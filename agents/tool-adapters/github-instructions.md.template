@@ -1,0 +1,13 @@
+---
+applyTo: "**"
+---
+
+# {{PRODUCT}} — GitHub Copilot path instructions
+
+Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
+
+- Run harness scripts with `{{PY}}`
+- Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- After non-trivial work, obtain `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS` before assemble
+- Device: {{DEVICE_POLICY}}
+- {{GIT_POLICY}}

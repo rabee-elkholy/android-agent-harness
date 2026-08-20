@@ -1,0 +1,37 @@
+{
+  "adb-and-git-safety": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "run_command|invoke_subagent|define_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python scripts/pre_tool_safety.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  },
+  "turn-start-reminder": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python scripts/pre_invocation_reminder.py",
+        "timeout": 5
+      }
+    ]
+  },
+  "hook-selftest": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python scripts/ensure_hook_selftest.py",
+        "timeout": 60
+      }
+    ]
+  }
+}

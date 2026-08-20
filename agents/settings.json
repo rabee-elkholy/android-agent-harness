@@ -1,0 +1,26 @@
+{
+  "autoExecutionPolicy": "always-proceed",
+  "commandAllowlist": [
+    "git status --short --branch",
+    "git status",
+    "git diff",
+    "git diff --cached --name-only",
+    "git diff --name-only",
+    "git rev-parse HEAD",
+    "adb devices",
+    "python .agents/scripts/review_package.py",
+    "python .agents/scripts/check_strings.py",
+    "python .agents/scripts/new_feature_scaffold.py",
+    "python .agents/scripts/logcat_doctor.py",
+    "python .agents/scripts/preflight_check.py",
+    "python .agents/scripts/perf_guard.py",
+    "python .agents/scripts/fast_kt_lint.py",
+    "python .agents/scripts/gradle_error_parser.py",
+    "python .agents/scripts/capture_screen.py",
+    "python .agents/scripts/run_gradle_task.py",
+    "python .agents/scripts/ensure_hook_selftest.py",
+    "python .agents/scripts/_hook_selftest.py"
+  ],
+  "artifactReviewMode": "asks-for-review",
+  "terminalSandbox": false
+}

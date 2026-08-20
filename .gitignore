@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+Thumbs.db
+*.zip
+.harness-backup/
+agents/state/
+agents/scripts/__pycache__/

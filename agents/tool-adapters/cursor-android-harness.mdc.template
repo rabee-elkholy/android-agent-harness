@@ -1,0 +1,12 @@
+---
+description: Android agent harness quality-first delivery rules
+alwaysApply: true
+---
+
+Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
+
+Use `{{PY}}` for harness scripts. Assemble with `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`. After non-trivial work, run all five reviewers (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`). Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
+
+Device: {{DEVICE_POLICY}}
+
+{{GIT_POLICY}}

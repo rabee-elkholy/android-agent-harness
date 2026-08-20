@@ -1,0 +1,8 @@
+# {{PRODUCT}} — Codex CLI
+
+Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. Codex reads `AGENTS.md` automatically; this pointer exists for tools that also look for `CODEX.md`.
+
+- Python: `{{PY}}`
+- Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- Device: {{DEVICE_POLICY}}
+- {{GIT_POLICY}}

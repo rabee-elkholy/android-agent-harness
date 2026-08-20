@@ -1,0 +1,12 @@
+@AGENTS.md
+
+# {{PRODUCT}} — Qwen Code
+
+**Source of truth:** `.agents/rules/harness-rules.md` (and `AGENTS.md`).
+
+- Python: `{{PY}}`
+- Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- Device: {{DEVICE_POLICY}}
+- {{GIT_POLICY}}
+
+Qwen Code does not run Antigravity `hooks.json`. Still honor the five-leaf review (`BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`) before assemble. No `code-review-guard-agent`. No `LGTM`.

@@ -1,0 +1,47 @@
+{
+  "_comment": "MERGE these into ~/.gemini/config/config.json userSettings. Do not replace the whole file. Do not copy hostname, tokens, or secrets from the sender.",
+  "autoExecutionPolicy": "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER",
+  "enableTerminalSandbox": false,
+  "globalPermissionGrants": {
+    "allow": [
+      "command(git status --short --branch)",
+      "command(git status)",
+      "command(git diff)",
+      "command(git diff --cached --name-only)",
+      "command(git diff --name-only)",
+      "command(git rev-parse HEAD)",
+      "command(adb devices)",
+      "command(python .agents/scripts/review_package.py)",
+      "command(python .agents/scripts/run_gradle_task.py)",
+      "command(python .agents/scripts/fast_kt_lint.py)",
+      "command(python .agents/scripts/check_strings.py)",
+      "command(python .agents/scripts/preflight_check.py)",
+      "command(python .agents/scripts/perf_guard.py)",
+      "command(python .agents/scripts/logcat_doctor.py)",
+      "command(python .agents/scripts/capture_screen.py)",
+      "command(python .agents/scripts/gradle_error_parser.py)",
+      "command(python .agents/scripts/new_feature_scaffold.py)",
+      "command(python .agents/scripts/ensure_hook_selftest.py)",
+      "command(python .agents/scripts/_hook_selftest.py)",
+      "command(python scripts/ensure_hook_selftest.py)"
+    ],
+    "deny": [
+      "command(emulator)",
+      "command(avdmanager)",
+      "command(android emulator)",
+      "command(adb monkey)",
+      "command(git add)",
+      "command(git commit)",
+      "command(git push)",
+      "command(git merge)",
+      "command(git rebase)",
+      "command(git stash)",
+      "command(git reset)",
+      "command(git checkout)",
+      "command(git switch)",
+      "command(git worktree)",
+      "command(git clone)",
+      "write_file(.git/)"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+# {{PRODUCT}} — GitHub Copilot / VS Code
+
+Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
+
+- Run harness scripts with `{{PY}}` (never assume `python3` on Windows).
+- After non-trivial implementation, create a review package and obtain all five PASS tokens before assemble.
+- Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- Device: {{DEVICE_POLICY}}
+- {{GIT_POLICY}}

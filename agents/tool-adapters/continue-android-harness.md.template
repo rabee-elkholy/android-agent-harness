@@ -1,0 +1,14 @@
+---
+name: Android Harness
+alwaysApply: true
+---
+
+# {{PRODUCT}} — Continue
+
+Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
+
+Use `{{PY}}` for `.agents/scripts/*`. Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`. Five-leaf review before assemble. No `code-review-guard-agent`. No `LGTM`.
+
+Device: {{DEVICE_POLICY}}
+
+{{GIT_POLICY}}
