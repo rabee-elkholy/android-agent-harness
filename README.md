@@ -26,6 +26,7 @@ android-harness-kit/
 │   ├── rollback-prompt.md
 │   ├── restore.md
 │   ├── porting.md
+│   ├── sync.md              ← kit ↔ parent product without overwriting .agents
 │   └── tool-support.md      ← which file each product loads
 ├── agents/                  ← copy this folder to <your-app>/.agents
 │   ├── rules/
@@ -96,6 +97,8 @@ When this GitHub repo gets a new commit, people who already installed do **not**
 Open a **new chat** on the **Android app** and paste **all of** [`docs/update-prompt.md`](docs/update-prompt.md).
 
 The agent backs up, `git pull`s the kit, recopies `agents/` → `.agents`, re-ports from `SETUP_ANSWERS.md`, and re-runs `install_tool_adapters.py --tools …`. Custom skills they added (not shipped by the kit) are restored from the backup. Then a new chat.
+
+Do **not** use install/update prompts on the parent product that this kit was extracted from. File-level sync: [`docs/sync.md`](docs/sync.md).
 
 ```
 You are updating the portable Android AI harness in this checkout. This folder is the Android product. It is not android-harness-kit.
