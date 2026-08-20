@@ -1,7 +1,5 @@
 # Install prompt
 
-Paste **this entire file** as the first message in a **new chat on your Android app** (the app checkout, not the kit). The agent must execute it, not summarize it.
-
 ---
 
 You are installing the portable **Android AI harness** into **this** checkout. This folder is the Android product. It is not `android-harness-kit`.
