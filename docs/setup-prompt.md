@@ -10,11 +10,15 @@ You are installing a portable **Android AI harness** into THIS checkout. The kit
 
 Same **engine** (5-leaf review, live Gradle runner, safety hook). **Different product, machine, and team policy.** A find-replace of the example app name is **not** enough.
 
-Before I.0, tell the developer in their language: setup takes time (backup, several questions that explain why, structural port, selftest). They should stay in this chat until `Total test failures: 0`. Skipping questions or stopping early is a weak install.
+Before I.0, tell the developer in their language: setup takes time (wizard questions, backup, structural port, selftest). They should stay in this chat until `Total test failures: 0`. Skipping questions or stopping early is a weak install.
 
 Answer in the developer's language. Do not commit unless they ask.
 
-**Interview format (mandatory):** After backup + file discovery, run section **I**. The developer reads the **choice UI**, not your chat. A five-word title (`Backup?`, `Python?`, `Device?`) is a failed question.
+If `<repo>/.harness-setup/answers.json` exists and `"i0": true`, **skip section I**. Use those answers. Copy `.harness-setup/SETUP_ANSWERS.md` into the backup folder. Installer argv: `$PY <kit-or-.agents>/scripts/setup_wizard.py flags --repo <this-android-root>`.
+
+Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Do **not** invent five-word `ask_question` titles. If you must ask in chat, the prompt text must be the wizard JSON `prompt` field verbatim.
+
+**Interview format (only if the wizard has not written answers.json):** After backup + file discovery, run section **I**. The developer reads the **choice UI**, not your chat. A five-word title (`Backup?`, `Python?`, `Device?`) is a failed question.
 
 For every question:
 

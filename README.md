@@ -42,7 +42,7 @@ android-harness-kit/
 │   └── tool-support.md      ← which file each product loads
 ├── agents/                  ← copy this folder to <your-app>/.agents
 │   ├── rules/
-│   ├── scripts/
+│   ├── scripts/             ← includes setup_wizard.py (I.0–I.14 answers)
 │   ├── skills/
 │   ├── subagents/
 │   ├── workflows/
@@ -61,48 +61,21 @@ android-harness-kit/
 
 ## Install
 
-Install is **not** a file copy. Plan for **time in the chat**: backup, clone (or reuse) the kit, discovery from disk, several setup questions (each one explains why it matters), a structural port, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you skip questions, close the chat early, or accept a rename of the example app, you do **not** get the engine above.
+Install is **not** a file copy. Plan for **time**: a setup wizard (each question explains why it matters), backup, clone (or reuse) the kit, a structural port, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you skip questions, close the chat early, or accept a rename of the example app, you do **not** get the engine above.
 
-Stay in that chat until the agent prints selftest `Total test failures: 0` and tells you to open a **new** session. Answer the forms. Let it finish. Do not start feature work in the install chat.
+Stay in that chat until the agent prints selftest `Total test failures: 0` and tells you to open a **new** session. Prefer answering the wizard in a **terminal** (full question text). The agent then ports; it must not invent five-word interview titles.
 
-Open a **new chat** on your **Android app** (not this kit). Paste the prompt below (same text as [`docs/install-prompt.md`](docs/install-prompt.md)).
+Open a **new chat** on your **Android app** (not this kit). Paste **all of** [`docs/install-prompt.md`](docs/install-prompt.md).
 
-The agent clones this repository if needed, copies `agents/` to `.agents`, then interviews you (product, Python, git, device, which coding tools). It must **port** the engine (regex, Path pieces, APK name, architecture). A find-replace of the example app name is not a successful install.
+The agent clones this repository if needed, runs `agents/scripts/setup_wizard.py` for I.0–I.14, copies `agents/` to `.agents`, then **ports** the engine (regex, Path pieces, APK name, architecture). A find-replace of the example app name is not a successful install.
 
-After port, it runs `install_tool_adapters.py --tools <the tools they chose>` and writes only those entry files. Switching to a new IDE later means re-running the installer with that tool added.
+After port, it runs `install_tool_adapters.py` with the flags printed by `setup_wizard.py flags`. Switching to a new IDE later means re-running the installer with that tool added.
 
 Physical vs emulator is **optional during setup**. Skip = both allowed. `adb monkey` stays denied.
 
-If you already have this kit on disk, you can still paste the same prompt — the agent will reuse the clone.
+If you already have this kit on disk, you can still paste the same prompt — the agent will reuse the clone (pull `main` if you want the latest).
 
-```
-You are installing the portable Android AI harness into this checkout. This folder is the Android product. It is not android-harness-kit.
-
-Answer in the developer's language. Do not commit unless they ask. Do not skip the interview. Do not only rename the example app.
-
-Tell the developer up front: this install takes a while (backup, questions with why/benefit, structural port, selftest). They should stay in this chat and wait for selftest Total test failures: 0. Rushing or skipping questions yields a weak harness.
-
-Start now:
-
-1. Confirm this repo has gradlew or gradlew.bat. If not, stop — this is not an Android Gradle checkout.
-2. Get the kit (do not clone into app/, composeApp/, or any module source tree):
-   - If a clone already exists nearby (sibling android-harness-kit, a path the developer gives, or a previous temp clone), use that.
-   - Otherwise: git clone https://github.com/rabee-elkholy/android-harness-kit.git into a sibling folder or the OS temp directory.
-3. Open <kit>/docs/setup-prompt.md and execute that file in full as if the developer had pasted it. The copy source is <kit>/agents/ → <this repo>/.agents.
-4. Interview: each ask_question prompt must include why + benefit. Do not use short titles. Do not dump every I.* into one form.
-5. After setup: tell them to start a new chat on this Android folder before real work.
-
-Kit rules that still apply during setup:
-
-- Backup before overwriting .agents or tool adapters.
-- Structural port (package, regex, Path pieces, APK name, architecture, locales). A find-replace of the example name is not a successful install.
-- Write adapters only for the tools they pick (--tools). Always write AGENTS.md.
-- Keep .agents/mcp_config.json as {"mcpServers": {}}. Do not add MCP servers. Do not overwrite the developer's existing MCP / Continue / Aider / kilo.jsonc / ~/.gemini configs.
-- Do not copy local.properties sdk.dir or ~/.gemini hostnames from another machine.
-- adb monkey stays denied. Emulator deny only if they lock the install to a physical device.
-
-Begin: print OS, this repo path, and whether you reused a kit clone or cloned a fresh one. Then run setup-prompt.md from its first heading.
-```
+The pasteable first message is the full file [`docs/install-prompt.md`](docs/install-prompt.md) (not a short summary).
 
 
 ## After setup
@@ -115,36 +88,11 @@ When this GitHub repo gets a new commit, people who already installed do **not**
 
 Open a **new chat** on the **Android app** and paste **all of** [`docs/update-prompt.md`](docs/update-prompt.md).
 
-The agent backs up, `git pull`s the kit, recopies `agents/` → `.agents`, re-ports from `SETUP_ANSWERS.md`, and re-runs `install_tool_adapters.py --tools …`. Custom skills they added (not shipped by the kit) are restored from the backup. Then a new chat.
+The agent backs up, `git pull`s the kit, recopies `agents/` → `.agents`, re-ports from `.harness-setup/answers.json` (or `SETUP_ANSWERS.md`), and re-runs `install_tool_adapters.py` from `setup_wizard.py flags`. Custom skills they added (not shipped by the kit) are restored from the backup. Then a new chat.
 
 Do **not** use install/update prompts on the parent product that this kit was extracted from. File-level sync: [`docs/sync.md`](docs/sync.md).
 
-```
-You are updating the portable Android AI harness in this checkout. This folder is the Android product. It is not android-harness-kit.
-
-Answer in the developer's language. Do not commit unless they ask. This is not a first install. Reuse recorded setup answers. Re-port the new engine.
-
-Start now:
-
-1. Confirm this repo has gradlew or gradlew.bat and .agents/. If .agents/ is missing, stop and tell them to paste docs/install-prompt.md instead.
-2. Ask U.0: Back up and update / Stop. Wait.
-3. Backup first (timestamp). Copy current .agents and harness-owned adapters into <repo>/.harness-backup/<timestamp>/. If backup fails, stop.
-4. Get the latest kit (do not clone into app/ or composeApp/):
-   - If a clone exists nearby: git fetch and git pull on main. Print the new commit.
-   - Else: git clone https://github.com/rabee-elkholy/android-harness-kit.git into a sibling folder or OS temp.
-   - Do not reuse a stale clone without pulling.
-5. Read the newest SETUP_ANSWERS.md. Print I.1–I.14.
-6. Ask U.1: Keep these answers and update / I will change some answers. Interview only what they want to change.
-7. Note extra paths under .agents/ that the kit agents/ folder does not ship. Restore those after the copy.
-8. Copy <kit>/agents/ → <this repo>/.agents/. Empty state/. Keep mcp_config.json as {"mcpServers": {}}. Do not overwrite the developer's MCP / Continue / Aider / kilo.jsonc / ~/.gemini configs.
-9. Restore extra non-kit paths from the backup. Do not restore old kit files on top of the new copy.
-10. Run setup-prompt.md from “Port structurally” through verify using the recorded answers. Re-run install_tool_adapters.py with the recorded --tools.
-11. Selftest 0 failures, then preflight.
-12. Tell them to start a new chat. Rollback = docs/rollback-prompt.md.
-
-Begin: print OS, this repo path, whether .agents exists, then U.0.
-```
-
+The pasteable update message is [`docs/update-prompt.md`](docs/update-prompt.md).
 
 ## Supported agents
 
@@ -168,3 +116,9 @@ Python scripts are the same on every tool. Only Antigravity auto-blocks assemble
 - Empty `agents/mcp_config.json` (`mcpServers: {}`)
 - Do not copy `local.properties` or `~/.gemini` hostnames from another PC
 - The agent must not commit unless you ask
+
+## Releases
+
+There were none at first because install is **clone `main` + paste the install prompt**, not a downloadable app zip. Tags start at **v0.1.0**.
+
+GitHub Releases are snapshots of this repo (source archive only — no extra zip). Day-to-day install and update still follow `main` unless you pin a tag (`git clone --branch v0.1.0 …`).
