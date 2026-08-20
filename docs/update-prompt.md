@@ -8,6 +8,8 @@ You are **updating** the portable Android AI harness in **this** checkout. This 
 
 Answer in the developer's language. Do not commit unless they ask.
 
+Tell the developer **first**, in their language: this update needs a **strong model** in this chat, not a fast/cheap one. Re-port is structural. A weak model copies files and skips leftover grep. Stay until selftest `Total test failures: 0`. If this chat is a small model, **stop** and start a new chat on a stronger model, then paste this file again.
+
 This is not a first install. Do **not** treat it as a blank product. Reuse recorded setup answers. Re-port the new engine. Do not only copy files and stop.
 
 ## Start now

@@ -97,10 +97,10 @@ T = {
         "i0_skip": "Start without a backup",
         "i0_no": "Stop setup",
         "i1": (
-            "Reviewer prompts and AGENTS.md will use this name. If we keep the example "
-            "product name, reviews talk about the wrong app. Use the name I found, or type another?"
+            "What name should the helper use for this app? I found “{name}”. "
+            "Reviews and AGENTS.md will show that name."
         ),
-        "i1_use": "Use “{name}”",
+        "i1_use": "Use “{name}” (Recommended)",
         "i1_other": "Other name (I will type it)",
         "i2": "Which Python command should the scripts use? On Windows this is usually python.",
         "i2_stop": "Stop — install Python 3.10+",
@@ -111,13 +111,12 @@ T = {
         "i3_never": "I commit myself (Recommended)",
         "i3_may": "The agent may commit when I ask in chat",
         "i4": (
-            "This chooses whether the harness may use an emulator serial. Pick “both allowed” "
-            "unless you are sure you will never debug on an AVD. “Physical only” blocks emulator "
-            "installs and logcat. You can change this later with the update prompt. Skipping is safe."
+            "Will you test this app on a real phone, an emulator (AVD), or both? "
+            "Pick both unless you never use an emulator. Physical only blocks emulator install and logcat."
         ),
-        "i4_skip": "Skip — both allowed for now (Recommended)",
-        "i4_allow": "Allow emulator",
-        "i4_phys": "Physical device only",
+        "i4_skip": "Phone and emulator both allowed (Recommended)",
+        "i4_allow": "Phone and emulator both allowed (Recommended)",
+        "i4_phys": "Physical phone only — no emulator",
         "i5": "Which Gradle module is the Android app that builds the APK?",
         "i5_other": "Other module (I will type it)",
         "i6": "Which screen opens when the app launches?",
@@ -151,18 +150,24 @@ T = {
         "i9_dis": "Disable it now (Recommended)",
         "i9_ret": "Retarget it to this project now",
         "i10": (
-            "run_device.py overwrites the app on the phone. Confirm-before-install avoids a surprise "
-            "install on the wrong device. Skipping confirm is faster if you trust the allowlist."
+            "Before the helper installs the app on the phone or emulator, should it ask you first? "
+            "Asking avoids installing on the wrong device. Skipping is faster if you trust the serial."
         ),
-        "i10_conf": "Confirm before adb install (Recommended)",
-        "i10_allow": "Allow run_device.py without confirm",
+        "i10_conf": "Ask me first (Recommended)",
+        "i10_allow": "Install without asking",
+        "i15": (
+            "After the helper finishes code and review, should it run unit tests "
+            "(checks logic without opening the app)? Pick no if this project has no tests and you will not add them."
+        ),
+        "i15_yes": "Yes, run unit tests (Recommended)",
+        "i15_no": "No, skip unit tests",
         "i11": (
-            "Gitignore keeps the harness on this machine only (clones will not get .agents). "
-            "Committing it later shares the engine with the team, still without state/. This setup "
-            "will not commit unless you later say commit."
+            "When someone clones this app from GitHub, should they get the same AI helper rules, "
+            "or should those files stay only on your PC? If you work alone, keep them on your PC. "
+            "This setup will not commit either way."
         ),
-        "i11_gi": "Add to .gitignore (local)",
-        "i11_later": "We will commit it later without state/",
+        "i11_gi": "Only on my PC — not on GitHub (Recommended)",
+        "i11_later": "In the project so teammates get them after a clone",
         "i12": (
             "~/.gemini/config.json is for the whole PC, not this repo. Another app on this machine "
             "may already use it. Merging the script allowlist only leaves that global file alone except "
@@ -182,10 +187,16 @@ T = {
             "If you use Cursor, you must select Cursor so its rules get written."
         ),
         "auto_blurb": (
-            "From this project I will use (no extra questions): name {product}, Python {py}, "
+            "From this project I will use (no extra questions): Python {py}, "
             "module {module}, launcher {launcher}, APK {apk}, stack {stack}, locales {locales}. "
-            "Emulator allowed. If Gemini config exists on this PC, only merge script grants. "
+            "If Gemini config exists on this PC, only merge script grants. "
             "Finish with harness tests, not a full app build. Answer only the questions below."
+        ),
+        "model_warning": (
+            "WARNING: Run this setup in a strong model chat, not a fast/cheap one. "
+            "Install is a structural port (package, module, APK, architecture, leftover grep, selftest). "
+            "A weak model skips steps, shortens questions, and leaves a broken helper. "
+            "Stay until Total test failures: 0. If this chat is a small model, stop and start a new one."
         ),
         "type_value": "Type the value:",
         "pick": "Enter number",
@@ -205,10 +216,9 @@ T = {
         "i0_skip": "ابدأ من غير نسخة",
         "i0_no": "وقف التثبيت",
         "i1": (
-            "اسم المنتج هيظهر في AGENTS.md وفي المراجعين. لو سيبنا اسم المثال، المراجعات هتتكلم عن "
-            "أبلكيشن تاني. نستخدم الاسم اللي لقيته، ولا تكتب اسم تاني؟"
+            "اسم التطبيق اللي هيظهر للمساعد: لقيت «{name}». نستخدمه ولا تكتب اسم تاني؟"
         ),
-        "i1_use": "استخدم «{name}»",
+        "i1_use": "استخدم «{name}» (مفضّل)",
         "i1_other": "اسم تاني (هكتبه)",
         "i2": "أي أمر Python نستخدمه؟ على ويندوز غالباً python مش python3.",
         "i2_stop": "قف — ثبّت Python 3.10+",
@@ -218,12 +228,12 @@ T = {
         "i3_never": "أنا اللي بعمل الكوميت (مفضّل)",
         "i3_may": "المساعد يعمل كوميت لما أطلب في الشات",
         "i4": (
-            "هل الـ harness يستخدم محاكي؟ «الاتنين مسموحين» إلا لو أكيد مش هتدِبَج على AVD. "
-            "«موبايل بس» بيمنع تثبيت ولوجكات المحاكي. تقدر تغيّر بعدين ببرومبت التحديث. التخطي آمن."
+            "هتختبر التطبيق على موبايل حقيقي، ولا محاكي (AVD)، ولا الاتنين؟ "
+            "لو بتستخدم المحاكي حتى أحيانًا اختار الاتنين. موبايل بس بيمنع التثبيت واللوج من المحاكي."
         ),
-        "i4_skip": "تخطّي — الاتنين مسموحين دلوقتي (مفضّل)",
-        "i4_allow": "اسمح بالمحاكي",
-        "i4_phys": "موبايل حقيقي فقط",
+        "i4_skip": "الاتنين: موبايل ومحاكي (مفضّل)",
+        "i4_allow": "الاتنين: موبايل ومحاكي (مفضّل)",
+        "i4_phys": "موبايل حقيقي فقط — من غير محاكي",
         "i5": "أنهي جزء من المشروع هو التطبيق اللي بيتبني (ملف الـ APK)؟",
         "i5_other": "موديول تاني (هكتبه)",
         "i6": "أنهي شاشة بتفتح أول ما التطبيق يشتغل؟",
@@ -254,17 +264,23 @@ T = {
         "i9_dis": "عطّله دلوقتي (مفضّل)",
         "i9_ret": "وجّهه للمشروع دلوقتي",
         "i10": (
-            "run_device.py بيستبدل التطبيق على الموبايل. التأكيد قبل التثبيت يمنع تثبيت على جهاز غلط. "
-            "من غير تأكيد أسرع لو واثق من الـ allowlist."
+            "قبل ما المساعد يركّب التطبيق على الموبايل أو المحاكي، يسألك ولا يركّب على طول؟ "
+            "السؤال يمنع تركيب على جهاز غلط."
         ),
-        "i10_conf": "أكّد قبل adb install (مفضّل)",
-        "i10_allow": "اسمح لـ run_device.py من غير تأكيد",
+        "i10_conf": "اسألني الأول (مفضّل)",
+        "i10_allow": "ركّب من غير سؤال",
+        "i15": (
+            "بعد ما المساعد يخلّص الكود والمراجعة، يشغّل يونيت تيست ولا نعدّي من غيرها؟ "
+            "اليونيت تيست بيفحص المنطق من غير ما يفتح التطبيق. لو المشروع مالوش تيستات ومش هتضيف، اختار لا."
+        ),
+        "i15_yes": "نعم، شغّل يونيت تيست (مفضّل)",
+        "i15_no": "لا، من غير يونيت تيست",
         "i11": (
-            "gitignore يخلي الـ harness على الجهاز ده بس (الـ clone مش هيبقى فيه .agents). "
-            "لو هتعملوا كوميت بعدين، الفريق يشاركه من غير state/. التثبيت الحالي مش هيعمل كوميت."
+            "لما حد يعمل clone للمشروع من GitHub، ياخد نفس قواعد المساعد، ولا الملفات تفضل عندك "
+            "على الجهاز ده بس؟ لو بتشتغل لوحدك: على جهازك بس. التثبيت الحالي مش هيعمل كوميت."
         ),
-        "i11_gi": "ضيف لـ .gitignore (محلي)",
-        "i11_later": "هنعمل كوميت بعدين من غير state/",
+        "i11_gi": "عندي على الجهاز بس — مش على GitHub (مفضّل)",
+        "i11_later": "في المشروع عشان زميلي ياخدها بعد الـ clone",
         "i12": (
             "ملف ~/.gemini/config.json للجهاز كله مش للريبو. تطبيق تاني على الجهاز ممكن يكون بيستخدمه. "
             "دمج الـ allowlist بس أأمن. القاعدة العامة بس لو ده مشروع Antigravity الوحيد على الجهاز."
@@ -282,10 +298,16 @@ T = {
             "لو بتستخدم Cursor لازم تختاره عشان ملفاته تتكتب."
         ),
         "auto_blurb": (
-            "من المشروع هستخدم من غير أسئلة زيادة: الاسم {product}، Python {py}، "
+            "من المشروع هستخدم من غير أسئلة زيادة: Python {py}، "
             "الموديول {module}، الشاشة الأولى {launcher}، ملف APK {apk}، طريقة الكتابة {stack}، "
-            "اللغات {locales}. المحاكي مسموح. لو فيه إعداد Gemini على الجهاز هعدّل سماح السكربتات "
+            "اللغات {locales}. لو فيه إعداد Gemini على الجهاز هعدّل سماح السكربتات "
             "بس. في الآخر اختبارات المساعد مش بيلد كامل للتطبيق. الأسئلة اللي تحت هي اللي محتاج إجابة."
+        ),
+        "model_warning": (
+            "تنبيه: التثبيت لازم على شات بموديل قوي، مش الموديل السريع/الرخيص. "
+            "الشغل نقل هيكلي (باكدج، موديول، APK، طريقة الكتابة، فحص البقايا، selftest). "
+            "الموديل الضعيف بيختصر الأسئلة وبيسيب مساعد مكسور. "
+            "كمّل لحد ما يطبع Total test failures: 0. لو الشات ده موديل صغير، وقف وافتح شات جديد بموديل أقوى."
         ),
         "type_value": "اكتب القيمة:",
         "pick": "اكتب الرقم",
@@ -567,6 +589,7 @@ def auto_from_facts(facts: dict) -> dict:
         "agents_git": "gitignore",
         "gemini_config": "merge-allowlist" if facts.get("gemini") else "skip",
         "assemble_now": "tests-only",
+        "unit_tests": "yes",
     }
 
 
@@ -600,6 +623,16 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                 {"id": "no", "label": t(lang, "i0_no")},
             ],
         },
+        {
+            "id": "i1",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i1", name=d.get("product") or "App"),
+            "options": [
+                {"id": "discovered", "label": t(lang, "i1_use", name=d.get("product") or "App")},
+                {"id": "other", "label": t(lang, "i1_other")},
+            ],
+        },
     ]
     pythons = d.get("pythons") or []
     if len(pythons) != 1:
@@ -623,6 +656,42 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "options": [
                 {"id": "never", "label": t(lang, "i3_never")},
                 {"id": "agent-may-commit", "label": t(lang, "i3_may")},
+            ],
+        }
+    )
+    qs.append(
+        {
+            "id": "i4",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i4"),
+            "options": [
+                {"id": "allow", "label": t(lang, "i4_allow")},
+                {"id": "physical-only", "label": t(lang, "i4_phys")},
+            ],
+        }
+    )
+    qs.append(
+        {
+            "id": "i10",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i10"),
+            "options": [
+                {"id": "confirm", "label": t(lang, "i10_conf")},
+                {"id": "allow", "label": t(lang, "i10_allow")},
+            ],
+        }
+    )
+    qs.append(
+        {
+            "id": "i15",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i15"),
+            "options": [
+                {"id": "yes", "label": t(lang, "i15_yes")},
+                {"id": "no", "label": t(lang, "i15_no")},
             ],
         }
     )
@@ -757,7 +826,7 @@ def normalize(raw: dict, facts: dict) -> dict:
     if not tools:
         raise SystemExit("Pick at least one coding tool (I.14).")
     device = raw.get("i4") or auto["device_policy"]
-    if device in {"allow-explicit", "allow"}:
+    if device in {"allow-explicit", "allow", "skip"}:
         device = "allow"
     git_policy = raw.get("i3") or "never"
     if git_policy not in {"never", "agent-may-commit"}:
@@ -786,9 +855,10 @@ def normalize(raw: dict, facts: dict) -> dict:
         "locales": locales,
         "scaffold": "disable",
         "install_confirm": raw.get("i10") or auto["install_confirm"],
-        "agents_git": raw.get("i11") or auto["agents_git"],
+        "agents_git": "gitignore",
         "gemini_config": gemini,
         "assemble_now": raw.get("i13") or auto["assemble_now"],
+        "unit_tests": "yes" if (raw.get("i15") or auto.get("unit_tests")) == "yes" else "no",
         "tools": tools,
         "asked": asked,
     }
@@ -820,19 +890,22 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.11 .agents in git: {answers.get('agents_git')}",
         f"- I.12 Gemini config: {answers.get('gemini_config')}",
         f"- I.13 Assemble now: {answers.get('assemble_now')}",
+        f"- I.15 Unit tests: {answers.get('unit_tests')}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
         "",
     ]
     markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
     gi = repo / ".gitignore"
-    extra = [".harness-setup/", ".harness-backup/"]
-    existing = read_text(gi)
-    add = [line for line in extra if line not in existing.splitlines()]
-    if add:
-        prefix = "" if existing.endswith("\n") or not existing else "\n"
-        with gi.open("a", encoding="utf-8") as fh:
-            fh.write(prefix + "\n".join(add) + "\n")
+    extra = [".harness-setup/", ".harness-backup/", ".agents/"]
+    lines = read_text(gi).splitlines()
+    for line in extra:
+        if line not in lines:
+            lines.append(line)
+    text = "\n".join(lines)
+    if text:
+        text += "\n"
+    gi.write_text(text, encoding="utf-8")
 
 
 def flags_from_answers(answers: dict) -> str:
@@ -846,6 +919,8 @@ def flags_from_answers(answers: dict) -> str:
 
 def interactive(repo: Path, lang: str) -> dict:
     facts = discover(repo)
+    print(t(lang, "model_warning"))
+    print()
     print(auto_blurb(facts, lang))
     raw: dict = {}
     for q in questions_payload(repo, lang, facts):
@@ -914,6 +989,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = {
             "discover": facts,
             "auto": auto_from_facts(facts),
+            "model_warning": t(args.lang, "model_warning"),
             "auto_blurb": auto_blurb(facts, args.lang),
             "questions": questions_payload(repo, args.lang, facts),
         }

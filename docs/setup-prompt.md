@@ -10,19 +10,19 @@ You are installing a portable **Android AI harness** into THIS checkout. The kit
 
 Same **engine** (5-leaf review, live Gradle runner, safety hook). **Different product, machine, and team policy.** A find-replace of the example app name is **not** enough.
 
-Before the three wizard questions, tell the developer in their language: setup takes a few minutes (backup, port, selftest). They should stay in this chat until `Total test failures: 0`. Stopping early is a weak install.
+Before the wizard questions, tell the developer in their language **as a warning**: this setup needs a **strong model** in this chat, not a fast/cheap one. Install is a structural port. A weak model skips steps and leaves a broken helper. Stay until `Total test failures: 0`. If this chat is a small model, **stop** and start a new chat on a stronger model. Then: setup takes a few minutes (backup, port, selftest).
 
 Answer in the developer's language. Do not commit unless they ask.
 
 If `<repo>/.harness-setup/answers.json` exists and `"i0": true`, **skip section I**. Use those answers. Copy `.harness-setup/SETUP_ANSWERS.md` into the backup folder. Installer argv: `$PY <kit-or-.agents>/scripts/setup_wizard.py flags --repo <this-android-root>`.
 
-Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `auto_blurb` in chat. Ask **only** the objects in `questions` (usually three: backup, git, which tools). Use each JSON `prompt` **verbatim**. Do **not** invent extra I.1–I.13 questions. Do **not** invent five-word titles.
+Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions` (usually seven: backup, app name, git, phone vs emulator, ask before install, unit tests, which tools). Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
 
-**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. Do not guess which tools they use (I.14). Do not rewrite `harness-rules.md` until I.0 / I.3 / I.14 are answered.
+**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. Do not guess which tools they use (I.14) or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until I.0 / I.1 / I.3 / I.4 / I.10 / I.15 / I.14 are answered.
 
-Product name, Python, module, launcher, APK, architecture, and locales come from disk (`auto` in the wizard JSON). Defaults you must **not** ask: emulator allowed (I.4), scaffold disabled (I.9), confirm before adb install (I.10), `.agents` gitignored (I.11), Gemini = merge script grants only if `~/.gemini` exists else skip (I.12 — never write a global Gemini rule during setup), tests only at the end (I.13). The wizard adds I.2 / I.5 / I.6 **only** when Python, module, or launcher is missing or ambiguous.
+Python, module, launcher, APK, architecture, and locales come from disk (`auto` in the wizard JSON). Defaults you must **not** ask: scaffold disabled (I.9), Gemini = merge script grants only if `~/.gemini` exists else skip (I.12 — never write a global Gemini rule during setup), tests only at the end (I.13). The wizard adds I.2 / I.5 / I.6 **only** when Python, module, or launcher is missing or ambiguous.
 
-**Free text only** if they pick “Other” on I.5 or I.6.
+**Free text only** if they pick “Other” on I.1, I.5, or I.6.
 
 ## Detect environment (print in chat)
 
@@ -47,21 +47,48 @@ Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state
 
 Read Gradle, manifests, source. Print a **proposed facts** table in chat (module, assemble task, APK path, applicationId, launcher, DI, VM base, Room yes/no, theme, source roots, string files). Never assume `:app` or `app-debug.apk`. If `local.properties` missing: tell them Android Studio must write `sdk.dir` — do not invent a path. If no `gradlew`: **stop**.
 
-Print `auto_blurb` from the wizard JSON. Then ask **only** the `questions` array (section I). Do not re-ask facts already in `auto`.
+Print `model_warning` then `auto_blurb` from the wizard JSON. Then ask **only** the `questions` array (section I). Do not re-ask facts already in `auto`.
 
 ## I) Interview — only what the wizard JSON lists
 
-Ask **only** `questions` from `setup_wizard.py questions`. Typically three forms:
+Ask **only** `questions` from `setup_wizard.py questions`. Typically seven forms:
 
 ### I.0 Backup? (required)
 
 - **Modal prompt:** Setup will replace the AI helper files in this project. A backup lets you restore them if something goes wrong. Without a backup, the old files cannot be restored.
 - **Choices:** `Back up and start` (Recommended) / `Start without a backup` / `Stop setup`
 
+### I.1 App name (required)
+
+- **Modal prompt:** What name should the helper use for this app? I found “<discovered>”. Reviews and AGENTS.md will show that name.
+- **Choices:** `Use “<discovered>”` (Recommended) / `Other name (I will type it)`
+- **Free text** only if they pick Other.
+
 ### I.3 Git (required)
 
 - **Modal prompt:** Who should create git commits? If you are not sure, keep commits in your own hands (you commit from the IDE).
 - **Choices:** `I commit myself` (Recommended) / `The agent may commit when I ask in chat`
+
+### I.4 Phone or emulator? (required)
+
+- **Modal prompt:** Will you test this app on a real phone, an emulator (AVD), or both? Pick both unless you never use an emulator. Physical only blocks emulator install and logcat.
+- **Choices:** `Phone and emulator both allowed` (Recommended) / `Physical phone only — no emulator`
+- **If both allowed:** relax “physical only” in `harness-rules.md`, `pre_tool_safety.py` (do **not** deny `emulator-` serials or `emulator`/`avdmanager`), `run_device.py`, `logcat_doctor.py`, `capture_screen.py`, adapters, and do not add emulator to the Gemini `deny` list. Keep `adb monkey` denied. Rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow`.
+- **If physical only:** keep the kit’s physical-only denies.
+
+### I.10 Ask before install? (required)
+
+- **Modal prompt:** Before the helper installs the app on the phone or emulator, should it ask you first? Asking avoids installing on the wrong device. Skipping is faster if you trust the serial.
+- **Choices:** `Ask me first` (Recommended) / `Install without asking`
+- **If ask:** `harness-rules.md` requires one confirmation before `run_device.py` / `adb install` in a session.
+- **If without asking:** do not add that confirmation. Keep `adb monkey` denied.
+
+### I.15 Unit tests? (required)
+
+- **Modal prompt:** After the helper finishes code and review, should it run unit tests (checks logic without opening the app)? Pick no if this project has no tests and you will not add them.
+- **Choices:** `Yes, run unit tests` (Recommended) / `No, skip unit tests`
+- **If yes:** keep a targeted `:<module>:testDebugUnitTest` step after the 5 leaves and before assemble. Use **this** module. Drop leftover payment-test paths unless they exist here. If there is no `src/test` yet, still leave the step — the agent must not invent fake tests.
+- **If no:** remove the unit-test step from `harness-rules.md` section 3, `workflows/deliver.md`, and `gradle-build-optimizer`. Do **not** skip the 5-leaf review or assemble. Do not require TDD.
 
 ### I.14 Coding tools (required)
 
@@ -75,11 +102,9 @@ Ask them with the JSON `prompt` verbatim (ambiguous Python, several app modules,
 
 ### Do not ask (already in `auto` / answers.json)
 
-- **I.1 / I.6b / I.7 / I.8:** product, APK path, stack, locales from disk. Use discovered stack (do **not** keep kit leftover architecture rules unless they later change answers).
-- **I.4:** emulator **allowed**. Relax “physical only” in `harness-rules.md`, `pre_tool_safety.py` (do **not** deny `emulator-` serials or `emulator`/`avdmanager`), `run_device.py`, `logcat_doctor.py`, `capture_screen.py`, adapters, and do not add emulator to the Gemini `deny` list. Keep `adb monkey` denied. Physical-only only if answers.json later says so.
+- **I.6b / I.7 / I.8:** APK path, stack, locales from disk. Use discovered stack (do **not** keep kit leftover architecture rules unless they later change answers).
 - **I.9:** always disable `new_feature_scaffold.py` `main()`. Keep `VIEWMODEL` / `SCREEN` constants for `_hook_selftest.py`.
-- **I.10:** confirm before adb install.
-- **I.11:** add `.agents` to `.gitignore`. Do not commit unless they later say “commit”.
+- **I.11:** always add `.agents/` to `.gitignore`. Helper rules stay on the machine that ran setup, even on a team. Teammates install their own copy. Do not commit `.agents` during this setup.
 - **I.12:** if `~/.gemini` exists, merge script grants only. Never write a global Gemini rule during this setup.
 - **I.13:** tests only (selftest + preflight). Do not run `:assembleDebug` at the end unless answers say assemble.
 
@@ -91,7 +116,7 @@ Record all answers in `.harness-backup/<timestamp>/SETUP_ANSWERS.md`.
 
 Patch **all** leftover forms (`docs/porting.md`): plain names, **regex** `com\.madarsoft`, **paths** `REPO / "app"`, quoted Path pieces `"madarsoft"` / `"fitness"`, `:app:assembleDebug`, launcher activity, APK existence check in `run_gradle_task.py` (glob `**/outputs/apk/debug/*.apk` if the filename is unknown). Also rename leftover `app-debug.apk` **filename** after `"app"` was already replaced.
 
-Apply **I.7**: rewrite or stub skills so reviewers cannot cite the example product’s ads/streak/GPS/Room/MVI/Hilt/theme wrapper unless they opted in. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` and the real source roots (KMP: `androidMain`, not `src/main` after renaming `"app"`). `run_device.py` uses **I.6**. Apply **I.4** (optional): physical-only keeps emulator denies; skip/either/emulator = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. There is **no** ticket portal in this kit. **I.8:** one locale → skip AR/EN parity.
+Apply **I.7**: rewrite or stub skills so reviewers cannot cite the example product’s ads/streak/GPS/Room/MVI/Hilt/theme wrapper unless they opted in. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` and the real source roots (KMP: `androidMain`, not `src/main` after renaming `"app"`). `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. There is **no** ticket portal in this kit. **I.8:** one locale → skip AR/EN parity.
 
 ## 4) Leftover grep
 
@@ -109,7 +134,7 @@ $PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemb
 
 `--tools` examples: `cursor,gemini` or `claude,copilot` or `all`. Map I.14 labels to ids: `cursor` `claude` `copilot` `gemini` `codex` `qwen` `windsurf` `cline` `roo` `amazonq` `continue` `junie` `kilo` `goose`. `--tools all` if they picked every tool.
 
-`--device-policy allow` if I.4 was skip / either / emulator. `--device-policy physical-only` only if they locked to a physical device. `--git-policy never` unless I.3 allows commits.
+`--device-policy allow` if I.4 is both-allowed. `--device-policy physical-only` only if they locked to a physical device. `--git-policy never` unless I.3 allows commits.
 
 That script fills `.agents/tool-adapters/*.template`, always writes `AGENTS.md`, writes the selected tool files, generates `.claude/agents/*.md` only when `claude` is selected, and **deletes** previously managed adapters for tools that were not selected. Details: kit `docs/tool-support.md`.
 
