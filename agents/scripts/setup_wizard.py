@@ -90,31 +90,26 @@ TOOL_LABELS = {
 T = {
     "en": {
         "i0": (
-            "Setup will replace .agents in this repo. A backup plus the rollback prompt "
-            "can restore what is here today. Without a backup, the old harness is gone. "
-            "Do you want to back up and start?"
+            "Setup will replace the AI helper files in this project. A backup lets you restore "
+            "them if something goes wrong. Without a backup, the old files cannot be restored."
         ),
-        "i0_yes": "Yes, back up and start",
-        "i0_no": "No, stop",
+        "i0_yes": "Back up and start (Recommended)",
+        "i0_skip": "Start without a backup",
+        "i0_no": "Stop setup",
         "i1": (
             "Reviewer prompts and AGENTS.md will use this name. If we keep the example "
             "product name, reviews talk about the wrong app. Use the name I found, or type another?"
         ),
         "i1_use": "Use “{name}”",
         "i1_other": "Other name (I will type it)",
-        "i2": (
-            "Every harness script starts with this command. On Windows, python3 is often a "
-            "Store stub that does not run. The one I verified actually works. Pick it, or stop "
-            "so you can install Python 3.10+."
-        ),
+        "i2": "Which Python command should the scripts use? On Windows this is usually python.",
         "i2_stop": "Stop — install Python 3.10+",
         "i3": (
-            "The default blocks the agent from git add / commit / push so nothing lands on "
-            "GitHub unless you commit in the IDE. If you want the agent to commit when you ask "
-            "in chat, pick the second option. Surprise commits are the failure mode of the second choice."
+            "Who should create git commits? If you are not sure, keep commits in your own hands "
+            "(you commit from the IDE)."
         ),
-        "i3_never": "Agent never touches git (developer commits) (Recommended)",
-        "i3_may": "Agent may commit when I explicitly ask",
+        "i3_never": "I commit myself (Recommended)",
+        "i3_may": "The agent may commit when I ask in chat",
         "i4": (
             "This chooses whether the harness may use an emulator serial. Pick “both allowed” "
             "unless you are sure you will never debug on an AVD. “Physical only” blocks emulator "
@@ -123,15 +118,9 @@ T = {
         "i4_skip": "Skip — both allowed for now (Recommended)",
         "i4_allow": "Allow emulator",
         "i4_phys": "Physical device only",
-        "i5": (
-            "Assemble and install must use the module that actually builds the APK. The wrong "
-            "module means you install an old or missing APK. I found these application modules."
-        ),
+        "i5": "Which Gradle module is the Android app that builds the APK?",
         "i5_other": "Other module (I will type it)",
-        "i6": (
-            "After install, run_device.py starts this activity (package/.Activity). The wrong "
-            "component opens a blank task or a different screen. I found these MAIN/LAUNCHER activities."
-        ),
+        "i6": "Which screen opens when the app launches?",
         "i6_other": "Other activity (I will type it)",
         "i6b": (
             "The live runner checks that this debug APK exists after assemble. The kit example is "
@@ -189,10 +178,14 @@ T = {
         "i13_tests": "Tests only (selftest + preflight) (Recommended)",
         "i13_asm": "Yes, run :assembleDebug at the end",
         "i14": (
-            "Each tool loads a different file (Cursor .mdc, GEMINI.md, CLAUDE.md, Copilot, …). Pick "
-            "every product you actually open this repo in. If you use Cursor but only pick Gemini, "
-            "Cursor will not get .cursor/rules. Extra tools only add files; you can add one later. "
-            "Do not pick all just to be safe if you want a clean root. Comma-separated numbers, or all."
+            "Which programs do you open this project in? Select every one you use. "
+            "If you use Cursor, you must select Cursor so its rules get written."
+        ),
+        "auto_blurb": (
+            "From this project I will use (no extra questions): name {product}, Python {py}, "
+            "module {module}, launcher {launcher}, APK {apk}, stack {stack}, locales {locales}. "
+            "Emulator allowed. If Gemini config exists on this PC, only merge script grants. "
+            "Finish with harness tests, not a full app build. Answer only the questions below."
         ),
         "type_value": "Type the value:",
         "pick": "Enter number",
@@ -205,28 +198,25 @@ T = {
     },
     "ar": {
         "i0": (
-            "التثبيت هيبَدّل مجلد .agents في المشروع. لو عملنا نسخة احتياطية نقدر نرجّع النظام القديم "
-            "ببرومبت الـ rollback. من غير نسخة، النظام القديم يضيع. نعمل backup ونبدأ؟"
+            "هركّب ملفات مساعد التطوير في المشروع ده. النسخة الاحتياطية تخليك ترجع لو حصل غلط. "
+            "من غير نسخة مش هتقدر ترجع الملفات القديمة."
         ),
-        "i0_yes": "نعم، backup ونبدأ",
-        "i0_no": "لا، وقف",
+        "i0_yes": "نسخة احتياطية وابدأ (مفضّل)",
+        "i0_skip": "ابدأ من غير نسخة",
+        "i0_no": "وقف التثبيت",
         "i1": (
             "اسم المنتج هيظهر في AGENTS.md وفي المراجعين. لو سيبنا اسم المثال، المراجعات هتتكلم عن "
             "أبلكيشن تاني. نستخدم الاسم اللي لقيته، ولا تكتب اسم تاني؟"
         ),
         "i1_use": "استخدم «{name}»",
         "i1_other": "اسم تاني (هكتبه)",
-        "i2": (
-            "كل سكربتات الـ harness بتبدأ بالأمر ده. على ويندوز python3 غالباً اختصار من الـ Store "
-            "ومش بيشتغل. الأمر اللي اتأكدت إنه شغال قدامك. اختاره، أو وقف وثبّت Python 3.10+."
-        ),
+        "i2": "أي أمر Python نستخدمه؟ على ويندوز غالباً python مش python3.",
         "i2_stop": "قف — ثبّت Python 3.10+",
         "i3": (
-            "الافتراضي يمنع الوكيل من git add / commit / push عشان ما يرفعش حاجة من غيرك. لو عايز "
-            "الوكيل يعمل كوميت لما تطلب في الشات، الخيار الثاني. مفاجأة كوميت هي غلطة الخيار الثاني."
+            "مين يعمل git commit؟ لو مش متأكد، خلّي الكوميت بإيدك (من Cursor أو أي IDE)."
         ),
-        "i3_never": "الوكيل ما يلمسش git (أنت اللي بتعمل كوميت) (مفضّل)",
-        "i3_may": "الوكيل يعمل كوميت لما أطلب صراحة",
+        "i3_never": "أنا اللي بعمل الكوميت (مفضّل)",
+        "i3_may": "المساعد يعمل كوميت لما أطلب في الشات",
         "i4": (
             "هل الـ harness يستخدم محاكي؟ «الاتنين مسموحين» إلا لو أكيد مش هتدِبَج على AVD. "
             "«موبايل بس» بيمنع تثبيت ولوجكات المحاكي. تقدر تغيّر بعدين ببرومبت التحديث. التخطي آمن."
@@ -234,15 +224,9 @@ T = {
         "i4_skip": "تخطّي — الاتنين مسموحين دلوقتي (مفضّل)",
         "i4_allow": "اسمح بالمحاكي",
         "i4_phys": "موبايل حقيقي فقط",
-        "i5": (
-            "الـ assemble والتثبيت لازم على الموديول اللي فعلاً بيطلع الـ APK. الموديول الغلط يعني "
-            "تثبيت APK قديم أو مش موجود. لقيت موديولات التطبيق دي."
-        ),
+        "i5": "أنهي جزء من المشروع هو التطبيق اللي بيتبني (ملف الـ APK)؟",
         "i5_other": "موديول تاني (هكتبه)",
-        "i6": (
-            "بعد التثبيت run_device.py بيفتح الشاشة دي (package/.Activity). المكوّن الغلط يفتح شاشة "
-            "فاضية أو شاشة تانية. لقيت MAIN/LAUNCHER دول."
-        ),
+        "i6": "أنهي شاشة بتفتح أول ما التطبيق يشتغل؟",
         "i6_other": "Activity تاني (هكتبه)",
         "i6b": (
             "الـ runner بيتأكد إن ملف الـ debug APK موجود بعد الـ assemble. مثال الكيت app-debug.apk؛ "
@@ -294,9 +278,14 @@ T = {
         "i13_tests": "اختبارات فقط (selftest + preflight) (مفضّل)",
         "i13_asm": "نعم، شغّل :assembleDebug في الآخر",
         "i14": (
-            "كل أداة بتقرا ملف مختلف (Cursor .mdc، GEMINI.md، CLAUDE.md، Copilot…). اختار كل أداة "
-            "بتفتح بيها المشروع. لو بتستخدم Cursor وتختار Gemini بس، Cursor مش هياخد .cursor/rules. "
-            "تقدر تضيف أداة بعدين. متختارش «كلهم» لو عايز روت نضيف. أرقام مفصولة بفاصلة، أو all."
+            "بتفتح المشروع ده في أنهي برامج؟ علّم على كل اللي بتستخدمه. "
+            "لو بتستخدم Cursor لازم تختاره عشان ملفاته تتكتب."
+        ),
+        "auto_blurb": (
+            "من المشروع هستخدم من غير أسئلة زيادة: الاسم {product}، Python {py}، "
+            "الموديول {module}، الشاشة الأولى {launcher}، ملف APK {apk}، طريقة الكتابة {stack}، "
+            "اللغات {locales}. المحاكي مسموح. لو فيه إعداد Gemini على الجهاز هعدّل سماح السكربتات "
+            "بس. في الآخر اختبارات المساعد مش بيلد كامل للتطبيق. الأسئلة اللي تحت هي اللي محتاج إجابة."
         ),
         "type_value": "اكتب القيمة:",
         "pick": "اكتب الرقم",
@@ -551,22 +540,54 @@ def discover(repo: Path) -> dict:
     }
 
 
-def questions_payload(repo: Path, lang: str) -> list[dict]:
-    d = discover(repo)
-    L = "ar" if lang == "ar" else "en"
-    labels = TOOL_LABELS[L]
-    py_opts = [{"id": p, "label": p} for p in d["pythons"]]
-    py_opts.append({"id": "stop", "label": t(lang, "i2_stop")})
-    mod_opts = [{"id": m, "label": m} for m in d["modules"]]
-    mod_opts.append({"id": "other", "label": t(lang, "i5_other")})
-    launch_opts = [{"id": x, "label": x} for x in d["launchers"]]
-    launch_opts.append({"id": "other", "label": t(lang, "i6_other")})
-    apk_opts = []
-    if d["apk_hint"]:
-        apk_opts.append({"id": "discovered", "label": t(lang, "i6b_use", path=d["apk_hint"])})
-    apk_opts.append({"id": "glob", "label": t(lang, "i6b_glob")})
-    apk_opts.append({"id": "other", "label": t(lang, "i6b_other")})
-    loc_label = ", ".join(d["locales"]) if d["locales"] else "values"
+def auto_from_facts(facts: dict) -> dict:
+    pythons = facts.get("pythons") or []
+    modules = facts.get("modules") or []
+    launchers = facts.get("launchers") or []
+    hint = facts.get("apk_hint") or ""
+    if hint:
+        apk_mode = "path"
+        apk_path = hint
+    else:
+        apk_mode = "glob"
+        apk_path = "**/outputs/apk/debug/*.apk"
+    return {
+        "product": facts.get("product") or "App",
+        "py": pythons[0] if pythons else "",
+        "module": modules[0] if modules else "",
+        "launcher": launchers[0] if launchers else "",
+        "apk": apk_mode,
+        "apk_path": apk_path,
+        "architecture": facts.get("stack") or "unknown",
+        "architecture_mode": "discovered",
+        "locales": ", ".join(facts.get("locales") or ["values"]),
+        "device_policy": "allow",
+        "scaffold": "disable",
+        "install_confirm": "confirm",
+        "agents_git": "gitignore",
+        "gemini_config": "merge-allowlist" if facts.get("gemini") else "skip",
+        "assemble_now": "tests-only",
+    }
+
+
+def auto_blurb(facts: dict, lang: str) -> str:
+    a = auto_from_facts(facts)
+    return t(
+        lang,
+        "auto_blurb",
+        product=a["product"] or "?",
+        py=a["py"] or "?",
+        module=a["module"] or "?",
+        launcher=a["launcher"] or "?",
+        apk=a["apk_path"],
+        stack=a["architecture"],
+        locales=a["locales"],
+    )
+
+
+def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[dict]:
+    d = facts if facts is not None else discover(repo)
+    labels = TOOL_LABELS["ar" if lang == "ar" else "en"]
     qs = [
         {
             "id": "i0",
@@ -575,26 +596,25 @@ def questions_payload(repo: Path, lang: str) -> list[dict]:
             "prompt": t(lang, "i0"),
             "options": [
                 {"id": "yes", "label": t(lang, "i0_yes")},
+                {"id": "skip", "label": t(lang, "i0_skip")},
                 {"id": "no", "label": t(lang, "i0_no")},
             ],
         },
-        {
-            "id": "i1",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i1"),
-            "options": [
-                {"id": "discovered", "label": t(lang, "i1_use", name=d["product"])},
-                {"id": "other", "label": t(lang, "i1_other")},
-            ],
-        },
-        {
-            "id": "i2",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i2"),
-            "options": py_opts,
-        },
+    ]
+    pythons = d.get("pythons") or []
+    if len(pythons) != 1:
+        py_opts = [{"id": p, "label": p} for p in pythons]
+        py_opts.append({"id": "stop", "label": t(lang, "i2_stop")})
+        qs.append(
+            {
+                "id": "i2",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "i2"),
+                "options": py_opts,
+            }
+        )
+    qs.append(
         {
             "id": "i3",
             "required": True,
@@ -604,115 +624,34 @@ def questions_payload(repo: Path, lang: str) -> list[dict]:
                 {"id": "never", "label": t(lang, "i3_never")},
                 {"id": "agent-may-commit", "label": t(lang, "i3_may")},
             ],
-        },
-        {
-            "id": "i4",
-            "required": False,
-            "allow_multiple": False,
-            "prompt": t(lang, "i4"),
-            "options": [
-                {"id": "allow", "label": t(lang, "i4_skip")},
-                {"id": "allow-explicit", "label": t(lang, "i4_allow")},
-                {"id": "physical-only", "label": t(lang, "i4_phys")},
-            ],
-        },
-        {
-            "id": "i5",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i5"),
-            "options": mod_opts,
-        },
-        {
-            "id": "i6",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i6"),
-            "options": launch_opts,
-        },
-        {
-            "id": "i6b",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i6b"),
-            "options": apk_opts,
-        },
-        {
-            "id": "i7",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i7"),
-            "options": [
-                {"id": "discovered", "label": t(lang, "i7_use", stack=d["stack"])},
-                {"id": "keep-kit", "label": t(lang, "i7_keep")},
-            ],
-        },
-        {
-            "id": "i8",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i8"),
-            "options": [
-                {"id": "discovered", "label": t(lang, "i8_use", folders=loc_label)},
-                {"id": "other", "label": t(lang, "i8_other")},
-            ],
-        },
-        {
-            "id": "i9",
-            "required": False,
-            "allow_multiple": False,
-            "prompt": t(lang, "i9"),
-            "options": [
-                {"id": "disable", "label": t(lang, "i9_dis")},
-                {"id": "retarget", "label": t(lang, "i9_ret")},
-            ],
-        },
-        {
-            "id": "i10",
-            "required": False,
-            "allow_multiple": False,
-            "prompt": t(lang, "i10"),
-            "options": [
-                {"id": "confirm", "label": t(lang, "i10_conf")},
-                {"id": "allow", "label": t(lang, "i10_allow")},
-            ],
-        },
-        {
-            "id": "i11",
-            "required": False,
-            "allow_multiple": False,
-            "prompt": t(lang, "i11"),
-            "options": [
-                {"id": "gitignore", "label": t(lang, "i11_gi")},
-                {"id": "commit-later", "label": t(lang, "i11_later")},
-            ],
-        },
-    ]
-    if d["gemini"]:
-        qs.append(
-            {
-                "id": "i12",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "i12"),
-                "options": [
-                    {"id": "merge-allowlist", "label": t(lang, "i12_merge")},
-                    {"id": "global-rule", "label": t(lang, "i12_global")},
-                ],
-            }
-        )
-    qs.append(
-        {
-            "id": "i13",
-            "required": False,
-            "allow_multiple": False,
-            "prompt": t(lang, "i13"),
-            "options": [
-                {"id": "tests-only", "label": t(lang, "i13_tests")},
-                {"id": "assemble", "label": t(lang, "i13_asm")},
-            ],
         }
     )
+    modules = d.get("modules") or []
+    if len(modules) != 1:
+        mod_opts = [{"id": m, "label": m} for m in modules]
+        mod_opts.append({"id": "other", "label": t(lang, "i5_other")})
+        qs.append(
+            {
+                "id": "i5",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "i5"),
+                "options": mod_opts,
+            }
+        )
+    launchers = d.get("launchers") or []
+    if len(launchers) != 1:
+        launch_opts = [{"id": x, "label": x} for x in launchers]
+        launch_opts.append({"id": "other", "label": t(lang, "i6_other")})
+        qs.append(
+            {
+                "id": "i6",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "i6"),
+                "options": launch_opts,
+            }
+        )
     tool_opts = [{"id": tid, "label": labels[tid]} for tid in TOOL_IDS]
     tool_opts.append({"id": "all", "label": labels["all"]})
     qs.append(
@@ -769,35 +708,45 @@ def prompt_text(lang: str) -> str:
 
 def normalize(raw: dict, facts: dict) -> dict:
     if raw.get("i0") == "no":
-        return {"schema": SCHEMA, "i0": False}
-    py = raw.get("i2")
-    if py in (None, "stop"):
+        return {"schema": SCHEMA, "i0": False, "backup": False}
+    auto = auto_from_facts(facts)
+    do_backup = raw.get("i0") != "skip"
+    py = raw.get("i2") or auto["py"]
+    if py in (None, "", "stop"):
         raise SystemExit("Python command missing or stop selected.")
-    module = raw.get("i5")
+    module = raw.get("i5") or auto["module"]
     if module == "other":
         module = raw.get("i5_text") or ""
     if module and not module.startswith(":"):
         module = ":" + module
-    launcher = raw.get("i6")
+    if not module:
+        raise SystemExit("No application module found; set i5.")
+    launcher = raw.get("i6") or auto["launcher"]
     if launcher == "other":
         launcher = raw.get("i6_text") or ""
+    if not launcher:
+        raise SystemExit("No launcher activity found; set i6.")
     apk = raw.get("i6b")
-    apk_path = facts.get("apk_hint") or "**/outputs/apk/debug/*.apk"
-    if apk == "other":
+    apk_path = auto["apk_path"]
+    if apk is None:
+        apk = auto["apk"]
+    elif apk == "other":
         apk_path = raw.get("i6b_text") or apk_path
         apk = "path"
     elif apk == "discovered":
         apk = "path"
-    elif apk != "glob":
-        apk = "glob"
+        apk_path = facts.get("apk_hint") or apk_path
+    elif apk == "glob":
         apk_path = "**/outputs/apk/debug/*.apk"
-    product = facts.get("product") or "App"
+    else:
+        apk = "path"
+    product = auto["product"]
     if raw.get("i1") == "other":
         product = raw.get("i1_text") or product
-    locales = ", ".join(facts.get("locales") or ["values"])
+    locales = auto["locales"]
     if raw.get("i8") == "other":
         locales = raw.get("i8_text") or locales
-    stack = facts.get("stack") or "unknown"
+    stack = auto["architecture"]
     arch_mode = "keep-kit" if raw.get("i7") == "keep-kit" else "discovered"
     tools = raw.get("i14") or []
     if isinstance(tools, str):
@@ -807,18 +756,22 @@ def normalize(raw: dict, facts: dict) -> dict:
     tools = [x for x in tools if x in TOOL_IDS]
     if not tools:
         raise SystemExit("Pick at least one coding tool (I.14).")
-    device = raw.get("i4") or "allow"
+    device = raw.get("i4") or auto["device_policy"]
     if device in {"allow-explicit", "allow"}:
         device = "allow"
     git_policy = raw.get("i3") or "never"
     if git_policy not in {"never", "agent-may-commit"}:
         git_policy = "never"
-    gemini = raw.get("i12") or "skip"
+    gemini = raw.get("i12") or auto["gemini_config"]
     if not facts.get("gemini"):
         gemini = "skip"
+    asked = sorted(
+        k for k in raw if isinstance(k, str) and re.fullmatch(r"i\d+[a-z]?", k)
+    )
     return {
         "schema": SCHEMA,
         "i0": True,
+        "backup": do_backup,
         "product": product,
         "py": py,
         "git_policy": git_policy,
@@ -831,12 +784,13 @@ def normalize(raw: dict, facts: dict) -> dict:
         "architecture": stack if arch_mode == "discovered" else "kit MVI/Hilt/Room leftovers",
         "architecture_mode": arch_mode,
         "locales": locales,
-        "scaffold": raw.get("i9") or "disable",
-        "install_confirm": raw.get("i10") or "confirm",
-        "agents_git": raw.get("i11") or "gitignore",
+        "scaffold": "disable",
+        "install_confirm": raw.get("i10") or auto["install_confirm"],
+        "agents_git": raw.get("i11") or auto["agents_git"],
         "gemini_config": gemini,
-        "assemble_now": raw.get("i13") or "tests-only",
+        "assemble_now": raw.get("i13") or auto["assemble_now"],
         "tools": tools,
+        "asked": asked,
     }
 
 
@@ -849,7 +803,8 @@ def write_answers(repo: Path, answers: dict) -> None:
     md = [
         "# SETUP_ANSWERS",
         "",
-        f"- I.0 Backup and start: {'yes' if answers.get('i0') else 'no'}",
+        f"- I.0 Continue install: {'yes' if answers.get('i0') else 'no'}",
+        f"- I.0 Backup: {'yes' if answers.get('backup', True) else 'no'}",
         f"- I.1 Product: {answers.get('product')}",
         f"- I.2 Python: {answers.get('py')}",
         f"- I.3 Git: {answers.get('git_policy')}",
@@ -866,6 +821,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.12 Gemini config: {answers.get('gemini_config')}",
         f"- I.13 Assemble now: {answers.get('assemble_now')}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
+        f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
         "",
     ]
     markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
@@ -890,8 +846,9 @@ def flags_from_answers(answers: dict) -> str:
 
 def interactive(repo: Path, lang: str) -> dict:
     facts = discover(repo)
+    print(auto_blurb(facts, lang))
     raw: dict = {}
-    for q in questions_payload(repo, lang):
+    for q in questions_payload(repo, lang, facts):
         chosen = prompt_choice(q, lang)
         if q["id"] == "i0" and chosen[0] == "no":
             print(t(lang, "stopped"))
@@ -953,7 +910,13 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(discover(repo), indent=2, ensure_ascii=False))
         return 0
     if args.command == "questions":
-        payload = {"discover": discover(repo), "questions": questions_payload(repo, args.lang)}
+        facts = discover(repo)
+        payload = {
+            "discover": facts,
+            "auto": auto_from_facts(facts),
+            "auto_blurb": auto_blurb(facts, args.lang),
+            "questions": questions_payload(repo, args.lang, facts),
+        }
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "flags":

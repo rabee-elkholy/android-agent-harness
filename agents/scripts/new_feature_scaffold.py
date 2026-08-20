@@ -350,12 +350,12 @@ def scaffold_feature(feature_name: str, target_dir: Path | None = None) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Scaffold an MVI feature in Rashaqa Android")
-    parser.add_argument("name", help="Feature name (e.g. dailyMotivation or waterTracker)")
-    parser.add_argument("--dest", help="Optional target directory path inside the repo")
-    args = parser.parse_args()
-    target = Path(args.dest) if args.dest else None
-    scaffold_feature(args.name, target)
+    print(
+        "new_feature_scaffold.py is disabled. Templates exist only so selftest can "
+        "read VIEWMODEL/SCREEN. Do not generate files from this script. Write new "
+        "screens in this app's real packages."
+    )
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":

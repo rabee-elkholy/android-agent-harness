@@ -42,7 +42,7 @@ android-harness-kit/
 │   └── tool-support.md      ← which file each product loads
 ├── agents/                  ← copy this folder to <your-app>/.agents
 │   ├── rules/
-│   ├── scripts/             ← includes setup_wizard.py (I.0–I.14 answers)
+│   ├── scripts/             ← includes setup_wizard.py (few questions; rest from disk)
 │   ├── skills/
 │   ├── subagents/
 │   ├── workflows/
@@ -61,17 +61,17 @@ android-harness-kit/
 
 ## Install
 
-Install is **not** a file copy. Plan for **time**: a setup wizard (each question explains why it matters), backup, clone (or reuse) the kit, a structural port, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you skip questions, close the chat early, or accept a rename of the example app, you do **not** get the engine above.
+Install is **not** a file copy. Plan for **time**: a few wizard questions (backup, git, which tools — the rest is read from Gradle/manifests), backup, clone (or reuse) the kit, a structural port, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you close the chat early or accept a rename of the example app, you do **not** get the engine above.
 
-Stay in that chat until the agent prints selftest `Total test failures: 0` and tells you to open a **new** session. Prefer answering the wizard in a **terminal** (full question text). The agent then ports; it must not invent five-word interview titles.
+Stay in that chat until the agent prints selftest `Total test failures: 0` and tells you to open a **new** session. Prefer answering the wizard in a **terminal**. The agent then ports; it must not invent extra interview questions.
 
 Open a **new chat** on your **Android app** (not this kit). Paste **all of** [`docs/install-prompt.md`](docs/install-prompt.md).
 
-The agent clones this repository if needed, runs `agents/scripts/setup_wizard.py` for I.0–I.14, copies `agents/` to `.agents`, then **ports** the engine (regex, Path pieces, APK name, architecture). A find-replace of the example app name is not a successful install.
+The agent clones this repository if needed, runs `agents/scripts/setup_wizard.py` (usually three questions), copies `agents/` to `.agents`, then **ports** the engine (regex, Path pieces, APK name, architecture). A find-replace of the example app name is not a successful install.
 
 After port, it runs `install_tool_adapters.py` with the flags printed by `setup_wizard.py flags`. Switching to a new IDE later means re-running the installer with that tool added.
 
-Physical vs emulator is **optional during setup**. Skip = both allowed. `adb monkey` stays denied.
+Emulator is **allowed by default** (change later with the update prompt if you need a physical device only). `adb monkey` stays denied.
 
 If you already have this kit on disk, you can still paste the same prompt — the agent will reuse the clone (pull `main` if you want the latest).
 

@@ -20,7 +20,7 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
    - Else: `git clone https://github.com/rabee-elkholy/android-harness-kit.git` into a sibling folder or the OS temp directory.
    - Do **not** reuse a stale clone without pulling.
 5. If `.harness-setup/answers.json` exists, print it. Ask **U.1** with a full prompt: keep these answers, or run `setup_wizard.py` again to change some. Do not use a two-word title.
-6. If they change answers, run `<kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>` (or `questions` + verbatim `ask_question` prompts + `write`). Copy the new `.harness-setup/SETUP_ANSWERS.md` into the backup folder.
+6. If they change answers, run `<kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>` (or `questions` + print `auto_blurb` + verbatim `ask_question` prompts for **only** the JSON `questions` list + `write`). Copy the new `.harness-setup/SETUP_ANSWERS.md` into the backup folder.
 7. Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills they added). Those must be restored from backup after the copy.
 8. Copy `<kit>/agents/` → `<this repo>/.agents/`. Empty `state/`. Keep `.agents/mcp_config.json` as `{"mcpServers": {}}`. Do not add MCP servers. Do not overwrite the developer's MCP / Continue / Aider / `kilo.jsonc` / `~/.gemini` configs.
 9. Restore extra non-kit paths from the backup into `.agents/` (custom skills only). Do **not** restore old kit files on top of the new copy.

@@ -6,7 +6,7 @@ You are installing the portable **Android AI harness** into **this** checkout. T
 
 Answer in the developer's language. Do not commit unless they ask. Do not only rename the example app.
 
-Tell the developer up front: this install takes a while (wizard questions with why/benefit, backup, structural port, selftest). They should stay in this chat until selftest `Total test failures: 0`. Rushing or skipping questions yields a weak harness.
+Tell the developer up front: a few short questions (backup, who commits, which AI tools), then backup, port, and selftest. They should stay in this chat until selftest `Total test failures: 0`. Stopping early yields a weak harness.
 
 ## Start now
 
@@ -17,9 +17,9 @@ Tell the developer up front: this install takes a while (wizard questions with w
 3. **Answers first (do not invent short questions).** `--lang ar` if the developer writes Arabic, else `--lang en`.
    - Preferred: they run this in **their** terminal, then tell you when it finishes:
      `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>`
-   - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>` then `ask_question` using each JSON `prompt` **verbatim** (translate nothing if `--lang` already matches). One policy question per form (i0, i3, i4, i7, i12, i14). Do not shorten the prompt. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
+   - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>`. Print `auto_blurb` in chat. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list (usually i0, i3, i14). Do not invent extra questions. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
-4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, open `<kit>/docs/setup-prompt.md` and execute it from **0) Backup** onward. Skip section **I** (answers are already recorded). Copy `.harness-setup/SETUP_ANSWERS.md` into the new backup folder. Installer flags: `$PY <kit>/agents/scripts/setup_wizard.py flags --repo <this-android-root>`. Copy source: `<kit>/agents/` → `<this repo>/.agents`.
+4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, open `<kit>/docs/setup-prompt.md` and execute it from **0) Backup** onward. If `"backup": false`, skip copying backups and say rollback will not work. Skip section **I** (answers are already recorded). Copy `.harness-setup/SETUP_ANSWERS.md` into the new backup folder when a backup was made. Installer flags: `$PY <kit>/agents/scripts/setup_wizard.py flags --repo <this-android-root>`. Copy source: `<kit>/agents/` → `<this repo>/.agents`.
 5. After setup: tell them to start a **new chat** on this Android folder before real work.
 
 Kit rules that still apply during setup:
