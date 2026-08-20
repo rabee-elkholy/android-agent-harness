@@ -1,6 +1,6 @@
 # Setup prompt
 
-The installing agent **executes** this file (usually after the developer pasted [`install-prompt.md`](install-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
+The installing agent **executes** this file (usually after the developer pasted [`install-prompt.md`](install-prompt.md) or [`update-prompt.md`](update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
 
 ---
 

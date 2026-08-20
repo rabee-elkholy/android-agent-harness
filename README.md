@@ -21,6 +21,7 @@ android-harness-kit/
 ├── .gitignore
 ├── docs/
 │   ├── install-prompt.md    ← paste this in a new chat on the Android app
+│   ├── update-prompt.md     ← paste this to pull a newer kit into an existing install
 │   ├── setup-prompt.md      ← the agent runs this after it clones the kit
 │   ├── rollback-prompt.md
 │   ├── restore.md
@@ -87,6 +88,41 @@ Begin: print OS, this repo path, and whether you reused a kit clone or cloned a 
 ## After setup
 
 Start a **new chat** on that Android folder. Non-trivial work still needs all five `*_PASS` tokens before assemble. Rollback: paste [`docs/rollback-prompt.md`](docs/rollback-prompt.md).
+
+## Update
+
+When this GitHub repo gets a new commit, people who already installed do **not** get it automatically. `.agents` is a copy.
+
+Open a **new chat** on the **Android app** and paste **all of** [`docs/update-prompt.md`](docs/update-prompt.md).
+
+The agent backs up, `git pull`s the kit, recopies `agents/` → `.agents`, re-ports from `SETUP_ANSWERS.md`, and re-runs `install_tool_adapters.py --tools …`. Custom skills they added (not shipped by the kit) are restored from the backup. Then a new chat.
+
+```
+You are updating the portable Android AI harness in this checkout. This folder is the Android product. It is not android-harness-kit.
+
+Answer in the developer's language. Do not commit unless they ask. This is not a first install. Reuse recorded setup answers. Re-port the new engine.
+
+Start now:
+
+1. Confirm this repo has gradlew or gradlew.bat and .agents/. If .agents/ is missing, stop and tell them to paste docs/install-prompt.md instead.
+2. Ask U.0: Back up and update / Stop. Wait.
+3. Backup first (timestamp). Copy current .agents and harness-owned adapters into <repo>/.harness-backup/<timestamp>/. If backup fails, stop.
+4. Get the latest kit (do not clone into app/ or composeApp/):
+   - If a clone exists nearby: git fetch and git pull on main. Print the new commit.
+   - Else: git clone https://github.com/rabee-elkholy/android-harness-kit.git into a sibling folder or OS temp.
+   - Do not reuse a stale clone without pulling.
+5. Read the newest SETUP_ANSWERS.md. Print I.1–I.14.
+6. Ask U.1: Keep these answers and update / I will change some answers. Interview only what they want to change.
+7. Note extra paths under .agents/ that the kit agents/ folder does not ship. Restore those after the copy.
+8. Copy <kit>/agents/ → <this repo>/.agents/. Empty state/. Keep mcp_config.json as {"mcpServers": {}}. Do not overwrite the developer's MCP / Continue / Aider / kilo.jsonc / ~/.gemini configs.
+9. Restore extra non-kit paths from the backup. Do not restore old kit files on top of the new copy.
+10. Run setup-prompt.md from “Port structurally” through verify using the recorded answers. Re-run install_tool_adapters.py with the recorded --tools.
+11. Selftest 0 failures, then preflight.
+12. Tell them to start a new chat. Rollback = docs/rollback-prompt.md.
+
+Begin: print OS, this repo path, whether .agents exists, then U.0.
+```
+
 
 ## Supported agents
 
