@@ -1,10 +1,10 @@
 # Setup prompt
 
-Paste **this entire file** as the first message to the agent in the **target Android checkout**. The agent must execute it, not summarize it. Replacing the example app name alone is **not** a successful install.
+The installing agent **executes** this file (usually after the developer pasted [`install-prompt.md`](install-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
 
 ---
 
-You are installing a portable **Android AI harness** into THIS checkout. The developer cloned or extracted `android-harness-kit`.
+You are installing a portable **Android AI harness** into THIS checkout. The kit is a clone of `android-harness-kit` (sibling, temp, or a path the developer gave). Copy from that clone’s `agents/` folder.
 
 ## Goal
 
