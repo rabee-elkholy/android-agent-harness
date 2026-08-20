@@ -23,7 +23,7 @@ Do not guess team policy. Wait for required choices before rewriting `harness-ru
 ## Detect environment (print in chat)
 
 - OS: `darwin` / Windows / Linux. Do **not** assume Mac. Never copy another PC's paths.
-- Tools: Claude Code, Codex, Antigravity/Gemini, Cursor, Copilot, Qwen Code, Windsurf, Cline, Roo, Amazon Q, Continue, Junie, Kilo, Goose — whatever exists. Do not require Antigravity. Write **all** adapters anyway (see §5).
+- Tools: Claude Code, Codex, Antigravity/Gemini, Cursor, Copilot, Qwen Code, Windsurf, Cline, Roo, Amazon Q, Continue, Junie, Kilo, Goose — whatever exists. Do not require Antigravity. Write adapters **only** for the tools they pick in **I.14**.
 - **`PY`**: try `python3 --version` then `python --version`. Windows `python3` is often a failing Store stub → use `python`. Confirm with the developer if both work (question I.2).
 - `adb` and `./gradlew` / `gradlew.bat`. On macOS `chmod +x gradlew` if needed.
 
@@ -146,6 +146,13 @@ You may **batch** independent choices in one `ask_question` (several questions) 
 - **Benefit:** they see heartbeats; cost = compile time.
 - **Choices:** `Tests only (selftest + preflight)` (Recommended) / `Yes, run :assembleDebug at the end`
 
+### I.14 Coding agents (required)
+
+- **Why:** Each product loads a different entry file. Writing every adapter clutters the checkout with tools they do not use.
+- **Benefit:** Only those files appear at the repo root. Re-run the installer with a new `--tools` list to add one later.
+- **Choices (multi-select):** `Cursor` / `Claude Code` / `GitHub Copilot` / `Gemini / Antigravity` / `Codex` / `Qwen Code` / `Windsurf` / `Cline` / `Roo` / `Amazon Q` / `Continue` / `Junie` / `Kilo` / `Goose` / `All of them`
+- Wait for this answer (`allow_multiple` if the product supports it). Do not default to all.
+
 ### I-text — type in chat (only these)
 
 Use a short chat prompt, not fake choices, when you **cannot** know:
@@ -171,15 +178,17 @@ Do not write forbidden tokens even in “do not use …” sentences.
 
 ## 5) Wire tools
 
-`hooks.json` = Antigravity only. **Always** write the full adapter set (not only the tool they use today) so switching later is smooth. Run:
+`hooks.json` lives in `.agents/` for Antigravity. Write adapters **only** for the tools from **I.14**. Run:
 
 ```
-$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5 assembleDebug task> --device-policy <allow|physical-only from I.4> --git-policy <never|agent-may-commit from I.3>
+$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5 assembleDebug task> --device-policy <allow|physical-only from I.4> --git-policy <never|agent-may-commit from I.3> --tools <comma ids from I.14>
 ```
+
+`--tools` examples: `cursor,gemini` or `claude,copilot` or `all`. Map I.14 labels to ids: `cursor` `claude` `copilot` `gemini` `codex` `qwen` `windsurf` `cline` `roo` `amazonq` `continue` `junie` `kilo` `goose`. `--tools all` if they picked every tool.
 
 `--device-policy allow` if I.4 was skip / either / emulator. `--device-policy physical-only` only if they locked to a physical device. `--git-policy never` unless I.3 allows commits.
 
-That script fills `.agents/tool-adapters/*.template` and writes `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `QWEN.md`, Cursor `.mdc`, Copilot, Windsurf (directory + `.windsurfrules`), Cline, Roo, Amazon Q, Continue, Junie, Kilo, Goose `.goosehints`, and `.claude/agents/*.md` from `.agents/subagents/*.json`. Details: kit `docs/tool-support.md`.
+That script fills `.agents/tool-adapters/*.template`, always writes `AGENTS.md`, writes the selected tool files, generates `.claude/agents/*.md` only when `claude` is selected, and **deletes** previously managed adapters for tools that were not selected. Details: kit `docs/tool-support.md`.
 
 Follow **I.12** for Gemini **global** config only. Never copy `remoteControlHostname` or tokens. Never set `sdk.dir` in harness files. Do not overwrite `.aider.conf.yml`, Continue/MCP user configs, `kilo.jsonc`, or `~/.gemini`.
 
@@ -187,7 +196,7 @@ Follow **I.12** for Gemini **global** config only. Never copy `remoteControlHost
 
 `$PY .agents/scripts/_hook_selftest.py` → `Total test failures: 0`.  
 `$PY .agents/scripts/preflight_check.py` → pass.  
-Confirm adapter files exist: `AGENTS.md`, `CLAUDE.md`, `QWEN.md`, `.cursor/rules/android-harness.mdc` (starts with `---`), `.github/copilot-instructions.md`, `.clinerules`, `.windsurf/rules/android-harness.md`.  
+Confirm adapter files exist for **I.14** only (always `AGENTS.md`; Cursor `.mdc` starts with `---`; `GEMINI.md` if Gemini was selected). Do not require CLAUDE.md / Copilot / Cline unless those tools were chosen.  
 Assemble only if **I.13 = yes**.
 
 ## 7) Tell the developer

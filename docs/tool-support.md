@@ -1,9 +1,11 @@
 # Tool support
 
-One engine. Many entry files. Setup always writes **every** adapter so the developer can switch tools later without re-installing.
+One engine. Many entry files. Setup writes adapters **only for the tools the developer selects** (`--tools`). Re-run the installer with a new list to add another tool later.
 
 Canonical rules: `.agents/rules/harness-rules.md`.  
 Installer: `$PY .agents/scripts/install_tool_adapters.py`.
+
+`AGENTS.md` is always written. `.claude/agents/*.md` is generated only when `claude` is selected. Previously managed adapters for tools that were **not** selected are deleted (unless `--keep-extra-adapters`).
 
 ## What actually runs
 
@@ -41,15 +43,17 @@ Do **not** overwrite `.aider.conf.yml`, Continue user config, MCP configs, `kilo
 
 Aider, Zed, Amp, Devin, Factory, Jules, Warp, and OpenCode pick up `AGENTS.md` with no extra file. Do not add `.cursorrules` (Cursor legacy; `.mdc` is the current file). Do not add `CONVENTIONS.md` (Aider can already read `AGENTS.md`; that filename often belongs to humans).
 
-## Smooth switching
+## Adding a tool later
 
-Install writes the full set even if only one tool is installed today. Opening the same checkout in Copilot next week already has `.github/copilot-instructions.md`.
-
-Re-run the installer after changing Python command, assemble task, device policy, or git policy:
+Re-run the installer with the **new** `--tools` list (include tools you still use, plus the one you are adding). Example: you had Cursor + Gemini; later you add Claude Code:
 
 ```
-{{PY}} .agents/scripts/install_tool_adapters.py --product <name> --py <python|python3> --assemble :<module>:assembleDebug --device-policy allow|physical-only --git-policy never|agent-may-commit
+{{PY}} .agents/scripts/install_tool_adapters.py --product <name> --py <python|python3> --assemble :<module>:assembleDebug --device-policy allow|physical-only --git-policy never|agent-may-commit --tools cursor,gemini,claude
 ```
+
+`--tools all` writes every row in the matrix. `--keep-extra-adapters` writes the selected files without deleting the others.
+
+Also re-run after changing Python command, assemble task, device policy, or git policy.
 
 ## Tools without subagent spawn
 

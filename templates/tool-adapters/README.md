@@ -5,7 +5,7 @@ Canonical templates live in **`agents/tool-adapters/`** so they copy with the en
 Setup runs:
 
 ```
-$PY .agents/scripts/install_tool_adapters.py --product … --py … --assemble … --device-policy … --git-policy …
+$PY .agents/scripts/install_tool_adapters.py --product … --py … --assemble … --device-policy … --git-policy … --tools cursor,gemini
 ```
 
-That writes `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `QWEN.md`, Copilot/Cursor/Windsurf/Cline/Roo/Amazon Q/Continue/Junie/Kilo/Goose adapters, and `.claude/agents/*.md`. See [`docs/tool-support.md`](../../docs/tool-support.md).
+`--tools` is required (`all` or a comma-separated list of ids). That writes `AGENTS.md` plus only the selected adapters. See [`docs/tool-support.md`](../../docs/tool-support.md).

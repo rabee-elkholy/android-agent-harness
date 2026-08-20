@@ -10,7 +10,7 @@ The kit is not an Android app. It is rules, reviewer prompts, and Python runners
 - Live Gradle runner with a task log and 10s heartbeat
 - Device install/launch helper (`run_device.py`)
 - Safety hook in Antigravity; the same protocol in markdown for every other tool
-- One installer that writes all popular-tool adapters so switching IDEs later needs no re-setup
+- One installer that writes adapters **only for the tools the developer selects** (re-run `--tools` to add another later)
 - Structural port away from the example product identity (package, module, theme, architecture)
 
 ## Layout
@@ -53,7 +53,7 @@ android-harness-kit/
 
 The agent backs up first, discovers your module/package/launcher from disk, then asks setup questions with choices. It must **port** the engine (regex, Path pieces, APK name, architecture). A find-replace of the example app name is not a successful install.
 
-After port, it runs `install_tool_adapters.py`, which writes `AGENTS.md`, `CLAUDE.md`, `QWEN.md`, Copilot, Cursor, Windsurf, Cline, Kilo, Goose, and the rest — **all of them**, not only the tool you have today.
+After port, it runs `install_tool_adapters.py --tools <the tools they chose>` and writes only those entry files. Switching to a new IDE later means re-running the installer with that tool added.
 
 Physical vs emulator is **optional during setup**. Skip = both allowed. `adb monkey` stays denied.
 

@@ -33,7 +33,7 @@ The engine ships with example-product leftovers from a production Android app. S
 - **I.9 disable scaffold:** `_hook_selftest.py` still imports `new_feature_scaffold.VIEWMODEL` and `.SCREEN` (needs `locale = "ar"` / `"en"` and `isEmpty = true`). Keep those constants without leftover identity tokens, or selftest crashes. `main()` may still exit disabled.
 - **Leftover grep:** do not write forbidden tokens even in “do not use …” sentences.
 - **I.12:** if another product on this PC already uses `~/.gemini/config.json`, skip global writes.
-- **Tool adapters:** do not hand-edit one `AGENTS.md` and skip the rest. Run `install_tool_adapters.py` so Cursor/Copilot/Cline/Qwen/Kilo/Goose/… stay in sync. Do not copy `remoteControlHostname`, tokens, or `sdk.dir`. Do not overwrite `.aider.conf.yml` or `~/.gemini`.
+- **Tool adapters:** do not hand-edit one `AGENTS.md` and skip the rest. Run `install_tool_adapters.py --tools <selected ids>` so every selected adapter stays in sync. Re-run with a new `--tools` list to add a tool. Do not copy `remoteControlHostname`, tokens, or `sdk.dir`. Do not overwrite `.aider.conf.yml` or `~/.gemini`.
 
 ## Do not weaken
 

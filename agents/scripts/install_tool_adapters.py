@@ -1,15 +1,16 @@
-"""Write entry files so popular coding agents load the same Android harness.
+"""Write entry files for the coding agents the developer actually uses.
 
-Canonical rules stay in `.agents/rules/harness-rules.md`. This script only writes
-thin adapters (AGENTS.md, CLAUDE.md, Copilot, Cursor, Windsurf, …).
+Canonical rules stay in `.agents/rules/harness-rules.md`. This script writes thin
+adapters only for `--tools` (and always `AGENTS.md`). Re-run with a new list to
+add a tool. Managed files for tools that were not selected are removed.
 
 Usage (from an installed app checkout):
 
-    python .agents/scripts/install_tool_adapters.py --product Qosousa --py python --assemble :composeApp:assembleDebug
+    python .agents/scripts/install_tool_adapters.py --product Qosousa --py python --assemble :composeApp:assembleDebug --tools cursor,gemini
 
 Usage (from the kit, targeting an app):
 
-    python agents/scripts/install_tool_adapters.py --repo /path/to/app --product MyApp --py python3 --assemble :<module>:assembleDebug
+    python agents/scripts/install_tool_adapters.py --repo /path/to/app --product MyApp --py python3 --assemble :<module>:assembleDebug --tools all
 """
 from __future__ import annotations
 
@@ -50,6 +51,57 @@ GIT_TEXT = {
 }
 
 CLAUDE_READ_TOOLS = "Read, Grep, Glob"
+
+TOOL_ALIASES = {
+    "antigravity": "gemini",
+    "google-antigravity": "gemini",
+    "vscode": "copilot",
+    "github-copilot": "copilot",
+    "amazon-q": "amazonq",
+    "q": "amazonq",
+}
+
+# Files the installer may create. Shared AGENTS.md is always kept when any tool is selected.
+TOOL_FILES: dict[str, tuple[str, ...]] = {
+    "cursor": (".cursor/rules/android-harness.mdc",),
+    "claude": ("CLAUDE.md",),
+    "gemini": ("GEMINI.md",),
+    "codex": ("CODEX.md",),
+    "qwen": ("QWEN.md",),
+    "copilot": (
+        ".github/copilot-instructions.md",
+        ".github/instructions/android-harness.instructions.md",
+    ),
+    "windsurf": (".windsurf/rules/android-harness.md", ".windsurfrules"),
+    "cline": (".clinerules",),
+    "roo": (".roo/rules/android-harness.md",),
+    "amazonq": (".amazonq/rules/android-harness.md",),
+    "continue": (".continue/rules/android-harness.md",),
+    "junie": (".junie/guidelines.md",),
+    "kilo": (".kilocode/rules/android-harness.md",),
+    "goose": (".goosehints",),
+}
+
+KNOWN_TOOLS = tuple(TOOL_FILES)
+EMPTY_DIR_CANDIDATES = (
+    ".amazonq/rules",
+    ".amazonq",
+    ".claude/agents",
+    ".claude",
+    ".continue/rules",
+    ".continue",
+    ".junie",
+    ".kilocode/rules",
+    ".kilocode",
+    ".roo/rules",
+    ".roo",
+    ".windsurf/rules",
+    ".windsurf",
+    ".github/instructions",
+    ".github",
+    ".cursor/rules",
+    ".cursor",
+)
 
 
 def fill(text: str, mapping: dict[str, str]) -> str:
@@ -105,17 +157,50 @@ def with_managed_marker(body: str) -> str:
     return text
 
 
+def rel_of(path: Path, repo: Path) -> str:
+    try:
+        return path.relative_to(repo).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def write_file(path: Path, body: str, *, dry_run: bool, repo: Path) -> str:
     text = with_managed_marker(body)
-    try:
-        rel = path.relative_to(repo).as_posix()
-    except ValueError:
-        rel = path.as_posix()
+    rel = rel_of(path, repo)
     if dry_run:
         return f"dry-run {rel} ({len(text)} bytes)"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
     return f"wrote {rel}"
+
+
+def is_managed_file(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        return MANAGED.strip() in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def parse_tools(raw: str) -> set[str]:
+    parts = [p.strip().lower().replace("_", "-") for p in raw.split(",") if p.strip()]
+    if not parts:
+        raise SystemExit("Pass --tools with at least one id, or --tools all.")
+    if "all" in parts:
+        return set(KNOWN_TOOLS)
+    selected: set[str] = set()
+    unknown: list[str] = []
+    for part in parts:
+        name = TOOL_ALIASES.get(part, part)
+        if name not in TOOL_FILES:
+            unknown.append(part)
+            continue
+        selected.add(name)
+    if unknown:
+        known = ", ".join(KNOWN_TOOLS)
+        raise SystemExit(f"Unknown --tools: {', '.join(unknown)}. Known: {known}, all")
+    return selected
 
 
 def find_repo(explicit: str | None) -> Path:
@@ -179,12 +264,106 @@ def generate_claude_agents(repo: Path, *, dry_run: bool) -> list[str]:
     return logs
 
 
+def bodies_for_tool(tool: str, mapping: dict[str, str], pointer: str) -> dict[str, str]:
+    if tool == "cursor":
+        return {
+            ".cursor/rules/android-harness.mdc": fill(
+                read_template("cursor-android-harness.mdc.template"), mapping
+            )
+        }
+    if tool == "claude":
+        return {"CLAUDE.md": fill(read_template("CLAUDE.md.template"), mapping)}
+    if tool == "gemini":
+        return {"GEMINI.md": fill(read_template("GEMINI.md.template"), mapping)}
+    if tool == "codex":
+        return {"CODEX.md": fill(read_template("CODEX.md.template"), mapping)}
+    if tool == "qwen":
+        return {"QWEN.md": fill(read_template("QWEN.md.template"), mapping)}
+    if tool == "copilot":
+        return {
+            ".github/copilot-instructions.md": fill(
+                read_template("copilot-instructions.md.template"), mapping
+            ),
+            ".github/instructions/android-harness.instructions.md": fill(
+                read_template("github-instructions.md.template"), mapping
+            ),
+        }
+    if tool == "windsurf":
+        return {
+            ".windsurf/rules/android-harness.md": fill(
+                read_template("windsurf-android-harness.md.template"), mapping
+            ),
+            ".windsurfrules": pointer,
+        }
+    if tool == "continue":
+        return {
+            ".continue/rules/android-harness.md": fill(
+                read_template("continue-android-harness.md.template"), mapping
+            )
+        }
+    out: dict[str, str] = {}
+    for rel in TOOL_FILES[tool]:
+        out[rel] = pointer
+    return out
+
+
+def keep_set(selected: set[str]) -> set[str]:
+    keep = {"AGENTS.md"}
+    for tool in selected:
+        keep.update(TOOL_FILES[tool])
+    return keep
+
+
+def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run: bool) -> list[str]:
+    logs: list[str] = []
+    catalog = {"AGENTS.md"}
+    for files in TOOL_FILES.values():
+        catalog.update(files)
+    for rel in sorted(catalog):
+        if rel in keep:
+            continue
+        path = repo / rel
+        if not is_managed_file(path):
+            continue
+        rel_s = rel_of(path, repo)
+        if dry_run:
+            logs.append(f"dry-run delete {rel_s}")
+            continue
+        path.unlink()
+        logs.append(f"deleted {rel_s}")
+    claude_dir = repo / ".claude" / "agents"
+    if "claude" not in selected and claude_dir.is_dir():
+        for path in sorted(claude_dir.glob("*.md")):
+            if not is_managed_file(path):
+                continue
+            rel_s = rel_of(path, repo)
+            if dry_run:
+                logs.append(f"dry-run delete {rel_s}")
+                continue
+            path.unlink()
+            logs.append(f"deleted {rel_s}")
+    if dry_run:
+        return logs
+    for rel in EMPTY_DIR_CANDIDATES:
+        path = repo / rel
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+            logs.append(f"removed empty {rel}")
+    return logs
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Install cross-tool Android harness adapters.")
+    known = ", ".join(KNOWN_TOOLS)
+    p = argparse.ArgumentParser(description="Install selected Android harness adapters.")
     p.add_argument("--repo", help="Android checkout root. Default: parent of .agents when installed.")
     p.add_argument("--product", required=True, help="Product display name (e.g. Qosousa).")
     p.add_argument("--py", required=True, help="Python command that actually runs here (python or python3).")
     p.add_argument("--assemble", required=True, help="Gradle assemble task (e.g. :composeApp:assembleDebug).")
+    p.add_argument(
+        "--tools",
+        required=True,
+        help=f"Comma-separated tool ids the developer uses, or 'all'. Known: {known}",
+    )
     p.add_argument(
         "--device-policy",
         choices=sorted(DEVICE_TEXT),
@@ -201,6 +380,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--git-text", help="Override the generated git-policy sentence.")
     p.add_argument("--dry-run", action="store_true", help="Print paths without writing.")
     p.add_argument("--skip-claude-agents", action="store_true", help="Do not generate .claude/agents/*.md.")
+    p.add_argument(
+        "--keep-extra-adapters",
+        action="store_true",
+        help="Do not delete managed adapters for tools that were not selected.",
+    )
     return p.parse_args(argv)
 
 
@@ -217,45 +401,30 @@ def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
 def install(args: argparse.Namespace) -> list[str]:
     if not TEMPLATES_DIR.is_dir():
         raise SystemExit(f"Templates missing: {TEMPLATES_DIR}")
+    selected = parse_tools(args.tools)
     repo = find_repo(args.repo)
     mapping = mapping_from_args(args)
     pointer = fill(read_template("pointer.md.template"), mapping)
     logs: list[str] = []
 
-    # Always write the full set. Do not write .aider.conf.yml, Continue user
-    # config, MCP configs, kilo.jsonc, or ~/.gemini / ~/.qwen / ~/.kilocode.
-    owned: list[tuple[str, str]] = [
-        ("AGENTS.md", fill(read_template("AGENTS.md.template"), mapping)),
-        ("CLAUDE.md", fill(read_template("CLAUDE.md.template"), mapping)),
-        ("GEMINI.md", fill(read_template("GEMINI.md.template"), mapping)),
-        ("CODEX.md", fill(read_template("CODEX.md.template"), mapping)),
-        ("QWEN.md", fill(read_template("QWEN.md.template"), mapping)),
-        (".cursor/rules/android-harness.mdc", fill(read_template("cursor-android-harness.mdc.template"), mapping)),
-        (".github/copilot-instructions.md", fill(read_template("copilot-instructions.md.template"), mapping)),
-        (
-            ".github/instructions/android-harness.instructions.md",
-            fill(read_template("github-instructions.md.template"), mapping),
-        ),
-        (
-            ".windsurf/rules/android-harness.md",
-            fill(read_template("windsurf-android-harness.md.template"), mapping),
-        ),
-        (".windsurfrules", pointer),
-        (".clinerules", pointer),
-        (".roo/rules/android-harness.md", pointer),
-        (".amazonq/rules/android-harness.md", pointer),
-        (
-            ".continue/rules/android-harness.md",
-            fill(read_template("continue-android-harness.md.template"), mapping),
-        ),
-        (".junie/guidelines.md", pointer),
-        (".kilocode/rules/android-harness.md", pointer),
-        (".goosehints", pointer),
-    ]
-    for rel, body in owned:
-        logs.append(write_file(repo / rel, body, dry_run=args.dry_run, repo=repo))
-    if not args.skip_claude_agents:
+    keep = keep_set(selected)
+    if not args.keep_extra_adapters:
+        logs.extend(prune_unselected(repo, keep, selected, dry_run=args.dry_run))
+
+    logs.append(
+        write_file(
+            repo / "AGENTS.md",
+            fill(read_template("AGENTS.md.template"), mapping),
+            dry_run=args.dry_run,
+            repo=repo,
+        )
+    )
+    for tool in sorted(selected):
+        for rel, body in bodies_for_tool(tool, mapping, pointer).items():
+            logs.append(write_file(repo / rel, body, dry_run=args.dry_run, repo=repo))
+    if "claude" in selected and not args.skip_claude_agents:
         logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
+    logs.append(f"tools: {', '.join(sorted(selected))}")
     return logs
 
 
@@ -264,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     logs = install(args)
     for line in logs:
         print(line)
-    print(f"adapter files: {len(logs)}")
+    print(f"adapter files: {len([x for x in logs if x.startswith(('wrote ', 'dry-run '))])}")
     return 0
 
 
