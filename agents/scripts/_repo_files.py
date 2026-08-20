@@ -1,4 +1,4 @@
-"""Repo-relative git/adb helpers shared by Rashaqa harness scripts."""
+"""Repo-relative git/adb helpers shared by harness scripts."""
 from __future__ import annotations
 
 import subprocess

@@ -63,8 +63,8 @@ def cache_is_fresh(fingerprint: str) -> bool:
 
 def run_selftest() -> tuple[bool, str]:
     env = os.environ.copy()
-    env.pop("RASHAQA_HOOK_STATE", None)
-    env.pop("RASHAQA_TRANSCRIPT_ROOT", None)
+    env.pop("HARNESS_HOOK_STATE", None)
+    env.pop("HARNESS_TRANSCRIPT_ROOT", None)
     proc = subprocess.run(
         [sys.executable, str(SELFTEST)],
         cwd=str(AGENTS.parent),
@@ -121,7 +121,7 @@ def main() -> int:
                     "injectSteps": [
                         {
                             "ephemeralMessage": (
-                                "Rashaqa hook selftest FAILED after a harness change. "
+                                "this app hook selftest FAILED after a harness change. "
                                 "Do not assemble. Run `python .agents/scripts/_hook_selftest.py` "
                                 "and fix the failures before delivery."
                             )

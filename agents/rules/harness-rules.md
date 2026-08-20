@@ -2,13 +2,13 @@
 trigger: always_on
 ---
 
-# Rashaqa Android — Quality-First Multi-Agent Delivery Rules
+# this Android app — Quality-First Multi-Agent Delivery Rules
 
 Single source of truth for AI work in this checkout. Skills are domain knowledge. Workflows are short pointers back here. If a workflow, skill, or reminder disagrees with this file, this file wins.
 
 Developer (Rabee) works **locally** in Android Studio on this checkout. The agent never uses Git worktrees, never commits, and never opens PRs.
 
-Main chat model: **Gemini Flash 3.7**. Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a different SKU.
+Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a different SKU.
 
 ---
 
@@ -33,7 +33,7 @@ Main chat model: **Gemini Flash 3.7**. Every subagent must use `model="inherit"`
 
 ## Always
 
-- Work only in the opened `Fitness_Android` checkout. Subagents: `Workspace="inherit"`. Never `share` / worktree / new branch.
+- Work only in this checkout. Subagents: `Workspace="inherit"`. Never `share` / worktree / new branch.
 - Leave changes **unstaged**. No `git add`, commit, push, merge, rebase, stash, reset, or PR — not even if the developer says "commit it". Draft the Conventional Commit message only. Rabee commits in Android Studio.
 - Physical device only. Never create or use an emulator or AVD. Resolve the serial with `adb devices` and pick a non-`emulator-` device. Do not hardcode a serial.
 - Never `adb monkey`, `pm clear`, uninstall, or clear app data without explicit developer direction.
@@ -69,18 +69,18 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 
 - Read `android-harness/SKILL.md` and any matching domain reference before non-trivial work.
 - Inspect with `grep_search` / `view_file` before editing. Do not guess symbols.
-- Smallest change that matches **the files you opened**. Most of the app is Fragment + XML + ViewBinding. Do not convert an XML screen to Compose to fix a bug.
-- Domain references (do not restate them here): ads/UMP, running/GPS, streak acknowledge, Room migrations, sensors/services, payments.
+- Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
+- Domain references: architecture, Compose/theme, Room (if `@Database` exists). Do not cite ads/GPS/streak/payments stubs.
 - Non-trivial work needs `.agents/state/plans/implementation_plan.md` and developer approval via `ask_question`.
-- Large work (>3–4 files, or core types like `HomeActivity` / `HomeViewModel` / `RunTrackingService`): split into milestones (data → domain → state → UI). One milestone per increment. No 10-file big-bang turns.
+- Large work (>3–4 files, or a shared ViewModel / service): split into milestones (data → domain → state → UI). One milestone per increment. No 10-file big-bang turns.
 - Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer.
 - TDD when it protects real logic. No placeholder tests.
 
 ### New production code
 
-- New UI: Jetpack Compose in `BaseComposeFragment`.
-- Any new or modified Compose UI: dual-locale `@Preview` in `MyAppTheme` — Arabic RTL (`locale = "ar"`) and English LTR (`locale = "en"`). **Screens** also need Loading, Empty, and Error. Cards, dialogs, sheets, and banners need the two locales; they do not need the three state previews.
-- New ViewModels: `MVIViewModel<S, E, A>` (not `BaseViewModel`). Data via UseCase → `ResultStates<T>`.
+- New UI: Jetpack Compose unless the surrounding screen is XML and the developer did not ask to convert it.
+- Any new or modified Compose UI: dual-locale `@Preview` — Arabic RTL (`locale = "ar"`) and English LTR (`locale = "en"`). Wrap in this app's theme (or `MaterialTheme` if none). **Screens** also need Loading, Empty, and Error. Cards, dialogs, sheets, and banners need the two locales; they do not need the three state previews.
+- New ViewModels: the base required by `architecture-mvi.md` and the files you opened. Data through the same layers those files already use.
 - Zero inline FQCNs. Import at the top. Typealias collisions (`as CoreState`, `as CoreAction`, `as CoreEvent`).
 - Typography: `MaterialTheme.typography.*` only.
 - One-shot UI effects: never sticky `MutableLiveData`. Consume-to-null, `Channel`/`sendEvent()`, or `SharedFlow`.
@@ -90,7 +90,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 
 ## 2) Parallel Review Fan-Out (the only delivery gate)
 
-Required after any non-trivial implementation (UI, state/lifecycle, payment, networking, database, running/sensors, streak, ads/privacy, refactor, multi-file, new Kotlin).
+Required after any non-trivial implementation (UI, state/lifecycle, networking, database, refactor, multi-file, new Kotlin).
 
 ### Stage 0: Narrow skip (reviews only)
 
@@ -106,7 +106,7 @@ This skip is not a token optimization. Code changes never skip reviews.
 
 From repo root:
 
-1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `RASHAQA_REVIEW_PACKAGE=`.
+1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
 3. Stop calling tools. Do not poll `transcript.jsonl`. Do not run lint/tests/assemble while they run.
 4. Collect verdicts. BLOCKER/MAJOR → fix at the producer → regenerate the package → dispatch the same 5 again. Identical package content is rejected; the diff must change.
@@ -123,10 +123,10 @@ Optional sixth slot in the same invoke: `qa-diagnostics-agent` **or** `android-u
 Only after the 5 leaves have finished (PASS, not still running):
 
 1. `python .agents/scripts/fast_kt_lint.py` — dual-locale `@Preview` is required on Compose `*Screen.kt`, `*Card.kt`, `*Dialog.kt`, `*BottomSheet.kt`, `*Sheet.kt`, and `*Banner.kt`. Screens also need Loading/Empty/Error.
-2. Targeted tests: `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."`. Payment tests: `app/src/test/.../payment/`.
+2. Targeted tests: `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."` when this checkout has unit tests. Use this module, not a leftover test path.
 3. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
 4. `adb devices` — physical serial only.
-5. `python .agents/scripts/run_device.py install-start` (live adb install + launch). Equivalent: `adb -s <DEVICE_ID> install -r -d app/build/outputs/apk/debug/app-debug.apk` then `adb -s <DEVICE_ID> shell am start -n com.madarsoft.fitness/.features.splash.SplashActivity`.
+5. `python .agents/scripts/run_device.py install-start` (live adb install + launch). Equivalent: `adb -s <DEVICE_ID> install -r -d app/build/outputs/apk/debug/app-debug.apk` then `adb -s <DEVICE_ID> shell am start -n com.example.app/.MainActivity`.
 
 Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/logcat_doctor.py` (optional `--device <serial>`). Both reject emulators.
 
@@ -140,15 +140,33 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
   1. Write `.agents/state/plans/walkthrough.md`
   2. Final Task Summary in chat: what / why / files / gates (`*_PASS` + `BUILD SUCCESSFUL`)
   3. Conventional Commit message for Android Studio
-  4. Never present the commit message before every phase is Pass.
+  4. If the work came from a Zoho id: one-line reminder that Zoho is not updated — wait for `update zoho`. No modal.
+  5. Never present the commit message before every phase is Pass.
+
+---
+
+## 5) Zoho
+
+Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-sprints.md`. Credentials stay in the user-level config — never copy tokens into the repo.
+
+- Never mutate Zoho unless the developer explicitly says to (for example `update zoho`).
+- Allowed statuses: `In progress` when started; `Ready To ReTest` when verified. Never `Done` / `Solved`.
+- Zoho prose: Arabic, no emoji, human tone, no engine internals, include `git log -1 --format=%h` (developer may paste the hash if HEAD has not moved).
+- Assignment: Rabee Elkholy. No name in titles. New items use the default Sprints assignee from the MCP workflow defaults (overridable in the user config).
+- **If Zoho MCP tools are not available in this session**, do not invent ticket fields. Ask the developer to paste the ticket or enable Zoho. Continue local implementation using what they provide.
+- This checkout wires **Zoho Sprints only** through `.agents/mcp_config.json` to `.agents/mcp/zoho_sprints/server.py`. **Zoho Desk is not used.** Do not invoke Desk tools, do not add a Desk MCP server, and do not treat Desk ticket numbers as Sprints item ids.
+- Bug id ingestion: fetch if tools exist, explain in chat, start analysis. Still write a plan for non-trivial bugs and request approval.
+- Feature task id: fetch, explain, then ask whether to start the plan.
+- Templates for comments/descriptions stay as: Commit / سبب المشكلة / الحل / خطوات الفحص (bugs) and Commit / الميزة / الشاشات / حالات الاختبار (features).
 
 ---
 
 ## Skills (read on demand)
 
-- `android-harness` and its `references/` — MVI, ads, streak, GPS, sensors, Room, payments, Compose, scenarios
+- `android-harness` and its `references/` — architecture, Compose, Room, performance, checkout facts
 - `kotlin-coroutines-expert`
 - `systematic-debugging`
 - `compose-inspector`
 - `gradle-build-optimizer`
 - `git-pr-automator` — commit **message** format only
+- Zoho Sprints playbook: `.agents/workflows/zoho-sprints.md` (mutate only on `update zoho`)

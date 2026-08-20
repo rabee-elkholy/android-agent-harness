@@ -3,7 +3,7 @@
 After fixes, regenerate the package (content must change) and dispatch the **same 5** in one invoke.
 
 ```
-RASHAQA_REVIEW_PACKAGE=[PATH from python .agents/scripts/review_package.py]
+HARNESS_REVIEW_PACKAGE=[PATH from python .agents/scripts/review_package.py]
 This is a scoped re-review of the fix diff.
 
 Previous findings to verdict:

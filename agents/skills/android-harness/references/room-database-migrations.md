@@ -1,11 +1,10 @@
 # Room Database & Storage Migration Protocol
 
-Strict rules for modifying Room entities, DAOs, schema versions, and preferences in Rashaqa Android.
+Strict rules for modifying Room entities, DAOs, schema versions, and preferences in this Android app.
 
 ---
 
 ## 1. Zero Data Loss Policy
-Rashaqa has millions of active users and version codes over 900.
 - ❌ **NEVER** use `fallbackToDestructiveMigration()` in production database builders.
 - ❌ **NEVER** modify a table structure, column name, or index without an explicit `Migration(startVersion, endVersion)` object.
 

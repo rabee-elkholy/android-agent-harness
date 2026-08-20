@@ -4,7 +4,7 @@ These files are copied into the **application repo** (not into `.agents`) so pop
 
 `install_tool_adapters.py` fills `{{PRODUCT}}`, `{{PY}}`, `{{ASSEMBLE}}`, `{{DEVICE_POLICY}}`, and `{{GIT_POLICY}}`.
 
-The installer writes **only** the tools passed in `--tools` (plus `AGENTS.md`). Re-run with a new list to add a tool. It does **not** overwrite `.aider.conf.yml`, Continue user config, MCP configs, `kilo.jsonc`, or `~/.gemini`.
+The installer writes **only** the tools passed in `--tools` (plus `AGENTS.md`). Re-run with a new list to add a tool. It does **not** overwrite `.aider.conf.yml`, Continue user config, `kilo.jsonc`, or `~/.gemini`. Zoho Sprints MCP is a separate script (`install_zoho_mcp.py`) and never copies tokens.
 
 Rows below are written only when that tool is selected (`--tools all` writes every row).
 

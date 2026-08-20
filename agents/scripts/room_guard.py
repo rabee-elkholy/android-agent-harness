@@ -1,4 +1,4 @@
-"""Room schema / migration gate for Rashaqa Android.
+"""Room schema / migration gate for this Android app.
 
 Fails a working-tree schema change when version was not incremented, when
 Migration(old, new) is missing, when it is not registered with addMigrations,

@@ -186,10 +186,20 @@ T = {
             "Which programs do you open this project in? Select every one you use. "
             "If you use Cursor, you must select Cursor so its rules get written."
         ),
+        "i16": (
+            "Does this project use Zoho Sprints? The helper can list and update sprint items. "
+            "Credentials stay in a file on this PC. Setup will not copy tokens into the repo "
+            "and will not ask you to paste them. Skip if you do not use Zoho."
+        ),
+        "i16_enable_found": "Enable Zoho Sprints — reuse the credentials already on this PC (Recommended)",
+        "i16_enable": "Enable Zoho Sprints — I will add credentials after setup",
+        "i16_skip": "Skip — no Zoho on this project",
+        "i16_skip_rec": "Skip — no Zoho (Recommended)",
         "auto_blurb": (
             "From this project I will use (no extra questions): Python {py}, "
             "module {module}, launcher {launcher}, APK {apk}, stack {stack}, locales {locales}. "
             "If Gemini config exists on this PC, only merge script grants. "
+            "Zoho Sprints is optional and never copies tokens. "
             "Finish with harness tests, not a full app build. Answer only the questions below."
         ),
         "model_warning": (
@@ -297,11 +307,21 @@ T = {
             "بتفتح المشروع ده في أنهي برامج؟ علّم على كل اللي بتستخدمه. "
             "لو بتستخدم Cursor لازم تختاره عشان ملفاته تتكتب."
         ),
+        "i16": (
+            "المشروع ده بيستخدم Zoho Sprints؟ المساعد يقدر يعرض ويحدّث عناصر الـ sprint. "
+            "التوكين يفضل في ملف على الجهاز. التثبيت مش هينسخ التوكين للريبو "
+            "ومش هيطلبك تلصقه. لو مش بتستخدم Zoho اختار تخطي."
+        ),
+        "i16_enable_found": "فعّل Zoho Sprints — استخدم بيانات الدخول الموجودة على الجهاز (مفضّل)",
+        "i16_enable": "فعّل Zoho Sprints — هضيف بيانات الدخول بعد التثبيت",
+        "i16_skip": "تخطي — المشروع من غير Zoho",
+        "i16_skip_rec": "تخطي — من غير Zoho (مفضّل)",
         "auto_blurb": (
             "من المشروع هستخدم من غير أسئلة زيادة: Python {py}، "
             "الموديول {module}، الشاشة الأولى {launcher}، ملف APK {apk}، طريقة الكتابة {stack}، "
             "اللغات {locales}. لو فيه إعداد Gemini على الجهاز هعدّل سماح السكربتات "
-            "بس. في الآخر اختبارات المساعد مش بيلد كامل للتطبيق. الأسئلة اللي تحت هي اللي محتاج إجابة."
+            "بس. Zoho Sprints اختياري ومش بينسخ التوكين. "
+            "في الآخر اختبارات المساعد مش بيلد كامل للتطبيق. الأسئلة اللي تحت هي اللي محتاج إجابة."
         ),
         "model_warning": (
             "تنبيه: التثبيت لازم على شات بموديل قوي، مش الموديل السريع/الرخيص. "
@@ -544,6 +564,15 @@ def gemini_exists() -> bool:
     ).is_file()
 
 
+def zoho_config_present() -> bool:
+    mcp = Path(__file__).resolve().parent.parent / "mcp" / "zoho_sprints"
+    if str(mcp) not in sys.path:
+        sys.path.insert(0, str(mcp))
+    from _config import resolve_config_path  # noqa: E402
+
+    return resolve_config_path() is not None
+
+
 def discover(repo: Path) -> dict:
     modules = discover_modules(repo)
     pythons = discover_pythons()
@@ -558,6 +587,7 @@ def discover(repo: Path) -> dict:
         "stack": discover_stack(repo),
         "classic_app_src": has_classic_app_src(repo),
         "gemini": gemini_exists(),
+        "zoho_config": zoho_config_present(),
         "gradlew": (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file(),
     }
 
@@ -590,6 +620,7 @@ def auto_from_facts(facts: dict) -> dict:
         "gemini_config": "merge-allowlist" if facts.get("gemini") else "skip",
         "assemble_now": "tests-only",
         "unit_tests": "yes",
+        "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
     }
 
 
@@ -732,6 +763,25 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "options": tool_opts,
         }
     )
+    found = bool(d.get("zoho_config"))
+    qs.append(
+        {
+            "id": "i16",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i16"),
+            "options": [
+                {
+                    "id": "enable",
+                    "label": t(lang, "i16_enable_found" if found else "i16_enable"),
+                },
+                {
+                    "id": "skip",
+                    "label": t(lang, "i16_skip" if found else "i16_skip_rec"),
+                },
+            ],
+        }
+    )
     return qs
 
 
@@ -831,6 +881,9 @@ def normalize(raw: dict, facts: dict) -> dict:
     git_policy = raw.get("i3") or "never"
     if git_policy not in {"never", "agent-may-commit"}:
         git_policy = "never"
+    zoho = raw.get("i16") or "skip"
+    if zoho not in {"enable", "skip"}:
+        zoho = "skip"
     gemini = raw.get("i12") or auto["gemini_config"]
     if not facts.get("gemini"):
         gemini = "skip"
@@ -859,6 +912,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "gemini_config": gemini,
         "assemble_now": raw.get("i13") or auto["assemble_now"],
         "unit_tests": "yes" if (raw.get("i15") or auto.get("unit_tests")) == "yes" else "no",
+        "zoho_mcp": zoho,
         "tools": tools,
         "asked": asked,
     }
@@ -891,6 +945,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.12 Gemini config: {answers.get('gemini_config')}",
         f"- I.13 Assemble now: {answers.get('assemble_now')}",
         f"- I.15 Unit tests: {answers.get('unit_tests')}",
+        f"- I.16 Zoho Sprints: {answers.get('zoho_mcp')}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
         "",

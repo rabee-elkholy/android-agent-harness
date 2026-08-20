@@ -1,4 +1,4 @@
-"""Scaffold a production-grade MVI feature for Rashaqa Android.
+"""Scaffold a production-grade MVI feature for this Android app.
 
 Usage: python .agents/scripts/new_feature_scaffold.py <feature_name> [--dest <path>]
 Example: python .agents/scripts/new_feature_scaffold.py dailyMotivation
@@ -12,12 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
+from _product import APPLICATION_ID, ANDROID_SRC  # noqa: E402
 from _repo_files import REPO  # noqa: E402
 
 enable_line_buffered_stdio()
 
-FEATURES_DIR = REPO / "app" / "src" / "main" / "java" / "com" / "madarsoft" / "fitness" / "features"
-RES_DIR = REPO / "app" / "src" / "main" / "res"
+FEATURES_DIR = REPO.joinpath(*ANDROID_SRC, "java", *APPLICATION_ID.split("."), "features")
+RES_DIR = REPO.joinpath(*ANDROID_SRC, "res")
 
 
 def split_words(text: str) -> list[str]:
@@ -59,9 +60,9 @@ def fill(template: str, mapping: dict[str, str]) -> str:
 CONTRACT = """package __PACKAGE__
 
 import androidx.compose.runtime.Immutable
-import com.madarsoft.core.common.bases.Action as CoreAction
-import com.madarsoft.core.common.bases.Event as CoreEvent
-import com.madarsoft.core.common.bases.State as CoreState
+import com.example.core.common.bases.Action as CoreAction
+import com.example.core.common.bases.Event as CoreEvent
+import com.example.core.common.bases.State as CoreState
 
 class __PASCAL__Contract {
 
@@ -88,8 +89,8 @@ class __PASCAL__Contract {
 VIEWMODEL = """package __PACKAGE__
 
 import androidx.lifecycle.viewModelScope
-import com.madarsoft.core.common.bases.MVIViewModel
-import com.madarsoft.core.common.utils.applicationExceptionHandler
+import com.example.core.common.bases.MVIViewModel
+import com.example.core.common.utils.applicationExceptionHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -145,8 +146,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import __PACKAGE__.__PASCAL__Contract
-import com.madarsoft.core.ui.themes.MyAppTheme
-import com.madarsoft.fitness.R
+import com.example.core.ui.themes.MyAppTheme
+import com.example.app.R
 
 @Composable
 fun __PASCAL__Screen(
@@ -263,7 +264,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.madarsoft.core.common.bases.BaseComposeFragment
+import com.example.core.common.bases.BaseComposeFragment
 import __PACKAGE__.ui.__PASCAL__Screen
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
@@ -329,7 +330,7 @@ def scaffold_feature(feature_name: str, target_dir: Path | None = None) -> Path:
     ui_dir.mkdir(parents=True, exist_ok=True)
 
     mapping = {
-        "__PACKAGE__": f"com.madarsoft.fitness.features.{camel}",
+        "__PACKAGE__": f"{APPLICATION_ID}.features.{camel}",
         "__PASCAL__": pascal,
         "__SNAKE__": snake,
     }

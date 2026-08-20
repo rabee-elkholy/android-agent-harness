@@ -12,7 +12,7 @@ This is not a style-guide snippet. After a full install, the agent cannot treat 
 - **Live Gradle:** `run_gradle_task.py` streams the task log with a 10s heartbeat. The agent does not wait on a silent `gradlew`.
 - **Device path:** `run_device.py` install/launch. `adb monkey` is always denied.
 - **Hard block where the tool allows it:** Antigravity `hooks.json` can refuse assemble until the five leaves finish. Other tools get the same protocol in markdown.
-- **Your product, not the example:** setup ports package, module, APK, launcher, and architecture so reviewers cite *this* app (Koin/KMP vs MVI/Hilt), not leftover names.
+- **Your product, not a placeholder:** setup fills `_product.py`, module, APK, launcher, and architecture so reviewers cite *this* app.
 
 The strength shows up **after** setup finishes (selftest `0` failures + adapters for the tools you picked). A half install is a weak install.
 
@@ -23,7 +23,7 @@ The strength shows up **after** setup finishes (selftest `0` failures + adapters
 - Device install/launch helper (`run_device.py`)
 - Safety hook in Antigravity; the same protocol in markdown for every other tool
 - One installer that writes adapters **only for the tools the developer selects** (re-run `--tools` to add another later)
-- Structural port away from the example product identity (package, module, theme, architecture)
+- Setup fills package, module, theme, and architecture from this app (`_product.py` + skills)
 
 ## Layout
 
@@ -61,13 +61,13 @@ android-harness-kit/
 
 ## Install
 
-Install is **not** a file copy. Use a **strong model** for the install chat (not a fast/cheap one). A weak model skips the structural port and leaves a broken helper. Plan for **time**: a few wizard questions (backup, app name, git, phone vs emulator, ask before install, unit tests, which tools — the rest is read from Gradle/manifests), backup, clone (or reuse) the kit, a structural port, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you close the chat early or accept a rename of the example app, you do **not** get the engine above.
+Install is **not** a file copy. Use a **strong model** for the install chat (not a fast/cheap one). A weak model skips filling product constants and leaves a broken helper. Plan for **time**: a few wizard questions (backup, app name, git, phone vs emulator, ask before install, unit tests, which tools — the rest is read from Gradle/manifests), backup, clone (or reuse) the kit, fill `_product.py` and architecture, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you close the chat early or accept placeholder package names, you do **not** get the engine above.
 
 Stay in that chat until the agent prints selftest `Total test failures: 0` and tells you to open a **new** session. Prefer answering the wizard in a **terminal**. The agent then ports; it must not invent extra interview questions.
 
 Open a **new chat** on your **Android app** (not this kit). Paste **all of** [`docs/install-prompt.md`](docs/install-prompt.md).
 
-The agent clones this repository if needed, runs `agents/scripts/setup_wizard.py` (usually seven questions), copies `agents/` to `.agents`, then **ports** the engine (regex, Path pieces, APK name, architecture). A find-replace of the example app name is not a successful install.
+The agent clones this repository if needed, runs `agents/scripts/setup_wizard.py` (usually seven questions), copies `agents/` to `.agents`, then **fills** `_product.py` and architecture from disk. A find-replace of a display name is not a successful install.
 
 After port, it runs `install_tool_adapters.py` with the flags printed by `setup_wizard.py flags`. Switching to a new IDE later means re-running the installer with that tool added.
 
@@ -113,7 +113,7 @@ Python scripts are the same on every tool. Only Antigravity auto-blocks assemble
 ## Safety
 
 - No tokens, OAuth clients, or portal IDs in this repo
-- Empty `agents/mcp_config.json` (`mcpServers: {}`)
+- Kit `agents/mcp_config.json` stays `mcpServers: {}`; install may wire Zoho Sprints to a **user-level** config path
 - Do not copy `local.properties` or `~/.gemini` hostnames from another PC
 - The agent must not commit unless you ask
 

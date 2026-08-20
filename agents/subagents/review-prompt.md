@@ -3,7 +3,7 @@
 Copy the same Prompt into every entry of a **single** `invoke_subagent` `Subagents` array. Do not invoke `code-review-guard-agent`. Do not narrate the intended fix.
 
 ```
-RASHAQA_REVIEW_PACKAGE=[PATH from python .agents/scripts/review_package.py]
+HARNESS_REVIEW_PACKAGE=[PATH from python .agents/scripts/review_package.py]
 Listed paths:
 - [path]
 - [path]

@@ -1,2 +1,4 @@
 ﻿state/
 scripts/__pycache__/
+mcp/zoho_sprints/__pycache__/
+mcp/zoho_sprints/zoho_config.json

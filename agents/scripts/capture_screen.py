@@ -1,4 +1,4 @@
-"""Physical device screen capture for Rashaqa Android.
+"""Physical device screen capture for this Android app.
 
 Usage:
   python .agents/scripts/capture_screen.py

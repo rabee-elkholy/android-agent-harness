@@ -116,7 +116,7 @@ def check_hardcoded_strings(files: list[Path]) -> list[str]:
 
 def main() -> int:
     print("==================================================")
-    print("[Strings] Rashaqa Localization & Strings Parity Checker")
+    print("[Strings] this app Localization & Strings Parity Checker")
     print("==================================================")
 
     if not STR_AR.is_file():

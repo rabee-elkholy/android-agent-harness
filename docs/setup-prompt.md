@@ -16,9 +16,9 @@ Answer in the developer's language. Do not commit unless they ask.
 
 If `<repo>/.harness-setup/answers.json` exists and `"i0": true`, **skip section I**. Use those answers. Copy `.harness-setup/SETUP_ANSWERS.md` into the backup folder. Installer argv: `$PY <kit-or-.agents>/scripts/setup_wizard.py flags --repo <this-android-root>`.
 
-Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions` (usually seven: backup, app name, git, phone vs emulator, ask before install, unit tests, which tools). Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
+Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions` (usually eight: backup, app name, git, phone vs emulator, ask before install, unit tests, which tools, Zoho Sprints). Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
 
-**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. Do not guess which tools they use (I.14) or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until I.0 / I.1 / I.3 / I.4 / I.10 / I.15 / I.14 are answered.
+**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. Do not guess which tools they use (I.14), Zoho (I.16), or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until I.0 / I.1 / I.3 / I.4 / I.10 / I.15 / I.14 / I.16 are answered.
 
 Python, module, launcher, APK, architecture, and locales come from disk (`auto` in the wizard JSON). Defaults you must **not** ask: scaffold disabled (I.9), Gemini = merge script grants only if `~/.gemini` exists else skip (I.12 — never write a global Gemini rule during setup), tests only at the end (I.13). The wizard adds I.2 / I.5 / I.6 **only** when Python, module, or launcher is missing or ambiguous.
 
@@ -41,7 +41,7 @@ If `"backup"` is true or unset (default): Timestamp `YYYYMMDD-HHMMSS`. **A)** `<
 
 ## 1) Place the engine
 
-Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state/` + `scripts/__pycache__/`. Keep `.agents/mcp_config.json` as `{"mcpServers": {}}`. Do **not** add MCP servers or portal integrations.
+Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state/` + `scripts/__pycache__/` + `mcp/zoho_sprints/__pycache__/` + `mcp/zoho_sprints/zoho_config.json`. Leave kit `mcp_config.json` empty until **I.16** is applied by `install_zoho_mcp.py`. Never copy a Zoho token file into the repo.
 
 ## 2) Discover from disk (do not invent)
 
@@ -96,13 +96,21 @@ Ask **only** `questions` from `setup_wizard.py questions`. Typically seven forms
 - **Choices (multi-select):** `Cursor` / `Claude Code` / `GitHub Copilot` / `Gemini / Antigravity` / `Codex` / `Qwen Code` / `Windsurf` / `Cline` / `Roo` / `Amazon Q` / `Continue` / `Junie` / `Kilo` / `Goose` / `All of them`
 - Wait. Do not default to all. Do not default to only the tool running this chat.
 
+### I.16 Zoho Sprints (required)
+
+- **Modal prompt:** use the wizard JSON `prompt` verbatim. Setup will not ask for tokens and will not copy them.
+- **Choices:** enable / skip. If a user-level Zoho config already exists on this PC, enable is recommended. Otherwise skip is recommended.
+- **If enable:** after copy, run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --enable`. That script points `ZOHO_SPRINTS_CONFIG` at an existing user file when one is found. It never copies `zoho_config.json` or OAuth values into the repo. If no file exists, it writes only `~/.android-harness/zoho_sprints.example.json` (empty fields) and tells the developer to fill `~/.android-harness/zoho_sprints.json` themselves.
+- **If skip:** run the same script with `--disable` so a leftover `.cursor/mcp.json` Zoho entry is removed. Keep `.agents/mcp_config.json` empty.
+- Never write `~/.gemini/config/mcp_config.json`. Never paste tokens in chat.
+
 ### I.2 / I.5 / I.6 — only if they appear in the JSON
 
 Ask them with the JSON `prompt` verbatim (ambiguous Python, several app modules, or several launchers).
 
 ### Do not ask (already in `auto` / answers.json)
 
-- **I.6b / I.7 / I.8:** APK path, stack, locales from disk. Use discovered stack (do **not** keep kit leftover architecture rules unless they later change answers).
+- **I.6b / I.7 / I.8:** APK path, stack, locales from disk. Use discovered stack. Rewrite architecture skills to match **this** app (do not keep kit placeholder architecture unless it matches disk).
 - **I.9:** always disable `new_feature_scaffold.py` `main()`. Keep `VIEWMODEL` / `SCREEN` constants for `_hook_selftest.py`.
 - **I.11:** always add `.agents/` to `.gitignore`. Helper rules stay on the machine that ran setup, even on a team. Teammates install their own copy. Do not commit `.agents` during this setup.
 - **I.12:** if `~/.gemini` exists, merge script grants only. Never write a global Gemini rule during this setup.
@@ -114,13 +122,13 @@ Record all answers in `.harness-backup/<timestamp>/SETUP_ANSWERS.md`.
 
 **Keep:** 5 reviewers; `*_PASS`; no `code-review-guard-agent`; no `LGTM`; `$PY .agents/scripts/run_gradle_task.py`; `$PY .agents/scripts/run_device.py`; do not skip reviews.
 
-Patch **all** leftover forms (`docs/porting.md`): plain names, **regex** `com\.madarsoft`, **paths** `REPO / "app"`, quoted Path pieces `"madarsoft"` / `"fitness"`, `:app:assembleDebug`, launcher activity, APK existence check in `run_gradle_task.py` (glob `**/outputs/apk/debug/*.apk` if the filename is unknown). Also rename leftover `app-debug.apk` **filename** after `"app"` was already replaced.
+Patch **all** product constants (`docs/porting.md`): write `.agents/scripts/_product.py` from `applicationId`, launcher, assemble task, APK path, and source-root Path pieces. Rewrite `harness-rules.md` (I.1 name, I.3 git, I.4 device, I.15 tests). Glob `**/outputs/apk/debug/*.apk` if the filename is unknown. KMP: `androidMain`, not `src/main` after renaming only `"app"`.
 
-Apply **I.7**: rewrite or stub skills so reviewers cannot cite the example product’s ads/streak/GPS/Room/MVI/Hilt/theme wrapper unless they opted in. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` and the real source roots (KMP: `androidMain`, not `src/main` after renaming `"app"`). `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. There is **no** ticket portal in this kit. **I.8:** one locale → skip AR/EN parity.
+Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Room/MVI/Hilt/theme wrappers unless this checkout has them. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` via `_product.py` and the real source roots. `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. Keep the generic Zoho Sprints section; I.16 only wires MCP. **I.8:** one locale → skip AR/EN parity.
 
 ## 4) Leftover grep
 
-Must not find the leftovers listed in `docs/porting.md` (After port). Theme-wrapper name only if they kept it. `RASHAQA_REVIEW_PACKAGE` may stay.
+Must not find the parent-product leftovers listed in `docs/porting.md` (After port). Theme-wrapper name only if they kept it. `HARNESS_REVIEW_PACKAGE` may stay.
 
 Do not write forbidden tokens even in “do not use …” sentences.
 
@@ -138,7 +146,15 @@ $PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemb
 
 That script fills `.agents/tool-adapters/*.template`, always writes `AGENTS.md`, writes the selected tool files, generates `.claude/agents/*.md` only when `claude` is selected, and **deletes** previously managed adapters for tools that were not selected. Details: kit `docs/tool-support.md`.
 
-Follow **I.12** from answers: merge script grants only when `gemini_config` is `merge-allowlist`. Do **not** write a global Gemini rule. Never copy `remoteControlHostname` or tokens. Never set `sdk.dir` in harness files. Do not overwrite `.aider.conf.yml`, Continue/MCP user configs, `kilo.jsonc`, or `~/.gemini`.
+Then Zoho MCP from **I.16**:
+
+```
+$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <comma ids from I.14> --enable
+```
+
+Use `--disable` when I.16 is skip (or `zoho_mcp` is missing on an old answers.json). Do **not** copy token files. Do **not** write `~/.gemini/config/mcp_config.json`.
+
+Follow **I.12** from answers: merge script grants only when `gemini_config` is `merge-allowlist`. Do **not** write a global Gemini rule. Never copy `remoteControlHostname` or tokens. Never set `sdk.dir` in harness files. Do not overwrite `.aider.conf.yml`, Continue user configs, `kilo.jsonc`, or `~/.gemini`.
 
 ## 6) Verify
 

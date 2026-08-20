@@ -1,4 +1,4 @@
-"""Performance, ANR, and Memory Leak static auditor for Rashaqa Android.
+"""Performance, ANR, and Memory Leak static auditor for this Android app.
 Usage: python .agents/scripts/perf_guard.py [--all] [--device <ID>]
 """
 import argparse
@@ -10,11 +10,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
+from _product import APPLICATION_ID, ANDROID_SRC  # noqa: E402
 
 enable_line_buffered_stdio()
 
 REPO = Path(__file__).resolve().parents[2]
-APP_DIR = REPO / "app" / "src" / "main"
+APP_DIR = REPO.joinpath(*ANDROID_SRC)
 
 
 def get_git_modified_files() -> list[Path]:
@@ -117,9 +118,9 @@ def check_device_anrs(device_id: str | None = None) -> list[str]:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         output = res.stdout or ""
         anrs = []
-        if "ANR in com.madarsoft.fitness" in output or "Recent ANR" in output:
+        if f"ANR in {APPLICATION_ID}" in output or "Recent ANR" in output:
             for line in output.splitlines():
-                if "com.madarsoft.fitness" in line and ("ANR" in line or "error" in line.lower()):
+                if APPLICATION_ID in line and ("ANR" in line or "error" in line.lower()):
                     anrs.append(line.strip())
         return anrs
     except Exception as e:
@@ -127,13 +128,13 @@ def check_device_anrs(device_id: str | None = None) -> list[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Performance & ANR static auditor for Rashaqa")
+    parser = argparse.ArgumentParser(description="Performance & ANR static auditor for this app")
     parser.add_argument("--all", action="store_true", help="Scan all Kotlin files in app/src/main")
     parser.add_argument("--device", help="Optional physical device ID to inspect recent ANRs via ADB")
     args = parser.parse_args()
 
     print("==================================================")
-    print("  RASHAQA PERFORMANCE & ANR GUARDIAN AUDITOR")
+    print("  HARNESS PERFORMANCE & ANR GUARDIAN AUDITOR")
     print("==================================================")
 
     if args.all:

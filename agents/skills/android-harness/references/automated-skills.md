@@ -4,7 +4,7 @@ Canonical protocol: `.agents/rules/harness-rules.md`. This file does not add pol
 
 ## Delivery gate (mandatory)
 
-One `invoke_subagent` call, five leaves, same `RASHAQA_REVIEW_PACKAGE`:
+One `invoke_subagent` call, five leaves, same `HARNESS_REVIEW_PACKAGE`:
 
 - `bug-reviewer-agent`
 - `convention-reviewer-agent`

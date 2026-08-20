@@ -1,39 +1,34 @@
 # Porting tokens
 
-Naive replace of the example app name is not enough. After copy, port **structurally**. Replacing `com.madarsoft.fitness` does **not** update regex (`com\.madarsoft`) or Path pieces (`"madarsoft"`).
+Naive replace of a display name is not enough. After copy, **fill product constants** and rewrite architecture from **this** checkout.
 
-The engine ships with example-product leftovers from a production Android app. Setup must map them to **this** checkout.
+The kit ships generic defaults in `agents/scripts/_product.py` (`com.example.app`, `.MainActivity`, `:app:assembleDebug`). Setup overwrites them from Gradle/manifests. Do **not** copy a parent product's company, package, or launcher into a stranger app.
 
-## Identity map
+## Fill from disk
 
-| Source leftover | Replace with |
+| Kit default | Replace with |
 |---|---|
-| Example product name (and its Arabic leftover) | This product name |
-| Example repo folder name | This repo folder name |
-| `com.madarsoft.fitness` | `applicationId` |
-| `com.madarsoft.core` | Real shared package, or delete those rules |
-| `com.madarsoft.` | Company/package prefix |
-| `com\.madarsoft\.fitness` / `com\.madarsoft\.` | Same IDs, still escaped (logcat/lint/selftest) |
-| `.features.splash.SplashActivity` | Real launcher (`/.MainActivity`, etc.) |
-| Example theme wrapper | Real theme **or delete the rule** if none |
-| `MVIViewModel` / `BaseComposeFragment` / Hilt | Real bases (e.g. `BaseViewModel` + Koin) or delete |
-| `:app:assembleDebug` | `:<androidApplicationModule>:assembleDebug` |
-| `app/build/outputs/apk/debug/app-debug.apk` | Real debug APK, **including** the `run_gradle_task.py` existence check |
-| `app-debug.apk` after `REPO / "app"` was already renamed | Path pieces become `composeApp/.../app-debug.apk`. Rename the filename too. |
+| `PRODUCT_NAME` in `_product.py` and `harness-rules.md` title | I.1 product name |
+| `APPLICATION_ID` / `PACKAGE_PREFIX` | Real `applicationId` (keep regex escapes in logcat/lint) |
+| `LAUNCHER` | Real launcher (`applicationId/.MainActivity`, etc.) |
+| `ASSEMBLE_TASK` / `UNIT_TEST_TASK` | `:<androidApplicationModule>:assembleDebug` / `testDebugUnitTest` |
+| `APK_RELATIVE` | Real debug APK, **including** the `run_gradle_task.py` existence check. Glob `**/outputs/apk/debug/*.apk` if the filename is unknown. |
+| `ANDROID_SRC` path pieces | Real source root. Replacing only `"app"` is not enough: KMP Android res is often `composeApp/src/androidMain`, not `composeApp/src/main`. |
 | Theme wrapper in subagent JSON / `compose-inspector` | Real theme token, or `MaterialTheme` if none |
-| `REPO / "app" / "src" / "main"` | Real source root. Replacing only `"app"` is not enough: KMP Android res is often `composeApp/src/androidMain`, not `composeApp/src/main`. |
-| `"madarsoft"` / `"fitness"` as **separate** Path args | `REPO / "com" / "madarsoft" / "fitness"` survives a replace of `com/madarsoft/fitness`. Replace each quoted piece. |
+| DI / ViewModel base in `architecture-mvi.md` | Real bases (Koin + `BaseViewModel`, Hilt + MVI, …) or delete invented rules |
 | Sender personal name | This team's developer name (who commits). Never copy portal ids or tokens. |
-| `RASHAQA_REVIEW_PACKAGE` | Keep the name **or** rename everywhere |
+
+`HARNESS_REVIEW_PACKAGE` and `HARNESS_*_FINGERPRINT` stay. Rename everywhere if you rebrand those env tokens.
 
 ## Install traps
 
 - **I.4 allow emulator:** rewrite the **whole** `if serial.startswith("emulator-")` / `re.search(...emulator` blocks (condition + body) in `pre_tool_safety.py`, `run_device.py`, `capture_screen.py`, `logcat_doctor.py`. Deleting only `deny()` / `sys.exit` leaves a **SyntaxError**. Change `_hook_selftest.py` case `emu` from `deny` to `allow`. Keep `adb monkey` denied.
 - **I.8 one locale:** if there is no second `values-*` folder, skip key parity in `check_strings.py` or preflight fails. Point `RES_DIR` at the real `res` root.
-- **I.9 scaffold:** do not ask. `main()` stays disabled. `_hook_selftest.py` still imports `new_feature_scaffold.VIEWMODEL` and `.SCREEN` (needs `locale = "ar"` / `"en"` and `isEmpty = true`). Keep those constants; leftover identity in that file still needs a structural port.
-- **Leftover grep:** do not write forbidden tokens even in “do not use …” sentences.
+- **I.9 scaffold:** do not ask. `main()` stays disabled. `_hook_selftest.py` still imports `new_feature_scaffold.VIEWMODEL` and `.SCREEN` (needs `locale = "ar"` / `"en"` and `isEmpty = true`). Keep those constants.
+- **Leftover grep:** do not write forbidden parent-product tokens even in “do not use …” sentences inside `.agents`.
 - **I.12:** if another product on this PC already uses `~/.gemini/config.json`, skip global writes.
-- **Tool adapters:** do not hand-edit one `AGENTS.md` and skip the rest. Run `install_tool_adapters.py --tools <selected ids>` so every selected adapter stays in sync. Re-run with a new `--tools` list to add a tool. Do not copy `remoteControlHostname`, tokens, or `sdk.dir`. Do not overwrite `.aider.conf.yml` or `~/.gemini`.
+- **I.16 Zoho Sprints:** run `install_zoho_mcp.py --enable` or `--disable` from answers. Never copy `zoho_config.json`, refresh tokens, or client secrets into the repo. Point `ZOHO_SPRINTS_CONFIG` at an existing user-level file when one is already on this PC. Do not write `~/.gemini/config/mcp_config.json`.
+- **Tool adapters:** do not hand-edit one `AGENTS.md` and skip the rest. Run `install_tool_adapters.py --tools <selected ids>`. Do not copy `remoteControlHostname`, tokens, or `sdk.dir`. Do not overwrite `.aider.conf.yml` or `~/.gemini`.
 
 ## Do not weaken
 
@@ -43,6 +38,10 @@ The engine ships with example-product leftovers from a production Android app. S
 - `adb monkey` deny always. Emulator deny **only** if setup I.4 = physical only
 - `code-review-guard-agent` retired / no `LGTM`
 
-## After port, grep must not find
+## After port, grep `.agents` must not find
 
-`madarsoft`, `Rashaqa`, `Fitness_Android`, `SplashActivity`, `com\\.madarsoft`, `app-debug.apk` (unless that is truly the APK name), `:app:assembleDebug` (unless the module is `:app`). Also grep the example product's original non-English display name (paired with Rashaqa in the source app).
+These parent-product tokens. They must also stay **out** of kit `agents/` (this docs file may name them so installers know what to search):
+
+`madarsoft` `Rashaqa` `RASHAQA` `رشاقة` `Fitness_Android`
+
+Theme-wrapper name only if they kept it. `HARNESS_REVIEW_PACKAGE` may stay.

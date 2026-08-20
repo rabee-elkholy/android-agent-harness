@@ -1,12 +1,12 @@
 ---
 name: kotlin-coroutines-expert
-description: "Expert patterns for Kotlin Coroutines and Flow, covering structured concurrency, error handling, and testing in Rashaqa Android."
+description: "Expert patterns for Kotlin Coroutines and Flow, covering structured concurrency, error handling, and testing in this Android app."
 ---
 
 # Kotlin Coroutines Expert
 
 ## Overview
-Authoritative guide for asynchronous programming, reactive data streams, and cancellation/exception safety in Rashaqa Android.
+Authoritative guide for asynchronous programming, reactive data streams, and cancellation/exception safety in this Android app.
 
 ---
 

@@ -1,32 +1,29 @@
 ---
 name: android-harness
-description: Use when working on Rashaqa Android architecture, MVI screens, Legacy XML, Compose theme, Streak/Gamification, Running/GPS Tracks, Ads/GDPR, Sensors/Services, Room DB migrations, Coroutines, or daily scenarios.
+description: Use when working on this Android app architecture, Compose or XML UI, Room, performance, or daily checkout facts.
 ---
 
-# Rashaqa Android Harness (Domain Knowledge Reference)
+# Android harness (domain knowledge)
 
-Comprehensive domain reference guides for the Rashaqa Fitness Android enterprise architecture.
+Setup fills product-specific references. Do not cite a stub file as if this app shipped that domain.
 
----
+## References
 
-## 📚 Domain Knowledge References
+- [**Architecture**](./references/architecture-mvi.md): match this checkout's DI, navigation, and ViewModel base.
+- [**Jetpack Compose & Theme**](./references/ui-compose-theme.md): theme tokens, `@Preview`, strings.
+- [**Room Database & Migrations**](./references/room-database-migrations.md): explicit migrations when `@Entity` / `@Database` change.
+- [**Performance & ANR**](./references/performance-anr-optimization.md): main-thread safety, leaks, Compose jank, WakeLocks.
+- [**Daily work notes**](./references/daily-scenarios.md): checkout facts after setup.
+- [**Automated skills**](./references/automated-skills.md): five-leaf delivery gate.
 
-- [**Architecture & MVI Standards**](./references/architecture-mvi.md): `MVIViewModel`, Clean Architecture boundaries, `ResultStates`, Hilt DI, One-Shot UI Effects Rule.
-- [**Ad Mediation & GDPR Privacy**](./references/ad-mediation-privacy.md): Google AdMob, Mediation networks, Google UMP 3.2.0, `:gdpr` module, Main-thread safety.
-- [**Streak System & Gamification Engine**](./references/streak-gamification-system.md): `StreakEventManager`, `StreakEffect.acknowledge()` lifecycle, daily milestones, sound & confetti animations.
-- [**Running, GPS Location & Virtual Tracks**](./references/running-routes-gps.md): `RunTrackingService`, FusedLocationProviderClient, Pace/Speed formulas, Polylines, Virtual Tracks.
-- [**Pedometer Sensors & Background Services**](./references/steps-sensors-services.md): 24/7 background step counting, Android 14/15/16 foreground service types, battery optimizations, Health Connect.
-- [**Room Database & Migrations**](./references/room-database-migrations.md): Zero Data Loss protocol, explicit Room migrations, EncryptedSharedPreferences.
-- [**Payment Gateways Architecture**](./references/payment-gateways-architecture.md): Google Play Billing 8.3, RevenueCat 10.16, Fawry Pay, purchase acknowledgment.
-- [**Performance & ANR Optimization**](./references/performance-anr-optimization.md): Main-thread safety, ANR prevention, 24/7 Sensor loops, WakeLocks, Compose recomposition stability.
-- [**Jetpack Compose & Theme**](./references/ui-compose-theme.md): `MyAppTheme`, typography, colors, `@Preview`, Coil, `strings.xml`.
-- [**Daily Work Scenarios & Protocols**](./references/daily-scenarios.md): Checkout-only facts (modules, no `:chat`, NetWorkModule). Domain rules stay in the files above.
-- [**Automated Skills & Multi-Agents**](./references/automated-skills.md): Delivery gate is five parallel leaves (`bug-reviewer-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `regression-impact-reviewer-agent`). On-demand: `qa-diagnostics-agent`, `android-ui-expert-agent`.
+Zoho Sprints (when enabled): `.agents/workflows/zoho-sprints.md`. Mutate only on `update zoho`.
 
-## Related Skills
+Stubs until setup proves the domain exists here: ads/privacy, streak, GPS, sensors, payments.
 
-- [**Kotlin Coroutines Expert**](../kotlin-coroutines-expert/SKILL.md): Structured concurrency, Flow streams, exception handling, and coroutine testing.
-- [**Systematic Debugging**](../systematic-debugging/SKILL.md): Hypothesis-driven debugging for bugs and crashes.
-- [**Compose Inspector**](../compose-inspector/SKILL.md): Recomposition safety, RTL/LTR, `@Immutable`, `remember`/`derivedStateOf`.
-- [**Gradle Build Optimizer**](../gradle-build-optimizer/SKILL.md): Daemon reuse, dependency safety, Windows locks.
-- [**Git PR Automator**](../git-pr-automator/SKILL.md): Conventional Commits, PR summaries for developer.
+## Related skills
+
+- [**Kotlin Coroutines Expert**](../kotlin-coroutines-expert/SKILL.md)
+- [**Systematic Debugging**](../systematic-debugging/SKILL.md)
+- [**Compose Inspector**](../compose-inspector/SKILL.md)
+- [**Gradle Build Optimizer**](../gradle-build-optimizer/SKILL.md)
+- [**Git PR Automator**](../git-pr-automator/SKILL.md): commit **message** format only

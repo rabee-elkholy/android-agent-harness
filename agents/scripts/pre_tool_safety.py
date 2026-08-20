@@ -27,7 +27,7 @@ def deny(reason: str) -> None:
     print(json.dumps({"decision": "deny", "reason": reason}))
 
 
-def allow(reason: str = "Not blocked by Rashaqa safety hook.") -> None:
+def allow(reason: str = "Not blocked by the harness safety hook.") -> None:
     print(json.dumps({"decision": "allow", "reason": reason}))
 
 
@@ -41,7 +41,7 @@ def conversation_id(payload: dict) -> str:
     return str(payload.get("conversationId") or payload.get("conversation_id") or "unknown")
 
 
-PACKAGE_RE = re.compile(r"RASHAQA_REVIEW_PACKAGE=(\S+)")
+PACKAGE_RE = re.compile(r"HARNESS_REVIEW_PACKAGE=(\S+)")
 
 REVIEW_FIVE = frozenset(
     {
@@ -74,7 +74,7 @@ def require_review_package(sub: dict) -> Path | None:
         deny(
             "Denied: generate a review package first "
             "(`python .agents/scripts/review_package.py`) and put "
-            "RASHAQA_REVIEW_PACKAGE=<path> in every reviewer Prompt."
+            "HARNESS_REVIEW_PACKAGE=<path> in every reviewer Prompt."
         )
         return None
     path = Path(match.group(1).strip().strip('"').strip("'"))
@@ -225,7 +225,7 @@ def handle_invoke_subagent(payload: dict, args: dict) -> None:
             package_paths.append(path)
         unique_pkgs = {str(p.resolve()) for p in package_paths}
         if len(unique_pkgs) != 1:
-            deny("Denied: all 5 review leaves must share the same RASHAQA_REVIEW_PACKAGE path.")
+            deny("Denied: all 5 review leaves must share the same HARNESS_REVIEW_PACKAGE path.")
             return
         pkg = package_paths[0]
         digest = file_sha256(pkg)

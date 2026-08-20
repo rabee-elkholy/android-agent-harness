@@ -1,0 +1,12 @@
+{
+  "client_id": "",
+  "client_secret": "",
+  "refresh_token": "",
+  "access_token": "",
+  "auth_domain": "https://accounts.zoho.com",
+  "team_id": "",
+  "project_id": "",
+  "default_user_id": "",
+  "item_prefix": "",
+  "title_strip_suffixes": []
+}

@@ -1,4 +1,4 @@
-"""Fast Gradle / kotlinc Compiler Error Parser for Rashaqa Android.
+"""Fast Gradle / kotlinc Compiler Error Parser for this Android app.
 Extracts clean, actionable file:line compiler errors from Gradle stdout/stderr.
 
 Usage:

@@ -1,6 +1,6 @@
-# Performance & ANR Optimization Reference Guide for Rashaqa
+# Performance & ANR Optimization
 
-Rashaqa is a high-demand fitness application featuring continuous 24/7 step tracking, GPS route tracing, realtime sensor processing, Jetpack Compose UI trees, and heavy ad mediation. Peak performance, 60/120 FPS rendering, zero ANRs, and low battery consumption are vital.
+Peak performance, 60/120 FPS rendering, zero ANRs, and low battery consumption are the bar. Apply the rules below to **this** checkout. Do not assume sensors, GPS, or ads exist unless the code does.
 
 ---
 
@@ -9,7 +9,7 @@ Rashaqa is a high-demand fitness application featuring continuous 24/7 step trac
 ### Strict Threading Rules
 - **Dispatchers.Main / UI Thread**: ONLY for UI updates, state emission, and lightweight view bindings.
 - **Dispatchers.IO**: For disk I/O, Room database reads/writes, SharedPreferences/DataStore, Retrofit network requests, and file streaming.
-- **Dispatchers.Default**: For CPU-intensive tasks: GPS distance & pace formulas, Polyline simplification, JSON serialization/deserialization, cryptographic operations, and step count filtering algorithms.
+- **Dispatchers.Default**: For CPU-intensive work (parsing, crypto, list transforms). Not for UI updates.
 
 ### Prohibited Patterns on Main Thread
 1. **Never use `runBlocking`** in ViewModels, Activities, Fragments, Services, or BroadcastReceivers.
@@ -19,13 +19,13 @@ Rashaqa is a high-demand fitness application featuring continuous 24/7 step trac
 
 ---
 
-## 2. 24/7 Sensor Processing & Background Services
+## 2. Sensors & background work (only if this checkout uses them)
 
-### Pedometer & Sensor Event Loops
+### Sensor event loops
 - `SensorEventListener.onSensorChanged()` is invoked on the registered thread (often Main or sensor thread).
-- **Rule**: Keep `onSensorChanged()` execution under **1 millisecond**.
-- Do NOT perform database writes or calculations inside `onSensorChanged()`. Buffer raw sensor events and dispatch processing asynchronously via Coroutines to `Dispatchers.Default` / `Dispatchers.IO`.
-- Use appropriate sampling rates: `SensorManager.SENSOR_DELAY_NORMAL` (200,000 µs) for background pedometer tracking to conserve battery.
+- Keep `onSensorChanged()` execution under **1 millisecond**.
+- Do NOT perform database writes or heavy math inside `onSensorChanged()`. Buffer events and process on `Dispatchers.Default` / `Dispatchers.IO`.
+- Prefer `SENSOR_DELAY_NORMAL` for long-running listeners unless the opened code already uses a tighter rate.
 
 ### WakeLock Management
 - Always use a timeout with `acquire()`:
@@ -45,12 +45,10 @@ Rashaqa is a high-demand fitness application featuring continuous 24/7 step trac
 
 ---
 
-## 3. GPS Running & Route Tracking Performance
+## 3. Location (only if this checkout tracks it)
 
-### `RunTrackingService` Best Practices
-- **Location Throttling**: Configure location updates with realistic distance and time filters (e.g. `interval = 3000ms`, `minDistance = 2.0m`).
-- **Polyline Downsampling**: Downsample high-frequency GPS coordinate lists before persisting to Room or rendering on Google Maps to prevent memory bloat and UI freezing.
-- **Memory Footprint**: Do not hold millions of raw `Location` objects in memory during marathon tracking; stream aggregations to disk.
+- Throttle updates with realistic time/distance filters.
+- Do not hold unbounded `Location` lists in memory; downsample before persist or draw.
 
 ---
 

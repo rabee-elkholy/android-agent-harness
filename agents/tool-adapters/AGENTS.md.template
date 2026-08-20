@@ -17,7 +17,7 @@ This checkout uses a portable Android harness. The same rules apply in Cursor, C
 After non-trivial implementation:
 
 1. `{{PY}} .agents/scripts/review_package.py`
-2. Run **all five** reviewers against the same `RASHAQA_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
+2. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
    - `bug-reviewer-agent` → `BUG_PASS`
    - `convention-reviewer-agent` → `CONVENTION_PASS`
    - `security-reviewer-agent` → `SECURITY_PASS`
@@ -34,3 +34,7 @@ If this product **cannot spawn named subagents**, still run the five leaves: ope
 ## Git
 
 {{GIT_POLICY}}
+
+## Zoho Sprints
+
+Follow `.agents/rules/harness-rules.md` section 5 and `.agents/workflows/zoho-sprints.md`. Fetch ticket ids read-only. Mutate only when the developer says `update zoho`. Arabic templates. Never `Done` / `Solved`.

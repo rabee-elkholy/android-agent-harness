@@ -92,7 +92,7 @@ def run_streaming(
         live_print(f"[!] Failed to launch {label}: {exc}", err=True)
         return 1, "", []
 
-    worker = threading.Thread(target=heartbeat, name="rashaqa-heartbeat", daemon=True)
+    worker = threading.Thread(target=heartbeat, name="harness-heartbeat", daemon=True)
     worker.start()
     try:
         assert proc.stdout is not None

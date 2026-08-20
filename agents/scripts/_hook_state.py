@@ -1,4 +1,4 @@
-"""Shared review-round state and subagent template validator for Rashaqa hooks."""
+"""Shared review-round state and subagent template validator for this app hooks."""
 from __future__ import annotations
 
 import hashlib
@@ -8,15 +8,15 @@ import re
 import time
 from pathlib import Path
 
-MAX_REVIEWS = int(os.environ.get("RASHAQA_MAX_REVIEWS", "20"))
-MAX_DIAGNOSTICS = int(os.environ.get("RASHAQA_MAX_DIAGNOSTICS", "10"))
-MAX_UI_REVIEWS = int(os.environ.get("RASHAQA_MAX_UI_REVIEWS", "10"))
+MAX_REVIEWS = int(os.environ.get("HARNESS_MAX_REVIEWS", "20"))
+MAX_DIAGNOSTICS = int(os.environ.get("HARNESS_MAX_DIAGNOSTICS", "10"))
+MAX_UI_REVIEWS = int(os.environ.get("HARNESS_MAX_UI_REVIEWS", "10"))
 
 STATE_EXPIRY_SECONDS = 7 * 24 * 3600
 
 SUBAGENTS_DIR = Path(__file__).resolve().parent.parent / "subagents"
 
-_FINGERPRINT_RE = re.compile(r"RASHAQA_\w+_FINGERPRINT=(\S+)")
+_FINGERPRINT_RE = re.compile(r"HARNESS_\w+_FINGERPRINT=(\S+)")
 
 TEMPLATE_ALIASES = {
     "compose-ui-expert": "android-ui-expert-agent",
@@ -34,14 +34,14 @@ TEMPLATE_ALIASES = {
 
 
 def state_path() -> Path:
-    override = os.environ.get("RASHAQA_HOOK_STATE")
+    override = os.environ.get("HARNESS_HOOK_STATE")
     if override:
         return Path(override)
     return Path(__file__).resolve().parent.parent / "state" / "review-invokes.json"
 
 
 def transcript_path(conversation_id: str) -> Path:
-    override = os.environ.get("RASHAQA_TRANSCRIPT_ROOT")
+    override = os.environ.get("HARNESS_TRANSCRIPT_ROOT")
     if override:
         return Path(override) / conversation_id / "transcript.jsonl"
     return (

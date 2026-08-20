@@ -1,4 +1,4 @@
-"""Synchronous Gradle runner for Rashaqa Android with a live task log.
+"""Synchronous Gradle runner for this Android app with a live task log.
 
 Streams executing tasks and a 10s heartbeat. Suppresses UP-TO-DATE noise and
 Kotlin `w:` deprecation floods. Full raw log is kept for failure parsing.
@@ -145,7 +145,7 @@ def _duration_hint(raw_log: str) -> str:
 
 def main() -> None:
     enable_line_buffered_stdio()
-    parser = argparse.ArgumentParser(description="Live Gradle runner for Rashaqa")
+    parser = argparse.ArgumentParser(description="Live Gradle runner for this app")
     parser.add_argument(
         "gradle_args",
         nargs=argparse.REMAINDER,

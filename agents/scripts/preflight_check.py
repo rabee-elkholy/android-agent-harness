@@ -30,7 +30,7 @@ def run_step(title: str, script_name: str) -> int:
 def main() -> int:
     enable_line_buffered_stdio()
     live_print("==================================================")
-    live_print("[Preflight] Rashaqa Preflight Verification Engine")
+    live_print("[Preflight] Harness preflight verification")
     live_print("==================================================")
 
     modified = [p.relative_to(REPO).as_posix() for p in changed_paths()]

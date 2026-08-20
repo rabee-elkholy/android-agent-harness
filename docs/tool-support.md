@@ -19,7 +19,7 @@ Installer: `$PY .agents/scripts/install_tool_adapters.py`.
 
 Do **not** copy `~/.gemini` hostnames, tokens, or `local.properties` `sdk.dir`.
 
-Do **not** overwrite `.aider.conf.yml`, Continue user config, MCP configs, `kilo.jsonc`, or `~/.qwen`. This installer only writes the harness-owned paths below.
+Do **not** overwrite `.aider.conf.yml`, Continue user config, unrelated MCP configs, `kilo.jsonc`, or `~/.qwen`. Zoho Sprints is the exception: `install_zoho_mcp.py` may merge `zoho-sprints` into this checkout’s `.agents/mcp_config.json` and `.cursor/mcp.json` (command + config **path** only, never tokens). It does not write `~/.gemini`.
 
 ## Adapter matrix
 
@@ -57,4 +57,4 @@ Also re-run after changing Python command, assemble task, device policy, or git 
 
 ## Tools without subagent spawn
 
-If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still requires the five leaves: open each JSON under `.agents/subagents/`, follow `system_prompt` against the same `RASHAQA_REVIEW_PACKAGE`, sequential is allowed. Assemble only after `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`.
+If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still requires the five leaves: open each JSON under `.agents/subagents/`, follow `system_prompt` against the same `HARNESS_REVIEW_PACKAGE`, sequential is allowed. Assemble only after `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`.

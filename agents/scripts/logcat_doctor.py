@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
+from _product import APPLICATION_ID, PACKAGE_PREFIX, PRODUCT_NAME  # noqa: E402
 from _repo_files import first_physical_adb_serial  # noqa: E402
 
 enable_line_buffered_stdio()
@@ -38,10 +39,10 @@ def fetch_logcat(serial: str, num_lines: int = 1000) -> str:
 def filter_forensics(raw_logs: str) -> dict:
     crash_patterns = [
         r"FATAL EXCEPTION",
-        r"Process:\s*com\.madarsoft\.fitness",
+        rf"Process:\s*{re.escape(APPLICATION_ID)}",
         r"AndroidRuntime:\s*FATAL",
         r"CoroutineExceptionHandler",
-        r"ANR in com\.madarsoft\.fitness",
+        rf"ANR in {re.escape(APPLICATION_ID)}",
     ]
     sensor_patterns = [
         r"SensorManager",
@@ -63,7 +64,7 @@ def filter_forensics(raw_logs: str) -> dict:
             in_fatal = True
             current_fatal.append(line)
         elif in_fatal:
-            if re.search(r"^\s*at\s+com\.madarsoft\.", line) or re.search(r"^\s*Caused by:", line) or re.search(r"^\s*at\s+android\.", line):
+            if re.search(rf"^\s*at\s+{re.escape(PACKAGE_PREFIX)}\.", line) or re.search(r"^\s*Caused by:", line) or re.search(r"^\s*at\s+android\.", line):
                 current_fatal.append(line)
             elif current_fatal and len(current_fatal) < 30 and line.startswith(" "):
                 current_fatal.append(line)
@@ -75,7 +76,7 @@ def filter_forensics(raw_logs: str) -> dict:
         if any(re.search(p, line, re.IGNORECASE) for p in sensor_patterns):
             sensor_logs.append(line)
 
-        if "com.madarsoft.fitness" in line or "Rashaqa" in line:
+        if APPLICATION_ID in line:
             app_logs.append(line)
 
     if current_fatal:
@@ -89,7 +90,7 @@ def filter_forensics(raw_logs: str) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Logcat Doctor & Crash Triage for Rashaqa Android")
+    parser = argparse.ArgumentParser(description="Logcat Doctor & Crash Triage for this Android app")
     parser.add_argument("-d", "--device", default=None, help="Physical device serial (default: first non-emulator adb device)")
     parser.add_argument("--lines", type=int, default=1000, help="Number of logcat lines to fetch")
     parser.add_argument("--clear", action="store_true", help="Clear logcat buffer on device")
@@ -115,7 +116,7 @@ def main() -> int:
     forensics = filter_forensics(raw)
 
     print("\n==================================================")
-    print("[Forensics] Rashaqa Crash & Forensic Triage Report")
+    print(f"[Forensics] {PRODUCT_NAME} Crash & Forensic Triage Report")
     print("==================================================")
 
     if forensics["fatals"]:
@@ -131,7 +132,7 @@ def main() -> int:
         for item in forensics["sensor_logs"]:
             print(f"   {item}")
 
-    print(f"\n[*] Total Rashaqa App Log Entries: {forensics['app_logs_count']}")
+    print(f"\n[*] Total {PRODUCT_NAME} app log entries: {forensics['app_logs_count']}")
     print("==================================================")
     return 0 if not forensics["fatals"] else 2
 

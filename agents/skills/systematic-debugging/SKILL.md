@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: Use when diagnosing Rashaqa Android bugs, crashes, or unexpected UI behavior. Requires explicit hypotheses before code changes.
+description: Use when diagnosing this Android app bugs, crashes, or unexpected UI behavior. Requires explicit hypotheses before code changes.
 ---
 
 # Systematic Debugging Skill (Superpowers Protocol)

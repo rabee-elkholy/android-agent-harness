@@ -1,4 +1,4 @@
-"""Local self-test for Rashaqa multi-agent hooks. Does not execute shell commands."""
+"""Local self-test for this app multi-agent hooks. Does not execute shell commands."""
 from __future__ import annotations
 
 import json
@@ -24,8 +24,8 @@ TEMPLATE_UI = SUBAGENTS / "android-ui-expert-agent.json"
 STATE = Path(tempfile.mkdtemp()) / "review-invokes.json"
 PACKAGE = Path(tempfile.mkdtemp()) / "pkg.diff"
 PACKAGE.write_text("diff --git a/x b/x\n", encoding="utf-8")
-os.environ["RASHAQA_HOOK_STATE"] = str(STATE)
-os.environ["RASHAQA_MAX_REVIEWS"] = "20"
+os.environ["HARNESS_HOOK_STATE"] = str(STATE)
+os.environ["HARNESS_MAX_REVIEWS"] = "20"
 
 PROMPT_BUG = json.loads(TEMPLATE_BUG.read_text(encoding="utf-8"))["system_prompt"]
 PROMPT_CONV = json.loads(TEMPLATE_CONV.read_text(encoding="utf-8"))["system_prompt"]
@@ -75,7 +75,7 @@ def cmd(line: str, conversation: str | None = None) -> dict:
     return payload
 
 
-def invoke(conversation, name="bug-reviewer-agent", prompt_prefix="RASHAQA_REVIEW_PACKAGE=", extra=None, **sub):
+def invoke(conversation, name="bug-reviewer-agent", prompt_prefix="HARNESS_REVIEW_PACKAGE=", extra=None, **sub):
     prompt_str = f"{prompt_prefix}{PACKAGE} Findings or PASS." if prompt_prefix else "Perform deep analysis."
     subagent = {
         "Workspace": "inherit",
@@ -101,7 +101,7 @@ def invoke_five(conversation: str, package: Path = PACKAGE) -> dict:
         subs.append({
             "Workspace": "inherit",
             "TypeName": name,
-            "Prompt": f"RASHAQA_REVIEW_PACKAGE={package} Findings or PASS.",
+            "Prompt": f"HARNESS_REVIEW_PACKAGE={package} Findings or PASS.",
         })
     return {
         "conversationId": conversation,
@@ -122,9 +122,9 @@ def define(prompt, name="bug-reviewer-agent", **kwargs):
 
 cases = [
     ("empty", {}, "allow"),
-    ("monkey", cmd("adb -s DEV shell monkey -p com.madarsoft.fitness 1"), "deny"),
+    ("monkey", cmd("adb -s DEV shell monkey -p com.example.app 1"), "deny"),
     ("git_mutation", cmd("git commit -m x"), "deny"),
-    ("git_c_commit", cmd("git -C E:\\AndroidProjects\\Fitness_Android commit -m x"), "deny"),
+    ("git_c_commit", cmd("git -C E:\\AndroidProjects\\SomeApp commit -m x"), "deny"),
     ("git_status", cmd("git status --short --branch"), "allow"),
     ("sub_share", invoke("c-share", Workspace="share"), "deny"),
     ("sub_not_allowed", invoke("c-other", name="arbitrary-unregistered-agent"), "deny"),
@@ -170,7 +170,7 @@ cases = [
     ("adb_install_s", cmd("adb -s DEV install -r -d app.apk"), "allow"),
     (
         "am_start",
-        cmd("adb -s DEV shell am start -n com.madarsoft.fitness/.features.splash.SplashActivity"),
+        cmd("adb -s DEV shell am start -n com.example.app/.MainActivity"),
         "allow",
     ),
     ("define_bug_ok", define(PROMPT_BUG, name="bug-reviewer-agent"), "allow"),
@@ -189,7 +189,7 @@ cases = [
     (
         "define_fingerprint_only",
         define(
-            "RASHAQA_BUG_FINGERPRINT=quality-first-bug-review-v1\nYou are a different prompt.",
+            "HARNESS_BUG_FINGERPRINT=quality-first-bug-review-v1\nYou are a different prompt.",
             name="bug-reviewer-agent",
         ),
         "deny",
@@ -257,7 +257,7 @@ four = {
                 {
                     "Workspace": "inherit",
                     "TypeName": name,
-                    "Prompt": f"RASHAQA_REVIEW_PACKAGE={PACKAGE} x",
+                    "Prompt": f"HARNESS_REVIEW_PACKAGE={PACKAGE} x",
                 }
                 for name in REVIEW_FIVE[:4]
             ]
@@ -315,7 +315,7 @@ pkg_proc = subprocess.run(
     check=True,
     cwd=str(SCRIPTS.parents[1]),
 )
-ok = pkg_proc.stdout.strip().startswith("RASHAQA_REVIEW_PACKAGE=")
+ok = pkg_proc.stdout.strip().startswith("HARNESS_REVIEW_PACKAGE=")
 pkg_path = Path(pkg_proc.stdout.strip().split("=", 1)[-1].strip()) if ok else None
 ok = ok and pkg_path is not None and pkg_path.is_file()
 print(f"review_package writes file: {'OK' if ok else 'FAIL ' + pkg_proc.stdout + pkg_proc.stderr}")
@@ -424,7 +424,7 @@ failed += int(not ok_screen)
 
 fqcn_path = card_dir / "Fqcn.kt"
 fqcn_path.write_text(
-    'val log = "com.madarsoft.fitness.Foo"\n',
+    'val log = "com.example.app.Foo"\n',
     encoding="utf-8",
 )
 ok_fqcn = not any(iss["type"] == "INLINE_FQCN" for iss in lint_file(fqcn_path))
@@ -464,7 +464,7 @@ failed += int(not ok_toast)
 
 # Transcript camelCase toolCalls + PASS tokens clears the assemble barrier
 tx_root = Path(tempfile.mkdtemp())
-os.environ["RASHAQA_TRANSCRIPT_ROOT"] = str(tx_root)
+os.environ["HARNESS_TRANSCRIPT_ROOT"] = str(tx_root)
 tx_file = tx_root / five_conv / "transcript.jsonl"
 tx_file.parent.mkdir(parents=True, exist_ok=True)
 tx_file.write_text(
@@ -587,5 +587,201 @@ ok_fp = isinstance(fp, str) and len(fp) == 64
 print(f"ensure_hook_selftest_fingerprint: {'OK' if ok_fp else 'FAIL'}")
 failed += int(not ok_fp)
 
+# Zoho Sprints MCP: code ships, tokens do not
+import shutil  # noqa: E402
+
+ZOHO_MCP = SCRIPTS.parent / "mcp" / "zoho_sprints"
+sys.path.insert(0, str(ZOHO_MCP))
+from _config import ENV_CONFIG, SECRET_KEYS, json_contains_secret_keys  # noqa: E402
+from install_zoho_mcp import install as zoho_install  # noqa: E402
+
+kit_mcp = json.loads((SCRIPTS.parent / "mcp_config.json").read_text(encoding="utf-8"))
+ok_kit_mcp = kit_mcp == {"mcpServers": {}}
+print(f"kit mcp_config empty: {'OK' if ok_kit_mcp else 'FAIL'}")
+failed += int(not ok_kit_mcp)
+
+example = json.loads((ZOHO_MCP / "config.example.json").read_text(encoding="utf-8"))
+ok_example = all(not str(example.get(key) or "").strip() for key in SECRET_KEYS)
+print(f"zoho example has empty secrets: {'OK' if ok_example else 'FAIL'}")
+failed += int(not ok_example)
+
+needles = (
+    "mada" + "rsoft",
+    "Rash" + "aqa",
+    "RASH" + "AQA",
+    "رشا" + "قة",
+    "Fitness" + "_Android",
+)
+ok_left = True
+for path in SCRIPTS.parent.rglob("*"):
+    if not path.is_file() or path.suffix == ".pyc":
+        continue
+    if "__pycache__" in path.parts or "state" in path.parts:
+        continue
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        continue
+    for needle in needles:
+        if needle in text:
+            ok_left = False
+            print(f"zoho leftover {needle!r} in {path.relative_to(SCRIPTS.parent)}")
+print(f"zoho leftover grep agents/: {'OK' if ok_left else 'FAIL'}")
+failed += int(not ok_left)
+
+tmp = Path(tempfile.mkdtemp())
+agents_dst = tmp / ".agents"
+shutil.copytree(ZOHO_MCP, agents_dst / "mcp" / "zoho_sprints")
+(agents_dst / "mcp_config.json").write_text('{"mcpServers": {}}\n', encoding="utf-8")
+secret = tmp / "user-zoho.json"
+secret.write_text(
+    json.dumps(
+        {
+            "refresh_token": "UNITTEST_SECRET_TOKEN_VALUE_XX",
+            "client_secret": "UNITTEST_CLIENT_SECRET_XX",
+            "access_token": "UNITTEST_ACCESS_TOKEN_XX",
+            "client_id": "UNITTEST_CLIENT_ID_XX",
+            "team_id": "1",
+            "project_id": "2",
+        }
+    ),
+    encoding="utf-8",
+)
+old_cfg = os.environ.get(ENV_CONFIG)
+os.environ[ENV_CONFIG] = str(secret)
+try:
+    zoho_install(tmp, "python", True, ["cursor"])
+    mcp_text = (agents_dst / "mcp_config.json").read_text(encoding="utf-8")
+    cursor_text = (tmp / ".cursor" / "mcp.json").read_text(encoding="utf-8")
+    mcp_obj = json.loads(mcp_text)
+    cursor_obj = json.loads(cursor_text)
+    leaked = any(
+        token in mcp_text or token in cursor_text
+        for token in (
+            "UNITTEST_SECRET_TOKEN_VALUE_XX",
+            "UNITTEST_CLIENT_SECRET_XX",
+            "UNITTEST_ACCESS_TOKEN_XX",
+            "UNITTEST_CLIENT_ID_XX",
+        )
+    )
+    copied = any(p.name == "user-zoho.json" for p in agents_dst.rglob("*"))
+    env_path = ((mcp_obj.get("mcpServers") or {}).get("zoho-sprints") or {}).get("env", {}).get(ENV_CONFIG)
+    ok_wire = (
+        not leaked
+        and not copied
+        and not json_contains_secret_keys(mcp_obj)
+        and not json_contains_secret_keys(cursor_obj)
+        and env_path is not None
+        and os.path.normpath(env_path) == os.path.normpath(str(secret))
+        and (agents_dst / "mcp" / "zoho_sprints" / "server.py").is_file()
+    )
+    print(f"zoho install reuses path without copying tokens: {'OK' if ok_wire else 'FAIL'}")
+    failed += int(not ok_wire)
+    zoho_install(tmp, "python", False, ["cursor"])
+    cleared = json.loads((agents_dst / "mcp_config.json").read_text(encoding="utf-8"))
+    ok_clear = "zoho-sprints" not in (cleared.get("mcpServers") or {})
+    print(f"zoho disable clears project mcp: {'OK' if ok_clear else 'FAIL'}")
+    failed += int(not ok_clear)
+finally:
+    if old_cfg is None:
+        os.environ.pop(ENV_CONFIG, None)
+    else:
+        os.environ[ENV_CONFIG] = old_cfg
+    shutil.rmtree(tmp, ignore_errors=True)
+
+init_payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+list_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n"
+proc = subprocess.run(
+    [sys.executable, str(ZOHO_MCP / "server.py")],
+    input=init_payload + list_payload,
+    text=True,
+    capture_output=True,
+    check=False,
+)
+ok_rpc = proc.returncode == 0 and "zoho-sprints-mcp" in proc.stdout and "zoho_list_sprints" in proc.stdout
+print(f"zoho mcp initialize+tools/list: {'OK' if ok_rpc else 'FAIL'}")
+failed += int(not ok_rpc)
+
+wf = json.loads((ZOHO_MCP / "workflow_defaults.json").read_text(encoding="utf-8"))
+ok_wf = (
+    "refresh_token" not in wf
+    and "access_token" not in wf
+    and "client_secret" not in wf
+    and str(wf.get("item_prefix") or "") == "Ras-" + "I"
+    and bool(str(wf.get("default_user_id") or "").strip())
+)
+print(f"zoho workflow defaults have no tokens: {'OK' if ok_wf else 'FAIL'}")
+failed += int(not ok_wf)
+
+overlay_dir = Path(tempfile.mkdtemp())
+overlay_cfg = overlay_dir / "cfg.json"
+overlay_cfg.write_text(
+    json.dumps(
+        {
+            "access_token": "UNITTEST_ACCESS_TOKEN_XX",
+            "refresh_token": "UNITTEST_SECRET_TOKEN_VALUE_XX",
+            "client_id": "UNITTEST_CLIENT_ID_XX",
+            "client_secret": "UNITTEST_CLIENT_SECRET_XX",
+            "team_id": "1",
+            "project_id": "2",
+        }
+    ),
+    encoding="utf-8",
+)
+from server import ZohoSprintsAPI  # noqa: E402
+
+api = ZohoSprintsAPI(str(overlay_cfg))
+ok_overlay = (
+    api.item_prefix == "Ras-" + "I"
+    and api.default_user_id == str(wf["default_user_id"])
+    and api.access_token == "UNITTEST_ACCESS_TOKEN_XX"
+    and bool(api.title_strip_suffixes)
+)
+print(f"zoho workflow overlay without copying tokens: {'OK' if ok_overlay else 'FAIL'}")
+failed += int(not ok_overlay)
+shutil.rmtree(overlay_dir, ignore_errors=True)
+
+zoho_rem = run_reminder({"invocationNum": 0, "conversationId": "c-zoho-wf"})
+ok_zoho_rem = "update zoho" in zoho_rem["injectSteps"][0]["ephemeralMessage"]
+print(f"reminder includes update zoho: {'OK' if ok_zoho_rem else 'FAIL'}")
+failed += int(not ok_zoho_rem)
+
+from setup_wizard import questions_payload, normalize  # noqa: E402
+
+facts = {
+    "product": "App",
+    "pythons": ["python"],
+    "modules": [":app"],
+    "launchers": ["com.example.app/.MainActivity"],
+    "apk_hint": "app/build/outputs/apk/debug/app-debug.apk",
+    "locales": ["values"],
+    "stack": "Koin",
+    "classic_app_src": True,
+    "gemini": False,
+    "zoho_config": True,
+    "gradlew": True,
+}
+q_ids = [q["id"] for q in questions_payload(Path("."), "en", facts)]
+ok_q = "i16" in q_ids
+print(f"wizard includes I.16: {'OK' if ok_q else 'FAIL'}")
+failed += int(not ok_q)
+norm = normalize(
+    {
+        "i0": "yes",
+        "i1": "discovered",
+        "i3": "never",
+        "i4": "allow",
+        "i10": "confirm",
+        "i15": "yes",
+        "i14": ["cursor"],
+        "i16": "enable",
+    },
+    facts,
+)
+ok_norm = norm.get("zoho_mcp") == "enable"
+print(f"wizard records zoho_mcp: {'OK' if ok_norm else 'FAIL'}")
+failed += int(not ok_norm)
+
 print(f"\nTotal test failures: {failed}")
 sys.exit(failed)
+

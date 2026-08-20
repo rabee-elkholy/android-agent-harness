@@ -1,4 +1,4 @@
-"""Fast Kotlin pre-build sanity for Rashaqa Android.
+"""Fast Kotlin pre-build sanity for this Android app.
 
 Usage:
   python .agents/scripts/fast_kt_lint.py
@@ -14,12 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
+from _product import PACKAGE_PREFIX  # noqa: E402
 from _repo_files import REPO, changed_paths  # noqa: E402
 
 enable_line_buffered_stdio()
 
 FQCN_PATTERN = re.compile(
-    r"\b(androidx\.[a-zA-Z0-9_.]+|com\.madarsoft\.[a-zA-Z0-9_.]+|android\.(view|widget|graphics|os|content)\.[a-zA-Z0-9_.]+|java\.util\.[a-zA-Z0-9_.]+)\b"
+    rf"\b(androidx\.[a-zA-Z0-9_.]+|{re.escape(PACKAGE_PREFIX)}\.[a-zA-Z0-9_.]+|android\.(view|widget|graphics|os|content)\.[a-zA-Z0-9_.]+|java\.util\.[a-zA-Z0-9_.]+)\b"
 )
 WILDCARD_IMPORT_PATTERN = re.compile(r"^import\s+[a-zA-Z0-9_.]+\.\*")
 STATE_CLASS_PATTERN = re.compile(r"data\s+class\s+[A-Za-z0-9_]*State\b")
@@ -164,7 +165,7 @@ def lint_file(file_path: Path) -> list[dict]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fast Kotlin lint for Rashaqa")
+    parser = argparse.ArgumentParser(description="Fast Kotlin lint for this app")
     parser.add_argument("--all", action="store_true", help="Scan all Kotlin files under app/src/main")
     args = parser.parse_args()
 

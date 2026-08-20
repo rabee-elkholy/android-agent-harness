@@ -45,7 +45,7 @@ def main(argv=None) -> int:
         diff_cmd.extend(["--", *paths])
 
     chunks = [
-        f"# Rashaqa review package (unstaged vs HEAD)\n# repo: {REPO}\n",
+        f"# Harness review package (unstaged vs HEAD)\n# repo: {REPO}\n",
         "## git status\n",
         git(*status_cmd),
         "\n## git diff --stat\n",
@@ -71,7 +71,7 @@ def main(argv=None) -> int:
         chunks.extend(extra)
 
     out.write_text("".join(chunks), encoding="utf-8")
-    print(f"RASHAQA_REVIEW_PACKAGE={out}")
+    print(f"HARNESS_REVIEW_PACKAGE={out}")
     return 0
 
 
