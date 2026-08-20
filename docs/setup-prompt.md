@@ -10,15 +10,23 @@ You are installing a portable **Android AI harness** into THIS checkout. The kit
 
 Same **engine** (5-leaf review, live Gradle runner, safety hook). **Different product, machine, and team policy.** A find-replace of the example app name is **not** enough.
 
+Before I.0, tell the developer in their language: setup takes time (backup, several questions that explain why, structural port, selftest). They should stay in this chat until `Total test failures: 0`. Skipping questions or stopping early is a weak install.
+
 Answer in the developer's language. Do not commit unless they ask.
 
-**Interview format (mandatory):** After backup + file discovery, run section **I**. For every question: (1) in chat, **why** you need it and **what they gain**, (2) then a **choice list** (`ask_question` if the product has it; otherwise numbered options in chat). Options in the **same language** as the developer.
+**Interview format (mandatory):** After backup + file discovery, run section **I**. The developer reads the **choice UI**, not your chat. A five-word title (`Backup?`, `Python?`, `Device?`) is a failed question.
 
-Use **choices whenever the answer is a known set** (yes/no, discovered module A vs B, python vs python3). Put the discovered/default value first and mark it `(Recommended)` **only** when it is an engineering default (e.g. no unattended install) — never on “did the last test pass”. Physical vs emulator is **optional during install** (I.4).
+For every question:
 
-**Free text only** when the agent cannot know the value from the repo or the machine (section **I-text**). Do not ask them to type a module name if you already found `:composeApp` — offer it as a choice. If they pick “Other”, **then** wait for one line of text.
+1. Put **why + what they gain + what goes wrong if they pick the other option** inside the `ask_question` `prompt` itself (translate the **Modal prompt** below). Chat may repeat it; the modal must stand alone.
+2. Then the **choice list**. Options in the **same language** as the developer.
+3. Wait for required answers. Do not guess team policy. Do not rewrite `harness-rules.md` until required I.* are answered.
 
-Do not guess team policy. Wait for required choices before rewriting `harness-rules.md`.
+Do **not** dump I.0–I.14 into one form. Policy questions are **one form each**: I.0, I.3, I.4, I.7, I.12, I.14. Disk facts may share one form **only** for I.5 + I.6 + I.6b, and each of those three prompts still has its full why/benefit text.
+
+Use **choices** whenever the answer is a known set. Put the discovered/safe default first. Mark `(Recommended)` **only** on a real engineering default (no unattended install, skip device lock during setup). Never on “did the last test pass”. Physical vs emulator is **optional during install** (I.4).
+
+**Free text only** when you cannot know the value (section **I-text**). Do not ask them to type a module name if you already found `:composeApp`. If they pick “Other”, **then** wait for one line of text.
 
 ## Detect environment (print in chat)
 
@@ -47,111 +55,93 @@ Then run **section I** using those proposals as defaults they can correct.
 
 ## I) Interview — choices first, type only when we cannot know
 
-Explain why + benefit in chat, then **choices**. Required = wait. Optional: if they ignore, apply the first option (the default) and record that in `SETUP_ANSWERS.md`.
-
-You may **batch** independent choices in one `ask_question` (several questions) so they are not clicking many times — still keep why/benefit in chat above the form.
+Explain why + benefit **in the question prompt**, then **choices**. Required = wait. Optional: if they ignore, apply the **first** option and record it in `SETUP_ANSWERS.md`.
 
 ### I.0 Backup and install? (required)
 
-- **Why:** Setup overwrites `.agents` and may merge AI tool settings.
-- **Benefit:** A backup + rollback prompt restores the old system.
+- **Modal prompt:** Setup will replace `.agents` in this repo. A backup plus the rollback prompt can restore what is here today. Without a backup, the old harness is gone. Do you want to back up and start?
 - **Choices:** `Yes, back up and start` / `No, stop`
 
 ### I.1 Product name (required)
 
-- **Why:** Prompts must name *this* app, not the example product.
-- **Benefit:** Reviewers follow this product.
+- **Modal prompt:** Reviewer prompts and `AGENTS.md` will use this name. If we keep the example product name, reviews talk about the wrong app. Use the name I found, or type another?
 - **Choices:** `Use “<discovered rootProject.name or folder>”` / `Other name (I will type it in chat)`
 - **Free text** only if they pick the second.
 
 ### I.2 Python command (required)
 
-- **Why:** Scripts run as `$PY .agents/scripts/...`.
-- **Benefit:** Lint/assemble do not hit a fake Windows `python3` Store alias.
-- **Choices:** only interpreters you **already verified** (e.g. `python` / `python3`). If only one works, one option + `Stop — install Python 3.10+`.
+- **Modal prompt:** Every harness script starts with this command. On Windows, `python3` is often a Store stub that does not run. The one I verified actually works. Pick it, or stop so you can install Python 3.10+.
+- **Choices:** only interpreters you **already verified** (e.g. `python` / `python3`). If only one works, that option + `Stop — install Python 3.10+`.
 
 ### I.3 Git (required)
 
-- **Why:** Default kit blocks agent `git add`/`commit`/`push`.
-- **Benefit:** No surprise commits, or the agent commits if they want that.
-- **Choices:** `Agent never touches git (developer commits)` (Recommended) / `Agent may commit`
+- **Modal prompt:** The default blocks the agent from `git add` / commit / push so nothing lands on GitHub unless you commit in the IDE. If you want the agent to commit when you ask in chat, pick the second option. Surprise commits are the failure mode of the second choice.
+- **Choices:** `Agent never touches git (developer commits)` (Recommended) / `Agent may commit when I explicitly ask`
 
 ### I.4 Device (optional during install)
 
-- **Why:** Serials, `run_device.py`, and whether the hook denies `emulator` / `emulator-*`.
-- **Benefit:** They can lock to a physical phone, allow an AVD, or skip and decide later.
-- **Do not block setup** waiting on this. If they skip or pick “either”, continue install.
-- **Choices:** `Physical device only` / `Allow emulator` / `Skip — both allowed for now`
-- **If skipped or third choice:** treat as emulator allowed. Relax “physical only” in `harness-rules.md`, `pre_tool_safety.py` (do **not** deny `emulator-` serials or `emulator`/`avdmanager` unless they picked physical-only), `run_device.py`, `logcat_doctor.py`, `capture_screen.py`, adapters, and do not add emulator to the Gemini `deny` list. Keep `adb monkey` denied either way.
+- **Modal prompt:** This chooses whether the harness may use an emulator serial. Pick “both allowed” unless you are sure you will never debug on an AVD. “Physical only” blocks emulator installs and logcat. You can change this later with the update prompt. Skipping is safe.
+- **Do not block setup** waiting on this. If they skip or ignore, continue.
+- **Choices:** `Skip — both allowed for now` (Recommended) / `Allow emulator` / `Physical device only`
+- **If skipped, ignored, first choice, or Allow emulator:** treat as emulator allowed. Relax “physical only” in `harness-rules.md`, `pre_tool_safety.py` (do **not** deny `emulator-` serials or `emulator`/`avdmanager`), `run_device.py`, `logcat_doctor.py`, `capture_screen.py`, adapters, and do not add emulator to the Gemini `deny` list. Keep `adb monkey` denied either way.
 - **If physical only:** keep the kit’s physical-only denies.
 
 ### I.5 Android application module (required)
 
-- **Why:** Assemble/install must use the real module.
-- **Benefit:** The APK they install is the one that just built.
+- **Modal prompt:** Assemble and install must use the module that actually builds the APK. The wrong module means you install an old or missing APK. I found these application modules.
 - **Choices:** one option per `com.android.application` / `androidApplication` module you found (e.g. `:composeApp`, `:app`). If several, list all. Add `Other module (I will type it)` only if discovery is incomplete.
 
 ### I.6 Launcher activity (required)
 
-- **Why:** `run_device.py` start component.
-- **Benefit:** Install launches the real MAIN/LAUNCHER screen.
-- **Choices:** each MAIN/LAUNCHER you found (`com.pkg/.MainActivity`). Add `Other activity (I will type it)` only if none or several ambiguous.
+- **Modal prompt:** After install, `run_device.py` starts this activity (`package/.Activity`). The wrong component opens a blank task or a different screen. I found these MAIN/LAUNCHER activities.
+- **Choices:** each MAIN/LAUNCHER you found (`com.pkg/.MainActivity`, keep the `/`). Add `Other activity (I will type it)` only if none or several ambiguous.
 
 ### I.6b Debug APK path (required)
 
-- **Why:** Assemble summary + install path.
-- **Benefit:** Not the example `app-debug.apk`.
+- **Modal prompt:** The live runner checks that this debug APK exists after assemble. The kit example is `app-debug.apk`; many KMP apps are `composeApp-debug.apk`. A wrong path looks like a failed build.
 - **Choices:** `Use discovered path: <path>` / `Glob **/outputs/apk/debug/*.apk` / `Other path (I will type it)`
 
 ### I.7 Architecture to enforce (required)
 
-- **Why:** Reviewers cite skills; example MVI/Hilt/Room/ads will false-fail Koin/KMP/`BaseViewModel`.
-- **Benefit:** Reviews match how they write code.
+- **Modal prompt:** Reviewers only flag what they can cite. If we keep the kit’s MVI/Hilt/Room/ads rules, they will false-fail a Koin/KMP/`BaseViewModel` app. Using the stack I discovered makes reviews match how you write code.
 - **Choices:** `Use discovered stack: <one-line stack>` (Recommended) / `Keep the kit’s MVI/Hilt/Room rules`
 
 ### I.8 Locales (required if you found resource folders)
 
-- **Why:** `check_strings.py` pairs locales.
-- **Benefit:** No missing keys across locales.
+- **Modal prompt:** String checks compare keys across locale folders. If you only have `values/`, we skip AR/EN parity so preflight does not fail on a missing `values-ar`. If you have two folders, we keep the pair so translations do not drift.
 - **Choices:** `Use discovered folders: <e.g. values + values-ar>` / `Other locales (I will type them)`
 
 ### I.9 Scaffold (optional)
 
-- **Why:** Scaffold still has example-product paths until retargeted.
-- **Benefit:** disable = no junk packages; retarget = faster new screens later.
+- **Modal prompt:** The new-screen generator still has example-product paths until we retarget it. Disable it so the agent cannot create junk packages. Retarget it if you want faster new screens in *this* tree. Disable is safer when the layout is not `app/src/main/java`.
 - **Choices:** `Disable it now` (Recommended if layout ≠ `app/src/main/java`) / `Retarget it to this project now`
 
 ### I.10 Unattended install (optional)
 
-- **Why:** Overwrites the app on a device.
-- **Benefit:** confirm = safer; allowlist = faster loop.
+- **Modal prompt:** `run_device.py` overwrites the app on the phone. Confirm-before-install avoids a surprise install on the wrong device. Skipping confirm is faster if you trust the allowlist.
 - **Choices:** `Confirm before adb install` (Recommended) / `Allow run_device.py without confirm`
 
 ### I.11 `.agents` in git (optional)
 
-- **Why:** Some teams keep the harness local; others commit it.
-- **Benefit:** git = shared with clones; gitignore = machine-only.
+- **Modal prompt:** Gitignore keeps the harness on this machine only (clones will not get `.agents`). Committing it later shares the engine with the team, still without `state/`. This setup will not commit unless you later say “commit”.
 - **Choices:** `Add to .gitignore (local)` / `We will commit it later without state/`
   Do not commit in this setup unless they later say “commit”.
 
 ### I.12 Antigravity config (only if `~/.gemini` exists)
 
-- **Why:** `config.json` is machine-global.
-- **Benefit:** allowlist-only is safe when another app on the same PC already uses Gemini.
+- **Modal prompt:** `~/.gemini/config.json` is for the whole PC, not this repo. Another app on this machine may already use it. Merging the script allowlist only leaves that global file alone except for safe grants. A global rule is only for when this is the only Antigravity project on the PC.
 - **Choices:** `Merge script allowlist only` (Recommended) / `This is the only Antigravity project — write a global rule`
 
 ### I.13 Assemble now? (optional)
 
-- **Why:** Proves their wrapper/SDK with the live runner.
-- **Benefit:** they see heartbeats; cost = compile time.
+- **Modal prompt:** Selftest + preflight prove the harness scripts. A full `:assembleDebug` also proves your SDK/wrapper and shows the 10s heartbeat, but it costs compile time. Tests only is enough to finish setup.
 - **Choices:** `Tests only (selftest + preflight)` (Recommended) / `Yes, run :assembleDebug at the end`
 
 ### I.14 Coding agents (required)
 
-- **Why:** Each product loads a different entry file. Writing every adapter clutters the checkout with tools they do not use.
-- **Benefit:** Only those files appear at the repo root. Re-run the installer with a new `--tools` list to add one later.
+- **Modal prompt:** Each tool loads a different file (Cursor `.mdc`, `GEMINI.md`, `CLAUDE.md`, Copilot, …). Pick **every** product you actually open this repo in. If you use Cursor but only pick Gemini, Cursor will not get `.cursor/rules`. Extra tools only add files; you can add one later by re-running the installer. Do not pick “all” just to be safe if you want a clean root.
 - **Choices (multi-select):** `Cursor` / `Claude Code` / `GitHub Copilot` / `Gemini / Antigravity` / `Codex` / `Qwen Code` / `Windsurf` / `Cline` / `Roo` / `Amazon Q` / `Continue` / `Junie` / `Kilo` / `Goose` / `All of them`
-- Wait for this answer (`allow_multiple` if the product supports it). Do not default to all.
+- Wait for this answer (`allow_multiple` if the product supports it). Do not default to all. Do not default to only the tool running this chat.
 
 ### I-text — type in chat (only these)
 

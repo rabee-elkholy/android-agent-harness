@@ -2,7 +2,19 @@
 
 Portable quality engine for Android work. Same scripts and five-leaf review in **Claude Code**, **Codex**, **Cursor**, **GitHub Copilot**, **Gemini / Antigravity**, **Qwen Code**, **Windsurf**, **Cline**, **Roo**, **Amazon Q**, **Continue**, **Junie**, **Kilo**, **Goose**, and any tool that reads `AGENTS.md`.
 
-The kit is not an Android app. It is rules, reviewer prompts, and Python runners you install into an existing checkout. It does **not** ship an SDK, Gradle caches, secrets, or another developer’s machine paths.
+The kit is not an Android app. It is the delivery gate used on a production Android product: rules, reviewer prompts, and Python runners you install into an existing checkout. It does **not** ship an SDK, Gradle caches, secrets, or another developer’s machine paths.
+
+## Why it is strong
+
+This is not a style-guide snippet. After a full install, the agent cannot treat “looks good” as done.
+
+- **Five-leaf gate:** `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS` before assemble. No `LGTM`. No retired `code-review-guard-agent`.
+- **Live Gradle:** `run_gradle_task.py` streams the task log with a 10s heartbeat. The agent does not wait on a silent `gradlew`.
+- **Device path:** `run_device.py` install/launch. `adb monkey` is always denied.
+- **Hard block where the tool allows it:** Antigravity `hooks.json` can refuse assemble until the five leaves finish. Other tools get the same protocol in markdown.
+- **Your product, not the example:** setup ports package, module, APK, launcher, and architecture so reviewers cite *this* app (Koin/KMP vs MVI/Hilt), not leftover names.
+
+The strength shows up **after** setup finishes (selftest `0` failures + adapters for the tools you picked). A half install is a weak install.
 
 ## What you get
 
@@ -49,6 +61,10 @@ android-harness-kit/
 
 ## Install
 
+Install is **not** a file copy. Plan for **time in the chat**: backup, clone (or reuse) the kit, discovery from disk, several setup questions (each one explains why it matters), a structural port, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you skip questions, close the chat early, or accept a rename of the example app, you do **not** get the engine above.
+
+Stay in that chat until the agent prints selftest `Total test failures: 0` and tells you to open a **new** session. Answer the forms. Let it finish. Do not start feature work in the install chat.
+
 Open a **new chat** on your **Android app** (not this kit). Paste the prompt below (same text as [`docs/install-prompt.md`](docs/install-prompt.md)).
 
 The agent clones this repository if needed, copies `agents/` to `.agents`, then interviews you (product, Python, git, device, which coding tools). It must **port** the engine (regex, Path pieces, APK name, architecture). A find-replace of the example app name is not a successful install.
@@ -64,6 +80,8 @@ You are installing the portable Android AI harness into this checkout. This fold
 
 Answer in the developer's language. Do not commit unless they ask. Do not skip the interview. Do not only rename the example app.
 
+Tell the developer up front: this install takes a while (backup, questions with why/benefit, structural port, selftest). They should stay in this chat and wait for selftest Total test failures: 0. Rushing or skipping questions yields a weak harness.
+
 Start now:
 
 1. Confirm this repo has gradlew or gradlew.bat. If not, stop — this is not an Android Gradle checkout.
@@ -71,7 +89,8 @@ Start now:
    - If a clone already exists nearby (sibling android-harness-kit, a path the developer gives, or a previous temp clone), use that.
    - Otherwise: git clone https://github.com/rabee-elkholy/android-harness-kit.git into a sibling folder or the OS temp directory.
 3. Open <kit>/docs/setup-prompt.md and execute that file in full as if the developer had pasted it. The copy source is <kit>/agents/ → <this repo>/.agents.
-4. After setup: tell them to start a new chat on this Android folder before real work.
+4. Interview: each ask_question prompt must include why + benefit. Do not use short titles. Do not dump every I.* into one form.
+5. After setup: tell them to start a new chat on this Android folder before real work.
 
 Kit rules that still apply during setup:
 
