@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.5] - 2026-08-23
+
+### 🛡️ Safety Hook Precision & Windows Unicode Support
+- **Installer Script Safety Bypass**: Explicitly excluded installer helper scripts (`install_tool_adapters.py`, `setup_wizard.py`, `install_zoho_mcp.py`, `check_kit_update.py`, `review_package.py`) from false-positive `assemble`/`test` barrier checks in `pre_tool_safety.py` when passed build-task flags (e.g. `--assemble :app:assembleDebug`).
+- **Cross-Platform Unicode Encoding**: Reconfigured stdout to UTF-8 across all CLI scripts (`check_kit_update.py`, etc.) to eliminate `UnicodeEncodeError` on Windows `cp1252` shells when rendering Emoji-rich release notes.
+- **Enhanced Subagent Registration Clarity**: Added explicit guidance in `pre_invocation_reminder.py` regarding `define_subagent` registration before dispatching parallel reviewers.
+
+---
+
 ## [0.2.4] - 2026-08-23
 
 ### 🛡️ Installation Safety & Guardrails
