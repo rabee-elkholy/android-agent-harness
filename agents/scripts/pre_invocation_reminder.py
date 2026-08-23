@@ -32,6 +32,7 @@ def message_for(used_reviews: int, pending: bool) -> str:
         "security-reviewer-agent, perf-anr-guardian-agent, regression-impact-reviewer-agent "
         "in EXACTLY ONE invoke_subagent call with the same HARNESS_REVIEW_PACKAGE (or self subagents if named agents are unmapped). "
         "Do not use code-review-guard-agent. Do not fire 5 separate invokes. "
+        "REACTIVE WAKEUP: After invoke_subagent, immediately stop calling tools. NEVER use schedule or timers to wait for subagents (the harness wakes automatically). "
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS. "
         "Fix BLOCKER/MAJOR, regenerate the package, re-run the same 5. "
         "On-demand only (not a substitute for the 5): qa-diagnostics-agent, android-ui-expert-agent. "

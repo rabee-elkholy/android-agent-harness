@@ -120,12 +120,31 @@ def define(prompt, name="bug-reviewer-agent", **kwargs):
     return {"toolCall": {"name": "define_subagent", "args": args}}
 
 
+def sched(prompt: str, conversation: str | None = None) -> dict:
+    payload = {
+        "toolCall": {
+            "name": "schedule",
+            "args": {"DurationSeconds": 10, "Prompt": prompt, "TimerCondition": "any"},
+        }
+    }
+    if conversation:
+        payload["conversationId"] = conversation
+    return payload
+
+
 cases = [
     ("empty", {}, "allow"),
     ("monkey", cmd("adb -s DEV shell monkey -p com.example.app 1"), "deny"),
     ("git_mutation", cmd("git commit -m x"), "deny"),
     ("git_c_commit", cmd("git -C E:\\AndroidProjects\\SomeApp commit -m x"), "deny"),
     ("git_status", cmd("git status --short --branch"), "allow"),
+    ("sched_waiting_subagents", sched("Waiting for 5 review subagents"), "deny"),
+    ("sched_user_reminder", sched("Remind developer about coffee in 10 mins"), "allow"),
+    ("adb_uninstall_s", cmd("adb -s DEV uninstall com.example.app"), "allow"),
+    ("adb_uninstall_bare", cmd("adb uninstall com.example.app"), "deny"),
+    ("run_device_uninstall", cmd("python .agents/scripts/run_device.py uninstall"), "allow"),
+    ("pm_clear", cmd("adb -s DEV shell pm clear com.example.app"), "deny"),
+    ("pm_uninstall", cmd("adb -s DEV shell pm uninstall com.example.app"), "deny"),
     ("sub_share", invoke("c-share", Workspace="share"), "deny"),
     ("sub_not_allowed", invoke("c-other", name="arbitrary-unregistered-agent"), "deny"),
     (

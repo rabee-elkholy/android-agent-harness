@@ -516,8 +516,11 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
     if re.search(r"(?:^|\s)monkey(?:\s|$)", lower):
         deny("Denied: adb monkey is forbidden. Use adb -s <id> shell am start.")
         return
-    if re.search(r"\bpm\s+clear\b|\bpm\s+uninstall\b|\buninstall\b", lower):
-        deny("Denied: uninstall/clear app data requires explicit developer approval.")
+    if re.search(r"\bpm\s+clear\b", lower):
+        deny("Denied: pm clear app data requires explicit developer approval.")
+        return
+    if re.search(r"\bpm\s+uninstall\b", lower):
+        deny("Denied: pm uninstall is forbidden. Use python .agents/scripts/run_device.py uninstall or adb -s <serial> uninstall <package>.")
         return
 
     device_bound = bool(
@@ -528,6 +531,21 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         return
 
     allow("ADB command not blocked by safety hook.")
+
+
+def handle_schedule(args: dict, payload: dict) -> None:
+    prompt = str(args.get("Prompt") or args.get("prompt") or "").lower()
+    conv = conversation_id(payload)
+    if reviews_pending(conv) or any(
+        kw in prompt for kw in ("subagent", "reviewer", "review", "reviewers", "subagents", "مراجع")
+    ):
+        deny(
+            "Denied: do not use schedule/timers to wait for subagents. "
+            "Antigravity wakes the agent automatically via Reactive Wakeup when subagents finish. "
+            "Simply stop calling tools to end your turn."
+        )
+        return
+    allow("Schedule call permitted.")
 
 
 def main() -> None:
@@ -552,6 +570,9 @@ def main() -> None:
             return
         if name == "invoke_subagent":
             handle_invoke_subagent(payload, args)
+            return
+        if name == "schedule":
+            handle_schedule(args, payload)
             return
         if name != "run_command":
             allow()

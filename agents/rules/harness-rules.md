@@ -107,7 +107,7 @@ From repo root:
 
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
-3. Stop calling tools. Do not poll `transcript.jsonl`. Do not run lint/tests/assemble while they run.
+3. **Stop calling tools immediately.** Antigravity wakes you up automatically via **Reactive Wakeup** when subagents finish. **NEVER** use the `schedule` tool or timers to wait for subagents. Do not poll `transcript.jsonl` or `manage_subagents` in a loop. Do not run lint/tests/assemble while they run.
 4. Collect verdicts. BLOCKER/MAJOR → fix at the producer → regenerate the package → dispatch the same 5 again. Identical package content is rejected; the diff must change.
 5. Advance only when all five returned `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`.
 

@@ -4,6 +4,7 @@ Usage:
   python .agents/scripts/run_device.py install
   python .agents/scripts/run_device.py start
   python .agents/scripts/run_device.py install-start
+  python .agents/scripts/run_device.py uninstall
 """
 from __future__ import annotations
 
@@ -13,7 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
-from _product import APK_RELATIVE, ASSEMBLE_TASK, LAUNCHER, PRODUCT_NAME  # noqa: E402
+from _product import (  # noqa: E402
+    APK_RELATIVE,
+    APPLICATION_ID,
+    ASSEMBLE_TASK,
+    LAUNCHER,
+    PRODUCT_NAME,
+)
 from _repo_files import REPO, first_physical_adb_serial  # noqa: E402
 
 DEFAULT_APK = REPO / Path(APK_RELATIVE)
@@ -46,14 +53,24 @@ def run_adb(serial: str, adb_args: list[str], label: str) -> int:
 def main() -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
-    parser.add_argument("action", choices=["install", "start", "install-start"])
+    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall"])
     parser.add_argument("-s", "--serial", default=None, help="Physical device serial")
     parser.add_argument("--apk", default=str(DEFAULT_APK), help="Debug APK path")
     parser.add_argument("--activity", default=DEFAULT_ACTIVITY, help="Launch activity")
+    parser.add_argument("--package", default=APPLICATION_ID, help="Package name to uninstall")
     args = parser.parse_args()
 
     serial = require_serial(args.serial)
     live_print(f"[*] Physical device: {serial}")
+
+    if args.action == "uninstall":
+        live_print(f"[*] Uninstalling {args.package} from {serial}")
+        code = run_adb(serial, ["uninstall", args.package], "adb uninstall")
+        if code != 0:
+            live_print(f"[!] adb uninstall failed (exit {code})", err=True)
+            return code
+        live_print(f"[+] Uninstall finished for {args.package}")
+        return 0
 
     if args.action in ("install", "install-start"):
         apk = Path(args.apk)
