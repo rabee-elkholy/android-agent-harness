@@ -10,7 +10,27 @@ def conversation_id(payload: dict) -> str:
     return str(payload.get("conversationId") or payload.get("conversation_id") or "unknown")
 
 
-def message_for(used_reviews: int, pending: bool) -> str:
+def check_update_directive() -> str:
+    try:
+        from check_kit_update import check_for_update
+        info = check_for_update(force=False)
+        if info.get("has_update"):
+            curr = info.get("current", "0.1.0")
+            latest = info.get("latest", "")
+            return (
+                f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Harness Kit (v{latest}) is available (installed: v{curr}). "
+                f"In this opening turn, notify the developer via ask_question in their language: 'New Android Harness Kit v{latest} is available! What would you like to do?' "
+                f"Choices: 'View Changes (عرض التغييرات)' / 'Remind me tomorrow (ذكرني غداً)' / 'Update now (تحديث الآن)'. "
+                f"If they pick 'Remind me tomorrow': run `python .agents/scripts/check_kit_update.py --snooze 1` and proceed with their request. "
+                f"If they pick 'View Changes': run `python .agents/scripts/check_kit_update.py --show-changes` to show the changelog, then ask 'Update now' or 'Remind me tomorrow'. "
+                f"If they pick 'Update now': execute docs/update-prompt.md."
+            )
+    except Exception:
+        pass
+    return ""
+
+
+def message_for(used_reviews: int, pending: bool, update_directive: str = "") -> str:
     if used_reviews >= MAX_REVIEWS:
         return (
             f"Harness Quality Guard: Runaway review cap reached ({used_reviews}/{MAX_REVIEWS}). "
@@ -23,7 +43,7 @@ def message_for(used_reviews: int, pending: bool) -> str:
         else ""
     )
     return (
-        f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note} "
+        f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{update_directive} "
         "PRIORITY: uncompromising quality. Never skip the 5-leaf review to save tokens. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create .agents/state/plans/implementation_plan.md and get developer approval BEFORE writing code. "
         "ANSWER FIRST in chat before ask_question. Match ask_question language to the developer. "
@@ -65,8 +85,14 @@ def main():
         if not should_inject(payload, used_reviews, pending):
             print(json.dumps({}))
             return
+        invocation = payload.get("invocationNum")
+        try:
+            n = int(invocation)
+        except (TypeError, ValueError):
+            n = 0 if invocation in (0, "0", None) else -1
+        update_dir = check_update_directive() if n in (0, 1) else ""
         print(json.dumps({
-            "injectSteps": [{"ephemeralMessage": message_for(used_reviews, pending)}]
+            "injectSteps": [{"ephemeralMessage": message_for(used_reviews, pending, update_dir)}]
         }))
     except Exception:
         print(json.dumps({}))
