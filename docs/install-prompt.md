@@ -12,7 +12,11 @@ Then tell them: a few short questions (backup, app name, who commits, phone vs e
 
 ## Start now
 
-1. Confirm this repo has `gradlew` or `gradlew.bat`. If not, stop — this is not an Android Gradle checkout.
+1. **Target Project Verification (Fail-Fast)**:
+   - **Android Project Check**: Confirm this repo has `gradlew` or `gradlew.bat` AND Android Gradle build files (`build.gradle` / `build.gradle.kts`). If not, **STOP IMMEDIATELY** and tell the developer in their language:
+     `[ERROR] Target directory is NOT an Android project. Android Harness Kit requires a Gradle-based Android or Kotlin Multiplatform project.`
+   - **Semi-Complete / Non-Blank Codebase Check**: Confirm this repo contains an existing, active codebase with real Kotlin/Java files, ViewModels, and UI (not an empty starter template). If the project is blank with no existing architecture/screens, **STOP IMMEDIATELY** and tell the developer in their language:
+     `[ERROR] Android Harness Kit requires an existing, active/semi-complete codebase with established architecture, ViewModels, and UI to discover and govern. Please create your foundational app structure and initial screen first, then install the harness.`
 2. Get the kit (do **not** clone into `app/`, `composeApp/`, or any module source tree):
    - If a clone already exists nearby (sibling `android-harness-kit`, a path the developer gives, or a previous temp clone), use that. `git pull` on `main` if they want the latest.
    - Otherwise: `git clone https://github.com/rabee-elkholy/android-harness-kit.git` into a sibling folder or the OS temp directory.

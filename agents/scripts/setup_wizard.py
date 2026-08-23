@@ -573,10 +573,22 @@ def zoho_config_present() -> bool:
     return resolve_config_path() is not None
 
 
+def count_source_files(repo: Path) -> int:
+    count = 0
+    for pat in ("**/*.kt", "**/*.java"):
+        for p in repo.glob(pat):
+            if not skip_path(p, repo):
+                count += 1
+                if count > 50:
+                    return count
+    return count
+
+
 def discover(repo: Path) -> dict:
     modules = discover_modules(repo)
     pythons = discover_pythons()
     locales = discover_locales(repo)
+    source_count = count_source_files(repo)
     return {
         "product": discover_product(repo),
         "pythons": pythons,
@@ -589,6 +601,8 @@ def discover(repo: Path) -> dict:
         "gemini": gemini_exists(),
         "zoho_config": zoho_config_present(),
         "gradlew": (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file(),
+        "source_count": source_count,
+        "is_empty": source_count == 0,
     }
 
 
@@ -1017,7 +1031,10 @@ def find_repo(explicit: str | None) -> Path:
     else:
         repo = Path.cwd().resolve()
     if not ((repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()):
-        raise SystemExit("Pass --repo <android-checkout> with gradlew / gradlew.bat.")
+        raise SystemExit(
+            "[ERROR] Target directory is NOT an Android project. Missing gradlew / gradlew.bat. "
+            "Please pass --repo pointing to a valid Android or Kotlin Multiplatform (KMP) project."
+        )
     return repo
 
 

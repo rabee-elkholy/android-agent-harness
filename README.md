@@ -52,47 +52,71 @@ android-harness-kit/
     └── gemini-runtime/      ← optional Antigravity grants example
 ```
 
-## Requirements
+## Prerequisites & Target Project Requirements
 
+> [!IMPORTANT]
+> **1. Install on an Existing or Active/Semi-Complete Android Codebase (NOT for Blank Projects)**
+> The Android Harness is an AI architecture-governance, security, and quality review engine. During installation, it inspects your existing codebase (DI setup, ViewModel base, navigation framework, Compose theme tokens, database entities, and domain logic) to configure strict, project-tailored reviewer rules. 
+> If installed on a completely blank or empty starter template, there is no architecture or UI to discover. **Build your core foundation and initial screen first, then install the harness.**
+
+> [!CAUTION]
+> **2. Non-Android Projects Are Strictly Rejected**
+> The harness requires a Gradle-based Android or Kotlin Multiplatform (KMP) project. If `gradlew`/`gradlew.bat` or Android Gradle build configurations are missing, installation immediately stops.
+
+### System Requirements:
 - Python 3.10+ (`python3` on macOS/Linux; on Windows use `python` if `python3` is a Store stub)
 - Android Studio `local.properties` (`sdk.dir`) on the target machine
-- Repo `gradlew` / `gradlew.bat`
+- Gradle wrapper in the project root (`gradlew` / `gradlew.bat`)
 - `adb` on `PATH` or from the SDK `platform-tools`
 
-## Install
+---
 
-Install is **not** a file copy. Use a **strong model** for the install chat (not a fast/cheap one). A weak model skips filling product constants and leaves a broken helper. Plan for **time**: a few wizard questions (backup, app name, git, phone vs emulator, ask before install, unit tests, which tools — the rest is read from Gradle/manifests), backup, clone (or reuse) the kit, fill `_product.py` and architecture, leftover grep, then selftest and preflight. On a first machine that can mean **tens of minutes**. If you close the chat early or accept placeholder package names, you do **not** get the engine above.
+## 🚀 Installation (Step-by-Step)
 
-Stay in that chat until the agent prints selftest `Total test failures: 0` and tells you to open a **new** session. Prefer answering the wizard in a **terminal**. The agent then ports; it must not invent extra interview questions.
+Installation is **not** a simple file copy. It is an automated structural port that tailors the 5-reviewer governance engine to your app's exact architecture and tech stack.
 
-Open a **new chat** on your **Android app** (not this kit). Paste **all of** [`docs/install-prompt.md`](docs/install-prompt.md).
+### Step 1: Open a New Chat in Your Android Project
+Open your IDE or terminal AI assistant (Cursor, Antigravity, Claude Code, etc.) in your **Android app's root folder** (⚠️ **never** run setup inside `android-harness-kit` itself).
 
-The agent clones this repository if needed, runs `agents/scripts/setup_wizard.py` (usually seven questions), copies `agents/` to `.agents`, then **fills** `_product.py` and architecture from disk. A find-replace of a display name is not a successful install.
+### Step 2: Use a Strong AI Model
+Use a strong reasoning model (e.g. Gemini 2.5/3.0 Pro, Claude 3.7 Sonnet, GPT-4o) for the installation chat. Fast/cheap models tend to skip architectural porting steps and leave a broken setup.
 
-After port, it runs `install_tool_adapters.py` with the flags printed by `setup_wizard.py flags`. Switching to a new IDE later means re-running the installer with that tool added.
+### Step 3: Paste the Install Prompt
+Copy the entire contents of [`docs/install-prompt.md`](docs/install-prompt.md) and paste it as your first message in the chat:
+```markdown
+[Paste the full contents of docs/install-prompt.md here]
+```
 
-Phone vs emulator is a setup question (both allowed is first). `adb monkey` stays denied.
+### Step 4: Answer the Setup Wizard Questions
+The agent will run the interactive setup wizard (`setup_wizard.py`) or present the questions in chat:
+1. **Backup**: Create a timestamped backup before touching `.agents/` (Recommended).
+2. **App Name**: Confirm the detected application name.
+3. **Git Policy**: Decide whether you commit manually in the IDE (Recommended) or allow the agent to commit on request.
+4. **Testing Target**: Physical device only, or both physical device and emulator.
+5. **Install Confirmation**: Ask before `adb install` or install unattended.
+6. **Unit Tests**: Keep or skip unit-test verification gates.
+7. **AI Tools**: Select which tools you use (Cursor, Antigravity, Claude Code, Copilot, Windsurf, etc.) to generate matching adapter files (`AGENTS.md`, `.cursorrules`, `CLAUDE.md`, etc.).
 
-If you already have this kit on disk, you can still paste the same prompt — the agent will reuse the clone (pull `main` if you want the latest).
+### Step 5: Automatic Porting & Verification
+The agent will:
+- Clone the harness kit to a sibling/temp location.
+- Copy engine scripts and subagents to `.agents/`.
+- Discover your app's package, modules, launcher activity, Compose theme, DI, and domain logic.
+- Dynamically create tailored reference files for detected domains (audio, education, billing, etc.).
+- Run selftest (`_hook_selftest.py`) until `Total test failures: 0`.
 
-The pasteable first message is the full file [`docs/install-prompt.md`](docs/install-prompt.md) (not a short summary).
+### Step 6: Start Real Work in a Fresh Chat Session
+Once setup completes, **open a brand new chat session** in your Android project. All subsequent coding tasks will automatically be governed by the parallel 5-reviewer quality gate!
 
+---
 
-## After setup
+## 🔄 Updating an Existing Installation
 
-Start a **new chat** on that Android folder. Non-trivial work still needs all five `*_PASS` tokens before assemble. Rollback: paste [`docs/rollback-prompt.md`](docs/rollback-prompt.md).
+When new features or fixes are committed to this repository, existing installations can be updated seamlessly without losing custom settings:
 
-## Update
-
-When this GitHub repo gets a new commit, people who already installed do **not** get it automatically. `.agents` is a copy.
-
-Open a **new chat** on the **Android app** and paste **all of** [`docs/update-prompt.md`](docs/update-prompt.md).
-
-The agent backs up, `git pull`s the kit, recopies `agents/` → `.agents`, re-ports from `.harness-setup/answers.json` (or `SETUP_ANSWERS.md`), and re-runs `install_tool_adapters.py` from `setup_wizard.py flags`. Custom skills they added (not shipped by the kit) are restored from the backup. Then a new chat.
-
-Do **not** use install/update prompts on the parent product that this kit was extracted from. File-level sync: [`docs/sync.md`](docs/sync.md).
-
-The pasteable update message is [`docs/update-prompt.md`](docs/update-prompt.md).
+1. Open a **new chat** in your Android project.
+2. Copy and paste the entire contents of [`docs/update-prompt.md`](docs/update-prompt.md).
+3. The agent will back up, pull the latest harness kit, re-port the engine using your saved answers, restore your custom skills, and verify with selftest.
 
 ## Supported agents
 

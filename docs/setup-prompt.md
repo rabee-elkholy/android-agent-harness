@@ -45,7 +45,11 @@ Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state
 
 ## 2) Discover from disk (do not invent)
 
-Read Gradle, manifests, source. Print a **proposed facts** table in chat (module, assemble task, APK path, applicationId, launcher, DI, VM base, Room yes/no, theme, source roots, string files). Never assume `:app` or `app-debug.apk`. If `local.properties` missing: tell them Android Studio must write `sdk.dir` — do not invent a path. If no `gradlew`: **stop**.
+Read Gradle, manifests, source:
+- **Android Validation**: If no `gradlew`/`gradlew.bat` or no Android Gradle build files: **STOP**. Tell the developer `[ERROR] Target directory is NOT an Android project.`
+- **Semi-Complete Codebase Validation**: If the project has 0 Kotlin/Java source files or is an unconfigured empty template: **STOP**. Tell the developer `[ERROR] Android Harness Kit requires an existing, active/semi-complete codebase with established architecture, ViewModels, and UI to discover and govern. Please build your initial screen and core foundation first, then install the harness.`
+
+Print a **proposed facts** table in chat (module, assemble task, APK path, applicationId, launcher, DI, VM base, Room yes/no, theme, source roots, string files). Never assume `:app` or `app-debug.apk`. If `local.properties` missing: tell them Android Studio must write `sdk.dir` — do not invent a path.
 
 Print `model_warning` then `auto_blurb` from the wizard JSON. Then ask **only** the `questions` array (section I). Do not re-ask facts already in `auto`.
 
