@@ -28,8 +28,12 @@ RUNBLOCKING_PATTERN = re.compile(r"\brunBlocking\s*(\(|{)")
 CLASS_ENTRY_PATTERN = re.compile(
     r"class\s+\w+[^{]*:\s*(BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity)\b"
 )
-PREVIEW_AR = re.compile(r"@Preview\b[\s\S]{0,500}?locale\s*=\s*\"ar\"")
-PREVIEW_EN = re.compile(r"@Preview\b[\s\S]{0,500}?locale\s*=\s*\"en\"")
+PREVIEW_AR = re.compile(
+    r"@Preview\b[\s\S]{0,500}?(?:locale\s*=\s*\"ar\"|LayoutDirection\.Rtl|ArabicPreview|\bArPreview\b|//\s*locale\s*=\s*\"ar\")"
+)
+PREVIEW_EN = re.compile(
+    r"@Preview\b[\s\S]{0,500}?(?:locale\s*=\s*\"en\"|LayoutDirection\.Ltr|EnglishPreview|\bEnPreview\b|//\s*locale\s*=\s*\"en\")"
+)
 PREVIEW_SURFACE_SUFFIXES = (
     "Screen.kt",
     "Card.kt",

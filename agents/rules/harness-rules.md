@@ -70,8 +70,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - Read `android-harness/SKILL.md` and any matching domain reference before non-trivial work.
 - Inspect with `grep_search` / `view_file` before editing. Do not guess symbols.
 - Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
-- Domain references: architecture, Compose/theme, Room (if `@Database` exists). Do not cite ads/GPS/streak/payments stubs.
-- Non-trivial work needs `.agents/state/plans/implementation_plan.md` and developer approval via `ask_question`.
+- **MANDATORY PLANNING**: Any new feature, new screen, new schema/table, or multi-file change MUST create `.agents/state/plans/implementation_plan.md` and obtain developer approval via `ask_question` BEFORE modifying or creating production code. Do not start coding before plan approval.
 - Large work (>3–4 files, or a shared ViewModel / service): split into milestones (data → domain → state → UI). One milestone per increment. No 10-file big-bang turns.
 - Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer.
 - TDD when it protects real logic. No placeholder tests.
@@ -79,7 +78,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 ### New production code
 
 - New UI: Jetpack Compose unless the surrounding screen is XML and the developer did not ask to convert it.
-- Any new or modified Compose UI: dual-locale `@Preview` — Arabic RTL (`locale = "ar"`) and English LTR (`locale = "en"`). Wrap in this app's theme (or `MaterialTheme` if none). **Screens** also need Loading, Empty, and Error. Cards, dialogs, sheets, and banners need the two locales; they do not need the three state previews.
+- Any new or modified Compose UI: dual-locale `@Preview` — Arabic RTL (`locale = "ar"` for AndroidX, or `CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl)` for Compose Multiplatform / KMP) and English LTR (`locale = "en"` or `LayoutDirection.Ltr`). Wrap in this app's theme (or `MaterialTheme` if none). **Screens** also need Loading, Empty, and Error. Cards, dialogs, sheets, and banners need the two locales; they do not need the three state previews.
 - New ViewModels: the base required by `architecture-mvi.md` and the files you opened. Data through the same layers those files already use.
 - Zero inline FQCNs. Import at the top. Typealias collisions (`as CoreState`, `as CoreAction`, `as CoreEvent`).
 - Typography: `MaterialTheme.typography.*` only.

@@ -25,11 +25,12 @@ def message_for(used_reviews: int, pending: bool) -> str:
     return (
         f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note} "
         "PRIORITY: uncompromising quality. Never skip the 5-leaf review to save tokens. "
+        "PLAN FIRST: New features, screens, or multi-file changes MUST create .agents/state/plans/implementation_plan.md and get developer approval BEFORE writing code. "
         "ANSWER FIRST in chat before ask_question. Match ask_question language to the developer. "
         "(Recommended) is only for engineering tradeoffs — never on Pass/Fail or plan approval. "
         "PARALLEL REVIEW: dispatch bug-reviewer-agent, convention-reviewer-agent, "
         "security-reviewer-agent, perf-anr-guardian-agent, regression-impact-reviewer-agent "
-        "in EXACTLY ONE invoke_subagent call with the same HARNESS_REVIEW_PACKAGE. "
+        "in EXACTLY ONE invoke_subagent call with the same HARNESS_REVIEW_PACKAGE (or self subagents if named agents are unmapped). "
         "Do not use code-review-guard-agent. Do not fire 5 separate invokes. "
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS. "
         "Fix BLOCKER/MAJOR, regenerate the package, re-run the same 5. "
