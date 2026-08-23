@@ -41,7 +41,7 @@ flowchart TD
     Plan --> Approval{Developer Approval}
     Approval -- Approved --> Code[Code Implementation]
     Approval -- Revisions --> Plan
-    Code --> ReviewGate[Five-Leaf Parallel Review Gate]
+    Code --> ReviewGate[Five-Leaf Parallel Review Gate - MANDATORY]
     
     subgraph ReviewGate [Reviewer Subagents]
         R1[Bug Reviewer]
@@ -54,60 +54,35 @@ flowchart TD
     ReviewGate --> Verdict{All 5 Leaves PASS?}
     Verdict -- Fix Findings --> Code
     Verdict -- All PASS --> Preflight[Preflight: Lint + DB Migrations + String Parity]
-    Preflight --> UnitTests[Unit Tests Gate: testDebugUnitTest]
+    Preflight --> TestCheck{Unit Tests Enabled? <br/><i>(Configurable)</i>}
+    TestCheck -- Enabled --> UnitTests[Unit Tests: testDebugUnitTest]
     UnitTests -- Tests Fail --> Code
     UnitTests -- Tests PASS --> Gradle[Live Gradle Runner: assembleDebug]
+    TestCheck -- Skipped --> Gradle
     Gradle --> Device[Device Install & Verification]
-    Device --> Zoho[Zoho Sprints Integration: Status & Comment Sync]
-    Zoho --> Finish([Verified Delivery & Commit])
+    Device --> ZohoCheck{Zoho Sprints Connected? <br/><i>(Optional)</i>}
+    ZohoCheck -- Enabled --> Zoho[Zoho Sprints: Status & Comment Sync]
+    ZohoCheck -- Skipped / None --> Finish([Verified Delivery & Commit])
+    Zoho --> Finish
 ```
 
 ---
 
-## Key Capabilities
+## Core vs. Optional Features
 
-<table>
-  <tr>
-    <td width="50%">
-      <h3>Five-Leaf Review Gate</h3>
-      Mandatory parallel dispatch of 5 specialized reviewer subagents (<code>BUG_PASS</code>, <code>CONVENTION_PASS</code>, <code>SECURITY_PASS</code>, <code>PERF_PASS</code>, <code>REGRESSION_PASS</code>) before any APK assembly or task completion.
-    </td>
-    <td width="50%">
-      <h3>Unit Tests Verification Gate</h3>
-      Automated execution of <code>testDebugUnitTest</code> via the live task runner. Enforces unit test passing as a strict pre-condition for APK builds and delivery.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>Dual Project Engine</h3>
-      Supports <b>established active codebases</b> (auto-discovering DI, ViewModels, and UI from disk) and <b>brand-new greenfield projects</b> (interactive architecture questionnaire).
-    </td>
-    <td width="50%">
-      <h3>Zoho Sprints MCP Integration</h3>
-      Native project management integration that updates sprint task status (<code>In progress</code> &rarr; <code>Ready To ReTest</code>) and posts structured comments without leaking tokens into the repo.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>Safety Hooks & Git Guard</h3>
-      Blocks unauthorized <code>git commit</code>, worktree mutations, <code>adb monkey</code>, and destructive package clears. Keeps version control firmly in the developer's hands.
-    </td>
-    <td width="50%">
-      <h3>Live Gradle Task Streaming</h3>
-      <code>run_gradle_task.py</code> streams real-time build logs with a 10-second heartbeat, preventing silent hangs and unmonitored builds.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>In-Harness Update Checker</h3>
-      Lightweight, non-blocking version checker that notifies you when a newer kit release is available, with support for 24h snoozing (<code>--snooze 1</code>) and in-chat release notes (<code>--show-changes</code>).
-    </td>
-    <td width="50%">
-      <h3>14+ AI Assistant Adapters</h3>
-      Generates tailored configuration files for <b>Google Antigravity</b>, <b>Cursor</b>, <b>Claude Code</b>, <b>GitHub Copilot</b>, <b>Codex</b>, <b>Windsurf</b>, and more.
-    </td>
-  </tr>
-</table>
+| Category | Feature | Status | Description |
+| :--- | :--- | :--- | :--- |
+| **Core** | **Five-Leaf Review Gate** | **Mandatory** | Parallel review by 5 subagents (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`). Never bypassed. |
+| **Core** | **Planning Guard** | **Mandatory** | Multi-file features and new screens require `implementation_plan.md` approval before coding. |
+| **Core** | **Preflight Verification** | **Mandatory** | Runs fast Kotlin lint, Room database migration checks, and string parity before building. |
+| **Core** | **Live Gradle Streaming** | **Mandatory** | `run_gradle_task.py` executes tasks with a 10s heartbeat to avoid silent background hangs. |
+| **Core** | **Safety Hooks & Git Guard** | **Mandatory** | Hard blocks on `git commit`, `adb monkey`, and destructive package operations. |
+| **Configurable** | **Unit Tests Gate (`I.15`)** | *Optional* | Enabled by default; runs `testDebugUnitTest`. Can be skipped if the project does not have test suites. |
+| **Configurable** | **Zoho Sprints Sync (`I.16`)** | *Optional* | Project management MCP integration to sync task statuses (`Ready To ReTest`) and comments. |
+| **Configurable** | **Device Target Policy (`I.4`)** | *Configurable* | Choose between locking strictly to **Physical Device Only** or allowing **Physical + Emulator**. |
+| **Configurable** | **Git Commit Policy (`I.3`)** | *Configurable* | **Manual IDE commit** (recommended) or allow the agent to commit upon explicit chat request. |
+| **Configurable** | **Bilingual Parity (`I.8`)** | *Configurable* | Enforces dual **Arabic (RTL) + English (LTR)** string parity and previews, or single locale. |
+| **Configurable** | **AI Tool Adapters (`I.14`)** | *Configurable* | Select only the tools you use (Cursor, Antigravity, Claude Code, Copilot, Windsurf, etc.). |
 
 ---
 
