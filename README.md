@@ -41,12 +41,7 @@ flowchart TD
     Plan --> Approval{Developer Approval}
     Approval -- Approved --> Code[Code Implementation]
     Approval -- Revisions --> Plan
-    Code --> Preflight[Preflight: Lint + DB Migrations + String Parity]
-    Preflight --> TestCheck{Unit Tests Enabled? <br/><i>(Configurable)</i>}
-    TestCheck -- Enabled --> UnitTests[Unit Tests: testDebugUnitTest]
-    UnitTests -- Tests Fail --> Code
-    UnitTests -- Tests PASS --> ReviewGate[Five-Leaf Parallel Review Gate - MANDATORY]
-    TestCheck -- Skipped --> ReviewGate
+    Code --> ReviewGate[Five-Leaf Parallel Review Gate - MANDATORY]
     
     subgraph ReviewGate [Reviewer Subagents]
         R1[Bug Reviewer]
@@ -58,9 +53,16 @@ flowchart TD
     
     ReviewGate --> Verdict{All 5 Leaves PASS?}
     Verdict -- Fix Findings --> Code
-    Verdict -- All PASS --> Gradle[Live Gradle Runner: assembleDebug]
-    Gradle --> Device[Device Install & Verification]
-    Device --> ZohoCheck{Zoho Sprints Connected? <br/><i>(Optional)</i>}
+    Verdict -- All PASS --> Preflight[Preflight: Lint + DB Migrations + String Parity]
+    Preflight --> TestCheck{Unit Tests Enabled? <br/><i>(Configurable)</i>}
+    TestCheck -- Enabled --> UnitTests[Unit Tests: testDebugUnitTest]
+    UnitTests -- Tests Fail --> Code
+    UnitTests -- Tests PASS --> Gradle[Live Gradle Runner: assembleDebug]
+    TestCheck -- Skipped --> Gradle
+    Gradle --> Device[Device Install & Launch: run_device.py]
+    Device --> ManualSignoff[Manual Device Verification: 4 Phases]
+    ManualSignoff -- Fail --> Code
+    ManualSignoff -- All PASS --> ZohoCheck{Zoho Sprints Connected? <br/><i>(Optional)</i>}
     ZohoCheck -- Enabled --> Zoho[Zoho Sprints: Status & Comment Sync]
     ZohoCheck -- Skipped / None --> Finish([Verified Delivery & Commit])
     Zoho --> Finish

@@ -89,7 +89,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 
 ## 2) Parallel Review Fan-Out (the only delivery gate)
 
-Required after any non-trivial implementation (UI, state/lifecycle, networking, database, refactor, multi-file, new Kotlin).
+Required after any non-trivial implementation (UI, state/lifecycle, payment, networking, database, running/sensors, streak, ads/privacy, refactor, multi-file, new Kotlin).
 
 ### Stage 0: Narrow skip (reviews only)
 
@@ -101,27 +101,14 @@ Skip the **5 review leaves** only when the working tree is strictly:
 
 This skip is not a token optimization. Code changes never skip reviews.
 
-## 2) Preflight Verification & Unit Tests
-
-Before dispatching code to the review gate:
-
-1. `python .agents/scripts/preflight_check.py` — runs fast Kotlin lint, Room database migration checks, and localization string parity.
-2. Targeted Unit Tests: `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` when this checkout has unit tests (`I.15: yes`). Fix any test failures at the source before review.
-
----
-
-## 3) Five-Leaf Review Delivery Gate
-
-Once the working tree passes preflight and unit tests:
-
 ### Stage 1: One tool call, five leaves
 
 From repo root:
 
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
-3. **Stop calling tools immediately.** Antigravity wakes you up automatically via **Reactive Wakeup** when subagents finish. **NEVER** use the `schedule` tool or timers to wait for subagents. Do not poll `transcript.jsonl` or `manage_subagents` in a loop. Do not run assemble while they run.
-4. Collect verdicts. BLOCKER/MAJOR → fix at the producer → re-run preflight/tests → regenerate package → dispatch the same 5 again. Identical package content is rejected; the diff must change.
+3. Stop calling tools. Do not poll `transcript.jsonl`. Do not run lint/tests/assemble while they run.
+4. Collect verdicts. BLOCKER/MAJOR → fix at the producer → regenerate the package → dispatch the same 5 again. Identical package content is rejected; the diff must change.
 5. Advance only when all five returned `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`.
 
 Never fire five separate `invoke_subagent` calls. That burns the round counter and is denied.
@@ -130,19 +117,21 @@ Optional sixth slot in the same invoke: `qa-diagnostics-agent` **or** `android-u
 
 ---
 
-## 4) Build, Install, Launch & Manual Sign-off
+## 3) Lint, Tests, Build, Install, Launch
 
 Only after the 5 leaves have finished (PASS, not still running):
 
-1. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
-2. `adb devices` — physical serial only.
-3. `python .agents/scripts/run_device.py install-start` (live adb install + launch). Equivalent: `adb -s <DEVICE_ID> install -r -d app/build/outputs/apk/debug/app-debug.apk` then `adb -s <DEVICE_ID> shell am start -n com.example.app/.MainActivity`.
+1. `python .agents/scripts/fast_kt_lint.py` — dual-locale `@Preview` is required on Compose `*Screen.kt`, `*Card.kt`, `*Dialog.kt`, `*BottomSheet.kt`, `*Sheet.kt`, and `*Banner.kt`. Screens also need Loading/Empty/Error.
+2. Targeted tests: `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."` when this checkout has unit tests. Use this module, not a leftover test path.
+3. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
+4. `adb devices` — physical serial only.
+5. `python .agents/scripts/run_device.py install-start` (live adb install + launch). Equivalent: `adb -s <DEVICE_ID> install -r -d app/build/outputs/apk/debug/app-debug.apk` then `adb -s <DEVICE_ID> shell am start -n com.example.app/.MainActivity`.
 
 Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/logcat_doctor.py` (optional `--device <serial>`). Both reject emulators.
 
 ---
 
-## 5) Manual Device Verification & Sign-off
+## 4) Manual Device Verification & Sign-off
 
 - Short phases: Happy path, then edge/offline, then RTL/orientation, then lifecycle/re-entry. **One phase per `ask_question`.**
 - On Fail: ask for symptoms in chat (not a modal). Do not guess. For crashes, offer `qa-diagnostics-agent` + `logcat_doctor.py`. Then fix producer, re-run gates, re-install, re-present the **same** phase.
@@ -155,7 +144,7 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 ---
 
-## 6) Zoho Sprints (Task & Project Management)
+## 5) Zoho
 
 Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-sprints.md`. Credentials stay in the user-level config — never copy tokens into the repo.
 
@@ -165,13 +154,13 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 - Assignment: the default user from MCP workflow defaults. No name in titles. New items use the default Sprints assignee (overridable in the user config).
 - **If Zoho MCP tools are not available in this session**, do not invent ticket fields. Ask the developer to paste the ticket or enable Zoho. Continue local implementation using what they provide.
 - This checkout wires **Zoho Sprints only** through `.agents/mcp_config.json` to `.agents/mcp/zoho_sprints/server.py`. **Zoho Desk is not used.** Do not invoke Desk tools, do not add a Desk MCP server, and do not treat Desk ticket numbers as Sprints item ids.
-- Bug id ingestion: fetch if tools exist, explain in chat, start analysis. Still write a plan for non-trivial bugs and request approval.
-- Feature task id: fetch, explain, then ask whether to start the plan.
+- Bug id ingestion: fetch if tools exist, check and list any attached screenshots/logs (`attachments`), explain in chat, start analysis. Still write a plan for non-trivial bugs and request approval.
+- Feature task id: fetch, check attachments, explain, then ask whether to start the plan.
 - Templates for comments/descriptions stay as: Commit / سبب المشكلة / الحل / خطوات الفحص (bugs) and Commit / الميزة / الشاشات / حالات الاختبار (features).
 
 ---
 
-## 7) Skills (read on demand)
+## Skills (read on demand)
 
 - `android-harness` and its `references/` — architecture, Compose, Room, performance, checkout facts
 - `kotlin-coroutines-expert`
