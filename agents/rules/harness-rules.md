@@ -155,7 +155,7 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 ---
 
-## 5) Zoho
+## 6) Zoho Sprints (Task & Project Management)
 
 Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-sprints.md`. Credentials stay in the user-level config — never copy tokens into the repo.
 
@@ -171,7 +171,7 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 
 ---
 
-## Skills (read on demand)
+## 7) Skills (read on demand)
 
 - `android-harness` and its `references/` — architecture, Compose, Room, performance, checkout facts
 - `kotlin-coroutines-expert`
