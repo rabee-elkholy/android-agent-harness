@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.4] - 2026-08-23
+
+### 🛡️ Installation Safety & Guardrails
+- **Zero-Tolerance Setup Guardrails**: Added explicit, strict constraints in `setup-prompt.md` and `install-prompt.md` to prevent common installer agent pitfalls.
+- **Strict Read-Only Kit Source**: Forbids installer agents from modifying or writing files to the source kit directory during project onboarding.
+- **Scope Isolation (App Code Protection)**: Forbids installer agents from unilaterally modifying app production files (`strings.xml`, Kotlin code) during setup; pre-existing discrepancies are reported in chat instead.
+- **Synchronous Execution Guard**: Strictly prohibits calling `schedule` sleep timers during setup.
+- **Mandatory Reference Approval**: Enforces Step 3b `ask_question` approval modal for domain reference files before concluding setup.
+
+---
+
 ## [0.2.3] - 2026-08-23
 
 ### 🛡️ Security Hardening & Concurrency

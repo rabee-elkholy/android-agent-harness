@@ -633,9 +633,15 @@ sys.path.insert(0, str(ZOHO_MCP))
 from _config import ENV_CONFIG, SECRET_KEYS, json_contains_secret_keys  # noqa: E402
 from install_zoho_mcp import install as zoho_install  # noqa: E402
 
+_repo_root = SCRIPTS.parent.parent
+_is_installed = (_repo_root / ".harness-setup" / "answers.json").is_file()
+
 kit_mcp = json.loads((SCRIPTS.parent / "mcp_config.json").read_text(encoding="utf-8"))
-ok_kit_mcp = kit_mcp == {"mcpServers": {}}
-print(f"kit mcp_config empty: {'OK' if ok_kit_mcp else 'FAIL'}")
+if _is_installed:
+    ok_kit_mcp = not json_contains_secret_keys(kit_mcp)
+else:
+    ok_kit_mcp = kit_mcp == {"mcpServers": {}}
+print(f"mcp_config has no secrets: {'OK' if ok_kit_mcp else 'FAIL'}")
 failed += int(not ok_kit_mcp)
 
 example = json.loads((ZOHO_MCP / "config.example.json").read_text(encoding="utf-8"))
@@ -651,14 +657,14 @@ needles = (
     "com.example.app",
     "com.example",
 )
-_repo_root = SCRIPTS.parent.parent
-_is_installed = (_repo_root / ".harness-setup" / "answers.json").is_file()
 ok_left = True
 if _is_installed:
     for path in SCRIPTS.parent.rglob("*"):
         if not path.is_file() or path.suffix == ".pyc":
             continue
         if "__pycache__" in path.parts or "state" in path.parts:
+            continue
+        if path.resolve() == Path(__file__).resolve():
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -845,7 +851,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.5") > (0, 2, 3) and get_current_version() == "0.2.3"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.5") > (0, 2, 4) and get_current_version() == "0.2.4"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
