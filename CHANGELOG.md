@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.3] - 2026-08-23
+
+### 🛡️ Security Hardening & Concurrency
+- **Comprehensive Git Mutation Protection**: Advanced command inspection intercepting git mutations across wrapper subshells (`powershell -Command`, `cmd /c`, `bash -c`), absolute paths (`/usr/bin/git`, `git.exe`), and chained command sequences.
+- **Review Package Path Traversal Guard**: Enforced strict boundary verification ensuring `HARNESS_REVIEW_PACKAGE` paths reside securely within repository boundaries.
+- **Atomic State Persistence**: Hardened `_hook_state.py` with atomic temporary-file writes and replacements (`os.replace`) to eliminate race conditions under concurrent operations.
+- **Zoho Sprints MCP Hardening**: Added cryptographically secure transaction IDs and packet boundary validations to DNS fallbacks, alongside strict POSIX `0o600` file permission enforcement on saved configurations.
+- **Enhanced Kotlin Lint Precision**: Upgraded `fast_kt_lint.py` to seamlessly ignore multiline block comments (`/* ... */`) and triple-quoted raw strings (`""" ... """`), eliminating false-positive FQCN detections.
+- **Expanded Test Coverage**: Extended `_hook_selftest.py` with comprehensive security test cases covering subshell invocations, path traversal attempts, and boundary validations.
+
+---
+
 ## [0.2.2] - 2026-08-23
 
 ### 🚀 Added & Improved

@@ -137,6 +137,10 @@ cases = [
     ("monkey", cmd("adb -s DEV shell monkey -p com.example.app 1"), "deny"),
     ("git_mutation", cmd("git commit -m x"), "deny"),
     ("git_c_commit", cmd("git -C E:\\AndroidProjects\\SomeApp commit -m x"), "deny"),
+    ("git_subshell_powershell", cmd('powershell -Command "git commit -m x"'), "deny"),
+    ("git_exe", cmd("git.exe push origin main"), "deny"),
+    ("git_usr_bin", cmd("/usr/bin/git checkout master"), "deny"),
+    ("git_chained", cmd("echo hello && git reset --hard"), "deny"),
     ("git_status", cmd("git status --short --branch"), "allow"),
     ("sched_waiting_subagents", sched("Waiting for 5 review subagents"), "deny"),
     ("sched_user_reminder", sched("Remind developer about coffee in 10 mins"), "allow"),
@@ -287,6 +291,21 @@ four_res = run(four)
 ok_four = four_res["decision"] == "deny"
 print(f"four_leaf_denied: {four_res['decision']} {'OK' if ok_four else 'FAIL ' + json.dumps(four_res)}")
 failed += int(not ok_four)
+
+# Review package path traversal outside repo/temp must deny
+external_pkg = Path("C:/Windows/System32/drivers/etc/hosts" if os.name == "nt" else "/etc/hosts")
+traversal_subs = [
+    {
+        "Workspace": "inherit",
+        "TypeName": name,
+        "Prompt": f"HARNESS_REVIEW_PACKAGE={external_pkg} x",
+    }
+    for name in REVIEW_FIVE
+]
+traversal_res = run({"conversationId": "c-trav", "toolCall": {"name": "invoke_subagent", "args": {"Subagents": traversal_subs}}})
+ok_traversal = traversal_res["decision"] == "deny"
+print(f"review_pkg_path_traversal: {traversal_res['decision']} {'OK' if ok_traversal else 'FAIL ' + json.dumps(traversal_res)}")
+failed += int(not ok_traversal)
 
 # Pending reviews block assemble (no transcript)
 assemble = run(cmd("gradlew.bat :app:assembleDebug", conversation=five_conv))
@@ -826,7 +845,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.5") > (0, 2, 2) and get_current_version() == "0.2.2"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.5") > (0, 2, 3) and get_current_version() == "0.2.3"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

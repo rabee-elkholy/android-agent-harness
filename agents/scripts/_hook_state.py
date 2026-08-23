@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 
@@ -195,7 +196,21 @@ def save_state(state: dict) -> None:
     path = state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     cleaned = _prune_expired(state)
-    path.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+    payload = json.dumps(cleaned, indent=2)
+    try:
+        temp_file = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(path.parent),
+            delete=False,
+            suffix=".tmp",
+        )
+        temp_file.write(payload)
+        temp_file.flush()
+        temp_file.close()
+        os.replace(temp_file.name, path)
+    except Exception:
+        path.write_text(payload, encoding="utf-8")
 
 
 def _record(conversation_id: str) -> dict:

@@ -1,6 +1,8 @@
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -20,7 +22,7 @@ from _hook_state import (  # noqa: E402
     reviews_pending,
     transcript_path,
 )
-from _repo_files import has_non_doc_code_changes  # noqa: E402
+from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
 
 
 def deny(reason: str) -> None:
@@ -77,9 +79,22 @@ def require_review_package(sub: dict) -> Path | None:
             "HARNESS_REVIEW_PACKAGE=<path> in every reviewer Prompt."
         )
         return None
-    path = Path(match.group(1).strip().strip('"').strip("'"))
+    raw_path = match.group(1).strip().strip('"').strip("'")
+    path = Path(raw_path)
     if not path.is_file():
         deny(f"Denied: review package file does not exist: {path}")
+        return None
+    try:
+        resolved = path.resolve()
+        repo_resolved = REPO.resolve()
+        temp_dir = Path(tempfile.gettempdir()).resolve()
+        is_inside_repo = resolved == repo_resolved or repo_resolved in resolved.parents
+        is_inside_temp = "HARNESS_HOOK_STATE" in os.environ and (resolved == temp_dir or temp_dir in resolved.parents)
+        if not (is_inside_repo or is_inside_temp):
+            deny(f"Denied: review package must reside inside the repository: {path}")
+            return None
+    except Exception:
+        deny(f"Denied: invalid review package path: {path}")
         return None
     return path
 
@@ -463,35 +478,42 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
             )
             return
 
-    tokens = lower.split()
-    if "git" in tokens:
-        mutations = {
-            "add",
-            "commit",
-            "push",
-            "pull",
-            "fetch",
-            "merge",
-            "rebase",
-            "stash",
-            "reset",
-            "checkout",
-            "switch",
-            "branch",
-            "worktree",
-            "clone",
-        }
+    git_mutation_pat = re.compile(
+        r'(?:^|[;&|`\s\'"]|(?:\b(?:cmd|powershell|pwsh|bash|sh|zsh|env)\b[^\n\r]*?))'
+        r'(?:[a-zA-Z0-9_./\\:-]*[/\\])?git(?:\.exe)?[\'"]?\s+(.+)$',
+        re.IGNORECASE | re.DOTALL,
+    )
+    mutations = {
+        "add",
+        "commit",
+        "push",
+        "pull",
+        "fetch",
+        "merge",
+        "rebase",
+        "stash",
+        "reset",
+        "checkout",
+        "switch",
+        "branch",
+        "worktree",
+        "clone",
+    }
+    for m in git_mutation_pat.finditer(command):
+        rest = m.group(1).strip()
+        rest_tokens = rest.split()
         skip_next = False
-        for token in tokens[tokens.index("git") + 1 :]:
+        for tok in rest_tokens:
+            cleaned_tok = tok.strip("'\"").strip()
             if skip_next:
                 skip_next = False
                 continue
-            if token in ("-c", "-C"):
+            if cleaned_tok in ("-c", "-C", "--git-dir", "--work-tree"):
                 skip_next = True
                 continue
-            if token.startswith("-"):
+            if cleaned_tok.startswith("-"):
                 continue
-            if token in mutations:
+            if cleaned_tok.lower() in mutations:
                 deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
                 return
             break

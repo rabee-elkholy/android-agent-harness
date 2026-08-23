@@ -88,9 +88,31 @@ def lint_file(file_path: Path) -> list[dict]:
     has_fragment_activity = False
     has_android_entry_point = False
     has_compose_function = False
+    in_block_comment = False
+    in_triple_string = False
 
     for idx, line in enumerate(lines, 1):
         trimmed = line.strip()
+
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+            continue
+
+        if trimmed.startswith("/*"):
+            if "*/" not in trimmed[2:]:
+                in_block_comment = True
+            continue
+
+        if in_triple_string:
+            if '"""' in line:
+                in_triple_string = False
+            continue
+
+        if '"""' in trimmed:
+            count = trimmed.count('"""')
+            if count % 2 != 0:
+                in_triple_string = True
 
         if WILDCARD_IMPORT_PATTERN.match(trimmed):
             issues.append({

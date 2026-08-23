@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import secrets
 import socket
 import struct
 import sys
@@ -38,7 +40,8 @@ _EMOJI_RE = re.compile(
 
 
 def _dns_query_fallback(hostname: str, dns_servers: tuple[str, ...] = ("8.8.8.8", "1.1.1.1")) -> Optional[str]:
-    packet = struct.pack(">HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
+    tx_id = secrets.randbelow(65535) + 1
+    packet = struct.pack(">HHHHHH", tx_id, 0x0100, 1, 0, 0, 0)
     for part in hostname.split("."):
         packet += struct.pack("B", len(part)) + part.encode("ascii")
     packet += b"\x00\x00\x01\x00\x01"
@@ -49,14 +52,21 @@ def _dns_query_fallback(hostname: str, dns_servers: tuple[str, ...] = ("8.8.8.8"
             sock.sendto(packet, (dns_ip, 53))
             data, _ = sock.recvfrom(1024)
             sock.close()
+            if len(data) < 12:
+                continue
+            resp_tx_id = struct.unpack(">H", data[0:2])[0]
+            if resp_tx_id != tx_id:
+                continue
             idx = 12
-            while data[idx] != 0:
+            while idx < len(data) and data[idx] != 0:
                 if (data[idx] & 0xC0) == 0xC0:
                     idx += 2
                     break
                 idx += 1 + data[idx]
             else:
                 idx += 5
+            if idx > len(data):
+                continue
             ancount = struct.unpack(">H", data[6:8])[0]
             for _ in range(ancount):
                 if idx >= len(data):
@@ -64,12 +74,14 @@ def _dns_query_fallback(hostname: str, dns_servers: tuple[str, ...] = ("8.8.8.8"
                 if (data[idx] & 0xC0) == 0xC0:
                     idx += 2
                 else:
-                    while data[idx] != 0:
+                    while idx < len(data) and data[idx] != 0:
                         idx += 1 + data[idx]
                     idx += 1
+                if idx + 10 > len(data):
+                    break
                 rtype, _rclass, _ttl, rdlength = struct.unpack(">HHIH", data[idx : idx + 10])
                 idx += 10
-                if rtype == 1 and rdlength == 4:
+                if rtype == 1 and rdlength == 4 and idx + 4 <= len(data):
                     return socket.inet_ntoa(data[idx : idx + 4])
                 idx += rdlength
         except Exception:
@@ -248,8 +260,19 @@ class ZohoSprintsAPI:
             raise RuntimeError("Zoho Sprints config needs team_id and project_id.")
 
     def save_config(self) -> None:
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            json.dump(self.config, f, indent=2)
+        path = Path(self.config_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if hasattr(os, "O_CREAT") and os.name != "nt":
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with open(fd, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f, indent=2)
+            else:
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f, indent=2)
+        except Exception:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=2)
 
     def sanitize_task_name(self, name: str) -> str:
         cleaned = name.strip()
