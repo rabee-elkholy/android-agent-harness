@@ -31,6 +31,10 @@ Then tell them: a few short questions (backup, app name, who commits, phone vs e
 
 Kit rules that still apply during setup:
 
+- **Strict Read-Only Kit Source**: Never modify or write files in `<kit>` (`android-harness-kit`). Port and configure strictly into `<this repo>/.agents`.
+- **Scope Isolation**: Setup configures `.agents/` only. Never edit app production files (`strings.xml`, Kotlin files) during install. Report pre-existing preflight issues in chat.
+- **No `schedule` Timers**: Never call `schedule` or create background sleep timers during install. Run commands synchronously or await reactive completion.
+- **Mandatory Step 3b Approval**: Must present the domain references table to the developer via `ask_question` and obtain approval.
 - Backup before overwriting `.agents` or tool adapters.
 - Structural port (package, regex, Path pieces, APK name, architecture, locales). A find-replace of the example name is not a successful install.
 - Write adapters only for the tools in answers.json (`--tools`). Always write `AGENTS.md`.
