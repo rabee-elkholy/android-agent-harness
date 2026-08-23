@@ -137,25 +137,27 @@ Use a strong reasoning model for the setup chat (fast/lightweight models without
 - **OpenAI**: `OpenAI o3` / `o3-mini` / `o1` / `GPT-4o`
 - **DeepSeek**: `DeepSeek-R1` / `DeepSeek-V3`
 
-### Step 3: Run the Installer
-Clone or reference the kit, then paste the contents of [`docs/install-prompt.md`](docs/install-prompt.md) into your chat.
+### Step 3: Paste the Install Prompt
+Open [`docs/install-prompt.md`](docs/install-prompt.md), copy its entire contents, and paste it as your first message in the chat.
 
-If you prefer running the wizard directly in your terminal:
-```bash
-python <path-to-kit>/agents/scripts/setup_wizard.py --repo . --lang en
-```
+The AI assistant will automatically:
+1. Verify that your project is a valid Android or Kotlin Multiplatform (KMP) repository.
+2. Clone or locate the harness kit.
+3. Guide you through the interactive setup questionnaire.
+4. Structurally port the architecture rules, domain skills, and the 5 reviewer subagents to your app.
+5. Generate native configuration adapters for your selected AI tools and run self-tests until `Total test failures: 0`.
 
-### Step 4: Complete the Setup Wizard
-The setup wizard will confirm:
-1. **Backup**: Timestamped backup before modifying `.agents/`.
+### Step 4: Answer the Setup Wizard Questions
+During installation, the wizard will ask you to confirm:
+1. **Backup**: Create a timestamped backup before modifying `.agents/` *(Recommended)*.
 2. **App Name**: Application identifier and display name.
-3. **Git Policy**: Manual commits in IDE (default) vs agent commits on request.
+3. **Git Policy**: Manual commits in IDE *(Recommended)* vs agent commits on request.
 4. **Testing Target**: Physical device only vs physical + emulator.
 5. **Install Confirmation**: Require confirmation before `adb install`.
 6. **Unit Tests**: Retain or bypass unit-test verification gates.
 7. **AI Tools**: Select which tools you use to generate matching adapter files.
 8. **Zoho Sprints**: Optional project management integration.
-9. *(If Greenfield)*: Complete the 8-question architecture foundation questionnaire.
+9. *(If Greenfield Project)*: Complete the 8-question architecture foundation questionnaire.
 
 ---
 
