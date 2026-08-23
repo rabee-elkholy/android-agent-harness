@@ -37,34 +37,34 @@ Once installed, coding assistants cannot declare tasks complete with a casual "L
 
 ```mermaid
 flowchart TD
-    Start([Task / Prompt]) --> Plan[Planning Guard: implementation_plan.md]
-    Plan --> Approval{Developer Approval}
-    Approval -- Approved --> Code[Code Implementation]
+    Start(["Task / Prompt"]) --> Plan["Planning Guard: implementation_plan.md"]
+    Plan --> Approval{"Developer Approval"}
+    Approval -- Approved --> Code["Code Implementation"]
     Approval -- Revisions --> Plan
-    Code --> ReviewGate[Five-Leaf Parallel Review Gate - MANDATORY]
+    Code --> ReviewGate["Five-Leaf Parallel Review Gate"]
     
-    subgraph ReviewGate [Reviewer Subagents]
-        R1[Bug Reviewer]
-        R2[Convention Reviewer]
-        R3[Security Reviewer]
-        R4[Perf & ANR Guardian]
-        R5[Regression Impact]
+    subgraph ReviewGate ["Reviewer Subagents"]
+        R1["Bug Reviewer"]
+        R2["Convention Reviewer"]
+        R3["Security Reviewer"]
+        R4["Perf & ANR Guardian"]
+        R5["Regression Impact"]
     end
     
-    ReviewGate --> Verdict{All 5 Leaves PASS?}
+    ReviewGate --> Verdict{"All 5 Leaves PASS?"}
     Verdict -- Fix Findings --> Code
-    Verdict -- All PASS --> Preflight[Preflight: Lint + DB Migrations + String Parity]
-    Preflight --> TestCheck{Unit Tests Enabled? <br/><i>(Configurable)</i>}
-    TestCheck -- Enabled --> UnitTests[Unit Tests: testDebugUnitTest]
+    Verdict -- All PASS --> Preflight["Preflight: Lint + DB Migrations + String Parity"]
+    Preflight --> TestCheck{"Unit Tests Enabled?"}
+    TestCheck -- Enabled --> UnitTests["Unit Tests: testDebugUnitTest"]
     UnitTests -- Tests Fail --> Code
-    UnitTests -- Tests PASS --> Gradle[Live Gradle Runner: assembleDebug]
+    UnitTests -- Tests PASS --> Gradle["Live Gradle Runner: assembleDebug"]
     TestCheck -- Skipped --> Gradle
-    Gradle --> Device[Device Install & Launch: run_device.py]
-    Device --> ManualSignoff[Manual Device Verification: 4 Phases]
+    Gradle --> Device["Device Install & Launch: run_device.py"]
+    Device --> ManualSignoff["Manual Device Verification: 4 Phases"]
     ManualSignoff -- Fail --> Code
-    ManualSignoff -- All PASS --> ZohoCheck{Zoho Sprints Connected? <br/><i>(Optional)</i>}
-    ZohoCheck -- Enabled --> Zoho[Zoho Sprints: Status & Comment Sync]
-    ZohoCheck -- Skipped / None --> Finish([Verified Delivery & Commit])
+    ManualSignoff -- All PASS --> ZohoCheck{"Zoho Sprints Connected?"}
+    ZohoCheck -- Enabled --> Zoho["Zoho Sprints: Status & Comment Sync"]
+    ZohoCheck -- Skipped / None --> Finish(["Verified Delivery & Commit"])
     Zoho --> Finish
 ```
 
