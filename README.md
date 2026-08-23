@@ -79,7 +79,7 @@ Installation is **not** a simple file copy. It is an automated structural port t
 Open your IDE or terminal AI assistant (Cursor, Antigravity, Claude Code, etc.) in your **Android app's root folder** (⚠️ **never** run setup inside `android-harness-kit` itself).
 
 ### Step 2: Use a Strong AI Model
-Use a strong reasoning model (e.g., Gemini 2.5 Pro / 2.0 Pro, Claude 3.7 Sonnet / 3.5 Sonnet, GPT-4o / o1 / o3-mini) for the installation chat. Fast/cheap models tend to skip architectural porting steps and leave a broken setup.
+Use a strong reasoning model (e.g., Claude Sonnet 4.6 / Claude Opus 4.6 (Thinking), Gemini 3.1 Pro / 3.7 Flash, GPT-OSS 120B / GPT-4o) for the installation chat. Fast/lightweight models without deep reasoning tend to skip architectural porting steps and leave a broken setup.
 
 ### Step 3: Paste the Install Prompt
 Copy the entire contents of [`docs/install-prompt.md`](docs/install-prompt.md) and paste it as your first message in the chat:
