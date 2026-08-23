@@ -54,9 +54,12 @@ flowchart TD
     ReviewGate --> Verdict{All 5 Leaves PASS?}
     Verdict -- Fix Findings --> Code
     Verdict -- All PASS --> Preflight[Preflight: Lint + DB Migrations + String Parity]
-    Preflight --> Gradle[Live Gradle Runner: assembleDebug]
+    Preflight --> UnitTests[Unit Tests Gate: testDebugUnitTest]
+    UnitTests -- Tests Fail --> Code
+    UnitTests -- Tests PASS --> Gradle[Live Gradle Runner: assembleDebug]
     Gradle --> Device[Device Install & Verification]
-    Device --> Finish([Verified Delivery])
+    Device --> Zoho[Zoho Sprints Integration: Status & Comment Sync]
+    Zoho --> Finish([Verified Delivery & Commit])
 ```
 
 ---
@@ -70,8 +73,18 @@ flowchart TD
       Mandatory parallel dispatch of 5 specialized reviewer subagents (<code>BUG_PASS</code>, <code>CONVENTION_PASS</code>, <code>SECURITY_PASS</code>, <code>PERF_PASS</code>, <code>REGRESSION_PASS</code>) before any APK assembly or task completion.
     </td>
     <td width="50%">
+      <h3>Unit Tests Verification Gate</h3>
+      Automated execution of <code>testDebugUnitTest</code> via the live task runner. Enforces unit test passing as a strict pre-condition for APK builds and delivery.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
       <h3>Dual Project Engine</h3>
       Supports <b>established active codebases</b> (auto-discovering DI, ViewModels, and UI from disk) and <b>brand-new greenfield projects</b> (interactive architecture questionnaire).
+    </td>
+    <td width="50%">
+      <h3>Zoho Sprints MCP Integration</h3>
+      Native project management integration that updates sprint task status (<code>In progress</code> &rarr; <code>Ready To ReTest</code>) and posts structured comments without leaking tokens into the repo.
     </td>
   </tr>
   <tr>
