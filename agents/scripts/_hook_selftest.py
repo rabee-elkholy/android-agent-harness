@@ -288,6 +288,28 @@ ok_same = second_same["decision"] == "deny" and "already reviewed" in second_sam
 print(f"five_leaf_identical_hash: {second_same['decision']} {'OK' if ok_same else 'FAIL ' + json.dumps(second_same)}")
 failed += int(not ok_same)
 
+# Define subagent allows immediate re-dispatch of the same package (recovering from initial registration failure)
+def_bug = {
+    "conversationId": five_conv,
+    "toolCall": {
+        "name": "define_subagent",
+        "args": {
+            "name": "bug-reviewer-agent",
+            "description": "Bug Reviewer",
+            "system_prompt": PROMPT_BUG,
+        },
+    },
+}
+def_res = run(def_bug)
+ok_def = def_res["decision"] == "allow"
+print(f"define_subagent_redispatch_flag: {def_res['decision']} {'OK' if ok_def else 'FAIL ' + json.dumps(def_res)}")
+failed += int(not ok_def)
+
+second_allowed = run(invoke_five(five_conv))
+ok_reallowed = second_allowed["decision"] == "allow"
+print(f"five_leaf_redispatch_after_define: {second_allowed['decision']} {'OK' if ok_reallowed else 'FAIL ' + json.dumps(second_allowed)}")
+failed += int(not ok_reallowed)
+
 PACKAGE.write_text("diff --git a/x b/x\nchanged\n", encoding="utf-8")
 third = run(invoke_five(five_conv))
 ok_third = third["decision"] == "allow"
@@ -881,7 +903,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.8") > (0, 2, 7) and get_current_version() == "0.2.7"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.9") > (0, 2, 8) and get_current_version() == "0.2.8"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

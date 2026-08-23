@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.8] - 2026-08-23
+
+### ⚡ Subagent Registration Recovery & Hash Lockout Resilience
+- **Dynamic Re-Dispatch Unlocking (`re_dispatch_allowed`)**: Resolved the registration-order deadlock where invoking subagents prior to defining all 5 reviewer templates locked the review package hash in `review-invokes.json`. Defining missing subagents now automatically permits immediate re-invocation of the active package without requiring manual state resets or dummy diff regenerations.
+- **Zero-Latency Parallel Review Dispatch**: Hardened the 5-leaf parallel gate workflow to ensure one-shot dispatching in all Antigravity runtime sessions.
+
+---
+
 ## [0.2.7] - 2026-08-23
 
 ### 🌐 Language Architecture & Zoho Localization Governance

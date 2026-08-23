@@ -18,6 +18,7 @@ from _hook_state import (  # noqa: E402
     package_already_reviewed,
     prompts_match,
     record_review_round,
+    record_subagent_defined,
     record_subagents_poll,
     record_task_poll,
     resolve_transcript_path,
@@ -144,7 +145,7 @@ def has_subagent_tools(obj: dict) -> bool:
     return False
 
 
-def handle_define_subagent(args: dict) -> None:
+def handle_define_subagent(args: dict, payload: dict | None = None) -> None:
     name = canonical_subagent_name(args.get("name") or args.get("Name") or "")
     if name in GUARD_NAMES or name == "code-review-guard-agent":
         deny(
@@ -168,6 +169,9 @@ def handle_define_subagent(args: dict) -> None:
             f".agents/subagents/{name}.json template verbatim (fingerprint + body)."
         )
         return
+    conv = conversation_id(payload) if payload else ""
+    if conv and conv != "unknown":
+        record_subagent_defined(conv, name)
     allow(f"{name} template accepted.")
 
 
@@ -632,7 +636,7 @@ def main() -> None:
         args = tool_call.get("args") or {}
 
         if name == "define_subagent":
-            handle_define_subagent(args)
+            handle_define_subagent(args, payload)
             return
         if name == "invoke_subagent":
             handle_invoke_subagent(payload, args)

@@ -241,8 +241,24 @@ def bump_invoke(conversation_id: str, agent_type: str = "review") -> int:
     return n
 
 
+def record_subagent_defined(conversation_id: str, name: str) -> None:
+    state = load_state()
+    rec = state.get(conversation_id) or {}
+    defined = list(rec.get("defined_subagents") or [])
+    if name not in defined:
+        defined.append(name)
+    rec["defined_subagents"] = defined
+    # When defining subagents, allow re-dispatching to recover from unregistered-subagent invoke failures
+    rec["re_dispatch_allowed"] = True
+    rec["_last_used"] = time.time()
+    state[conversation_id] = rec
+    save_state(state)
+
+
 def package_already_reviewed(conversation_id: str, package_hash: str) -> bool:
     rec = _record(conversation_id)
+    if rec.get("re_dispatch_allowed"):
+        return False
     hashes = rec.get("package_hashes") or []
     return package_hash in hashes
 
@@ -256,6 +272,7 @@ def record_review_round(conversation_id: str, package_hash: str) -> int:
     rec["package_hashes"] = hashes[-40:]
     rec["last_package_hash"] = package_hash
     rec["pending_reviews"] = True
+    rec["re_dispatch_allowed"] = False
     rec["pending_since"] = time.time()
     n = int(rec.get("review_invokes") or rec.get("invokes") or 0) + 1
     rec["invokes"] = n
