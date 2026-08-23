@@ -804,6 +804,32 @@ ok_norm = norm.get("zoho_mcp") == "enable"
 print(f"wizard records zoho_mcp: {'OK' if ok_norm else 'FAIL'}")
 failed += int(not ok_norm)
 
+greenfield_facts = {
+    "product": "NewApp",
+    "pythons": ["python"],
+    "modules": [":app"],
+    "launchers": ["com.example.newapp/.MainActivity"],
+    "apk_hint": "app/build/outputs/apk/debug/app-debug.apk",
+    "locales": ["values"],
+    "stack": "unknown",
+    "is_empty": True,
+    "source_count": 0,
+    "classic_app_src": False,
+    "gemini": False,
+    "zoho_config": False,
+    "gradlew": True,
+}
+g_q_ids = [q["id"] for q in questions_payload(Path("."), "en", greenfield_facts)]
+ok_g_q = "b_platform" in g_q_ids and "b_arch" in g_q_ids and "b_di" in g_q_ids
+print(f"wizard includes greenfield bootstrap questions: {'OK' if ok_g_q else 'FAIL'}")
+failed += int(not ok_g_q)
+
+from check_kit_update import parse_semver, get_current_version  # noqa: E402
+
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.5") > (0, 1, 0) and get_current_version() == "0.1.0"
+print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
+failed += int(not ok_semver)
+
 print(f"\nTotal test failures: {failed}")
 sys.exit(failed)
 

@@ -49,6 +49,13 @@ def main() -> int:
     overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0)
     if overall_pass:
         live_print("[SUCCESS] PREFLIGHT PASSED: ready for assembleDebug.")
+        try:
+            from check_kit_update import update_banner
+            banner = update_banner()
+            if banner:
+                live_print("\n" + banner)
+        except Exception:
+            pass
         return 0
     live_print("[FAIL] PREFLIGHT FAILED: fix the issues above before assembling.")
     return 1
