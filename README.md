@@ -96,6 +96,7 @@ The agent will run the interactive setup wizard (`setup_wizard.py`) or present t
 5. **Install Confirmation**: Ask before `adb install` or install unattended.
 6. **Unit Tests**: Keep or skip unit-test verification gates.
 7. **AI Tools**: Select which tools you use (Cursor, Antigravity, Claude Code, Copilot, Windsurf, etc.) to generate matching adapter files (`AGENTS.md`, `.cursorrules`, `CLAUDE.md`, etc.).
+8. **Zoho Sprints (Optional)**: Enable or skip Zoho Sprints project management integration (MCP credentials stay securely on your PC and are never copied into the repository).
 
 ### Step 5: Automatic Porting & Verification
 The agent will:
