@@ -22,7 +22,7 @@ Do not weaken the engine (see `docs/porting.md`).
 - Run `install-prompt.md` or `update-prompt.md` **on the parent product**. Those prompts fill generic kit defaults from disk. The parent already has its real identity.
 - Copy `~/.gemini` either way.
 - Naive find-replace of the product name in either direction.
-- Promote parent domain skills (ads, GPS, streak, payments) into the kit unless they are rewritten as **stubs**.
+- Promote parent product-specific domain skills (ads, GPS, audio, education, payments) into the kit.
 
 ## Parent → kit (promote an engine fix)
 
@@ -38,10 +38,10 @@ Do not weaken the engine (see `docs/porting.md`).
 1. Backup the parent’s live `.agents` (not only `dist/`).
 2. Diff the same engine files in the kit vs the parent.
 3. Copy **only** those engine files into the parent’s live `.agents/scripts` (etc.).
-4. Do **not** replace parent `harness-rules.md` with the generic kit copy. Do **not** replace parent skill refs with stubs. Do **not** run leftover-grep-as-if-foreign-app (the parent should still say its real name / module / launcher).
+4. Do **not** replace parent `harness-rules.md` with the generic kit copy. Do **not** overwrite parent domain skill refs with generic files. Do **not** run leftover-grep-as-if-foreign-app (the parent should still say its real name / module / launcher).
 5. Keep parent I.4 (physical-only) and git policy as they are unless you intend to change them.
 6. `python .agents/scripts/_hook_selftest.py` in the parent → `Total test failures: 0`. Then a **new chat**.
 
 ## If you are unsure which bucket a file is
 
-Treat it as **parent-only** until you can name the engine behavior it changes (barrier, heartbeat, five leaves, monkey deny). Packaging docs never go to the parent. Product skills never go to the kit except as stubs.
+Treat it as **parent-only** until you can name the engine behavior it changes (barrier, heartbeat, five leaves, monkey deny). Packaging docs never go to the parent. Product skills never go to the kit.

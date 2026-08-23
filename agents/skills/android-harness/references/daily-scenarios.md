@@ -14,4 +14,4 @@ Follow `.agents/rules/harness-rules.md`. Setup fills checkout facts from Gradle/
 - Compose / theme: `ui-compose-theme.md`
 - Room: `room-database-migrations.md` (only if this checkout has `@Database`)
 - Performance: `performance-anr-optimization.md`
-- Ads / streak / GPS / sensors / payments: only if those files describe **this** checkout (kit stubs are not rules)
+- Specialized domains: custom references created during setup (e.g. audio, education, media) if present in this checkout.

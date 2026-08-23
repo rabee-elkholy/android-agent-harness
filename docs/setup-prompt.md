@@ -151,9 +151,9 @@ Patch **all** product constants (`docs/porting.md`): write `.agents/scripts/_pro
 
 Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Room/MVI/Hilt/theme wrappers unless this checkout has them. See **3b** for the full reference-fill protocol. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` via `_product.py` and the real source roots. `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. Keep the generic Zoho Sprints section; I.16 only wires MCP. **I.8:** one locale → skip AR/EN parity.
 
-### 3b) Dynamic Domain Discovery, Custom Reference Creation & Stub Pruning (with developer approval)
+### 3b) Dynamic Domain Discovery & Custom Reference Creation (with developer approval)
 
-The kit ships foundation references plus example domain templates in `.agents/skills/android-harness/references/`. During install, the installer agent MUST dynamically discover the project's actual core domains, create tailored reference files, and prune unused stubs.
+The kit ships clean foundation references in `.agents/skills/android-harness/references/` (`architecture-mvi.md`, `ui-compose-theme.md`, `performance-anr-optimization.md`, `room-database-migrations.md`, `automated-skills.md`, `daily-scenarios.md`). During install, the installer agent MUST dynamically discover the project's actual core domains and create tailored reference files.
 
 #### 1. Foundation References (Always Port & Fill):
 1. **`architecture-mvi.md`**: Read Gradle, `libs.versions.toml`, and 10–20 ViewModels / DI modules. Port:
@@ -179,22 +179,19 @@ Scan all module folders (`features/`, `core/`, `domain/`, etc.), packages, and G
 - **Audio / Media**: (ExoPlayer, Media3, SoundPool, AudioPlayer) -> Create `audio-media-playback.md`
 - **Networking & API**: (Ktor client, Retrofit, WebSockets, GraphQL) -> Create `networking-api-contracts.md`
 - **Hardware / IoT / Bluetooth**: (BLE, USB, CameraX, NFC, Wi-Fi) -> Create `hardware-bluetooth-camera.md`
-- **Domain-Specific Engines**: e.g., Education & Alphabet Games (like Qosousa), Shopping Cart & Checkout, Chat & Messaging, Biometrics / Auth -> Create `<feature-name>-system.md`
+- **Ads / Mediation**: (AdMob, AppLovin, UnityAds, UMP) -> Create `ad-mediation-privacy.md`
+- **Payments / Billing**: (Google Play Billing, Stripe, RevenueCat) -> Create `payment-gateways-architecture.md`
+- **Location / Maps**: (GPS, Google Maps, Mapbox, LocationManager) -> Create `location-maps-services.md`
+- **Domain-Specific Engines**: e.g., Education & Alphabet Games, Shopping Cart & Checkout, Chat & Messaging -> Create `<feature-name>-system.md`
 - **Local Storage / Caching**: (SQLDelight, KeyValueCache, DataStore) -> Create `local-cache-storage.md`
 
-#### 3. Prune Unused Stub Files:
-The kit contains example stubs (`ad-mediation-privacy.md`, `running-routes-gps.md`, `payment-gateways-architecture.md`, `steps-sensors-services.md`, `streak-gamification-system.md`).
-- If the project **has** that domain: fill it with the project's real SDKs and patterns.
-- If the project **does NOT have** that domain: **DELETE that stub file from `.agents/skills/android-harness/references/`**. Do not leave dead stubs that clutter the reviewers' context.
-
-#### 4. Update `daily-scenarios.md`:
+#### 3. Update `daily-scenarios.md`:
 - Register and link to ALL active domain references (foundation + newly discovered).
 
-#### 5. Present Approval Table:
+#### 4. Present Approval Table:
 Present a clear summary table to the developer showing:
 - Foundation references filled
 - Discovered domain references created
-- Irrelevant stubs pruned/deleted
 Ask for approval via `ask_question` modal before proceeding:
 - `Approve the reference files` / `I have changes to make`
 

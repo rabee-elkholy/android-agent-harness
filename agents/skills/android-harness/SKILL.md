@@ -18,8 +18,6 @@ Setup fills product-specific references. Do not cite a stub file as if this app 
 
 Zoho Sprints (when enabled): `.agents/workflows/zoho-sprints.md`. Mutate only on `update zoho`.
 
-Stubs until setup proves the domain exists here: ads/privacy, streak, GPS, sensors, payments.
-
 ## Related skills
 
 - [**Kotlin Coroutines Expert**](../kotlin-coroutines-expert/SKILL.md)
