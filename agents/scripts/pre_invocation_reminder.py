@@ -15,7 +15,7 @@ def check_update_directive() -> str:
         from check_kit_update import check_for_update
         info = check_for_update(force=False)
         if info.get("has_update"):
-            curr = info.get("current", "0.2.1")
+            curr = info.get("current", "0.2.2")
             latest = info.get("latest", "")
             return (
                 f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Harness Kit (v{latest}) is available (installed: v{curr}). "
