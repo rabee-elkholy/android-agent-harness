@@ -8,7 +8,7 @@ You are **updating** the portable Android AI harness in **this** checkout. This 
 
 Answer in the developer's language. Do not commit unless they ask.
 
-Tell the developer **first**, in their language: this update needs a **strong reasoning model** in this chat (such as Anthropic `Claude 3.7 / 4.6 Sonnet (Thinking)`, Google `Gemini 3.1 Pro / 2.5 Pro`, OpenAI `o1 / o3-mini / GPT-4o`, or DeepSeek `DeepSeek-R1`), not a fast/lightweight one without deep reasoning. Re-port is structural. A weak model copies files and skips leftover grep. Stay until selftest `Total test failures: 0`. If this chat is a small model, **stop** and start a new chat on a stronger model, then paste this file again.
+Tell the developer **first**, in their language: this update needs a **strong reasoning model** in this chat (such as Anthropic `Claude Opus 4.6 / Sonnet 4.6 (Thinking)`, Google `Gemini 3.7 Flash / 3.1 Pro`, OpenAI `o3 / o3-mini / o1`, or DeepSeek `DeepSeek-R1`), not a fast/lightweight one without deep reasoning. Re-port is structural. A weak model copies files and skips leftover grep. Stay until selftest `Total test failures: 0`. If this chat is a small model, **stop** and start a new chat on a stronger model, then paste this file again.
 
 This is not a first install. Do **not** treat it as a blank product. Reuse recorded setup answers. Re-port the new engine. Do not only copy files and stop.
 

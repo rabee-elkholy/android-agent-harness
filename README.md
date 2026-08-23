@@ -132,10 +132,10 @@ Open your IDE or terminal assistant in your **Android project root directory** (
 
 ### Step 2: Select a Reasoning Model
 Use a strong reasoning model for the setup chat (fast/lightweight models without deep reasoning tend to skip structural porting steps):
-- **Anthropic**: `Claude 3.7 Sonnet (Thinking)` / `Claude Sonnet 4.6 (Thinking)`
-- **Google**: `Gemini 3.1 Pro` / `Gemini 2.5 Pro`
-- **OpenAI**: `OpenAI o1` / `o3-mini` / `GPT-4o`
-- **DeepSeek**: `DeepSeek-R1`
+- **Anthropic**: `Claude Opus 4.6 (Thinking)` / `Claude Sonnet 4.6 (Thinking)` / `Claude 3.7 Sonnet (Thinking)`
+- **Google**: `Gemini 3.7 Flash` / `Gemini 3.1 Pro`
+- **OpenAI**: `OpenAI o3` / `o3-mini` / `o1` / `GPT-4o`
+- **DeepSeek**: `DeepSeek-R1` / `DeepSeek-V3`
 
 ### Step 3: Run the Installer
 Clone or reference the kit, then paste the contents of [`docs/install-prompt.md`](docs/install-prompt.md) into your chat.
