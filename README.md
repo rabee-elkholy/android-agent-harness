@@ -52,16 +52,16 @@ android-harness-kit/
     └── gemini-runtime/      ← optional Antigravity grants example
 ```
 
-## Prerequisites & Target Project Requirements
+## Prerequisites & Target Project Types
 
-> [!IMPORTANT]
-> **1. Install on an Existing or Active/Semi-Complete Android Codebase (NOT for Blank Projects)**
-> The Android Harness is an AI architecture-governance, security, and quality review engine. During installation, it inspects your existing codebase (DI setup, ViewModel base, navigation framework, Compose theme tokens, database entities, and domain logic) to configure strict, project-tailored reviewer rules. 
-> If installed on a completely blank or empty starter template, there is no architecture or UI to discover. **Build your core foundation and initial screen first, then install the harness.**
+> [!TIP]
+> **Supports Both Established Codebases & Brand-New (Greenfield) Projects**
+> - **Existing / Established Codebases**: The installer automatically inspects and discovers your DI, ViewModels, Navigation, Compose theme, and domain patterns from disk.
+> - **Brand-New / Greenfield Projects**: The installer guides you through the interactive **Greenfield Bootstrap Questionnaire** (Platform, MVI/MVVM, Koin/Hilt, Voyager/ComposeNav, Room/SQLDelight, Ktor/Retrofit) to establish strict architectural rules and blueprints from day one!
 
 > [!CAUTION]
-> **2. Non-Android Projects Are Strictly Rejected**
-> The harness requires a Gradle-based Android or Kotlin Multiplatform (KMP) project. If `gradlew`/`gradlew.bat` or Android Gradle build configurations are missing, installation immediately stops.
+> **Non-Android Projects Are Strictly Rejected**
+> The harness requires a Gradle-based Android or Kotlin Multiplatform (KMP) project with `gradlew` / `gradlew.bat`. If the Gradle wrapper or Android build configurations are missing, installation immediately stops.
 
 ### System Requirements:
 - Python 3.10+ (`python3` on macOS/Linux; on Windows use `python` if `python3` is a Store stub)

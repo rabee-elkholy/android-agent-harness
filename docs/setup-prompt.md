@@ -47,7 +47,7 @@ Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state
 
 Read Gradle, manifests, source:
 - **Android Validation**: If no `gradlew`/`gradlew.bat` or no Android Gradle build files: **STOP**. Tell the developer `[ERROR] Target directory is NOT an Android project.`
-- **Semi-Complete Codebase Validation**: If the project has 0 Kotlin/Java source files or is an unconfigured empty template: **STOP**. Tell the developer `[ERROR] Android Harness Kit requires an existing, active/semi-complete codebase with established architecture, ViewModels, and UI to discover and govern. Please build your initial screen and core foundation first, then install the harness.`
+- **Greenfield / Brand-New Project Support**: If the project is brand new or blank (< 4 source files, unconfigured architecture), do NOT stop! Instead, enter **Greenfield Bootstrap Mode**. The wizard `questions` payload will automatically include the detailed architectural foundation questions (`b_platform`, `b_arch`, `b_di`, `b_nav`, `b_ui`, `b_db`, `b_net`, `b_locales`) so the developer can establish their desired stack from day one.
 
 Print a **proposed facts** table in chat (module, assemble task, APK path, applicationId, launcher, DI, VM base, Room yes/no, theme, source roots, string files). Never assume `:app` or `app-debug.apk`. If `local.properties` missing: tell them Android Studio must write `sdk.dir` — do not invent a path.
 
@@ -160,12 +160,9 @@ Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Ro
 The kit ships clean foundation references in `.agents/skills/android-harness/references/` (`architecture-mvi.md`, `ui-compose-theme.md`, `performance-anr-optimization.md`, `room-database-migrations.md`, `automated-skills.md`, `daily-scenarios.md`). During install, the installer agent MUST dynamically discover the project's actual core domains and create tailored reference files.
 
 #### 1. Foundation References (Always Port & Fill):
-1. **`architecture-mvi.md`**: Read Gradle, `libs.versions.toml`, and 10–20 ViewModels / DI modules. Port:
-   - DI framework: Hilt / Koin / Manual / etc.
-   - ViewModel base: `ViewModel()` / `BaseViewModel<S, E, A>` / `MviViewModel` / custom
-   - Navigation: Voyager / Compose Navigation / Decompose / Navigation Component
-   - State pattern: MVI (State + Action + Event) / MVVM (StateFlow / LiveData)
-   - Layer conventions: UseCase / Repository / DataSource / KMP commonMain vs androidMain
+1. **`architecture-mvi.md`**: 
+   - **For Established Codebases**: Read Gradle, `libs.versions.toml`, and ViewModels / DI modules to port DI framework, ViewModel base, Navigation, State pattern, and Layer conventions.
+   - **For Greenfield / Brand-New Projects**: Write `architecture-mvi.md` directly using the developer's recorded `bootstrap_details` (Platform, Architecture pattern, DI, Navigation, Database, Networking, Locales), establishing the clean architectural foundation for the new project from day one!
 
 2. **`ui-compose-theme.md`**:
    - Detect Compose Multiplatform vs AndroidX Compose.

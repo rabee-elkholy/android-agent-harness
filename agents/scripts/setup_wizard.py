@@ -214,6 +214,37 @@ T = {
         "invalid": "Invalid choice.",
         "stopped": "Stopped. No answers written.",
         "wrote": "Wrote {path}",
+        "b_platform": "What is the target platform architecture for this project?",
+        "b_platform_kmp": "Kotlin Multiplatform (KMP: Android + iOS / Desktop / Web) (Recommended)",
+        "b_platform_native": "Android Native (Kotlin + AndroidX)",
+        "b_arch": "Which Architecture Pattern will this project follow?",
+        "b_arch_mvi": "MVI with Unidirectional Data Flow (State + Action + Channel Events & BaseViewModel) (Recommended)",
+        "b_arch_mvvm": "MVVM with StateFlow / SharedFlow & ViewModel",
+        "b_arch_clean": "Clean Architecture + MVI (Data -> Domain/UseCases -> Presentation/MVI)",
+        "b_di": "Which Dependency Injection (DI) framework will you use?",
+        "b_di_koin": "Koin (koin-core / koin-compose / koin-android) (Recommended for KMP & Kotlin)",
+        "b_di_hilt": "Dagger Hilt (@HiltViewModel, @Inject, @AndroidEntryPoint) (Recommended for Native Android)",
+        "b_di_manual": "Manual DI / Constructor Injection",
+        "b_nav": "Which Navigation framework will you use?",
+        "b_nav_voyager": "Voyager (cafe.adriel.voyager with Screen model) (Recommended for Compose/KMP)",
+        "b_nav_comp": "Jetpack Compose Navigation (androidx.navigation.compose)",
+        "b_nav_decompose": "Decompose (arkivanov/decompose)",
+        "b_ui": "Which UI framework will you use?",
+        "b_ui_compose": "Jetpack Compose / Compose Multiplatform with Material 3 (Recommended)",
+        "b_ui_xml": "XML Layouts + ViewBinding",
+        "b_db": "Which local database / storage engine will this project use?",
+        "b_db_room": "Room Database (androidx.room with KSP & explicit migrations) (Recommended)",
+        "b_db_sql": "SQLDelight (app.cash.sqldelight for KMP)",
+        "b_db_datastore": "Jetpack DataStore Preferences (Key-Value)",
+        "b_db_none": "No database needed initially",
+        "b_net": "Which networking client will this project use?",
+        "b_net_ktor": "Ktor Client (io.ktor:ktor-client with kotlinx.serialization) (Recommended for KMP)",
+        "b_net_retrofit": "Retrofit + OkHttp (Recommended for Native Android)",
+        "b_net_none": "No remote API initially (Local-only app)",
+        "b_locales": "Which localization and language support do you need?",
+        "b_locales_dual": "Bilingual Arabic (RTL) + English (LTR) with dual-locale previews (Recommended)",
+        "b_locales_en": "English only",
+        "b_locales_ar": "Arabic only",
         "no_python": "No working Python 3.10+ on PATH.",
         "need_repo": "Need --repo pointing at an Android checkout with gradlew.",
     },
@@ -335,6 +366,37 @@ T = {
         "invalid": "اختيار غلط.",
         "stopped": "اتوقف. مفيش إجابات اتكتبت.",
         "wrote": "اتكتب {path}",
+        "b_platform": "ما هي منصة الاستهداف الأساسية لهذا المشروع؟",
+        "b_platform_kmp": "Kotlin Multiplatform (KMP: أندرويد + iOS / ديسكتوب / ويب) (مفضّل)",
+        "b_platform_native": "أندرويد أصيل (Android Native: Kotlin + AndroidX)",
+        "b_arch": "ما هو نمط المعمارية (Architecture Pattern) الذي سيتبعه المشروع؟",
+        "b_arch_mvi": "MVI مع تدفق بيانات أحادي (State + Action + Channel Events مع BaseViewModel) (مفضّل)",
+        "b_arch_mvvm": "MVVM مع StateFlow / SharedFlow و ViewModel",
+        "b_arch_clean": "Clean Architecture + MVI (طبقات Data ➔ Domain/UseCases ➔ Presentation/MVI)",
+        "b_di": "ما هي مكتبة حقن الاعتماديات (Dependency Injection) المستخدمة؟",
+        "b_di_koin": "Koin (koin-core / koin-compose / koin-android) (مفضّل لـ KMP وكوتلن)",
+        "b_di_hilt": "Dagger Hilt (@HiltViewModel, @Inject, @AndroidEntryPoint) (مفضّل لـ Native Android)",
+        "b_di_manual": "حقن يدوي (Manual DI / Constructor Injection)",
+        "b_nav": "ما هي مكتبة التنقل (Navigation) المستخدمة؟",
+        "b_nav_voyager": "Voyager (cafe.adriel.voyager مع Screen Model) (مفضّل لـ Compose و KMP)",
+        "b_nav_comp": "Jetpack Compose Navigation Component الرسمي",
+        "b_nav_decompose": "Decompose (arkivanov/decompose)",
+        "b_ui": "ما هو إطار واجهة المستخدم (UI Framework)؟",
+        "b_ui_compose": "Jetpack Compose / Compose Multiplatform مع Material 3 (مفضّل)",
+        "b_ui_xml": "XML Views مع ViewBinding كلاسيكي",
+        "b_db": "ما هي قاعدة البيانات أو وحدة التخزين المحلية المستخدمة؟",
+        "b_db_room": "Room Database (androidx.room مع ترحيلات Schema صريحة) (مفضّل)",
+        "b_db_sql": "SQLDelight (app.cash.sqldelight لمشاريع KMP)",
+        "b_db_datastore": "DataStore Preferences لتخزين الإعدادات",
+        "b_db_none": "لا توجد قاعدة بيانات حالياً",
+        "b_net": "ما هي مكتبة الاتصال بالإنترنت والـ API؟",
+        "b_net_ktor": "Ktor Client (io.ktor مع kotlinx.serialization) (مفضّل لـ KMP)",
+        "b_net_retrofit": "Retrofit + OkHttp (مفضّل لـ Native Android)",
+        "b_net_none": "تطبيق محلي فقط بدون API حالياً",
+        "b_locales": "ما هي اللغات المدعومة ومعايير الواجهة؟",
+        "b_locales_dual": "ثنائي اللغة: عربي (RTL) + إنجليزي (LTR) مع Dual Previews (مفضّل)",
+        "b_locales_en": "إنجليزي فقط",
+        "b_locales_ar": "عربي فقط",
         "no_python": "مفيش Python 3.10+ شغال على PATH.",
         "need_repo": "محتاج --repo على مشروع أندرويد فيه gradlew.",
     },
@@ -796,6 +858,111 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
+    is_greenfield = d.get("is_empty") or d.get("source_count", 0) < 4 or d.get("stack") in ("unknown", "unknown (confirm in chat)", "")
+    if is_greenfield:
+        qs.append(
+            {
+                "id": "b_platform",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_platform"),
+                "options": [
+                    {"id": "kmp", "label": t(lang, "b_platform_kmp")},
+                    {"id": "native", "label": t(lang, "b_platform_native")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_arch",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_arch"),
+                "options": [
+                    {"id": "mvi", "label": t(lang, "b_arch_mvi")},
+                    {"id": "mvvm", "label": t(lang, "b_arch_mvvm")},
+                    {"id": "clean", "label": t(lang, "b_arch_clean")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_di",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_di"),
+                "options": [
+                    {"id": "koin", "label": t(lang, "b_di_koin")},
+                    {"id": "hilt", "label": t(lang, "b_di_hilt")},
+                    {"id": "manual", "label": t(lang, "b_di_manual")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_nav",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_nav"),
+                "options": [
+                    {"id": "voyager", "label": t(lang, "b_nav_voyager")},
+                    {"id": "comp", "label": t(lang, "b_nav_comp")},
+                    {"id": "decompose", "label": t(lang, "b_nav_decompose")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_ui",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_ui"),
+                "options": [
+                    {"id": "compose", "label": t(lang, "b_ui_compose")},
+                    {"id": "xml", "label": t(lang, "b_ui_xml")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_db",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_db"),
+                "options": [
+                    {"id": "room", "label": t(lang, "b_db_room")},
+                    {"id": "sql", "label": t(lang, "b_db_sql")},
+                    {"id": "datastore", "label": t(lang, "b_db_datastore")},
+                    {"id": "none", "label": t(lang, "b_db_none")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_net",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_net"),
+                "options": [
+                    {"id": "ktor", "label": t(lang, "b_net_ktor")},
+                    {"id": "retrofit", "label": t(lang, "b_net_retrofit")},
+                    {"id": "none", "label": t(lang, "b_net_none")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_locales",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_locales"),
+                "options": [
+                    {"id": "dual", "label": t(lang, "b_locales_dual")},
+                    {"id": "en", "label": t(lang, "b_locales_en")},
+                    {"id": "ar", "label": t(lang, "b_locales_ar")},
+                ],
+            }
+        )
     return qs
 
 
@@ -881,6 +1048,38 @@ def normalize(raw: dict, facts: dict) -> dict:
         locales = raw.get("i8_text") or locales
     stack = auto["architecture"]
     arch_mode = "keep-kit" if raw.get("i7") == "keep-kit" else "discovered"
+    bootstrap_details = {}
+    if raw.get("b_arch") or raw.get("b_platform"):
+        p_val = raw.get("b_platform", "kmp")
+        a_val = raw.get("b_arch", "mvi")
+        d_val = raw.get("b_di", "koin")
+        n_val = raw.get("b_nav", "voyager")
+        u_val = raw.get("b_ui", "compose")
+        db_val = raw.get("b_db", "room")
+        net_val = raw.get("b_net", "ktor")
+        loc_val = raw.get("b_locales", "dual")
+
+        plat_str = "KMP" if p_val == "kmp" else "Android Native"
+        arch_str = "MVI (State + Action + Channel)" if a_val == "mvi" else ("MVVM" if a_val == "mvvm" else "Clean Architecture + MVI")
+        di_str = "Koin" if d_val == "koin" else ("Hilt" if d_val == "hilt" else "Manual DI")
+        nav_str = "Voyager" if n_val == "voyager" else ("Compose Navigation" if n_val == "comp" else "Decompose")
+        ui_str = "Compose Material3" if u_val == "compose" else "XML Views"
+        db_str = "Room" if db_val == "room" else ("SQLDelight" if db_val == "sql" else ("DataStore" if db_val == "datastore" else "No DB"))
+        net_str = "Ktor" if net_val == "ktor" else ("Retrofit" if net_val == "retrofit" else "No API")
+
+        stack = f"{plat_str} + {arch_str} + {di_str} + {nav_str} + {ui_str} + {db_str} + {net_str}"
+        arch_mode = "greenfield_bootstrap"
+        locales = "values, values-ar" if loc_val == "dual" else ("values" if loc_val == "en" else "values-ar")
+        bootstrap_details = {
+            "platform": p_val,
+            "architecture": a_val,
+            "di": d_val,
+            "navigation": n_val,
+            "ui": u_val,
+            "database": db_val,
+            "networking": net_val,
+            "locales": loc_val,
+        }
     tools = raw.get("i14") or []
     if isinstance(tools, str):
         tools = [x.strip() for x in tools.split(",") if x.strip()]
@@ -902,7 +1101,7 @@ def normalize(raw: dict, facts: dict) -> dict:
     if not facts.get("gemini"):
         gemini = "skip"
     asked = sorted(
-        k for k in raw if isinstance(k, str) and re.fullmatch(r"i\d+[a-z]?", k)
+        k for k in raw if isinstance(k, str) and (re.fullmatch(r"i\d+[a-z]?", k) or re.fullmatch(r"b_[a-z]+", k))
     )
     return {
         "schema": SCHEMA,
@@ -917,8 +1116,9 @@ def normalize(raw: dict, facts: dict) -> dict:
         "launcher": launcher,
         "apk": apk,
         "apk_path": apk_path,
-        "architecture": stack if arch_mode == "discovered" else "kit MVI/Hilt/Room leftovers",
+        "architecture": stack if arch_mode in ("discovered", "greenfield_bootstrap") else "kit MVI/Hilt/Room leftovers",
         "architecture_mode": arch_mode,
+        "bootstrap_details": bootstrap_details,
         "locales": locales,
         "scaffold": "disable",
         "install_confirm": raw.get("i10") or auto["install_confirm"],
@@ -964,6 +1164,20 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
         "",
     ]
+    if answers.get("bootstrap_details"):
+        b = answers["bootstrap_details"]
+        md.extend([
+            "## Greenfield Bootstrap Details",
+            f"- Platform: {b.get('platform')}",
+            f"- Architecture: {b.get('architecture')}",
+            f"- DI: {b.get('di')}",
+            f"- Navigation: {b.get('navigation')}",
+            f"- UI: {b.get('ui')}",
+            f"- Database: {b.get('database')}",
+            f"- Networking: {b.get('networking')}",
+            f"- Locales: {b.get('locales')}",
+            "",
+        ])
     markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
     gi = repo / ".gitignore"
     extra = [".harness-setup/", ".harness-backup/", ".agents/"]
