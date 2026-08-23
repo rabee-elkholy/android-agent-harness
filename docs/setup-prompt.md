@@ -151,35 +151,51 @@ Patch **all** product constants (`docs/porting.md`): write `.agents/scripts/_pro
 
 Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Room/MVI/Hilt/theme wrappers unless this checkout has them. See **3b** for the full reference-fill protocol. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` via `_product.py` and the real source roots. `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. Keep the generic Zoho Sprints section; I.16 only wires MCP. **I.8:** one locale → skip AR/EN parity.
 
-### 3b) Fill domain reference files (with developer approval)
+### 3b) Dynamic Domain Discovery, Custom Reference Creation & Stub Pruning (with developer approval)
 
-The kit ships stub references in `.agents/skills/android-harness/references/`. After porting `_product.py` and `harness-rules.md`, fill each reference **only if the checkout has that domain**. Show the developer what you found and ask for approval before writing.
+The kit ships foundation references plus example domain templates in `.agents/skills/android-harness/references/`. During install, the installer agent MUST dynamically discover the project's actual core domains, create tailored reference files, and prune unused stubs.
 
-1. **`architecture-mvi.md`**: Read Gradle, the version catalog, and 10–20 ViewModels / DI modules. Write:
-   - DI framework: Hilt / Koin / Manual / other
-   - ViewModel base: `ViewModel()` / `MviViewModel` / `BaseViewModel` / custom
-   - Navigation: Compose Navigation / Voyager / Navigation Component / other
-   - State pattern: MVI (State + Action + Event) / MVVM (LiveData / StateFlow) / other
-   - Layer conventions from the opened files (UseCase / Repository / DataSource / etc.)
-   - If the checkout uses `BaseComposeFragment`, `MyAppTheme`, or custom wrappers — document them.
+#### 1. Foundation References (Always Port & Fill):
+1. **`architecture-mvi.md`**: Read Gradle, `libs.versions.toml`, and 10–20 ViewModels / DI modules. Port:
+   - DI framework: Hilt / Koin / Manual / etc.
+   - ViewModel base: `ViewModel()` / `BaseViewModel<S, E, A>` / `MviViewModel` / custom
+   - Navigation: Voyager / Compose Navigation / Decompose / Navigation Component
+   - State pattern: MVI (State + Action + Event) / MVVM (StateFlow / LiveData)
+   - Layer conventions: UseCase / Repository / DataSource / KMP commonMain vs androidMain
 
-2. **`ui-compose-theme.md`**: Scan for `@Composable fun *Theme` or `MaterialTheme` wrappers. Write the real theme function name and any custom color tokens / typography extensions. If none, leave `MaterialTheme`.
+2. **`ui-compose-theme.md`**:
+   - Detect Compose Multiplatform vs AndroidX Compose.
+   - Document the real theme function (`AppTheme` / `MaterialTheme`), typography tokens, and preview patterns (`CompositionLocalProvider(LocalLayoutDirection...)` for KMP, `locale = "ar"` for AndroidX).
 
-3. **`room-database-migrations.md`**: Only if `@Database` exists. The current content is already generic and strong — keep it. Add the real `AppDatabase` class name and entity list if helpful.
+3. **`performance-anr-optimization.md`**:
+   - Keep generic (UI thread safety, coroutine dispatchers, memory leaks, Compose recomposition stability).
 
-4. **`performance-anr-optimization.md`**: Already generic. Keep as-is. It correctly says "only if this checkout uses sensors/location".
+4. **`room-database-migrations.md`**:
+   - If `@Database` exists: fill with real `AppDatabase` class name and entities.
+   - If no Room: delete this file or keep a minimal note ("No Room database in this project").
 
-5. **Stub files** (ads, streak, GPS, sensors, payments): Fill **only** if the checkout has matching code:
-   - `ad-mediation-privacy.md`: only if `com.google.android.gms.ads`, UMP, AdMob, or mediation SDK found
-   - `streak-gamification-system.md`: only if streak / achievement / gamification patterns found
-   - `running-routes-gps.md`: only if location tracking, `FusedLocationProviderClient`, or route recording found
-   - `steps-sensors-services.md`: only if `SensorManager`, pedometer, or foreground service for tracking found
-   - `payment-gateways-architecture.md`: only if Play Billing, RevenueCat, Stripe, or payment SDK found
-   - If not found, leave the stub as-is ("Setup fills this file only if this checkout has X").
+#### 2. Dynamic Domain Discovery & Custom Reference Creation:
+Scan all module folders (`features/`, `core/`, `domain/`, etc.), packages, and Gradle dependencies to identify the project's actual core domains. For any major domain found in the project, **create a new dedicated reference file** in `.agents/skills/android-harness/references/`:
+- **Audio / Media**: (ExoPlayer, Media3, SoundPool, AudioPlayer) -> Create `audio-media-playback.md`
+- **Networking & API**: (Ktor client, Retrofit, WebSockets, GraphQL) -> Create `networking-api-contracts.md`
+- **Hardware / IoT / Bluetooth**: (BLE, USB, CameraX, NFC, Wi-Fi) -> Create `hardware-bluetooth-camera.md`
+- **Domain-Specific Engines**: e.g., Education & Alphabet Games (like Qosousa), Shopping Cart & Checkout, Chat & Messaging, Biometrics / Auth -> Create `<feature-name>-system.md`
+- **Local Storage / Caching**: (SQLDelight, KeyValueCache, DataStore) -> Create `local-cache-storage.md`
 
-6. **`daily-scenarios.md`**: Fill checkout facts (source roots, locales, any special build variants).
+#### 3. Prune Unused Stub Files:
+The kit contains example stubs (`ad-mediation-privacy.md`, `running-routes-gps.md`, `payment-gateways-architecture.md`, `steps-sensors-services.md`, `streak-gamification-system.md`).
+- If the project **has** that domain: fill it with the project's real SDKs and patterns.
+- If the project **does NOT have** that domain: **DELETE that stub file from `.agents/skills/android-harness/references/`**. Do not leave dead stubs that clutter the reviewers' context.
 
-Present a summary table to the developer showing which references were filled and which stayed as stubs. Ask for approval via `ask_question`:
+#### 4. Update `daily-scenarios.md`:
+- Register and link to ALL active domain references (foundation + newly discovered).
+
+#### 5. Present Approval Table:
+Present a clear summary table to the developer showing:
+- Foundation references filled
+- Discovered domain references created
+- Irrelevant stubs pruned/deleted
+Ask for approval via `ask_question` modal before proceeding:
 - `Approve the reference files` / `I have changes to make`
 
 ## 4) Leftover grep
