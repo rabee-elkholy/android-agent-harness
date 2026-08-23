@@ -286,6 +286,49 @@ def clear_pending_reviews(conversation_id: str) -> None:
     if not rec:
         return
     rec["pending_reviews"] = False
+    rec["subagents_polls"] = 0
     rec["_last_used"] = time.time()
     state[conversation_id] = rec
     save_state(state)
+
+
+def task_poll_count(conversation_id: str, task_id: str) -> int:
+    rec = _record(conversation_id)
+    polls = rec.get("task_polls") or {}
+    try:
+        return int(polls.get(task_id, 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def record_task_poll(conversation_id: str, task_id: str) -> int:
+    state = load_state()
+    rec = state.get(conversation_id) or {}
+    polls = dict(rec.get("task_polls") or {})
+    n = task_poll_count(conversation_id, task_id) + 1
+    polls[task_id] = n
+    rec["task_polls"] = polls
+    rec["_last_used"] = time.time()
+    state[conversation_id] = rec
+    save_state(state)
+    return n
+
+
+def subagents_poll_count(conversation_id: str) -> int:
+    rec = _record(conversation_id)
+    try:
+        return int(rec.get("subagents_polls") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def record_subagents_poll(conversation_id: str) -> int:
+    state = load_state()
+    rec = state.get(conversation_id) or {}
+    n = subagents_poll_count(conversation_id) + 1
+    rec["subagents_polls"] = n
+    rec["_last_used"] = time.time()
+    state[conversation_id] = rec
+    save_state(state)
+    return n
+

@@ -18,8 +18,12 @@ from _hook_state import (  # noqa: E402
     package_already_reviewed,
     prompts_match,
     record_review_round,
+    record_subagents_poll,
+    record_task_poll,
     resolve_transcript_path,
     reviews_pending,
+    subagents_poll_count,
+    task_poll_count,
     transcript_path,
 )
 from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
@@ -579,6 +583,37 @@ def handle_schedule(args: dict, payload: dict) -> None:
     allow("Schedule call permitted.")
 
 
+def handle_manage_task(args: dict, payload: dict) -> None:
+    action = str(args.get("Action") or args.get("action") or "").lower()
+    task_id = str(args.get("TaskId") or args.get("taskId") or "")
+    conv = conversation_id(payload)
+    if action == "status" and conv != "unknown" and task_id:
+        count = record_task_poll(conv, task_id)
+        if count > 2:
+            deny(
+                "Denied: Busy polling on background task status is forbidden. "
+                "Antigravity automatically notifies you with a message when the background command finishes. "
+                "You MUST stop calling tools immediately to end your turn and wait for the completion notification."
+            )
+            return
+    allow("manage_task permitted.")
+
+
+def handle_manage_subagents(args: dict, payload: dict) -> None:
+    action = str(args.get("Action") or args.get("action") or "").lower()
+    conv = conversation_id(payload)
+    if action == "list" and conv != "unknown" and reviews_pending(conv):
+        count = record_subagents_poll(conv)
+        if count > 2:
+            deny(
+                "Denied: Busy polling on active subagents via manage_subagents(list) is forbidden. "
+                "Antigravity automatically delivers subagent responses via Reactive Wakeup. "
+                "You MUST stop calling tools immediately to end your turn."
+            )
+            return
+    allow("manage_subagents permitted.")
+
+
 def main() -> None:
     try:
         if hasattr(sys.stdin, "reconfigure"):
@@ -601,6 +636,12 @@ def main() -> None:
             return
         if name == "invoke_subagent":
             handle_invoke_subagent(payload, args)
+            return
+        if name == "manage_subagents":
+            handle_manage_subagents(args, payload)
+            return
+        if name == "manage_task":
+            handle_manage_task(args, payload)
             return
         if name == "schedule":
             handle_schedule(args, payload)

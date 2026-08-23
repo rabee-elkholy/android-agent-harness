@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.6] - 2026-08-23
+
+### 🛡️ Anti-Polling Guardrails & Background Task Discipline
+- **Busy-Polling Elimination Guard**: Added automated polling interceptors in `pre_tool_safety.py` and `_hook_state.py` for `manage_task(Action="status")` and `manage_subagents(Action="list")`.
+- **Enforced Reactive Wakeup Discipline**: Intercepts and denies repeated polling attempts (>2 inquiries per task/round), instructing LLM agents to halt tool executions and wait for Antigravity's event-driven completion notifications.
+
+---
+
 ## [0.2.5] - 2026-08-23
 
 ### 🛡️ Safety Hook Precision & Windows Unicode Support

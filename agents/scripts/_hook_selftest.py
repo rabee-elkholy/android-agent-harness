@@ -132,6 +132,26 @@ def sched(prompt: str, conversation: str | None = None) -> dict:
     return payload
 
 
+def manage_t(action: str, task_id: str = "task-1", conversation: str = "conv-poll") -> dict:
+    return {
+        "conversationId": conversation,
+        "toolCall": {
+            "name": "manage_task",
+            "args": {"Action": action, "TaskId": task_id},
+        },
+    }
+
+
+def manage_s(action: str, conversation: str = "conv-sub-poll") -> dict:
+    return {
+        "conversationId": conversation,
+        "toolCall": {
+            "name": "manage_subagents",
+            "args": {"Action": action},
+        },
+    }
+
+
 cases = [
     ("empty", {}, "allow"),
     ("monkey", cmd("adb -s DEV shell monkey -p com.example.app 1"), "deny"),
@@ -145,6 +165,9 @@ cases = [
     ("git_status", cmd("git status --short --branch"), "allow"),
     ("sched_waiting_subagents", sched("Waiting for 5 review subagents"), "deny"),
     ("sched_user_reminder", sched("Remind developer about coffee in 10 mins"), "allow"),
+    ("manage_task_poll_1", manage_t("status", "task-x", "conv-task-poll"), "allow"),
+    ("manage_task_poll_2", manage_t("status", "task-x", "conv-task-poll"), "allow"),
+    ("manage_task_poll_3_deny", manage_t("status", "task-x", "conv-task-poll"), "deny"),
     ("adb_uninstall_s", cmd("adb -s DEV uninstall com.example.app"), "allow"),
     ("adb_uninstall_bare", cmd("adb uninstall com.example.app"), "deny"),
     ("run_device_uninstall", cmd("python .agents/scripts/run_device.py uninstall"), "allow"),
@@ -852,7 +875,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.6") > (0, 2, 5) and get_current_version() == "0.2.5"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.7") > (0, 2, 6) and get_current_version() == "0.2.6"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
