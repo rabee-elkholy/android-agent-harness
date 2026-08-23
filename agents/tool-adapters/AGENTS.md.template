@@ -37,4 +37,4 @@ If this product **cannot spawn named subagents**, still run the five leaves: ope
 
 ## Zoho Sprints
 
-Follow `.agents/rules/harness-rules.md` section 5 and `.agents/workflows/zoho-sprints.md`. Fetch ticket ids read-only. Mutate only when the developer says `update zoho`. Arabic templates. Never `Done` / `Solved`.
+Follow `.agents/rules/harness-rules.md` section 5 and `.agents/workflows/zoho-sprints.md`. Fetch ticket ids read-only. Mutate only when the developer says `update zoho`. English task titles, Arabic descriptions/comments. Never `Done` / `Solved`.

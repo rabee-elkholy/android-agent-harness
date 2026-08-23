@@ -833,8 +833,8 @@ facts = {
     "gradlew": True,
 }
 q_ids = [q["id"] for q in questions_payload(Path("."), "en", facts)]
-ok_q = "i16" in q_ids
-print(f"wizard includes I.16: {'OK' if ok_q else 'FAIL'}")
+ok_q = "i16" in q_ids and "i17" in q_ids and "i18" in q_ids
+print(f"wizard includes I.16, I.17, I.18: {'OK' if ok_q else 'FAIL'}")
 failed += int(not ok_q)
 norm = normalize(
     {
@@ -846,11 +846,17 @@ norm = normalize(
         "i15": "yes",
         "i14": ["cursor"],
         "i16": "enable",
+        "i17": "en",
+        "i18": "en_titles_ar_comments",
     },
     facts,
 )
-ok_norm = norm.get("zoho_mcp") == "enable"
-print(f"wizard records zoho_mcp: {'OK' if ok_norm else 'FAIL'}")
+ok_norm = (
+    norm.get("zoho_mcp") == "enable"
+    and norm.get("chat_language") == "en"
+    and norm.get("zoho_language") == "en_titles_ar_comments"
+)
+print(f"wizard records zoho_mcp and language preferences: {'OK' if ok_norm else 'FAIL'}")
 failed += int(not ok_norm)
 
 greenfield_facts = {
@@ -875,7 +881,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.7") > (0, 2, 6) and get_current_version() == "0.2.6"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.8") > (0, 2, 7) and get_current_version() == "0.2.7"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

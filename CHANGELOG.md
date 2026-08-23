@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.7] - 2026-08-23
+
+### 🌐 Language Architecture & Zoho Localization Governance
+- **Granular Language Separation (I.17 & I.18)**: Added explicit language configuration questions in `setup_wizard.py` separating engineering/system chat from project management updates.
+- **Strict English Engineering Standard**: Established default strict English for reasoning, implementation plans (`implementation_plan.md`), walkthroughs, subagent review findings, and commit drafts (`CHAT_LANGUAGE = "en"`), eliminating RTL/LTR rendering bugs and prompt confusion.
+- **Dedicated Zoho Sprints Language Control**: Enabled English task titles alongside Arabic QA/PM descriptions and comments (`ZOHO_LANGUAGE = "en_titles_ar_comments"`), maintaining clean technical backlogs while facilitating native team collaboration.
+
+---
+
 ## [0.2.6] - 2026-08-23
 
 ### 🛡️ Anti-Polling Guardrails & Background Task Discipline

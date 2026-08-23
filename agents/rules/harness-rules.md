@@ -15,7 +15,9 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 ## Quality-First & Clarification
 
 - **Answer First, Then Ask**: If the developer asks anything, answer in visible chat first. Only then may you call `ask_question` for a pending plan or device phase. Never fire a bare modal that ignores the question.
-- **Language**: `ask_question` prompts and options MUST match the developer's language. Translate the English options below when the conversation is not English.
+- **Language Policy**:
+  - **Engineering & System Language**: Per `_product.py` (`CHAT_LANGUAGE = "en"` by default): All reasoning, chat responses, implementation plans (`implementation_plan.md`), walkthroughs (`walkthrough.md`), subagent review findings, and Conventional Commit drafts MUST be written in **clear, standard English** to ensure technical precision and prevent RTL/LTR formatting issues. If `CHAT_LANGUAGE = "mirror"`, strictly mirror the developer's language (English if addressed in English, Arabic if addressed in Arabic).
+  - **`ask_question` Modals**: Prompts and options must follow `CHAT_LANGUAGE` (English by default, or mirror developer language).
 - **`(Recommended)`**: Only for technical / architectural tradeoffs. Forbidden on Pass/Fail device results, plan approval, and simple confirmations.
 - **`ask_question` is only for**:
   1. **Plan approval** after writing `.agents/state/plans/implementation_plan.md`. Put a clickable link and highlights in chat first.
@@ -150,7 +152,11 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 
 - Never mutate Zoho unless the developer explicitly says to (for example `update zoho`).
 - Allowed statuses: `In progress` when started; `Ready To ReTest` when verified. Never `Done` / `Solved`.
-- Zoho prose: Arabic, no emoji, human tone, no engine internals, include `git log -1 --format=%h` (developer may paste the hash if HEAD has not moved).
+- **Zoho Language Policy**:
+  - Per `_product.py` (`ZOHO_LANGUAGE = "en_titles_ar_comments"` by default):
+    - **Task Titles**: MUST be in **English** (e.g. `Ras-I725: Fix Scroll in FoodPlanFragment`). Never put developer or assignee names in titles.
+    - **Task Descriptions & Comments**: Written in **Arabic** (human tone, clear explanation for QA/PM, no emoji, no internal engine tokens), including the commit hash `git log -1 --format=%h` (developer may paste the hash if HEAD has not moved).
+    - If `ZOHO_LANGUAGE = "all_en"`, use English for titles, descriptions, and comments. If `all_ar`, use Arabic for all.
 - Assignment: the default user from MCP workflow defaults. No name in titles. New items use the default Sprints assignee (overridable in the user config).
 - **If Zoho MCP tools are not available in this session**, do not invent ticket fields. Ask the developer to paste the ticket or enable Zoho. Continue local implementation using what they provide.
 - This checkout wires **Zoho Sprints only** through `.agents/mcp_config.json` to `.agents/mcp/zoho_sprints/server.py`. **Zoho Desk is not used.** Do not invoke Desk tools, do not add a Desk MCP server, and do not treat Desk ticket numbers as Sprints item ids.

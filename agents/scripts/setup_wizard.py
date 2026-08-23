@@ -195,6 +195,18 @@ T = {
         "i16_enable": "Enable Zoho Sprints — I will add credentials after setup",
         "i16_skip": "Skip — no Zoho on this project",
         "i16_skip_rec": "Skip — no Zoho (Recommended)",
+        "i17": (
+            "What is your preferred language for engineering chat, implementation plans, subagent reviews, and git commits?"
+        ),
+        "i17_en": "Strict English everywhere (Recommended for Android engineering)",
+        "i17_mirror": "Mirror developer language (English if addressed in English, Arabic if addressed in Arabic)",
+        "i17_ar": "Arabic (عربي)",
+        "i18": (
+            "What is your preferred language for Zoho Sprints task descriptions and comments?"
+        ),
+        "i18_en_titles_ar_comments": "English task titles + Arabic comments and descriptions (Recommended)",
+        "i18_all_en": "All English (Titles, Descriptions, and Comments in English)",
+        "i18_all_ar": "All Arabic (عربي بالكامل)",
         "auto_blurb": (
             "From this project I will use (no extra questions): Python {py}, "
             "module {module}, launcher {launcher}, APK {apk}, stack {stack}, locales {locales}. "
@@ -347,6 +359,18 @@ T = {
         "i16_enable": "فعّل Zoho Sprints — هضيف بيانات الدخول بعد التثبيت",
         "i16_skip": "تخطي — المشروع من غير Zoho",
         "i16_skip_rec": "تخطي — من غير Zoho (مفضّل)",
+        "i17": (
+            "ما هي لغة المحادثة والخطط الهندسية وتقارير المراجعين والكوميت المفضلة؟"
+        ),
+        "i17_en": "إنجليزي هندسي فقط في كل شيء (مفضّل لتطوير أندرويد ومنع تداخل النصوص)",
+        "i17_mirror": "مطابقة لغة المطور (إنجليزي لو كلمته إنجليزي، عربي لو كلمته عربي)",
+        "i17_ar": "عربي بالكامل",
+        "i18": (
+            "ما هي اللغة المفضلة لتحديثات ووصف وتعليقات مهام Zoho Sprints؟"
+        ),
+        "i18_en_titles_ar_comments": "عناوين المهام بالإنجليزي والوصف/التعليقات بالعربي (مفضّل)",
+        "i18_all_en": "إنجليزي بالكامل (العناوين والوصف والتعليقات بالإنجليزي)",
+        "i18_all_ar": "عربي بالكامل",
         "auto_blurb": (
             "من المشروع هستخدم من غير أسئلة زيادة: Python {py}، "
             "الموديول {module}، الشاشة الأولى {launcher}، ملف APK {apk}، طريقة الكتابة {stack}، "
@@ -697,6 +721,8 @@ def auto_from_facts(facts: dict) -> dict:
         "assemble_now": "tests-only",
         "unit_tests": "yes",
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
+        "chat_language": "en",
+        "zoho_language": "en_titles_ar_comments",
     }
 
 
@@ -854,6 +880,41 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                 {
                     "id": "skip",
                     "label": t(lang, "i16_skip" if found else "i16_skip_rec"),
+                },
+            ],
+        }
+    )
+    qs.append(
+        {
+            "id": "i17",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i17"),
+            "options": [
+                {"id": "en", "label": t(lang, "i17_en")},
+                {"id": "mirror", "label": t(lang, "i17_mirror")},
+                {"id": "ar", "label": t(lang, "i17_ar")},
+            ],
+        }
+    )
+    qs.append(
+        {
+            "id": "i18",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i18"),
+            "options": [
+                {
+                    "id": "en_titles_ar_comments",
+                    "label": t(lang, "i18_en_titles_ar_comments"),
+                },
+                {
+                    "id": "all_en",
+                    "label": t(lang, "i18_all_en"),
+                },
+                {
+                    "id": "all_ar",
+                    "label": t(lang, "i18_all_ar"),
                 },
             ],
         }
@@ -1097,6 +1158,12 @@ def normalize(raw: dict, facts: dict) -> dict:
     zoho = raw.get("i16") or "skip"
     if zoho not in {"enable", "skip"}:
         zoho = "skip"
+    chat_lang = raw.get("i17") or auto.get("chat_language") or "en"
+    if chat_lang not in {"en", "mirror", "ar"}:
+        chat_lang = "en"
+    zoho_lang = raw.get("i18") or auto.get("zoho_language") or "en_titles_ar_comments"
+    if zoho_lang not in {"en_titles_ar_comments", "all_en", "all_ar"}:
+        zoho_lang = "en_titles_ar_comments"
     gemini = raw.get("i12") or auto["gemini_config"]
     if not facts.get("gemini"):
         gemini = "skip"
@@ -1127,6 +1194,8 @@ def normalize(raw: dict, facts: dict) -> dict:
         "assemble_now": raw.get("i13") or auto["assemble_now"],
         "unit_tests": "yes" if (raw.get("i15") or auto.get("unit_tests")) == "yes" else "no",
         "zoho_mcp": zoho,
+        "chat_language": chat_lang,
+        "zoho_language": zoho_lang,
         "tools": tools,
         "asked": asked,
     }
@@ -1160,6 +1229,8 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.13 Assemble now: {answers.get('assemble_now')}",
         f"- I.15 Unit tests: {answers.get('unit_tests')}",
         f"- I.16 Zoho Sprints: {answers.get('zoho_mcp')}",
+        f"- I.17 Chat & Engineering Language: {answers.get('chat_language', 'en')}",
+        f"- I.18 Zoho Updates Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
         "",
