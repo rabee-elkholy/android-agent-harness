@@ -11,6 +11,9 @@ import time
 import urllib.request
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 GITHUB_REPO = "rabee-elkholy/android-harness-kit"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 CACHE_TTL_SECONDS = 86400  # 24 hours
