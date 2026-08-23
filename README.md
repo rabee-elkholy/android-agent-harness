@@ -17,6 +17,7 @@
   <a href="#key-capabilities">Key Capabilities</a> •
   <a href="#supported-ai-tools">Supported Tools</a> •
   <a href="#installation">Installation</a> •
+  <a href="#contributing">Contributing</a> •
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
@@ -182,6 +183,31 @@ android-harness-kit/
 │   └── tool-adapters/       ← Template adapters for Cursor, Claude, Antigravity, etc.
 └── templates/               ← Optional runtime and tool templates
 ```
+
+## Contributing
+
+Contributions from the Android and Kotlin Multiplatform development community are welcome!
+
+Whether you want to:
+- Add support or adapters for new AI coding tools and IDEs
+- Improve prompt heuristics and domain guidelines for the reviewer subagents
+- Enhance test coverage, safety guards, or Python automation runners
+- Report edge-case bugs or suggest architectural improvements
+
+### Getting Started:
+1. **Fork the Repository** and create your branch from `main`:
+   ```bash
+   git checkout -b feature/your-improvement
+   ```
+2. **Make Your Changes** and verify all safety checks and selftests pass:
+   ```bash
+   python agents/scripts/_hook_selftest.py
+   python agents/scripts/preflight_check.py
+   ```
+3. **Commit Your Changes** with clear, conventional commit messages (`feat: ...`, `fix: ...`, `docs: ...`).
+4. **Open a Pull Request** explaining the motivation and detailed summary of changes.
+
+For major architectural proposals, please open an **Issue** or start a **Discussion** first to align on design.
 
 ---
 

@@ -7,14 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.1] - 2026-08-23
+
+### 🚀 Added
+- **Community Contribution Guidelines**: Added clear open-source contribution workflow, branch conventions, and testing requirements in `README.md`.
+- **Single-Backup Retention & 1-Click Rollback**: Enforced single-backup pruning on upgrades with automatic rollback guarantee via `docs/rollback-prompt.md`.
+- **Frontier Reasoning Model Lineup**: Updated model recommendations to latest verified flagship reasoning models (Claude Opus/Sonnet 4.6/5, Gemini 3.1 Pro/3.7 Flash, GPT-5.6 Sol/o3, DeepSeek-V4/R1).
+- **Documentation Refinement**: Streamlined README with clean engineering typography, flat-square badges, and polished workflow diagrams.
+
+---
+
 ## [0.2.0] - 2026-08-23
 
 ### 🚀 Added
 - **Interactive Start-of-Session Update Notifier**: Automatic, non-blocking check at the beginning of each new chat session alerting the developer when a newer kit version is available.
 - **Snooze & In-Chat Changelog Viewing**: Full support for viewing markdown release notes directly in chat (`--show-changes`), snoozing update notifications for 24 hours (`--snooze 1`), or launching seamless upgrades.
-- **Single-Backup Retention & 1-Click Rollback**: Updates automatically create a backup and prune older snapshots to retain strictly one rollback version in `.harness-backup/`, allowing instant rollback via `docs/rollback-prompt.md` without disk bloat.
 - **Greenfield Bootstrap Mode**: Interactive architectural questionnaire for blank Android/KMP projects to establish Platform, Architecture, DI, Navigation, UI, Database, Networking, and Locales from Day 1.
-- **Flagship Reasoning Model Roster**: Documented top reasoning models per major AI provider (Anthropic, Google, OpenAI, DeepSeek).
 
 ---
 
