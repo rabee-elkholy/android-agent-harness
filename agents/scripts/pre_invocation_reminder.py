@@ -15,7 +15,7 @@ def check_update_directive() -> str:
         from check_kit_update import check_for_update
         info = check_for_update(force=False)
         if info.get("has_update"):
-            curr = info.get("current", "0.1.0")
+            curr = info.get("current", "0.2.1")
             latest = info.get("latest", "")
             return (
                 f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Harness Kit (v{latest}) is available (installed: v{curr}). "
@@ -38,7 +38,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
             "Inspect why the same findings keep returning. Do not assemble a leftover APK."
         )
     pending_note = (
-        " A 5-leaf review round is still pending — do not run unit tests or assembleDebug until all 5 reply."
+        " A 5-leaf review round is still pending — do not assembleDebug until all 5 reply."
         if pending
         else ""
     )
