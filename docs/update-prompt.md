@@ -15,8 +15,11 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
 ## Start now
 
 1. Confirm this repo has `gradlew` or `gradlew.bat` **and** `.agents/`. If `.agents/` is missing, stop and tell them to paste `docs/install-prompt.md` instead.
-2. Ask **U.0** with choices: `Back up and update` / `Stop`. Wait. If Stop, do nothing.
-3. Backup first (same layout as setup): timestamp `YYYYMMDD-HHMMSS`. Copy current `.agents` and harness-owned adapters into `<repo>/.harness-backup/<timestamp>/`. Print the path. If backup fails, **stop**. Copy `<kit>/docs/rollback-prompt.md` into that backup folder when the kit is available.
+3. **Single-Backup Retention**:
+   - **Prune Old Backups**: Inspect `<repo>/.harness-backup/`. If any older backup folders exist, remove them first so that **strictly only ONE backup copy** (the immediate previous version) is retained, avoiding disk bloat.
+   - **Create Backup**: Timestamp `YYYYMMDD-HHMMSS`. Copy current `.agents` and harness-owned adapters into `<repo>/.harness-backup/<timestamp>/`. Print the backup path in chat.
+   - If backup fails, **STOP IMMEDIATELY**.
+   - Copy `<kit>/docs/rollback-prompt.md` into that backup folder. Tell the developer: *"A rollback backup was saved. If you do not like this update at any point, simply paste `docs/rollback-prompt.md` in a new chat to restore your previous version."*
 4. Get the **latest** kit (do **not** clone into `app/`, `composeApp/`, or any module source tree):
    - If a clone already exists nearby: `git fetch` and `git pull` on `main` in that clone. Print the new commit.
    - Else: `git clone https://github.com/rabee-elkholy/android-harness-kit.git` into a sibling folder or the OS temp directory.
