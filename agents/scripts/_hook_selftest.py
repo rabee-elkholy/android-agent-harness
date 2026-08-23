@@ -141,6 +141,7 @@ cases = [
     ("git_exe", cmd("git.exe push origin main"), "deny"),
     ("git_usr_bin", cmd("/usr/bin/git checkout master"), "deny"),
     ("git_chained", cmd("echo hello && git reset --hard"), "deny"),
+    ("installer_adapters_allowed", cmd("python .agents/scripts/install_tool_adapters.py --product Rashaqa --assemble :app:assembleDebug --tools gemini"), "allow"),
     ("git_status", cmd("git status --short --branch"), "allow"),
     ("sched_waiting_subagents", sched("Waiting for 5 review subagents"), "deny"),
     ("sched_user_reminder", sched("Remind developer about coffee in 10 mins"), "allow"),

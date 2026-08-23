@@ -454,12 +454,21 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
 def handle_run_command(command: str, payload: dict | None = None) -> None:
     lower = command.lower()
     conv = conversation_id(payload or {})
-
-    is_assemble_or_test = any(
+    is_setup_script = any(
+        s in lower
+        for s in (
+            "install_tool_adapters",
+            "setup_wizard",
+            "install_zoho_mcp",
+            "check_kit_update",
+            "review_package",
+        )
+    )
+    is_assemble_or_test = not is_setup_script and any(
         k in lower
         for k in ("gradle", "assemble", "testdebug", ":app:test", "run_device.py")
     )
-    is_lint = "fast_kt_lint" in lower
+    is_lint = not is_setup_script and "fast_kt_lint" in lower
 
     if (is_assemble_or_test or is_lint) and conv != "unknown":
         ok, barrier_msg = check_subagents_barrier(conv, payload)
