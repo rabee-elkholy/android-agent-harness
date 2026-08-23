@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.2] - 2026-08-23
 
 ### 🚀 Added & Improved
-- **Production Reference Alignment**: Aligned rules and delivery pipeline sequence with production reference architecture (`Fitness_Android`).
+- **Production Reference Alignment**: Aligned rules and delivery pipeline sequence with production multi-agent architecture.
 - **Comprehensive Workflow Diagram**: Added full interactive Mermaid flow covering planning, parallel 5-leaf review, lint, targeted unit tests, live Gradle builds, manual device sign-off, and Zoho Sprints tracking.
 - **Core vs. Optional Capability Matrix**: Clear matrix distinguishing mandatory core quality gates from configurable options (unit tests, Zoho Sprints, device target policy, git policy, and dual localization).
 
