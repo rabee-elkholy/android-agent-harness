@@ -6,7 +6,7 @@ description: Use when the developer asks for a commit message or PR summary. The
 # Git notes (developer-owned)
 
 The AI agent works **locally** and leaves changes unstaged.
-Rabee commits from **Android Studio**. The agent must not `git add`, commit, push, or open a PR. Draft the message only.
+The developer commits from their IDE. The agent must not `git add`, commit, push, or open a PR. Draft the message only.
 
 ## Conventional Commits (when the developer commits)
 - `feat(scope):`

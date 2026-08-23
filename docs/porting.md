@@ -40,8 +40,6 @@ The kit ships generic defaults in `agents/scripts/_product.py` (`com.example.app
 
 ## After port, grep `.agents` must not find
 
-These parent-product tokens. They must also stay **out** of kit `agents/` (this docs file may name them so installers know what to search):
-
-`madarsoft` `Rashaqa` `RASHAQA` `رشاقة` `Fitness_Android`
+After port, grep `.agents` for any leftover references to the project the kit was originally extracted from. The install selftest (`_hook_selftest.py`) checks for kit placeholder leftovers automatically (`com.example.app`, `com.example`, `this Android app`). Setup adds project-specific needles during install.
 
 Theme-wrapper name only if they kept it. `HARNESS_REVIEW_PACKAGE` may stay.

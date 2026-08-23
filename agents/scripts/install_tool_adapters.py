@@ -6,7 +6,7 @@ add a tool. Managed files for tools that were not selected are removed.
 
 Usage (from an installed app checkout):
 
-    python .agents/scripts/install_tool_adapters.py --product Qosousa --py python --assemble :composeApp:assembleDebug --tools cursor,gemini
+    python .agents/scripts/install_tool_adapters.py --product MyApp --py python --assemble :app:assembleDebug --tools cursor,gemini
 
 Usage (from the kit, targeting an app):
 
@@ -356,7 +356,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     known = ", ".join(KNOWN_TOOLS)
     p = argparse.ArgumentParser(description="Install selected Android harness adapters.")
     p.add_argument("--repo", help="Android checkout root. Default: parent of .agents when installed.")
-    p.add_argument("--product", required=True, help="Product display name (e.g. Qosousa).")
+    p.add_argument("--product", required=True, help="Product display name (e.g. MyApp).")
     p.add_argument("--py", required=True, help="Python command that actually runs here (python or python3).")
     p.add_argument("--assemble", required=True, help="Gradle assemble task (e.g. :composeApp:assembleDebug).")
     p.add_argument(

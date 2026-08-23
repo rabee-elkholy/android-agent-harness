@@ -170,7 +170,14 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.all:
-        target_files = list((REPO / "app" / "src" / "main").rglob("*.kt"))
+        try:
+            from _product import ANDROID_SRC
+            src_root = REPO.joinpath(*ANDROID_SRC)
+        except Exception:
+            src_root = REPO / "app" / "src" / "main"
+        if not src_root.is_dir():
+            src_root = REPO
+        target_files = [p for p in src_root.rglob("*.kt") if not any(x in p.parts for x in {".git", "build", ".gradle", ".agents", ".harness-backup", ".harness-setup", "__pycache__"})]
     else:
         target_files = [p for p in changed_paths() if p.suffix == ".kt"]
 

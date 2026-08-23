@@ -1,13 +1,8 @@
 {
-  "default_user_id": "193083000000007324",
-  "item_prefix": "Ras-I",
-  "title_strip_suffixes": [
-    "Rabee Elkholy",
-    "Rabee",
-    "ربيع الخولي",
-    "ربيع"
-  ],
-  "fallback_item_type_id": "193083000000007023",
-  "fallback_priority_id": "193083000000007021",
-  "fallback_sprint_id": "193083000000284006"
+  "default_user_id": "",
+  "item_prefix": "",
+  "title_strip_suffixes": [],
+  "fallback_item_type_id": "",
+  "fallback_priority_id": "",
+  "fallback_sprint_id": ""
 }

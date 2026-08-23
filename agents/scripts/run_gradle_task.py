@@ -115,7 +115,11 @@ def run_gradle(task_args: list[str]) -> int:
             if "BUILD SUCCESSFUL" in item or "tests completed" in lower or " passed" in lower:
                 live_print(f"    {item}")
         if any("assemble" in arg.lower() for arg in task_args):
-            apk = REPO_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+            try:
+                from _product import APK_RELATIVE
+                apk = REPO_ROOT / APK_RELATIVE
+            except Exception:
+                apk = REPO_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
             if not apk.is_file():
                 found = sorted(REPO_ROOT.glob("**/outputs/apk/debug/*.apk"))
                 apk = found[0] if found else apk

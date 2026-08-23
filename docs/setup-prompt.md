@@ -100,9 +100,34 @@ Ask **only** `questions` from `setup_wizard.py questions`. Typically seven forms
 
 - **Modal prompt:** use the wizard JSON `prompt` verbatim. Setup will not ask for tokens and will not copy them.
 - **Choices:** enable / skip. If a user-level Zoho config already exists on this PC, enable is recommended. Otherwise skip is recommended.
-- **If enable:** after copy, run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --enable`. That script points `ZOHO_SPRINTS_CONFIG` at an existing user file when one is found. It never copies `zoho_config.json` or OAuth values into the repo. If no file exists, it writes only `~/.android-harness/zoho_sprints.example.json` (empty fields) and tells the developer to fill `~/.android-harness/zoho_sprints.json` themselves.
-- **If skip:** run the same script with `--disable` so a leftover `.cursor/mcp.json` Zoho entry is removed. Keep `.agents/mcp_config.json` empty.
+- **If skip:** run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --disable` so a leftover `.cursor/mcp.json` Zoho entry is removed. Keep `.agents/mcp_config.json` empty.
+- **If enable:** follow the Zoho setup flow below.
 - Never write `~/.gemini/config/mcp_config.json`. Never paste tokens in chat.
+
+#### Zoho setup flow (only when I.16 = enable)
+
+1. **Check for existing credentials** on this PC: `~/.android-harness/zoho_sprints.json` or `~/.gemini/antigravity/scratch/zoho_sprints/zoho_config.json`.
+2. **If credentials exist:** tell the developer you found them and will reuse them. Skip to step 6.
+3. **If no credentials:** ask the developer with `ask_question`:
+   - `Set up Zoho credentials now` / `I will set them up later`
+4. **If later:** run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --enable`. Tell them to fill `~/.android-harness/zoho_sprints.json` with the fields from `config.example.json` when they are ready. Skip to step 7.
+5. **If now:** guide the developer through credential setup:
+   - Tell them: "You need a Zoho API console self-client. Here are the steps:"
+   - **Step A:** Go to https://api-console.zoho.com/ and create a **Self Client**.
+   - **Step B:** Generate a grant token with scope: `ZohoSprints.sprints.ALL,ZohoSprints.items.ALL,ZohoSprints.team.READ`
+   - **Step C:** Exchange the grant token for a refresh token using the Zoho OAuth endpoint.
+   - **Step D:** Ask the developer for these values (one `ask_question` with free text):
+     - `client_id`
+     - `client_secret`
+     - `refresh_token`
+     - `team_id` (from their Zoho Sprints URL: `https://sprints.zoho.com/team/<team_id>/...`)
+     - `project_id` (from their Zoho Sprints URL: `https://sprints.zoho.com/team/<team_id>/project/<project_id>/...`)
+   - Write these to `~/.android-harness/zoho_sprints.json` in the format of `config.example.json`. Never copy this file into the repo.
+6. **Wire MCP:** run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --enable`.
+7. **Fill workflow defaults:** ask the developer:
+   - What prefix to use for sprint items (e.g. `"App-I"`, `"PRJ-I"`)?
+   - What names should be stripped from ticket titles (their name in English and/or Arabic)?
+   - Write these to `.agents/mcp/zoho_sprints/workflow_defaults.json`. Leave `default_user_id`, `fallback_item_type_id`, `fallback_priority_id`, `fallback_sprint_id` empty — the server resolves them at runtime when blank.
 
 ### I.2 / I.5 / I.6 — only if they appear in the JSON
 
@@ -124,7 +149,38 @@ Record all answers in `.harness-backup/<timestamp>/SETUP_ANSWERS.md`.
 
 Patch **all** product constants (`docs/porting.md`): write `.agents/scripts/_product.py` from `applicationId`, launcher, assemble task, APK path, and source-root Path pieces. Rewrite `harness-rules.md` (I.1 name, I.3 git, I.4 device, I.15 tests). Glob `**/outputs/apk/debug/*.apk` if the filename is unknown. KMP: `androidMain`, not `src/main` after renaming only `"app"`.
 
-Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Room/MVI/Hilt/theme wrappers unless this checkout has them. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` via `_product.py` and the real source roots. `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. Keep the generic Zoho Sprints section; I.16 only wires MCP. **I.8:** one locale → skip AR/EN parity.
+Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Room/MVI/Hilt/theme wrappers unless this checkout has them. See **3b** for the full reference-fill protocol. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` via `_product.py` and the real source roots. `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. Keep the generic Zoho Sprints section; I.16 only wires MCP. **I.8:** one locale → skip AR/EN parity.
+
+### 3b) Fill domain reference files (with developer approval)
+
+The kit ships stub references in `.agents/skills/android-harness/references/`. After porting `_product.py` and `harness-rules.md`, fill each reference **only if the checkout has that domain**. Show the developer what you found and ask for approval before writing.
+
+1. **`architecture-mvi.md`**: Read Gradle, the version catalog, and 10–20 ViewModels / DI modules. Write:
+   - DI framework: Hilt / Koin / Manual / other
+   - ViewModel base: `ViewModel()` / `MviViewModel` / `BaseViewModel` / custom
+   - Navigation: Compose Navigation / Voyager / Navigation Component / other
+   - State pattern: MVI (State + Action + Event) / MVVM (LiveData / StateFlow) / other
+   - Layer conventions from the opened files (UseCase / Repository / DataSource / etc.)
+   - If the checkout uses `BaseComposeFragment`, `MyAppTheme`, or custom wrappers — document them.
+
+2. **`ui-compose-theme.md`**: Scan for `@Composable fun *Theme` or `MaterialTheme` wrappers. Write the real theme function name and any custom color tokens / typography extensions. If none, leave `MaterialTheme`.
+
+3. **`room-database-migrations.md`**: Only if `@Database` exists. The current content is already generic and strong — keep it. Add the real `AppDatabase` class name and entity list if helpful.
+
+4. **`performance-anr-optimization.md`**: Already generic. Keep as-is. It correctly says "only if this checkout uses sensors/location".
+
+5. **Stub files** (ads, streak, GPS, sensors, payments): Fill **only** if the checkout has matching code:
+   - `ad-mediation-privacy.md`: only if `com.google.android.gms.ads`, UMP, AdMob, or mediation SDK found
+   - `streak-gamification-system.md`: only if streak / achievement / gamification patterns found
+   - `running-routes-gps.md`: only if location tracking, `FusedLocationProviderClient`, or route recording found
+   - `steps-sensors-services.md`: only if `SensorManager`, pedometer, or foreground service for tracking found
+   - `payment-gateways-architecture.md`: only if Play Billing, RevenueCat, Stripe, or payment SDK found
+   - If not found, leave the stub as-is ("Setup fills this file only if this checkout has X").
+
+6. **`daily-scenarios.md`**: Fill checkout facts (source roots, locales, any special build variants).
+
+Present a summary table to the developer showing which references were filled and which stayed as stubs. Ask for approval via `ask_question`:
+- `Approve the reference files` / `I have changes to make`
 
 ## 4) Leftover grep
 

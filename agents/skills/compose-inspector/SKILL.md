@@ -16,6 +16,6 @@ description: Use when inspecting or building Jetpack Compose UI for recompositio
 
 ## 2. Layout & Localization Verification
 - **RTL / LTR**: Strictly use directional modifiers: `Modifier.padding(start = ..., end = ...)` instead of `left`/`right`.
-- **Theme & Design Tokens**: All colors and text styles must consume `MyAppTheme` — `MaterialTheme.colorScheme` / `MaterialTheme.typography`. `colorResource(R.color…)` is allowed when matching existing XML colors. Never use raw hex colors or hardcoded fonts.
+- **Theme & Design Tokens**: All colors and text styles must consume this app's theme tokens — `MaterialTheme.colorScheme` / `MaterialTheme.typography`. `colorResource(R.color…)` is allowed when matching existing XML colors. Never use raw hex colors or hardcoded fonts.
 - **String Resources**: Extract all text to `values/strings.xml` and `values-ar/strings.xml`.
-- **Previews**: Every independent UI component and screen state (Loading, Empty, Success, Error) must have a `@Preview` function wrapped in `MyAppTheme`, including Arabic RTL (`locale = "ar"`) and English LTR (`locale = "en"`).
+- **Previews**: Every independent UI component and screen state (Loading, Empty, Success, Error) must have a `@Preview` function wrapped in this app's theme (or `MaterialTheme`), including Arabic RTL (`locale = "ar"`) and English LTR (`locale = "en"`).

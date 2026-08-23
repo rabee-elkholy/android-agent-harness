@@ -4,7 +4,7 @@ description: Zoho Sprints ingest, create, and update zoho — same workflow as t
 
 # Zoho Sprints
 
-Follow `.agents/rules/harness-rules.md` section 5. This file is the playbook. **Zoho Desk is not used.**
+Follow `.agents/rules/harness-rules.md` section 5. This file is the playbook. **Zoho Desk is not used.** If `workflow_defaults.json` has empty values, the server resolves defaults at runtime. Fill them during install (I.16) or leave them for the developer to configure later.
 
 Credentials stay in the user-level config. Never copy tokens into the repo. Never mutate Zoho unless the developer explicitly says `update zoho` (or an equivalent explicit order).
 

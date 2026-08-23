@@ -6,7 +6,7 @@ trigger: always_on
 
 Single source of truth for AI work in this checkout. Skills are domain knowledge. Workflows are short pointers back here. If a workflow, skill, or reminder disagrees with this file, this file wins.
 
-Developer (Rabee) works **locally** in Android Studio on this checkout. The agent never uses Git worktrees, never commits, and never opens PRs.
+The developer works **locally** in their IDE on this checkout. The agent never uses Git worktrees, never commits, and never opens PRs.
 
 Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a different SKU.
 
@@ -26,7 +26,7 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 - **Clean chat**: No filler per tool step. Never echo `<SYSTEM_MESSAGE>`, raw Gradle dumps, or internal task dumps. Speak when answering, presenting a plan, presenting one device phase, or delivering the final summary.
 - **Quality over tokens**: Uncompromising code quality always wins. Never skip, serialize, or drop the 5 review leaves to save tokens.
 - **Bugs**: Trace data to the producer. No empty `try-catch`, no swallowing `CancellationException`, no dummy business fallbacks (`null` / `0` as fake success). Framework recovery (for example DataStore `emit(emptyPreferences())` on a corrupt file) is not a dummy business fallback.
-- **Colors**: Use `MyAppTheme` tokens. Prefer `MaterialTheme.colorScheme` / `MaterialTheme.typography`. `colorResource(R.color…)` is allowed when matching existing XML colors. No raw hex and no hardcoded fonts.
+- **Colors**: Use this app's theme tokens (or `MaterialTheme`). Prefer `MaterialTheme.colorScheme` / `MaterialTheme.typography`. `colorResource(R.color…)` is allowed when matching existing XML colors. No raw hex and no hardcoded fonts.
 - **Context**: Subagents may read callers, contracts, entities, and lifecycle hosts.
 
 ---
@@ -34,8 +34,8 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 ## Always
 
 - Work only in this checkout. Subagents: `Workspace="inherit"`. Never `share` / worktree / new branch.
-- Leave changes **unstaged**. No `git add`, commit, push, merge, rebase, stash, reset, or PR — not even if the developer says "commit it". Draft the Conventional Commit message only. Rabee commits in Android Studio.
-- Physical device only. Never create or use an emulator or AVD. Resolve the serial with `adb devices` and pick a non-`emulator-` device. Do not hardcode a serial.
+- Leave changes **unstaged**. No `git add`, commit, push, merge, rebase, stash, reset, or PR — not even if the developer says "commit it". Draft the Conventional Commit message only. The developer commits from their IDE.
+- Device policy is set during install (I.4). Default: both phone and emulator allowed. Resolve the serial with `adb devices`. Do not hardcode a serial. If physical-only was selected during setup, never create or use an emulator or AVD and pick only a non-`emulator-` device.
 - Never `adb monkey`, `pm clear`, uninstall, or clear app data without explicit developer direction.
 - Never complete a real purchase/charge.
 - Do not claim device validation from unit tests or review alone.
@@ -152,7 +152,7 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 - Never mutate Zoho unless the developer explicitly says to (for example `update zoho`).
 - Allowed statuses: `In progress` when started; `Ready To ReTest` when verified. Never `Done` / `Solved`.
 - Zoho prose: Arabic, no emoji, human tone, no engine internals, include `git log -1 --format=%h` (developer may paste the hash if HEAD has not moved).
-- Assignment: Rabee Elkholy. No name in titles. New items use the default Sprints assignee from the MCP workflow defaults (overridable in the user config).
+- Assignment: the default user from MCP workflow defaults. No name in titles. New items use the default Sprints assignee (overridable in the user config).
 - **If Zoho MCP tools are not available in this session**, do not invent ticket fields. Ask the developer to paste the ticket or enable Zoho. Continue local implementation using what they provide.
 - This checkout wires **Zoho Sprints only** through `.agents/mcp_config.json` to `.agents/mcp/zoho_sprints/server.py`. **Zoho Desk is not used.** Do not invoke Desk tools, do not add a Desk MCP server, and do not treat Desk ticket numbers as Sprints item ids.
 - Bug id ingestion: fetch if tools exist, explain in chat, start analysis. Still write a plan for non-trivial bugs and request approval.

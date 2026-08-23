@@ -15,7 +15,17 @@ from _repo_files import REPO, changed_paths  # noqa: E402
 
 enable_line_buffered_stdio()
 
-RES_DIR = REPO / "app" / "src" / "main" / "res"
+try:
+    from _product import ANDROID_SRC
+    RES_DIR = REPO.joinpath(*ANDROID_SRC) / "res"
+except Exception:
+    RES_DIR = REPO / "app" / "src" / "main" / "res"
+
+if not RES_DIR.is_dir():
+    _candidates = list(REPO.glob("**/src/*/res")) or list(REPO.glob("**/res"))
+    if _candidates:
+        RES_DIR = _candidates[0]
+
 STR_EN = RES_DIR / "values" / "strings.xml"
 STR_AR = RES_DIR / "values-ar" / "strings.xml"
 

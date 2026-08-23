@@ -88,7 +88,7 @@ def install(
     dry_run: bool = False,
 ) -> list[str]:
     logs: list[str] = []
-    agents = repo / ".agents"
+    agents = repo / ".agents" if (repo / ".agents").is_dir() else repo / "agents"
     server = kit_server_path(agents)
     mcp_path = agents / "mcp_config.json"
     cursor_mcp = repo / ".cursor" / "mcp.json"

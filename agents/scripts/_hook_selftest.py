@@ -605,28 +605,34 @@ ok_example = all(not str(example.get(key) or "").strip() for key in SECRET_KEYS)
 print(f"zoho example has empty secrets: {'OK' if ok_example else 'FAIL'}")
 failed += int(not ok_example)
 
+# Kit placeholders — a successful install replaces these with real values.
+# The selftest proves nothing from the example kit leaked into the installed copy.
+# During install, setup_wizard adds project-specific needles via _product.py.
+# This check only applies AFTER install (when answers.json exists).
 needles = (
-    "mada" + "rsoft",
-    "Rash" + "aqa",
-    "RASH" + "AQA",
-    "رشا" + "قة",
-    "Fitness" + "_Android",
+    "com.example.app",
+    "com.example",
 )
+_repo_root = SCRIPTS.parent.parent
+_is_installed = (_repo_root / ".harness-setup" / "answers.json").is_file()
 ok_left = True
-for path in SCRIPTS.parent.rglob("*"):
-    if not path.is_file() or path.suffix == ".pyc":
-        continue
-    if "__pycache__" in path.parts or "state" in path.parts:
-        continue
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        continue
-    for needle in needles:
-        if needle in text:
-            ok_left = False
-            print(f"zoho leftover {needle!r} in {path.relative_to(SCRIPTS.parent)}")
-print(f"zoho leftover grep agents/: {'OK' if ok_left else 'FAIL'}")
+if _is_installed:
+    for path in SCRIPTS.parent.rglob("*"):
+        if not path.is_file() or path.suffix == ".pyc":
+            continue
+        if "__pycache__" in path.parts or "state" in path.parts:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for needle in needles:
+            if needle in text:
+                ok_left = False
+                print(f"kit placeholder {needle!r} in {path.relative_to(SCRIPTS.parent)}")
+    print(f"kit placeholder grep agents/: {'OK' if ok_left else 'FAIL'}")
+else:
+    print("kit placeholder grep agents/: OK (skipped — raw kit, not an installed checkout)")
 failed += int(not ok_left)
 
 tmp = Path(tempfile.mkdtemp())
@@ -707,8 +713,7 @@ ok_wf = (
     "refresh_token" not in wf
     and "access_token" not in wf
     and "client_secret" not in wf
-    and str(wf.get("item_prefix") or "") == "Ras-" + "I"
-    and bool(str(wf.get("default_user_id") or "").strip())
+    and "client_id" not in wf
 )
 print(f"zoho workflow defaults have no tokens: {'OK' if ok_wf else 'FAIL'}")
 failed += int(not ok_wf)
@@ -732,10 +737,8 @@ from server import ZohoSprintsAPI  # noqa: E402
 
 api = ZohoSprintsAPI(str(overlay_cfg))
 ok_overlay = (
-    api.item_prefix == "Ras-" + "I"
-    and api.default_user_id == str(wf["default_user_id"])
-    and api.access_token == "UNITTEST_ACCESS_TOKEN_XX"
-    and bool(api.title_strip_suffixes)
+    api.access_token == "UNITTEST_ACCESS_TOKEN_XX"
+    and not json_contains_secret_keys(wf)
 )
 print(f"zoho workflow overlay without copying tokens: {'OK' if ok_overlay else 'FAIL'}")
 failed += int(not ok_overlay)

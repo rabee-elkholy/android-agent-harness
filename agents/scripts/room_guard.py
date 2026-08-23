@@ -96,10 +96,12 @@ def parse_database_source(text: str, rel: str = "") -> DatabaseDecl:
 
 
 def iter_database_files() -> list[Path]:
-    root = REPO / "app"
-    if not root.is_dir():
-        return []
-    return [p for p in root.rglob("*Database.kt") if p.is_file()]
+    skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
+    db_files: list[Path] = []
+    for p in REPO.rglob("*Database.kt"):
+        if p.is_file() and not (set(p.parts) & skip_parts):
+            db_files.append(p)
+    return db_files
 
 
 def _rel(path: Path) -> str:
