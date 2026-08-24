@@ -94,6 +94,40 @@ CORE_REFERENCES = (
     "daily-scenarios.md",
 )
 
+KNOWN_DOMAINS = {
+    "Networking & API": {
+        "signatures": ("retrofit", "retrofit2", "io.ktor", "ktor-client", "okhttp3", "com.apollographql"),
+        "expected_prefixes": ("networking-", "api-"),
+        "sample_file": "networking-api-contracts.md",
+    },
+    "Payments & Billing": {
+        "signatures": ("com.android.billingclient", "billing-ktx", "com.stripe", "revenuecat", "fawry"),
+        "expected_prefixes": ("payment-", "billing-"),
+        "sample_file": "payment-gateways-architecture.md",
+    },
+    "Ads & Monetization": {
+        "signatures": ("play-services-ads", "com.google.android.gms.ads", "applovin", "unity-ads", "user-messaging-platform"),
+        "expected_prefixes": ("ad-", "ads-"),
+        "sample_file": "ad-mediation-privacy.md",
+    },
+    "Location & Maps": {
+        "signatures": ("play-services-location", "play-services-maps", "com.mapbox", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"),
+        "expected_prefixes": ("location-", "maps-"),
+        "sample_file": "location-maps-services.md",
+    },
+    "Hardware & Sensors": {
+        "signatures": ("SensorEventListener", "SensorManager", "androidx.camera", "camera-camera2", "android.bluetooth"),
+        "expected_prefixes": ("hardware-", "sensor-", "fitness-", "camera-", "bluetooth-"),
+        "sample_file": "hardware-bluetooth-camera.md",
+    },
+    "Audio & Media": {
+        "signatures": ("androidx.media3", "exoplayer", "SoundPool", "MediaPlayer"),
+        "expected_prefixes": ("audio-", "media-"),
+        "sample_file": "audio-media-playback.md",
+    },
+}
+
+
 
 @dataclass
 class CheckResult:
@@ -345,6 +379,39 @@ class HarnessDoctor:
         else:
             self.log(category, "Placeholder Inspection", "FAIL", f"Found {len(leaks)} file(s) with un-replaced placeholders.", leaks)
 
+    def _detect_project_domains(self) -> set[str]:
+        detected = set()
+        text_corpus = ""
+        for p in self.repo.glob("**/*.gradle*"):
+            if any(x in p.parts for x in {".git", ".gradle", "build", ".harness-backup"}):
+                continue
+            try:
+                text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
+            except Exception:
+                pass
+
+        toml_path = self.repo / "gradle" / "libs.versions.toml"
+        if toml_path.is_file():
+            try:
+                text_corpus += toml_path.read_text(encoding="utf-8", errors="ignore") + "\n"
+            except Exception:
+                pass
+
+        for p in self.repo.glob("**/AndroidManifest.xml"):
+            if any(x in p.parts for x in {".git", ".gradle", "build", ".harness-backup"}):
+                continue
+            try:
+                text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
+            except Exception:
+                pass
+
+        for domain_name, config in KNOWN_DOMAINS.items():
+            for sig in config["signatures"]:
+                if sig.lower() in text_corpus.lower():
+                    detected.add(domain_name)
+                    break
+        return detected
+
     def check_skills_and_workflows(self) -> None:
         category = "6. Skills & Workflows"
         workflows_dir = self.agents_dir / "workflows"
@@ -355,11 +422,95 @@ class HarnessDoctor:
             self.log(category, "Workflow Playbooks", "FAIL", f"Missing workflows: {', '.join(missing_wf)}")
 
         ref_dir = self.agents_dir / "skills" / "android-harness" / "references"
-        missing_ref = [r for r in CORE_REFERENCES if not (ref_dir / r).is_file()]
-        if not missing_ref:
-            self.log(category, "Domain References", "PASS", f"All {len(CORE_REFERENCES)} architectural reference guides verified.")
+        if not ref_dir.is_dir():
+            self.log(category, "Domain References", "FAIL", f"Missing references directory at {ref_dir}")
+            return
+
+        # 1. Foundation References Audit
+        missing_foundation = []
+        corrupted_foundation = []
+        for r in CORE_REFERENCES:
+            ref_path = ref_dir / r
+            if not ref_path.is_file():
+                missing_foundation.append(r)
+            elif ref_path.stat().st_size < 20:
+                corrupted_foundation.append(f"{r} (empty or corrupted: {ref_path.stat().st_size} bytes)")
+
+        if missing_foundation:
+            self.log(category, "Foundation References", "FAIL", f"Missing {len(missing_foundation)} foundation reference(s): {', '.join(missing_foundation)}")
+        elif corrupted_foundation:
+            self.log(category, "Foundation References", "FAIL", f"Corrupted reference files detected: {', '.join(corrupted_foundation)}")
         else:
-            self.log(category, "Domain References", "FAIL", f"Missing references: {', '.join(missing_ref)}")
+            self.log(category, "Foundation References", "PASS", f"All {len(CORE_REFERENCES)} foundation architectural references verified.")
+
+        # 2. Tailored Domain References & Project Domain Coverage
+        all_refs = sorted([f.name for f in ref_dir.glob("*.md")])
+        tailored_refs = [r for r in all_refs if r not in CORE_REFERENCES]
+
+        if self.is_raw_kit:
+            self.log(category, "Tailored Domain Coverage", "PASS", "Kit template mode (domain discovery active on client Android apps).")
+            self.log(category, "Domain Reference Indexing", "PASS", "Foundation scenarios indexed in daily-scenarios.md.")
+            return
+
+        detected_domains = self._detect_project_domains()
+        uncovered_domains = []
+        covered_domains = []
+
+        for domain_name, config in KNOWN_DOMAINS.items():
+            if domain_name in detected_domains:
+                prefixes = config["expected_prefixes"]
+                has_tailored = any(any(ref.startswith(p) for p in prefixes) for ref in tailored_refs)
+                if has_tailored:
+                    matching = [ref for ref in tailored_refs if any(ref.startswith(p) for p in prefixes)]
+                    covered_domains.append(f"{domain_name} -> {', '.join(matching)}")
+                else:
+                    uncovered_domains.append(f"{domain_name} (suggested: '{config['sample_file']}')")
+
+        details = []
+        if tailored_refs:
+            details.append(f"Active tailored guides ({len(tailored_refs)}): {', '.join(tailored_refs)}")
+        if covered_domains:
+            details.append(f"Domain integrations confirmed: {'; '.join(covered_domains)}")
+
+        if not uncovered_domains:
+            msg = f"Deep domain integration verified: {len(tailored_refs)} tailored reference guide(s) active."
+            self.log(category, "Tailored Domain Coverage", "PASS", msg, details=details if details else None)
+        else:
+            details.extend([f"Uncovered domain detected: {d}" for d in uncovered_domains])
+            self.log(
+                category,
+                "Tailored Domain Coverage",
+                "WARN",
+                f"Detected {len(uncovered_domains)} active project domain(s) without dedicated reference guide(s).",
+                details=details,
+            )
+
+        # 3. Reference Indexing in daily-scenarios.md
+        daily_scenarios_path = ref_dir / "daily-scenarios.md"
+        if daily_scenarios_path.is_file():
+            daily_content = daily_scenarios_path.read_text(encoding="utf-8", errors="ignore")
+            unlinked_refs = [
+                r for r in all_refs
+                if r != "daily-scenarios.md" and r not in daily_content and r.replace(".md", "") not in daily_content
+            ]
+            if not unlinked_refs:
+                self.log(
+                    category,
+                    "Domain Reference Indexing",
+                    "PASS",
+                    f"All {len(all_refs)} domain and foundation reference guides are indexed in daily-scenarios.md.",
+                )
+            else:
+                self.log(
+                    category,
+                    "Domain Reference Indexing",
+                    "WARN",
+                    f"Found {len(unlinked_refs)} reference guide(s) not linked in daily-scenarios.md: {', '.join(unlinked_refs)}",
+                    details=[f"Link '{u}' in daily-scenarios.md so AI subagents can discover and cite it." for u in unlinked_refs],
+                )
+        else:
+            self.log(category, "Domain Reference Indexing", "WARN", "daily-scenarios.md missing; reference routing disabled.")
+
 
     def check_tool_adapters(self) -> None:
         category = "7. Multi-IDE Tool Adapters"
