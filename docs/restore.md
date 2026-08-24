@@ -4,7 +4,11 @@ Use this if the new harness is not what you wanted. **Do not delete** `.harness-
 
 ## Fastest path
 
-Paste [`rollback-prompt.md`](rollback-prompt.md) into the same agent (any tool that can edit this checkout).
+Paste the rollback prompt into your AI assistant:
+```markdown
+Read and execute the Android Harness Kit rollback:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md
+```
 
 ## Manual steps
 

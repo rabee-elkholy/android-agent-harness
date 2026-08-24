@@ -1,5 +1,8 @@
 # Update prompt
 
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md`  
+> **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
+
 Paste **this entire file** as the first message in a **new chat on your Android app** (already has `.agents` from a previous install). The agent must execute it, not summarize it.
 
 ---
@@ -20,10 +23,13 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
    - **Create Backup**: Timestamp `YYYYMMDD-HHMMSS`. Copy current `.agents` and harness-owned adapters into `<repo>/.harness-backup/<timestamp>/`. Print the backup path in chat.
    - If backup fails, **STOP IMMEDIATELY**.
    - Copy `<kit>/docs/rollback-prompt.md` into that backup folder. Tell the developer: *"A rollback backup was saved. If you do not like this update at any point, simply paste `docs/rollback-prompt.md` in a new chat to restore your previous version."*
-3. Get the **latest** kit (do **not** clone into `app/`, `composeApp/`, or any module source tree):
+3. **Get the Latest Kit (Remote & Local Support)**:
    - If a clone already exists nearby: `git fetch` and `git pull` on `main` in that clone. Print the new commit.
-   - Else: `git clone https://github.com/rabee-elkholy/android-harness-kit.git` into a sibling folder or the OS temp directory.
-   - Do **not** reuse a stale clone without pulling.
+   - Otherwise (for developers who do not have the kit locally): Clone the latest kit directly into a temporary folder or sibling path:
+     ```bash
+     git clone https://github.com/rabee-elkholy/android-harness-kit.git
+     ```
+   - Do **not** reuse a stale clone without pulling. (Do **not** clone into `app/`, `composeApp/`, or any module source tree).
 4. If `.harness-setup/answers.json` exists, print it. Ask **U.1** with a full prompt: keep these answers, or run `setup_wizard.py` again to change some. Do not use a two-word title.
 5. If they change answers, run `<kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>` (or `questions` + print `auto_blurb` + verbatim `ask_question` prompts for **only** the JSON `questions` list + `write`). Copy the new `.harness-setup/SETUP_ANSWERS.md` into the backup folder.
 6. Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills they added). Those must be restored from backup after the copy.

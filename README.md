@@ -53,7 +53,7 @@
 - [Installation & Setup Modes](#installation--setup-modes)
   - [Mode A: Existing Android / KMP App](#mode-a-existing-android--kmp-app)
   - [Mode B: Greenfield / Blank Project](#mode-b-greenfield--blank-project)
-  - [Upgrades & Rollbacks](#upgrades--rollbacks)
+  - [Upgrades, Diagnostics & Rollbacks](#upgrades-diagnostics--rollbacks)
 - [Setup Wizard & Configuration Reference](#setup-wizard--configuration-reference)
 - [Self-Tests & CI/CD Pipeline](#self-tests--cicd-pipeline)
 - [Contributing & Community](#contributing--community)
@@ -86,18 +86,31 @@ When AI coding assistants like **Cursor**, **Google Antigravity**, **Claude Code
 
 ## Quickstart in 2 Minutes
 
-To install the harness in your Android app:
+To manage the harness in your Android app, open your AI assistant (Antigravity, Cursor, Claude Code, Copilot, Windsurf) in your **Android project root directory**, select a deep reasoning model (e.g. `Claude Opus 5 / 3.7 Sonnet (Thinking)`, `Gemini 3.1 Pro (Deep Think)`, `GPT-5.6 Sol`, or `DeepSeek-R1`), and paste one of the following prompts:
 
-1. Open your AI assistant (Antigravity, Cursor, Claude Code, etc.) in your **Android project root directory**.
-2. Select a deep reasoning model (e.g. `Claude Opus 5 / 3.7 Sonnet (Thinking)`, `Gemini 3.1 Pro (Deep Think)`, `GPT-5.6 Sol`, or `DeepSeek-R1`).
-3. Copy and paste the installer prompt:
-
+### 1. First-Time Installation (or Greenfield Project Bootstrap)
 ```markdown
 Read and execute the Android Harness Kit installer:
 https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md
 ```
 
-4. Follow the interactive questionnaire to configure your project. Once verified with `Total test failures: 0`, your repository is fully protected.
+### 2. Update to Latest Harness Release
+```markdown
+Read and execute the Android Harness Kit updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md
+```
+
+### 3. System Diagnostic & Health Check (Doctor)
+```markdown
+Read and execute the Android Harness Kit diagnostic doctor:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md
+```
+
+### 4. Rollback to Previous Version
+```markdown
+Read and execute the Android Harness Kit rollback:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md
+```
 
 For step-by-step guidance, see the [Quickstart Guide](docs/quickstart.md).
 
@@ -378,9 +391,13 @@ For brand-new or blank projects, the wizard guides you through an **8-question A
 7. **Networking**: Ktor Client vs Retrofit + OkHttp.
 8. **Localization**: Bilingual Arabic (RTL) + English (LTR) vs Single Locale.
 
-### Upgrades & Rollbacks
-- **Upgrade**: Paste [`docs/update-prompt.md`](docs/update-prompt.md) into your chat. Upgrades preserve custom domain references and product configurations while updating core scripts and hooks.
-- **Rollback**: Paste [`docs/rollback-prompt.md`](docs/rollback-prompt.md) into your chat to cleanly restore previous backups.
+### Upgrades, Diagnostics & Rollbacks
+- **Upgrade**: Paste the update prompt into your chat to pull latest features while preserving custom domain rules:
+  `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md`
+- **System Doctor**: Paste the diagnostic prompt to audit system health and safety hooks:
+  `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`
+- **Rollback**: Paste the rollback prompt to restore previous backups cleanly:
+  `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`
 
 ---
 

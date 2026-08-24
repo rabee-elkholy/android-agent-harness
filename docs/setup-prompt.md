@@ -1,10 +1,13 @@
 # Setup prompt
 
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/setup-prompt.md`  
+> **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
+
 The installing agent **executes** this file (usually after the developer pasted [`install-prompt.md`](install-prompt.md) or [`update-prompt.md`](update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
 
 ---
 
-You are installing a portable **Android AI harness** into THIS checkout. The kit is a clone of `android-harness-kit` (sibling, temp, or a path the developer gave). Copy from that clone’s `agents/` folder.
+You are installing a portable **Android AI harness** into THIS checkout. The kit is a clone of `android-harness-kit` (sibling, temp, or a path the developer gave via `git clone https://github.com/rabee-elkholy/android-harness-kit.git`). Copy from that clone’s `agents/` folder.
 
 ## Goal
 

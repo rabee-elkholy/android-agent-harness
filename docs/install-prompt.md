@@ -1,5 +1,8 @@
 # Install prompt
 
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md`  
+> **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
+
 ---
 
 You are installing the portable **Android AI harness** into **this** checkout. This folder is the Android product. It is not `android-harness-kit`.
@@ -18,9 +21,13 @@ Then tell them: a few short questions (backup, app name, who commits, phone vs e
    - **Greenfield / Established Codebase Support**:
      - If this is an **established codebase**, the wizard will automatically discover your architecture, DI, ViewModels, and UI from disk.
      - If this is a **brand-new / blank project**, the wizard will automatically guide you through the **Greenfield Bootstrap Questionnaire** (Platform, MVI/MVVM, Koin/Hilt, Voyager/ComposeNav, Room/SQLDelight, Ktor/Retrofit) to establish the architectural blueprint and governance rules from day one.
-2. Get the kit (do **not** clone into `app/`, `composeApp/`, or any module source tree):
+2. **Get the Kit (Remote & Local Support)**:
    - If a clone already exists nearby (sibling `android-harness-kit`, a path the developer gives, or a previous temp clone), use that. `git pull` on `main` if they want the latest.
-   - Otherwise: `git clone https://github.com/rabee-elkholy/android-harness-kit.git` into a sibling folder or the OS temp directory.
+   - Otherwise (for developers who do not have the kit locally): Clone the kit directly into a temporary folder or sibling path:
+     ```bash
+     git clone https://github.com/rabee-elkholy/android-harness-kit.git
+     ```
+     (Do **not** clone into `app/`, `composeApp/`, or any module source tree).
 3. **Answers first (do not invent short questions).** `--lang ar` if the developer writes Arabic, else `--lang en`.
    - Preferred: they run this in **their** terminal, then tell you when it finishes:
      `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>`

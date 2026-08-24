@@ -22,7 +22,7 @@ The kit ships generic defaults in `agents/scripts/_product.py` (`com.example.app
 
 ## Install traps
 
-- **I.4 allow emulator:** rewrite the **whole** `if serial.startswith("emulator-")` / `re.search(...emulator` blocks (condition + body) in `pre_tool_safety.py`, `run_device.py`, `capture_screen.py`, `logcat_doctor.py`. Deleting only `deny()` / `sys.exit` leaves a **SyntaxError**. Change `_hook_selftest.py` case `emu` from `deny` to `allow`. Keep `adb monkey` denied.
+- **I.4 allow emulator:** Set `ALLOW_EMULATOR = True` (or `False` for physical device only) in `_product.py`. Device runners (`run_device.py`, `logcat_doctor.py`, `capture_screen.py`) automatically consume this centralized policy. Keep `adb monkey` denied.
 - **I.8 one locale:** if there is no second `values-*` folder, skip key parity in `check_strings.py` or preflight fails. Point `RES_DIR` at the real `res` root.
 - **I.9 scaffold:** do not ask. `main()` stays disabled. `_hook_selftest.py` still imports `new_feature_scaffold.VIEWMODEL` and `.SCREEN` (needs `locale = "ar"` / `"en"` and `isEmpty = true`). Keep those constants.
 - **Leftover grep:** do not write forbidden parent-product tokens even in “do not use …” sentences inside `.agents`.

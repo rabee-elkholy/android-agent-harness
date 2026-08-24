@@ -1,5 +1,8 @@
 # Rollback prompt
 
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`  
+> **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
+
 Paste **this entire file** to the agent if you want the previous system restored.
 
 ---

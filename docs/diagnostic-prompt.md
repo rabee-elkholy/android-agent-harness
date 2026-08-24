@@ -1,5 +1,8 @@
 # Diagnostic prompt
 
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`  
+> **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
+
 Paste **this entire file** as the first message in a **new chat on your Android app** to systematically audit the health, configuration, safety hooks, and operational readiness of your installed Android Agent Harness.
 
 ---
@@ -15,9 +18,8 @@ Tell the developer **first**, in their language:
 
 1. **Target Verification (Fail-Fast)**:
    - Verify that this directory has `gradlew` or `gradlew.bat` **and** `.agents/`.
-   - If `.agents/` is missing, stop immediately and guide the developer:
-     - In Arabic: `[خطأ] مجلد .agents/ غير موجود. يرجى تثبيت النظام أولاً عبر لصق docs/install-prompt.md.`
-     - In English: `[ERROR] The .agents/ directory is missing. Please install the harness first by pasting docs/install-prompt.md.`
+   - If `.agents/` is missing, stop immediately and tell the developer in their language that `.agents/` is missing, and instruct them to install the harness first by pasting:
+     `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md`
 
 2. **Automated Diagnostic Execution**:
    - Determine python executable (`python`, `python3`, or `$PY`).

@@ -107,3 +107,20 @@ Provides bidirectional synchronization with Zoho Sprints:
 - Automatically reads bug descriptions, steps to reproduce, and attachments.
 - Creates hierarchical tasks and subtasks.
 - Posts Arabic/English QA testing handoff comments with the exact Git commit hash for complete audit traceability.
+
+---
+
+### 7. 12-Dimension System Doctor (`harness_doctor.py`)
+Provides deterministic, end-to-end verification of repository health across 12 operational dimensions:
+- Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status).
+- File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 24 core scripts).
+- Complete subagent roster (all 8 subagents with active security fingerprints).
+- Product configuration (`_product.py`, package prefix, application ID, source root, assemble task).
+- Template leakage check (verifying zero un-replaced `{{...}}` tokens in `.agents/`).
+- Domain skills & workflow playbooks (verifying all 10 workflow playbooks and 7 reference guides).
+- Multi-IDE tool adapter parity (`AGENTS.md` and tool-specific rule configuration).
+- Safety hooks & atomic state locking (cross-platform atomic `state_lock()`, zero selftest failures).
+- Process streaming & heartbeat (line-buffered standard I/O and process tree lifecycle termination).
+- Preflight verification pipeline (string parity & hardcoded UI text, Room migration graph, fast Kotlin lint).
+- Zoho Sprints MCP security boundaries (zero token leakage in repository).
+- Connected devices & ADB hardware diagnostics (querying physical devices, emulators, and Android API levels).

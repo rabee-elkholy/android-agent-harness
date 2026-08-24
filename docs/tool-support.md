@@ -75,3 +75,14 @@ Also re-run after changing Python command, assemble task, device policy, or git 
 ## Tools without subagent spawn
 
 If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still requires the five leaves: open each JSON under `.agents/subagents/`, follow `system_prompt` against the same `HARNESS_REVIEW_PACKAGE`, sequential is allowed. Assemble only after `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`.
+
+---
+
+## One-Click Lifecycle Prompt URLs
+
+For any supported AI assistant, use the following raw GitHub URLs:
+- **Install**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md`
+- **Update**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md`
+- **Diagnostic Doctor**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`
+- **Rollback**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`
+

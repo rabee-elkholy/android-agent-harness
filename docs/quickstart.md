@@ -1,6 +1,6 @@
 # Quickstart Guide
 
-Get started with **Android Agent Harness** in 4 simple steps.
+Get started with **Android Agent Harness** in 5 simple steps.
 
 ---
 
@@ -50,10 +50,31 @@ PREFLIGHT PASSED
 
 ## Step 5: Verify System Health with Diagnostic Doctor
 
-To perform a comprehensive 12-dimension health audit at any time, paste [`docs/diagnostic-prompt.md`](diagnostic-prompt.md) in a new chat, or run:
+To perform a comprehensive 12-dimension health audit at any time, paste the diagnostic prompt or run the CLI doctor:
 
+```markdown
+Run the Android Harness Kit Diagnostic Doctor:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md
+```
+
+Or execute directly from your terminal:
 ```bash
 python .agents/scripts/harness_doctor.py
 ```
+
+---
+
+## One-Click Lifecycle Prompts Library
+
+You can copy and paste any of the following raw prompt URLs directly into your AI assistant in a new chat:
+
+| Lifecycle Action | Action Summary | Copy-Paste AI Prompt URL |
+|---|---|---|
+| **Install** | First-time setup, Greenfield bootstrap, or existing app porting | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md` |
+| **Update** | Upgrade installed harness to latest release with backup | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md` |
+| **Diagnostic Doctor** | Comprehensive 12-dimension health and safety check | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md` |
+| **Rollback** | Restore previous backup state if needed | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md` |
+
+---
 
 Your Android repository is now governed by the 5-Leaf Review Gate.
