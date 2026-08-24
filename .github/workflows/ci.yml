@@ -32,4 +32,4 @@ jobs:
 
       - name: Run Preflight Sanity Verification
         run: |
-          python agents/scripts/preflight_check.py\n
+          python agents/scripts/preflight_check.py
