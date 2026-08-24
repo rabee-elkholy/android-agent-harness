@@ -1,4 +1,4 @@
-# 🚀 Quickstart Guide (2 Minutes)
+# Quickstart Guide
 
 Get started with **Android Agent Harness** in 4 simple steps.
 
@@ -43,4 +43,4 @@ Total test failures: 0
 PREFLIGHT PASSED
 ```
 
-🎉 **Your Android repository is now governed by the 5-Leaf Review Gate!**\n
+Your Android repository is now governed by the 5-Leaf Review Gate.\n

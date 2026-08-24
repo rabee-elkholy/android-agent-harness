@@ -1,11 +1,11 @@
-name: ✨ Feature Request / Proposal
+name: Feature Request / Proposal
 description: Suggest a new reviewer subagent, rule enhancement, or tool adapter
 labels: ["enhancement", "discussion"]
 body:
   - type: markdown
     attributes:
       value: |
-        Have an idea to make the delivery harness even smarter or support a new AI workflow? Let us know!
+        Have an idea to make the delivery harness even smarter or support a new AI workflow? Let us know.
   - type: dropdown
     id: category
     attributes:

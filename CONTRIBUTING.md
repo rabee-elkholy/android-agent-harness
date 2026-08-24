@@ -1,18 +1,18 @@
 # Contributing to Android Agent Harness
 
-Thank you for your interest in contributing to **Android Agent Harness**! 🚀
+Thank you for your interest in contributing to **Android Agent Harness**.
 
-We welcome contributions from the Android, Kotlin Multiplatform, and AI engineering communities — whether it's adding new AI tool adapters, expanding subagent review heuristics, improving Python test runners, or polishing documentation.
+We welcome contributions from the Android, Kotlin Multiplatform, and software engineering communities -- whether it is adding new AI tool adapters, expanding subagent review heuristics, improving Python test runners, or polishing documentation.
 
 ---
 
-## 🧭 Code of Conduct
+## Code of Conduct
 
 Please review and abide by our [Code of Conduct](CODE_OF_CONDUCT.md) in all project interactions.
 
 ---
 
-## 🛠️ Development Setup
+## Development Setup
 
 1. **Prerequisites**:
    - Python 3.10+ installed.
@@ -34,7 +34,7 @@ Please review and abide by our [Code of Conduct](CODE_OF_CONDUCT.md) in all proj
 
 ---
 
-## 🧩 Architectural Principles
+## Architectural Principles
 
 When contributing code, rules, or subagents, keep these core principles in mind:
 
@@ -45,7 +45,7 @@ When contributing code, rules, or subagents, keep these core principles in mind:
 
 ---
 
-## 🧪 Testing Your Changes
+## Testing Your Changes
 
 Every new safety hook, subagent definition, or installer flag MUST include automated tests in `agents/scripts/_hook_selftest.py`.
 
@@ -60,7 +60,7 @@ Total test failures: 0
 
 ---
 
-## 📝 Commit Conventions
+## Commit Conventions
 
 We follow [Conventional Commits](https://www.conventionalcommits.org/):
 - `feat(subagents): add accessibility audit reviewer`
@@ -70,7 +70,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ---
 
-## 🚀 Submitting a Pull Request
+## Submitting a Pull Request
 
 1. Create a feature branch (`git checkout -b feat/your-feature-name`).
 2. Implement your change with clean code and comments.

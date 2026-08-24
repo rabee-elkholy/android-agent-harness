@@ -1,11 +1,11 @@
-name: 🐛 Bug Report
+name: Bug Report
 description: Report an issue, false positive, hook blocker failure, or subagent error
 labels: ["bug", "triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for helping improve Android Harness Kit! Please provide details below.
+        Thank you for helping improve Android Harness Kit. Please provide details below.
   - type: dropdown
     id: ai-tool
     attributes:

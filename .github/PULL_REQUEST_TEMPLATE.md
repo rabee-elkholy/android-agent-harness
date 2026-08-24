@@ -2,11 +2,11 @@
 <!-- Provide a brief description of the changes introduced by this PR. -->
 
 ## Type of Change
-- [ ] 🐛 Bug fix (non-breaking change fixing an issue)
-- [ ] ✨ New feature / enhancement (new rule, subagent, or adapter)
-- [ ] 🛡️ Safety hook or guardrail update
-- [ ] 📚 Documentation / README update
-- [ ] ⚡ Performance or test improvement
+- [ ] Bug fix (non-breaking change fixing an issue)
+- [ ] New feature / enhancement (new rule, subagent, or adapter)
+- [ ] Safety hook or guardrail update
+- [ ] Documentation / README update
+- [ ] Performance or test improvement
 
 ## Verification Checklist
 - [ ] Ran `python agents/scripts/_hook_selftest.py` with **0 test failures**.

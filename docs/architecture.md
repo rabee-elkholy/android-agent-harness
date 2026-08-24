@@ -1,10 +1,10 @@
-# Android Agent Harness: Deep Architecture Guide
+# Android Agent Harness: Architecture Guide
 
 The **Android Agent Harness** is an enterprise-grade delivery gate and governance system designed to transform AI coding assistants from unconstrained code generators into disciplined, architecture-compliant engineering teammates.
 
 ---
 
-## 🏛️ System Topology
+## System Topology
 
 ```mermaid
 graph TB
@@ -22,11 +22,11 @@ graph TB
     end
 
     subgraph Reviewers ["Parallel 5-Leaf Review Gate"]
-        R1["🐞 Bug & Null-Safety Reviewer"]
-        R2["📐 Architecture & Convention Reviewer"]
-        R3["🔒 Security & Permissions Reviewer"]
-        R4["⚡ Perf & ANR Guardian Reviewer"]
-        R5["🔄 Regression Impact Reviewer"]
+        R1["Bug & Null-Safety Reviewer"]
+        R2["Architecture & Convention Reviewer"]
+        R3["Security & Permissions Reviewer"]
+        R4["Perf & ANR Guardian Reviewer"]
+        R5["Regression Impact Reviewer"]
     end
 
     subgraph Integrations ["Ecosystem Integrations"]
@@ -46,7 +46,7 @@ graph TB
 
 ---
 
-## 🛡️ Core Pillars
+## Core Pillars
 
 ### 1. The Five-Leaf Review Gate
 Unlike traditional code assistants that produce code and instantly declare completion, the Harness intercepts tool execution until **5 specialized reviewer subagents** evaluate the exact package diff in parallel:

@@ -1,16 +1,16 @@
 <div align="center">
 
-# 🛡️ Android Agent Harness
+# Android Agent Harness
 
-**Enterprise Architecture Governance, 5-Leaf Review Gate, and Safety Harness for Android & Kotlin Multiplatform.**
+**Architecture governance, five-leaf parallel review gate, and execution safety harness for Android & Kotlin Multiplatform.**
 
-[![CI Build](https://img.shields.io/github/actions/workflow/status/rabee-elkholy/android-harness-kit/ci.yml?branch=main&style=flat-square&logo=github-actions&logoColor=white&label=CI%20Build)](https://github.com/rabee-elkholy/android-harness-kit/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/rabee-elkholy/android-harness-kit?color=2ea44f&style=flat-square&logo=github&logoColor=white&label=Release)](https://github.com/rabee-elkholy/android-harness-kit/releases)
+[![CI Build](https://img.shields.io/github/actions/workflow/status/rabee-elkholy/android-harness-kit/ci.yml?branch=main&style=flat-square&label=CI%20Build)](https://github.com/rabee-elkholy/android-harness-kit/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/rabee-elkholy/android-harness-kit?color=2ea44f&style=flat-square&label=Release)](https://github.com/rabee-elkholy/android-harness-kit/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20KMP-3DDC84?style=flat-square&logo=android&logoColor=white)](https://android.com)
-[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-5--Leaf%20Pass-success?style=flat-square&logo=checkmarx&logoColor=white)](docs/architecture.md)
-[![AI Tools](https://img.shields.io/badge/AI%20Tools-14%20Supported-8A2BE2?style=flat-square&logo=openai&logoColor=white)](docs/tool-support.md)
+[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20KMP-3DDC84?style=flat-square)](https://android.com)
+[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square)](https://python.org)
+[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-5--Leaf%20Pass-success?style=flat-square)](docs/architecture.md)
+[![AI Tools](https://img.shields.io/badge/AI%20Tools-14%20Supported-8A2BE2?style=flat-square)](docs/tool-support.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 <br/>
@@ -23,42 +23,42 @@
 
 ---
 
-## 📑 Table of Contents
+## Table of Contents
 
-- [🌟 Overview](#-overview)
-- [🛑 The Problem We Solve](#-the-problem-we-solve)
-- [⚡ Quickstart in 2 Minutes](#-quickstart-in-2-minutes)
-- [🔄 Architecture Workflow](#-architecture-workflow)
-- [🍃 The Five-Leaf Review Gate](#-the-five-leaf-review-gate)
-  - [🐞 1. Bug Reviewer Agent](#-1-bug-reviewer-agent)
-  - [📐 2. Convention & Architecture Reviewer](#-2-convention--architecture-reviewer)
-  - [🔒 3. Security & Privacy Reviewer](#-3-security--privacy-reviewer)
-  - [⚡ 4. Performance & ANR Guardian](#-4-performance--anr-guardian)
-  - [🔄 5. Regression Blast Radius Reviewer](#-5-regression-blast-radius-reviewer)
-- [🛡️ Safety Hooks & Execution Governance](#️-safety-hooks--execution-governance)
-  - [🔒 Strict Git Mutation Protection](#-strict-git-mutation-protection)
-  - [🚦 Anti-Polling Guardrails](#-anti-polling-guardrails)
-  - [💾 Ephemeral State Machine](#-ephemeral-state-machine)
-- [🔍 Preflight Verification Pipeline](#-preflight-verification-pipeline)
-  - [⚡ Fast Kotlin Lint](#-fast-kotlin-lint)
-  - [🗄️ Room Database Migration Guard](#️-room-database-migration-guard)
-  - [🌐 Bilingual String Parity Check](#-bilingual-string-parity-check)
-- [🚀 Live Gradle Streaming Runner](#-live-gradle-streaming-runner)
-- [📱 Physical Device Runner & Logcat Doctor](#-physical-device-runner--logcat-doctor)
-- [💼 Zoho Sprints MCP Integration](#-zoho-sprints-mcp-integration)
-- [🛠️ Supported AI Tools & Adapters Matrix](#️-supported-ai-tools--adapters-matrix)
-- [📦 Installation & Setup Modes](#-installation--setup-modes)
+- [Overview](#overview)
+- [The Problem We Solve](#the-problem-we-solve)
+- [Quickstart in 2 Minutes](#quickstart-in-2-minutes)
+- [Architecture Workflow](#architecture-workflow)
+- [The Five-Leaf Review Gate](#the-five-leaf-review-gate)
+  - [1. Bug Reviewer Agent](#1-bug-reviewer-agent)
+  - [2. Convention & Architecture Reviewer](#2-convention--architecture-reviewer)
+  - [3. Security & Privacy Reviewer](#3-security--privacy-reviewer)
+  - [4. Performance & ANR Guardian](#4-performance--anr-guardian)
+  - [5. Regression Blast Radius Reviewer](#5-regression-blast-radius-reviewer)
+- [Safety Hooks & Execution Governance](#safety-hooks--execution-governance)
+  - [Strict Git Mutation Protection](#strict-git-mutation-protection)
+  - [Anti-Polling Guardrails](#anti-polling-guardrails)
+  - [Ephemeral State Machine](#ephemeral-state-machine)
+- [Preflight Verification Pipeline](#preflight-verification-pipeline)
+  - [Fast Kotlin Lint](#fast-kotlin-lint)
+  - [Room Database Migration Guard](#room-database-migration-guard)
+  - [Bilingual String Parity Check](#bilingual-string-parity-check)
+- [Live Gradle Streaming Runner](#live-gradle-streaming-runner)
+- [Physical Device Runner & Logcat Doctor](#physical-device-runner--logcat-doctor)
+- [Zoho Sprints MCP Integration](#zoho-sprints-mcp-integration)
+- [Supported AI Tools & Adapters Matrix](#supported-ai-tools--adapters-matrix)
+- [Installation & Setup Modes](#installation--setup-modes)
   - [Mode A: Existing Android / KMP App](#mode-a-existing-android--kmp-app)
-  - [Mode B: Greenfield / Brand-New App](#mode-b-greenfield--brand-new-app)
+  - [Mode B: Greenfield / Blank Project](#mode-b-greenfield--blank-project)
   - [Upgrades & Rollbacks](#upgrades--rollbacks)
-- [⚙️ Setup Wizard & Configuration Reference](#️-setup-wizard--configuration-reference)
-- [🧪 Self-Tests & CI/CD Pipeline](#-self-tests--cicd-pipeline)
-- [🤝 Contributing & Community](#-contributing--community)
-- [📄 License](#-license)
+- [Setup Wizard & Configuration Reference](#setup-wizard--configuration-reference)
+- [Self-Tests & CI/CD Pipeline](#self-tests--cicd-pipeline)
+- [Contributing & Community](#contributing--community)
+- [License](#license)
 
 ---
 
-## 🌟 Overview
+## Overview
 
 **Android Agent Harness** is an enterprise-grade delivery gate, safety framework, and architecture governance engine for **Android** and **Kotlin Multiplatform (KMP)** development.
 
@@ -68,9 +68,9 @@ When AI coding assistants like **Cursor**, **Google Antigravity**, **Claude Code
 
 ---
 
-## 🛑 The Problem We Solve
+## The Problem We Solve
 
-| Without Android Harness ❌ | With Android Agent Harness 🛡️ |
+| Without Android Harness | With Android Agent Harness |
 | :--- | :--- |
 | **Casual "LGTM"**: AI writes code and declares completion without compiling or verifying. | **Mandatory Review Gate**: AI is locked out of assembly until 5 specialized subagents sign off (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`). |
 | **Silent Regressions**: Modifying one ViewModel or UI component breaks dependent flows. | **Regression Blast Radius**: Maps every caller, navigation route, and data model to verify impact. |
@@ -81,9 +81,9 @@ When AI coding assistants like **Cursor**, **Google Antigravity**, **Claude Code
 
 ---
 
-## ⚡ Quickstart in 2 Minutes
+## Quickstart in 2 Minutes
 
-To install the harness in your Android app in 2 minutes:
+To install the harness in your Android app:
 
 1. Open your AI assistant (Antigravity, Cursor, Claude Code, etc.) in your **Android project root directory**.
 2. Select a deep reasoning model (e.g. `Claude Opus 4.6 / Sonnet 4.6 (Thinking)`, `Gemini 3.1 Pro / 3.7 Flash`, or `OpenAI o3`).
@@ -94,13 +94,13 @@ Read and execute the Android Harness Kit installer:
 https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md
 ```
 
-4. Follow the interactive questionnaire to configure your project. Once verified with `Total test failures: 0`, your repository is fully protected!
+4. Follow the interactive questionnaire to configure your project. Once verified with `Total test failures: 0`, your repository is fully protected.
 
-👉 *For step-by-step guidance, see the [Quickstart Guide](docs/quickstart.md).*
+For step-by-step guidance, see the [Quickstart Guide](docs/quickstart.md).
 
 ---
 
-## 🔄 Architecture Workflow
+## Architecture Workflow
 
 The harness enforces a deterministic, 7-stage quality delivery lifecycle:
 
@@ -113,11 +113,11 @@ flowchart TD
     
     Code --> ReviewGate["4. Five-Leaf Parallel Review Gate"]
     subgraph ReviewGate ["Parallel Reviewer Subagents"]
-        R1["🐞 Bug & Null-Safety Reviewer"]
-        R2["📐 Architecture & Convention"]
-        R3["🔒 Security & Permissions"]
-        R4["⚡ Perf & ANR Guardian"]
-        R5["🔄 Regression Blast Radius"]
+        R1["Bug & Null-Safety Reviewer"]
+        R2["Architecture & Convention"]
+        R3["Security & Permissions"]
+        R4["Perf & ANR Guardian"]
+        R5["Regression Blast Radius"]
     end
     
     ReviewGate --> Verdict{"All 5 Leaves PASS?"}
@@ -147,56 +147,56 @@ flowchart TD
 
 ---
 
-## 🍃 The Five-Leaf Review Gate
+## The Five-Leaf Review Gate
 
 Before any Gradle build or device installation can proceed, the AI assistant must dispatch **5 specialized reviewer subagents** in parallel. Every subagent inspects the exact package diff and outputs a structured pass token:
 
 ```
-[BUG_PASS]         — Verified by Bug Reviewer
-[CONVENTION_PASS]  — Verified by Architecture & Convention Reviewer
-[SECURITY_PASS]    — Verified by Security & Privacy Reviewer
-[PERF_PASS]        — Verified by Performance & ANR Guardian
-[REGRESSION_PASS]  — Verified by Regression Blast Radius Reviewer
+[BUG_PASS]         -- Verified by Bug Reviewer
+[CONVENTION_PASS]  -- Verified by Architecture & Convention Reviewer
+[SECURITY_PASS]    -- Verified by Security & Privacy Reviewer
+[PERF_PASS]        -- Verified by Performance & ANR Guardian
+[REGRESSION_PASS]  -- Verified by Regression Blast Radius Reviewer
 ```
 
-### 🐞 1. Bug Reviewer Agent
+### 1. Bug Reviewer Agent
 - **Focus**: Logical correctness, memory safety, and lifecycle awareness.
 - **Catches**: Unhandled `NullPointerException` risks, uncaught coroutine cancellations, improper `StateFlow` collection without `repeatOnLifecycle`, and memory leaks in static singletons.
 
-### 📐 2. Convention & Architecture Reviewer
+### 2. Convention & Architecture Reviewer
 - **Focus**: Structural cleanliness, MVI/Clean Architecture, and design patterns.
 - **Catches**: Mutable state exposed outside ViewModels, business logic in Composables/Fragments, improper dependency injection (Hilt/Koin), and missing `@Preview` annotations for light/dark themes.
 
-### 🔒 3. Security & Privacy Reviewer
+### 3. Security & Privacy Reviewer
 - **Focus**: Android component security, permission boundaries, and data storage.
 - **Catches**: Exported Activities/Receivers without explicit intent filters or permissions, plaintext credentials/API keys, SQL injection in raw Room queries, and sensitive data printed to production Logcat.
 
-### ⚡ 4. Performance & ANR Guardian
+### 4. Performance & ANR Guardian
 - **Focus**: UI fluidity (60/120 FPS), main thread responsiveness, and memory footprint.
 - **Catches**: Disk or network I/O executed on `Dispatchers.Main`, heavy allocations during Jetpack Compose recomposition phases, unoptimized Canvas drawings, and unbounded recursive loops.
 
-### 🔄 5. Regression Blast Radius Reviewer
+### 5. Regression Blast Radius Reviewer
 - **Focus**: Cross-feature dependency graphs and change impact radius.
 - **Catches**: Renamed ViewModel functions breaking secondary screens, altered data models breaking JSON serialization, modified navigation arguments breaking deep links, and shared database migrations.
 
 ---
 
-## 🛡️ Safety Hooks & Execution Governance
+## Safety Hooks & Execution Governance
 
 The harness incorporates a Python-driven safety interception layer (`pre_tool_safety.py` and `hooks.json`) that monitors all AI tool invocations in real time.
 
-### 🔒 Strict Git Mutation Protection
+### Strict Git Mutation Protection
 AI models frequently attempt to cover mistakes by making unauthorized commits or force-pushing branches. The harness intercepts:
 - `git commit` / `git push` / `git reset --hard`
 - PowerShell and bash subshell bypasses (`sh -c "git commit"`, `cmd.exe /c git commit`)
-- Full paths (`C:\Program Files\Gitin\git.exe commit`)
+- Executable paths (`git.exe commit`)
 
-*Developers retain sole authority over repository history.*
+Developers retain sole authority over repository history.
 
-### 🚦 Anti-Polling Guardrails
+### Anti-Polling Guardrails
 To prevent models from getting stuck in infinite polling loops (>2 calls to `manage_task` or `manage_subagents`), the hook enforces event-driven reactive wakeups and denies redundant poll requests.
 
-### 💾 Ephemeral State Machine
+### Ephemeral State Machine
 `_hook_state.py` tracks the review lifecycle per conversation:
 - Packages are hashed to ensure reviewers inspect the exact active changes.
 - Automatically unlocks re-dispatching if missing subagent templates are defined (`re_dispatch_allowed`).
@@ -204,31 +204,31 @@ To prevent models from getting stuck in infinite polling loops (>2 calls to `man
 
 ---
 
-## 🔍 Preflight Verification Pipeline
+## Preflight Verification Pipeline
 
 Before compiling the application with Gradle, `preflight_check.py` runs three rapid static verification checks in under 2 seconds:
 
-### ⚡ Fast Kotlin Lint (`fast_kt_lint.py`)
+### Fast Kotlin Lint (`fast_kt_lint.py`)
 - Verifies package declarations, import hygiene, and Kotlin syntax.
 - Enforces Jetpack Compose `@Preview` tags for both LTR (English) and RTL (Arabic) locales.
 
-### 🗄️ Room Database Migration Guard (`room_guard.py`)
+### Room Database Migration Guard (`room_guard.py`)
 - Scans `@Database` and `@Entity` declarations for schema changes.
 - Requires explicit `Migration(from, to)` classes and schema version bumps whenever database fields are added or modified.
 
-### 🌐 Bilingual String Parity Check (`check_strings.py`)
+### Bilingual String Parity Check (`check_strings.py`)
 - Analyzes `res/values/strings.xml` and `res/values-ar/strings.xml`.
 - Flags missing translations, mismatched placeholder arguments (`%1$s`), and ignores `translatable="false"` system strings.
 
 ---
 
-## 🚀 Live Gradle Streaming Runner
+## Live Gradle Streaming Runner
 
 Executing Gradle builds directly through AI tool interfaces often causes timeouts, silent freezes, or lost output.
 
 `run_gradle_task.py` provides:
 - **10-Second Live Heartbeat**: Continuously streams stdout/stderr to prevent assistant timeout.
-- **Intelligent Error Parser (`gradle_error_parser.py`)**: Filters thousands of lines of Gradle noise to extract the exact compiler error, file path, and line number.
+- **Intelligent Error Parser (`gradle_error_parser.py`)**: Filters thousands of lines of Gradle output to extract the exact compiler error, file path, and line number.
 - **Build Isolation**: Executes safely with project-specific daemon configurations.
 
 ```bash
@@ -237,9 +237,9 @@ python .agents/scripts/run_gradle_task.py :app:assembleDebug
 
 ---
 
-## 📱 Physical Device Runner & Logcat Doctor
+## Physical Device Runner & Logcat Doctor
 
-The harness prioritizes **real-world physical hardware testing** over slow emulators:
+The harness prioritizes **real-world physical hardware testing** over emulators:
 
 ```bash
 python .agents/scripts/run_device.py --package com.example.app --activity .MainActivity
@@ -251,7 +251,7 @@ python .agents/scripts/run_device.py --package com.example.app --activity .MainA
 
 ---
 
-## 💼 Zoho Sprints MCP Integration
+## Zoho Sprints MCP Integration
 
 The harness includes a built-in **Model Context Protocol (MCP) server** for Zoho Sprints:
 
@@ -277,7 +277,7 @@ sequenceDiagram
 
 ---
 
-## 🛠️ Supported AI Tools & Adapters Matrix
+## Supported AI Tools & Adapters Matrix
 
 The harness supports **14+ AI coding assistants and IDEs**, automatically generating native configuration adapters:
 
@@ -294,12 +294,12 @@ The harness supports **14+ AI coding assistants and IDEs**, automatically genera
 
 ---
 
-## 📦 Installation & Setup Modes
+## Installation & Setup Modes
 
 ### Mode A: Existing Android / KMP App
 Run the installer in an established codebase. The setup wizard inspects your `libs.versions.toml`, Gradle dependencies, and existing architecture (MVI/MVVM, Compose, Room, Koin/Hilt) and generates custom domain reference skills tailored to your app.
 
-### Mode B: Greenfield / Brand-New App
+### Mode B: Greenfield / Blank Project
 For brand-new or blank projects, the wizard guides you through an **8-question Architecture Foundation Questionnaire**:
 1. **Target Platform**: Android Native vs Kotlin Multiplatform (KMP).
 2. **Architecture**: MVI (Unidirectional) vs MVVM.
@@ -316,7 +316,7 @@ For brand-new or blank projects, the wizard guides you through an **8-question A
 
 ---
 
-## ⚙️ Setup Wizard & Configuration Reference
+## Setup Wizard & Configuration Reference
 
 The setup wizard configures 18 parameters (`I.1` to `I.18`) stored in `_product.py`:
 
@@ -343,7 +343,7 @@ The setup wizard configures 18 parameters (`I.1` to `I.18`) stored in `_product.
 
 ---
 
-## 🧪 Self-Tests & CI/CD Pipeline
+## Self-Tests & CI/CD Pipeline
 
 The harness includes a comprehensive self-test suite (`_hook_selftest.py`) validating:
 - Hook blocking rules (`git commit`, `adb monkey`, `pm clear`).
@@ -364,18 +364,18 @@ Every push and pull request is automatically tested across:
 
 ---
 
-## 🤝 Contributing & Community
+## Contributing & Community
 
-Contributions from the Android and Kotlin Multiplatform development community are welcome!
+Contributions from the Android and Kotlin Multiplatform development community are welcome.
 
-- **🐛 Report Bugs**: Use our [Bug Report Form](.github/ISSUE_TEMPLATE/bug_report.yml).
-- **✨ Suggest Features**: Propose new reviewer subagents or tool adapters via our [Feature Request Form](.github/ISSUE_TEMPLATE/feature_request.yml).
-- **📖 Contributing Guide**: Read [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and commit standards.
-- **💬 Discussions**: Connect on [GitHub Discussions](https://github.com/rabee-elkholy/android-harness-kit/discussions).
+- **Report Bugs**: Use our [Bug Report Form](.github/ISSUE_TEMPLATE/bug_report.yml).
+- **Suggest Features**: Propose new reviewer subagents or tool adapters via our [Feature Request Form](.github/ISSUE_TEMPLATE/feature_request.yml).
+- **Contributing Guide**: Read [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and commit standards.
+- **Discussions**: Connect on [GitHub Discussions](https://github.com/rabee-elkholy/android-harness-kit/discussions).
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for complete terms.
 
@@ -383,8 +383,6 @@ Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for complete ter
 
 <br/>
 
-**Crafted with 💚 for the Android & Kotlin Multiplatform Community.**
+[Back to Top](#android-agent-harness)
 
-[Back to Top ↑](#️-android-agent-harness)
-
-</div>
+</div>\n
