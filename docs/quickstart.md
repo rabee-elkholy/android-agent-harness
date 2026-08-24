@@ -10,10 +10,13 @@ Launch your preferred AI-enabled IDE or assistant (e.g. Google Antigravity, Curs
 ---
 
 ## Step 2: Choose a Reasoning Model
-For initial setup, select a model capable of deep architectural reasoning:
-- **Claude**: `Claude Opus 4.6 / 5 (Thinking)` or `Claude Sonnet 4.6 (Thinking)`
-- **Gemini**: `Gemini 3.1 Pro (Deep Think)` or `Gemini 3.7 Flash`
-- **OpenAI**: `OpenAI o3` or `GPT-5.6 Sol`
+For initial setup and structural porting, select a model capable of deep architectural reasoning:
+- **Google Antigravity**: `Gemini 3.1 Pro (Deep Think)` or `Gemini 3.7 Flash`
+- **Cursor**: `Claude Opus 5`, `GPT-5.6 Sol`, or `Claude 3.7 Sonnet (Thinking)`
+- **Claude Code**: `Claude Opus 5 (Adaptive Thinking)` or `Claude 3.7 Sonnet (Thinking)`
+- **GitHub Copilot**: `Claude 3.7 Sonnet (Thinking)` or `GPT-5.6 Sol`
+- **OpenAI Codex**: `GPT-5.6 Sol` or `OpenAI o3`
+- **Windsurf / Cline / Continue**: `Claude 3.7 Sonnet (Thinking)` or `DeepSeek-R1`
 
 ---
 
@@ -43,4 +46,4 @@ Total test failures: 0
 PREFLIGHT PASSED
 ```
 
-Your Android repository is now governed by the 5-Leaf Review Gate.\n
+Your Android repository is now governed by the 5-Leaf Review Gate.

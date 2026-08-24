@@ -88,7 +88,7 @@ When AI coding assistants like **Cursor**, **Google Antigravity**, **Claude Code
 To install the harness in your Android app:
 
 1. Open your AI assistant (Antigravity, Cursor, Claude Code, etc.) in your **Android project root directory**.
-2. Select a deep reasoning model (e.g. `Claude Opus 4.6 / Sonnet 4.6 (Thinking)`, `Gemini 3.1 Pro / 3.7 Flash`, or `OpenAI o3`).
+2. Select a deep reasoning model (e.g. `Claude Opus 5 / 3.7 Sonnet (Thinking)`, `Gemini 3.1 Pro (Deep Think)`, `GPT-5.6 Sol`, or `DeepSeek-R1`).
 3. Copy and paste the installer prompt:
 
 ```markdown
@@ -407,4 +407,4 @@ Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for complete ter
 
 [Back to Top](#android-agent-harness)
 
-</div>\n
+</div>

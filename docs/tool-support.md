@@ -43,6 +43,23 @@ Do **not** overwrite `.aider.conf.yml`, Continue user config, unrelated MCP conf
 
 Aider, Zed, Amp, Devin, Factory, Jules, Warp, and OpenCode pick up `AGENTS.md` with no extra file. Do not add `.cursorrules` (Cursor legacy; `.mdc` is the current file). Do not add `CONVENTIONS.md` (Aider can already read `AGENTS.md`; that filename often belongs to humans).
 
+---
+
+## Recommended Models by Assistant (Setup vs Daily)
+
+| Assistant / IDE | Recommended for Setup & Porting (Tier-1 Reasoning) | Recommended for Daily Work (Coding & 5-Leaf Review) |
+| :--- | :--- | :--- |
+| **Google Antigravity** | `Gemini 3.1 Pro (Deep Think)` | `Gemini 3.7 Flash (Thinking)` |
+| **Cursor** | `Claude Opus 5` / `GPT-5.6 Sol` / `Claude 3.7 Sonnet (Thinking)` | `Composer 2.5` / `Claude Sonnet 5` / `Grok 4.6` |
+| **Claude Code** | `Claude Opus 5 (Adaptive Thinking)` / `Claude 3.7 Sonnet (Thinking)` | `Claude Sonnet 5` |
+| **GitHub Copilot** | `Claude 3.7 Sonnet (Thinking)` / `GPT-5.6 Sol` | `Claude Sonnet 5` / `GPT-5 mini` |
+| **OpenAI Codex CLI** | `GPT-5.6 Sol` / `OpenAI o3` | `GPT-5.5` / `gpt-oss-120b` |
+| **Windsurf (Codeium)** | `Claude 3.7 Sonnet (Thinking)` / `Claude Sonnet 5` | `Cascade Base` / `Claude 3.7 Sonnet` |
+| **Cline & Roo Code** | `Claude Opus 5` / `DeepSeek-V4 Pro` / `DeepSeek-R1` | `Gemini 3.7 Flash Thinking` / `DeepSeek-V4 Flash` |
+| **Continue / Kilo / Goose** | `DeepSeek-R1` / `Claude 3.7 Sonnet` | `Qwen 2.5 Coder 32B` (Local) / `Claude Sonnet 5` |
+| **Amazon Q Developer** | `Amazon Q Developer Pro Engine` | `Amazon Q Developer Default` |
+| **JetBrains Junie** | `Junie Core Engine` | `Junie Core Engine` |
+
 ## Adding a tool later
 
 Re-run the installer with the **new** `--tools` list (include tools you still use, plus the one you are adding). Example: you had Cursor + Gemini; later you add Claude Code:
