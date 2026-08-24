@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.9] - 2026-08-24
+
+### Automated CI/CD, Tier-1 Community Standards & Architecture Documentation
+- **Multi-OS GitHub Actions CI Pipeline**: Added automated matrix test workflows (`.github/workflows/ci.yml`) covering Linux and Windows across Python 3.10, 3.11, 3.12, and 3.13, validating core hook selftests and preflight safety checks.
+- **Open-Source Community Health Infrastructure**: Introduced `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1), `SECURITY.md`, and interactive GitHub Issue Forms for bug reports and feature requests.
+- **Deep Technical Documentation**: Added comprehensive `docs/architecture.md` guide, `docs/quickstart.md`, and expanded `README.md` with an extensive Table of Contents, 5-Leaf Reviewer deep dives, and clean professional typography.
+- **String Parity Attribute Support**: Enhanced `check_strings.py` to automatically recognize and ignore `translatable="false"` resource strings.
+
+---
+
 ## [0.2.8] - 2026-08-23
 
 ### ⚡ Subagent Registration Recovery & Hash Lockout Resilience
