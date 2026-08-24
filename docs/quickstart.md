@@ -1,6 +1,6 @@
 # Quickstart Guide
 
-Get started with **Android Agent Harness** in 5 simple steps.
+Get started with **Android Agent Harness** in 4 simple steps.
 
 ---
 
@@ -48,7 +48,7 @@ PREFLIGHT PASSED
 
 ---
 
-## Step 5: Verify System Health with Diagnostic Doctor
+## Step 5: (Optional) Verify System Health with Diagnostic Doctor
 
 To perform a comprehensive 12-dimension health audit at any time, paste the diagnostic prompt or run the CLI doctor:
 
