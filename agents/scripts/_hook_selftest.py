@@ -967,6 +967,14 @@ ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0]
 print(f"changelog milestone release consolidation: {'OK' if ok_changelog_milestones else 'FAIL'}")
 failed += int(not ok_changelog_milestones)
 
+ok_test_specialist_files = (
+    (repo_root / "agents" / "subagents" / "test-quality-reviewer-agent.json").is_file()
+    and (repo_root / "agents" / "skills" / "android-harness" / "references" / "test-quality-guidelines.md").is_file()
+    and (repo_root / "agents" / "workflows" / "test-quality-audit.md").is_file()
+)
+print(f"test-quality-reviewer-agent files and references: {'OK' if ok_test_specialist_files else 'FAIL'}")
+failed += int(not ok_test_specialist_files)
+
 print(f"\nTotal test failures: {failed}")
 sys.exit(failed)
 

@@ -15,7 +15,7 @@ Installer: `$PY .agents/scripts/install_tool_adapters.py`.
 | Live Gradle + heartbeat | `.agents/scripts/run_gradle_task.py` | Same Python on every tool |
 | Device install/launch | `.agents/scripts/run_device.py` | Same Python on every tool |
 | Assemble barrier (5 `*_PASS`) | `.agents/hooks.json` + `pre_tool_safety.py` | **Antigravity only** (automatic). Others: follow `AGENTS.md` |
-| Reviewer prompts | `.agents/subagents/*.json` | Claude Code also gets `.claude/agents/*.md` |
+| Reviewer & Specialist prompts | `.agents/subagents/*.json` | Claude Code also gets `.claude/agents/*.md` (including `test-quality-reviewer-agent.md`) |
 
 Do **not** copy `~/.gemini` hostnames, tokens, or `local.properties` `sdk.dir`.
 

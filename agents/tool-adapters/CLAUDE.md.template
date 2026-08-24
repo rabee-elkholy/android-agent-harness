@@ -16,6 +16,11 @@ After `{{PY}} .agents/scripts/review_package.py`, launch all five in parallel (s
 
 Wait for `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
 
+On-demand specialists (`.claude/agents/`):
+- `qa-diagnostics-agent` (Logcat crash forensics)
+- `android-ui-expert-agent` (Compose & RTL)
+- `test-quality-reviewer-agent` (Unit & UI test quality audits)
+
 Device: {{DEVICE_POLICY}}
 
 {{GIT_POLICY}}

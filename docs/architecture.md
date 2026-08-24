@@ -29,6 +29,12 @@ graph TB
         R5["Regression Impact Reviewer"]
     end
 
+    subgraph Specialists ["On-Demand Dedicated Specialists"]
+        S1["QA Diagnostics Agent (Logcat / ANR)"]
+        S2["Android UI Expert (Compose / RTL)"]
+        S3["Test Quality Specialist (*Test.kt Suites)"]
+    end
+
     subgraph Integrations ["Ecosystem Integrations"]
         ZohoMCP["Zoho Sprints MCP Server"]
         GitGuard["Git Mutation Interceptor"]
@@ -38,7 +44,9 @@ graph TB
     SafetyHooks --> StateManager
     SafetyHooks --> GitGuard
     SafetyHooks --> Reviewers
+    SafetyHooks --> Specialists
     Reviewers --> Preflight
+    Specialists --> Preflight
     Preflight --> GradleStream
     GradleStream --> DeviceRunner
     DeviceRunner --> ZohoMCP
@@ -70,10 +78,14 @@ Unlike traditional assistants that output unreviewed code, the Harness intercept
 ---
 
 ### 3. Dedicated On-Demand Specialists
-Specialists dispatched only when specific forensic or verification tasks are needed:
+Specialists dispatched only when specific forensic, UI, or test quality tasks are needed:
 - **`qa-diagnostics-agent`**: Physical device Logcat forensic analysis and ANR root-cause investigation.
 - **`android-ui-expert-agent`**: Jetpack Compose and legacy XML UI layout, theming, RTL, and responsiveness.
-- **`test-quality-reviewer-agent`**: Audits unit and UI test suites (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutine `runTest` dispatchers.
+- **`test-quality-reviewer-agent`**: Audits unit and UI test suites (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutine `runTest` dispatchers:
+  - Verifies non-vacuous assertions and full MVI state transition coverage (`Loading` -> `Success` / `Error`).
+  - Enforces `StandardTestDispatcher` injection over hardcoded `Dispatchers.IO` / `Dispatchers.Main`.
+  - Verifies Turbine sequential assertions for reactive `StateFlow` and `SharedFlow` streams.
+  - Audits in-memory Room database DAO tests and `MigrationTestHelper` assertions.
 
 ---
 

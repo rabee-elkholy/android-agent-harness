@@ -31,6 +31,13 @@ Antigravity `hooks.json` enforces this barrier automatically. Other tools must f
 
 If this product **cannot spawn named subagents**, still run the five leaves: open each `.agents/subagents/<name>.json`, follow its `system_prompt` against the same package, and stop that leaf when it emits its `*_PASS` or findings. Sequential is fine. Assemble only after all five exist.
 
+## On-demand specialists
+
+Dispatch when needed:
+- `qa-diagnostics-agent`: Logcat crash forensics and ANR triage.
+- `android-ui-expert-agent`: Jetpack Compose and XML UI layout / RTL guidance.
+- `test-quality-reviewer-agent`: Unit and UI test quality audits (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
+
 ## Git
 
 {{GIT_POLICY}}

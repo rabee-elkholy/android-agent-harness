@@ -141,7 +141,7 @@ From repo root:
 
 Never fire five separate `invoke_subagent` calls. That burns the round counter and is denied.
 
-Optional sixth slot in the same invoke: `qa-diagnostics-agent` **or** `android-ui-expert-agent`, not both.
+Optional sixth slot in the same invoke: `qa-diagnostics-agent`, `android-ui-expert-agent`, or `test-quality-reviewer-agent`.
 
 ---
 
@@ -150,7 +150,7 @@ Optional sixth slot in the same invoke: `qa-diagnostics-agent` **or** `android-u
 Only after the 5 leaves have finished (PASS, not still running):
 
 1. `python .agents/scripts/fast_kt_lint.py` — dual-locale `@Preview` is required on Compose `*Screen.kt`, `*Card.kt`, `*Dialog.kt`, `*BottomSheet.kt`, `*Sheet.kt`, and `*Banner.kt`. Screens also need Loading/Empty/Error.
-2. Targeted tests: `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."` when this checkout has unit tests. Use this module, not a leftover test path.
+2. Targeted tests: If test files (`*Test.kt`) were modified or added, audit test quality via `test-quality-reviewer-agent`. Run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."` when this checkout has unit tests. Use this module, not a leftover test path.
 3. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
 4. `adb devices` — physical serial only.
 5. `python .agents/scripts/run_device.py install-start` (live adb install + launch). Equivalent: `adb -s <DEVICE_ID> install -r -d app/build/outputs/apk/debug/app-debug.apk` then `adb -s <DEVICE_ID> shell am start -n com.example.app/.MainActivity`.

@@ -133,7 +133,8 @@ flowchart TD
     end
     
     Preflight --> TestCheck{"Unit Tests Enabled?"}
-    TestCheck -- Enabled --> UnitTests["Unit Tests: testDebugUnitTest"]
+    TestCheck -- Enabled --> TestQualityReview["Test Quality Specialist: test-quality-reviewer-agent"]
+    TestQualityReview --> UnitTests["Unit Tests: testDebugUnitTest"]
     UnitTests -- Tests Fail --> Code
     UnitTests -- Tests PASS --> Gradle["6. Live Gradle Runner: assembleDebug"]
     TestCheck -- Skipped --> Gradle
@@ -196,10 +197,20 @@ Before any Gradle build or device installation can proceed, the AI assistant mus
 
 ## Dedicated On-Demand Specialists
 
-For specific investigations and testing tasks, the harness provides dedicated on-demand specialists:
-- **`qa-diagnostics-agent`**: Physical device Logcat forensic analysis and ANR root-cause investigation.
-- **`android-ui-expert-agent`**: Jetpack Compose and legacy XML UI layout, theming, RTL, and responsiveness.
-- **`test-quality-reviewer-agent`**: Audits unit and UI test suites (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutine `runTest` dispatchers.
+For specific investigations, UI design, and test suite auditing, the harness provides dedicated on-demand specialists:
+
+### 1. QA & Crash Diagnostics Specialist (`qa-diagnostics-agent`)
+- **Focus**: Physical device Logcat forensic analysis, ANR root-cause triage, and native tombstone inspection.
+- **Workflow**: `/crash-triage` playbook to capture live traces without emulator artifacts.
+
+### 2. Android UI & Design Specialist (`android-ui-expert-agent`)
+- **Focus**: Jetpack Compose and XML layout fidelity, Material Design 3 theming, RTL localization, and edge-to-edge support.
+- **Rules**: Enforces dual-locale `@Preview` on all Compose screens, cards, and dialogs.
+
+### 3. Test Quality Specialist (`test-quality-reviewer-agent`)
+- **Focus**: Unit and UI test suite integrity (`*Test.kt`), assertion depth, and Coroutine concurrency safety.
+- **Catches**: Vacuous assertions (e.g. `assertNotNull` without state verification), hardcoded `Dispatchers.IO`/`Dispatchers.Main` instead of `TestDispatcher`, untested MVI error state transitions, and fragile mock chains.
+- **Reference**: [Test Quality Guidelines](agents/skills/android-harness/references/test-quality-guidelines.md) and `/test-quality-audit` workflow.
 
 ---
 
