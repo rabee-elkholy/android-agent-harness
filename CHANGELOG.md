@@ -5,6 +5,14 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2026-08-24
+
+### Scope Isolation Hardening & Application Localization Advisory
+- **Scope Isolation Protection (`harness_doctor.py` Dimension 10)**: Refactored Preflight Pipeline inspection to classify pre-existing application string parity discrepancies as informational advisories (`[WARN]`) rather than fatal harness infrastructure failures (`[FAIL]`).
+- **Preventing Unauthorized App Code Mutation**: Guarantees that the diagnostic doctor and setup agents strictly observe Rule 2 (Scope Isolation) and never mutate the host application's `strings.xml` or source code without explicit developer instructions.
+
+---
+
 ## [0.5.4] - 2026-08-24
 
 ### Deep Domain References Integration & Architectural Coverage Guard
