@@ -139,10 +139,12 @@ class CheckResult:
 
 
 class HarnessDoctor:
-    def __init__(self, repo: Path, check_device: bool = False, run_selftest: bool = True):
+    def __init__(self, repo: Path, check_device: bool = False, run_selftest: bool = True, live_stream: bool = False):
         self.repo = repo
         self.check_device = check_device
         self.run_selftest = run_selftest and (os.environ.get("_IN_HOOK_SELFTEST") != "1")
+        self.live_stream = live_stream
+        self.current_cat = ""
         self.results: list[CheckResult] = []
         self.is_raw_kit = (self.repo / "agents" / "VERSION").is_file() and not (self.repo / ".agents").is_dir()
         self.agents_dir = self.repo / ".agents" if not self.is_raw_kit else self.repo / "agents"
@@ -151,6 +153,15 @@ class HarnessDoctor:
 
     def log(self, category: str, name: str, status: str, message: str, details: list[str] | None = None) -> None:
         self.results.append(CheckResult(category=category, name=name, status=status, message=message, details=details))
+        if self.live_stream:
+            if category != self.current_cat:
+                self.current_cat = category
+                print(f"\n[*] {category}", flush=True)
+            badge = f"[{status}]"
+            print(f"  {badge:<6} {name}: {message}", flush=True)
+            if details:
+                for d in details:
+                    print(f"         - {d}", flush=True)
 
     def check_environment(self) -> None:
         category = "1. Environment & Host"
@@ -661,6 +672,10 @@ class HarnessDoctor:
             self.log(category, "Connected Devices", "WARN", f"Failed querying adb devices: {exc}")
 
     def run_all(self) -> list[CheckResult]:
+        if self.live_stream:
+            print("==================================================", flush=True)
+            print("  Android Agent Harness: 12-Dimension Diagnostic Report", flush=True)
+            print("==================================================", flush=True)
         self.check_environment()
         self.check_file_structure()
         self.check_subagent_roster()
@@ -672,58 +687,53 @@ class HarnessDoctor:
         self.check_process_streaming()
         self.check_preflight_pipeline()
         self.check_zoho_mcp()
-        self.check_connected_devices()
+        if self.check_device:
+            self.check_connected_devices()
         return self.results
 
 
-def print_report(results: list[CheckResult]) -> int:
-    print("==================================================")
-    print("  Android Agent Harness: 12-Dimension Diagnostic Report")
-    print("==================================================")
+def print_report(results: list[CheckResult], already_streamed: bool = False) -> int:
+    if not already_streamed:
+        print("==================================================", flush=True)
+        print("  Android Agent Harness: 12-Dimension Diagnostic Report", flush=True)
+        print("==================================================", flush=True)
 
-    current_cat = ""
-    pass_count = 0
-    warn_count = 0
-    fail_count = 0
+        current_cat = ""
+        for r in results:
+            if r.category != current_cat:
+                current_cat = r.category
+                print(f"\n[*] {current_cat}", flush=True)
 
-    for r in results:
-        if r.category != current_cat:
-            current_cat = r.category
-            print(f"\n[*] {current_cat}")
+            badge = f"[{r.status}]"
+            print(f"  {badge:<6} {r.name}: {r.message}", flush=True)
+            if r.details:
+                for d in r.details:
+                    print(f"         - {d}", flush=True)
 
-        badge = f"[{r.status}]"
-        if r.status == "PASS":
-            pass_count += 1
-        elif r.status == "WARN":
-            warn_count += 1
-        else:
-            fail_count += 1
+    pass_count = sum(1 for r in results if r.status == "PASS")
+    warn_count = sum(1 for r in results if r.status == "WARN")
+    fail_count = sum(1 for r in results if r.status == "FAIL")
 
-        print(f"  {badge:<6} {r.name}: {r.message}")
-        if r.details:
-            for d in r.details:
-                print(f"         - {d}")
-
-    print("\n==================================================")
-    print(f"  Diagnostic Summary: {pass_count} Passed, {warn_count} Warnings, {fail_count} Failures")
-    print("==================================================")
+    print("\n==================================================", flush=True)
+    print(f"  Diagnostic Summary: {pass_count} Passed, {warn_count} Warnings, {fail_count} Failures", flush=True)
+    print("==================================================", flush=True)
 
     # If uncommitted changes exist, print an explicit git commit reminder
     uncommitted_warning = next((r for r in results if r.name == "Git Working Tree" and r.status == "WARN"), None)
     if uncommitted_warning:
-        print("\n--------------------------------------------------")
-        print("  [ADVISORY] Uncommitted changes detected in repository.")
-        print("  If you just installed or updated the harness, remember to review")
-        print("  and create a Git commit for your changes:")
-        print("    git add .")
-        print('    git commit -m "chore: setup / update android harness"')
-        print("--------------------------------------------------")
+        print("\n--------------------------------------------------", flush=True)
+        print("  [ADVISORY] Uncommitted changes detected in repository.", flush=True)
+        print("  If you just installed or updated the harness, remember to review", flush=True)
+        print("  and create a Git commit for your changes:", flush=True)
+        print("    git add .", flush=True)
+        print('    git commit -m "chore: setup / update android harness"', flush=True)
+        print("--------------------------------------------------", flush=True)
 
     if fail_count == 0:
-        print("\n[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.")
+        print("\n[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.", flush=True)
         return 0
     else:
-        print(f"\n[FAIL] {fail_count} critical failure(s) detected. Please remediate the issues above.")
+        print(f"\n[FAIL] {fail_count} critical failure(s) detected. Please remediate the issues above.", flush=True)
         return 1
 
 
@@ -736,7 +746,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_path = Path(args.repo).resolve()
-    doctor = HarnessDoctor(repo_path, check_device=args.device)
+    live_stream = not args.json
+    doctor = HarnessDoctor(repo_path, check_device=args.device, live_stream=live_stream)
     results = doctor.run_all()
 
     if args.json:
@@ -746,10 +757,10 @@ def main(argv: list[str] | None = None) -> int:
             "failures": sum(1 for r in results if r.status == "FAIL"),
             "checks": [asdict(r) for r in results],
         }
-        print(json.dumps(report_data, indent=2))
+        print(json.dumps(report_data, indent=2), flush=True)
         return 0 if report_data["failures"] == 0 else 1
 
-    return print_report(results)
+    return print_report(results, already_streamed=live_stream)
 
 
 if __name__ == "__main__":

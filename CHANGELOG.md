@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Scope Isolation Hardening & Application Localization Advisory
 - **Scope Isolation Protection (`harness_doctor.py` Dimension 10)**: Refactored Preflight Pipeline inspection to classify pre-existing application string parity discrepancies as informational advisories (`[WARN]`) rather than fatal harness infrastructure failures (`[FAIL]`).
-- **Preventing Unauthorized App Code Mutation**: Guarantees that the diagnostic doctor and setup agents strictly observe Rule 2 (Scope Isolation) and never mutate the host application's `strings.xml` or source code without explicit developer instructions.
+- **Real-Time Progressive Console Streaming (`harness_doctor.py`)**: Implemented progressive line-by-line output streaming with immediate `flush=True` for all 12 diagnostic dimensions. Eliminates stdout buffer delays and prevents tasks from appearing silent/frozen during background execution.
 
 ---
 
