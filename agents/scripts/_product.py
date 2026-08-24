@@ -13,4 +13,5 @@ ANDROID_SRC = ("app", "src", "main")
 # Language & Zoho settings (configured during setup)
 CHAT_LANGUAGE = "en"  # "en" (Strict English), "mirror" (Mirror developer input), "ar" (Arabic)
 ZOHO_LANGUAGE = "en_titles_ar_comments"  # "en_titles_ar_comments", "all_en", "all_ar"
+ALLOW_EMULATOR = True  # True (both physical and emulator allowed), False (physical device only)
 

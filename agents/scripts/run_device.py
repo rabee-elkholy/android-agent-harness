@@ -15,27 +15,30 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
 from _product import (  # noqa: E402
+    ALLOW_EMULATOR,
     APK_RELATIVE,
     APPLICATION_ID,
     ASSEMBLE_TASK,
     LAUNCHER,
     PRODUCT_NAME,
 )
-from _repo_files import REPO, first_physical_adb_serial  # noqa: E402
+from _repo_files import REPO, first_adb_serial, first_physical_adb_serial  # noqa: E402
 
 DEFAULT_APK = REPO / Path(APK_RELATIVE)
 DEFAULT_ACTIVITY = LAUNCHER
 
 
 def require_serial(explicit: str | None) -> str:
-    serial = explicit or first_physical_adb_serial()
+    allow_emu = bool(ALLOW_EMULATOR)
+    serial = explicit or first_adb_serial(allow_emulator=allow_emu)
     if not serial:
-        live_print("[ERROR] No physical Android device detected via ADB.", err=True)
+        live_print("[ERROR] No Android device detected via ADB.", err=True)
         sys.exit(1)
-    if serial.startswith("emulator-"):
-        live_print("[ERROR] Emulator targeting is forbidden. Connect a physical device.", err=True)
+    if not allow_emu and serial.startswith("emulator-"):
+        live_print("[ERROR] Emulator targeting is forbidden by project policy. Connect a physical device.", err=True)
         sys.exit(1)
     return serial
+
 
 
 def run_adb(serial: str, adb_args: list[str], label: str) -> int:

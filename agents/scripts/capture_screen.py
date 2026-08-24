@@ -14,7 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
-from _repo_files import REPO, first_physical_adb_serial  # noqa: E402
+from _product import ALLOW_EMULATOR  # noqa: E402
+from _repo_files import REPO, first_adb_serial, first_physical_adb_serial  # noqa: E402
 
 enable_line_buffered_stdio()
 
@@ -46,19 +47,21 @@ def capture_screenshot(device_id: str, name: str | None = None) -> Path | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Capture screenshot from physical Android device")
-    parser.add_argument("-d", "--device", default=None, help="Physical device serial (default: first non-emulator adb device)")
+    parser.add_argument("-d", "--device", default=None, help="Device serial (default: first available adb device)")
     parser.add_argument("-n", "--name", default="screen", help="Prefix name for screenshot")
     args = parser.parse_args()
 
-    device_id = args.device or first_physical_adb_serial()
+    allow_emu = bool(ALLOW_EMULATOR)
+    device_id = args.device or first_adb_serial(allow_emulator=allow_emu)
     if not device_id:
-        print("[ERROR] No physical Android device detected via ADB.", file=sys.stderr)
+        print("[ERROR] No Android device detected via ADB.", file=sys.stderr)
         return 1
-    if device_id.startswith("emulator-"):
-        print("[ERROR] Emulator targeting is forbidden. Connect a physical device.", file=sys.stderr)
+    if not allow_emu and device_id.startswith("emulator-"):
+        print("[ERROR] Emulator targeting is forbidden by project policy. Connect a physical device.", file=sys.stderr)
         return 1
 
     print(f"[*] Capturing screenshot from device: {device_id}...")
+
     saved_path = capture_screenshot(device_id, args.name)
     if saved_path:
         print("[SUCCESS] Screenshot saved successfully!")

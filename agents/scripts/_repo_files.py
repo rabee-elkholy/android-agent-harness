@@ -10,6 +10,18 @@ REPO = SCRIPTS_DIR.parent.parent
 _CODE_SUFFIXES = {".kt", ".java", ".kts"}
 
 
+def _unquote_git_path(raw: str) -> str:
+    """Decode C-style quoted and octal-escaped Git porcelain path."""
+    raw = raw.strip()
+    if raw.startswith('"') and raw.endswith('"'):
+        inner = raw[1:-1]
+        try:
+            return inner.encode("latin1").decode("unicode_escape").encode("latin1").decode("utf-8")
+        except Exception:
+            return inner
+    return raw
+
+
 def changed_paths(*, include_untracked: bool = True) -> list[Path]:
     """Working-tree files vs HEAD: staged, unstaged, and untracked."""
     proc = subprocess.run(
@@ -29,6 +41,7 @@ def changed_paths(*, include_untracked: bool = True) -> list[Path]:
         path_str = line[3:].strip()
         if " -> " in path_str:
             path_str = path_str.split(" -> ", 1)[1].strip()
+        path_str = _unquote_git_path(path_str)
         if not include_untracked and xy == "??":
             continue
         path = REPO / path_str
@@ -56,7 +69,7 @@ def has_non_doc_code_changes() -> bool:
     return False
 
 
-def first_physical_adb_serial() -> str | None:
+def first_adb_serial(*, allow_emulator: bool = True) -> str | None:
     try:
         proc = subprocess.run(
             ["adb", "devices"],
@@ -70,6 +83,12 @@ def first_physical_adb_serial() -> str | None:
         return None
     for line in (proc.stdout or "").splitlines()[1:]:
         parts = line.split()
-        if len(parts) >= 2 and parts[1] == "device" and not parts[0].startswith("emulator-"):
-            return parts[0]
+        if len(parts) >= 2 and parts[1] == "device":
+            if allow_emulator or not parts[0].startswith("emulator-"):
+                return parts[0]
     return None
+
+
+def first_physical_adb_serial() -> str | None:
+    return first_adb_serial(allow_emulator=False)
+

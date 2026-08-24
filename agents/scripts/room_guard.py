@@ -15,7 +15,9 @@ from _repo_files import REPO, changed_paths
 
 VERSION_RE = re.compile(r"version\s*=\s*(\d+)")
 MIGRATION_RE = re.compile(r"Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")
+AUTO_MIGRATION_RE = re.compile(r"AutoMigration\s*\(\s*(?:from\s*=\s*)?(\d+)\s*,\s*(?:to\s*=\s*)?(\d+)")
 ENTITY_REF_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)::class")
+EMBEDDED_TYPE_RE = re.compile(r"@Embedded(?:\([^)]*\))?\s+(?:val|var)\s+\w+\s*:\s*([A-Z][A-Za-z0-9_]*)")
 DESTRUCTIVE_RE = re.compile(r"fallbackToDestructiveMigration(?:OnDowngrade)?\s*\(")
 ADD_MIGRATIONS_RE = re.compile(r"addMigrations\s*\((.*?)\)", re.DOTALL)
 TYPE_DECL_RE = re.compile(
@@ -69,15 +71,59 @@ def changed_kotlin_types(paths: list[Path]) -> set[str]:
     return names
 
 
+def resolve_all_entity_types(root_entities: frozenset[str], repo: Path) -> frozenset[str]:
+    all_types = set(root_entities)
+    frontier = list(root_entities)
+    visited_files = set()
+    while frontier:
+        curr = frontier.pop(0)
+        for kt_file in repo.rglob(f"{curr}.kt"):
+            if kt_file in visited_files or not kt_file.is_file():
+                continue
+            visited_files.add(kt_file)
+            try:
+                content = kt_file.read_text(encoding="utf-8", errors="replace")
+                for embedded in EMBEDDED_TYPE_RE.findall(content):
+                    if embedded not in all_types:
+                        all_types.add(embedded)
+                        frontier.append(embedded)
+            except Exception:
+                continue
+    return frozenset(all_types)
+
+
+def is_migration_path_covered(start: int, end: int, migrations: frozenset[tuple[int, int]]) -> bool:
+    if (start, end) in migrations:
+        return True
+    adj: dict[int, list[int]] = {}
+    for u, v in migrations:
+        adj.setdefault(u, []).append(v)
+    visited = set()
+    queue = [start]
+    while queue:
+        curr = queue.pop(0)
+        if curr == end:
+            return True
+        if curr not in visited:
+            visited.add(curr)
+            queue.extend(adj.get(curr, []))
+    return False
+
+
 def parse_database_source(text: str, rel: str = "") -> DatabaseDecl:
     version_match = VERSION_RE.search(text)
     version = int(version_match.group(1)) if version_match else None
     db_ann = re.search(r"@Database\s*\((.*?)\)\s*(?:@|\babstract\b)", text, re.DOTALL)
     header = db_ann.group(1) if db_ann else text.split("abstract class", 1)[0]
-    entities = frozenset(ENTITY_REF_RE.findall(header))
-    migrations = frozenset(
+    raw_entities = frozenset(ENTITY_REF_RE.findall(header))
+    entities = resolve_all_entity_types(raw_entities, REPO)
+    manual_migrations = set(
         (int(a), int(b)) for a, b in MIGRATION_RE.findall(text)
     )
+    auto_migrations = set(
+        (int(a), int(b)) for a, b in AUTO_MIGRATION_RE.findall(text)
+    )
+    all_migrations = frozenset(manual_migrations | auto_migrations)
     registered: set[str] = set()
     add_blocks = ADD_MIGRATIONS_RE.findall(text)
     for block in add_blocks:
@@ -88,9 +134,9 @@ def parse_database_source(text: str, rel: str = "") -> DatabaseDecl:
         rel=rel,
         version=version,
         entity_names=entities,
-        migrations=migrations,
+        migrations=all_migrations,
         registered=frozenset(registered),
-        has_add_migrations=bool(add_blocks),
+        has_add_migrations=bool(add_blocks) or bool(auto_migrations),
         destructive=bool(DESTRUCTIVE_RE.search(text)),
     )
 
@@ -98,9 +144,17 @@ def parse_database_source(text: str, rel: str = "") -> DatabaseDecl:
 def iter_database_files() -> list[Path]:
     skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
     db_files: list[Path] = []
-    for p in REPO.rglob("*Database.kt"):
+    for p in REPO.rglob("*.kt"):
         if p.is_file() and not (set(p.parts) & skip_parts):
-            db_files.append(p)
+            if p.name.endswith("Database.kt"):
+                db_files.append(p)
+            else:
+                try:
+                    head = p.read_text(encoding="utf-8", errors="replace")[:2000]
+                    if "@Database" in head:
+                        db_files.append(p)
+                except Exception:
+                    pass
     return db_files
 
 
@@ -151,22 +205,21 @@ def check_room_working_tree(modified_rels: list[str] | None = None) -> tuple[boo
         if entity_hit and old_ver is not None and new_ver <= old_ver:
             failures.append(
                 f"{new_decl.rel}: entity schema changed but version stayed {new_ver}. "
-                f"Increment version and add Migration({old_ver}, {old_ver + 1})."
+                f"Increment version and add Migration({old_ver}, {old_ver + 1}) or AutoMigration."
             )
 
         if old_ver is not None and new_ver > old_ver:
-            needed = (old_ver, new_ver)
-            if needed not in new_decl.migrations:
+            if not is_migration_path_covered(old_ver, new_ver, new_decl.migrations):
                 failures.append(
-                    f"{new_decl.rel}: version {old_ver} -> {new_ver} but Migration{needed} is missing."
+                    f"{new_decl.rel}: version {old_ver} -> {new_ver} but valid migration path is missing."
                 )
             if not new_decl.has_add_migrations:
                 failures.append(
-                    f"{new_decl.rel}: version bumped but addMigrations(...) is missing."
+                    f"{new_decl.rel}: version bumped but addMigrations(...) or autoMigrations is missing."
                 )
             expected_name = f"MIGRATION_{old_ver}_{new_ver}"
             body = path.read_text(encoding="utf-8", errors="replace")
-            if expected_name in body and expected_name not in new_decl.registered:
+            if expected_name in body and expected_name not in new_decl.registered and expected_name not in str(new_decl.migrations):
                 failures.append(
                     f"{new_decl.rel}: {expected_name} exists but is not passed to addMigrations(...)."
                 )
@@ -181,3 +234,4 @@ def check_room_working_tree(modified_rels: list[str] | None = None) -> tuple[boo
         return False, " ".join(failures)
     names = ", ".join(d.rel for _, d, _ in affected)
     return True, f"Room migration gate passed for: {names}."
+

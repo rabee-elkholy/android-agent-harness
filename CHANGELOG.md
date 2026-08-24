@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-08-24
+
+### AST Parser Robustness, Room Graph Migrations & Network Socket Hardening
+- **AST Parser Robustness & Multiline UI Strings**: Modernized `check_strings.py` to detect multiline Compose `Text(...)` parameters, handle parameter reordering, and strip `RESOURCE_CALL` before evaluation to prevent string concatenation bypasses.
+- **Deep Room Schema Invariants & Migration Graph Analysis**: Extended `room_guard.py` with recursive `@Embedded` data class discovery across all entity hierarchies, native Room 2.4+ `AutoMigration(from, to)` annotation parsing, and BFS graph traversal (`is_migration_path_covered`) to validate transitive migration paths (e.g. 1 -> 2 -> 3).
+- **Kotlin AST & Architecture Hygiene**: Whitelisted standard Android SDK symbols (`Build.VERSION.SDK_INT`, `UUID`, `@androidx.annotation.*`, `@file:OptIn`), excluded `abstract class` from `@AndroidEntryPoint` check to prevent Hilt compiler crashes, and dynamically scanned lookback annotations for Compose `@Immutable` state classes.
+- **Heterogeneous Android & Groovy Gradle Discovery**: Added support for Groovy `applicationId` and `namespace` declarations without equals signs in `setup_wizard.py` and KMP `composeResources` fallback directory resolution.
+- **Git Path Octal C-Escape Decoding**: Implemented `_unquote_git_path()` in `_repo_files.py` using `latin1` -> `unicode_escape` -> `utf-8` decoding, ensuring paths with spaces and Arabic characters are never dropped from git diff and safety gates.
+- **Configurable Device Policy in Runners**: Replaced hardcoded emulator denials with project-configured `ALLOW_EMULATOR` in `run_device.py`, `logcat_doctor.py`, and `capture_screen.py`.
+- **Network & Socket Resilience in Zoho MCP**: Enclosed UDP socket creation in `try...finally` cleanup to eliminate socket file descriptor leaks on DNS timeouts, enforced explicit 30.0s HTTP timeouts across all `urllib.request.urlopen` requests, added 3-attempt exponential backoff retry on HTTP 429 and 502/503/504 errors, and added validated OAuth token refresh error handling.
+
+---
+
 ## [0.3.0] - 2026-08-24
 
 ### Shift-Left Proactive Quality, Reviewer Expansion & Test Quality Specialist

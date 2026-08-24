@@ -15,10 +15,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
-from _product import APPLICATION_ID, PACKAGE_PREFIX, PRODUCT_NAME  # noqa: E402
-from _repo_files import first_physical_adb_serial  # noqa: E402
+from _product import ALLOW_EMULATOR, APPLICATION_ID, PACKAGE_PREFIX, PRODUCT_NAME  # noqa: E402
+from _repo_files import first_adb_serial, first_physical_adb_serial  # noqa: E402
 
 enable_line_buffered_stdio()
+
 
 
 def fetch_logcat(serial: str, num_lines: int = 1000) -> str:
@@ -96,15 +97,17 @@ def main() -> int:
     parser.add_argument("--clear", action="store_true", help="Clear logcat buffer on device")
     args = parser.parse_args()
 
-    serial = args.device or first_physical_adb_serial()
+    allow_emu = bool(ALLOW_EMULATOR)
+    serial = args.device or first_adb_serial(allow_emulator=allow_emu)
     if not serial:
-        print("[!] No physical Android device connected via ADB.")
+        print("[!] No Android device connected via ADB.")
         return 1
-    if serial.startswith("emulator-"):
-        print("[!] Emulator targeting is forbidden. Connect a physical device.")
+    if not allow_emu and serial.startswith("emulator-"):
+        print("[!] Emulator targeting is forbidden by project policy. Connect a physical device.")
         return 1
 
-    print(f"[*] Connected Physical Device: {serial}")
+    print(f"[*] Connected Device: {serial}")
+
 
     if args.clear:
         subprocess.run(["adb", "-s", serial, "logcat", "-c"], check=False)

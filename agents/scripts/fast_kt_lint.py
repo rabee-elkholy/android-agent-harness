@@ -22,11 +22,15 @@ enable_line_buffered_stdio()
 FQCN_PATTERN = re.compile(
     rf"\b(androidx\.[a-zA-Z0-9_.]+|{re.escape(PACKAGE_PREFIX)}\.[a-zA-Z0-9_.]+|android\.(view|widget|graphics|os|content)\.[a-zA-Z0-9_.]+|java\.util\.[a-zA-Z0-9_.]+)\b"
 )
+FQCN_WHITELIST = re.compile(
+    r"^(?:android\.os\.Build(?:\.VERSION(?:\.SDK_INT|_CODES)?)?|java\.util\.(?:UUID|Locale|Date|Objects)|androidx\.annotation\.\w+|androidx\.compose\.\w+\.Experimental\w+)$"
+)
+
 WILDCARD_IMPORT_PATTERN = re.compile(r"^import\s+[a-zA-Z0-9_.]+\.\*")
 STATE_CLASS_PATTERN = re.compile(r"data\s+class\s+[A-Za-z0-9_]*State\b")
 RUNBLOCKING_PATTERN = re.compile(r"\brunBlocking\s*(\(|{)")
 CLASS_ENTRY_PATTERN = re.compile(
-    r"class\s+\w+[^{]*:\s*(BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity)\b"
+    r"^(?:(?:public|internal|open)\s+)?class\s+\w+[^{]*:\s*(?:BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity|ComponentActivity|FragmentActivity|DialogFragment|BottomSheetDialogFragment)\b"
 )
 PREVIEW_AR = re.compile(
     r"@Preview\b[\s\S]{0,500}?(?:locale\s*=\s*\"ar\"|LayoutDirection\.Rtl|ArabicPreview|\bArPreview\b|//\s*locale\s*=\s*\"ar\")"
@@ -88,6 +92,7 @@ def lint_file(file_path: Path) -> list[dict]:
     has_fragment_activity = False
     has_android_entry_point = False
     has_compose_function = False
+    has_compose_imports = any("androidx.compose" in l for l in lines[:60])
     in_block_comment = False
     in_triple_string = False
 
@@ -128,8 +133,13 @@ def lint_file(file_path: Path) -> list[dict]:
             or trimmed.startswith("//")
             or trimmed.startswith("/*")
             or trimmed.startswith("*")
+            or trimmed.startswith("@file:OptIn")
+            or trimmed.startswith("@OptIn")
         ):
             for match in FQCN_PATTERN.finditer(line):
+                val = match.group(0)
+                if FQCN_WHITELIST.match(val):
+                    continue
                 if _in_string_or_comment(line, match.start()):
                     continue
                 issues.append({
@@ -150,15 +160,20 @@ def lint_file(file_path: Path) -> list[dict]:
 
         if "@AndroidEntryPoint" in trimmed:
             has_android_entry_point = True
-        if CLASS_ENTRY_PATTERN.search(trimmed):
+        if CLASS_ENTRY_PATTERN.search(trimmed) and not trimmed.startswith("abstract class"):
             has_fragment_activity = True
 
         if "@Composable" in trimmed:
             has_compose_function = True
 
-        if STATE_CLASS_PATTERN.search(trimmed):
-            prev_lines = " ".join(lines[max(0, idx - 4) : idx])
-            if "@Immutable" not in prev_lines and "@Stable" not in prev_lines:
+        if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function):
+            lookback_idx = idx - 2
+            annotations = []
+            while lookback_idx >= 0 and lines[lookback_idx].strip().startswith("@"):
+                annotations.append(lines[lookback_idx].strip())
+                lookback_idx -= 1
+            ann_block = " ".join(annotations)
+            if "@Immutable" not in ann_block and "@Stable" not in ann_block:
                 issues.append({
                     "file": str(file_path),
                     "line": idx,

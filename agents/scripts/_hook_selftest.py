@@ -911,7 +911,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.3.1") > (0, 3, 0) and get_current_version() == "0.3.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.4.1") > (0, 4, 0) and get_current_version() == "0.4.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -963,7 +963,7 @@ failed += int(not ok_escapes)
 
 changelog_text = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
 changelog_versions = re.findall(r"## \[(\d+\.\d+\.\d+)\]", changelog_text)
-ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.3.0"
+ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.4.0"
 print(f"changelog milestone release consolidation: {'OK' if ok_changelog_milestones else 'FAIL'}")
 failed += int(not ok_changelog_milestones)
 
@@ -975,6 +975,60 @@ ok_test_specialist_files = (
 print(f"test-quality-reviewer-agent files and references: {'OK' if ok_test_specialist_files else 'FAIL'}")
 failed += int(not ok_test_specialist_files)
 
+from _repo_files import _unquote_git_path
+ok_unquote = (
+    _unquote_git_path('"app/src/main/res/values/strings with spaces.xml"') == "app/src/main/res/values/strings with spaces.xml"
+    and "values-ar" in _unquote_git_path('"app/src/main/res/values-ar/\\330\\247\\331\\204\\330\\253.xml"')
+)
+print(f"git unquote handles spaces and non-ascii: {'OK' if ok_unquote else 'FAIL'}")
+failed += int(not ok_unquote)
+
+from check_strings import HARDCODED_KT, RESOURCE_CALL
+compose_sample = 'Text(text = "Hello World")'
+ok_kt_strings = (
+    any(p.search(compose_sample) for p in HARDCODED_KT)
+    and any(p.search('text = "Welcome"') for p in HARDCODED_KT)
+    and RESOURCE_CALL.sub('""', 'stringResource(R.string.x) + " - hardcoded"') == '"" + " - hardcoded"'
+)
+print(f"check_strings multiline Compose and concatenation: {'OK' if ok_kt_strings else 'FAIL'}")
+failed += int(not ok_kt_strings)
+
+from room_guard import is_migration_path_covered, parse_database_source
+ok_mig_graph = (
+    is_migration_path_covered(1, 3, frozenset({(1, 2), (2, 3)}))
+    and not is_migration_path_covered(1, 4, frozenset({(1, 2), (2, 3)}))
+)
+auto_mig_code = '@Database(entities = [UserEntity::class], version = 2, autoMigrations = [AutoMigration(from = 1, to = 2)])\nabstract class AppDatabase : RoomDatabase()'
+decl_auto = parse_database_source(auto_mig_code, "AppDatabase.kt")
+ok_auto_mig = (1, 2) in decl_auto.migrations and decl_auto.has_add_migrations
+print(f"room_guard auto_migration and transitive path: {'OK' if (ok_mig_graph and ok_auto_mig) else 'FAIL'}")
+failed += int(not (ok_mig_graph and ok_auto_mig))
+
+from fast_kt_lint import FQCN_WHITELIST, CLASS_ENTRY_PATTERN
+ok_lint_harden = (
+    bool(FQCN_WHITELIST.match("android.os.Build.VERSION.SDK_INT"))
+    and bool(FQCN_WHITELIST.match("java.util.UUID"))
+    and bool(CLASS_ENTRY_PATTERN.search("class MainActivity : ComponentActivity()"))
+)
+print(f"fast_kt_lint FQCN whitelist and ComponentActivity: {'OK' if ok_lint_harden else 'FAIL'}")
+failed += int(not ok_lint_harden)
+
+import re
+groovy_gradle = '''
+android {
+    namespace "com.example.groovyapp"
+    defaultConfig {
+        applicationId "com.example.groovyapp"
+    }
+}
+'''
+groovy_ids = [m.group(1) for m in re.finditer(r'applicationId(?:\s*=\s*|\s+)["\']([^"\']+)["\']', groovy_gradle)]
+groovy_ns = [m.group(1) for m in re.finditer(r'namespace(?:\s*=\s*|\s+)["\']([^"\']+)["\']', groovy_gradle)]
+ok_groovy = ("com.example.groovyapp" in groovy_ids) and ("com.example.groovyapp" in groovy_ns)
+print(f"setup_wizard groovy applicationId discovery: {'OK' if ok_groovy else 'FAIL'}")
+failed += int(not ok_groovy)
+
 print(f"\nTotal test failures: {failed}")
 sys.exit(failed)
+
 

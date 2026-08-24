@@ -46,47 +46,56 @@ def _dns_query_fallback(hostname: str, dns_servers: tuple[str, ...] = ("8.8.8.8"
         packet += struct.pack("B", len(part)) + part.encode("ascii")
     packet += b"\x00\x00\x01\x00\x01"
     for dns_ip in dns_servers:
+        sock = None
+        data = b""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(2.0)
             sock.sendto(packet, (dns_ip, 53))
             data, _ = sock.recvfrom(1024)
-            sock.close()
-            if len(data) < 12:
-                continue
-            resp_tx_id = struct.unpack(">H", data[0:2])[0]
-            if resp_tx_id != tx_id:
-                continue
-            idx = 12
-            while idx < len(data) and data[idx] != 0:
-                if (data[idx] & 0xC0) == 0xC0:
-                    idx += 2
-                    break
-                idx += 1 + data[idx]
-            else:
-                idx += 5
-            if idx > len(data):
-                continue
-            ancount = struct.unpack(">H", data[6:8])[0]
-            for _ in range(ancount):
-                if idx >= len(data):
-                    break
-                if (data[idx] & 0xC0) == 0xC0:
-                    idx += 2
-                else:
-                    while idx < len(data) and data[idx] != 0:
-                        idx += 1 + data[idx]
-                    idx += 1
-                if idx + 10 > len(data):
-                    break
-                rtype, _rclass, _ttl, rdlength = struct.unpack(">HHIH", data[idx : idx + 10])
-                idx += 10
-                if rtype == 1 and rdlength == 4 and idx + 4 <= len(data):
-                    return socket.inet_ntoa(data[idx : idx + 4])
-                idx += rdlength
         except Exception:
             continue
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        if len(data) < 12:
+            continue
+
+        resp_tx_id = struct.unpack(">H", data[0:2])[0]
+        if resp_tx_id != tx_id:
+            continue
+        idx = 12
+        while idx < len(data) and data[idx] != 0:
+            if (data[idx] & 0xC0) == 0xC0:
+                idx += 2
+                break
+            idx += 1 + data[idx]
+        else:
+            idx += 5
+        if idx > len(data):
+            continue
+        ancount = struct.unpack(">H", data[6:8])[0]
+        for _ in range(ancount):
+            if idx >= len(data):
+                break
+            if (data[idx] & 0xC0) == 0xC0:
+                idx += 2
+            else:
+                while idx < len(data) and data[idx] != 0:
+                    idx += 1 + data[idx]
+                idx += 1
+            if idx + 10 > len(data):
+                break
+            rtype, _rclass, _ttl, rdlength = struct.unpack(">HHIH", data[idx : idx + 10])
+            idx += 10
+            if rtype == 1 and rdlength == 4 and idx + 4 <= len(data):
+                return socket.inet_ntoa(data[idx : idx + 4])
+            idx += rdlength
     return None
+
 
 
 def apply_dns_fallback() -> None:
@@ -295,12 +304,18 @@ class ZohoSprintsAPI:
         }
         encoded = urllib.parse.urlencode(params).encode("utf-8")
         req = urllib.request.Request(url, data=encoded, method="POST")
-        with urllib.request.urlopen(req) as resp:
-            res = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=30.0) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            raise RuntimeError(f"Zoho OAuth token refresh network error: {e}") from e
         if "access_token" in res:
             self.access_token = res["access_token"]
             self.config["access_token"] = self.access_token
             self.save_config()
+        else:
+            err = res.get("error", "unknown_oauth_error")
+            raise RuntimeError(f"Zoho OAuth token refresh failed: {err}. Re-authenticate in config.")
 
     def _request(self, path: str, method: str = "GET", params: dict | None = None, data: dict | None = None) -> Any:
         url = f"{self.base_url}{path}"
@@ -311,19 +326,34 @@ class ZohoSprintsAPI:
         if data is not None:
             encoded_data = urllib.parse.urlencode(data).encode("utf-8")
             headers["Content-Type"] = "application/x-www-form-urlencoded"
-        req = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            err_msg = exc.read().decode("utf-8")
-            if exc.code == 401 or "Invalid oauthToken" in err_msg or "invalid_token" in err_msg:
-                self.refresh_token_if_needed()
-                headers["Authorization"] = f"Zoho-oauthtoken {self.access_token}"
-                req2 = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
-                with urllib.request.urlopen(req2) as resp2:
-                    return json.loads(resp2.read().decode("utf-8"))
-            raise RuntimeError(f"HTTP Error {exc.code}: {err_msg}") from exc
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            req = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=30.0) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                err_msg = exc.read().decode("utf-8", errors="replace")
+                if exc.code in (429, 502, 503, 504) and attempt < max_retries - 1:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                if exc.code == 401 or "Invalid oauthToken" in err_msg or "invalid_token" in err_msg:
+                    self.refresh_token_if_needed()
+                    headers["Authorization"] = f"Zoho-oauthtoken {self.access_token}"
+                    req2 = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
+                    try:
+                        with urllib.request.urlopen(req2, timeout=30.0) as resp2:
+                            return json.loads(resp2.read().decode("utf-8"))
+                    except Exception as retry_exc:
+                        raise RuntimeError(f"Zoho request failed after token refresh: {retry_exc}") from retry_exc
+                raise RuntimeError(f"HTTP Error {exc.code}: {err_msg}") from exc
+            except Exception as exc:
+                if attempt < max_retries - 1 and isinstance(exc, (urllib.error.URLError, TimeoutError)):
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"Zoho request failed ({method} {path}): {exc}") from exc
+
 
     def get_sprints(self) -> dict:
         return self._request(

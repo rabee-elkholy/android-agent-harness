@@ -22,7 +22,7 @@ except Exception:
     RES_DIR = REPO / "app" / "src" / "main" / "res"
 
 if not RES_DIR.is_dir():
-    _candidates = list(REPO.glob("**/src/*/res")) or list(REPO.glob("**/res"))
+    _candidates = list(REPO.glob("**/src/*/res")) or list(REPO.glob("**/res")) or list(REPO.glob("**/composeResources"))
     if _candidates:
         RES_DIR = _candidates[0]
 
@@ -31,14 +31,14 @@ STR_AR = RES_DIR / "values-ar" / "strings.xml"
 
 # UI call sites that must not carry a raw user-facing literal.
 HARDCODED_KT = [
-    re.compile(r'\bText\s*\(\s*(?:text\s*=\s*)?"[^"]{2,}"'),
-    re.compile(r'\bText\s*\(\s*(?:text\s*=\s*)?"[^"]*"\s*\+'),
+    re.compile(r'\bText\s*\([^;\n]{0,200}(?:text\s*=\s*)?"[^"]{2,}"'),
+    re.compile(r'\bText\s*\([^;\n]{0,200}"[^"]*"\s*\+'),
     re.compile(r'\bText\s*\(\s*"""'),
+    re.compile(r'\b(?:text|label|placeholder|headline|supportingText|contentDescription)\s*=\s*"[^"]{2,}"'),
     re.compile(
         r'\b(?:Button|TextButton|OutlinedButton|ElevatedButton|FilledTonalButton)'
         r'\s*\([^;\n]{0,200}(?:text|content)\s*=\s*"[^"]{2,}"'
     ),
-    re.compile(r'\b(?:label|placeholder|headline|supportingText)\s*=\s*"[^"]{2,}"'),
     re.compile(
         r'\b(?:setText|setHint|setTitle|setMessage|setSubtitle|setContentDescription|setError)'
         r'\s*\(\s*"[^"]{2,}"'
@@ -48,13 +48,15 @@ HARDCODED_KT = [
     re.compile(
         r'\b(?:setPositiveButton|setNegativeButton|setNeutralButton)\s*\(\s*"[^"]{2,}"'
     ),
-    re.compile(r'\bcontentDescription\s*=\s*"[^"]{2,}"'),
 ]
 HARDCODED_XML_TEXT = re.compile(
     r'(?:android|app):(?:text|hint|contentDescription|title|subtitle)="([^@?/"][^"]+)"',
     re.IGNORECASE,
 )
 HAS_LETTERS = re.compile(r"[A-Za-z\u0600-\u06FF]")
+RESOURCE_CALL = re.compile(
+    r"\b(?:stringResource|pluralStringResource|getString|getText|getQuantityString)\s*\([^)]*\)"
+)
 RESOURCE_OK = re.compile(
     r"\b(?:stringResource|pluralStringResource|getString|getText|getQuantityString|R\.string)\b"
 )
@@ -113,9 +115,10 @@ def check_hardcoded_strings(files: list[Path]) -> list[str]:
             if stripped.startswith("//") or stripped.startswith("<!--") or stripped.startswith("*"):
                 continue
             if path.suffix == ".kt":
-                if RESOURCE_OK.search(line) or SKIP_KT_LINE.search(line):
+                if SKIP_KT_LINE.search(line):
                     continue
-                if any(pat.search(line) for pat in HARDCODED_KT):
+                clean_line = RESOURCE_CALL.sub('""', line)
+                if any(pat.search(clean_line) for pat in HARDCODED_KT):
                     findings.append(f"{rel}:{i} -> Hardcoded Kotlin UI text: {stripped[:120]}")
             elif path.suffix == ".xml":
                 for match in HARDCODED_XML_TEXT.finditer(line):
@@ -124,6 +127,7 @@ def check_hardcoded_strings(files: list[Path]) -> list[str]:
                         continue
                     findings.append(f"{rel}:{i} -> Hardcoded XML {match.group(0)[:120]}")
     return findings
+
 
 
 def main() -> int:

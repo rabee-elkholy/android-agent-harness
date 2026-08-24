@@ -535,10 +535,10 @@ def discover_application_ids(repo: Path) -> list[str]:
     ids: list[str] = []
     for path in gradle_files(repo):
         text = read_text(path)
-        for m in re.finditer(r'applicationId\s*=\s*["\']([^"\']+)["\']', text):
+        for m in re.finditer(r'applicationId(?:\s*=\s*|\s+)["\']([^"\']+)["\']', text):
             if m.group(1) not in ids:
                 ids.append(m.group(1))
-        for m in re.finditer(r'namespace\s*=\s*["\']([^"\']+)["\']', text):
+        for m in re.finditer(r'namespace(?:\s*=\s*|\s+)["\']([^"\']+)["\']', text):
             if m.group(1) not in ids:
                 ids.append(m.group(1))
     return ids
