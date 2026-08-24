@@ -911,7 +911,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.1") > (0, 5, 0) and get_current_version() == "0.5.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.2") > (0, 5, 1) and get_current_version() == "0.5.1"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -970,7 +970,7 @@ failed += int(not ok_escapes)
 if (repo_root / "CHANGELOG.md").is_file():
     changelog_text = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
     changelog_versions = re.findall(r"## \[(\d+\.\d+\.\d+)\]", changelog_text)
-    ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.5.0"
+    ok_changelog_milestones = len(changelog_versions) <= 6 and changelog_versions[0] == "0.5.1"
     print(f"changelog milestone release consolidation: {'OK' if ok_changelog_milestones else 'FAIL'}")
     failed += int(not ok_changelog_milestones)
 else:
