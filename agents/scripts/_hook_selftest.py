@@ -911,7 +911,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.3") > (0, 5, 2) and get_current_version() == "0.5.2"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.4") > (0, 5, 3) and get_current_version() == "0.5.3"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

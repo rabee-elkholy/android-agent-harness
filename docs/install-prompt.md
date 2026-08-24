@@ -34,7 +34,7 @@ Then tell them: a few short questions (backup, app name, who commits, phone vs e
    - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>`. Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list (usually i0, i1, i3, i4, i10, i15, i14, i16). Do not invent extra questions. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
 4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, open `<kit>/docs/setup-prompt.md` and execute it from **0) Backup** onward. If `"backup": false`, skip copying backups and say rollback will not work. Skip section **I** (answers are already recorded). Copy `.harness-setup/SETUP_ANSWERS.md` into the new backup folder when a backup was made. Installer flags: `$PY <kit>/agents/scripts/setup_wizard.py flags --repo <this-android-root>`. Copy source: `<kit>/agents/` → `<this repo>/.agents`.
-5. After setup: tell them to start a **new chat** on this Android folder before real work.
+5. After setup: run `$PY .agents/scripts/harness_doctor.py` for automated 12-dimension verification. If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.
 
 Kit rules that still apply during setup:
 

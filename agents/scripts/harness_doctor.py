@@ -149,8 +149,84 @@ class HarnessDoctor:
 
         if (self.repo / ".git").is_dir():
             self.log(category, "Git Repository", "PASS", "Active Git repository detected.")
+            self._check_gitignore(category)
+            self._check_git_status(category)
         else:
             self.log(category, "Git Repository", "WARN", "Not a Git repository. Version tracking and review diffs disabled.")
+
+    def _check_gitignore(self, category: str) -> None:
+        ignore_files = []
+        if (self.repo / ".gitignore").is_file():
+            ignore_files.append(self.repo / ".gitignore")
+        if (self.agents_dir / ".gitignore").is_file():
+            ignore_files.append(self.agents_dir / ".gitignore")
+
+        if not ignore_files:
+            self.log(category, "Git Ignore Rules", "WARN", "No .gitignore file detected. Critical transient and secret files may be tracked.")
+            return
+
+        combined_ignore = ""
+        for ig_file in ignore_files:
+            try:
+                combined_ignore += ig_file.read_text(encoding="utf-8", errors="ignore") + "\n"
+            except Exception:
+                pass
+
+        required_patterns = {
+            "Harness State Directory": ("state/", ".agents/state/", "agents/state/"),
+            "Python Bytecode Cache": ("__pycache__", "*.pyc", "*.py[cod]"),
+            "Zoho Secrets / Config": ("zoho_config.json", "*zoho*token*"),
+            "Harness Backup Directory": (".harness-backup", ".harness-backup/"),
+        }
+
+        missing_patterns = []
+        for name, pats in required_patterns.items():
+            if not any(p in combined_ignore for p in pats):
+                if name == "Harness Backup Directory" and self.is_raw_kit:
+                    continue
+                missing_patterns.append(f"{name} (e.g. '{pats[0]}')")
+
+        if not missing_patterns:
+            self.log(
+                category,
+                "Git Ignore Rules",
+                "PASS",
+                "Harness state, cache, backup, and secrets are properly ignored in .gitignore.",
+            )
+        else:
+            details = [f"Recommended pattern to add: {m}" for m in missing_patterns]
+            self.log(
+                category,
+                "Git Ignore Rules",
+                "WARN",
+                f"Missing {len(missing_patterns)} recommended pattern(s) in .gitignore.",
+                details=details,
+            )
+
+    def _check_git_status(self, category: str) -> None:
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(self.repo),
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+            if proc.returncode == 0:
+                uncommitted = [l for l in proc.stdout.splitlines() if l.strip()]
+                if not uncommitted:
+                    self.log(category, "Git Working Tree", "PASS", "Working tree is clean. All changes are committed.")
+                else:
+                    self.log(
+                        category,
+                        "Git Working Tree",
+                        "WARN",
+                        f"Uncommitted changes detected ({len(uncommitted)} file(s)). Remember to review and commit your changes in Android Studio / Git.",
+                        details=[f"Uncommitted: {l}" for l in uncommitted[:8]] + ([f"... and {len(uncommitted) - 8} more"] if len(uncommitted) > 8 else []),
+                    )
+        except Exception as exc:
+            self.log(category, "Git Working Tree", "WARN", f"Failed querying git status: {exc}")
+
 
     def check_file_structure(self) -> None:
         category = "2. File Structure & Version"
@@ -468,12 +544,24 @@ def print_report(results: list[CheckResult]) -> int:
     print(f"  Diagnostic Summary: {pass_count} Passed, {warn_count} Warnings, {fail_count} Failures")
     print("==================================================")
 
+    # If uncommitted changes exist, print an explicit git commit reminder
+    uncommitted_warning = next((r for r in results if r.name == "Git Working Tree" and r.status == "WARN"), None)
+    if uncommitted_warning:
+        print("\n--------------------------------------------------")
+        print("  [ADVISORY] Uncommitted changes detected in repository.")
+        print("  If you just installed or updated the harness, remember to review")
+        print("  and create a Git commit for your changes:")
+        print("    git add .")
+        print('    git commit -m "chore: setup / update android harness"')
+        print("--------------------------------------------------")
+
     if fail_count == 0:
-        print("[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.")
+        print("\n[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.")
         return 0
     else:
-        print(f"[FAIL] {fail_count} critical failure(s) detected. Please remediate the issues above.")
+        print(f"\n[FAIL] {fail_count} critical failure(s) detected. Please remediate the issues above.")
         return 1
+
 
 
 def main(argv: list[str] | None = None) -> int:

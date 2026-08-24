@@ -236,13 +236,20 @@ Use `--disable` when I.16 is skip (or `zoho_mcp` is missing on an old answers.js
 
 Follow **I.12** from answers: merge script grants only when `gemini_config` is `merge-allowlist`. Do **not** write a global Gemini rule. Never copy `remoteControlHostname` or tokens. Never set `sdk.dir` in harness files. Do not overwrite `.aider.conf.yml`, Continue user configs, `kilo.jsonc`, or `~/.gemini`.
 
-## 6) Verify
+## 6) Verify & Diagnostics
 
-`$PY .agents/scripts/_hook_selftest.py` → `Total test failures: 0`.  
-`$PY .agents/scripts/preflight_check.py` → pass.  
-Confirm adapter files exist for **I.14** only (always `AGENTS.md`; Cursor `.mdc` starts with `---`; `GEMINI.md` if Gemini was selected). Do not require CLAUDE.md / Copilot / Cline unless those tools were chosen.  
-Assemble only if **I.13 = yes**.
+1. `$PY .agents/scripts/_hook_selftest.py` → `Total test failures: 0`.  
+2. `$PY .agents/scripts/preflight_check.py` → pass.  
+3. `$PY .agents/scripts/harness_doctor.py` → 12-Dimension diagnostic engine (must report 0 critical failures). Validates `.gitignore` coverage for state/cache/secrets.
+4. Confirm adapter files exist for **I.14** only (always `AGENTS.md`; Cursor `.mdc` starts with `---`; `GEMINI.md` if Gemini was selected). Do not require CLAUDE.md / Copilot / Cline unless those tools were chosen.  
+5. Assemble only if **I.13 = yes**.
 
 ## 7) Tell the developer
 
-New session on this folder. Five `*_PASS` before real delivery. Rollback = `docs/rollback-prompt.md`.
+- **Commit Reminder**: If `harness_doctor.py` reported uncommitted changes, instruct the developer in their language to review and commit their changes in Android Studio or Git:
+  ```bash
+  git add .
+  git commit -m "chore: setup android harness kit"
+  ```
+- **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
+- **Diagnostics & Rollback**: System diagnostics = `docs/diagnostic-prompt.md`, Rollback = `docs/rollback-prompt.md`. Five `*_PASS` before real delivery.
