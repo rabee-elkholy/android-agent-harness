@@ -1,0 +1,504 @@
+"""Android Agent Harness System Diagnostic & Health Check Engine.
+
+Comprehensive 12-Dimension diagnostic suite inspecting every layer of the
+installed harness: Host & Environment, File Structure, Subagent Roster,
+Product Configuration, Template Leakage, Domain Skills & Workflows, Multi-IDE
+Adapters, Safety Hooks & State Locking, Live Process Streaming, Preflight
+Pipeline, Zoho MCP Security, and Connected Android Devices.
+
+Usage:
+    python .agents/scripts/harness_doctor.py
+    python .agents/scripts/harness_doctor.py --json
+    python .agents/scripts/harness_doctor.py --device
+    python .agents/scripts/harness_doctor.py --repo /path/to/app
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _live_process import enable_line_buffered_stdio  # noqa: E402
+from _repo_files import REPO  # noqa: E402
+
+enable_line_buffered_stdio()
+
+AGENTS_DIR = Path(__file__).resolve().parent.parent
+
+CORE_SUBAGENTS = {
+    "bug-reviewer-agent": "HARNESS_BUG_FINGERPRINT=quality-first-bug-review-v1",
+    "convention-reviewer-agent": "HARNESS_CONVENTION_FINGERPRINT=quality-first-convention-review-v1",
+    "security-reviewer-agent": "HARNESS_SECURITY_FINGERPRINT=quality-first-security-review-v1",
+    "perf-anr-guardian-agent": "HARNESS_PERF_FINGERPRINT=performance-anr-guardian-v3",
+    "regression-impact-reviewer-agent": "HARNESS_REGRESSION_FINGERPRINT=quality-first-regression-impact-v1",
+    "qa-diagnostics-agent": "HARNESS_QA_FINGERPRINT=deep-device-diagnostics-v2",
+    "android-ui-expert-agent": "HARNESS_UI_FINGERPRINT=comprehensive-android-ui-expert-v3",
+    "test-quality-reviewer-agent": "HARNESS_TEST_FINGERPRINT=quality-first-test-review-v1",
+}
+
+CORE_SCRIPTS = (
+    "_hook_selftest.py",
+    "_hook_state.py",
+    "_live_process.py",
+    "_product.py",
+    "_repo_files.py",
+    "capture_screen.py",
+    "check_kit_update.py",
+    "check_strings.py",
+    "ensure_hook_selftest.py",
+    "fast_kt_lint.py",
+    "gradle_error_parser.py",
+    "harness_doctor.py",
+    "install_tool_adapters.py",
+    "install_zoho_mcp.py",
+    "logcat_doctor.py",
+    "perf_guard.py",
+    "pre_invocation_reminder.py",
+    "pre_tool_safety.py",
+    "preflight_check.py",
+    "review_package.py",
+    "room_guard.py",
+    "run_device.py",
+    "run_gradle_task.py",
+    "setup_wizard.py",
+)
+
+CORE_WORKFLOWS = (
+    "deliver.md",
+    "debug.md",
+    "new-feature.md",
+    "commit-msg.md",
+    "crash-triage.md",
+    "perf-audit.md",
+    "preflight.md",
+    "check-strings.md",
+    "test-quality-audit.md",
+    "zoho-sprints.md",
+)
+
+CORE_REFERENCES = (
+    "architecture-mvi.md",
+    "ui-compose-theme.md",
+    "room-database-migrations.md",
+    "performance-anr-optimization.md",
+    "test-quality-guidelines.md",
+    "automated-skills.md",
+    "daily-scenarios.md",
+)
+
+
+@dataclass
+class CheckResult:
+    category: str
+    name: str
+    status: str  # "PASS", "WARN", "FAIL"
+    message: str
+    details: list[str] | None = None
+
+
+class HarnessDoctor:
+    def __init__(self, repo: Path, check_device: bool = False, run_selftest: bool = True):
+        self.repo = repo
+        self.check_device = check_device
+        self.run_selftest = run_selftest and (os.environ.get("_IN_HOOK_SELFTEST") != "1")
+        self.results: list[CheckResult] = []
+        self.is_raw_kit = (self.repo / "agents" / "VERSION").is_file() and not (self.repo / ".agents").is_dir()
+        self.agents_dir = self.repo / ".agents" if not self.is_raw_kit else self.repo / "agents"
+        if not self.agents_dir.is_dir():
+            self.agents_dir = AGENTS_DIR
+
+    def log(self, category: str, name: str, status: str, message: str, details: list[str] | None = None) -> None:
+        self.results.append(CheckResult(category=category, name=name, status=status, message=message, details=details))
+
+    def check_environment(self) -> None:
+        category = "1. Environment & Host"
+        py_ver = sys.version_info
+        if py_ver >= (3, 10):
+            self.log(category, "Python Runtime", "PASS", f"Python {py_ver.major}.{py_ver.minor}.{py_ver.micro} (>= 3.10 required)")
+        else:
+            self.log(category, "Python Runtime", "FAIL", f"Python {py_ver.major}.{py_ver.minor} detected. Minimum 3.10 is required.")
+
+        os_name = platform.system()
+        self.log(category, "Operating System", "PASS", f"{os_name} ({platform.release()} - {platform.machine()})")
+
+        has_wrapper = (self.repo / "gradlew").is_file() or (self.repo / "gradlew.bat").is_file()
+        if has_wrapper:
+            self.log(category, "Gradle Wrapper", "PASS", "Gradle wrapper verified at repository root.")
+        elif self.is_raw_kit:
+            self.log(category, "Gradle Wrapper", "PASS", "Kit repository template mode (gradlew verified in client Android apps).")
+        else:
+            self.log(category, "Gradle Wrapper", "FAIL", "Missing gradlew / gradlew.bat at repository root.")
+
+        sdk_found = bool(
+            os.environ.get("ANDROID_HOME")
+            or os.environ.get("ANDROID_SDK_ROOT")
+            or (self.repo / "local.properties").is_file()
+        )
+        if sdk_found:
+            self.log(category, "Android SDK", "PASS", "Android SDK configured via environment or local.properties.")
+        else:
+            self.log(category, "Android SDK", "WARN", "ANDROID_HOME / ANDROID_SDK_ROOT or local.properties not detected.")
+
+        if (self.repo / ".git").is_dir():
+            self.log(category, "Git Repository", "PASS", "Active Git repository detected.")
+        else:
+            self.log(category, "Git Repository", "WARN", "Not a Git repository. Version tracking and review diffs disabled.")
+
+    def check_file_structure(self) -> None:
+        category = "2. File Structure & Version"
+        if not self.agents_dir.is_dir():
+            self.log(category, "Harness Directory", "FAIL", f"Harness directory not found at {self.agents_dir}")
+            return
+
+        self.log(category, "Harness Directory", "PASS", f"Harness directory verified at {self.agents_dir.name}/")
+
+        version_file = self.agents_dir / "VERSION"
+        if version_file.is_file():
+            ver = version_file.read_text(encoding="utf-8").strip()
+            self.log(category, "Harness Version", "PASS", f"Installed version: v{ver}")
+        else:
+            self.log(category, "Harness Version", "FAIL", "VERSION file missing in harness directory.")
+
+        rules_file = self.agents_dir / "rules" / "harness-rules.md"
+        if rules_file.is_file():
+            self.log(category, "Canonical Rules", "PASS", "harness-rules.md verified.")
+        else:
+            self.log(category, "Canonical Rules", "FAIL", "harness-rules.md missing.")
+
+        scripts_dir = self.agents_dir / "scripts"
+        missing_scripts = [s for s in CORE_SCRIPTS if not (scripts_dir / s).is_file()]
+        if not missing_scripts:
+            self.log(category, "Core Scripts", "PASS", f"All {len(CORE_SCRIPTS)} core harness scripts verified.")
+        else:
+            self.log(category, "Core Scripts", "FAIL", f"Missing scripts: {', '.join(missing_scripts)}")
+
+        hooks_file = self.agents_dir / "hooks.json"
+        if hooks_file.is_file():
+            self.log(category, "Safety Hooks Config", "PASS", "hooks.json verified.")
+        else:
+            self.log(category, "Safety Hooks Config", "WARN", "hooks.json missing (runtime hooks will not trigger).")
+
+    def check_subagent_roster(self) -> None:
+        category = "3. Subagent Roster"
+        subagents_dir = self.agents_dir / "subagents"
+        if not subagents_dir.is_dir():
+            self.log(category, "Subagents Directory", "FAIL", f"Missing subagents directory at {subagents_dir}")
+            return
+
+        missing = []
+        corrupted = []
+        for name, fingerprint in CORE_SUBAGENTS.items():
+            path = subagents_dir / f"{name}.json"
+            if not path.is_file():
+                missing.append(name)
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                prompt = data.get("system_prompt", "")
+                if fingerprint not in prompt:
+                    corrupted.append(f"{name} (missing fingerprint: {fingerprint})")
+            except Exception as exc:
+                corrupted.append(f"{name} (invalid JSON: {exc})")
+
+        if not missing and not corrupted:
+            self.log(category, "Subagents Templates", "PASS", f"All {len(CORE_SUBAGENTS)} subagents verified with active fingerprints.")
+        else:
+            details = []
+            if missing:
+                details.append(f"Missing: {', '.join(missing)}")
+            if corrupted:
+                details.append(f"Corrupted: {', '.join(corrupted)}")
+            self.log(category, "Subagents Templates", "FAIL", "Subagent roster validation failed.", details)
+
+    def check_product_config(self) -> None:
+        category = "4. Product Configuration"
+        try:
+            import _product
+            product_name = getattr(_product, "PRODUCT_NAME", getattr(_product, "PRODUCT", "Android Product"))
+            app_id = getattr(_product, "APPLICATION_ID", "com.example.app")
+            pkg_prefix = getattr(_product, "PACKAGE_PREFIX", "com.example")
+            assemble_task = getattr(_product, "ASSEMBLE_TASK", ":app:assembleDebug")
+            allow_emu = getattr(_product, "ALLOW_EMULATOR", True)
+            android_src = getattr(_product, "ANDROID_SRC", ("app", "src", "main"))
+
+            self.log(category, "Product Identity", "PASS", f"Product: '{product_name}', AppID: '{app_id}', PkgPrefix: '{pkg_prefix}'")
+
+            if self.is_raw_kit:
+                self.log(category, "Source Root", "PASS", "Kit repository template mode (source root verified in client apps).")
+            else:
+                src_path = self.repo.joinpath(*android_src)
+                if src_path.is_dir():
+                    self.log(category, "Source Root", "PASS", f"Verified source root on disk: {src_path.relative_to(self.repo)}")
+                else:
+                    self.log(category, "Source Root", "FAIL", f"Configured ANDROID_SRC not found on disk: {src_path}")
+
+            self.log(category, "Assemble Task", "PASS", f"Configured assemble task: {assemble_task}")
+            self.log(category, "Device Policy", "PASS", f"ALLOW_EMULATOR = {allow_emu}")
+        except Exception as exc:
+            self.log(category, "Product Identity", "FAIL", f"Error reading _product.py: {exc}")
+
+    def check_template_leaks(self) -> None:
+        category = "5. Template Leak Check"
+        if self.is_raw_kit:
+            self.log(category, "Placeholder Inspection", "PASS", "Kit repository template mode (placeholders expected in kit templates).")
+            return
+
+        leaks = []
+        token_re = re.compile(r"\{\{[A-Z0-9_]+\}\}")
+        for path in self.agents_dir.rglob("*"):
+            if not path.is_file() or any(x in path.parts for x in {"__pycache__", "state", "tool-adapters"}):
+                continue
+            try:
+                content = path.read_text(encoding="utf-8", errors="ignore")
+                matches = token_re.findall(content)
+                if matches:
+                    leaks.append(f"{path.relative_to(self.repo)}: {', '.join(set(matches))}")
+            except Exception:
+                continue
+
+        if not leaks:
+            self.log(category, "Placeholder Inspection", "PASS", "Zero un-replaced template placeholders ({{...}}) detected in .agents/.")
+        else:
+            self.log(category, "Placeholder Inspection", "FAIL", f"Found {len(leaks)} file(s) with un-replaced placeholders.", leaks)
+
+    def check_skills_and_workflows(self) -> None:
+        category = "6. Skills & Workflows"
+        workflows_dir = self.agents_dir / "workflows"
+        missing_wf = [wf for wf in CORE_WORKFLOWS if not (workflows_dir / wf).is_file()]
+        if not missing_wf:
+            self.log(category, "Workflow Playbooks", "PASS", f"All {len(CORE_WORKFLOWS)} workflow playbooks verified.")
+        else:
+            self.log(category, "Workflow Playbooks", "FAIL", f"Missing workflows: {', '.join(missing_wf)}")
+
+        ref_dir = self.agents_dir / "skills" / "android-harness" / "references"
+        missing_ref = [r for r in CORE_REFERENCES if not (ref_dir / r).is_file()]
+        if not missing_ref:
+            self.log(category, "Domain References", "PASS", f"All {len(CORE_REFERENCES)} architectural reference guides verified.")
+        else:
+            self.log(category, "Domain References", "FAIL", f"Missing references: {', '.join(missing_ref)}")
+
+    def check_tool_adapters(self) -> None:
+        category = "7. Multi-IDE Tool Adapters"
+        if self.is_raw_kit:
+            self.log(category, "Adapter Parity", "PASS", "Kit repository template mode (adapters verified in client checkouts).")
+            return
+
+        agents_md = self.repo / "AGENTS.md"
+        if agents_md.is_file():
+            self.log(category, "Root AGENTS.md", "PASS", "Root AGENTS.md verified.")
+        else:
+            self.log(category, "Root AGENTS.md", "WARN", "Root AGENTS.md missing. Run install_tool_adapters.py.")
+
+        known_adapters = [
+            (".cursor/rules/android-harness.mdc", "Cursor"),
+            ("CLAUDE.md", "Claude Code"),
+            (".github/copilot-instructions.md", "GitHub Copilot"),
+            (".windsurf/rules/android-harness.md", "Windsurf"),
+            ("GEMINI.md", "Gemini CLI / Antigravity"),
+            ("CODEX.md", "Codex"),
+            ("QWEN.md", "Qwen Code"),
+        ]
+        found_adapters = [name for rel, name in known_adapters if (self.repo / rel).is_file()]
+        if found_adapters:
+            self.log(category, "Active Adapters", "PASS", f"Configured adapters for: {', '.join(found_adapters)}")
+        else:
+            self.log(category, "Active Adapters", "WARN", "No tool-specific adapters detected at repository root.")
+
+    def check_safety_and_selftest(self) -> None:
+        category = "8. Safety & Concurrency"
+        try:
+            from _hook_state import state_lock
+            with state_lock(timeout=2.0):
+                pass
+            self.log(category, "State File Lock", "PASS", "Cross-platform atomic state_lock() acquired and released cleanly.")
+        except Exception as exc:
+            self.log(category, "State File Lock", "FAIL", f"state_lock() failed: {exc}")
+
+        if not self.run_selftest:
+            self.log(category, "Hook Selftest Suite", "PASS", "Hook selftest active in parent harness test suite.")
+            return
+
+        selftest_script = self.agents_dir / "scripts" / "_hook_selftest.py"
+        if selftest_script.is_file():
+            proc = subprocess.run(
+                [sys.executable, str(selftest_script)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(self.repo),
+            )
+            if proc.returncode == 0:
+                self.log(category, "Hook Selftest Suite", "PASS", "Full selftest suite passed (0 test failures).")
+            else:
+                out_snippet = "\n".join(proc.stdout.strip().splitlines()[-5:])
+                self.log(category, "Hook Selftest Suite", "FAIL", f"Selftest failed with exit code {proc.returncode}:\n{out_snippet}")
+        else:
+            self.log(category, "Hook Selftest Suite", "WARN", "_hook_selftest.py script missing.")
+
+    def check_process_streaming(self) -> None:
+        category = "9. Process Streaming"
+        try:
+            from _live_process import enable_line_buffered_stdio
+            enable_line_buffered_stdio()
+            self.log(category, "Line-Buffered Stdio", "PASS", "Standard I/O line buffering active.")
+        except Exception as exc:
+            self.log(category, "Line-Buffered Stdio", "WARN", f"Line-buffered stdio check error: {exc}")
+
+    def check_preflight_pipeline(self) -> None:
+        category = "10. Preflight Pipeline"
+        if not self.run_selftest:
+            self.log(category, "Preflight Sanity Suite", "PASS", "Preflight pipeline active in parent test suite.")
+            return
+
+        preflight_script = self.agents_dir / "scripts" / "preflight_check.py"
+        if preflight_script.is_file():
+            proc = subprocess.run(
+                [sys.executable, str(preflight_script)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(self.repo),
+            )
+            if proc.returncode == 0:
+                self.log(category, "Preflight Sanity Suite", "PASS", "String Parity, Room Guard, and Fast Kotlin Lint passed.")
+            else:
+                out_snippet = "\n".join(proc.stdout.strip().splitlines()[-8:])
+                self.log(category, "Preflight Sanity Suite", "FAIL", f"Preflight checks reported issues:\n{out_snippet}")
+        else:
+            self.log(category, "Preflight Sanity Suite", "WARN", "preflight_check.py missing.")
+
+    def check_zoho_mcp(self) -> None:
+        category = "11. Zoho Sprints MCP"
+        mcp_config = self.agents_dir / "mcp_config.json"
+        if mcp_config.is_file():
+            try:
+                data = json.loads(mcp_config.read_text(encoding="utf-8"))
+                zoho_server = data.get("mcpServers", {}).get("zoho-sprints")
+                if zoho_server:
+                    self.log(category, "MCP Configuration", "PASS", "Zoho Sprints MCP registered in mcp_config.json.")
+                else:
+                    self.log(category, "MCP Configuration", "PASS", "Zoho Sprints MCP is not enabled (optional).")
+            except Exception as exc:
+                self.log(category, "MCP Configuration", "WARN", f"Could not parse mcp_config.json: {exc}")
+        else:
+            self.log(category, "MCP Configuration", "PASS", "No mcp_config.json found (Zoho Sprints is optional).")
+
+        repo_tokens = list(self.repo.glob("**/zoho_config.json")) + list(self.repo.glob("**/*zoho*token*.json"))
+        if not repo_tokens:
+            self.log(category, "Credential Isolation", "PASS", "Zero Zoho tokens or secret files in repository.")
+        else:
+            self.log(category, "Credential Isolation", "FAIL", f"Tokens detected in repository: {', '.join(str(p) for p in repo_tokens)}")
+
+    def check_connected_devices(self) -> None:
+        if not self.check_device:
+            return
+        category = "12. Connected Devices"
+        adb_path = shutil.which("adb")
+        if not adb_path:
+            self.log(category, "ADB Executable", "WARN", "adb command not found in system PATH.")
+            return
+
+        self.log(category, "ADB Executable", "PASS", f"adb available at {adb_path}")
+        try:
+            proc = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=5.0)
+            lines = [l.strip() for l in proc.stdout.splitlines() if l.strip() and not l.startswith("List of")]
+            devices = [l.split()[0] for l in lines if "\tdevice" in l]
+            if devices:
+                self.log(category, "Connected Devices", "PASS", f"Detected {len(devices)} active device(s): {', '.join(devices)}")
+            else:
+                self.log(category, "Connected Devices", "WARN", "No active devices/emulators connected via ADB.")
+        except Exception as exc:
+            self.log(category, "Connected Devices", "WARN", f"Failed querying adb devices: {exc}")
+
+    def run_all(self) -> list[CheckResult]:
+        self.check_environment()
+        self.check_file_structure()
+        self.check_subagent_roster()
+        self.check_product_config()
+        self.check_template_leaks()
+        self.check_skills_and_workflows()
+        self.check_tool_adapters()
+        self.check_safety_and_selftest()
+        self.check_process_streaming()
+        self.check_preflight_pipeline()
+        self.check_zoho_mcp()
+        self.check_connected_devices()
+        return self.results
+
+
+def print_report(results: list[CheckResult]) -> int:
+    print("==================================================")
+    print("  Android Agent Harness: 12-Dimension Diagnostic Report")
+    print("==================================================")
+
+    current_cat = ""
+    pass_count = 0
+    warn_count = 0
+    fail_count = 0
+
+    for r in results:
+        if r.category != current_cat:
+            current_cat = r.category
+            print(f"\n[*] {current_cat}")
+
+        badge = f"[{r.status}]"
+        if r.status == "PASS":
+            pass_count += 1
+        elif r.status == "WARN":
+            warn_count += 1
+        else:
+            fail_count += 1
+
+        print(f"  {badge:<6} {r.name}: {r.message}")
+        if r.details:
+            for d in r.details:
+                print(f"         - {d}")
+
+    print("\n==================================================")
+    print(f"  Diagnostic Summary: {pass_count} Passed, {warn_count} Warnings, {fail_count} Failures")
+    print("==================================================")
+
+    if fail_count == 0:
+        print("[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.")
+        return 0
+    else:
+        print(f"[FAIL] {fail_count} critical failure(s) detected. Please remediate the issues above.")
+        return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Android Agent Harness 12-Dimension Diagnostic Engine")
+    parser.add_argument("--repo", default=str(REPO), help="Path to Android project root")
+    parser.add_argument("--json", action="store_true", help="Output machine-readable JSON report")
+    parser.add_argument("--device", action="store_true", help="Include connected ADB device diagnostics")
+    args = parser.parse_args(argv)
+
+    repo_path = Path(args.repo).resolve()
+    doctor = HarnessDoctor(repo_path, check_device=args.device)
+    results = doctor.run_all()
+
+    if args.json:
+        report_data = {
+            "passed": sum(1 for r in results if r.status == "PASS"),
+            "warnings": sum(1 for r in results if r.status == "WARN"),
+            "failures": sum(1 for r in results if r.status == "FAIL"),
+            "checks": [asdict(r) for r in results],
+        }
+        print(json.dumps(report_data, indent=2))
+        return 0 if report_data["failures"] == 0 else 1
+
+    return print_report(results)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

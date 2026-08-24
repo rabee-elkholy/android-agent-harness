@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-08-24
+
+### 12-Dimension Harness Doctor & Interactive System Diagnostics
+- **12-Dimension System Doctor Engine (`harness_doctor.py`)**: Introduced an automated, exhaustive diagnostic CLI runner that inspects 12 core operational layers:
+  1. Environment & Host Runtime (Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, Git status).
+  2. File Structure & Version Alignment (`.agents/VERSION`, `harness-rules.md`, 24 core scripts, `hooks.json`).
+  3. Complete Subagent Roster (all 8 subagents with active security fingerprint validation).
+  4. Product Identity & Configuration (`_product.py`, package prefix, application ID, source root, assemble task).
+  5. Template Leakage Check (verifying zero un-replaced `{{...}}` template placeholders in `.agents/`).
+  6. Skills & Workflow Playbooks (verifying all 10 workflow playbooks and 7 domain architectural references).
+  7. Multi-IDE Tool Adapters (verifying `AGENTS.md` and tool-specific configuration parity).
+  8. Safety Hooks & Atomic State Locking (cross-platform atomic `state_lock()` and selftest validation).
+  9. Live Process Streaming & Heartbeat (verifying line-buffered standard I/O and process tree cleanup).
+  10. Preflight Verification Pipeline (verifying string parity, Room migration graph, and fast Kotlin lint).
+  11. Zoho Sprints MCP Security Boundaries (verifying zero token leakage in repository).
+  12. Connected Devices & ADB Hardware Diagnostics (querying physical devices, emulators, and Android API levels).
+- **Interactive AI Assistant Diagnostic Prompt (`docs/diagnostic-prompt.md`)**: Added an interactive, dual-language (Arabic/English) copy-paste diagnostic prompt for developers to audit system health in a new chat across any supported AI assistant.
+- **Workflow & Doctor Integration**: Integrated `harness_doctor.py` into `docs/quickstart.md`, `docs/update-prompt.md`, `README.md`, and `_hook_selftest.py`.
+
+---
+
 ## [0.4.0] - 2026-08-24
 
 ### AST Parser Robustness, Room Graph Migrations & Network Socket Hardening

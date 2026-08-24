@@ -911,7 +911,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.4.1") > (0, 4, 0) and get_current_version() == "0.4.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.1") > (0, 5, 0) and get_current_version() == "0.5.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -963,7 +963,7 @@ failed += int(not ok_escapes)
 
 changelog_text = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
 changelog_versions = re.findall(r"## \[(\d+\.\d+\.\d+)\]", changelog_text)
-ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.4.0"
+ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.5.0"
 print(f"changelog milestone release consolidation: {'OK' if ok_changelog_milestones else 'FAIL'}")
 failed += int(not ok_changelog_milestones)
 
@@ -1027,6 +1027,20 @@ groovy_ns = [m.group(1) for m in re.finditer(r'namespace(?:\s*=\s*|\s+)["\']([^"
 ok_groovy = ("com.example.groovyapp" in groovy_ids) and ("com.example.groovyapp" in groovy_ns)
 print(f"setup_wizard groovy applicationId discovery: {'OK' if ok_groovy else 'FAIL'}")
 failed += int(not ok_groovy)
+
+os.environ["_IN_HOOK_SELFTEST"] = "1"
+from harness_doctor import HarnessDoctor
+doc = HarnessDoctor(repo_root)
+doc_results = doc.run_all()
+doc_failures = sum(1 for r in doc_results if r.status == "FAIL")
+ok_doctor = (
+    doc_failures == 0
+    and (repo_root / "docs" / "diagnostic-prompt.md").is_file()
+    and any(r.name == "Python Runtime" and r.status == "PASS" for r in doc_results)
+    and any(r.name == "Subagents Templates" and r.status == "PASS" for r in doc_results)
+)
+print(f"harness_doctor 12-dimension diagnostic suite: {'OK' if ok_doctor else 'FAIL'}")
+failed += int(not ok_doctor)
 
 print(f"\nTotal test failures: {failed}")
 sys.exit(failed)

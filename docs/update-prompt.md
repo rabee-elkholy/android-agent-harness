@@ -30,8 +30,8 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
 7. Copy `<kit>/agents/` → `<this repo>/.agents/`. Empty `state/`. Then run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file. Do not overwrite the developer's Continue / Aider / `kilo.jsonc` / `~/.gemini` configs.
 8. Restore extra non-kit paths from the backup into `.agents/` (custom skills only). Do **not** restore old kit files on top of the new copy.
 9. Open `<kit>/docs/setup-prompt.md` and run **from “3) Port structurally” through verify** using the recorded answers. Discover from disk again (module/package may have changed). Leftover grep must pass. Run `install_tool_adapters.py` with the recorded `--tools` (and `--product`, `--py`, `--assemble`, `--device-policy`, `--git-policy`).
-10. `$PY .agents/scripts/_hook_selftest.py` → `Total test failures: 0`. Then `$PY .agents/scripts/preflight_check.py`.
-11. Tell them to start a **new chat** on this Android folder. Rollback = `docs/rollback-prompt.md`.
+10. `$PY .agents/scripts/_hook_selftest.py` → `Total test failures: 0`. Then `$PY .agents/scripts/preflight_check.py` and `$PY .agents/scripts/harness_doctor.py`.
+11. Tell them to start a **new chat** on this Android folder. System diagnostics = `docs/diagnostic-prompt.md`, Rollback = `docs/rollback-prompt.md`.
 
 Do not copy `local.properties` `sdk.dir` or `~/.gemini` hostnames. `adb monkey` stays denied. Emulator deny only if I.4 is physical-only.
 

@@ -46,4 +46,14 @@ Total test failures: 0
 PREFLIGHT PASSED
 ```
 
+---
+
+## Step 5: Verify System Health with Diagnostic Doctor
+
+To perform a comprehensive 12-dimension health audit at any time, paste [`docs/diagnostic-prompt.md`](diagnostic-prompt.md) in a new chat, or run:
+
+```bash
+python .agents/scripts/harness_doctor.py
+```
+
 Your Android repository is now governed by the 5-Leaf Review Gate.

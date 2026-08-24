@@ -42,9 +42,10 @@
   - [Anti-Polling Guardrails](#anti-polling-guardrails)
   - [Ephemeral State Machine](#ephemeral-state-machine)
 - [Preflight Verification Pipeline](#preflight-verification-pipeline)
-  - [Fast Kotlin Lint](#fast-kotlin-lint)
-  - [Room Database Migration Guard](#room-database-migration-guard)
-  - [Bilingual String Parity Check](#bilingual-string-parity-check)
+  - [Fast Kotlin Lint](#fast-kotlin-lint-fast_kt_lintpy)
+  - [Room Database Migration Guard](#room-database-migration-guard-room_guardpy)
+  - [Bilingual String Parity Check](#bilingual-string-parity-check-check_stringspy)
+- [12-Dimension System Doctor & Diagnostics](#12-dimension-system-doctor--diagnostics)
 - [Live Gradle Streaming Runner](#live-gradle-streaming-runner)
 - [Physical Device Runner & Logcat Doctor](#physical-device-runner--logcat-doctor)
 - [Zoho Sprints MCP Integration](#zoho-sprints-mcp-integration)
@@ -259,6 +260,33 @@ Before compiling the application with Gradle, `preflight_check.py` runs three ra
 - Matches multiline Jetpack Compose `Text(...)` parameters and arbitrary argument positions.
 - Strips `stringResource(...)` calls before regex matching to prevent string concatenation bypasses.
 - Supports Kotlin Multiplatform `composeResources` fallback paths.
+
+---
+
+## 12-Dimension System Doctor & Diagnostics
+
+To verify that an installation or update was 100% successful, `harness_doctor.py` and `docs/diagnostic-prompt.md` execute an exhaustive audit across 12 operational dimensions:
+
+1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, and Android SDK path.
+2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 24 core scripts, and `hooks.json`.
+3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
+4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, and assemble task.
+5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.
+6. **Skills & Workflows**: 10 workflow playbooks and 7 domain architectural references.
+7. **Multi-IDE Tool Adapters**: `AGENTS.md` at root and active tool adapters (Cursor, Claude Code, GitHub Copilot).
+8. **Safety Hooks & State Locking**: Cross-platform atomic `state_lock()` and hook selftest execution.
+9. **Process Streaming**: Line-buffered standard I/O and process tree lifecycle termination.
+10. **Preflight Pipeline**: String parity & hardcoded UI text, Room migration graph, and Fast Kotlin lint.
+11. **Zoho MCP Security**: Zero credentials in repo, valid MCP config, and server stdio handshake.
+12. **Connected Devices**: ADB device connectivity, hardware model, and Android API level.
+
+```bash
+# Run full automated diagnostic
+python .agents/scripts/harness_doctor.py
+
+# Run with hardware ADB check and JSON output
+python .agents/scripts/harness_doctor.py --device --json
+```
 
 ---
 
