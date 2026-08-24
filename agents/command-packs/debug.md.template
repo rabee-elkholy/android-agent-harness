@@ -1,0 +1,10 @@
+---
+description: Hypothesis-driven Android debugging with forensics, 5-leaf review, and physical-device validation.
+argument-hint: "[bug symptoms / Zoho id]"
+---
+
+Read `.agents/rules/harness-rules.md` first. That file wins over everything in this session.
+
+Execute the playbook `.agents/workflows/debug.md` exactly, step by step. Do not skip or reorder gates.
+
+User request / context: $ARGUMENTS

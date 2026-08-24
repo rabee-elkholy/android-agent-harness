@@ -1,0 +1,10 @@
+---
+description: Fail on English/Arabic string key drift or hardcoded user-facing text; fix both locale files.
+argument-hint: ""
+---
+
+Read `.agents/rules/harness-rules.md` first. That file wins over everything in this session.
+
+Execute the playbook `.agents/workflows/check-strings.md` exactly, step by step. Do not skip or reorder gates.
+
+User request / context: $ARGUMENTS

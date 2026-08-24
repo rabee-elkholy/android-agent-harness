@@ -20,7 +20,16 @@ For initial setup and structural porting, select a model capable of deep archite
 
 ---
 
-## Step 3: Run the One-Prompt Installer
+## Step 3: Run the Installer (CLI or AI Prompt)
+
+### Option A: Standalone CLI (Terminal)
+
+```bash
+pipx install android-harness-kit
+android-harness init
+```
+
+### Option B: One-Prompt Installer (Chat Prompt)
 
 Copy the entire content of [`docs/install-prompt.md`](install-prompt.md) and paste it into your chat prompt:
 

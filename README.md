@@ -27,7 +27,7 @@
 
 - [Overview](#overview)
 - [The Problem We Solve](#the-problem-we-solve)
-- [Quickstart in 2 Minutes](#quickstart-in-2-minutes)
+- [Quickstart & CLI](#quickstart--cli)
 - [One-Click Lifecycle Prompts](#one-click-lifecycle-prompts)
 - [Architecture Workflow](#architecture-workflow)
 - [Shift-Left Proactive Quality Invariants](#shift-left-proactive-quality-invariants)
@@ -40,6 +40,8 @@
 - [Dedicated On-Demand Specialists](#dedicated-on-demand-specialists)
 - [Safety Hooks & Execution Governance](#safety-hooks--execution-governance)
   - [Strict Git Mutation Protection](#strict-git-mutation-protection)
+  - [Deterministic Staged Pre-Commit Quality Gate](#deterministic-staged-pre-commit-quality-gate)
+  - [Claude Code PreToolUse Safety Bridge](#claude-code-pretooluse-safety-bridge)
   - [Anti-Polling Guardrails](#anti-polling-guardrails)
   - [Ephemeral State Machine](#ephemeral-state-machine)
 - [Preflight Verification Pipeline](#preflight-verification-pipeline)
@@ -50,7 +52,7 @@
 - [Live Gradle Streaming Runner](#live-gradle-streaming-runner)
 - [Physical Device Runner & Logcat Doctor](#physical-device-runner--logcat-doctor)
 - [Zoho Sprints MCP Integration](#zoho-sprints-mcp-integration)
-- [Supported AI Tools & Adapters Matrix](#supported-ai-tools--adapters-matrix)
+- [Supported AI Tools, Slash Commands & Adapters](#supported-ai-tools-slash-commands--adapters)
 - [Installation & Setup Modes](#installation--setup-modes)
   - [Mode A: Existing Android / KMP App](#mode-a-existing-android--kmp-app)
   - [Mode B: Greenfield / Blank Project](#mode-b-greenfield--blank-project)
@@ -85,9 +87,35 @@ When AI coding assistants like **Cursor**, **Google Antigravity**, **Claude Code
 
 ---
 
-## Quickstart in 2 Minutes
+## Quickstart & CLI
 
-To install and activate the harness in your Android app:
+You can install and activate Android Agent Harness via the **Standalone CLI** or directly inside your **AI Assistant Chat**:
+
+### Option 1: Standalone CLI Executable (`android-harness`)
+
+Install globally via `pipx` (or `pip install`):
+
+```bash
+pipx install android-harness-kit
+```
+
+Then run the setup wizard and diagnostics directly from your terminal:
+
+```bash
+# Initialize harness in current Android repository
+android-harness init
+
+# Audit 12-dimension health at any time
+android-harness doctor --device
+
+# Run rapid preflight checks (strings + Room + fast lint)
+android-harness preflight
+
+# Update kit engine to latest release
+android-harness update
+```
+
+### Option 2: One-Prompt Installer in AI Assistant Chat
 
 1. Open your AI assistant (Antigravity, Cursor, Claude Code, Copilot, Windsurf) in your **Android project root directory**.
 2. Select a deep reasoning model (e.g. `Claude Opus 5 / 3.7 Sonnet (Thinking)`, `Gemini 3.1 Pro (Deep Think)`, `GPT-5.6 Sol`, or `DeepSeek-R1`).
@@ -264,6 +292,18 @@ AI models frequently attempt to cover mistakes by making unauthorized commits or
 
 Developers retain sole authority over repository history.
 
+### Deterministic Staged Pre-Commit Quality Gate
+A standalone, stdlib-only Git hook (`.githooks/pre-commit`, installed via `--git-gate`) running against staged files in <5 seconds:
+- Bilingual string parity and hardcoded UI string detection.
+- Fast Kotlin syntax and import lint.
+- Room database working-tree schema and migration invariant checks.
+- Blocks commits containing regressions without interfering with the developer's commit authority.
+
+### Claude Code PreToolUse Safety Bridge
+Cross-tool runtime safety bridge (`agents/scripts/cc_pre_tool_safety.py`, installed via `--cc-hooks`):
+- Bridges Claude Code's native `PreToolUse` hook protocol in `.claude/settings.json` to the harness safety engine.
+- Denies forbidden Git mutations (`git push`, `git commit`) and unauthorized ADB actions with deterministic `permissionDecision: "deny"`.
+
 ### Anti-Polling Guardrails
 To prevent models from getting stuck in infinite polling loops (>2 calls to `manage_task` or `manage_subagents`), the hook enforces event-driven reactive wakeups and denies redundant poll requests.
 
@@ -305,7 +345,7 @@ Before compiling the application with Gradle, `preflight_check.py` runs three ra
 To verify that an installation or update was 100% successful, `harness_doctor.py` and `docs/diagnostic-prompt.md` execute an exhaustive audit across 12 operational dimensions:
 
 1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` security audit, and Git working tree status / commit advisory.
-2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 25 core scripts, and `hooks.json`.
+2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 27 core scripts, and `hooks.json`.
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
 4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency (`answers.json` vs device policy, assemble task, and selected tool adapters).
 5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.
@@ -384,20 +424,38 @@ sequenceDiagram
 
 ---
 
-## Supported AI Tools & Adapters Matrix
+## Supported AI Tools, Slash Commands & Adapters
 
-The harness supports **14+ AI coding assistants and IDEs**, automatically generating native configuration adapters:
+The harness supports **14+ AI coding assistants and IDEs**, automatically generating native configuration adapters and tool-native command shortcuts:
 
-| Assistant / IDE | Generated Adapter | Integration Features |
-| :--- | :--- | :--- |
-| **Google Antigravity** | `agents/rules/`, `agents/hooks.json` | Subagent dispatch, hook blockers, ephemeral reminders |
-| **Cursor** | `.cursor/rules/android-harness.mdc` | Architecture constraints, review protocol, terminal execution gates |
-| **Claude Code** | `CLAUDE.md` | Slash command protocols, terminal safety guards |
-| **GitHub Copilot** | `.github/copilot-instructions.md` | Workspace instructions, domain conventions |
-| **OpenAI Codex CLI** | `AGENTS.md` | Universal agent instructions, execution limits |
-| **Windsurf** | `.windsurfrules` | Cascade AI rules and architectural constraints |
-| **Cline & Roo Code** | `.clinerules`, `.roo/rules/android-harness.md` | System prompts, mode definitions, tool permissions |
-| **Amazon Q / Continue / Junie / Kilo / Goose** | Native Adapter Files | Full rule compliance across all supported environments |
+| Assistant / IDE | Generated Adapter | Integration Features | Native Commands |
+| :--- | :--- | :--- | :--- |
+| **Google Antigravity** | `agents/rules/`, `agents/hooks.json` | Subagent dispatch, hook blockers, ephemeral reminders | Workflow playbooks (`.agents/workflows/`) |
+| **Cursor** | `.cursor/rules/android-harness.mdc` | Architecture constraints, review protocol, terminal execution gates | Rule-driven workflows |
+| **Claude Code** | `CLAUDE.md`, `.claude/settings.json` | PreToolUse safety bridge, subagent prompts | Native Slash Commands (`.claude/commands/*.md`) |
+| **GitHub Copilot** | `.github/copilot-instructions.md` | Workspace instructions, domain conventions | Prompt Files (`.github/prompts/*.prompt.md`) |
+| **OpenAI Codex CLI** | `AGENTS.md` | Universal agent instructions, execution limits | Prompt Commands (`.codex/prompts/*.md`) |
+| **Windsurf** | `.windsurfrules` | Cascade AI rules and architectural constraints | Cascade workflows |
+| **Cline & Roo Code** | `.clinerules`, `.roo/rules/android-harness.md` | System prompts, mode definitions, tool permissions | Mode instructions |
+| **Amazon Q / Continue / Junie / Kilo / Goose** | Native Adapter Files | Full rule compliance across all supported environments | Rule integration |
+
+### 11 Standardized Slash Command Packs
+
+When installed with Claude Code, GitHub Copilot, or Codex, the harness automatically generates 11 command shortcuts:
+
+| Command / Prompt | Purpose |
+| :--- | :--- |
+| `/deliver [request]` | Full 7-stage delivery lifecycle: plan artifact, implement, 5-leaf review gate, preflight, assemble, device testing. |
+| `/debug [symptoms]` | Hypothesis-driven debugging with root cause isolation, 5-leaf review, and physical device validation. |
+| `/new-feature [spec]` | Implement new feature with interactive planning artifact and five-leaf delivery gate. |
+| `/preflight` | Rapid preflight sanity suite: string parity, Room migrations, and fast Kotlin lint. |
+| `/check-strings` | Bilingual English/Arabic string parity and hardcoded UI string audit. |
+| `/perf-audit` | Static heuristics and ANR audit for main-thread I/O and Compose recompositions. |
+| `/test-quality-audit`| Audit unit/UI test files (`*Test.kt`) for assertion depth, TestDispatcher, and mocking integrity. |
+| `/crash-triage [issue]`| Pull live physical device Logcat fatal exceptions and dispatch to `qa-diagnostics-agent`. |
+| `/commit-msg` | Draft Conventional Commit message with Blast Radius for manual developer commit in Android Studio. |
+| `/zoho-sprints [item]` | Zoho Sprints task synchronization, subtask creation, and QA handoff comments. |
+| `/doctor` | Run automated 12-dimension health inspection (`harness_doctor.py --device`). |
 
 ---
 

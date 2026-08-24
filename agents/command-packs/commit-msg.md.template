@@ -1,0 +1,10 @@
+---
+description: Draft a Conventional Commit message for Android Studio after every phase is Pass. The agent never commits.
+argument-hint: ""
+---
+
+Read `.agents/rules/harness-rules.md` first. That file wins over everything in this session.
+
+Execute the playbook `.agents/workflows/commit-msg.md` exactly, step by step. Do not skip or reorder gates.
+
+User request / context: $ARGUMENTS

@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = AGENTS_DIR / "tool-adapters"
+COMMAND_PACKS_DIR = AGENTS_DIR / "command-packs"
 MANAGED = "<!-- managed-by: android-harness-kit -->\n"
 SKIP_SUBAGENTS = {
     "code-review-guard-agent",
@@ -83,11 +85,21 @@ TOOL_FILES: dict[str, tuple[str, ...]] = {
 }
 
 KNOWN_TOOLS = tuple(TOOL_FILES)
+
+COMMAND_DIRS: dict[str, tuple[str, str]] = {
+    "claude": (".claude/commands", "{}.md"),
+    "copilot": (".github/prompts", "{}.prompt.md"),
+    "codex": (".codex/prompts", "{}.md"),
+}
+
 EMPTY_DIR_CANDIDATES = (
     ".amazonq/rules",
     ".amazonq",
     ".claude/agents",
+    ".claude/commands",
     ".claude",
+    ".codex/prompts",
+    ".codex",
     ".continue/rules",
     ".continue",
     ".junie",
@@ -98,6 +110,7 @@ EMPTY_DIR_CANDIDATES = (
     ".windsurf/rules",
     ".windsurf",
     ".github/instructions",
+    ".github/prompts",
     ".github",
     ".cursor/rules",
     ".cursor",
@@ -129,6 +142,45 @@ def read_template(name: str) -> str:
     if not path.is_file():
         raise SystemExit(f"Missing template: {path}")
     return path.read_text(encoding="utf-8")
+
+
+def _pack_name(tmpl: Path) -> str:
+    name = tmpl.name
+    return name[: -len(".md.template")] if name.endswith(".md.template") else tmpl.stem
+
+
+def command_pack_templates() -> list[Path]:
+    if not COMMAND_PACKS_DIR.is_dir():
+        return []
+    return sorted(COMMAND_PACKS_DIR.glob("*.template"))
+
+
+def command_pack_rels(tool: str) -> list[str]:
+    spec = COMMAND_DIRS.get(tool)
+    if not spec:
+        return []
+    base, pattern = spec
+    return [f"{base}/{pattern.format(_pack_name(tmpl))}" for tmpl in command_pack_templates()]
+
+
+def strip_frontmatter(text: str) -> str:
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end >= 0:
+            return text[end + 4 :].lstrip("\n")
+    return text
+
+
+def generate_command_packs(repo: Path, tool: str, mapping: dict[str, str], *, dry_run: bool) -> list[str]:
+    logs: list[str] = []
+    for tmpl in command_pack_templates():
+        text = tmpl.read_text(encoding="utf-8")
+        if tool == "codex":
+            text = strip_frontmatter(text)
+        base, pattern = COMMAND_DIRS[tool]
+        rel = f"{base}/{pattern.format(_pack_name(tmpl))}"
+        logs.append(write_file(repo / rel, fill(text, mapping), dry_run=dry_run, repo=repo))
+    return logs
 
 
 def with_managed_marker(body: str) -> str:
@@ -311,6 +363,7 @@ def keep_set(selected: set[str]) -> set[str]:
     keep = {"AGENTS.md"}
     for tool in selected:
         keep.update(TOOL_FILES[tool])
+        keep.update(command_pack_rels(tool))
     return keep
 
 
@@ -319,6 +372,8 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
     catalog = {"AGENTS.md"}
     for files in TOOL_FILES.values():
         catalog.update(files)
+    for tool in COMMAND_DIRS:
+        catalog.update(command_pack_rels(tool))
     for rel in sorted(catalog):
         if rel in keep:
             continue
@@ -385,6 +440,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not delete managed adapters for tools that were not selected.",
     )
+    p.add_argument(
+        "--git-gate",
+        action="store_true",
+        help="Write .githooks/pre-commit staged-changes quality gate and set core.hooksPath.",
+    )
+    p.add_argument(
+        "--cc-hooks",
+        action="store_true",
+        help="Register the Claude Code PreToolUse bridge (requires --tools to include claude).",
+    )
     return p.parse_args(argv)
 
 
@@ -396,6 +461,83 @@ def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
         "DEVICE_POLICY": (args.device_text or DEVICE_TEXT[args.device_policy]).strip(),
         "GIT_POLICY": (args.git_text or GIT_TEXT[args.git_policy]).strip(),
     }
+
+
+GIT_GATE_HOOK = """#!/usr/bin/env python
+import os
+import subprocess
+import sys
+
+top = subprocess.run(
+    ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+).stdout.strip()
+gate = os.path.join(top, ".agents", "scripts", "pre_commit_gate.py")
+if not os.path.isfile(gate):
+    sys.exit(0)
+res = subprocess.run([sys.executable, gate], cwd=top)
+sys.exit(res.returncode)
+"""
+
+CC_HOOK_COMMAND = "{py} .agents/scripts/cc_pre_tool_safety.py"
+
+
+def install_git_gate(repo: Path, *, dry_run: bool) -> list[str]:
+    logs: list[str] = []
+    hook_path = repo / ".githooks" / "pre-commit"
+    if dry_run:
+        logs.append(f"dry-run write {rel_of(hook_path, repo)}")
+        logs.append("dry-run git config core.hooksPath .githooks")
+        return logs
+    hook_path.parent.mkdir(parents=True, exist_ok=True)
+    hook_path.write_text(GIT_GATE_HOOK, encoding="utf-8", newline="\n")
+    logs.append(f"wrote {rel_of(hook_path, repo)}")
+    proc = subprocess.run(
+        ["git", "config", "core.hooksPath", ".githooks"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode == 0:
+        logs.append("git core.hooksPath -> .githooks")
+    else:
+        logs.append("WARNING: could not set core.hooksPath; run: git config core.hooksPath .githooks")
+    return logs
+
+
+def ensure_cc_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
+    settings_path = repo / ".claude" / "settings.json"
+    rel = rel_of(settings_path, repo)
+    data: dict = {}
+    if settings_path.is_file():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            return [f"skip {rel}: existing settings.json is not valid JSON; merge the hook manually"]
+
+    groups = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    command = CC_HOOK_COMMAND.format(py=py)
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        for hook in group.get("hooks") or []:
+            if isinstance(hook, dict) and "cc_pre_tool_safety.py" in str(hook.get("command", "")):
+                return [f"skip {rel}: harness PreToolUse bridge already registered"]
+
+    new_group = {
+        "matcher": "Bash",
+        "_harnessManaged": True,
+        "hooks": [{"type": "command", "command": command, "timeout": 15}],
+    }
+    if dry_run:
+        logs = [f"dry-run merge PreToolUse(Bash) into {rel}"]
+        return logs
+    groups.append(new_group)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return [f"merged PreToolUse(Bash) bridge into {rel}"]
 
 
 def install(args: argparse.Namespace) -> list[str]:
@@ -422,8 +564,14 @@ def install(args: argparse.Namespace) -> list[str]:
     for tool in sorted(selected):
         for rel, body in bodies_for_tool(tool, mapping, pointer).items():
             logs.append(write_file(repo / rel, body, dry_run=args.dry_run, repo=repo))
+        if tool in COMMAND_DIRS:
+            logs.extend(generate_command_packs(repo, tool, mapping, dry_run=args.dry_run))
     if "claude" in selected and not args.skip_claude_agents:
         logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
+    if getattr(args, "git_gate", False):
+        logs.extend(install_git_gate(repo, dry_run=args.dry_run))
+    if getattr(args, "cc_hooks", False) and "claude" in selected:
+        logs.extend(ensure_cc_hooks(repo, mapping["PY"], dry_run=args.dry_run))
     logs.append(f"tools: {', '.join(sorted(selected))}")
     return logs
 

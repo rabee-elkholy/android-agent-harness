@@ -1,0 +1,10 @@
+---
+description: Deliver an Android change end-to-end: plan artifact, implement, 5-leaf review gate, preflight, assemble, device phases.
+argument-hint: "[what to deliver]"
+---
+
+Read `.agents/rules/harness-rules.md` first. That file wins over everything in this session.
+
+Execute the playbook `.agents/workflows/deliver.md` exactly, step by step. Do not skip or reorder gates.
+
+User request / context: $ARGUMENTS

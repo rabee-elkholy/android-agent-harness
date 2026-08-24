@@ -1,0 +1,13 @@
+---
+description: 12-dimension harness health diagnostic with actionable remediation.
+---
+
+Read `.agents/rules/harness-rules.md` first. That file wins over everything in this session.
+
+Run the full diagnostic engine from the repository root:
+
+```bash
+{{PY}} .agents/scripts/harness_doctor.py --device
+```
+
+Present the 12-dimension summary as a compact markdown table (Dimension | Status | Detail). For every [WARN] or [FAIL]: root cause, then the exact copy-paste terminal command to fix it, then re-run the doctor to confirm recovery. If everything passes, declare the harness ready for delivery.

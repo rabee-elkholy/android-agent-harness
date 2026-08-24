@@ -962,7 +962,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.7") > (0, 5, 6) and get_current_version() == "0.5.7"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.6.0") > (0, 5, 7) and get_current_version() == "0.6.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1099,6 +1099,126 @@ ttl_res = run(cmd("gradlew.bat :app:assembleDebug", conversation="c-ttl"))
 ok_ttl = ttl_res["decision"] == "allow"
 print(f"barrier_ttl_expiry_unblocks: {ttl_res['decision']} {'OK' if ok_ttl else 'FAIL ' + json.dumps(ttl_res)}")
 failed += int(not ok_ttl)
+
+# --- v0.6.0: Claude Code PreToolUse Bridge ---
+cc_bridge_script = SCRIPTS / "cc_pre_tool_safety.py"
+if cc_bridge_script.is_file():
+    proc_cc_push = subprocess.run(
+        [sys.executable, str(cc_bridge_script)],
+        input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}),
+        capture_output=True,
+        text=True,
+    )
+    cc_push_out = json.loads(proc_cc_push.stdout or "{}")
+    ok_cc_push = cc_push_out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    proc_cc_status = subprocess.run(
+        [sys.executable, str(cc_bridge_script)],
+        input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}}),
+        capture_output=True,
+        text=True,
+    )
+    cc_status_out = json.loads(proc_cc_status.stdout or "{}")
+    ok_cc_status = cc_status_out.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
+
+    proc_cc_other = subprocess.run(
+        [sys.executable, str(cc_bridge_script)],
+        input=json.dumps({"tool_name": "ViewFile", "tool_input": {"path": "README.md"}}),
+        capture_output=True,
+        text=True,
+    )
+    cc_other_out = json.loads(proc_cc_other.stdout or "{}")
+    ok_cc_other = cc_other_out.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
+
+    ok_cc_bridge = ok_cc_push and ok_cc_status and ok_cc_other
+    print(f"claude_code_pre_tool_safety bridge: {'OK' if ok_cc_bridge else 'FAIL'}")
+    failed += int(not ok_cc_bridge)
+else:
+    print("claude_code_pre_tool_safety bridge: OK (skipped — script not present)")
+
+# --- v0.6.0: Command Packs, Git Gate & Adapter Lifecycle ---
+from install_tool_adapters import (
+    command_pack_templates,
+    parse_args,
+    install as install_adapters,
+)
+
+cp_tmpls = command_pack_templates()
+ok_cp_tmpls = len(cp_tmpls) == 11 or _is_installed
+tmp_adapt_dir = Path(tempfile.mkdtemp())
+try:
+    adapt_args = parse_args([
+        "--repo", str(tmp_adapt_dir),
+        "--product", "TestApp",
+        "--py", "python",
+        "--assemble", ":app:assembleDebug",
+        "--tools", "claude,copilot,codex",
+        "--git-gate",
+        "--cc-hooks",
+    ])
+    install_adapters(adapt_args)
+    ok_claude_pack = (tmp_adapt_dir / ".claude" / "commands" / "deliver.md").is_file()
+    ok_copilot_pack = (tmp_adapt_dir / ".github" / "prompts" / "deliver.prompt.md").is_file()
+    ok_codex_pack = (tmp_adapt_dir / ".codex" / "prompts" / "deliver.md").is_file()
+    ok_git_gate_hook = (tmp_adapt_dir / ".githooks" / "pre-commit").is_file()
+    ok_cc_settings = (tmp_adapt_dir / ".claude" / "settings.json").is_file()
+
+    # Test pruning
+    adapt_args_prune = parse_args([
+        "--repo", str(tmp_adapt_dir),
+        "--product", "TestApp",
+        "--py", "python",
+        "--assemble", ":app:assembleDebug",
+        "--tools", "claude",
+    ])
+    install_adapters(adapt_args_prune)
+    ok_prune_codex = not (tmp_adapt_dir / ".codex" / "prompts" / "deliver.md").is_file()
+    ok_keep_claude = (tmp_adapt_dir / ".claude" / "commands" / "deliver.md").is_file()
+
+    ok_adapter_lifecycle = (
+        ok_cp_tmpls
+        and ok_claude_pack
+        and ok_copilot_pack
+        and ok_codex_pack
+        and ok_git_gate_hook
+        and ok_cc_settings
+        and ok_prune_codex
+        and ok_keep_claude
+    )
+    print(f"install_tool_adapters command_packs, git_gate & cc_hooks: {'OK' if ok_adapter_lifecycle else 'FAIL'}")
+    failed += int(not ok_adapter_lifecycle)
+finally:
+    import shutil
+    shutil.rmtree(tmp_adapt_dir, ignore_errors=True)
+
+# --- v0.6.0: Pre-Commit Quality Gate Smoke ---
+pre_commit_script = SCRIPTS / "pre_commit_gate.py"
+if pre_commit_script.is_file():
+    proc_gate = subprocess.run([sys.executable, str(pre_commit_script)], capture_output=True, text=True)
+    ok_gate = proc_gate.returncode == 0
+    print(f"pre_commit_gate staged sanity: {'OK' if ok_gate else 'FAIL'}")
+    failed += int(not ok_gate)
+else:
+    print("pre_commit_gate staged sanity: OK (skipped — script not present)")
+
+# --- v0.6.0: Harness CLI Dispatcher ---
+cli_file = repo_root / "harness_cli.py"
+if cli_file.is_file():
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from harness_cli import build_parser as cli_build_parser, resolve_kit as cli_resolve_kit
+    cli_p = cli_build_parser()
+    cli_cmds = set(next(a.choices for a in cli_p._actions if a.dest == "command").keys())
+    ok_cli_cmds = cli_cmds == {"init", "update", "doctor", "preflight", "selftest", "version"}
+    ok_cli_kit = bool(cli_resolve_kit(str(repo_root)))
+    proc_cli_ver = subprocess.run([sys.executable, str(cli_file), "version"], capture_output=True, text=True)
+    ok_cli_ver = proc_cli_ver.returncode == 0 and bool(proc_cli_ver.stdout.strip())
+    ok_cli = ok_cli_cmds and ok_cli_kit and ok_cli_ver
+    print(f"harness_cli dispatch & subcommands: {'OK' if ok_cli else 'FAIL'}")
+    failed += int(not ok_cli)
+else:
+    print("harness_cli dispatch & subcommands: OK (skipped — installed checkout)")
+
 
 doc = HarnessDoctor(repo_root)
 doc_results = doc.run_all()

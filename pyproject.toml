@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "android-harness-kit"
+version = "0.6.0"
+description = "Android Agent Harness: five-leaf review gate, deterministic safety hooks, and delivery governance for Android & KMP AI coding agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Rabee Elkholy" }]
+keywords = ["android", "kmp", "ai-agents", "code-review", "governance", "mcp"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/rabee-elkholy/android-harness-kit"
+Issues = "https://github.com/rabee-elkholy/android-harness-kit/issues"
+
+[project.scripts]
+android-harness = "harness_cli:main"
+
+[tool.setuptools]
+py-modules = ["harness_cli"]

@@ -12,10 +12,12 @@ Installer: `$PY .agents/scripts/install_tool_adapters.py`.
 | Capability | Where it lives | Who enforces it |
 |---|---|---|
 | Review protocol, git, device, architecture | `.agents/rules/harness-rules.md` | Every tool, via adapters |
-| Live Gradle + heartbeat | `.agents/scripts/run_gradle_task.py` | Same Python on every tool |
+| Live Gradle + heartbeat + staleness advisory | `.agents/scripts/run_gradle_task.py` | Same Python on every tool |
 | Device install/launch | `.agents/scripts/run_device.py` | Same Python on every tool |
-| Assemble barrier (5 `*_PASS`) | `.agents/hooks.json` + `pre_tool_safety.py` | **Antigravity only** (automatic). Others: follow `AGENTS.md` |
-| Reviewer & Specialist prompts | `.agents/subagents/*.json` | Claude Code also gets `.claude/agents/*.md` (including `test-quality-reviewer-agent.md`) |
+| Assemble barrier (5 `*_PASS`) | `.agents/hooks.json` + `pre_tool_safety.py` | **Antigravity** (runtime hook) & **Claude Code** (`PreToolUse` bridge). Others: follow `AGENTS.md` |
+| Staged Pre-Commit Quality Gate | `.agents/scripts/pre_commit_gate.py` (`.githooks/`) | Universal across all tools via Git |
+| 11 Native Slash Command Packs | `.claude/commands/`, `.github/prompts/`, `.codex/prompts/` | Claude Code, GitHub Copilot, OpenAI Codex |
+| Reviewer & Specialist prompts | `.agents/subagents/*.json` | Claude Code also gets `.claude/agents/*.md` |
 
 Do **not** copy `~/.gemini` hostnames, tokens, or `local.properties` `sdk.dir`.
 
@@ -26,12 +28,10 @@ Do **not** overwrite `.aider.conf.yml`, Continue user config, unrelated MCP conf
 | Tool | Files written at the Android repo root | Enforcement |
 |---|---|---|
 | **Any agent that reads `AGENTS.md`** (Codex, Cursor, Copilot, Windsurf, Aider, Zed, Amp, Devin, Factory, Jules, Warp, Roo, VS Code, OpenCode) | `AGENTS.md` | Prompt |
-| **Claude Code** | `CLAUDE.md` (`@AGENTS.md` first line) + `.claude/agents/*.md` | Prompt + named agents |
-| **Gemini CLI / Antigravity** | `GEMINI.md` + `.agents/hooks.json` | Prompt; **hook barrier in Antigravity** |
-| **OpenAI Codex CLI** | `AGENTS.md` + `CODEX.md` | Prompt |
-| **Qwen Code** | `QWEN.md` (`@AGENTS.md` first line) + `AGENTS.md` | Prompt |
-| **Cursor** | `AGENTS.md` + `.cursor/rules/android-harness.mdc` (`alwaysApply: true`) | Prompt |
-| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` + `.github/instructions/android-harness.instructions.md` | Prompt |
+| **Claude Code** | `CLAUDE.md` (`@AGENTS.md`), `.claude/agents/*.md`, `.claude/commands/*.md`, `.claude/settings.json` | Prompt + named agents + PreToolUse bridge |
+| **Google Antigravity** | `GEMINI.md` + `.agents/hooks.json` | Prompt; **hook barrier in Antigravity** |
+| **OpenAI Codex CLI** | `AGENTS.md` + `CODEX.md` + `.codex/prompts/*.md` | Prompt + native prompt commands |
+| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` + `.github/prompts/*.prompt.md` | Prompt + native prompt files |
 | **Windsurf** | `.windsurf/rules/android-harness.md` (`trigger: always_on`) + `.windsurfrules` | Prompt |
 | **Cline** | `.clinerules` | Prompt |
 | **Roo Code** | `.roo/rules/android-harness.md` | Prompt |

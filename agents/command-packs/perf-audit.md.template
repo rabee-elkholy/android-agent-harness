@@ -1,0 +1,10 @@
+---
+description: Static + optional device ANR audit via perf_guard and perf-anr-guardian-agent.
+argument-hint: "[optional file paths]"
+---
+
+Read `.agents/rules/harness-rules.md` first. That file wins over everything in this session.
+
+Execute the playbook `.agents/workflows/perf-audit.md` exactly, step by step. Do not skip or reorder gates.
+
+User request / context: $ARGUMENTS

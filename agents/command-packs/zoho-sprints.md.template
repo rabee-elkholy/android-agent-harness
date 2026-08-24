@@ -1,0 +1,10 @@
+---
+description: Zoho Sprints ingest/create/update playbook. Mutate only on explicit update zoho.
+argument-hint: "[item id or update zoho]"
+---
+
+Read `.agents/rules/harness-rules.md` first. That file wins over everything in this session.
+
+Execute the playbook `.agents/workflows/zoho-sprints.md` exactly, step by step. Do not skip or reorder gates.
+
+User request / context: $ARGUMENTS
