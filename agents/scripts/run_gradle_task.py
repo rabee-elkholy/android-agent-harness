@@ -74,6 +74,14 @@ def gradle_wrapper() -> Path:
 
 def run_gradle(task_args: list[str]) -> int:
     enable_line_buffered_stdio()
+    try:
+        from _hook_state import review_advisory
+
+        advisory = review_advisory()
+        if advisory:
+            live_print(advisory)
+    except Exception:
+        pass
     gradle_args = with_plain_console(task_args)
     try:
         wrapper = gradle_wrapper()

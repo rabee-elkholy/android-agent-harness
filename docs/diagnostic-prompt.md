@@ -41,7 +41,7 @@ Tell the developer **first**, in their language:
    | 1 | **Environment & Host** | `PASS / FAIL` | Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` audit, Git working tree status |
    | 2 | **File Structure & Version** | `PASS / FAIL` | `.agents/VERSION`, `harness-rules.md`, 25 core scripts, `hooks.json` |
    | 3 | **Subagent Roster** | `PASS / FAIL` | All 8 subagents verified with active fingerprints |
-   | 4 | **Product Configuration** | `PASS / FAIL` | `_product.py`, package prefix, application ID, source root, assemble task |
+   | 4 | **Product Configuration** | `PASS / FAIL` | `_product.py`, package prefix, application ID, source root, assemble task, and recorded answers consistency (device policy, adapters) |
    | 5 | **Template Leakage** | `PASS / FAIL` | Zero un-replaced template placeholders (`{{...}}`) in `.agents/` |
    | 6 | **Skills & Workflows** | `PASS / FAIL` | 10 workflow playbooks, foundation references integrity, project domain coverage, and `daily-scenarios.md` indexing |
    | 7 | **Multi-IDE Tool Adapters** | `PASS / WARN` | `AGENTS.md` at root and configured tool adapters (Cursor, Claude, Copilot) |

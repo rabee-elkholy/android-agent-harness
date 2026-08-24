@@ -5,6 +5,17 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-08-24
+
+### Architectural Resilience Release: Parser Immunity, Cross-Tool Review Ledger, Barrier TTL & Install-Consistency Audit
+- **Parser Adversarial Immunity (`check_strings.py`)**: The hardcoded-string scanner now truncates trailing `//` comments (string-literal aware) and skips Kotlin triple-quoted string blocks across lines, eliminating false positives from decoy `Text("...")` samples in comments/KDoc/multiline documentation strings while still flagging real code after a trailing comment.
+- **Cross-Tool Review Ledger (`_hook_state.py`, `review_package.py`, `run_gradle_task.py`)**: `review_package.py` now records a review ledger (`state/review_ledger.json`) containing the package hash plus a fingerprint of the protected code tree at generation time. `run_gradle_task.py` prints a deterministic `REVIEW ADVISORY` when Kotlin/XML code changed after the last package was generated — giving Cursor/Claude/Copilot sessions (where Antigravity hooks do not run) a script-level, tool-agnostic staleness signal instead of prompt-only compliance.
+- **Barrier TTL Expiry (`pre_tool_safety.py`)**: A pending 5-leaf review round now auto-expires after `HARNESS_BARRIER_TTL` seconds (default 6h) instead of wedging forever if the platform transcript format changes or subagents never reply. Format drift degrades to a time-based unblock with an explicit re-review reminder rather than a permanent assemble lockout.
+- **Install-Consistency Dimension (`harness_doctor.py`)**: In installed checkouts (`.harness-setup/answers.json` present), the doctor cross-checks recorded answers against reality: device policy vs `_product.py ALLOW_EMULATOR`, assemble task parity, and presence/managed-marker of every selected tool adapter plus root `AGENTS.md`. A weak-model install that skipped steps now fails diagnostics with exact remediation commands instead of silently drifting.
+- **Selftest Expansion**: New regression cases for triple-string/trailing-comment immunity, ledger recording + staleness comparator, and barrier TTL expiry; version assertions synced to 0.5.7.
+
+---
+
 ## [0.5.6] - 2026-08-24
 
 ### Forensic Audit Hardening: Chained Git Mutation Interception & Diagnostic Inventory Parity

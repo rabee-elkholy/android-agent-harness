@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -17,6 +18,7 @@ from _hook_state import (  # noqa: E402
     file_sha256,
     invoke_count,
     package_already_reviewed,
+    pending_since,
     prompts_match,
     record_review_round,
     record_subagent_defined,
@@ -397,6 +399,18 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
         return True, "No conv id"
     if not reviews_pending(conv_id):
         return True, "No pending review round"
+
+    try:
+        barrier_ttl = float(os.environ.get("HARNESS_BARRIER_TTL", "21600"))
+    except (TypeError, ValueError):
+        barrier_ttl = 21600.0
+    since = pending_since(conv_id)
+    if barrier_ttl > 0 and since is not None and time.time() - since > barrier_ttl:
+        clear_pending_reviews(conv_id)
+        return True, (
+            f"Pending review round expired after {int(barrier_ttl)}s barrier TTL. "
+            "Re-run the 5 review leaves if the code changed."
+        )
 
     log_file = resolve_transcript_path(conv_id, payload)
     if log_file is None or not log_file.is_file():

@@ -122,7 +122,7 @@ Provides deterministic, end-to-end verification of repository health across 12 o
 - Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status, **`.gitignore` security & transient state audit**, **Git working tree status & commit reminders**).
 - File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 25 core scripts).
 - Complete subagent roster (all 8 subagents with active security fingerprints).
-- Product configuration (`_product.py`, package prefix, application ID, source root, assemble task).
+- Product configuration (`_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency: device policy vs `ALLOW_EMULATOR`, assemble parity, selected adapter presence).
 - Template leakage check (verifying zero un-replaced `{{...}}` tokens in `.agents/`).
 - Domain skills & workflow playbooks (10 workflow playbooks, foundation references integrity, automated project domain coverage discovery, and 100% reference indexing in `daily-scenarios.md`).
 - Multi-IDE tool adapter parity (`AGENTS.md` and tool-specific rule configuration).

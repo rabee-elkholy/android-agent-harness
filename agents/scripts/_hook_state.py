@@ -415,3 +415,87 @@ def record_subagents_poll(conversation_id: str) -> int:
         return n
 
 
+def _ledger_path() -> Path:
+    return state_path().with_name("review_ledger.json")
+
+
+_CODE_FP_SUFFIXES = {".kt", ".java", ".kts"}
+
+
+def tree_code_fingerprint() -> str | None:
+    """Stable hash over working-tree code paths that the review gate protects."""
+    try:
+        from _repo_files import REPO, changed_paths
+
+        names = []
+        for path in changed_paths():
+            suffix = path.suffix.lower()
+            if suffix in _CODE_FP_SUFFIXES:
+                pass
+            elif suffix == ".xml":
+                try:
+                    rel = f"/{path.relative_to(REPO).as_posix()}"
+                except ValueError:
+                    rel = f"/{path.as_posix()}"
+                lower_name = path.name.lower()
+                if lower_name in ("strings.xml", "plurals.xml") or "/values" in rel:
+                    continue
+            else:
+                continue
+            try:
+                names.append(path.relative_to(REPO).as_posix())
+            except ValueError:
+                names.append(path.as_posix())
+        if not names:
+            return None
+        return hashlib.sha256("\n".join(sorted(names)).encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
+
+def record_review_ledger(package_path: Path) -> None:
+    """Persist the tree fingerprint a review package was generated against."""
+    payload = {
+        "package": str(package_path),
+        "sha256": file_sha256(Path(package_path)),
+        "tree_fingerprint": tree_code_fingerprint(),
+        "time": time.time(),
+    }
+    path = _ledger_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with state_lock():
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def ledger_verdict(fp_now: str | None, fp_ledger: str | None) -> str:
+    """Advisory text when code changed since the last review package, else ''."""
+    if fp_now is None or fp_now == fp_ledger:
+        return ""
+    return (
+        "[!] REVIEW ADVISORY: Kotlin/XML code changed after the last review package "
+        "was generated. The 5-leaf verdicts on disk cover an older diff. "
+        "Regenerate with `python .agents/scripts/review_package.py` and re-run the "
+        "5 review leaves before trusting this build."
+    )
+
+
+def review_advisory() -> str:
+    try:
+        from _repo_files import has_non_doc_code_changes
+
+        if not has_non_doc_code_changes():
+            return ""
+    except Exception:
+        return ""
+    try:
+        led = json.loads(_ledger_path().read_text(encoding="utf-8"))
+        if not isinstance(led, dict):
+            return ledger_verdict(tree_code_fingerprint(), None)
+    except Exception:
+        return ledger_verdict(tree_code_fingerprint(), None)
+    return ledger_verdict(tree_code_fingerprint(), led.get("tree_fingerprint"))
+
+

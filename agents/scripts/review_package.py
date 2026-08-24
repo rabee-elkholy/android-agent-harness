@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
+from _hook_state import record_review_ledger  # noqa: E402
 
 enable_line_buffered_stdio()
 
@@ -71,6 +72,7 @@ def main(argv=None) -> int:
         chunks.extend(extra)
 
     out.write_text("".join(chunks), encoding="utf-8")
+    record_review_ledger(out)
     print(f"HARNESS_REVIEW_PACKAGE={out}")
     return 0
 

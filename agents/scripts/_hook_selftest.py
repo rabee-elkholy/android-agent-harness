@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -419,6 +420,32 @@ ok = ok and pkg_path is not None and pkg_path.is_file()
 print(f"review_package writes file: {'OK' if ok else 'FAIL ' + pkg_proc.stdout + pkg_proc.stderr}")
 failed += int(not ok)
 
+ledger_path = STATE.parent / "review_ledger.json"
+try:
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ok_ledger = (
+        isinstance(ledger, dict)
+        and "tree_fingerprint" in ledger
+        and "sha256" in ledger
+        and ledger.get("package", "").endswith(".diff")
+    )
+except Exception:
+    ledger = {}
+    ok_ledger = False
+print(f"review_package records ledger: {'OK' if ok_ledger else 'FAIL missing/invalid ' + str(ledger_path)}")
+failed += int(not ok_ledger)
+
+from _hook_state import ledger_verdict  # noqa: E402
+
+ok_verdict = (
+    "REVIEW ADVISORY" in ledger_verdict("fp-after-change", "fp-at-package")
+    and ledger_verdict(None, "fp-at-package") == ""
+    and ledger_verdict("same-fp", "same-fp") == ""
+    and "REVIEW ADVISORY" in ledger_verdict("fp-now", None)
+)
+print(f"review ledger staleness comparator: {'OK' if ok_verdict else 'FAIL'}")
+failed += int(not ok_verdict)
+
 # Scaffold templates must not emit invalid try {{ and must include Empty + dual locale
 sys.path.insert(0, str(SCRIPTS))
 import new_feature_scaffold as scaffold_mod  # noqa: E402
@@ -550,6 +577,24 @@ preview_kt.write_text('@Preview(name = "Arabic RTL")\n', encoding="utf-8")
 ok_skip_preview = check_hardcoded_strings([preview_kt]) == []
 print(f"check_strings_skips_preview: {'OK' if ok_skip_preview else 'FAIL'}")
 failed += int(not ok_skip_preview)
+
+trip_kt = str_dir / "Trip.kt"
+trip_kt.write_text('val doc = """\nText("Sample inside docs")\n"""\n', encoding="utf-8")
+ok_skip_trip = check_hardcoded_strings([trip_kt]) == []
+print(f"check_strings_skips_triple_string: {'OK' if ok_skip_trip else 'FAIL'}")
+failed += int(not ok_skip_trip)
+
+decoy_kt = str_dir / "Decoy.kt"
+decoy_kt.write_text('fun g() { load() } // Text("decoy in trailing comment")\n', encoding="utf-8")
+ok_skip_decoy = check_hardcoded_strings([decoy_kt]) == []
+print(f"check_strings_skips_trailing_comment_decoy: {'OK' if ok_skip_decoy else 'FAIL'}")
+failed += int(not ok_skip_decoy)
+
+real_after_comment = str_dir / "RealAfter.kt"
+real_after_comment.write_text('fun h() { label = "Real user text" } // note\n', encoding="utf-8")
+ok_real_after = any("Hardcoded" in item for item in check_hardcoded_strings([real_after_comment]))
+print(f"check_strings_detects_code_after_trailing_comment: {'OK' if ok_real_after else 'FAIL'}")
+failed += int(not ok_real_after)
 
 toast_kt = str_dir / "Toast.kt"
 toast_kt.write_text(
@@ -917,7 +962,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.6") > (0, 5, 5) and get_current_version() == "0.5.6"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.7") > (0, 5, 6) and get_current_version() == "0.5.7"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1045,6 +1090,16 @@ failed += int(not ok_groovy)
 
 os.environ["_IN_HOOK_SELFTEST"] = "1"
 from harness_doctor import HarnessDoctor
+
+STATE.write_text(
+    json.dumps({"c-ttl": {"pending_reviews": True, "pending_since": time.time() - 100000}}),
+    encoding="utf-8",
+)
+ttl_res = run(cmd("gradlew.bat :app:assembleDebug", conversation="c-ttl"))
+ok_ttl = ttl_res["decision"] == "allow"
+print(f"barrier_ttl_expiry_unblocks: {ttl_res['decision']} {'OK' if ok_ttl else 'FAIL ' + json.dumps(ttl_res)}")
+failed += int(not ok_ttl)
+
 doc = HarnessDoctor(repo_root)
 doc_results = doc.run_all()
 doc_failures = sum(1 for r in doc_results if r.status == "FAIL")

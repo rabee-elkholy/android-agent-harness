@@ -364,8 +364,92 @@ class HarnessDoctor:
 
             self.log(category, "Assemble Task", "PASS", f"Configured assemble task: {assemble_task}")
             self.log(category, "Device Policy", "PASS", f"ALLOW_EMULATOR = {allow_emu}")
+
+            self._check_install_consistency(category)
         except Exception as exc:
             self.log(category, "Product Identity", "FAIL", f"Error reading _product.py: {exc}")
+
+    def _check_install_consistency(self, category: str) -> None:
+        """Cross-check recorded setup answers against _product.py and adapters on disk."""
+        answers_file = self.repo / ".harness-setup" / "answers.json"
+        if not answers_file.is_file():
+            return
+        try:
+            answers = json.loads(answers_file.read_text(encoding="utf-8"))
+            if not isinstance(answers, dict):
+                return
+        except Exception as exc:
+            self.log(category, "Install Consistency", "WARN", f"answers.json unreadable: {exc}")
+            return
+
+        import _product
+
+        drift = []
+
+        device_policy = str(answers.get("device_policy") or "").strip()
+        allow_emu = bool(getattr(_product, "ALLOW_EMULATOR", True))
+        if device_policy == "physical-only" and allow_emu:
+            drift.append(
+                "device policy mismatch: answers.json says physical-only but "
+                "_product.py ALLOW_EMULATOR = True (emulator denies are inactive)."
+            )
+        elif device_policy == "allow" and not allow_emu:
+            drift.append(
+                "device policy mismatch: answers.json says both allowed but "
+                "_product.py ALLOW_EMULATOR = False."
+            )
+
+        answers_assemble = str(answers.get("assemble") or "").strip()
+        product_assemble = str(getattr(_product, "ASSEMBLE_TASK", "")).strip()
+        if answers_assemble and product_assemble and answers_assemble != product_assemble:
+            drift.append(
+                f"assemble task mismatch: answers.json '{answers_assemble}' vs "
+                f"_product.py '{product_assemble}'."
+            )
+
+        try:
+            from install_tool_adapters import MANAGED, TOOL_FILES
+
+            selected_tools = [str(t) for t in (answers.get("tools") or [])]
+            missing_adapters = []
+            for tool in selected_tools:
+                for rel in TOOL_FILES.get(tool, ()):
+                    path = self.repo / rel
+                    if not path.is_file():
+                        missing_adapters.append(rel)
+                        continue
+                    try:
+                        if MANAGED.strip() not in path.read_text(encoding="utf-8"):
+                            missing_adapters.append(f"{rel} (unmanaged)")
+                    except OSError:
+                        missing_adapters.append(rel)
+            agents_md = self.repo / "AGENTS.md"
+            if selected_tools and not agents_md.is_file():
+                missing_adapters.append("AGENTS.md")
+        except Exception:
+            missing_adapters = []
+
+        if missing_adapters:
+            drift.append(
+                f"selected tool adapters missing/unmanaged: {', '.join(missing_adapters)}. "
+                "Re-run install_tool_adapters.py with the recorded --tools."
+            )
+
+        if drift:
+            self.log(
+                category,
+                "Install Consistency",
+                "FAIL",
+                f"{len(drift)} configuration drift(s) between answers.json and this checkout.",
+                details=drift,
+            )
+        else:
+            self.log(
+                category,
+                "Install Consistency",
+                "PASS",
+                "answers.json matches _product.py and all selected adapters are managed and present.",
+            )
 
     def check_template_leaks(self) -> None:
         category = "5. Template Leak Check"

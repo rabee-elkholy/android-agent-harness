@@ -95,6 +95,28 @@ def _is_test_path(path: Path) -> bool:
     return "/src/test/" in posix or "/androidtest/" in posix
 
 
+def _cut_line_comment(line: str) -> str:
+    """Truncate a Kotlin line at a // comment that sits outside string literals."""
+    in_string = False
+    escaped = False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            return line[:i]
+        i += 1
+    return line
+
+
 def check_hardcoded_strings(files: list[Path]) -> list[str]:
     findings: list[str] = []
     for path in files:
@@ -110,14 +132,23 @@ def check_hardcoded_strings(files: list[Path]) -> list[str]:
             content = path.read_text(encoding="utf-8", errors="replace")
         except Exception:
             continue
+        in_triple_string = False
         for i, line in enumerate(content.splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("//") or stripped.startswith("<!--") or stripped.startswith("*"):
                 continue
             if path.suffix == ".kt":
-                if SKIP_KT_LINE.search(line):
+                if in_triple_string:
+                    if line.count('"""') % 2 == 1:
+                        in_triple_string = False
                     continue
-                clean_line = RESOURCE_CALL.sub('""', line)
+                code_line = _cut_line_comment(line)
+                if code_line.count('"""') % 2 == 1:
+                    in_triple_string = True
+                    continue
+                if SKIP_KT_LINE.search(code_line):
+                    continue
+                clean_line = RESOURCE_CALL.sub('""', code_line)
                 if any(pat.search(clean_line) for pat in HARDCODED_KT):
                     findings.append(f"{rel}:{i} -> Hardcoded Kotlin UI text: {stripped[:120]}")
             elif path.suffix == ".xml":

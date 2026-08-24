@@ -307,7 +307,7 @@ To verify that an installation or update was 100% successful, `harness_doctor.py
 1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` security audit, and Git working tree status / commit advisory.
 2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 25 core scripts, and `hooks.json`.
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
-4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, and assemble task.
+4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency (`answers.json` vs device policy, assemble task, and selected tool adapters).
 5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.
 6. **Skills & Workflows**: 10 workflow playbooks, foundation references integrity, automated project domain coverage discovery, and 100% reference indexing in `daily-scenarios.md`.
 7. **Multi-IDE Tool Adapters**: `AGENTS.md` at root and active tool adapters (Cursor, Claude Code, GitHub Copilot).
@@ -333,6 +333,7 @@ Executing Gradle builds directly through AI tool interfaces often causes timeout
 
 `run_gradle_task.py` provides:
 - **10-Second Live Heartbeat**: Continuously streams stdout/stderr to prevent assistant timeout.
+- **Review Staleness Advisory**: Deterministic warning when Kotlin/XML code changed after the last `review_package.py` generation (works in every tool, not just Antigravity).
 - **Intelligent Error Parser (`gradle_error_parser.py`)**: Filters thousands of lines of Gradle output to extract the exact compiler error, file path, and line number.
 - **Build Isolation**: Executes safely with project-specific daemon configurations.
 
