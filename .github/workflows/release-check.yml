@@ -28,4 +28,4 @@ jobs:
           changelog = Path('CHANGELOG.md').read_text(encoding='utf-8')
           assert f'[{ver}]' in changelog, f'Version {ver} not found in CHANGELOG.md'
           print(f'Release version {ver} is valid and aligned.')
-          "\n
+          "
