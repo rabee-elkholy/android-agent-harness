@@ -252,4 +252,7 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
   git commit -m "chore: setup android harness kit"
   ```
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
-- **Diagnostics & Rollback**: System diagnostics = `docs/diagnostic-prompt.md`, Rollback = `docs/rollback-prompt.md`. Five `*_PASS` before real delivery.
+- **Diagnostics & Rollback**:
+  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`.
+  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`.
+  - Remember: Five `*_PASS` required before real feature/bug delivery.
