@@ -241,17 +241,24 @@ To prevent models from getting stuck in infinite polling loops (>2 calls to `man
 
 Before compiling the application with Gradle, `preflight_check.py` runs three rapid static verification checks in under 2 seconds:
 
-### Fast Kotlin Lint
+### Fast Kotlin Lint (`fast_kt_lint.py`)
 - Verifies package declarations, import hygiene, and Kotlin syntax.
 - Enforces Jetpack Compose `@Preview` tags for both LTR (English) and RTL (Arabic) locales.
+- Whitelists standard Android SDK symbols (`Build.VERSION.SDK_INT`, `UUID`, `@androidx.annotation.*`, `@file:OptIn`).
+- Ignores `abstract class` definitions to prevent false `@AndroidEntryPoint` annotations that crash the Hilt compiler.
+- Dynamically scans lookback annotations for Compose `@Immutable` and `@Stable` state data classes.
 
-### Room Database Migration Guard
-- Scans `@Database` and `@Entity` declarations for schema changes.
-- Requires explicit `Migration(from, to)` classes and schema version bumps whenever database fields are added or modified.
+### Room Database Migration Guard (`room_guard.py`)
+- Scans `@Database` and `@Entity` declarations for schema modifications.
+- Recursively discovers nested `@Embedded` entity data classes to prevent undetected SQLite schema mismatches.
+- Fully supports modern Room 2.4+ `AutoMigration(from = X, to = Y)` annotations.
+- Implements BFS graph traversal to validate transitive multi-step migration paths (e.g. 1 -> 2 -> 3).
 
-### Bilingual String Parity Check
-- Analyzes `res/values/strings.xml` and `res/values-ar/strings.xml`.
-- Flags missing translations, mismatched placeholder arguments (`%1$s`), and ignores `translatable="false"` system strings.
+### Bilingual String Parity Check (`check_strings.py`)
+- Analyzes `res/values/strings.xml` and `res/values-ar/strings.xml` for complete 1-to-1 key parity.
+- Matches multiline Jetpack Compose `Text(...)` parameters and arbitrary argument positions.
+- Strips `stringResource(...)` calls before regex matching to prevent string concatenation bypasses.
+- Supports Kotlin Multiplatform `composeResources` fallback paths.
 
 ---
 

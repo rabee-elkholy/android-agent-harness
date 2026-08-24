@@ -40,9 +40,10 @@ When adding or modifying an `@Entity`:
 ---
 
 ## 4. Review Guard Checklist for Database
-- If any `@Database` file or one of its entity classes is in the working tree:
+- If any `@Database` file, one of its entity classes, or an `@Embedded` data class is in the working tree:
   1. Did the integer `version` increment vs HEAD?
-  2. Is `Migration(old, new)` present and passed to `addMigrations(...)`?
-  3. Are nullability (`NOT NULL` vs `NULL`) and default values aligned with Kotlin types?
-  4. Was `fallbackToDestructiveMigration()` removed for that schema change?
-- `python .agents/scripts/preflight_check.py` runs this gate (`room_guard.py`). It maps `@Database` entity class names to any changed Kotlin type in the working tree (not filename stems). Anonymous `object : Migration(x, y)` still counts; `addMigrations(...)` must be present on a version bump.
+  2. Is `Migration(old, new)` or `AutoMigration(from, to)` present and passed to `addMigrations(...)` or declared on `@Database`?
+  3. For multi-version jumps, is the transitive migration path covered (e.g. 1 -> 2 -> 3)?
+  4. Are nullability (`NOT NULL` vs `NULL`) and default values aligned with Kotlin types?
+  5. Was `fallbackToDestructiveMigration()` removed for that schema change?
+- `python .agents/scripts/preflight_check.py` runs this gate (`room_guard.py`). It recursively resolves `@Embedded` types, validates `AutoMigration` declarations, and verifies graph path connectivity. Anonymous `object : Migration(x, y)` still counts.
