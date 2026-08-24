@@ -1,23 +1,25 @@
 <div align="center">
 
-# Android Agent Harness
+# 🛡️ Android Agent Harness
 
-**Architecture governance, quality delivery gate, and safety harness for Android & Kotlin Multiplatform.**
+**Enterprise Architecture Governance, 5-Leaf Review Gate, and Safety Harness for Android & Kotlin Multiplatform.**
 
-[![Release](https://img.shields.io/github/v/release/rabee-elkholy/android-harness-kit?color=2ea44f&style=flat-square)](https://github.com/rabee-elkholy/android-harness-kit/releases)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![CI Build](https://img.shields.io/github/actions/workflow/status/rabee-elkholy/android-harness-kit/ci.yml?branch=main&style=flat-square&logo=github-actions&logoColor=white&label=CI)](https://github.com/rabee-elkholy/android-harness-kit/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/rabee-elkholy/android-harness-kit?color=2ea44f&style=flat-square&logo=github&logoColor=white)](https://github.com/rabee-elkholy/android-harness-kit/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20KMP-3DDC84?style=flat-square&logo=android&logoColor=white)](https://android.com)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-5--Leaf%20Pass-success?style=flat-square)](https://github.com/rabee-elkholy/android-harness-kit)
-[![AI Tools](https://img.shields.io/badge/AI%20Tools-14%20Supported-purple?style=flat-square)](docs/tool-support.md)
+[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-5--Leaf%20Pass-success?style=flat-square&logo=checkmarx&logoColor=white)](docs/architecture.md)
+[![AI Tools](https://img.shields.io/badge/AI%20Tools-14%20Supported-8A2BE2?style=flat-square&logo=openai&logoColor=white)](docs/tool-support.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 <p align="center">
-  <a href="#overview">Overview</a> •
-  <a href="#architecture-workflow">Workflow</a> •
-  <a href="#key-capabilities">Key Capabilities</a> •
-  <a href="#supported-ai-tools">Supported Tools</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#contributing">Contributing</a> •
+  <a href="#-overview">Overview</a> •
+  <a href="#-quickstart-in-2-minutes">Quickstart</a> •
+  <a href="#-architecture-workflow">Workflow</a> •
+  <a href="#-the-five-leaf-review-gate">Review Gate</a> •
+  <a href="#-supported-ai-tools">Supported Tools</a> •
+  <a href="#-documentation">Documentation</a> •
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
@@ -25,190 +27,127 @@
 
 </div>
 
-## Overview
+## 🌟 Overview
 
-**Android Agent Harness** is a production delivery gate and architecture governance engine for Android and Kotlin Multiplatform (KMP) development. It installs rules, specialized reviewer subagents, and Python safety runners into your codebase.
+**Android Agent Harness** transforms AI coding assistants from unconstrained code generators into disciplined, production-grade engineering teammates.
 
-Once installed, coding assistants cannot declare tasks complete with a casual "LGTM". Every code modification must pass a parallel **Five-Leaf Review Gate**, preflight sanity checks, real-time Gradle execution, and physical device verification before delivery.
+When using tools like **Cursor**, **Google Antigravity**, **Claude Code**, or **GitHub Copilot** on large Android & KMP codebases, AI models often cause silent regressions, introduce unhandled `NullPointerExceptions`, drop Arabic/RTL string translations, or freeze the UI thread with unoptimized recompositions.
+
+**Android Agent Harness** eliminates these risks by installing an automated **Five-Leaf Review Gate**, strict safety hooks, live Gradle execution streams, and Zoho Sprints project sync into your codebase.
 
 ---
 
-## Architecture Workflow
+## ⚡ Quickstart (in 2 Minutes)
+
+Open your AI assistant in your **Android project root directory** and paste:
+
+```markdown
+Read and execute the Android Harness Kit installer:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md
+```
+
+Follow the interactive setup wizard to configure your project. Once verified (`Total test failures: 0`), your repository is fully protected!
+
+👉 *For detailed setup instructions, see the [Quickstart Guide](docs/quickstart.md).*
+
+---
+
+## 🔄 Architecture Workflow
 
 ```mermaid
 flowchart TD
-    Start(["Task / Prompt"]) --> Plan["Planning Guard: implementation_plan.md"]
+    Start(["Task / User Request"]) --> Plan["Planning Guard: implementation_plan.md"]
     Plan --> Approval{"Developer Approval"}
     Approval -- Approved --> Code["Code Implementation"]
     Approval -- Revisions --> Plan
     Code --> ReviewGate["Five-Leaf Parallel Review Gate"]
     
-    subgraph ReviewGate ["Reviewer Subagents"]
-        R1["Bug Reviewer"]
-        R2["Convention Reviewer"]
-        R3["Security Reviewer"]
-        R4["Perf & ANR Guardian"]
-        R5["Regression Impact"]
+    subgraph ReviewGate ["Parallel Reviewer Subagents"]
+        R1["🐞 Bug & Null-Safety Reviewer"]
+        R2["📐 Architecture & Convention"]
+        R3["🔒 Security & Permissions"]
+        R4["⚡ Perf & ANR Guardian"]
+        R5["🔄 Regression Blast Radius"]
     end
     
     ReviewGate --> Verdict{"All 5 Leaves PASS?"}
-    Verdict -- Fix Findings --> Code
-    Verdict -- All PASS --> Preflight["Preflight: Lint + DB Migrations + String Parity"]
+    Verdict -- Findings --> Code
+    Verdict -- All PASS --> Preflight["Preflight: Fast Lint + Room DB + String Parity"]
     Preflight --> TestCheck{"Unit Tests Enabled?"}
     TestCheck -- Enabled --> UnitTests["Unit Tests: testDebugUnitTest"]
-    UnitTests -- Tests Fail --> Code
-    UnitTests -- Tests PASS --> Gradle["Live Gradle Runner: assembleDebug"]
+    UnitTests -- Fail --> Code
+    UnitTests -- PASS --> Gradle["Live Gradle Runner: assembleDebug"]
     TestCheck -- Skipped --> Gradle
-    Gradle --> Device["Device Install & Launch: run_device.py"]
-    Device --> ManualSignoff["Manual Device Verification: 4 Phases"]
+    Gradle --> Device["Device Runner: run_device.py"]
+    Device --> ManualSignoff["Manual 4-Phase Verification"]
     ManualSignoff -- Fail --> Code
     ManualSignoff -- All PASS --> ZohoCheck{"Zoho Sprints Connected?"}
-    ZohoCheck -- Enabled --> Zoho["Zoho Sprints: Status & Comment Sync"]
-    ZohoCheck -- Skipped / None --> Finish(["Verified Delivery & Commit"])
+    ZohoCheck -- Enabled --> Zoho["Zoho Sprints: Status & Commit Traceability"]
+    ZohoCheck -- Skipped --> Finish(["Verified Delivery & Safe Commit"])
     Zoho --> Finish
 ```
 
 ---
 
-## Core vs. Optional Features
+## 🍃 The Five-Leaf Review Gate
 
-| Category | Feature | Status | Description |
-| :--- | :--- | :--- | :--- |
-| **Core** | **Five-Leaf Review Gate** | **Mandatory** | Parallel review by 5 subagents (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`). Never bypassed. |
-| **Core** | **Planning Guard** | **Mandatory** | Multi-file features and new screens require `implementation_plan.md` approval before coding. |
-| **Core** | **Preflight Verification** | **Mandatory** | Runs fast Kotlin lint, Room database migration checks, and string parity before building. |
-| **Core** | **Live Gradle Streaming** | **Mandatory** | `run_gradle_task.py` executes tasks with a 10s heartbeat to avoid silent background hangs. |
-| **Core** | **Safety Hooks & Git Guard** | **Mandatory** | Hard blocks on `git commit`, `adb monkey`, and destructive package operations. |
-| **Configurable** | **Unit Tests Gate (`I.15`)** | *Optional* | Enabled by default; runs `testDebugUnitTest`. Can be skipped if the project does not have test suites. |
-| **Configurable** | **Zoho Sprints Sync (`I.16`)** | *Optional* | Project management MCP integration to sync task statuses (`Ready To ReTest`) and comments. |
-| **Configurable** | **Device Target Policy (`I.4`)** | *Configurable* | Choose between locking strictly to **Physical Device Only** or allowing **Physical + Emulator**. |
-| **Configurable** | **Git Commit Policy (`I.3`)** | *Configurable* | **Manual IDE commit** (recommended) or allow the agent to commit upon explicit chat request. |
-| **Configurable** | **Bilingual Parity (`I.8`)** | *Configurable* | Enforces dual **Arabic (RTL) + English (LTR)** string parity and previews, or single locale. |
-| **Configurable** | **AI Tool Adapters (`I.14`)** | *Configurable* | Select only the tools you use (Cursor, Antigravity, Claude Code, Copilot, Windsurf, etc.). |
+Every code change must pass parallel sign-off from all 5 specialized reviewer subagents before Gradle assembly is unlocked:
 
----
-
-## Supported AI Tools
-
-The installer generates native adapter files for your chosen toolchain:
-
-| AI Assistant / IDE | Generated Adapter | Integration Level |
+| Leaf Reviewer | Focus Area | What It Catches |
 | :--- | :--- | :--- |
-| **Google Antigravity** | `agents/rules/`, `agents/hooks.json` | Hook blocking, subagent definitions, ephemeral reminders |
-| **Cursor** | `.cursorrules` | Architectural rules, review protocol, terminal execution gates |
-| **Claude Code** | `CLAUDE.md` | Slash command protocols, terminal safety guards |
-| **GitHub Copilot** | `.github/copilot-instructions.md` | Workspace instructions, domain conventions |
-| **OpenAI Codex CLI** | `AGENTS.md` | Universal agent instructions, execution policies |
-| **Windsurf** | `.windsurfrules` | Cascade AI rules and architectural constraints |
-| **Cline & Roo Code** | `.clinerules`, `.roomodes` | System prompts, mode definitions, tool permissions |
-| **Amazon Q / Continue / Junie / Kilo / Goose** | Tool-specific rule files | Full rule compliance across 14+ supported environments |
+| **🐞 Bug Reviewer** | Memory & Logic | `NullPointerExceptions`, unhandled coroutine cancellations, lifecycle leaks |
+| **📐 Convention Reviewer** | Architecture | MVI / Clean Architecture violations, mutable state leakage, improper DI |
+| **🔒 Security Reviewer** | Security & Privacy | Exported components without permission, SQL injections, cleartext tokens |
+| **⚡ Perf & ANR Guardian** | Performance & UI | Main thread disk/network I/O, heavy recompositions, unbounded loops |
+| **🔄 Regression Reviewer** | Blast Radius | Broken dependent screens, missing navigation parameters, contract breaks |
 
 ---
 
-## Project Modes
+## 🛠️ Supported AI Tools
 
-> [!NOTE]
-> **Established Codebases**: The installer inspects `libs.versions.toml`, Gradle build files, ViewModels, and Compose UI to port your existing stack (MVI/MVVM, Koin/Hilt, Voyager/Compose Navigation, Room, etc.).
-> 
-> **Brand-New / Blank Projects**: The installer launches an interactive questionnaire to define your target platform (Native vs KMP), architecture, DI, navigation, UI toolkit, database, networking, and localization from day one.
+The installer automatically generates native rule adapters tailored to your IDE and assistant:
 
----
-
-## Installation
-
-Installation is an automated structural port that tailors the 5-reviewer governance engine to your app's exact package and architecture.
-
-### Step 1: Open Chat in Target Android Root
-Open your IDE or terminal assistant in your **Android project root directory** (do not run setup inside `android-harness-kit`).
-
-### Step 2: Select a Reasoning Model
-Use a strong reasoning model for the setup chat (fast/lightweight models without deep reasoning tend to skip structural porting steps):
-- **Anthropic**: `Claude Opus 4.6 / 5 (Thinking)` / `Claude Sonnet 4.6 / 5 (Thinking)`
-- **Google**: `Gemini 3.1 Pro (Deep Think)` / `Gemini 3.7 Flash`
-- **OpenAI**: `GPT-5.6 Sol` / `OpenAI o3` / `gpt-oss-120b`
-- **DeepSeek**: `DeepSeek-V4 (Thinking)` / `DeepSeek-R1`
-
-### Step 3: Paste the Install Prompt
-Open [`docs/install-prompt.md`](docs/install-prompt.md), copy its entire contents, and paste it as your first message in the chat.
-
-The AI assistant will automatically:
-1. Verify that your project is a valid Android or Kotlin Multiplatform (KMP) repository.
-2. Clone or locate the harness kit.
-3. Guide you through the interactive setup questionnaire.
-4. Structurally port the architecture rules, domain skills, and the 5 reviewer subagents to your app.
-5. Generate native configuration adapters for your selected AI tools and run self-tests until `Total test failures: 0`.
-
-### Step 4: Answer the Setup Wizard Questions
-During installation, the wizard will ask you to confirm:
-1. **Backup**: Create a timestamped backup before modifying `.agents/` *(Recommended)*.
-2. **App Name**: Application identifier and display name.
-3. **Git Policy**: Manual commits in IDE *(Recommended)* vs agent commits on request.
-4. **Testing Target**: Physical device only vs physical + emulator.
-5. **Install Confirmation**: Require confirmation before `adb install`.
-6. **Unit Tests**: Retain or bypass unit-test verification gates.
-7. **AI Tools**: Select which tools you use to generate matching adapter files.
-8. **Zoho Sprints**: Optional project management integration.
-9. *(If Greenfield Project)*: Complete the 8-question architecture foundation questionnaire.
+| Assistant / IDE | Generated Adapter | Capabilities |
+| :--- | :--- | :--- |
+| **Google Antigravity** | `agents/rules/`, `agents/hooks.json` | Subagent dispatch, blocking hooks, ephemeral reminders |
+| **Cursor** | `.cursorrules` | Architecture constraints, review protocol, terminal gates |
+| **Claude Code** | `CLAUDE.md` | Terminal safety guards, review flow protocols |
+| **GitHub Copilot** | `.github/copilot-instructions.md` | Context instructions, domain conventions |
+| **OpenAI Codex CLI** | `AGENTS.md` | Universal agent instructions, execution limits |
+| **Windsurf** | `.windsurfrules` | Cascade AI constraints, MVI architecture rules |
+| **Cline & Roo Code** | `.clinerules`, `.roomodes` | System prompt enforcement, tool permissions |
+| **Continue / Junie / Kilo / Goose** | Native Adapter Files | Full rule compliance across 14+ supported environments |
 
 ---
 
-## Repository Structure
+## 📚 Documentation
 
-```
-android-harness-kit/
-├── README.md                ← Project documentation
-├── CHANGELOG.md             ← Version release history
-├── LICENSE                  ← MIT License
-├── docs/
-│   ├── install-prompt.md    ← Setup instructions for new installs
-│   ├── update-prompt.md     ← Upgrade instructions for existing installs
-│   ├── setup-prompt.md      ← Installer agent execution protocol
-│   ├── rollback-prompt.md   ← Uninstallation and restore instructions
-│   └── tool-support.md      ← Supported tool specifications
-├── agents/                  ← Deployed to <your-app>/.agents
-│   ├── rules/               ← Core harness rules & five-leaf review guidelines
-│   ├── scripts/             ← Python runners (setup_wizard, run_gradle_task, preflight, etc.)
-│   ├── skills/              ← Android skills (Compose theme, MVI, ANR, Room, etc.)
-│   ├── subagents/           ← Specialized reviewer subagent definitions
-│   └── tool-adapters/       ← Template adapters for Cursor, Claude, Antigravity, etc.
-└── templates/               ← Optional runtime and tool templates
-```
-
-## Contributing
-
-Contributions from the Android and Kotlin Multiplatform development community are welcome!
-
-Whether you want to:
-- Add support or adapters for new AI coding tools and IDEs
-- Improve prompt heuristics and domain guidelines for the reviewer subagents
-- Enhance test coverage, safety guards, or Python automation runners
-- Report edge-case bugs or suggest architectural improvements
-
-### Getting Started:
-1. **Fork the Repository** and create your branch from `main`:
-   ```bash
-   git checkout -b feature/your-improvement
-   ```
-2. **Make Your Changes** and verify all safety checks and selftests pass:
-   ```bash
-   python agents/scripts/_hook_selftest.py
-   python agents/scripts/preflight_check.py
-   ```
-3. **Commit Your Changes** with clear, conventional commit messages (`feat: ...`, `fix: ...`, `docs: ...`).
-4. **Open a Pull Request** explaining the motivation and detailed summary of changes.
-
-For major architectural proposals, please open an **Issue** or start a **Discussion** first to align on design.
+- [**Quickstart Guide**](docs/quickstart.md) — 2-minute setup instructions
+- [**Architecture Guide**](docs/architecture.md) — Deep dive into the governance engine
+- [**Tool Support Matrix**](docs/tool-support.md) — Full matrix of 14+ supported AI tools
+- [**Installation Prompt**](docs/install-prompt.md) — One-prompt installer script
+- [**Upgrade Guide**](docs/update-prompt.md) — How to update an existing installation
+- [**Rollback Guide**](docs/rollback-prompt.md) — Clean uninstaller and restore script
+- [**Contributing Guidelines**](CONTRIBUTING.md) — How to contribute to the kit
+- [**Code of Conduct**](CODE_OF_CONDUCT.md) — Community standards
+- [**Security Policy**](SECURITY.md) — Vulnerability reporting
 
 ---
 
-## License
+## 🤝 Contributing
+
+Contributions are welcome! Whether you want to add adapters for new AI tools, improve subagent prompts, or enhance Python runners, please read our [Contributing Guide](CONTRIBUTING.md) before submitting a Pull Request.
+
+---
+
+## 📄 License
 
 Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 
----
-
 <div align="center">
 
-[Back to Top](#android-agent-harness)
+**Crafted with 💚 for the Android & Kotlin Multiplatform Community.**
 
-</div>
+[Back to Top ↑](#️-android-agent-harness)
+
+</div>\n

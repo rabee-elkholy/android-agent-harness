@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/rabee-elkholy/android-harness-kit/discussions
+    about: Ask questions, share ideas, and connect with the community.
+  - name: Release Notes & Changelog
+    url: https://github.com/rabee-elkholy/android-harness-kit/releases
+    about: Explore release updates and upgrade guides.\n

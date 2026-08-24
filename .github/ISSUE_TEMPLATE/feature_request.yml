@@ -1,0 +1,35 @@
+name: ✨ Feature Request / Proposal
+description: Suggest a new reviewer subagent, rule enhancement, or tool adapter
+labels: ["enhancement", "discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make the delivery harness even smarter or support a new AI workflow? Let us know!
+  - type: dropdown
+    id: category
+    attributes:
+      label: Proposal Category
+      options:
+        - New Reviewer Subagent (e.g., Accessibility, Localization, KMP)
+        - New AI Tool / IDE Adapter
+        - Safety Hook & Guardrail Improvement
+        - Python Runner / Script Enhancement
+        - Documentation / Reference Expansion
+        - Zoho Sprints / MCP Integration
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Problem & Motivation
+      description: What problem does this solve, or what workflow does it enhance?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution / Design
+      description: Detailed explanation of how this should work.
+    validations:
+      required: true\n

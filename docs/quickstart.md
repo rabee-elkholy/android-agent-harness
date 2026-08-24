@@ -1,0 +1,46 @@
+# 🚀 Quickstart Guide (2 Minutes)
+
+Get started with **Android Agent Harness** in 4 simple steps.
+
+---
+
+## Step 1: Open Your Android Project Root
+Launch your preferred AI-enabled IDE or assistant (e.g. Google Antigravity, Cursor, Claude Code, Windsurf) and ensure your workspace is set to your **Android project root directory**.
+
+---
+
+## Step 2: Choose a Reasoning Model
+For initial setup, select a model capable of deep architectural reasoning:
+- **Claude**: `Claude Opus 4.6 / 5 (Thinking)` or `Claude Sonnet 4.6 (Thinking)`
+- **Gemini**: `Gemini 3.1 Pro (Deep Think)` or `Gemini 3.7 Flash`
+- **OpenAI**: `OpenAI o3` or `GPT-5.6 Sol`
+
+---
+
+## Step 3: Run the One-Prompt Installer
+
+Copy the entire content of [`docs/install-prompt.md`](install-prompt.md) and paste it into your chat prompt:
+
+```markdown
+Run the Android Harness Kit Installer:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md
+```
+
+---
+
+## Step 4: Answer the Setup Wizard
+
+The interactive installer will ask you a series of quick questions:
+1. **Backup**: Confirm creating a rollback backup.
+2. **Product Details**: Your app name and package namespace.
+3. **Commit & Device Policies**: Physical device only vs emulator, manual vs automated commits.
+4. **AI Tool Adapters**: Select the tools you use (Cursor, Antigravity, Claude, Copilot, etc.).
+5. **Zoho Sprints**: Connect Zoho Sprints project management (Optional).
+
+Once completed, the installer will verify:
+```
+Total test failures: 0
+PREFLIGHT PASSED
+```
+
+🎉 **Your Android repository is now governed by the 5-Leaf Review Gate!**\n

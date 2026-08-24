@@ -1,0 +1,31 @@
+name: Release Validation
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  validate-tag:
+    name: Validate Release Version & Changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate Version Alignment
+        run: |
+          python -c "
+          from pathlib import Path
+          ver = Path('agents/VERSION').read_text().strip()
+          tag = '${{ github.ref_name }}'.lstrip('v')
+          assert ver == tag, f'agents/VERSION ({ver}) does not match tag ({tag})'
+          changelog = Path('CHANGELOG.md').read_text(encoding='utf-8')
+          assert f'[{ver}]' in changelog, f'Version {ver} not found in CHANGELOG.md'
+          print(f'Release version {ver} is valid and aligned.')
+          "\n

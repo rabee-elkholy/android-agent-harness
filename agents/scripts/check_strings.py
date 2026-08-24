@@ -74,6 +74,8 @@ def _resource_names(xml_file: Path) -> set[str]:
         return set()
     for tag in ("string", "plurals", "string-array"):
         for elem in root.findall(tag):
+            if elem.get("translatable") == "false":
+                continue
             name = elem.get("name")
             if name:
                 names.add(name)

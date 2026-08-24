@@ -1,0 +1,68 @@
+name: 🐛 Bug Report
+description: Report an issue, false positive, hook blocker failure, or subagent error
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Android Harness Kit! Please provide details below.
+  - type: dropdown
+    id: ai-tool
+    attributes:
+      label: AI Coding Assistant / Environment
+      description: Which AI tool or IDE are you using?
+      options:
+        - Google Antigravity
+        - Cursor
+        - Claude Code
+        - GitHub Copilot
+        - Windsurf
+        - Cline / Roo Code
+        - OpenAI Codex / CLI
+        - Other (specify below)
+    validations:
+      required: true
+  - type: input
+    id: kit-version
+    attributes:
+      label: Harness Kit Version
+      description: Check agents/VERSION or .agents/VERSION (e.g. 0.2.8)
+      placeholder: "0.2.8"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (Ubuntu/Debian)
+        - Linux (Other)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: Clear and concise description of what happened vs what was expected.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How did this issue occur?
+      placeholder: |
+        1. Installed harness on project X
+        2. Prompted assistant to do Y
+        3. Hook blocked or subagent failed with error Z
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Logs or Hook Outputs
+      description: Paste any relevant output from terminal, _hook_selftest.py, or transcript logs.
+      render: shell\n

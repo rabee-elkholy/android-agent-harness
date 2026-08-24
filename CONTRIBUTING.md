@@ -1,0 +1,79 @@
+# Contributing to Android Agent Harness
+
+Thank you for your interest in contributing to **Android Agent Harness**! 🚀
+
+We welcome contributions from the Android, Kotlin Multiplatform, and AI engineering communities — whether it's adding new AI tool adapters, expanding subagent review heuristics, improving Python test runners, or polishing documentation.
+
+---
+
+## 🧭 Code of Conduct
+
+Please review and abide by our [Code of Conduct](CODE_OF_CONDUCT.md) in all project interactions.
+
+---
+
+## 🛠️ Development Setup
+
+1. **Prerequisites**:
+   - Python 3.10+ installed.
+   - Git installed.
+   - Android SDK / ADB (optional, for device runner testing).
+
+2. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/rabee-elkholy/android-harness-kit.git
+   cd android-harness-kit
+   ```
+
+3. **Verify Self-Tests**:
+   Ensure all existing tests pass on your machine:
+   ```bash
+   python agents/scripts/_hook_selftest.py
+   python agents/scripts/preflight_check.py
+   ```
+
+---
+
+## 🧩 Architectural Principles
+
+When contributing code, rules, or subagents, keep these core principles in mind:
+
+1. **Zero Silent Regressions**: Every code modification in client projects must be verifiable. Safety hooks must fail closed.
+2. **Deterministic Governance**: Tool blocks, subagent verifications, and git protections must be deterministic and testable in `_hook_selftest.py`.
+3. **No Hardcoded Secrets**: MCP servers, API tokens, and webhook configurations must always use local `.env` or placeholder configurations. Never commit API keys.
+4. **Bilingual Awareness**: Support RTL / Arabic string parity and Jetpack Compose `@Preview` guidelines across all templates.
+
+---
+
+## 🧪 Testing Your Changes
+
+Every new safety hook, subagent definition, or installer flag MUST include automated tests in `agents/scripts/_hook_selftest.py`.
+
+Run the self-test suite:
+```bash
+python agents/scripts/_hook_selftest.py
+```
+Ensure output finishes with:
+```
+Total test failures: 0
+```
+
+---
+
+## 📝 Commit Conventions
+
+We follow [Conventional Commits](https://www.conventionalcommits.org/):
+- `feat(subagents): add accessibility audit reviewer`
+- `fix(hooks): prevent duplicate hash lockout on define_subagent`
+- `docs(readme): add interactive architecture workflow`
+- `test(selftest): add test case for git branch protection`
+
+---
+
+## 🚀 Submitting a Pull Request
+
+1. Create a feature branch (`git checkout -b feat/your-feature-name`).
+2. Implement your change with clean code and comments.
+3. Add tests to `_hook_selftest.py` and run tests.
+4. Update `CHANGELOG.md` under an `[Unreleased]` or target release section.
+5. Push your branch and open a PR with the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).\n
