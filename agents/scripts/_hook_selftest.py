@@ -20,6 +20,7 @@ TEMPLATE_PERF = SUBAGENTS / "perf-anr-guardian-agent.json"
 TEMPLATE_REG = SUBAGENTS / "regression-impact-reviewer-agent.json"
 TEMPLATE_QA = SUBAGENTS / "qa-diagnostics-agent.json"
 TEMPLATE_UI = SUBAGENTS / "android-ui-expert-agent.json"
+TEMPLATE_TEST = SUBAGENTS / "test-quality-reviewer-agent.json"
 
 STATE = Path(tempfile.mkdtemp()) / "review-invokes.json"
 PACKAGE = Path(tempfile.mkdtemp()) / "pkg.diff"
@@ -34,6 +35,7 @@ PROMPT_PERF = json.loads(TEMPLATE_PERF.read_text(encoding="utf-8"))["system_prom
 PROMPT_REG = json.loads(TEMPLATE_REG.read_text(encoding="utf-8"))["system_prompt"]
 PROMPT_QA = json.loads(TEMPLATE_QA.read_text(encoding="utf-8"))["system_prompt"]
 PROMPT_UI = json.loads(TEMPLATE_UI.read_text(encoding="utf-8"))["system_prompt"]
+PROMPT_TEST = json.loads(TEMPLATE_TEST.read_text(encoding="utf-8"))["system_prompt"]
 
 REVIEW_FIVE = [
     "bug-reviewer-agent",
@@ -210,6 +212,11 @@ cases = [
         invoke("c-perf", name="perf-anr-guardian-agent", prompt_prefix=""),
         "allow",
     ),
+    (
+        "sub_test_quality",
+        invoke("c-test", name="test-quality-reviewer-agent", prompt_prefix=""),
+        "allow",
+    ),
     ("emu", cmd("android emulator start pixel"), "deny"),
     ("android_run_bare", cmd("android run"), "deny"),
     ("android_run_device", cmd("android run --device DEV"), "allow"),
@@ -228,6 +235,7 @@ cases = [
     ("define_qa_ok", define(PROMPT_QA, name="qa-diagnostics-agent"), "allow"),
     ("define_ui_ok", define(PROMPT_UI, name="android-ui-expert-agent"), "allow"),
     ("define_ui_alias_ok", define(PROMPT_UI, name="compose-ui-expert-agent"), "allow"),
+    ("define_test_ok", define(PROMPT_TEST, name="test-quality-reviewer-agent"), "allow"),
     (
         "define_homemade",
         define("Review whole files for leaks and nits.", name="bug-reviewer-agent"),
@@ -903,7 +911,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.2.10") > (0, 2, 9) and get_current_version() == "0.2.9"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.3.1") > (0, 3, 0) and get_current_version() == "0.3.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

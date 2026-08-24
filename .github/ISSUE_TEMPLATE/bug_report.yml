@@ -26,8 +26,8 @@ body:
     id: kit-version
     attributes:
       label: Harness Kit Version
-      description: Check agents/VERSION or .agents/VERSION (e.g. 0.2.8)
-      placeholder: "0.2.8"
+      description: Check agents/VERSION or .agents/VERSION (e.g. 0.3.0)
+      placeholder: "0.3.0"
     validations:
       required: true
   - type: dropdown

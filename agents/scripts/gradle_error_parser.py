@@ -61,7 +61,7 @@ def format_errors(errors: list[dict]) -> str:
     if not errors:
         return "[OK] No compiler errors detected in build log."
     
-    lines = [f"❌ Found {len(errors)} compilation error(s):"]
+    lines = [f"[ERROR] Found {len(errors)} compilation error(s):"]
     for i, err in enumerate(errors, 1):
         col_str = f":{err['column']}" if err['column'] else ""
         lines.append(f"  {i}. [{err['type']}] {err['file']}:{err['line']}{col_str}")

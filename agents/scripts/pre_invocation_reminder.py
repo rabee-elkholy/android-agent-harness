@@ -15,7 +15,7 @@ def check_update_directive() -> str:
         from check_kit_update import check_for_update
         info = check_for_update(force=False)
         if info.get("has_update"):
-            curr = info.get("current", "0.2.9")
+            curr = info.get("current", "0.3.0")
             latest = info.get("latest", "")
             return (
                 f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Harness Kit (v{latest}) is available (installed: v{curr}). "
@@ -45,6 +45,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
     return (
         f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{update_directive} "
         "PRIORITY: uncompromising quality. Never skip the 5-leaf review to save tokens. "
+        "SHIFT-LEFT QUALITY: Before writing code, proactively satisfy all review pillars (null/network resilience, MVI single-source StateFlow, no inline FQCNs, Compose contentDescription & 48dp touch targets, dual-locale en/ar previews, zero Main-thread I/O, Room migration if @Entity changes) to achieve first-pass review approval. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create .agents/state/plans/implementation_plan.md and get developer approval BEFORE writing code. "
         "ANSWER FIRST in chat before ask_question. Match ask_question language to the developer. "
         "(Recommended) is only for engineering tradeoffs — never on Pass/Fail or plan approval. "
@@ -55,7 +56,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
         "REACTIVE WAKEUP: After invoke_subagent, immediately stop calling tools. NEVER use schedule or timers to wait for subagents (the harness wakes automatically). "
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS. "
         "Fix BLOCKER/MAJOR, regenerate the package, re-run the same 5. "
-        "On-demand only (not a substitute for the 5): qa-diagnostics-agent, android-ui-expert-agent. "
+        "On-demand only (not a substitute for the 5): qa-diagnostics-agent, android-ui-expert-agent, test-quality-reviewer-agent. "
         "Physical device only. Never commit. Assemble via python .agents/scripts/run_gradle_task.py "
         ":app:assembleDebug. One manual phase at a time via ask_question. "
         "Commit message only after every phase Pass. "

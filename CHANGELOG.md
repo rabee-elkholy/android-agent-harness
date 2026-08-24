@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-08-24
+
+### Shift-Left Proactive Quality, Reviewer Expansion & Test Quality Specialist
+- **Shift-Left Proactive Quality Architecture**: Introduced Pre-Implementation Quality Invariants across `harness-rules.md` and `pre_invocation_reminder.py`, instructing coding agents to proactively satisfy review pillars prior to code execution for first-pass review approval.
+- **Expanded Core Reviewer Pillars**:
+  - `bug-reviewer-agent`: Added Network & I/O Resiliency checks (`IOException`, `SocketTimeoutException`, `UnknownHostException` in coroutines, error UI state exposure, exponential backoff).
+  - `convention-reviewer-agent`: Added Accessibility standards (mandatory `contentDescription` on non-decorative images/icons, minimum 48dp touch target size) and KMP portability rules (zero `android.*` framework imports in `commonMain`).
+  - `perf-anr-guardian-agent`: Added Battery & Sensor Life checks (`SensorEventListener` unregistration in `onPause()`/`DisposableEffect.onDispose`, Android 14+ foreground service type declarations, WorkManager charging constraints).
+- **Dedicated Test Quality Specialist (`test-quality-reviewer-agent`)**: Introduced on-demand reviewer (`HARNESS_TEST_FINGERPRINT=quality-first-test-review-v1`) for unit and UI test files (`*Test.kt`), checking assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
+
+---
+
 ## [0.2.9] - 2026-08-24
 
 ### Automated CI/CD, Tier-1 Community Standards & Architecture Documentation
@@ -19,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.8] - 2026-08-23
 
-### ⚡ Subagent Registration Recovery & Hash Lockout Resilience
+### Subagent Registration Recovery & Hash Lockout Resilience
 - **Dynamic Re-Dispatch Unlocking (`re_dispatch_allowed`)**: Resolved the registration-order deadlock where invoking subagents prior to defining all 5 reviewer templates locked the review package hash in `review-invokes.json`. Defining missing subagents now automatically permits immediate re-invocation of the active package without requiring manual state resets or dummy diff regenerations.
 - **Zero-Latency Parallel Review Dispatch**: Hardened the 5-leaf parallel gate workflow to ensure one-shot dispatching in all Antigravity runtime sessions.
 
@@ -27,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.7] - 2026-08-23
 
-### 🌐 Language Architecture & Zoho Localization Governance
+### Language Architecture & Zoho Localization Governance
 - **Granular Language Separation (I.17 & I.18)**: Added explicit language configuration questions in `setup_wizard.py` separating engineering/system chat from project management updates.
 - **Strict English Engineering Standard**: Established default strict English for reasoning, implementation plans (`implementation_plan.md`), walkthroughs, subagent review findings, and commit drafts (`CHAT_LANGUAGE = "en"`), eliminating RTL/LTR rendering bugs and prompt confusion.
 - **Dedicated Zoho Sprints Language Control**: Enabled English task titles alongside Arabic QA/PM descriptions and comments (`ZOHO_LANGUAGE = "en_titles_ar_comments"`), maintaining clean technical backlogs while facilitating native team collaboration.
@@ -36,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.6] - 2026-08-23
 
-### 🛡️ Anti-Polling Guardrails & Background Task Discipline
+### Anti-Polling Guardrails & Background Task Discipline
 - **Busy-Polling Elimination Guard**: Added automated polling interceptors in `pre_tool_safety.py` and `_hook_state.py` for `manage_task(Action="status")` and `manage_subagents(Action="list")`.
 - **Enforced Reactive Wakeup Discipline**: Intercepts and denies repeated polling attempts (>2 inquiries per task/round), instructing LLM agents to halt tool executions and wait for Antigravity's event-driven completion notifications.
 
@@ -44,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.5] - 2026-08-23
 
-### 🛡️ Safety Hook Precision & Windows Unicode Support
+### Safety Hook Precision & Windows Unicode Support
 - **Installer Script Safety Bypass**: Explicitly excluded installer helper scripts (`install_tool_adapters.py`, `setup_wizard.py`, `install_zoho_mcp.py`, `check_kit_update.py`, `review_package.py`) from false-positive `assemble`/`test` barrier checks in `pre_tool_safety.py` when passed build-task flags (e.g. `--assemble :app:assembleDebug`).
 - **Cross-Platform Unicode Encoding**: Reconfigured stdout to UTF-8 across all CLI scripts (`check_kit_update.py`, etc.) to eliminate `UnicodeEncodeError` on Windows `cp1252` shells when rendering Emoji-rich release notes.
 - **Enhanced Subagent Registration Clarity**: Added explicit guidance in `pre_invocation_reminder.py` regarding `define_subagent` registration before dispatching parallel reviewers.
@@ -53,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.4] - 2026-08-23
 
-### 🛡️ Installation Safety & Guardrails
+### Installation Safety & Guardrails
 - **Zero-Tolerance Setup Guardrails**: Added explicit, strict constraints in `setup-prompt.md` and `install-prompt.md` to prevent common installer agent pitfalls.
 - **Strict Read-Only Kit Source**: Forbids installer agents from modifying or writing files to the source kit directory during project onboarding.
 - **Scope Isolation (App Code Protection)**: Forbids installer agents from unilaterally modifying app production files (`strings.xml`, Kotlin code) during setup; pre-existing discrepancies are reported in chat instead.
@@ -64,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.3] - 2026-08-23
 
-### 🛡️ Security Hardening & Concurrency
+### Security Hardening & Concurrency
 - **Comprehensive Git Mutation Protection**: Advanced command inspection intercepting git mutations across wrapper subshells (`powershell -Command`, `cmd /c`, `bash -c`), absolute paths (`/usr/bin/git`, `git.exe`), and chained command sequences.
 - **Review Package Path Traversal Guard**: Enforced strict boundary verification ensuring `HARNESS_REVIEW_PACKAGE` paths reside securely within repository boundaries.
 - **Atomic State Persistence**: Hardened `_hook_state.py` with atomic temporary-file writes and replacements (`os.replace`) to eliminate race conditions under concurrent operations.
@@ -76,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.2] - 2026-08-23
 
-### 🚀 Added & Improved
+### Added & Improved
 - **Production Reference Alignment**: Aligned rules and delivery pipeline sequence with production multi-agent architecture.
 - **Comprehensive Workflow Diagram**: Added full interactive Mermaid flow covering planning, parallel 5-leaf review, lint, targeted unit tests, live Gradle builds, manual device sign-off, and Zoho Sprints tracking.
 - **Core vs. Optional Capability Matrix**: Clear matrix distinguishing mandatory core quality gates from configurable options (unit tests, Zoho Sprints, device target policy, git policy, and dual localization).
@@ -85,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.1] - 2026-08-23
 
-### 🚀 Added
+### Added
 - **Community Contribution Guidelines**: Added clear open-source contribution workflow, branch conventions, and testing requirements in `README.md`.
 - **Single-Backup Retention & 1-Click Rollback**: Enforced single-backup pruning on upgrades with automatic rollback guarantee via `docs/rollback-prompt.md`.
 - **Frontier Reasoning Model Lineup**: Updated model recommendations to latest verified flagship reasoning models (Claude Opus/Sonnet 4.6/5, Gemini 3.1 Pro/3.7 Flash, GPT-5.6 Sol/o3, DeepSeek-V4/R1).
@@ -95,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-08-23
 
-### 🚀 Added
+### Added
 - **Interactive Start-of-Session Update Notifier**: Automatic, non-blocking check at the beginning of each new chat session alerting the developer when a newer kit version is available.
 - **Snooze & In-Chat Changelog Viewing**: Full support for viewing markdown release notes directly in chat (`--show-changes`), snoozing update notifications for 24 hours (`--snooze 1`), or launching seamless upgrades.
 - **Greenfield Bootstrap Mode**: Interactive architectural questionnaire for blank Android/KMP projects to establish Platform, Architecture, DI, Navigation, UI, Database, Networking, and Locales from Day 1.
@@ -104,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-08-23
 
-### 🚀 Added
+### Added
 - **Five-Leaf Review Delivery Gate**: Mandatory, parallel 5-reviewer subagents (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`) before any assemble or release.
 - **Dynamic Domain Discovery**: Automatically inspects project dependencies and codebase during installation to create tailored domain reference files (Audio/Media, BLE, Education/Games, Billing, etc.).
 - **Live Gradle Task Runner (`run_gradle_task.py`)**: Real-time task logging with a 10-second heartbeat to prevent silent builds.
@@ -112,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fail-Fast Project Validation**: Immediately verifies `gradlew`/`gradlew.bat` and halts non-Android directories with helpful guidance.
 - **Zoho Sprints MCP Integration**: Project management integration that reads PC-level credentials without leaking or committing tokens to the repository.
 
-### 🛡️ Security & Quality
+### Security & Quality
 - **Reactive Wakeup Enforcement**: Forbids `schedule` timer polling loops after subagent dispatch, relying on Antigravity's automatic reactive wakeup.
 - **Strict Git Mutation Guard**: Hard safety hooks preventing agents from creating unauthorized commits, pushes, or worktrees unless explicitly directed.
 - **Device & Package Safety**: Strict denial of `adb monkey` and unauthorized `pm clear` commands, with safe `run_device.py uninstall` support.

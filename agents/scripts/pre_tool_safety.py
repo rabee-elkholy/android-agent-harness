@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _hook_state import (  # noqa: E402
     MAX_DIAGNOSTICS,
     MAX_REVIEWS,
+    MAX_TEST_REVIEWS,
     MAX_UI_REVIEWS,
     bump_invoke,
     canonical_subagent_name,
@@ -70,6 +71,7 @@ ALLOWED_KINDS = {
     "perf-anr-guardian-agent": "review",
     "qa-diagnostics-agent": "diagnostics",
     "android-ui-expert-agent": "ui",
+    "test-quality-reviewer-agent": "test",
     "code-review-guard-agent": "guard",
 }
 
@@ -281,6 +283,7 @@ def handle_invoke_subagent(payload: dict, args: dict) -> None:
 
     has_diag = any(kind == "diagnostics" for _, _, kind in identified)
     has_ui = any(kind == "ui" for _, _, kind in identified)
+    has_test = any(kind == "test" for _, _, kind in identified)
 
     if has_diag:
         used = invoke_count(conv, "diagnostics")
@@ -294,6 +297,12 @@ def handle_invoke_subagent(payload: dict, args: dict) -> None:
             deny(f"Denied: UI review limit reached ({used}/{MAX_UI_REVIEWS}).")
             return
         bump_invoke(conv, "ui")
+    if has_test:
+        used = invoke_count(conv, "test")
+        if used >= MAX_TEST_REVIEWS:
+            deny(f"Denied: test quality review limit reached ({used}/{MAX_TEST_REVIEWS}).")
+            return
+        bump_invoke(conv, "test")
 
     allow(f"Specialist subagents accepted: {len(subs)} running.")
 

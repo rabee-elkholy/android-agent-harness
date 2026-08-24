@@ -64,6 +64,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 
 - `qa-diagnostics-agent` — logcat / crash / ANR forensics on a physical device
 - `android-ui-expert-agent` — Compose **and** legacy XML. Never convert XML to Compose during a bugfix unless asked.
+- `test-quality-reviewer-agent` — On-demand verification of unit/UI test files (`*Test.kt`), checking assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
 
 ---
 
@@ -77,12 +78,37 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer.
 - TDD when it protects real logic. No placeholder tests.
 
+---
+
+## Shift-Left Quality Invariants (Pre-Implementation Guard)
+
+Before writing or modifying any code, the Lead Agent must proactively verify compliance with all 6 quality pillars to achieve **first-pass review approval** and avoid review rejection rounds:
+
+1. **Null-Safety & Network Resiliency**:
+   - Never use `!!` on nullable types or unvetted platform types.
+   - All network/remote calls in coroutines must safely handle `IOException`, `SocketTimeoutException`, `UnknownHostException` (e.g. via `runCatching` or explicit `Result` wrapping).
+   - ViewModels must expose clear error states to the UI with retry mechanisms; never swallow network failures silently.
+2. **Clean Architecture & Import Hygiene**:
+   - Strict Unidirectional Data Flow (MVI StateFlow as the single source of truth).
+   - **STRICTLY ZERO INLINE FQCNs**: Never use inline package paths (e.g. `androidx.compose...`). Always import at the top and use typealiases (`as CoreState`, `as CoreAction`) to resolve collisions.
+3. **Accessibility & Jetpack Compose Standards**:
+   - Every `Image`, `Icon`, and `IconButton` MUST specify a meaningful `contentDescription` (or explicit `null` only if decorative).
+   - Clickable UI components must have a minimum touch target size of 48dp (`Modifier.minimumInteractiveComponentSize()` or `>= 48.dp`).
+   - Every new or modified Compose component MUST have dedicated dual-locale `@Preview` (Arabic RTL `locale = "ar"` & English LTR `locale = "en"`) wrapped in the app theme. Screens also require Loading, Empty, and Error previews.
+4. **Performance, Battery & Sensor Life**:
+   - Strictly zero disk I/O, database access, or JSON parsing on `Dispatchers.Main`.
+   - Any `SensorEventListener` (pedometer, accelerometer, GPS) MUST be unregistered in `onPause()`, `onStop()`, or `DisposableEffect.onDispose`.
+   - Android 14+ Foreground Services must specify valid `foregroundServiceType` in the Manifest and handle start restrictions gracefully.
+5. **Room Database & Migrations**:
+   - Any modification to an `@Entity` class or `@Database` schema MUST increment the database `version` and supply an explicit `Migration(from, to)` registered via `addMigrations(...)`.
+6. **Blast Radius & Contract Integrity**:
+   - Check all usages across the codebase before altering public function signatures, ViewModel contracts, or navigation arguments.
+
+---
+
 ### New production code
 
 - New UI: Jetpack Compose unless the surrounding screen is XML and the developer did not ask to convert it.
-- Any new or modified Compose UI: dual-locale `@Preview` — Arabic RTL (`locale = "ar"` for AndroidX, or `CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl)` for Compose Multiplatform / KMP) and English LTR (`locale = "en"` or `LayoutDirection.Ltr`). Wrap in this app's theme (or `MaterialTheme` if none). **Screens** also need Loading, Empty, and Error. Cards, dialogs, sheets, and banners need the two locales; they do not need the three state previews.
-- New ViewModels: the base required by `architecture-mvi.md` and the files you opened. Data through the same layers those files already use.
-- Zero inline FQCNs. Import at the top. Typealias collisions (`as CoreState`, `as CoreAction`, `as CoreEvent`).
 - Typography: `MaterialTheme.typography.*` only.
 - One-shot UI effects: never sticky `MutableLiveData`. Consume-to-null, `Channel`/`sendEvent()`, or `SharedFlow`.
 - Strings: `values/strings.xml` **and** `values-ar/strings.xml`. No hardcoded user-facing text.

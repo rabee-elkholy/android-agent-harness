@@ -20,6 +20,7 @@ Verdicts: `BUG_PASS` / `CONVENTION_PASS` / `SECURITY_PASS` / `PERF_PASS` / `REGR
 
 - `qa-diagnostics-agent` — device forensics
 - `android-ui-expert-agent` — Compose + XML (alias: `compose-ui-expert-agent`)
+- `test-quality-reviewer-agent` — unit & UI test quality verification (alias: `test-reviewer-agent`)
 
 All subagents: `Workspace="inherit"`, `model="inherit"`, write tools off.
 

@@ -5,8 +5,8 @@ Strict rules for modifying Room entities, DAOs, schema versions, and preferences
 ---
 
 ## 1. Zero Data Loss Policy
-- ❌ **NEVER** use `fallbackToDestructiveMigration()` in production database builders.
-- ❌ **NEVER** modify a table structure, column name, or index without an explicit `Migration(startVersion, endVersion)` object.
+- **NEVER** use `fallbackToDestructiveMigration()` in production database builders.
+- **NEVER** modify a table structure, column name, or index without an explicit `Migration(startVersion, endVersion)` object.
 
 ---
 

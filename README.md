@@ -29,12 +29,14 @@
 - [The Problem We Solve](#the-problem-we-solve)
 - [Quickstart in 2 Minutes](#quickstart-in-2-minutes)
 - [Architecture Workflow](#architecture-workflow)
+- [Shift-Left Proactive Quality Invariants](#shift-left-proactive-quality-invariants)
 - [The Five-Leaf Review Gate](#the-five-leaf-review-gate)
-  - [1. Bug Reviewer Agent](#1-bug-reviewer-agent)
-  - [2. Convention & Architecture Reviewer](#2-convention--architecture-reviewer)
-  - [3. Security & Privacy Reviewer](#3-security--privacy-reviewer)
-  - [4. Performance & ANR Guardian](#4-performance--anr-guardian)
-  - [5. Regression Blast Radius Reviewer](#5-regression-blast-radius-reviewer)
+  - [1. Bug & Network Resiliency Reviewer](#1-bug--network-resiliency-reviewer-bug-reviewer-agent)
+  - [2. Convention, Accessibility & KMP Reviewer](#2-convention-accessibility--kmp-reviewer-convention-reviewer-agent)
+  - [3. Security & Privacy Reviewer](#3-security--privacy-reviewer-security-reviewer-agent)
+  - [4. Performance, Battery & ANR Guardian](#4-performance-battery--anr-guardian-perf-anr-guardian-agent)
+  - [5. Regression Blast Radius Reviewer](#5-regression-blast-radius-reviewer-regression-impact-reviewer-agent)
+- [Dedicated On-Demand Specialists](#dedicated-on-demand-specialists)
 - [Safety Hooks & Execution Governance](#safety-hooks--execution-governance)
   - [Strict Git Mutation Protection](#strict-git-mutation-protection)
   - [Anti-Polling Guardrails](#anti-polling-guardrails)
@@ -147,37 +149,57 @@ flowchart TD
 
 ---
 
+## Shift-Left Proactive Quality Invariants
+
+The harness enforces proactive engineering standards before any code is generated, ensuring the Primary Lead Agent achieves first-pass review approval:
+- **Null-Safety & Network Resiliency**: Catch `IOException`/`SocketTimeoutException`, avoid `!!`, use `repeatOnLifecycle`.
+- **Clean Architecture & Imports**: Strict MVI StateFlow single source of truth, zero inline FQCNs, explicit top-level imports.
+- **Accessibility & Compose**: Mandatory `contentDescription` on non-decorative images/icons, touch targets >= 48dp, dual-locale `@Preview` (en/ar).
+- **Performance & Battery**: Zero I/O on `Dispatchers.Main`, sensor unregistration in `onPause()`/`DisposableEffect.onDispose`, Android 14 foreground service rules.
+- **Room Database Migrations**: Mandatory version bump and explicit `Migration(from, to)` on any `@Entity` schema modification.
+
+---
+
 ## The Five-Leaf Review Gate
 
 Before any Gradle build or device installation can proceed, the AI assistant must dispatch **5 specialized reviewer subagents** in parallel. Every subagent inspects the exact package diff and outputs a structured pass token:
 
 ```
-[BUG_PASS]         -- Verified by Bug Reviewer
-[CONVENTION_PASS]  -- Verified by Architecture & Convention Reviewer
+[BUG_PASS]         -- Verified by Bug & Network Resiliency Reviewer
+[CONVENTION_PASS]  -- Verified by Architecture, Accessibility & KMP Reviewer
 [SECURITY_PASS]    -- Verified by Security & Privacy Reviewer
-[PERF_PASS]        -- Verified by Performance & ANR Guardian
+[PERF_PASS]        -- Verified by Performance, Battery & ANR Guardian
 [REGRESSION_PASS]  -- Verified by Regression Blast Radius Reviewer
 ```
 
-### 1. Bug Reviewer Agent
-- **Focus**: Logical correctness, memory safety, and lifecycle awareness.
-- **Catches**: Unhandled `NullPointerException` risks, uncaught coroutine cancellations, improper `StateFlow` collection without `repeatOnLifecycle`, and memory leaks in static singletons.
+### 1. Bug & Network Resiliency Reviewer (`bug-reviewer-agent`)
+- **Focus**: Logical correctness, null safety, lifecycle, and network error recovery.
+- **Catches**: Unhandled `NullPointerException` risks, uncaught coroutine cancellations, improper `StateFlow` collection without `repeatOnLifecycle`, uncaught `SocketTimeoutException`/`IOException` in API flows, missing error UI states, and infinite retry storms without exponential backoff.
 
-### 2. Convention & Architecture Reviewer
-- **Focus**: Structural cleanliness, MVI/Clean Architecture, and design patterns.
-- **Catches**: Mutable state exposed outside ViewModels, business logic in Composables/Fragments, improper dependency injection (Hilt/Koin), and missing `@Preview` annotations for light/dark themes.
+### 2. Convention, Accessibility & KMP Reviewer (`convention-reviewer-agent`)
+- **Focus**: Structural cleanliness, MVI/Clean Architecture, accessibility compliance, and KMP code purity.
+- **Catches**: Mutable state exposed outside ViewModels, missing `contentDescription` on Compose icons/images, clickable components with touch targets < 48dp, `android.*` framework imports leaking into KMP `commonMain`, and missing dual-locale `@Preview` annotations (en/ar).
 
-### 3. Security & Privacy Reviewer
+### 3. Security & Privacy Reviewer (`security-reviewer-agent`)
 - **Focus**: Android component security, permission boundaries, and data storage.
 - **Catches**: Exported Activities/Receivers without explicit intent filters or permissions, plaintext credentials/API keys, SQL injection in raw Room queries, and sensitive data printed to production Logcat.
 
-### 4. Performance & ANR Guardian
-- **Focus**: UI fluidity (60/120 FPS), main thread responsiveness, and memory footprint.
-- **Catches**: Disk or network I/O executed on `Dispatchers.Main`, heavy allocations during Jetpack Compose recomposition phases, unoptimized Canvas drawings, and unbounded recursive loops.
+### 4. Performance, Battery & ANR Guardian (`perf-anr-guardian-agent`)
+- **Focus**: UI fluidity (60/120 FPS), main thread responsiveness, sensor lifecycles, and battery footprint.
+- **Catches**: Disk or network I/O executed on `Dispatchers.Main`, heavy allocations during Jetpack Compose recomposition phases, unreleased WakeLocks, active `SensorEventListener` (pedometer/accelerometer) leaks during background/pause, and Android 14+ foreground service type violations.
 
-### 5. Regression Blast Radius Reviewer
+### 5. Regression Blast Radius Reviewer (`regression-impact-reviewer-agent`)
 - **Focus**: Cross-feature dependency graphs and change impact radius.
 - **Catches**: Renamed ViewModel functions breaking secondary screens, altered data models breaking JSON serialization, modified navigation arguments breaking deep links, and shared database migrations.
+
+---
+
+## Dedicated On-Demand Specialists
+
+For specific investigations and testing tasks, the harness provides dedicated on-demand specialists:
+- **`qa-diagnostics-agent`**: Physical device Logcat forensic analysis and ANR root-cause investigation.
+- **`android-ui-expert-agent`**: Jetpack Compose and legacy XML UI layout, theming, RTL, and responsiveness.
+- **`test-quality-reviewer-agent`**: Audits unit and UI test suites (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutine `runTest` dispatchers.
 
 ---
 
@@ -208,15 +230,15 @@ To prevent models from getting stuck in infinite polling loops (>2 calls to `man
 
 Before compiling the application with Gradle, `preflight_check.py` runs three rapid static verification checks in under 2 seconds:
 
-### Fast Kotlin Lint (`fast_kt_lint.py`)
+### Fast Kotlin Lint
 - Verifies package declarations, import hygiene, and Kotlin syntax.
 - Enforces Jetpack Compose `@Preview` tags for both LTR (English) and RTL (Arabic) locales.
 
-### Room Database Migration Guard (`room_guard.py`)
+### Room Database Migration Guard
 - Scans `@Database` and `@Entity` declarations for schema changes.
 - Requires explicit `Migration(from, to)` classes and schema version bumps whenever database fields are added or modified.
 
-### Bilingual String Parity Check (`check_strings.py`)
+### Bilingual String Parity Check
 - Analyzes `res/values/strings.xml` and `res/values-ar/strings.xml`.
 - Flags missing translations, mismatched placeholder arguments (`%1$s`), and ignores `translatable="false"` system strings.
 

@@ -48,18 +48,36 @@ graph TB
 
 ## Core Pillars
 
-### 1. The Five-Leaf Review Gate
-Unlike traditional code assistants that produce code and instantly declare completion, the Harness intercepts tool execution until **5 specialized reviewer subagents** evaluate the exact package diff in parallel:
+### 1. Shift-Left Proactive Quality Invariants
+The Harness enforces proactive quality standards before any code is written, ensuring the Primary Lead Agent achieves first-pass approval from reviewers:
+- **Null-Safety & Network Resiliency**: Coroutine exception handling (`IOException`, `SocketTimeoutException`), no `!!`, safe error propagation.
+- **Clean Architecture**: MVI StateFlow as single source of truth, zero inline FQCNs, explicit top-level imports.
+- **Accessibility & Compose**: Mandatory `contentDescription` on non-decorative images/icons, touch targets >= 48dp, dual-locale `@Preview` (en/ar).
+- **Performance & Battery**: Zero I/O on `Dispatchers.Main`, sensor unregistration in `onPause()`/`DisposableEffect.onDispose`, Android 14 foreground service rules.
+- **Database Migrations**: Mandatory version bump and explicit `Migration(old, new)` on any `@Entity` schema modification.
 
-1. **`bug-reviewer-agent`**: Detects memory leaks, unchecked `NullPointerExceptions`, unhandled coroutine cancellations, and lifecycle issues.
-2. **`convention-reviewer-agent`**: Enforces strict MVI / Clean Architecture, single source of truth StateFlows, and unidirectional data flow.
-3. **`security-reviewer-agent`**: Inspects exported components, permission checks, SQL injection in raw queries, and sensitive data logging.
-4. **`perf-anr-guardian-agent`**: Prevents main-thread blocking operations, unoptimized recompositions in Jetpack Compose, and unbounded loops.
+---
+
+### 2. The Five-Leaf Review Gate
+Unlike traditional assistants that output unreviewed code, the Harness intercepts tool execution until **5 specialized reviewer subagents** evaluate the review package in parallel:
+
+1. **`bug-reviewer-agent`**: Detects memory leaks, unchecked `NullPointerExceptions`, coroutine race conditions, uncaught network/I/O timeouts, and missing error state propagation.
+2. **`convention-reviewer-agent`**: Enforces strict MVI / Clean Architecture, single source of truth StateFlows, accessibility standards (`contentDescription`, 48dp touch targets), and KMP commonMain cleanliness.
+3. **`security-reviewer-agent`**: Inspects exported components, permission declarations, SQL injection, and secret leakage.
+4. **`perf-anr-guardian-agent`**: Prevents main-thread blocking operations, unoptimized recompositions, unreleased WakeLocks, sensor listener leaks, and Android 14 foreground service violations.
 5. **`regression-impact-reviewer-agent`**: Maps the exact blast radius of changes to ensure dependent screens and ViewModels remain unbroken.
 
 ---
 
-### 2. Safety Interceptors & Git Mutation Protection
+### 3. Dedicated On-Demand Specialists
+Specialists dispatched only when specific forensic or verification tasks are needed:
+- **`qa-diagnostics-agent`**: Physical device Logcat forensic analysis and ANR root-cause investigation.
+- **`android-ui-expert-agent`**: Jetpack Compose and legacy XML UI layout, theming, RTL, and responsiveness.
+- **`test-quality-reviewer-agent`**: Audits unit and UI test suites (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutine `runTest` dispatchers.
+
+---
+
+### 4. Safety Interceptors & Git Mutation Protection
 The harness intercepts destructive commands before they execute:
 - **`git commit` / `git push`**: Hard blocked from autonomous execution. Developers retain sole authority over repository history (unless explicitly authorized via `I.3`).
 - **`adb monkey` / `pm clear`**: Blocked to protect developer device state and prevent data wiping.
@@ -67,12 +85,12 @@ The harness intercepts destructive commands before they execute:
 
 ---
 
-### 3. Live Gradle Streaming (`run_gradle_task.py`)
+### 5. Live Gradle Streaming (`run_gradle_task.py`)
 AI assistants frequently get stuck or timeout when running long Gradle builds. `run_gradle_task.py` executes Gradle with a **10-second heartbeat monitor**, streaming build output and capturing structured diagnostics if compilation fails.
 
 ---
 
-### 4. Zoho Sprints MCP Integration
+### 6. Zoho Sprints MCP Integration
 Provides bidirectional synchronization with Zoho Sprints:
 - Automatically reads bug descriptions, steps to reproduce, and attachments.
 - Creates hierarchical tasks and subtasks.

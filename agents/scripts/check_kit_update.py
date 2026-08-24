@@ -156,7 +156,7 @@ def update_banner() -> str:
     res = check_for_update(force=False)
     if res["has_update"]:
         return (
-            f"💡 [HARNESS UPDATE AVAILABLE] v{res['latest']} is out (installed: v{res['current']})!\n"
+            f"[HARNESS UPDATE AVAILABLE] v{res['latest']} is out (installed: v{res['current']})!\n"
             f"   To upgrade your project harness, paste docs/update-prompt.md in a new chat."
         )
     return ""

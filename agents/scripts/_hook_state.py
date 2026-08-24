@@ -12,6 +12,7 @@ from pathlib import Path
 MAX_REVIEWS = int(os.environ.get("HARNESS_MAX_REVIEWS", "20"))
 MAX_DIAGNOSTICS = int(os.environ.get("HARNESS_MAX_DIAGNOSTICS", "10"))
 MAX_UI_REVIEWS = int(os.environ.get("HARNESS_MAX_UI_REVIEWS", "10"))
+MAX_TEST_REVIEWS = int(os.environ.get("HARNESS_MAX_TEST_REVIEWS", "10"))
 
 STATE_EXPIRY_SECONDS = 7 * 24 * 3600
 
@@ -24,6 +25,11 @@ TEMPLATE_ALIASES = {
     "compose-ui-expert-agent": "android-ui-expert-agent",
     "android-ui-expert": "android-ui-expert-agent",
     "qa-diagnostics": "qa-diagnostics-agent",
+    "test-quality-reviewer": "test-quality-reviewer-agent",
+    "test-quality-reviewer-agent": "test-quality-reviewer-agent",
+    "test-quality-expert": "test-quality-reviewer-agent",
+    "test-reviewer": "test-quality-reviewer-agent",
+    "test-reviewer-agent": "test-quality-reviewer-agent",
     "bug-reviewer": "bug-reviewer-agent",
     "convention-reviewer": "convention-reviewer-agent",
     "security-reviewer": "security-reviewer-agent",
