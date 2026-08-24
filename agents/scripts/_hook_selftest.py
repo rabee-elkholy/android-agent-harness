@@ -935,12 +935,18 @@ EMOJI_PATTERN = re.compile(
 )
 
 repo_root = Path(__file__).resolve().parent.parent.parent
-docs_files = (
-    list(repo_root.glob("*.md"))
-    + list((repo_root / "docs").glob("*.md"))
-    + list((repo_root / ".github").glob("**/*.md"))
-    + list((repo_root / "agents").glob("**/*.md"))
-)
+agents_root = Path(__file__).resolve().parent.parent
+_is_installed = (repo_root / ".harness-setup" / "answers.json").is_file() or agents_root.name == ".agents"
+
+if _is_installed:
+    docs_files = list(agents_root.glob("**/*.md"))
+else:
+    docs_files = (
+        list(repo_root.glob("*.md"))
+        + list((repo_root / "docs").glob("*.md"))
+        + list((repo_root / ".github").glob("**/*.md"))
+        + list((repo_root / "agents").glob("**/*.md"))
+    )
 
 emoji_found = []
 escape_found = []
@@ -961,16 +967,19 @@ ok_escapes = len(escape_found) == 0
 print(f"zero literal escape artifacts in docs: {'OK' if ok_escapes else f'FAIL (found in {escape_found})'}")
 failed += int(not ok_escapes)
 
-changelog_text = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
-changelog_versions = re.findall(r"## \[(\d+\.\d+\.\d+)\]", changelog_text)
-ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.5.0"
-print(f"changelog milestone release consolidation: {'OK' if ok_changelog_milestones else 'FAIL'}")
-failed += int(not ok_changelog_milestones)
+if (repo_root / "CHANGELOG.md").is_file():
+    changelog_text = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
+    changelog_versions = re.findall(r"## \[(\d+\.\d+\.\d+)\]", changelog_text)
+    ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.5.0"
+    print(f"changelog milestone release consolidation: {'OK' if ok_changelog_milestones else 'FAIL'}")
+    failed += int(not ok_changelog_milestones)
+else:
+    print("changelog milestone release consolidation: OK (skipped — installed checkout)")
 
 ok_test_specialist_files = (
-    (repo_root / "agents" / "subagents" / "test-quality-reviewer-agent.json").is_file()
-    and (repo_root / "agents" / "skills" / "android-harness" / "references" / "test-quality-guidelines.md").is_file()
-    and (repo_root / "agents" / "workflows" / "test-quality-audit.md").is_file()
+    (agents_root / "subagents" / "test-quality-reviewer-agent.json").is_file()
+    and (agents_root / "skills" / "android-harness" / "references" / "test-quality-guidelines.md").is_file()
+    and (agents_root / "workflows" / "test-quality-audit.md").is_file()
 )
 print(f"test-quality-reviewer-agent files and references: {'OK' if ok_test_specialist_files else 'FAIL'}")
 failed += int(not ok_test_specialist_files)
@@ -1035,7 +1044,7 @@ doc_results = doc.run_all()
 doc_failures = sum(1 for r in doc_results if r.status == "FAIL")
 ok_doctor = (
     doc_failures == 0
-    and (repo_root / "docs" / "diagnostic-prompt.md").is_file()
+    and ((repo_root / "docs" / "diagnostic-prompt.md").is_file() or _is_installed)
     and any(r.name == "Python Runtime" and r.status == "PASS" for r in doc_results)
     and any(r.name == "Subagents Templates" and r.status == "PASS" for r in doc_results)
 )

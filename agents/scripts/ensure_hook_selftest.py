@@ -115,13 +115,18 @@ def main() -> int:
         if ok:
             print("{}")
             return 0
+        try:
+            import _product
+            prod_name = getattr(_product, "PRODUCT_NAME", getattr(_product, "PRODUCT", "App"))
+        except Exception:
+            prod_name = "App"
         print(
             json.dumps(
                 {
                     "injectSteps": [
                         {
                             "ephemeralMessage": (
-                                "this app hook selftest FAILED after a harness change. "
+                                f"{prod_name} hook selftest FAILED after a harness change. "
                                 "Do not assemble. Run `python .agents/scripts/_hook_selftest.py` "
                                 "and fix the failures before delivery."
                             )
