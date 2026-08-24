@@ -14,16 +14,15 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 
 ## Quality-First & Clarification
 
-- **Answer First, Then Ask**: If the developer asks anything, answer in visible chat first. Only then may you call `ask_question` for a pending plan or device phase. Never fire a bare modal that ignores the question.
+- **Answer First, Then Ask**: If the developer asks anything, answer in visible chat first. Only then may you call `ask_question` for a pending device phase or tradeoff. Never fire a bare modal that ignores the question.
 - **Language Policy**:
   - **Engineering & System Language**: Per `_product.py` (`CHAT_LANGUAGE = "en"` by default): All reasoning, chat responses, implementation plans (`implementation_plan.md`), walkthroughs (`walkthrough.md`), subagent review findings, and Conventional Commit drafts MUST be written in **clear, standard English** to ensure technical precision and prevent RTL/LTR formatting issues. If `CHAT_LANGUAGE = "mirror"`, strictly mirror the developer's language (English if addressed in English, Arabic if addressed in Arabic).
   - **`ask_question` Modals**: Prompts and options must follow `CHAT_LANGUAGE` (English by default, or mirror developer language).
 - **`(Recommended)`**: Only for technical / architectural tradeoffs. Forbidden on Pass/Fail device results, plan approval, and simple confirmations.
-- **`ask_question` is only for**:
-  1. **Plan approval** after writing `.agents/state/plans/implementation_plan.md`. Put a clickable link and highlights in chat first.
-     - `Approve the plan and start implementation` / `I have notes or changes to the plan`
-  2. **Design tradeoffs** when requirements are ambiguous. `(Recommended)` is allowed here.
-  3. **One device-verification phase at a time**:
+- **Native Artifact Planning & Approval**: Implementation plans MUST be written as user-facing artifacts (`implementation_plan.md`) with `ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`. This natively renders the interactive **"Proceed"** button in the chat interface. **Never call `ask_question` for plan approval**; stop calling tools and wait for the developer to approve via the **Proceed** button or provide feedback in chat.
+- **`ask_question` is strictly reserved for**:
+  1. **Design / architectural tradeoffs** when requirements are ambiguous. `(Recommended)` is allowed here.
+  2. **One manual device-verification phase at a time**:
      - `Phase passed` / `Phase failed` / `Retest / I need help`
 - **Clean chat**: No filler per tool step. Never echo `<SYSTEM_MESSAGE>`, raw Gradle dumps, or internal task dumps. Speak when answering, presenting a plan, presenting one device phase, or delivering the final summary.
 - **Quality over tokens**: Uncompromising code quality always wins. Never skip, serialize, or drop the 5 review leaves to save tokens.
@@ -73,7 +72,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - Read `android-harness/SKILL.md` and any matching domain reference before non-trivial work.
 - Inspect with `grep_search` / `view_file` before editing. Do not guess symbols.
 - Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
-- **MANDATORY PLANNING**: Any new feature, new screen, new schema/table, or multi-file change MUST create `.agents/state/plans/implementation_plan.md` and obtain developer approval via `ask_question` BEFORE modifying or creating production code. Do not start coding before plan approval.
+- **MANDATORY PLANNING**: Any new feature, new screen, new schema/table, or multi-file change MUST create an `implementation_plan.md` artifact (`ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`) and obtain developer approval (via the native interactive **Proceed** button or chat approval) BEFORE modifying or creating production code. Do NOT fire an `ask_question` modal for plan approval; let the native artifact Proceed action handle it. Do not start coding before plan approval.
 - Large work (>3–4 files, or a shared ViewModel / service): split into milestones (data → domain → state → UI). One milestone per increment. No 10-file big-bang turns.
 - Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer.
 - TDD when it protects real logic. No placeholder tests.
@@ -178,17 +177,28 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 
 - Never mutate Zoho unless the developer explicitly says to (for example `update zoho`).
 - Allowed statuses: `In progress` when started; `Ready To ReTest` when verified. Never `Done` / `Solved`.
+- **Zoho Quality & Communication Policy (QA-Centric)**:
+  - **Audience**: Descriptions and comments are written exclusively for **QA / Testers and Product Stakeholders**.
+  - **No Technical Code Internals**: Strictly prohibit raw code artifacts (e.g. no XML layout file names like `fragment_food_plan.xml`, no Kotlin source files, no XML attributes like `clipToPadding`, no framework class names, no raw `dp`/`px` numbers unless part of product design specs). Describe issues and solutions in **clear, functional, and user-facing terms**.
+  - **Mandatory Commit Hash**: The first line MUST always be `Commit: <hash>` (retrieved via `git log -1 --format=%h` or provided by developer).
+  - **Mandatory Sections for ALL Zoho items** (Bugs, Features, Tasks, Stories, Improvements):
+    1. `Commit: <hash>`
+    2. **سبب المشكلة / الهدف من المهمة** (Functional root cause or business goal).
+    3. **الحل / ما تم تنفيذه** (Functional solution and UI behavior changes).
+    4. **نطاق التأثير** (`Impact Area / Blast Radius` — list screens, related features, and flows QA must verify for regression).
+    5. **خطوات الفحص وحالات الاختبار** (`Test Cases & Verification Steps` — explicit positive, negative, and edge scenarios).
 - **Zoho Language Policy**:
   - Per `_product.py` (`ZOHO_LANGUAGE = "en_titles_ar_comments"` by default):
-    - **Task Titles**: MUST be in **English** (e.g. `Ras-I725: Fix Scroll in FoodPlanFragment`). Never put developer or assignee names in titles.
-    - **Task Descriptions & Comments**: Written in **Arabic** (human tone, clear explanation for QA/PM, no emoji, no internal engine tokens), including the commit hash `git log -1 --format=%h` (developer may paste the hash if HEAD has not moved).
+    - **Task Titles**: MUST be in **English** (e.g. `Ras-I725: Fix Scroll in Food Plan Screen`). Never put developer or assignee names in titles.
+    - **Task Descriptions & Comments**: Written in **Arabic** (human tone, QA-centric, no emoji, no internal engine tokens), starting with the commit hash `Commit: <hash>`.
     - If `ZOHO_LANGUAGE = "all_en"`, use English for titles, descriptions, and comments. If `all_ar`, use Arabic for all.
 - Assignment: the default user from MCP workflow defaults. No name in titles. New items use the default Sprints assignee (overridable in the user config).
 - **If Zoho MCP tools are not available in this session**, do not invent ticket fields. Ask the developer to paste the ticket or enable Zoho. Continue local implementation using what they provide.
 - This checkout wires **Zoho Sprints only** through `.agents/mcp_config.json` to `.agents/mcp/zoho_sprints/server.py`. **Zoho Desk is not used.** Do not invoke Desk tools, do not add a Desk MCP server, and do not treat Desk ticket numbers as Sprints item ids.
 - Bug id ingestion: fetch if tools exist, check and list any attached screenshots/logs (`attachments`), explain in chat, start analysis. Still write a plan for non-trivial bugs and request approval.
 - Feature task id: fetch, check attachments, explain, then ask whether to start the plan.
-- Templates for comments/descriptions stay as: Commit / سبب المشكلة / الحل / خطوات الفحص (bugs) and Commit / الميزة / الشاشات / حالات الاختبار (features).
+- Templates for comments/descriptions: Follow `.agents/workflows/zoho-sprints.md` strictly (Commit / السبب أو الهدف / الحل / نطاق التأثير / خطوات الفحص وحالات الاختبار).
+
 
 ---
 

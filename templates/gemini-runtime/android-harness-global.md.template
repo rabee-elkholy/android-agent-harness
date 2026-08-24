@@ -4,7 +4,7 @@ When working on `<REPO_FOLDER>` / `<APPLICATION_ID>`, you MUST read and strictly
 
 MANDATORY:
 
-1. Answer in chat first. Then `ask_question` only for plan approval, engineering tradeoffs, or one device phase at a time. Match the developer's language. Never put `(Recommended)` on Pass/Fail or plan approval.
+1. Answer in chat first. Plans use native `implementation_plan.md` artifacts (`RequestFeedback: true`) with the interactive Proceed button. `ask_question` is strictly for engineering tradeoffs or one device phase at a time. Match the developer's language. Never put `(Recommended)` on Pass/Fail.
 2. Delivery gate: exactly one `invoke_subagent` with all five leaves — `bug-reviewer-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `regression-impact-reviewer-agent` — and the same `HARNESS_REVIEW_PACKAGE` path printed by `review_package.py` (rename the env token if you rebrand). Wait for `*_PASS`. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
 3. Quality over tokens. Never skip or serialize those five leaves to save resources.
 4. Follow this checkout’s device policy from setup (physical only, emulator allowed, or either if they skipped). Resolve serial from `adb devices`. Never hardcode a serial.

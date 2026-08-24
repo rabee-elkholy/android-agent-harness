@@ -8,7 +8,7 @@ Follow `.agents/rules/harness-rules.md` exactly. Do not commit. Do not use workt
 
 ## Steps
 
-1. Inspect. Non-trivial work: write `.agents/state/plans/implementation_plan.md`, link it, `ask_question` for approval.
+1. Inspect. Non-trivial work: write `implementation_plan.md` artifact (`RequestFeedback: true`), link it in chat, wait for developer approval (via native Proceed button or chat). Do not fire `ask_question`.
 2. Implement against the files you opened. Compose + MVI for new UI. Dual-locale previews. Both string files.
 3. `python .agents/scripts/review_package.py`
 4. One `invoke_subagent` with all 5 leaves and the same `HARNESS_REVIEW_PACKAGE`. Wait for all `*_PASS`.
