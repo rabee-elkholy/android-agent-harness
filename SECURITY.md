@@ -4,10 +4,10 @@
 
 We actively maintain and provide security patches for the following versions of **Android Agent Harness**:
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
-| < 0.2.0 | :x:                |
+| Version | Supported |
+| ------- | --------- |
+| 0.2.x   | Yes       |
+| < 0.2.0 | No        |
 
 ---
 
@@ -22,4 +22,4 @@ If you discover a potential security vulnerability (such as a safety hook bypass
    - Step-by-step reproduction instructions or proof-of-concept.
    - Affected harness version and environment (OS, Python version, AI tool).
 
-We take security issues seriously and will respond promptly within 48 hours to validate and resolve any verified concerns.\n
+We take security issues seriously and will respond promptly within 48 hours to validate and resolve any verified concerns.
