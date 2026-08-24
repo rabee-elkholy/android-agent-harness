@@ -38,7 +38,7 @@ Tell the developer **first**, in their language:
 
    | # | Dimension | Status | Verified Subsystem |
    |---|---|:---:|---|
-   | 1 | **Environment & Host** | `PASS / FAIL` | Python >= 3.10, OS platform, Gradle wrapper, Android SDK path |
+   | 1 | **Environment & Host** | `PASS / FAIL` | Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` audit, Git working tree status |
    | 2 | **File Structure & Version** | `PASS / FAIL` | `.agents/VERSION`, `harness-rules.md`, 24 core scripts, `hooks.json` |
    | 3 | **Subagent Roster** | `PASS / FAIL` | All 8 subagents verified with active fingerprints |
    | 4 | **Product Configuration** | `PASS / FAIL` | `_product.py`, package prefix, application ID, source root, assemble task |
@@ -53,6 +53,7 @@ Tell the developer **first**, in their language:
 
 4. **Actionable Remediation Guidance**:
    - If all checks are `[PASS]`: Declare the harness **100% Operational & Ready for Active Feature Delivery**.
+   - If uncommitted files are reported in Dimension 1, remind the developer to commit their repository changes (`git add . && git commit -m "chore: setup android harness kit"`).
    - If any `[WARN]` or `[FAIL]` is present:
      - Provide the exact root cause.
      - Provide the verbatim, copy-paste terminal command to remediate the issue immediately.

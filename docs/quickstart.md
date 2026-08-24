@@ -40,17 +40,18 @@ The interactive installer will ask you a series of quick questions:
 4. **AI Tool Adapters**: Select the tools you use (Cursor, Antigravity, Claude, Copilot, etc.).
 5. **Zoho Sprints**: Connect Zoho Sprints project management (Optional).
 
-Once completed, the installer will verify:
+Once completed, the installer will automatically run the 12-dimension diagnostic doctor (`harness_doctor.py`), verify `.gitignore` security, and confirm:
 ```
 Total test failures: 0
 PREFLIGHT PASSED
+[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.
 ```
 
 ---
 
 ## Step 5: (Optional) Verify System Health with Diagnostic Doctor
 
-To perform a comprehensive 12-dimension health audit at any time, paste the diagnostic prompt or run the CLI doctor:
+To perform a comprehensive 12-dimension health audit at any time, audit `.gitignore` security rules, or check working tree status, paste the diagnostic prompt or run the CLI doctor:
 
 ```markdown
 Run the Android Harness Kit Diagnostic Doctor:

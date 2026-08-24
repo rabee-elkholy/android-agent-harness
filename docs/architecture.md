@@ -104,15 +104,22 @@ AI assistants frequently get stuck or timeout when running long Gradle builds. `
 
 ### 6. Zoho Sprints MCP Integration
 Provides bidirectional synchronization with Zoho Sprints:
-- Automatically reads bug descriptions, steps to reproduce, and attachments.
+- Automatically reads bug descriptions, steps to reproduce, and attached screenshots/logs (`attachments`).
 - Creates hierarchical tasks and subtasks.
-- Posts Arabic/English QA testing handoff comments with the exact Git commit hash for complete audit traceability.
+- Generates **QA-Centric Handoff Descriptions & Comments**: Strictly eliminates low-level internal code jargon (XML tags, Kotlin classes, `dp` values) in favor of functional, user-facing explanations.
+- Enforces mandatory structure across all items (Bugs, Features/Stories, Tasks/Improvements):
+  1. Mandatory `Commit: <hash>` on the first line.
+  2. Functional Root Cause / Objective.
+  3. Solution / Implementation Summary.
+  4. Explicit **Impact Area (Blast Radius)** for regression testing.
+  5. Structured **Test Cases & Verification Steps** (positive, negative, and edge scenarios).
+- Includes dynamic dual-language workflow mapping resolving English and Arabic headers per `ZOHO_LANGUAGE` in `_product.py`.
 
 ---
 
 ### 7. 12-Dimension System Doctor (`harness_doctor.py`)
-Provides deterministic, end-to-end verification of repository health across 12 operational dimensions:
-- Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status).
+Provides deterministic, end-to-end verification of repository health across 12 operational dimensions (automatically executed after install/update):
+- Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status, **`.gitignore` security & transient state audit**, **Git working tree status & commit reminders**).
 - File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 24 core scripts).
 - Complete subagent roster (all 8 subagents with active security fingerprints).
 - Product configuration (`_product.py`, package prefix, application ID, source root, assemble task).

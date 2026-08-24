@@ -304,7 +304,7 @@ Before compiling the application with Gradle, `preflight_check.py` runs three ra
 
 To verify that an installation or update was 100% successful, `harness_doctor.py` and `docs/diagnostic-prompt.md` execute an exhaustive audit across 12 operational dimensions:
 
-1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, and Android SDK path.
+1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` security audit, and Git working tree status / commit advisory.
 2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 24 core scripts, and `hooks.json`.
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
 4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, and assemble task.
@@ -318,7 +318,7 @@ To verify that an installation or update was 100% successful, `harness_doctor.py
 12. **Connected Devices**: ADB device connectivity, hardware model, and Android API level.
 
 ```bash
-# Run full automated diagnostic
+# Run full automated diagnostic (automatically executed post-setup and post-update)
 python .agents/scripts/harness_doctor.py
 
 # Run with hardware ADB check and JSON output
@@ -372,13 +372,14 @@ sequenceDiagram
     Zoho-->>Dev: Ticket Context, Steps to Reproduce
     Note over Dev: Code Implementation & 5-Leaf Review Gate
     Dev->>MCP: zoho_update_task_status("Ready To ReTest")
-    Dev->>MCP: zoho_add_comment(Arabic/English QA Handoff + Commit Hash)
+    Dev->>MCP: zoho_add_comment(QA-Centric Handoff + Commit Hash + Impact Area)
     MCP-->>Zoho: Status Updated & Commit Traceability Logged
-    Zoho-->>QA: Notification with Exact Testing Steps
+    Zoho-->>QA: Notification with Exact Testing Steps & Blast Radius
 ```
 
 - **Bi-Directional Sync**: Reads tasks, subtasks, bug reports, and attachments directly.
-- **QA Handoff**: Generates structured Arabic and English testing handoff notes with the exact **Git Commit SHA** for complete audit traceability.
+- **QA-First Handoff Standards**: Eliminates internal code dumps and XML/Kotlin jargon in favor of functional explanations, mandatory `Commit: <hash>` traceability, explicit **Impact Area (Blast Radius)**, and structured test cases.
+- **Dual-Language Mapping**: Dynamic translation matrix supporting English titles with Arabic descriptions/comments (`en_titles_ar_comments`), full English (`all_en`), or full Arabic (`all_ar`) per `_product.py`.
 
 ---
 
