@@ -65,4 +65,4 @@ body:
     attributes:
       label: Error Logs or Hook Outputs
       description: Paste any relevant output from terminal, _hook_selftest.py, or transcript logs.
-      render: shell\n
+      render: shell

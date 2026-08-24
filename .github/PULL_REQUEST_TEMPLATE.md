@@ -16,4 +16,4 @@
 - [ ] Tested on target AI tool(s) (e.g. Antigravity, Cursor, Claude Code).
 
 ## Related Issues
-<!-- Link related issues using Closes #123 or Fixes #123 -->\n
+<!-- Link related issues using Closes #123 or Fixes #123 -->

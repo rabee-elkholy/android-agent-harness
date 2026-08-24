@@ -915,6 +915,58 @@ ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.3.1") > (0, 
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
+# Release quality invariants: zero emojis, zero literal escapes, and milestone release consolidation
+import re
+
+EMOJI_PATTERN = re.compile(
+    r"[\U0001F600-\U0001F64F"
+    r"\U0001F300-\U0001F5FF"
+    r"\U0001F680-\U0001F6FF"
+    r"\U0001F700-\U0001F77F"
+    r"\U0001F780-\U0001F7FF"
+    r"\U0001F800-\U0001F8FF"
+    r"\U0001F900-\U0001F9FF"
+    r"\U0001FA00-\U0001FA6F"
+    r"\U0001FA70-\U0001FAFF"
+    r"\U00002702-\U000027B0"
+    r"\U000024C2-\U0001F251"
+    r"]+",
+    flags=re.UNICODE,
+)
+
+repo_root = Path(__file__).resolve().parent.parent.parent
+docs_files = (
+    list(repo_root.glob("*.md"))
+    + list((repo_root / "docs").glob("*.md"))
+    + list((repo_root / ".github").glob("**/*.md"))
+    + list((repo_root / "agents").glob("**/*.md"))
+)
+
+emoji_found = []
+escape_found = []
+for f in docs_files:
+    if f.is_file():
+        content = f.read_text(encoding="utf-8", errors="ignore")
+        if EMOJI_PATTERN.search(content):
+            emoji_found.append(f.name)
+        for l_idx, line in enumerate(content.splitlines(), start=1):
+            if line.endswith("\\n") or line.endswith("\\r"):
+                escape_found.append(f"{f.name}:{l_idx}")
+
+ok_emojis = len(emoji_found) == 0
+print(f"zero emojis across all markdown docs: {'OK' if ok_emojis else f'FAIL (found in {emoji_found})'}")
+failed += int(not ok_emojis)
+
+ok_escapes = len(escape_found) == 0
+print(f"zero literal escape artifacts in docs: {'OK' if ok_escapes else f'FAIL (found in {escape_found})'}")
+failed += int(not ok_escapes)
+
+changelog_text = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
+changelog_versions = re.findall(r"## \[(\d+\.\d+\.\d+)\]", changelog_text)
+ok_changelog_milestones = len(changelog_versions) <= 5 and changelog_versions[0] == "0.3.0"
+print(f"changelog milestone release consolidation: {'OK' if ok_changelog_milestones else 'FAIL'}")
+failed += int(not ok_changelog_milestones)
+
 print(f"\nTotal test failures: {failed}")
 sys.exit(failed)
 

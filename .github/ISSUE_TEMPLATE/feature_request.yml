@@ -32,4 +32,4 @@ body:
       label: Proposed Solution / Design
       description: Detailed explanation of how this should work.
     validations:
-      required: true\n
+      required: true

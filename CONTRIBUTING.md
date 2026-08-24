@@ -70,10 +70,19 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ---
 
+## Release Governance & Formatting Invariants
+
+1. **Milestone Consolidation**: Do not create fragmented micro-releases for intermediate commits. Consolidate sprint improvements into clean minor/major milestone releases (`v0.1.0`, `v0.2.0`, `v0.3.0`).
+2. **Safe Release Creation (`--notes-file`)**: Always write release notes to a clean UTF-8 markdown file and publish using `gh release create <tag> --notes-file <file>`. Never pass multiline markdown as command-line strings to avoid PowerShell/Bash escape character corruption.
+3. **Zero Emojis**: Maintain strict technical typography with zero casual emojis across all documentation, commits, and release notes.
+4. **Automated Verification**: All changes must satisfy `_hook_selftest.py` with 0 failures before opening a PR.
+
+---
+
 ## Submitting a Pull Request
 
 1. Create a feature branch (`git checkout -b feat/your-feature-name`).
 2. Implement your change with clean code and comments.
 3. Add tests to `_hook_selftest.py` and run tests.
 4. Update `CHANGELOG.md` under an `[Unreleased]` or target release section.
-5. Push your branch and open a PR with the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).\n
+5. Push your branch and open a PR with the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).

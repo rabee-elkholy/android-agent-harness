@@ -94,4 +94,4 @@ AI assistants frequently get stuck or timeout when running long Gradle builds. `
 Provides bidirectional synchronization with Zoho Sprints:
 - Automatically reads bug descriptions, steps to reproduce, and attachments.
 - Creates hierarchical tasks and subtasks.
-- Posts Arabic/English QA testing handoff comments with the exact Git commit hash for complete audit traceability.\n
+- Posts Arabic/English QA testing handoff comments with the exact Git commit hash for complete audit traceability.
