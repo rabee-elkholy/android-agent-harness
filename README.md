@@ -309,7 +309,7 @@ To verify that an installation or update was 100% successful, `harness_doctor.py
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
 4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, and assemble task.
 5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.
-6. **Skills & Workflows**: 10 workflow playbooks and 7 domain architectural references.
+6. **Skills & Workflows**: 10 workflow playbooks, foundation references integrity, automated project domain coverage discovery, and 100% reference indexing in `daily-scenarios.md`.
 7. **Multi-IDE Tool Adapters**: `AGENTS.md` at root and active tool adapters (Cursor, Claude Code, GitHub Copilot).
 8. **Safety Hooks & State Locking**: Cross-platform atomic `state_lock()` and hook selftest execution.
 9. **Process Streaming**: Line-buffered standard I/O and process tree lifecycle termination.

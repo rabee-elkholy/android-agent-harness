@@ -124,7 +124,7 @@ Provides deterministic, end-to-end verification of repository health across 12 o
 - Complete subagent roster (all 8 subagents with active security fingerprints).
 - Product configuration (`_product.py`, package prefix, application ID, source root, assemble task).
 - Template leakage check (verifying zero un-replaced `{{...}}` tokens in `.agents/`).
-- Domain skills & workflow playbooks (verifying all 10 workflow playbooks and 7 reference guides).
+- Domain skills & workflow playbooks (10 workflow playbooks, foundation references integrity, automated project domain coverage discovery, and 100% reference indexing in `daily-scenarios.md`).
 - Multi-IDE tool adapter parity (`AGENTS.md` and tool-specific rule configuration).
 - Safety hooks & atomic state locking (cross-platform atomic `state_lock()`, zero selftest failures).
 - Process streaming & heartbeat (line-buffered standard I/O and process tree lifecycle termination).

@@ -43,7 +43,7 @@ Tell the developer **first**, in their language:
    | 3 | **Subagent Roster** | `PASS / FAIL` | All 8 subagents verified with active fingerprints |
    | 4 | **Product Configuration** | `PASS / FAIL` | `_product.py`, package prefix, application ID, source root, assemble task |
    | 5 | **Template Leakage** | `PASS / FAIL` | Zero un-replaced template placeholders (`{{...}}`) in `.agents/` |
-   | 6 | **Skills & Workflows** | `PASS / FAIL` | 10 workflow playbooks and 7 domain architectural references |
+   | 6 | **Skills & Workflows** | `PASS / FAIL` | 10 workflow playbooks, foundation references integrity, project domain coverage, and `daily-scenarios.md` indexing |
    | 7 | **Multi-IDE Tool Adapters** | `PASS / WARN` | `AGENTS.md` at root and configured tool adapters (Cursor, Claude, Copilot) |
    | 8 | **Safety Hooks & State Locking** | `PASS / FAIL` | Cross-platform atomic `state_lock()`, zero selftest failures |
    | 9 | **Process Streaming** | `PASS / FAIL` | Line-buffered standard I/O and process tree lifecycle termination |
