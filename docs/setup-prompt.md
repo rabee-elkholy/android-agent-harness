@@ -167,7 +167,7 @@ Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Ro
 
 ### 3b) Dynamic Domain Discovery & Custom Reference Creation (with developer approval)
 
-The kit ships clean foundation references in `.agents/skills/android-harness/references/` (`architecture-mvi.md`, `ui-compose-theme.md`, `performance-anr-optimization.md`, `room-database-migrations.md`, `automated-skills.md`, `daily-scenarios.md`). During install, the installer agent MUST dynamically discover the project's actual core domains and create tailored reference files.
+The kit ships clean foundation references in `.agents/skills/android-harness/references/` (`architecture-mvi.md`, `ui-compose-theme.md`, `performance-anr-optimization.md`, `room-database-migrations.md`, `test-quality-guidelines.md`, `automated-skills.md`, `daily-scenarios.md`). During install, the installer agent MUST dynamically discover the project's actual core domains and create tailored reference files.
 
 #### 1. Foundation References (Always Port & Fill):
 1. **`architecture-mvi.md`**: 

@@ -305,7 +305,7 @@ Before compiling the application with Gradle, `preflight_check.py` runs three ra
 To verify that an installation or update was 100% successful, `harness_doctor.py` and `docs/diagnostic-prompt.md` execute an exhaustive audit across 12 operational dimensions:
 
 1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` security audit, and Git working tree status / commit advisory.
-2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 24 core scripts, and `hooks.json`.
+2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 25 core scripts, and `hooks.json`.
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
 4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, and assemble task.
 5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.
@@ -347,7 +347,7 @@ python .agents/scripts/run_gradle_task.py :app:assembleDebug
 The harness prioritizes **real-world physical hardware testing** over emulators:
 
 ```bash
-python .agents/scripts/run_device.py --package com.example.app --activity .MainActivity
+python .agents/scripts/run_device.py install-start --package com.example.app --activity .MainActivity
 ```
 
 - **Auto-Discovery**: Automatically identifies connected physical Android devices over ADB USB / Wi-Fi.
@@ -390,12 +390,12 @@ The harness supports **14+ AI coding assistants and IDEs**, automatically genera
 | Assistant / IDE | Generated Adapter | Integration Features |
 | :--- | :--- | :--- |
 | **Google Antigravity** | `agents/rules/`, `agents/hooks.json` | Subagent dispatch, hook blockers, ephemeral reminders |
-| **Cursor** | `.cursorrules` | Architecture constraints, review protocol, terminal execution gates |
+| **Cursor** | `.cursor/rules/android-harness.mdc` | Architecture constraints, review protocol, terminal execution gates |
 | **Claude Code** | `CLAUDE.md` | Slash command protocols, terminal safety guards |
 | **GitHub Copilot** | `.github/copilot-instructions.md` | Workspace instructions, domain conventions |
 | **OpenAI Codex CLI** | `AGENTS.md` | Universal agent instructions, execution limits |
 | **Windsurf** | `.windsurfrules` | Cascade AI rules and architectural constraints |
-| **Cline & Roo Code** | `.clinerules`, `.roomodes` | System prompts, mode definitions, tool permissions |
+| **Cline & Roo Code** | `.clinerules`, `.roo/rules/android-harness.md` | System prompts, mode definitions, tool permissions |
 | **Amazon Q / Continue / Junie / Kilo / Goose** | Native Adapter Files | Full rule compliance across all supported environments |
 
 ---
@@ -437,7 +437,7 @@ The setup wizard configures 18 parameters (`I.1` to `I.18`) stored in `_product.
 | `I.1` | **Backup Creation** | `Yes` | Create timestamped backup in `.harness-backup/` before install. |
 | `I.2` | **Product Name** | *Auto-detected* | Clean product display name (e.g. `Rashaqa`). |
 | `I.3` | **Git Commit Policy** | `Manual in IDE` | `Manual in IDE` *(Recommended)* vs `Agent upon explicit chat request`. |
-| `I.4` | **Device Target Policy** | `Physical Only` | `Physical Only` *(Recommended)* vs `Physical + Emulator`. |
+| `I.4` | **Device Target Policy** | `Physical + Emulator` | `Physical + Emulator` *(Recommended)* vs `Physical Only`. Default matches `_product.py` (`ALLOW_EMULATOR = True`). |
 | `I.5` | **Install Confirmation** | `Yes` | Require explicit confirmation before `adb install`. |
 | `I.6` | **Assemble Task** | `:app:assembleDebug` | Gradle assemble task path. |
 | `I.7` | **Launcher Activity** | *Auto-detected* | Target Activity for physical device launch. |
@@ -449,7 +449,7 @@ The setup wizard configures 18 parameters (`I.1` to `I.18`) stored in `_product.
 | `I.13` | **Custom Heuristics**| `Yes` | Discover and generate domain reference skill guides. |
 | `I.14` | **AI Tool Adapters** | *Multi-select* | Select target IDEs (Antigravity, Cursor, Claude, etc.). |
 | `I.15` | **Unit Tests Gate** | `Yes` | Run `testDebugUnitTest` before assemble. |
-| `I.16` | **Zoho Sprints MCP** | `Yes` | Configure Zoho Sprints project management integration. |
+| `I.16` | **Zoho Sprints MCP** | *Optional* | Configure Zoho Sprints integration. Enable is recommended when PC credentials already exist; otherwise skip. Never copies tokens. |
 | `I.17` | **Chat Language** | `Strict English` | English documentation, commit messages, and reviews. |
 | `I.18` | **Zoho Language** | `En Title + Ar Note` | English task titles with Arabic QA testing notes. |
 

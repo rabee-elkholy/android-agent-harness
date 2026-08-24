@@ -163,6 +163,12 @@ cases = [
     ("git_exe", cmd("git.exe push origin main"), "deny"),
     ("git_usr_bin", cmd("/usr/bin/git checkout master"), "deny"),
     ("git_chained", cmd("echo hello && git reset --hard"), "deny"),
+    ("git_status_then_push", cmd("git status --short --branch && git push origin main"), "deny"),
+    ("git_log_semi_reset", cmd("git log --oneline; git reset --hard HEAD~1"), "deny"),
+    ("git_diff_pipe_checkout", cmd("git diff | head -50 || git checkout -- ."), "deny"),
+    ("git_status_or_stash", cmd('powershell -Command "git status; git stash drop"'), "deny"),
+    ("git_status_inspection_only", cmd("git status --short --branch && git diff HEAD --stat"), "allow"),
+    ("git_log_pipe_head", cmd("git log --oneline -5 | head -20"), "allow"),
     ("installer_adapters_allowed", cmd("python .agents/scripts/install_tool_adapters.py --product Rashaqa --assemble :app:assembleDebug --tools gemini"), "allow"),
     ("git_status", cmd("git status --short --branch"), "allow"),
     ("sched_waiting_subagents", sched("Waiting for 5 review subagents"), "deny"),
@@ -911,7 +917,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.6") > (0, 5, 5) and get_current_version() == "0.5.5"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.5.6") > (0, 5, 5) and get_current_version() == "0.5.6"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

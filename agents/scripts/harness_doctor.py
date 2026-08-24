@@ -60,6 +60,7 @@ CORE_SCRIPTS = (
     "install_tool_adapters.py",
     "install_zoho_mcp.py",
     "logcat_doctor.py",
+    "new_feature_scaffold.py",
     "perf_guard.py",
     "pre_invocation_reminder.py",
     "pre_tool_safety.py",
@@ -392,9 +393,10 @@ class HarnessDoctor:
 
     def _detect_project_domains(self) -> set[str]:
         detected = set()
+        skip_parts = {".git", ".gradle", "build", ".harness-backup", "node_modules", "__pycache__"}
         text_corpus = ""
         for p in self.repo.glob("**/*.gradle*"):
-            if any(x in p.parts for x in {".git", ".gradle", "build", ".harness-backup"}):
+            if any(x in p.parts for x in skip_parts):
                 continue
             try:
                 text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
@@ -409,12 +411,27 @@ class HarnessDoctor:
                 pass
 
         for p in self.repo.glob("**/AndroidManifest.xml"):
-            if any(x in p.parts for x in {".git", ".gradle", "build", ".harness-backup"}):
+            if any(x in p.parts for x in skip_parts):
                 continue
             try:
                 text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
             except Exception:
                 pass
+
+        # Bounded Kotlin source scan: several domain signatures (SensorManager,
+        # SoundPool, MediaPlayer, SensorEventListener) only appear in .kt files.
+        scanned_kt = 0
+        max_kt_files = 500
+        for p in self.repo.rglob("*.kt"):
+            if scanned_kt >= max_kt_files:
+                break
+            if any(x in p.parts for x in skip_parts):
+                continue
+            try:
+                text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
+                scanned_kt += 1
+            except Exception:
+                continue
 
         for domain_name, config in KNOWN_DOMAINS.items():
             for sig in config["signatures"]:

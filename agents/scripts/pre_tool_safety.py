@@ -523,24 +523,28 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         "worktree",
         "clone",
     }
-    for m in git_mutation_pat.finditer(command):
-        rest = m.group(1).strip()
-        rest_tokens = rest.split()
-        skip_next = False
-        for tok in rest_tokens:
-            cleaned_tok = tok.strip("'\"").strip()
-            if skip_next:
-                skip_next = False
-                continue
-            if cleaned_tok in ("-c", "-C", "--git-dir", "--work-tree"):
-                skip_next = True
-                continue
-            if cleaned_tok.startswith("-"):
-                continue
-            if cleaned_tok.lower() in mutations:
-                deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
-                return
-            break
+    # Scan each shell-chained segment separately so a leading inspection
+    # command cannot mask a chained mutation ("git status && git push").
+    segments = [s for s in re.split(r"&&|\|\||;|\||\r?\n", command) if s.strip()] or [command]
+    for segment in segments:
+        for m in git_mutation_pat.finditer(segment):
+            rest = m.group(1).strip()
+            rest_tokens = rest.split()
+            skip_next = False
+            for tok in rest_tokens:
+                cleaned_tok = tok.strip("'\"").strip()
+                if skip_next:
+                    skip_next = False
+                    continue
+                if cleaned_tok in ("-c", "-C", "--git-dir", "--work-tree"):
+                    skip_next = True
+                    continue
+                if cleaned_tok.startswith("-"):
+                    continue
+                if cleaned_tok.lower() in mutations:
+                    deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
+                    return
+                break
 
     if re.search(r"\bandroid\s+emulator\b", lower):
         deny("Denied: android emulator is forbidden. Physical device only.")
