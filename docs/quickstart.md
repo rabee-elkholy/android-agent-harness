@@ -66,14 +66,47 @@ python .agents/scripts/harness_doctor.py
 
 ## One-Click Lifecycle Prompts Library
 
-You can copy and paste any of the following raw prompt URLs directly into your AI assistant in a new chat:
+You can copy and paste any of the following prompts directly into your AI assistant in a new chat:
 
-| Lifecycle Action | Action Summary | Copy-Paste AI Prompt URL |
-|---|---|---|
-| **Install** | First-time setup, Greenfield bootstrap, or existing app porting | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md` |
-| **Update** | Upgrade installed harness to latest release with backup | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md` |
-| **Diagnostic Doctor** | Comprehensive 12-dimension health and safety check | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md` |
-| **Rollback** | Restore previous backup state if needed | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md` |
+### 1. Install Prompt (Setup & Greenfield Bootstrap)
+- **What it does**: Sets up `.agents/`, safety hooks, IDE adapters, and architectural rules tailored to your project.
+- **Why it matters**: Turns standard AI coding assistants into architecture-compliant engineering teammates.
+- **When to use**: Onboarding an existing Android repository or bootstrapping a brand-new Greenfield app.
+- **Prompt URL**:
+```markdown
+Read and execute the Android Harness Kit installer:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md
+```
+
+### 2. Update Prompt (Harness Upgrade)
+- **What it does**: Upgrades `.agents/` scripts, hooks, and subagent prompts to the newest release while retaining your custom app settings.
+- **Why it matters**: Delivers new lint rules, security hardening, and framework improvements without touching your application source code.
+- **When to use**: Whenever a new harness release is published.
+- **Prompt URL**:
+```markdown
+Read and execute the Android Harness Kit updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md
+```
+
+### 3. Diagnostic Doctor Prompt (12-Dimension Health Check)
+- **What it does**: Audits 12 core dimensions of your repository (environment, subagents, product config, templates, hooks, preflight, ADB).
+- **Why it matters**: Confirms 100% operational health and active safety enforcement.
+- **When to use**: After installing, updating, switching IDEs, or troubleshooting warnings.
+- **Prompt URL**:
+```markdown
+Read and execute the Android Harness Kit diagnostic doctor:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md
+```
+
+### 4. Rollback Prompt (Instant Backup Restoration)
+- **What it does**: Restores your previous `.agents/` configuration and IDE adapters from the `.harness-backup/` snapshot.
+- **Why it matters**: Provides a zero-risk rollback guarantee if an update does not suit your project.
+- **When to use**: To revert recent harness configuration updates.
+- **Prompt URL**:
+```markdown
+Read and execute the Android Harness Kit rollback:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md
+```
 
 ---
 

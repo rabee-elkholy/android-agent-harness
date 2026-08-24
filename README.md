@@ -28,6 +28,7 @@
 - [Overview](#overview)
 - [The Problem We Solve](#the-problem-we-solve)
 - [Quickstart in 2 Minutes](#quickstart-in-2-minutes)
+- [One-Click Lifecycle Prompts](#one-click-lifecycle-prompts)
 - [Architecture Workflow](#architecture-workflow)
 - [Shift-Left Proactive Quality Invariants](#shift-left-proactive-quality-invariants)
 - [The Five-Leaf Review Gate](#the-five-leaf-review-gate)
@@ -99,7 +100,43 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/in
 
 4. Follow the interactive questionnaire to configure your app. Once verified with `Total test failures: 0`, your repository is fully protected.
 
-For step-by-step guidance, see the [Quickstart Guide](docs/quickstart.md).
+For detailed step-by-step guidance, see the [Quickstart Guide](docs/quickstart.md).
+
+---
+
+## One-Click Lifecycle Prompts
+
+Beyond initial installation, Android Harness Kit provides 3 dedicated on-demand prompts for upgrades, system health auditing, and instant emergency restoration. Simply paste the relevant prompt into a **new chat session** on your Android project whenever needed:
+
+### 1. Update Prompt (Upgrade to Latest Release)
+- **What it does**: Pulls the newest version of Android Harness Kit from GitHub and updates your `.agents/` scripts, safety hooks, and subagent prompts while preserving your custom product configuration and domain skill guides.
+- **Why it matters**: Gives you the latest compiler lint rules, security hardening, new reviewer capabilities, and IDE adapters without requiring manual file editing.
+- **When to use**: Whenever a new harness release is published, or when notified by the automated update reminder.
+- **How to use**: Copy and paste this prompt into a new chat:
+```markdown
+Read and execute the Android Harness Kit updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md
+```
+
+### 2. Diagnostic Doctor Prompt (12-Dimension Health Check)
+- **What it does**: Runs an automated 12-dimension health inspection (`harness_doctor.py`) auditing host runtime, subagent fingerprints, product configuration, template integrity, safety hooks, preflight pipeline, and ADB device connectivity.
+- **Why it matters**: Confirms that your harness installation is 100% healthy, no scripts are missing or corrupted, and all 5 reviewer gates and safety hooks are actively defending your repository.
+- **When to use**: After installing, after updating, when switching AI assistants/IDEs, or whenever you want to confirm system readiness and fix warnings.
+- **How to use**: Copy and paste this prompt into a new chat:
+```markdown
+Read and execute the Android Harness Kit diagnostic doctor:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md
+```
+
+### 3. Rollback Prompt (Instant Backup Restoration)
+- **What it does**: Reverts your `.agents/` configuration and IDE adapters back to your immediate previous backup stored in `.harness-backup/`.
+- **Why it matters**: Zero-risk guarantee. If an update or configuration change does not suit your project, you can revert back to your exact previous state in seconds.
+- **When to use**: If an update causes an unexpected issue or you want to undo recent harness configuration changes.
+- **How to use**: Copy and paste this prompt into a new chat:
+```markdown
+Read and execute the Android Harness Kit rollback:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md
+```
 
 ---
 
