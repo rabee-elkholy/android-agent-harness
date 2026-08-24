@@ -19,11 +19,14 @@ jobs:
           python-version: '3.12'
 
       - name: Validate Version Alignment
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           python -c "
+          import os
           from pathlib import Path
           ver = Path('agents/VERSION').read_text().strip()
-          tag = '${{ github.ref_name }}'.lstrip('v')
+          tag = os.environ.get('REF_NAME', '').lstrip('v')
           assert ver == tag, f'agents/VERSION ({ver}) does not match tag ({tag})'
           changelog = Path('CHANGELOG.md').read_text(encoding='utf-8')
           assert f'[{ver}]' in changelog, f'Version {ver} not found in CHANGELOG.md'

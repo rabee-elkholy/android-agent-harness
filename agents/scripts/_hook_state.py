@@ -1,6 +1,7 @@
 """Shared review-round state and subagent template validator for this app hooks."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -15,6 +16,45 @@ MAX_UI_REVIEWS = int(os.environ.get("HARNESS_MAX_UI_REVIEWS", "10"))
 MAX_TEST_REVIEWS = int(os.environ.get("HARNESS_MAX_TEST_REVIEWS", "10"))
 
 STATE_EXPIRY_SECONDS = 7 * 24 * 3600
+
+
+@contextlib.contextmanager
+def state_lock(timeout: float = 5.0):
+    lock_file = state_path().with_suffix(".lock")
+    try:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    start = time.time()
+    acquired = False
+    fd = None
+    while time.time() - start < timeout:
+        try:
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            acquired = True
+            break
+        except FileExistsError:
+            try:
+                if lock_file.is_file() and (time.time() - lock_file.stat().st_mtime > 10.0):
+                    lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            time.sleep(0.02)
+        except Exception:
+            break
+    try:
+        yield
+    finally:
+        if acquired and fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
 
 SUBAGENTS_DIR = Path(__file__).resolve().parent.parent / "subagents"
 
@@ -234,31 +274,38 @@ def invoke_count(conversation_id: str, agent_type: str = "review") -> int:
 
 
 def bump_invoke(conversation_id: str, agent_type: str = "review") -> int:
-    state = load_state()
-    rec = state.get(conversation_id) or {}
-    key = "invokes" if agent_type == "review" else f"{agent_type}_invokes"
-    n = invoke_count(conversation_id, agent_type) + 1
-    rec[key] = n
-    if agent_type == "review":
-        rec["review_invokes"] = n
-    rec["_last_used"] = time.time()
-    state[conversation_id] = rec
-    save_state(state)
-    return n
+    with state_lock():
+        state = load_state()
+        rec = state.get(conversation_id) or {}
+        key = "invokes" if agent_type == "review" else f"{agent_type}_invokes"
+        current = 0
+        try:
+            current = int(rec.get(key) or (rec.get("review_invokes") if agent_type == "review" else 0) or 0)
+        except (TypeError, ValueError):
+            current = 0
+        n = current + 1
+        rec[key] = n
+        if agent_type == "review":
+            rec["review_invokes"] = n
+        rec["_last_used"] = time.time()
+        state[conversation_id] = rec
+        save_state(state)
+        return n
 
 
 def record_subagent_defined(conversation_id: str, name: str) -> None:
-    state = load_state()
-    rec = state.get(conversation_id) or {}
-    defined = list(rec.get("defined_subagents") or [])
-    if name not in defined:
-        defined.append(name)
-    rec["defined_subagents"] = defined
-    # When defining subagents, allow re-dispatching to recover from unregistered-subagent invoke failures
-    rec["re_dispatch_allowed"] = True
-    rec["_last_used"] = time.time()
-    state[conversation_id] = rec
-    save_state(state)
+    with state_lock():
+        state = load_state()
+        rec = state.get(conversation_id) or {}
+        defined = list(rec.get("defined_subagents") or [])
+        if name not in defined:
+            defined.append(name)
+        rec["defined_subagents"] = defined
+        # When defining subagents, allow re-dispatching to recover from unregistered-subagent invoke failures
+        rec["re_dispatch_allowed"] = True
+        rec["_last_used"] = time.time()
+        state[conversation_id] = rec
+        save_state(state)
 
 
 def package_already_reviewed(conversation_id: str, package_hash: str) -> bool:
@@ -270,23 +317,24 @@ def package_already_reviewed(conversation_id: str, package_hash: str) -> bool:
 
 
 def record_review_round(conversation_id: str, package_hash: str) -> int:
-    state = load_state()
-    rec = state.get(conversation_id) or {}
-    hashes = list(rec.get("package_hashes") or [])
-    if package_hash not in hashes:
-        hashes.append(package_hash)
-    rec["package_hashes"] = hashes[-40:]
-    rec["last_package_hash"] = package_hash
-    rec["pending_reviews"] = True
-    rec["re_dispatch_allowed"] = False
-    rec["pending_since"] = time.time()
-    n = int(rec.get("review_invokes") or rec.get("invokes") or 0) + 1
-    rec["invokes"] = n
-    rec["review_invokes"] = n
-    rec["_last_used"] = time.time()
-    state[conversation_id] = rec
-    save_state(state)
-    return n
+    with state_lock():
+        state = load_state()
+        rec = state.get(conversation_id) or {}
+        hashes = list(rec.get("package_hashes") or [])
+        if package_hash not in hashes:
+            hashes.append(package_hash)
+        rec["package_hashes"] = hashes[-40:]
+        rec["last_package_hash"] = package_hash
+        rec["pending_reviews"] = True
+        rec["re_dispatch_allowed"] = False
+        rec["pending_since"] = time.time()
+        n = int(rec.get("review_invokes") or rec.get("invokes") or 0) + 1
+        rec["invokes"] = n
+        rec["review_invokes"] = n
+        rec["_last_used"] = time.time()
+        state[conversation_id] = rec
+        save_state(state)
+        return n
 
 
 def reviews_pending(conversation_id: str) -> bool:
@@ -304,15 +352,16 @@ def pending_since(conversation_id: str) -> float | None:
 
 
 def clear_pending_reviews(conversation_id: str) -> None:
-    state = load_state()
-    rec = state.get(conversation_id) or {}
-    if not rec:
-        return
-    rec["pending_reviews"] = False
-    rec["subagents_polls"] = 0
-    rec["_last_used"] = time.time()
-    state[conversation_id] = rec
-    save_state(state)
+    with state_lock():
+        state = load_state()
+        rec = state.get(conversation_id) or {}
+        if not rec:
+            return
+        rec["pending_reviews"] = False
+        rec["subagents_polls"] = 0
+        rec["_last_used"] = time.time()
+        state[conversation_id] = rec
+        save_state(state)
 
 
 def task_poll_count(conversation_id: str, task_id: str) -> int:
@@ -325,16 +374,21 @@ def task_poll_count(conversation_id: str, task_id: str) -> int:
 
 
 def record_task_poll(conversation_id: str, task_id: str) -> int:
-    state = load_state()
-    rec = state.get(conversation_id) or {}
-    polls = dict(rec.get("task_polls") or {})
-    n = task_poll_count(conversation_id, task_id) + 1
-    polls[task_id] = n
-    rec["task_polls"] = polls
-    rec["_last_used"] = time.time()
-    state[conversation_id] = rec
-    save_state(state)
-    return n
+    with state_lock():
+        state = load_state()
+        rec = state.get(conversation_id) or {}
+        polls = dict(rec.get("task_polls") or {})
+        try:
+            current = int(polls.get(task_id, 0))
+        except (TypeError, ValueError):
+            current = 0
+        n = current + 1
+        polls[task_id] = n
+        rec["task_polls"] = polls
+        rec["_last_used"] = time.time()
+        state[conversation_id] = rec
+        save_state(state)
+        return n
 
 
 def subagents_poll_count(conversation_id: str) -> int:
@@ -346,12 +400,18 @@ def subagents_poll_count(conversation_id: str) -> int:
 
 
 def record_subagents_poll(conversation_id: str) -> int:
-    state = load_state()
-    rec = state.get(conversation_id) or {}
-    n = subagents_poll_count(conversation_id) + 1
-    rec["subagents_polls"] = n
-    rec["_last_used"] = time.time()
-    state[conversation_id] = rec
-    save_state(state)
-    return n
+    with state_lock():
+        state = load_state()
+        rec = state.get(conversation_id) or {}
+        try:
+            current = int(rec.get("subagents_polls") or 0)
+        except (TypeError, ValueError):
+            current = 0
+        n = current + 1
+        rec["subagents_polls"] = n
+        rec["_last_used"] = time.time()
+        state[conversation_id] = rec
+        save_state(state)
+        return n
+
 

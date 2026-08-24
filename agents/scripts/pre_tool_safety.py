@@ -452,9 +452,6 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
         if not pending:
             clear_pending_reviews(conv_id)
             return True, "All subagents completed."
-        if _tail_has_verdicts(after):
-            clear_pending_reviews(conv_id)
-            return True, "All subagents completed."
         return False, (
             f"Waiting for {len(pending)}/{len(spawned_ids)} review subagents to deliver their verdicts."
         )
@@ -470,9 +467,10 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
 
 def handle_run_command(command: str, payload: dict | None = None) -> None:
     lower = command.lower()
+    lower_norm = re.sub(r"[\\]", "", lower)
     conv = conversation_id(payload or {})
     is_setup_script = any(
-        s in lower
+        s in lower_norm
         for s in (
             "install_tool_adapters",
             "setup_wizard",
@@ -482,10 +480,10 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         )
     )
     is_assemble_or_test = not is_setup_script and any(
-        k in lower
+        k in lower_norm
         for k in ("gradle", "assemble", "testdebug", ":app:test", "run_device.py")
     )
-    is_lint = not is_setup_script and "fast_kt_lint" in lower
+    is_lint = not is_setup_script and "fast_kt_lint" in lower_norm
 
     if (is_assemble_or_test or is_lint) and conv != "unknown":
         ok, barrier_msg = check_subagents_barrier(conv, payload)

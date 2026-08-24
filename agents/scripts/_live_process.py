@@ -108,6 +108,16 @@ def run_streaming(
                 if echo:
                     live_print(clean)
         proc.wait()
+    except BaseException:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except Exception:
+                proc.kill()
+        except Exception:
+            pass
+        raise
     finally:
         stop.set()
 
