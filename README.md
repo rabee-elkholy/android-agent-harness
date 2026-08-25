@@ -93,10 +93,16 @@ You can install and activate Android Agent Harness via the **Standalone CLI** or
 
 ### Option 1: Standalone CLI Executable (`android-harness`)
 
-Install globally via `pipx` (or `pip install`):
+Install globally via `pipx` directly from this repository (PyPI publication pending):
 
 ```bash
-pipx install android-harness-kit
+pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
+```
+
+No install needed? Run it in place from any kit clone:
+
+```bash
+python harness_cli.py --help
 ```
 
 Then run the setup wizard and diagnostics directly from your terminal:

@@ -25,7 +25,7 @@ For initial setup and structural porting, select a model capable of deep archite
 ### Option A: Standalone CLI (Terminal)
 
 ```bash
-pipx install android-harness-kit
+pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
 android-harness init
 ```
 

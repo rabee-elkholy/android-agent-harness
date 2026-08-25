@@ -33,3 +33,10 @@ jobs:
       - name: Run Preflight Sanity Verification
         run: |
           python agents/scripts/preflight_check.py
+
+      - name: Smoke Standalone CLI Dispatcher
+        env:
+          _IN_HOOK_SELFTEST: '1'
+        run: |
+          python harness_cli.py version
+          python harness_cli.py doctor --json
