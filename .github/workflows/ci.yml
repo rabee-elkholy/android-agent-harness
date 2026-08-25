@@ -30,6 +30,10 @@ jobs:
         run: |
           python agents/scripts/_hook_selftest.py
 
+      - name: Run Adversarial Security Self-Tests (B1)
+        run: |
+          python agents/scripts/_security_selftest.py
+
       - name: Run Preflight Sanity Verification
         run: |
           python agents/scripts/preflight_check.py

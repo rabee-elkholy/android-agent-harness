@@ -1281,7 +1281,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.9.0") > (0, 8, 0) and get_current_version() == "0.9.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.0") > (0, 9, 0) and get_current_version() == "0.10.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1445,21 +1445,11 @@ from setup_wizard import discover_flavors  # noqa: E402
 from setup_wizard import normalize as wiz_normalize  # noqa: E402
 from setup_wizard import questions_payload as qp_v7  # noqa: E402
 
-flavor_repo = Path(tempfile.mkdtemp())
+sys.path.insert(0, str(SCRIPTS.parents[1] / "scripts_dev" / "fixtures"))
+from make_android_fixture import make_fixture  # noqa: E402
+
+flavor_repo = make_fixture("flavors")
 flavor_app_dir = flavor_repo / "app"
-flavor_app_dir.mkdir(parents=True)
-(flavor_repo / "gradlew.bat").write_text("rem", encoding="utf-8")
-(flavor_app_dir / "build.gradle.kts").write_text(
-    'android {\n'
-    '    flavorDimensions += "env"\n'
-    '    productFlavors {\n'
-    '        create("staging") { dimension = "env" }\n'
-    '        create("prodClient") { dimension = "env" }\n'
-    '        isDefault = true\n'
-    '    }\n'
-    '}\n',
-    encoding="utf-8",
-)
 flavors_found = discover_flavors(flavor_repo)
 ok_flavor_disc = flavors_found == ["staging", "prodClient"]
 
@@ -1504,11 +1494,7 @@ failed += int(not ok_wizard_flavors)
 from _modules import discover_source_roots, module_name_of  # noqa: E402
 from fast_kt_lint import lint_file as lint_file_v7  # noqa: E402
 
-mm_repo = Path(tempfile.mkdtemp())
-for mod in ("app/src/main/java", "core/data/src/main/kotlin"):
-    (mm_repo / mod).mkdir(parents=True, exist_ok=True)
-(mm_repo / "app/src/main/java/A.kt").write_text("class A\n", encoding="utf-8")
-(mm_repo / "core/data/src/main/kotlin/B.kt").write_text("class B\n", encoding="utf-8")
+mm_repo = make_fixture("multimodule")
 roots_mm = discover_source_roots(mm_repo)
 ok_roots = len(roots_mm) == 2
 names_mm = sorted(module_name_of(r, mm_repo) for r in roots_mm)
@@ -1544,6 +1530,35 @@ print(
     f"multi-module roots+boundary lint: {'OK' if ok_multimodule else 'FAIL ' + str([ok_roots, ok_mod_names, ok_boundary])}"
 )
 failed += int(not ok_multimodule)
+
+# --- v0.10.0: fixture generator profiles (promoted from ad-hoc builders) ---
+fix_classic = make_fixture("classic")
+fix_multi = make_fixture("multimodule")
+fix_flavors = make_fixture("flavors")
+fix_kmp = make_fixture("kmp")
+ok_fixture = (
+    (fix_classic / "app" / "src" / "main" / "java" / "A.kt").is_file()
+    and (fix_multi / "app" / "src" / "main" / "java" / "A.kt").is_file()
+    and (fix_multi / "core" / "data" / "src" / "main" / "kotlin" / "B.kt").is_file()
+    and (fix_flavors / "app" / "build.gradle.kts").is_file()
+    and "create(\"staging\")" in (fix_flavors / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+    and (fix_kmp / "shared" / "src" / "androidMain" / "kotlin" / "Shared.android.kt").is_file()
+)
+proc_fix = subprocess.run(
+    [
+        sys.executable,
+        str(SCRIPTS.parents[1] / "scripts_dev" / "fixtures" / "make_android_fixture.py"),
+        "--profile",
+        "classic",
+    ],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+ok_fix_cli = proc_fix.returncode == 0 and Path(proc_fix.stdout.strip()).is_dir()
+ok_fixtures = ok_fixture and ok_fix_cli
+print(f"make_android_fixture profiles + CLI: {'OK' if ok_fixtures else 'FAIL'}")
+failed += int(not ok_fixtures)
 
 # --- v0.8.0: PM abstraction layer — policy engine matrix ---
 import pm_policy  # noqa: E402
@@ -1766,6 +1781,30 @@ print(
 )
 failed += int(not ok_wizard_i20)
 
+# --- v0.10.0: wizard I.21 git-gate confirmation (default ON) ---
+from setup_wizard import flags_from_answers  # noqa: E402
+
+ok_i21_present = "i21" in q_ids_v8
+norm_i21_yes = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
+                             "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
+                             "i17": "en", "i18": "all_en", "i20": "zoho_sprints", "i21": "no"},
+                          }, facts_v8)
+norm_i21_absent = normalize({"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
+                              "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
+                              "i17": "en", "i18": "all_en", "i20": "zoho_sprints"}, facts_v8)
+ok_i21_norm = (
+    norm_i21_yes.get("git_gate") == "no"
+    and norm_i21_absent.get("git_gate") == "yes"
+)
+flags_yes = flags_from_answers({**norm_i21_absent, "git_gate": "yes"})
+flags_no = flags_from_answers({**norm_i21_absent, "git_gate": "no"})
+ok_i21_flags = "--git-gate" in flags_yes and "--no-git-gate" in flags_no
+ok_wizard_i21 = ok_i21_present and ok_i21_norm and ok_i21_flags
+print(
+    f"wizard I.21 git-gate confirmation (default ON): {'OK' if ok_wizard_i21 else 'FAIL ' + str([ok_i21_present, ok_i21_norm, ok_i21_flags])}"
+)
+failed += int(not ok_wizard_i21)
+
 STATE.write_text(
     json.dumps({"c-ttl": {"pending_reviews": True, "pending_since": time.time() - 100000}}),
     encoding="utf-8",
@@ -1822,14 +1861,15 @@ cp_tmpls = command_pack_templates()
 ok_cp_tmpls = len(cp_tmpls) == 11 or _is_installed
 tmp_adapt_dir = Path(tempfile.mkdtemp())
 try:
+    # No --git-gate flag: the staged quality gate is DEFAULT ON since v0.10.0.
     adapt_args = parse_args([
         "--repo", str(tmp_adapt_dir),
         "--product", "TestApp",
         "--py", "python",
         "--assemble", ":app:assembleDebug",
         "--tools", "claude,copilot,codex",
-        "--git-gate",
         "--cc-hooks",
+        "--copilot-hooks",
     ])
     install_adapters(adapt_args)
     ok_claude_pack = (tmp_adapt_dir / ".claude" / "commands" / "deliver.md").is_file()
@@ -1837,8 +1877,13 @@ try:
     ok_codex_pack = (tmp_adapt_dir / ".codex" / "prompts" / "deliver.md").is_file()
     ok_git_gate_hook = (tmp_adapt_dir / ".githooks" / "pre-commit").is_file()
     ok_cc_settings = (tmp_adapt_dir / ".claude" / "settings.json").is_file()
+    copilot_hooks_file = tmp_adapt_dir / ".github" / "hooks" / "android-harness-pre-tool-use.json"
+    ok_copilot_hooks = copilot_hooks_file.is_file()
+    if ok_copilot_hooks:
+        hooks_body = copilot_hooks_file.read_text(encoding="utf-8")
+        ok_copilot_hooks = "preToolUse" in hooks_body and "copilot_pre_tool_safety.py" in hooks_body
 
-    # Test pruning
+    # Test pruning (copilot deselected -> its hooks bridge is removed too)
     adapt_args_prune = parse_args([
         "--repo", str(tmp_adapt_dir),
         "--product", "TestApp",
@@ -1848,7 +1893,21 @@ try:
     ])
     install_adapters(adapt_args_prune)
     ok_prune_codex = not (tmp_adapt_dir / ".codex" / "prompts" / "deliver.md").is_file()
+    ok_prune_copilot_hooks = not copilot_hooks_file.is_file()
     ok_keep_claude = (tmp_adapt_dir / ".claude" / "commands" / "deliver.md").is_file()
+
+    # Explicit opt-out: --no-git-gate must leave no hook behind
+    no_gate_dir = Path(tempfile.mkdtemp())
+    adapt_args_no_gate = parse_args([
+        "--repo", str(no_gate_dir),
+        "--product", "TestApp",
+        "--py", "python",
+        "--assemble", ":app:assembleDebug",
+        "--tools", "claude",
+        "--no-git-gate",
+    ])
+    install_adapters(adapt_args_no_gate)
+    ok_no_gate = not (no_gate_dir / ".githooks" / "pre-commit").is_file()
 
     ok_adapter_lifecycle = (
         ok_cp_tmpls
@@ -1857,14 +1916,18 @@ try:
         and ok_codex_pack
         and ok_git_gate_hook
         and ok_cc_settings
+        and ok_copilot_hooks
         and ok_prune_codex
+        and ok_prune_copilot_hooks
         and ok_keep_claude
+        and ok_no_gate
     )
-    print(f"install_tool_adapters command_packs, git_gate & cc_hooks: {'OK' if ok_adapter_lifecycle else 'FAIL'}")
+    print(f"install_tool_adapters command_packs, git_gate(default ON) & hook bridges: {'OK' if ok_adapter_lifecycle else 'FAIL'}")
     failed += int(not ok_adapter_lifecycle)
 finally:
     import shutil
     shutil.rmtree(tmp_adapt_dir, ignore_errors=True)
+    shutil.rmtree(no_gate_dir, ignore_errors=True)
 
 # --- v0.6.0: Pre-Commit Quality Gate Smoke ---
 pre_commit_script = SCRIPTS / "pre_commit_gate.py"
@@ -1893,6 +1956,22 @@ if cli_file.is_file():
     failed += int(not ok_cli)
 else:
     print("harness_cli dispatch & subcommands: OK (skipped — installed checkout)")
+
+
+# --- v0.10.0: adversarial security suite (B1) ---
+sec_proc = subprocess.run(
+    [sys.executable, str(SCRIPTS / "_security_selftest.py")],
+    capture_output=True,
+    text=True,
+    check=False,
+    env=os.environ.copy(),
+)
+ok_security_suite = sec_proc.returncode == 0
+print(
+    f"security_selftest suite (B1): "
+    f"{'OK' if ok_security_suite else 'FAIL ' + sec_proc.stdout + sec_proc.stderr}"
+)
+failed += int(not ok_security_suite)
 
 
 doc = HarnessDoctor(repo_root)

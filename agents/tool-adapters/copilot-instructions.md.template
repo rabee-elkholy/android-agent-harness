@@ -7,3 +7,9 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 - Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
 - Device: {{DEVICE_POLICY}}
 - {{GIT_POLICY}}
+- Safety enforcement: this repo registers a Copilot `preToolUse` hook
+  (`.github/hooks/android-harness-pre-tool-use.json`) that deterministically denies
+  git mutations, emulator tooling, and unsafe adb commands. Do not try to bypass it.
+  If the hook file is absent (older checkout, hook support unavailable), treat
+  `{{PY}} .agents/scripts/pre_tool_safety.py` as the reference policy: apply the same
+  denials yourself before every shell command (best-effort). Git mutations are never allowed.

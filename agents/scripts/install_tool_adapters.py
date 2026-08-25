@@ -73,6 +73,7 @@ TOOL_FILES: dict[str, tuple[str, ...]] = {
     "copilot": (
         ".github/copilot-instructions.md",
         ".github/instructions/android-harness.instructions.md",
+        ".github/hooks/android-harness-pre-tool-use.json",
     ),
     "windsurf": (".windsurf/rules/android-harness.md", ".windsurfrules"),
     "cline": (".clinerules",),
@@ -442,13 +443,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--git-gate",
-        action="store_true",
-        help="Write .githooks/pre-commit staged-changes quality gate and set core.hooksPath.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write .githooks/pre-commit staged-changes quality gate and set core.hooksPath (default ON; --no-git-gate to opt out).",
     )
     p.add_argument(
         "--cc-hooks",
         action="store_true",
         help="Register the Claude Code PreToolUse bridge (requires --tools to include claude).",
+    )
+    p.add_argument(
+        "--copilot-hooks",
+        action="store_true",
+        help="Register the GitHub Copilot preToolUse bridge under .github/hooks/ (requires --tools to include copilot).",
     )
     return p.parse_args(argv)
 
@@ -479,6 +486,25 @@ sys.exit(res.returncode)
 """
 
 CC_HOOK_COMMAND = "{py} .agents/scripts/cc_pre_tool_safety.py"
+
+COPILOT_HOOKS_FILE = ".github/hooks/android-harness-pre-tool-use.json"
+
+
+def copilot_hooks_payload(py: str) -> dict:
+    return {
+        "version": 1,
+        "_comment": "<!-- managed-by: android-harness-kit -->",
+        "hooks": {
+            "preToolUse": [
+                {
+                    "type": "command",
+                    "matcher": "bash|powershell",
+                    "command": f"{py} .agents/scripts/copilot_pre_tool_safety.py",
+                    "timeoutSec": 15,
+                }
+            ]
+        },
+    }
 
 
 def install_git_gate(repo: Path, *, dry_run: bool) -> list[str]:
@@ -540,6 +566,17 @@ def ensure_cc_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
     return [f"merged PreToolUse(Bash) bridge into {rel}"]
 
 
+def ensure_copilot_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
+    hooks_path = repo / COPILOT_HOOKS_FILE
+    rel = rel_of(hooks_path, repo)
+    payload = copilot_hooks_payload(py)
+    if dry_run:
+        return [f"dry-run write {rel} (preToolUse -> copilot_pre_tool_safety.py)"]
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    hooks_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return [f"wrote {rel} (Copilot preToolUse bridge)"]
+
+
 def install(args: argparse.Namespace) -> list[str]:
     if not TEMPLATES_DIR.is_dir():
         raise SystemExit(f"Templates missing: {TEMPLATES_DIR}")
@@ -568,10 +605,12 @@ def install(args: argparse.Namespace) -> list[str]:
             logs.extend(generate_command_packs(repo, tool, mapping, dry_run=args.dry_run))
     if "claude" in selected and not args.skip_claude_agents:
         logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
-    if getattr(args, "git_gate", False):
+    if getattr(args, "git_gate", True):
         logs.extend(install_git_gate(repo, dry_run=args.dry_run))
     if getattr(args, "cc_hooks", False) and "claude" in selected:
         logs.extend(ensure_cc_hooks(repo, mapping["PY"], dry_run=args.dry_run))
+    if getattr(args, "copilot_hooks", False) and "copilot" in selected:
+        logs.extend(ensure_copilot_hooks(repo, mapping["PY"], dry_run=args.dry_run))
     logs.append(f"tools: {', '.join(sorted(selected))}")
     return logs
 

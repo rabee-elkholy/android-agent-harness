@@ -5,6 +5,17 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-25
+
+### Enforcement Parity & Red Team: Adversarial Security Suite, Copilot Hook Bridge, Fixture Generator, Threat Model
+- **Adversarial Security Suite (`agents/scripts/_security_selftest.py`)**: New standalone red-team suite (23 deterministic, zero-network assertion lines) wired into `_hook_selftest.py` and CI. Covers chained/spaced/config-wrapped/base64-wrapped git mutations, homoglyph and full-path `git.exe` variants, review-package traversal (URL-encoded `%2e%2e`, `..\..\`, symlink escape), oversized hook stdin, malformed Claude Code bridge fuzz, malformed Copilot bridge fuzz, forged EVIDENCE footers, and secret leakage through the Zoho MCP install path. Every case must deny or fail closed.
+- **GitHub Copilot Enforcement Bridge (`agents/scripts/copilot_pre_tool_safety.py`, `install_tool_adapters.py --copilot-hooks`)**: GitHub Copilot now enforces repository-level `preToolUse` hooks (`.github/hooks/*.json`, allow/deny decision JSON, fail-closed on crash). The bridge reuses the engine-subprocess pattern from `cc_pre_tool_safety.py`, accepting both the documented camelCase and the VS Code compatible snake_case payloads, and is registered under `.github/hooks/android-harness-pre-tool-use.json` with a bash|powershell matcher. `copilot-instructions.md.template` documents the hook and a best-effort fallback for hook-less checkouts.
+- **Git Gate Default ON + Wizard I.21 (`install_tool_adapters.py`, `setup_wizard.py`)**: The staged pre-commit quality gate is now installed by default; `--no-git-gate` opts out. The setup wizard gains confirmation question I.21 ("Pre-commit git gate?") in EN/AR, recorded as `git_gate` in answers, printed in the answers summary, and emitted as `--git-gate`/`--no-git-gate` by `flags_from_answers`. Absent answers keep the new default (on).
+- **Fixture Generator Promotion (`scripts_dev/fixtures/make_android_fixture.py`)**: The ad-hoc temp-project builders from the selftests are promoted into one reusable stdlib-only generator with `--profile classic|multimodule|flavors|kmp` that prints the fixture root. The heaviest selftest blocks (wizard flavor discovery, multi-module root discovery) now consume it — behavior-neutral, all existing assertions unchanged.
+- **Threat Model Documentation (`SECURITY.md`)**: New "Threat Model & Mitigations" table mapping every attack class above to the exact test name that proves the mitigation; supported-versions rows now span 0.6–0.10. Core script inventory expanded from 32 to 34 (`_security_selftest.py`, `copilot_pre_tool_safety.py`).
+
+---
+
 ## [0.9.0] - 2026-08-25
 
 ### Trust & Supply Chain: Pin-to-Tag Provisioning, Single Deny Vocabulary, Audit Log, Evidence-Backed Verdicts

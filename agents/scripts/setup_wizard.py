@@ -224,6 +224,13 @@ T = {
         "i20_jira_mcp": "Jira — official upstream MCP server (registration guide)",
         "i20_linear_mcp": "Linear — official upstream MCP server (registration guide)",
         "i20_none": "None — local-only delivery, no tracker",
+        "i21": (
+            "Should the helper install a staged-changes quality gate before every git commit? "
+            "It adds .githooks/pre-commit (string parity, Room migrations, Kotlin lint) and runs in "
+            "under 5 seconds. Choose no only if you already run your own git hooks."
+        ),
+        "i21_yes": "Yes — install the pre-commit quality gate (Recommended)",
+        "i21_no": "No — I manage my own git hooks",
         "i19": (
             "This project defines Gradle product flavors. Which flavor do you test daily? "
             "Install/launch/logcat will target that variant automatically. "
@@ -405,6 +412,13 @@ T = {
         "i20_jira_mcp": "Jira — خادم MCP رسمي (دليل تسجيل)",
         "i20_linear_mcp": "Linear — خادم MCP رسمي (دليل تسجيل)",
         "i20_none": "بدون نظام مهام — تسليم محلي فقط",
+        "i21": (
+            "المساعد يركّب بوابة جودة قبل كل git commit؟ "
+            "بتضيف .githooks/pre-commit (تطابق النصوص، ترحيلات Room، فحص Kotlin) وشغلها أقل من 5 ثواني. "
+            "اختار لا بس لو عندك hooks جاهزة بتديرها بنفسك."
+        ),
+        "i21_yes": "نعم — ركّب بوابة الجودة قبل الكوميت (مفضّل)",
+        "i21_no": "لا — هدير hooks الجيت بنفسي",
         "i19": (
             "المشروع فيه Product Flavors. أنهي نسخة بتختبر عليها يومياً؟ "
             "التثبيت والتشغيل واللوج هيشتغلوا على النسخة دي. "
@@ -1012,6 +1026,18 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "options": [{"id": pid, "label": t(lang, f"i20_{pid}")} for pid in PM_PROVIDER_IDS],
         }
     )
+    qs.append(
+        {
+            "id": "i21",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i21"),
+            "options": [
+                {"id": "yes", "label": t(lang, "i21_yes")},
+                {"id": "no", "label": t(lang, "i21_no")},
+            ],
+        }
+    )
     flavors = d.get("flavors") or []
     if flavors:
         flavor_opts = [{"id": f, "label": f} for f in flavors]
@@ -1322,6 +1348,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "zoho_language": zoho_lang,
         "pm_provider": pm_provider,
         "tools": tools,
+        "git_gate": "no" if (raw.get("i21") or auto.get("git_gate", "yes")) == "no" else "yes",
         "asked": asked,
     }
 
@@ -1358,6 +1385,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.18 Zoho Updates Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
+        f"- I.21 Pre-commit git gate: {answers.get('git_gate', 'yes')}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
@@ -1392,10 +1420,11 @@ def write_answers(repo: Path, answers: dict) -> None:
 
 def flags_from_answers(answers: dict) -> str:
     tools = ",".join(answers.get("tools") or [])
+    gate_flag = "--git-gate" if (answers.get("git_gate") or "yes") != "no" else "--no-git-gate"
     return (
         f"--product {answers['product']} --py {answers['py']} "
         f"--assemble {answers['assemble']} --device-policy {answers['device_policy']} "
-        f"--git-policy {answers['git_policy']} --tools {tools}"
+        f"--git-policy {answers['git_policy']} --tools {tools} {gate_flag}"
     )
 
 
