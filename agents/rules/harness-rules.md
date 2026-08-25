@@ -88,8 +88,8 @@ Before writing or modifying any code, the Lead Agent must proactively verify com
    - All network/remote calls in coroutines must safely handle `IOException`, `SocketTimeoutException`, `UnknownHostException` (e.g. via `runCatching` or explicit `Result` wrapping).
    - ViewModels must expose clear error states to the UI with retry mechanisms; never swallow network failures silently.
 2. **Clean Architecture & Import Hygiene**:
-   - Strict Unidirectional Data Flow (MVI StateFlow as the single source of truth).
-   - **STRICTLY ZERO INLINE FQCNs**: Never use inline package paths (e.g. `androidx.compose...`). Always import at the top and use typealiases (`as CoreState`, `as CoreAction`) to resolve collisions.
+   - Strict Unidirectional Data Flow (StateFlow / LiveData as the single source of truth for UI state, matching this project's architecture).
+   - **STRICTLY ZERO INLINE FQCNs**: Never use inline package paths (e.g. `androidx.compose...`, `android.view...`). Always import at the top and use typealiases (`as CoreState`, `as CoreAction`) to resolve collisions.
 3. **Accessibility & Jetpack Compose Standards**:
    - Every `Image`, `Icon`, and `IconButton` MUST specify a meaningful `contentDescription` (or explicit `null` only if decorative).
    - Clickable UI components must have a minimum touch target size of 48dp (`Modifier.minimumInteractiveComponentSize()` or `>= 48.dp`).

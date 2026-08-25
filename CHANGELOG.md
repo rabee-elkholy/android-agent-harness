@@ -5,6 +5,15 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] - 2026-08-25
+
+### Established & Modern Codebase Reviewer Enhancement (Five-Leaf Review Gate)
+- **Established & Legacy Codebase Adaptive Reviewers (`agents/subagents/`)**: Upgraded the Five-Leaf Review Gate prompts (`bug-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `regression-impact-reviewer-agent`) to seamlessly handle both established/legacy codebases (XML Views, ViewBinding, MVVM, Java platform types, multi-module) and modern architectures (Jetpack Compose, MVI, KMP).
+- **Sharpened Quality Invariants**: Added explicit checks for Java/Kotlin nullability boundaries, `viewLifecycleOwner` vs `this` in Fragment LiveData observation, atomic `StateFlow.update { }`, `onDestroyView()` ViewBinding nulling, unhandled Coroutine crashes, deep links/intent exports, and multi-module core contract blast radius.
+- **Architectural Rules Alignment (`harness-rules.md`)**: Aligned shift-left quality invariants to explicitly respect the target project's established architecture without forcing unadopted patterns.
+
+---
+
 ## [0.10.4] - 2026-08-25
  
 ### Fix: Neutralize Kit-Shipped Placeholders in Installed-Mode Selftest
@@ -137,16 +146,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.5.1] - 2026-08-24
-
-**Included in 0.5.3:**
+## [0.5.0] - 2026-08-24
 
 ### Automated Post-Setup Diagnostics, `.gitignore` Hygiene & Git Working Tree Guard
 - **Automated Post-Setup & Post-Update Diagnostics**: Standardized `harness_doctor.py` as an automatic verification stage executed across `docs/setup-prompt.md`, `docs/install-prompt.md`, and `docs/update-prompt.md` to validate full 12-dimension health immediately after harness provisioning.
 - **Deep `.gitignore` Security & State Inspection (`harness_doctor.py`)**: Added dedicated `.gitignore` inspection auditing root and harness-level `.gitignore` files to guarantee that transient state (`state/`, `.agents/state/`), Python cache (`__pycache__`, `*.pyc`), backup archives (`.harness-backup/`), and sensitive Zoho tokens (`zoho_config.json`) are completely excluded from source control.
 - **Git Working Tree Status & Commit Reminders**: Added automated `git status` inspection to `harness_doctor.py` detecting uncommitted or untracked changes, accompanied by an explicit actionable advisory banner instructing developers to create a Git commit following harness setup or updates.
-
-**Included in 0.5.2:**
 
 ### QA-Centric Zoho Handoff & Native Artifact Interactive Plan Review
 - **QA-Centric Zoho Communication Policy (`harness-rules.md`, `zoho-sprints.md`)**: Standardized all task descriptions and comments across Zoho Sprints for QA / testers and product stakeholders. Strictly prohibited raw code dumps, internal XML layout files, Kotlin source references, and framework-level attributes (e.g. `clipToPadding`, `paddingBottom` dp values), enforcing functional, user-facing descriptions.
@@ -154,16 +159,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dynamic Dual-Language Workflow (`zoho-sprints.md`)**: Refactored the Zoho Sprints workflow playbook into standard English documentation with a comprehensive `Language Mapping Table` resolving English and Arabic section headers dynamically per `ZOHO_LANGUAGE` (`en_titles_ar_comments`, `all_en`, `all_ar`) in `_product.py`.
 - **Native Artifact Planning & Interactive "Proceed" Review**: Replaced redundant `ask_question` plan approval modals with Antigravity native interactive `implementation_plan.md` artifacts (`RequestFeedback: true`), providing a direct UI **Proceed** action and reserving `ask_question` strictly for design tradeoffs and sequential manual device verification phases (`deliver.md`, `pre_invocation_reminder.py`, `android-harness-global.md.template`).
 
----
-
 ### Installed Checkout Selftest Alignment & Dynamic Product Identity
 - **Installed Checkout Selftest Adaptation (`_hook_selftest.py`)**: Enhanced the selftest suite to dynamically detect installed target Android checkouts (`.harness-setup/answers.json` or `.agents/` root). When running inside an installed client app, the suite verifies the client's `.agents/` hierarchy instead of requiring raw kit-only files (`CHANGELOG.md`, kit root `docs/`, `agents/` folder), guaranteeing zero false-positive selftest failures after installation or update.
 - **Dynamic Product Name in Ephemeral Failure Notices (`ensure_hook_selftest.py`)**: Dynamically resolves the active application's `PRODUCT_NAME` from `_product.py` when generating ephemeral hook messages upon harness modifications.
 - **Cross-Platform UTF-8 & Windows CP1252 Resilience**: Standardized UTF-8 encoding across setup wizard subprocess runners, preventing character encoding exceptions when processing Arabic titles and non-ASCII typography on Windows consoles.
-
----
-
-## [0.5.0] - 2026-08-24
 
 **Included in 0.4.0:**
 
