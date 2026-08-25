@@ -6,6 +6,10 @@ We actively maintain and provide security patches for the following versions of 
 
 | Version | Supported |
 | ------- | --------- |
+| 0.9.x   | Yes       |
+| 0.8.x   | Yes       |
+| 0.7.x   | Yes       |
+| 0.6.x   | Yes       |
 | 0.5.x   | Yes       |
 | 0.4.x   | Yes       |
 | 0.3.x   | Yes       |

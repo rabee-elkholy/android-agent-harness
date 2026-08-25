@@ -341,6 +341,14 @@ def reviews_pending(conversation_id: str) -> bool:
     return bool(_record(conversation_id).get("pending_reviews"))
 
 
+def active_package_hash(conversation_id: str) -> str:
+    """Full sha256 of the review package the pending round was dispatched against."""
+    rec = _record(conversation_id)
+    if not rec.get("pending_reviews"):
+        return ""
+    return str(rec.get("last_package_hash") or "")
+
+
 def pending_since(conversation_id: str) -> float | None:
     rec = _record(conversation_id)
     if not rec.get("pending_reviews"):
@@ -453,12 +461,13 @@ def tree_code_fingerprint() -> str | None:
         return None
 
 
-def record_review_ledger(package_path: Path) -> None:
+def record_review_ledger(package_path: Path, git_sha: str | None = None) -> None:
     """Persist the tree fingerprint a review package was generated against."""
     payload = {
         "package": str(package_path),
         "sha256": file_sha256(Path(package_path)),
         "tree_fingerprint": tree_code_fingerprint(),
+        "git_sha": git_sha or "",
         "time": time.time(),
     }
     path = _ledger_path()

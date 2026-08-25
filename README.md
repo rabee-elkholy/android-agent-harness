@@ -351,7 +351,7 @@ Before compiling the application with Gradle, `preflight_check.py` runs three ra
 To verify that an installation or update was 100% successful, `harness_doctor.py` and `docs/diagnostic-prompt.md` execute an exhaustive audit across 12 operational dimensions:
 
 1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` security audit, and Git working tree status / commit advisory.
-2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 31 core scripts, and `hooks.json`.
+2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 32 core scripts, and `hooks.json`.
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
 4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency (`answers.json` vs device policy, assemble task, and selected tool adapters).
 5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.

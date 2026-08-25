@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from _hook_state import (  # noqa: E402
     MAX_REVIEWS,
     MAX_TEST_REVIEWS,
     MAX_UI_REVIEWS,
+    active_package_hash,
     bump_invoke,
     canonical_subagent_name,
     clear_pending_reviews,
@@ -31,13 +33,91 @@ from _hook_state import (  # noqa: E402
     transcript_path,
 )
 from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
+from policy_vocab import (  # noqa: E402
+    DEVICE_BOUND_ADB,
+    DENIED_PM_OPS,
+    FORBIDDEN_TOOLS,
+    GIT_MUTATIONS,
+    SHELL_INDIRECTION_PATTERNS,
+    classify_reason,
+    emulator_match,
+    normalize_command,
+    reason_short,
+)
+
+
+_CONTEXT = {"tool": "", "command": ""}
+
+AUDIT_MAX_RECORDS = 1000
+
+
+def _audit_path() -> Path:
+    override = os.environ.get("HARNESS_HOOK_STATE")
+    base = (
+        Path(override)
+        if override
+        else Path(__file__).resolve().parent.parent / "state" / "review-invokes.json"
+    )
+    return base.with_name("audit_log.jsonl")
+
+
+def _cmd_sha256_12(command: str) -> str:
+    if not command:
+        return ""
+    return hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def write_audit(decision: str, reason: str) -> None:
+    """Append one sanitized decision record to the JSONL audit log.
+
+    Never writes raw commands or payload content: only a 12-hex command digest,
+    a truncated conversation hint, and the classified reason.
+    """
+    try:
+        conv = conversation_id(_CONTEXT.get("payload") or {})
+        record = {
+            "ts": round(time.time(), 3),
+            "decision": decision,
+            "tool": _CONTEXT.get("tool") or "run_command",
+            "reason_code": classify_reason(reason),
+            "reason_short": reason_short(reason),
+            "cmd_sha256_12": _cmd_sha256_12(_CONTEXT.get("command") or ""),
+            "conv_hint": (conv if conv and conv != "unknown" else "")[:16],
+        }
+        path = _audit_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if path.stat().st_size > 0:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+            if len(lines) > AUDIT_MAX_RECORDS:
+                from _hook_state import state_lock
+
+                with state_lock():
+                    kept = lines[-AUDIT_MAX_RECORDS:]
+                    temp_file = tempfile.NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        dir=str(path.parent),
+                        delete=False,
+                        suffix=".tmp",
+                    )
+                    temp_file.writelines(kept)
+                    temp_file.flush()
+                    temp_file.close()
+                    os.replace(temp_file.name, path)
+    except Exception:
+        pass  # Auditing must never alter a safety decision.
 
 
 def deny(reason: str) -> None:
+    write_audit("deny", reason)
     print(json.dumps({"decision": "deny", "reason": reason}))
 
 
 def allow(reason: str = "Not blocked by the harness safety hook.") -> None:
+    write_audit("allow", reason)
     print(json.dumps({"decision": "allow", "reason": reason}))
 
 
@@ -93,6 +173,19 @@ def require_review_package(sub: dict) -> Path | None:
     if not path.is_file():
         deny(f"Denied: review package file does not exist: {path}")
         return None
+    _WARNED_LEGACY: set[str] = getattr(require_review_package, "_warned", set())
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:2000]
+    except Exception:
+        head = ""
+    if "HARNESS_PACKAGE_HEADER v2" not in head and str(path) not in _WARNED_LEGACY:
+        _WARNED_LEGACY.add(str(path))
+        setattr(require_review_package, "_warned", _WARNED_LEGACY)
+        print(
+            f"[WARN] review package {path.name} predates the v2 evidence header "
+            "(no PACKAGE_SHA256/GIT_SHA); accepted this migration window, regenerate soon.",
+            file=sys.stderr,
+        )
     try:
         resolved = path.resolve()
         repo_resolved = REPO.resolve()
@@ -316,6 +409,38 @@ CONV_ID_RE = re.compile(
 )
 SENDER_RE = re.compile(r"sender=([0-9a-fA-F-]{8,}(?:/task-\d+)?)")
 PASS_TOKENS = ("BUG_PASS", "CONVENTION_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS")
+EVIDENCE_RE = re.compile(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\b")
+
+
+def _evidence_mode() -> str:
+    raw = os.environ.get("HARNESS_EVIDENCE_MODE", "strict").strip().lower()
+    return "legacy" if raw == "legacy" else "strict"
+
+
+def _valid_evidence_footer(text: str, active_pkg12: str) -> bool:
+    if not active_pkg12:
+        return False
+    return any(pkg.lower() == active_pkg12.lower() for pkg, _cites in EVIDENCE_RE.findall(text))
+
+
+def _evidenced_verdict_count(chunks: list[str], active_pkg12: str) -> int:
+    """Count distinct leaves whose verdict chunk carries a valid evidence footer.
+
+    A chunk satisfies one leaf when it contains the leaf's PASS token or a
+    Findings marker AND at least one EVIDENCE footer whose pkg matches the
+    active review package hash.
+    """
+    satisfied_tokens: set[str] = set()
+    findings_leaves = 0
+    for chunk in chunks:
+        footer_ok = _valid_evidence_footer(chunk, active_pkg12)
+        if not footer_ok:
+            continue
+        tokens = {token for token in PASS_TOKENS if token in chunk}
+        satisfied_tokens |= tokens
+        if not tokens and "Findings" in chunk:
+            findings_leaves += 1
+    return len(satisfied_tokens) + min(findings_leaves, max(0, 5 - len(satisfied_tokens)))
 
 
 _INVOKE_TOOL_JSON_RE = re.compile(
@@ -400,6 +525,20 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
     if not reviews_pending(conv_id):
         return True, "No pending review round"
 
+    evidence_mode = _evidence_mode()
+    active_pkg12 = active_package_hash(conv_id)[:12]
+    if evidence_mode == "strict" and not active_pkg12:
+        return False, (
+            "A 5-leaf review round is pending but the active review package hash is unknown. "
+            "Regenerate with `python .agents/scripts/review_package.py` and re-dispatch the 5 leaves; "
+            "verdicts are only accepted with an EVIDENCE footer citing that package."
+        )
+
+    def strict_shortfall(chunks: list[str]) -> bool:
+        if evidence_mode != "strict":
+            return False
+        return _evidenced_verdict_count(chunks, active_pkg12) < 5
+
     try:
         barrier_ttl = float(os.environ.get("HARNESS_BARRIER_TTL", "21600"))
     except (TypeError, ValueError):
@@ -415,11 +554,18 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
     log_file = resolve_transcript_path(conv_id, payload)
     if log_file is None or not log_file.is_file():
         fallback = transcript_path(conv_id)
+        if evidence_mode == "legacy":
+            return False, (
+                "A 5-leaf review round is pending and the conversation transcript is not readable yet "
+                f"(looked for {fallback}). "
+                "Wait until all 5 leaves deliver BUG_PASS / CONVENTION_PASS / SECURITY_PASS / "
+                "PERF_PASS / REGRESSION_PASS (or Findings). Do not assemble while they are running."
+            )
         return False, (
             "A 5-leaf review round is pending and the conversation transcript is not readable yet "
-            f"(looked for {fallback}). "
-            "Wait until all 5 leaves deliver BUG_PASS / CONVENTION_PASS / SECURITY_PASS / "
-            "PERF_PASS / REGRESSION_PASS (or Findings). Do not assemble while they are running."
+            f"(looked for {fallback}). In strict evidence mode each leaf must end its reply with "
+            "`EVIDENCE pkg=<sha256_12> cites=<n>` matching the dispatched package "
+            f"(active package: pkg={active_pkg12}). Do not assemble while they are running."
         )
     try:
         lines = _read_transcript_lines(log_file)
@@ -436,9 +582,16 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
 
     if last_invoke_idx == -1:
         whole = "\n".join(_entry_blob(entry) for entry in lines)
-        if _tail_has_verdicts(whole):
+        if _tail_has_verdicts(whole) and not strict_shortfall([whole]):
             clear_pending_reviews(conv_id)
             return True, "Review verdicts found in transcript (invoke record missing)."
+        if evidence_mode == "strict" and _tail_has_verdicts(whole):
+            missing = _evidenced_verdict_count([whole], active_pkg12)
+            return False, (
+                f"PASS/Findings tokens found for {missing}/5 leaves but EVIDENCE footers are missing "
+                f"or cite the wrong package (expected pkg={active_pkg12}). "
+                "Verdicts without a valid evidence footer do not count; ask the leaves to re-reply."
+            )
         return False, (
             "A 5-leaf review round is pending but the last invoke_subagent is not in the transcript tail. "
             "Wait for all 5 leaves to reply before tests/assemble. "
@@ -464,15 +617,31 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
                     replied_ids.add(sid)
         pending = [sid for sid in spawned_ids if sid not in replied_ids]
         if not pending:
+            chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
+            if strict_shortfall(chunks):
+                evidenced = _evidenced_verdict_count(chunks, active_pkg12)
+                return False, (
+                    f"All subagent senders replied, but only {evidenced}/5 verdicts carry a valid "
+                    f"EVIDENCE footer (expected pkg={active_pkg12}). "
+                    "Forged, missing, or mismatched footers keep the barrier up; re-request the replies."
+                )
             clear_pending_reviews(conv_id)
             return True, "All subagents completed."
         return False, (
             f"Waiting for {len(pending)}/{len(spawned_ids)} review subagents to deliver their verdicts."
         )
 
-    if _tail_has_verdicts(after):
+    chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
+    if _tail_has_verdicts(after) and not strict_shortfall(chunks):
         clear_pending_reviews(conv_id)
         return True, "All subagents completed."
+    if evidence_mode == "strict" and _tail_has_verdicts(after):
+        evidenced = _evidenced_verdict_count(chunks, active_pkg12)
+        return False, (
+            f"A 5-leaf review round is pending: {evidenced}/5 verdicts carry a valid EVIDENCE footer "
+            f"(expected pkg={active_pkg12}). Tokens alone no longer clear the barrier — "
+            "each leaf reply must include `EVIDENCE pkg=<sha256_12> cites=<n>`."
+        )
     return False, (
         "A 5-leaf review round is pending. Wait until all 5 leaves reply "
         "(PASS or Findings) before tests/assemble."
@@ -521,27 +690,21 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         r'(?:[a-zA-Z0-9_./\\:-]*[/\\])?git(?:\.exe)?[\'"]?\s+(.+)$',
         re.IGNORECASE | re.DOTALL,
     )
-    mutations = {
-        "add",
-        "commit",
-        "push",
-        "pull",
-        "fetch",
-        "merge",
-        "rebase",
-        "stash",
-        "reset",
-        "checkout",
-        "switch",
-        "branch",
-        "worktree",
-        "clone",
-    }
+    indirection_res = tuple(re.compile(p, re.IGNORECASE) for p in SHELL_INDIRECTION_PATTERNS)
     # Scan each shell-chained segment separately so a leading inspection
     # command cannot mask a chained mutation ("git status && git push").
     segments = [s for s in re.split(r"&&|\|\||;|\||\r?\n", command) if s.strip()] or [command]
     for segment in segments:
-        for m in git_mutation_pat.finditer(segment):
+        normalized_segment = normalize_command(segment)
+        lower_norm_segment = normalized_segment.lower()
+        for pattern in indirection_res:
+            if pattern.search(lower_norm_segment):
+                deny(
+                    "Denied: encoded or piped shell indirection is fail-closed denied. "
+                    "Run the plain command directly; do not wrap payloads through sh/base64/eval."
+                )
+                return
+        for m in git_mutation_pat.finditer(normalized_segment):
             rest = m.group(1).strip()
             rest_tokens = rest.split()
             skip_next = False
@@ -555,14 +718,15 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
                     continue
                 if cleaned_tok.startswith("-"):
                     continue
-                if cleaned_tok.lower() in mutations:
+                if cleaned_tok.lower() in GIT_MUTATIONS:
                     deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
                     return
                 break
 
-    if re.search(r"\bandroid\s+emulator\b", lower):
+    if emulator_match(lower) and emulator_match(lower)[0] == "android_emulator":
         deny("Denied: android emulator is forbidden. Physical device only.")
         return
+
     if re.search(r"\bandroid\s+(?:run|install)\b", lower) and "--device" not in lower:
         deny("Denied: android run/install needs --device=<physical-serial>.")
         return
@@ -571,25 +735,29 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         allow()
         return
 
-    if re.search(r"(?:^|\s)(?:emulator|avdmanager)(?:\.exe|\.bat)?(?:\s|$)", lower):
-        deny("Denied: emulator/AVD tooling is forbidden. Physical device only.")
-        return
-    if re.search(r"(?:^|\s)-e(?:\s|$)", lower) or re.search(r"emulator-\d+", lower):
+    emulator_hit = emulator_match(lower)
+    if emulator_hit:
+        name, _match = emulator_hit
+        if name == "monkey":
+            deny("Denied: adb monkey is forbidden. Use adb -s <id> shell am start.")
+            return
+        if name == "standalone_tool":
+            deny("Denied: emulator/AVD tooling is forbidden. Physical device only.")
+            return
         deny("Denied: emulator targeting is forbidden.")
         return
-    if re.search(r"(?:^|\s)monkey(?:\s|$)", lower):
-        deny("Denied: adb monkey is forbidden. Use adb -s <id> shell am start.")
-        return
-    if re.search(r"\bpm\s+clear\b", lower):
-        deny("Denied: pm clear app data requires explicit developer approval.")
-        return
-    if re.search(r"\bpm\s+uninstall\b", lower):
-        deny("Denied: pm uninstall is forbidden. Use python .agents/scripts/run_device.py uninstall or adb -s <serial> uninstall <package>.")
-        return
 
-    device_bound = bool(
-        re.search(r"\b(?:install|uninstall|shell|exec-out|push|pull|logcat|forward|reverse)\b", lower)
-    )
+    pm_messages = {
+        "clear": "Denied: pm clear app data requires explicit developer approval.",
+        "uninstall": "Denied: pm uninstall is forbidden. Use python .agents/scripts/run_device.py uninstall or adb -s <serial> uninstall <package>.",
+    }
+    for op in sorted(DENIED_PM_OPS):
+        if re.search(rf"\bpm\s+{re.escape(op)}\b", lower):
+            deny(pm_messages[op])
+            return
+
+    device_bound_pat = r"\b(?:" + "|".join(sorted(DEVICE_BOUND_ADB)) + r")\b"
+    device_bound = bool(re.search(device_bound_pat, lower))
     if device_bound and not re.search(r"(?:^|\s)(?:-d|-s)\b", command):
         deny("Denied: device-bound adb needs -d or -s <physical-serial>.")
         return
@@ -643,6 +811,9 @@ def handle_manage_subagents(args: dict, payload: dict) -> None:
     allow("manage_subagents permitted.")
 
 
+MAX_STDIN_BYTES = 5 * 1024 * 1024
+
+
 def main() -> None:
     try:
         if hasattr(sys.stdin, "reconfigure"):
@@ -651,6 +822,12 @@ def main() -> None:
             except Exception:
                 pass
         raw = sys.stdin.read()
+        if len(raw.encode("utf-8", errors="replace")) > MAX_STDIN_BYTES:
+            deny(
+                "Denied: hook payload too large "
+                f"(>{MAX_STDIN_BYTES} bytes). Retry with a smaller tool input."
+            )
+            return
         if not raw.strip():
             allow()
             return
@@ -659,6 +836,9 @@ def main() -> None:
         tool_call = payload.get("toolCall") or {}
         name = str(tool_call.get("name") or "").lower()
         args = tool_call.get("args") or {}
+        _CONTEXT["tool"] = name or "run_command"
+        _CONTEXT["command"] = str(args.get("CommandLine") or args.get("commandLine") or "")
+        _CONTEXT["payload"] = payload if isinstance(payload, dict) else {}
 
         if name == "define_subagent":
             handle_define_subagent(args, payload)

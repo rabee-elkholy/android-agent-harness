@@ -120,7 +120,7 @@ Provides bidirectional synchronization with Zoho Sprints:
 ### 7. 12-Dimension System Doctor (`harness_doctor.py`)
 Provides deterministic, end-to-end verification of repository health across 12 operational dimensions (automatically executed after install/update):
 - Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status, **`.gitignore` security & transient state audit**, **Git working tree status & commit reminders**).
-- File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 31 core scripts).
+- File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 32 core scripts).
 - Complete subagent roster (all 8 subagents with active security fingerprints).
 - Product configuration (`_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency: device policy vs `ALLOW_EMULATOR`, assemble parity, selected adapter presence).
 - Template leakage check (verifying zero un-replaced `{{...}}` tokens in `.agents/`).

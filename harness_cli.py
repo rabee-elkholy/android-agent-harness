@@ -4,9 +4,15 @@ Zero runtime dependencies. The CLI is a thin dispatcher: the engine always lives
 in a kit checkout (agents/scripts). `android-harness init` reuses an existing
 kit clone or fetches one into ~/.android-harness/kit.
 
+The kit is provisioned PINNED to an exact release tag (never main). The tag is
+resolved from HARNESS_KIT_REF when set, otherwise from the latest GitHub release;
+after checkout the provisioned agents/VERSION is asserted against the requested
+version and any mismatch fails closed with remediation instructions.
+
 Usage:
     android-harness init  [--repo PATH] [--lang en|ar] [--kit PATH]
     android-harness update [--repo PATH] [--kit PATH]
+    android-harness explain [--last N] [--kit PATH]
     android-harness doctor [--repo PATH] [--json] [--device] [--kit PATH]
     android-harness preflight [--repo PATH] [--kit PATH]
     android-harness selftest [--kit PATH]
@@ -20,12 +26,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 from pathlib import Path
 
 KIT_REPO_URL = "https://github.com/rabee-elkholy/android-harness-kit.git"
+RELEASES_API_URL = "https://api.github.com/repos/rabee-elkholy/android-harness-kit/releases/latest"
 KIT_DIR = Path.home() / ".android-harness" / "kit"
 INSTALL_PROMPT_URL = (
     "https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md"
@@ -33,6 +43,76 @@ INSTALL_PROMPT_URL = (
 UPDATE_PROMPT_URL = (
     "https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md"
 )
+
+
+def _manual_remediation(version: str) -> str:
+    return (
+        "Remediate manually:\n"
+        f"    git clone {KIT_REPO_URL}\n"
+        f"    git -C android-harness-kit checkout v{version}\n"
+        "then rerun with --kit <path>."
+    )
+
+
+def _read_version_file(kit: Path) -> str:
+    return (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def _semver_tuple(version: str) -> tuple[int, int, int]:
+    parts: list[int] = []
+    for chunk in version.lstrip("v").strip().split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def _latest_release_tag(timeout: float = 3.0) -> str | None:
+    req = urllib.request.Request(
+        RELEASES_API_URL,
+        headers={"User-Agent": "AndroidHarnessKit-CLI"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                tag = str(json.loads(resp.read().decode("utf-8")).get("tag_name") or "").strip()
+                return tag.lstrip("v") or None
+    except Exception:
+        return None
+    return None
+
+
+def _provision_pinned(url: str, dest: Path, version: str) -> None:
+    """Fresh checkout of exactly tag v<version>. No main, no float."""
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    tag = f"v{version}"
+    steps = [
+        (["git", "init", "-q"], True),
+        (["git", "remote", "add", "origin", url], True),
+        (
+            [
+                "git",
+                "fetch",
+                "--depth",
+                "1",
+                "--force",
+                "origin",
+                f"refs/tags/{tag}:refs/tags/{tag}",
+            ],
+            True,
+        ),
+        (["git", "checkout", "-q", "--detach", tag], True),
+    ]
+    for step, use_cwd in steps:
+        proc = subprocess.run(step, check=False, cwd=str(dest) if use_cwd else None)
+        if proc.returncode != 0:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise SystemExit(
+                f"[ERROR] Could not provision kit at tag {tag}. {_manual_remediation(version)}"
+            )
 
 
 def _script_root(kit: Path) -> Path:
@@ -72,27 +152,88 @@ def ensure_kit(explicit: str | None) -> Path:
         pass
     if explicit:
         raise SystemExit(f"[ERROR] --kit path has no harness engine: {explicit}")
-    print(f"[*] Cloning Android Harness Kit into {KIT_DIR} ...")
-    proc = subprocess.run(
-        ["git", "clone", "--depth", "1", KIT_REPO_URL, str(KIT_DIR)],
-        check=False,
-    )
-    if proc.returncode != 0 or not _has_engine(KIT_DIR):
+    requested = os.environ.get("HARNESS_KIT_REF", "").strip().lstrip("v") or _latest_release_tag()
+    if not requested:
         raise SystemExit(
-            "[ERROR] Kit clone failed. Clone manually:\n"
-            f"    git clone {KIT_REPO_URL}\n"
-            "then rerun with --kit <path>."
+            "[ERROR] Could not resolve a release tag to pin (offline?). "
+            "The kit is never provisioned from a floating branch. "
+            + _manual_remediation("latest")
+        )
+    print(f"[*] Provisioning Android Harness Kit at pinned tag v{requested} into {KIT_DIR} ...")
+    _provision_pinned(KIT_REPO_URL, KIT_DIR, requested)
+    if not _has_engine(KIT_DIR):
+        shutil.rmtree(KIT_DIR, ignore_errors=True)
+        raise SystemExit(
+            f"[ERROR] Kit checkout at v{requested} has no harness engine. {_manual_remediation(requested)}"
+        )
+    found = _read_version_file(KIT_DIR)
+    if found != requested:
+        raise SystemExit(
+            f"[ERROR] Pinned kit checkout reports v{found} but v{requested} was requested. "
+            "Refusing to continue on a mismatched provision. " + _manual_remediation(requested)
         )
     return KIT_DIR
 
 
-def refresh_kit(kit: Path) -> None:
+def refresh_kit(kit: Path, target_version: str | None = None) -> None:
+    """Re-pin an existing kit clone to an exact release tag. Never floats to main."""
     if not (kit / ".git").is_dir():
-        print(f"[i] Kit at {kit} is not a git checkout; skipping pull.")
+        print(f"[i] Kit at {kit} is not a git checkout; skipping pin.")
         return
-    print(f"[*] Updating kit clone at {kit} (main) ...")
-    subprocess.run(["git", "-C", str(kit), "fetch", "origin", "main"], check=False)
-    subprocess.run(["git", "-C", str(kit), "pull", "--ff-only", "origin", "main"], check=False)
+    want = (target_version or "").strip().lstrip("v") or _read_version_file(kit)
+    tag = f"v{want}"
+    print(f"[*] Pinning kit at {kit} to {tag} ...")
+    fetch = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(kit),
+            "fetch",
+            "--depth",
+            "1",
+            "--force",
+            "origin",
+            f"refs/tags/{tag}:refs/tags/{tag}",
+        ],
+        check=False,
+    )
+    checkout = subprocess.run(
+        ["git", "-C", str(kit), "checkout", "-q", "--detach", tag],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if fetch.returncode != 0 or checkout.returncode != 0:
+        current = _read_version_file(kit)
+        detached = subprocess.run(
+            ["git", "-C", str(kit), "symbolic-ref", "-q", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if detached.returncode == 0:
+            # The checkout sits on a named branch (e.g. a manual drift to main):
+            # refuse to continue — the kit must never float.
+            raise SystemExit(
+                f"[ERROR] Kit at {kit} is on a branch, not a pinned tag; refusing to float. "
+                + _manual_remediation(current)
+            )
+        print(
+            f"[!] Could not re-fetch/checkout {tag}; keeping existing pinned checkout v{current}. "
+            "Nothing floated to main."
+        )
+        return
+    found = _read_version_file(kit)
+    if found != want:
+        raise SystemExit(
+            f"[ERROR] After pinning, kit reports v{found} but {tag} was requested. "
+            "Refusing to continue. " + _manual_remediation(want)
+        )
+    print(f"[OK] Kit pinned at {tag}")
 
 
 def find_repo(explicit: str | None) -> Path:
@@ -156,7 +297,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_update(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
-    current = (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+    current = _read_version_file(kit)
     sys.path.insert(0, str(_script_root(kit)))
     try:
         from check_kit_update import check_for_update
@@ -170,8 +311,12 @@ def cmd_update(args: argparse.Namespace) -> int:
     if args.repo:
         repo = find_repo(args.repo)
         print(f"[*] Target app checkout: {repo}")
-    refresh_kit(kit)
-    new_version = (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+    if _semver_tuple(latest) > _semver_tuple(current):
+        refresh_kit(kit, latest)
+    else:
+        # No upgrade (or offline): re-assert the pin on the current release tag.
+        refresh_kit(kit, current)
+    new_version = _read_version_file(kit)
     print(f"[i] Local kit engine now at: v{new_version}")
     print("[NEXT] Port the new engine into your app checkout:")
     print(f"       paste {UPDATE_PROMPT_URL}")
@@ -219,7 +364,52 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 
 def cmd_version(args: argparse.Namespace) -> int:
     kit = resolve_kit(args.kit)
-    print((kit / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+    print(_read_version_file(kit))
+    return 0
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    kit = resolve_kit(args.kit)
+    override = os.environ.get("HARNESS_HOOK_STATE", "").strip()
+    if override:
+        audit_path = Path(override).with_name("audit_log.jsonl")
+    else:
+        audit_path = _script_root(kit).parent / "state" / "audit_log.jsonl"
+    if not audit_path.is_file():
+        print(f"[i] No audit log yet at {audit_path}")
+        return 0
+    sys.path.insert(0, str(_script_root(kit)))
+    try:
+        from policy_vocab import REASON_CODES
+    except Exception:
+        REASON_CODES = {}
+
+    records: list[dict] = []
+    with open(audit_path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                records.append(item)
+    last_n = max(1, args.last)
+    for rec in records[-last_n:]:
+        code = str(rec.get("reason_code") or "")
+        label = REASON_CODES.get(code, code or "UNSPECIFIED")
+        ts = rec.get("ts") or 0
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts))) if ts else "?"
+        decision = str(rec.get("decision") or "?").upper()
+        tool = str(rec.get("tool") or "-")
+        short = str(rec.get("reason_short") or "").replace("\n", " ")
+        cmd_hash = str(rec.get("cmd_sha256_12") or "-")
+        conv = str(rec.get("conv_hint") or "-")
+        print(f"{stamp}  {decision:<5} {tool:<16} {cmd_hash}  [{code}] {label}")
+        print(f"            conv={conv} :: {short}")
+    print(f"[i] showed {min(last_n, len(records))} of {len(records)} record(s) from {audit_path}")
     return 0
 
 
@@ -261,6 +451,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("version", help="Print the active kit engine version.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
     sp.set_defaults(func=cmd_version)
+
+    sp = sub.add_parser(
+        "explain",
+        help="Print recent safety-hook decisions from the append-only audit log.",
+    )
+    sp.add_argument("--last", type=int, default=20, metavar="N", help="How many records to show.")
+    sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
+    sp.set_defaults(func=cmd_explain)
 
     return p
 

@@ -67,6 +67,7 @@ CORE_SCRIPTS = (
     "perf_guard.py",
     "pm_github.py",
     "pm_policy.py",
+    "policy_vocab.py",
     "pre_commit_gate.py",
     "pre_invocation_reminder.py",
     "pre_tool_safety.py",
