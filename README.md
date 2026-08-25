@@ -299,7 +299,7 @@ AI models frequently attempt to cover mistakes by making unauthorized commits or
 Developers retain sole authority over repository history.
 
 ### Deterministic Staged Pre-Commit Quality Gate
-A standalone, stdlib-only Git hook (`.githooks/pre-commit`, installed via `--git-gate`) running against staged files in <5 seconds:
+A standalone, stdlib-only Git hook (`.githooks/pre-commit`, installed by default; `--no-git-gate` opts out) running against staged files in <5 seconds:
 - Bilingual string parity and hardcoded UI string detection.
 - Fast Kotlin syntax and import lint.
 - Room database working-tree schema and migration invariant checks.

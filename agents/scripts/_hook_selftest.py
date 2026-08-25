@@ -1560,6 +1560,112 @@ ok_fixtures = ok_fixture and ok_fix_cli
 print(f"make_android_fixture profiles + CLI: {'OK' if ok_fixtures else 'FAIL'}")
 failed += int(not ok_fixtures)
 
+# --- v0.10.0: wizard answer pre-fill + doctor remediation guidance ---
+from setup_wizard import default_for_question, existing_defaults, write_answers  # noqa: E402
+
+prefill_repo = make_fixture("classic")
+prefill_answers = {
+    "i0": True,
+    "backup": True,
+    "product": "TestApp",
+    "py": "python",
+    "git_policy": "never",
+    "device_policy": "physical-only",
+    "module": ":app",
+    "assemble": ":app:assembleDebug",
+    "launcher": "com.t/.Main",
+    "install_confirm": "confirm",
+    "unit_tests": "no",
+    "tools": ["cursor", "gemini"],
+    "zoho_mcp": "skip",
+    "chat_language": "ar",
+    "zoho_language": "all_ar",
+    "flavor": "staging",
+    "pm_provider": "github_projects",
+    "git_gate": "no",
+}
+write_answers(prefill_repo, prefill_answers)
+prefill_defaults = existing_defaults(prefill_repo)
+ok_prefill = (
+    prefill_defaults.get("i0") == "yes"
+    and prefill_defaults.get("i3") == "never"
+    and prefill_defaults.get("i4") == "physical-only"
+    and prefill_defaults.get("i15") == "no"
+    and prefill_defaults.get("i14") == ["cursor", "gemini"]
+    and prefill_defaults.get("i17") == "ar"
+    and prefill_defaults.get("i20") == "github_projects"
+    and prefill_defaults.get("i21") == "no"
+)
+i3_q = {"id": "i3", "options": [{"id": "never"}, {"id": "agent-may-commit"}]}
+ok_prefill = (
+    ok_prefill
+    and default_for_question(i3_q, prefill_defaults) == ["never"]
+    and default_for_question({"id": "i3", "options": [{"id": "agent-may-commit"}]}, prefill_defaults) == []
+    and default_for_question({"id": "i9", "options": [{"id": "x"}]}, prefill_defaults) == []
+)
+prefill_proc = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        (
+            "import sys; sys.path.insert(0, r'%s'); "
+            "from setup_wizard import prompt_choice; "
+            "q = {'id': 'i3', 'required': True, 'allow_multiple': False, 'prompt': 'Git policy', "
+            "'options': [{'id': 'never', 'label': 'N'}, {'id': 'agent-may-commit', 'label': 'A'}]}; "
+            "print(prompt_choice(q, 'en', ['never'])[0])"
+        )
+        % SCRIPTS,
+    ],
+    input="\n",
+    text=True,
+    capture_output=True,
+    check=False,
+    env=os.environ.copy(),
+)
+ok_prefill_enter = prefill_proc.returncode == 0 and prefill_proc.stdout.strip().endswith("never")
+ok_prefill_all = ok_prefill and ok_prefill_enter
+print(f"wizard answer pre-fill defaults: {'OK' if ok_prefill_all else 'FAIL ' + str([ok_prefill, ok_prefill_enter])}")
+failed += int(not ok_prefill_all)
+
+app_agents = prefill_repo / ".agents" / "scripts"
+app_agents.mkdir(parents=True, exist_ok=True)
+shutil.copy(SCRIPTS / "_product.py", app_agents / "_product.py")
+repo_product = app_agents / "_product.py"
+repo_product.write_text(
+    repo_product.read_text(encoding="utf-8").replace("ALLOW_EMULATOR = True", "ALLOW_EMULATOR = False"),
+    encoding="utf-8",
+)
+write_answers(
+    prefill_repo,
+    {**prefill_answers, "device_policy": "allow"},
+)
+doctor_drift_proc = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        (
+            "import sys; sys.path.insert(0, r'%s'); sys.path.insert(0, r'%s'); "
+            "from pathlib import Path; import harness_doctor; "
+            "d = harness_doctor.HarnessDoctor(Path(r'%s')); "
+            "rs = d.run_all(); "
+            'r = next(x for x in rs if x.name == "Install Consistency"); '
+            "print(r.status); print(r.details)"
+        )
+        % (app_agents, SCRIPTS, prefill_repo),
+    ],
+    capture_output=True,
+    text=True,
+    check=False,
+    env={**os.environ.copy(), "PYTHONPATH": str(app_agents) + os.pathsep + str(SCRIPTS)},
+)
+ok_drift_hint = (
+    doctor_drift_proc.returncode == 0
+    and doctor_drift_proc.stdout.splitlines()[0].strip() == "FAIL"
+    and "setup_wizard.py ask" in doctor_drift_proc.stdout
+)
+print(f"doctor drift remediation points to wizard: {'OK' if ok_drift_hint else 'FAIL ' + doctor_drift_proc.stdout + doctor_drift_proc.stderr}")
+failed += int(not ok_drift_hint)
+
 # --- v0.8.0: PM abstraction layer — policy engine matrix ---
 import pm_policy  # noqa: E402
 from pm_policy import normalize_status as pm_norm_status  # noqa: E402

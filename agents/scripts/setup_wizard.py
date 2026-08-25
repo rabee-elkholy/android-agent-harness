@@ -253,6 +253,10 @@ T = {
         "type_value": "Type the value:",
         "pick": "Enter number",
         "pick_multi": "Enter numbers (comma-separated)",
+        "defaults_note": (
+            "Previous answers found in .harness-setup/answers.json. "
+            "Each question shows (current) — press Enter to keep it, type a number to change."
+        ),
         "invalid": "Invalid choice.",
         "stopped": "Stopped. No answers written.",
         "wrote": "Wrote {path}",
@@ -441,6 +445,10 @@ T = {
         "type_value": "اكتب القيمة:",
         "pick": "اكتب الرقم",
         "pick_multi": "اكتب الأرقام مفصولة بفاصلة",
+        "defaults_note": (
+            "لقينا إجابات سابقة في .harness-setup/answers.json. "
+            "كل سؤال هيظهر جنبه (current) — دوس Enter عشان تفضلّه، أو اكتب رقم لتغييره."
+        ),
         "invalid": "اختيار غلط.",
         "stopped": "اتوقف. مفيش إجابات اتكتبت.",
         "wrote": "اتكتب {path}",
@@ -1159,19 +1167,53 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
     return qs
 
 
-def prompt_choice(q: dict, lang: str) -> list[str]:
+def default_for_question(q: dict, defaults: dict) -> list[str]:
+    """Map previously recorded answers to this question's option ids (pre-fill).
+
+    Returns [] when no stored value matches an option, so the question is
+    asked fresh (required). Multi-select questions return the stored tool list
+    as default selection.
+    """
+    qid = str(q.get("id") or "")
+    if qid not in defaults:
+        return []
+    stored = defaults[qid]
+    if stored is None:
+        return []
+    if q.get("allow_multiple") and isinstance(stored, list):
+        option_ids = [opt["id"] for opt in q["options"]]
+        picked = [opt for opt in stored if opt in option_ids]
+        return picked if picked else []
+    if any(opt["id"] == stored for opt in q["options"]):
+        return [stored]
+    return []
+
+
+def prompt_choice(q: dict, lang: str, default: list[str] | None = None) -> list[str]:
+    default = default or []
+    default_indexes = []
+    if default:
+        for idx, opt in enumerate(q["options"]):
+            if opt["id"] in default:
+                default_indexes.append(idx)
     print()
     print(q["prompt"])
     print()
     for i, opt in enumerate(q["options"], start=1):
-        print(f"  {i}) {opt['label']}")
+        marker = "  (current)" if (i - 1) in default_indexes else ""
+        print(f"  {i}) {opt['label']}{marker}")
     hint = t(lang, "pick_multi" if q.get("allow_multiple") else "pick")
     if not q.get("required"):
         hint += " [Enter = 1]"
+    if default_indexes:
+        labels = ", ".join(str(idx + 1) for idx in default_indexes)
+        hint += f" [Enter = {labels}]"
     while True:
         raw = input(f"{hint}: ").strip()
         if not raw and not q.get("required"):
             return [q["options"][0]["id"]]
+        if not raw and default_indexes:
+            return [q["options"][idx]["id"] for idx in default_indexes]
         if q.get("allow_multiple"):
             if raw.lower() in {"all", "كلهم"}:
                 return ["all"]
@@ -1455,14 +1497,53 @@ def pm_next_steps(answers: dict) -> list[str]:
     return []
 
 
+def existing_defaults(repo: Path) -> dict[str, object]:
+    """Map a previous answers.json to question ids so re-runs pre-fill them."""
+    path = answers_path(repo)
+    if not path.is_file():
+        return {}
+    try:
+        answers = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(answers, dict) or not answers.get("i0"):
+        return {}
+    defaults: dict[str, object] = {"i0": "yes" if answers.get("backup", True) else "skip", "i1": "discovered"}
+    for qid, field in (
+        ("i2", "py"),
+        ("i3", "git_policy"),
+        ("i4", "device_policy"),
+        ("i5", "module"),
+        ("i6", "launcher"),
+        ("i10", "install_confirm"),
+        ("i15", "unit_tests"),
+        ("i16", "zoho_mcp"),
+        ("i17", "chat_language"),
+        ("i18", "zoho_language"),
+        ("i19", "flavor"),
+        ("i20", "pm_provider"),
+        ("i21", "git_gate"),
+    ):
+        value = answers.get(field)
+        if value:
+            defaults[qid] = value
+    tools = answers.get("tools")
+    if isinstance(tools, list) and tools:
+        defaults["i14"] = list(tools)
+    return defaults
+
+
 def interactive(repo: Path, lang: str) -> dict:
     facts = discover(repo)
+    defaults = existing_defaults(repo)
     print(t(lang, "model_warning"))
     print()
     print(auto_blurb(facts, lang))
+    if defaults:
+        print(t(lang, "defaults_note"))
     raw: dict = {}
     for q in questions_payload(repo, lang, facts):
-        chosen = prompt_choice(q, lang)
+        chosen = prompt_choice(q, lang, default_for_question(q, defaults))
         if q["id"] == "i0" and chosen[0] == "no":
             print(t(lang, "stopped"))
             raise SystemExit(1)

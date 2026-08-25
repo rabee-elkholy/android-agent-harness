@@ -488,6 +488,12 @@ class HarnessDoctor:
             )
 
         if drift:
+            drift.append(
+                "To change setup answers: python .agents/scripts/setup_wizard.py ask "
+                f"--repo {self.repo} --lang <en|ar> (previous answers are pre-filled; press Enter "
+                "to keep each one), then re-run install_tool_adapters.py with the flags the "
+                "wizard prints."
+            )
             self.log(
                 category,
                 "Install Consistency",

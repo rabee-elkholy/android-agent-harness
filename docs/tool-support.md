@@ -72,9 +72,38 @@ Re-run the installer with the **new** `--tools` list (include tools you still us
 
 Also re-run after changing Python command, assemble task, device policy, or git policy.
 
+## Changing setup answers after install
+
+Setup answers are recorded in `.harness-setup/answers.json` (human-readable summary:
+`.harness-setup/SETUP_ANSWERS.md`). To change them later:
+
+1. **Re-run the wizard (recommended)**:
+
+   ```
+   {{PY}} .agents/scripts/setup_wizard.py ask --repo . --lang en|ar
+   ```
+
+   Previous answers are pre-filled: each question shows `(current)` next to the
+   recorded choice. Press **Enter** to keep it, type a new number to change it.
+
+2. **Non-interactive (via chat)**: run
+   `{{PY}} .agents/scripts/setup_wizard.py questions --repo . --lang en|ar`,
+   answer only the JSON questions, then
+   `{{PY}} .agents/scripts/setup_wizard.py write --repo . --answers-json <file>`.
+
+3. **Manual edit**: edit `.harness-setup/answers.json` directly, then re-run
+   `install_tool_adapters.py` for the values that feed adapters (`--py`,
+   `--assemble`, `--device-policy`, `--git-policy`, `--tools`) and update the
+   matching `_product.py` fields (`ALLOW_EMULATOR`, `ASSEMBLE_TASK`,
+   `ACTIVE_FLAVOR`, `PM_PROVIDER`).
+
+After any change, verify with `{{PY}} .agents/scripts/harness_doctor.py`. The
+**Install Consistency** dimension fails with a remediation hint whenever
+answers drift from `_product.py` or the adapters on disk.
+
 ## Tools without subagent spawn
 
-If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still requires the five leaves: open each JSON under `.agents/subagents/`, follow `system_prompt` against the same `HARNESS_REVIEW_PACKAGE`, sequential is allowed. Assemble only after `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`.
+If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still requires the five leaves: open each JSON under `.agents/subagents/`, follow `system_prompt` against the same `HARNESS_REVIEW_PACKAGE`, sequential is allowed. Assemble only after `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`, each accompanied by the evidence footer `EVIDENCE pkg=<HARNESS_PACKAGE_SHA256_12> cites=<n>` (strict evidence mode).
 
 ---
 
