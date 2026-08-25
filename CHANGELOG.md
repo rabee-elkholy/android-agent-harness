@@ -5,6 +5,16 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-08-25
+
+### Setup Answers Change Flow: Wizard Pre-Fill, Doctor Remediation & Documentation
+- **Wizard Answer Pre-Fill (`setup_wizard.py`)**: Re-running the wizard (`setup_wizard.py ask`) now pre-fills the previously recorded answers — `existing_defaults()` maps `.harness-setup/answers.json` onto the question ids and each question shows `(current)` next to the recorded choice; Enter keeps it, typing a new number changes only that answer. Multi-select tool questions restore the stored `tools` list. EN/AR `defaults_note` announces the behavior.
+- **Doctor Drift Remediation (`harness_doctor.py`)**: The Install Consistency dimension appends a remediation line pointing at the wizard whenever answers drift from `_product.py`/adapters, closing the "detected but unexplained" gap.
+- **Dedicated Documentation (`docs/tool-support.md`)**: New "Changing setup answers after install" section covering the wizard (recommended), the non-interactive questions/write flow, and manual edits, with a doctor verification step. Documentation veracity sweep: CLI subcommand list now includes `explain` and pin-to-tag provisioning (`docs/architecture.md`), git gate documented as default-ON with `--no-git-gate` opt-out (README, `docs/architecture.md`), and the evidence footer requirement noted for manual reviews (`docs/tool-support.md`).
+- **Selftests**: New regression groups `wizard answer pre-fill defaults` and `doctor drift remediation points to wizard`. Changelog consolidated (0.4.0 folded into the 0.5.0 entry) to hold the milestone cap.
+
+---
+
 ## [0.10.0] - 2026-08-25
 
 ### Enforcement Parity & Red Team: Adversarial Security Suite, Copilot Hook Bridge, Fixture Generator, Threat Model
@@ -13,7 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Git Gate Default ON + Wizard I.21 (`install_tool_adapters.py`, `setup_wizard.py`)**: The staged pre-commit quality gate is now installed by default; `--no-git-gate` opts out. The setup wizard gains confirmation question I.21 ("Pre-commit git gate?") in EN/AR, recorded as `git_gate` in answers, printed in the answers summary, and emitted as `--git-gate`/`--no-git-gate` by `flags_from_answers`. Absent answers keep the new default (on).
 - **Fixture Generator Promotion (`scripts_dev/fixtures/make_android_fixture.py`)**: The ad-hoc temp-project builders from the selftests are promoted into one reusable stdlib-only generator with `--profile classic|multimodule|flavors|kmp` that prints the fixture root. The heaviest selftest blocks (wizard flavor discovery, multi-module root discovery) now consume it — behavior-neutral, all existing assertions unchanged.
 - **Threat Model Documentation (`SECURITY.md`)**: New "Threat Model & Mitigations" table mapping every attack class above to the exact test name that proves the mitigation; supported-versions rows now span 0.6–0.10. Core script inventory expanded from 32 to 34 (`_security_selftest.py`, `copilot_pre_tool_safety.py`).
-- **Setup Answers Change Flow (post-release follow-up within 0.10.x)**: Re-running the wizard (`setup_wizard.py ask`) now pre-fills the previously recorded answers — each question shows `(current)` and Enter keeps it, so changing one answer no longer requires re-answering everything (`existing_defaults`, `default_for_question`, EN/AR `defaults_note`). The doctor's Install Consistency dimension appends remediation pointing at the wizard whenever answers drift from `_product.py`/adapters. Documented in a dedicated "Changing setup answers after install" section of `docs/tool-support.md`.
 
 ---
 
@@ -129,6 +138,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2026-08-24
 
+**Included in 0.4.0:**
+
+### Consolidated Milestone (0.2.0 - 0.4.0): Foundation Era
+- **0.4.0**: AST parser robustness, Room graph migrations with BFS path validation, Groovy/KMP discovery, git octal-escape decoding, configurable device policy, Zoho MCP network hardening.
+- **0.3.0**: Shift-left quality invariants, expanded reviewer pillars (network resiliency, accessibility, battery/sensor), test-quality-reviewer-agent, atomic state locking, CI matrix, community health files.
+- **0.2.0**: Initial public foundation - multi-IDE adapters, five-leaf review gate, domain discovery, live Gradle runner, Zoho Sprints MCP, greenfield bootstrap, device safety.
+
+---
+
 ### 12-Dimension Harness Doctor & Interactive System Diagnostics
 - **12-Dimension System Doctor Engine (`harness_doctor.py`)**: Introduced an automated, exhaustive diagnostic CLI runner that inspects 12 core operational layers:
   1. Environment & Host Runtime (Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, Git status).
@@ -148,9 +166,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.4.0] - 2026-08-24
-
-### Consolidated Milestone (0.2.0 - 0.4.0): Foundation Era
-- **0.4.0**: AST parser robustness, Room graph migrations with BFS path validation, Groovy/KMP discovery, git octal-escape decoding, configurable device policy, Zoho MCP network hardening.
-- **0.3.0**: Shift-left quality invariants, expanded reviewer pillars (network resiliency, accessibility, battery/sensor), test-quality-reviewer-agent, atomic state locking, CI matrix, community health files.
-- **0.2.0**: Initial public foundation - multi-IDE adapters, five-leaf review gate, domain discovery, live Gradle runner, Zoho Sprints MCP, greenfield bootstrap, device safety.
