@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
+from _variants import resolve_or_raise  # noqa: E402
 from gradle_error_parser import format_errors, parse_compiler_errors  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -124,12 +125,13 @@ def run_gradle(task_args: list[str]) -> int:
                 live_print(f"    {item}")
         if any("assemble" in arg.lower() for arg in task_args):
             try:
-                from _product import APK_RELATIVE
-                apk = REPO_ROOT / APK_RELATIVE
+                from _variants import apk_relative
+
+                apk = REPO_ROOT / apk_relative()
             except Exception:
                 apk = REPO_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
             if not apk.is_file():
-                found = sorted(REPO_ROOT.glob("**/outputs/apk/debug/*.apk"))
+                found = sorted(REPO_ROOT.glob("**/outputs/apk/*debug/*.apk"))
                 apk = found[0] if found else apk
             if apk.is_file():
                 size_mb = apk.stat().st_size / (1024 * 1024)
@@ -167,9 +169,25 @@ def main() -> None:
     task_args = list(args.gradle_args)
     if task_args and task_args[0] == "--":
         task_args = task_args[1:]
+
+    flavor: str | None = None
+    if task_args and task_args[0] == "--flavor":
+        if len(task_args) < 2:
+            live_print("Usage: python run_gradle_task.py --flavor <name> <gradle_tasks...>", err=True)
+            sys.exit(1)
+        flavor = task_args[1]
+        task_args = task_args[2:]
+
     if not task_args:
-        live_print("Usage: python run_gradle_task.py <gradle_tasks_and_args>", err=True)
+        live_print("Usage: python run_gradle_task.py [--flavor <name>] <gradle_tasks_and_args>", err=True)
         sys.exit(1)
+    try:
+        active_flavor, _resolved_task = resolve_or_raise(flavor)
+    except SystemExit as exc:
+        live_print(str(exc), err=True)
+        sys.exit(1)
+    if active_flavor:
+        live_print(f"[*] Active build variant: {active_flavor} (debug)")
     sys.exit(run_gradle(task_args))
 
 

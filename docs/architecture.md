@@ -120,7 +120,7 @@ Provides bidirectional synchronization with Zoho Sprints:
 ### 7. 12-Dimension System Doctor (`harness_doctor.py`)
 Provides deterministic, end-to-end verification of repository health across 12 operational dimensions (automatically executed after install/update):
 - Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status, **`.gitignore` security & transient state audit**, **Git working tree status & commit reminders**).
-- File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 27 core scripts).
+- File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 29 core scripts).
 - Complete subagent roster (all 8 subagents with active security fingerprints).
 - Product configuration (`_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency: device policy vs `ALLOW_EMULATOR`, assemble parity, selected adapter presence).
 - Template leakage check (verifying zero un-replaced `{{...}}` tokens in `.agents/`).
@@ -138,4 +138,4 @@ Provides deterministic, end-to-end verification of repository health across 12 o
 - **Standalone CLI Dispatcher (`harness_cli.py`)**: Zero-dependency executable (`android-harness` via `pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git`, or direct `python harness_cli.py`) providing unified `init`, `update`, `doctor`, `preflight`, `selftest`, and `version` subcommands with automatic kit discovery and remote clone fallback.
 - **11 Native Slash Command Packs (`agents/command-packs/`)**: Standardized command packs generating native slash shortcuts for Claude Code (`.claude/commands/`), GitHub Copilot (`.github/prompts/*.prompt.md`), and OpenAI Codex (`.codex/prompts/`) with automatic pruning.
 - **Staged Pre-Commit Quality Gate (`pre_commit_gate.py`, `--git-gate`)**: Deterministic, stdlib-only Git hook (`.githooks/pre-commit`) running bilingual string parity, Room database migrations, and fast Kotlin lint against staged changes in <5s before commit.
-- **Claude Code PreToolUse Safety Bridge (`cc_pre_tool_safety.py`, `--cc-hooks`)**: Intercepts terminal tool execution in Claude Code sessions via `.claude/settings.json` `PreToolUse` hook, enforcing strict Git mutation and ADB safety boundaries outside Antigravity.
+- **Claude Code PreToolUse Safety Bridge (`cc_pre_tool_safety.py`, `--cc-hooks`)**: Intercepts terminal tool execution in Claude Code sessions via `.claude/settings.json` `PreToolUse` hook, enforcing strict Git mutation and ADB safety boundaries outside Antigravity.

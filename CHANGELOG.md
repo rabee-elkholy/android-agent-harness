@@ -5,6 +5,16 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-24
+
+### P1 Domain Depth: Build Flavors (Variants) & Multi-Module Governance
+- **Build Flavor Support (`_variants.py`, `run_gradle_task.py --flavor`, `run_device.py --flavor`, setup I.19)**: Full product-flavor lifecycle. The wizard discovers flavors from Groovy/KTS `productFlavors` blocks and asks which variant is the daily test target; runners resolve assemble tasks (`:app:assemble{Flavor}Debug`) and flavor APK paths automatically, with unknown-flavor rejection. Backward compatible: empty flavor = classic single-variant behavior. Debug-only discipline enforced by construction.
+- **Multi-Module Governance (`_modules.py`, `fast_kt_lint.py`, `perf_guard.py`)**: Source-root discovery across every module (`*/src/main/{java,kotlin}` including KMP `androidMain`). `fast_kt_lint --all` and `perf_guard --all` now scan all modules instead of only `app/src/main`. New deterministic architecture gate `FEATURE_CROSS_IMPORT`: a feature module importing another feature is flagged at lint time — shared logic must route through `:core`/`:common`.
+- **Doctor Upgrades (`harness_doctor.py`)**: Dimension 2 reports discovered module source roots (`:app`, `:core:data`, ...); install-consistency cross-check now validates daily-flavor parity between `answers.json` and `_product.py ACTIVE_FLAVOR` plus per-flavor task resolution.
+- **Core Script Inventory**: Expanded from 27 to 29 audited scripts (`_variants.py`, `_modules.py`). Selftest adds 4 regression groups (resolver matrix, wizard discovery + I.19 wiring incl. unknown-flavor guard, multi-root discovery, boundary-lint matrix).
+
+---
+
 ## [0.6.0] - 2026-08-24
 
 ### Standalone CLI Dispatcher, 11 Native Slash Command Packs, Pre-Commit Quality Gate & Claude Code PreToolUse Bridge
@@ -106,42 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0] - 2026-08-24
 
-### AST Parser Robustness, Room Graph Migrations & Network Socket Hardening
-- **AST Parser Robustness & Multiline UI Strings**: Modernized `check_strings.py` to detect multiline Compose `Text(...)` parameters, handle parameter reordering, and strip `RESOURCE_CALL` before evaluation to prevent string concatenation bypasses.
-- **Deep Room Schema Invariants & Migration Graph Analysis**: Extended `room_guard.py` with recursive `@Embedded` data class discovery across all entity hierarchies, native Room 2.4+ `AutoMigration(from, to)` annotation parsing, and BFS graph traversal (`is_migration_path_covered`) to validate transitive migration paths (e.g. 1 -> 2 -> 3).
-- **Kotlin AST & Architecture Hygiene**: Whitelisted standard Android SDK symbols (`Build.VERSION.SDK_INT`, `UUID`, `@androidx.annotation.*`, `@file:OptIn`), excluded `abstract class` from `@AndroidEntryPoint` check to prevent Hilt compiler crashes, and dynamically scanned lookback annotations for Compose `@Immutable` state classes.
-- **Heterogeneous Android & Groovy Gradle Discovery**: Added support for Groovy `applicationId` and `namespace` declarations without equals signs in `setup_wizard.py` and KMP `composeResources` fallback directory resolution.
-- **Git Path Octal C-Escape Decoding**: Implemented `_unquote_git_path()` in `_repo_files.py` using `latin1` -> `unicode_escape` -> `utf-8` decoding, ensuring paths with spaces and Arabic characters are never dropped from git diff and safety gates.
-- **Configurable Device Policy in Runners**: Replaced hardcoded emulator denials with project-configured `ALLOW_EMULATOR` in `run_device.py`, `logcat_doctor.py`, and `capture_screen.py`.
-- **Network & Socket Resilience in Zoho MCP**: Enclosed UDP socket creation in `try...finally` cleanup to eliminate socket file descriptor leaks on DNS timeouts, enforced explicit 30.0s HTTP timeouts across all `urllib.request.urlopen` requests, added 3-attempt exponential backoff retry on HTTP 429 and 502/503/504 errors, and added validated OAuth token refresh error handling.
-
----
-
-## [0.3.0] - 2026-08-24
-
-### Shift-Left Proactive Quality, Reviewer Expansion & Test Quality Specialist
-- **Shift-Left Proactive Quality Architecture**: Introduced Pre-Implementation Quality Invariants across `harness-rules.md` and `pre_invocation_reminder.py`, instructing coding agents to proactively satisfy review pillars prior to code execution for first-pass review approval.
-- **Expanded Core Reviewer Pillars**:
-  - `bug-reviewer-agent`: Added Network & I/O Resiliency checks (`IOException`, `SocketTimeoutException`, `UnknownHostException` in coroutines, error UI state exposure, exponential backoff).
-  - `convention-reviewer-agent`: Added Accessibility standards (mandatory `contentDescription` on non-decorative images/icons, minimum 48dp touch target size) and KMP portability rules (zero `android.*` framework imports in `commonMain`).
-  - `perf-anr-guardian-agent`: Added Battery & Sensor Life checks (`SensorEventListener` unregistration in `onPause()`/`DisposableEffect.onDispose`, Android 14+ foreground service type declarations, WorkManager charging constraints).
-- **Dedicated Test Quality Specialist (`test-quality-reviewer-agent`)**: Introduced on-demand reviewer (`HARNESS_TEST_FINGERPRINT=quality-first-test-review-v1`) for unit and UI test files (`*Test.kt`), checking assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
-- **Security & Concurrency Hardening**: Implemented atomic cross-platform file locking (`state_lock()`) preventing multi-agent state race conditions, child process lifecycle management preventing orphaned Gradle worker/AAPT2 daemon locks (`BaseException` process reaping), secure CI/CD environment variable parameterization (CWE-94 prevention), and escaped command normalization in safety hooks.
-- **Model Selection Matrix by Assistant**: Added comprehensive **Recommended Models by Assistant (Setup vs Daily)** comparative matrix in `docs/tool-support.md` and `docs/quickstart.md` across 10 supported AI assistants and IDEs.
-- **Automated CI/CD Pipeline**: Multi-OS GitHub Actions matrix testing Linux and Windows across Python 3.10, 3.11, 3.12, and 3.13 (`.github/workflows/ci.yml`).
-- **Open-Source Community Health**: Added `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1), `SECURITY.md`, and interactive GitHub Issue Forms.
-
----
-
-## [0.2.0] - 2026-08-23
-
-### Multi-IDE Tool Adapters, Five-Leaf AI Quality Engine & Foundation
-- **Multi-IDE & AI Assistant Support**: Automatic adapter generation for 14+ tools including Cursor, Google Antigravity, Claude Code, GitHub Copilot, Codex, Qwen Code, Windsurf, Cline, Roo, Amazon Q, Continue, Junie, Kilo, and Goose.
-- **Five-Leaf Review Delivery Gate**: Mandatory, parallel 5-reviewer subagents (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`) before any assemble or release.
-- **Dynamic Domain Discovery**: Automatically inspects project dependencies and codebase during installation to create tailored domain reference files (Audio/Media, BLE, Education/Games, Billing, etc.).
-- **Live Gradle Task Runner (`run_gradle_task.py`)**: Real-time task logging with a 10-second heartbeat to prevent silent build timeouts.
-- **Zoho Sprints MCP Integration**: Bidirectional task synchronization reading bug attachments, creating hierarchical subtasks, and posting Arabic/English QA handoff comments with exact Git commit hashes.
-- **Interactive Update Notifier (`check_kit_update.py`)**: Automatic start-of-session update checker with 24-hour cache TTL and non-blocking timeout.
-- **Greenfield Bootstrap Mode**: Interactive architectural questionnaire for blank Android and Kotlin Multiplatform projects.
-- **Device & Package Safety**: Strict denial of `adb monkey` and unauthorized `pm clear` commands, with safe `run_device.py uninstall` support.
-
+### Consolidated Milestone (0.2.0 - 0.4.0): Foundation Era
+- **0.4.0**: AST parser robustness, Room graph migrations with BFS path validation, Groovy/KMP discovery, git octal-escape decoding, configurable device policy, Zoho MCP network hardening.
+- **0.3.0**: Shift-left quality invariants, expanded reviewer pillars (network resiliency, accessibility, battery/sensor), test-quality-reviewer-agent, atomic state locking, CI matrix, community health files.
+- **0.2.0**: Initial public foundation - multi-IDE adapters, five-leaf review gate, domain discovery, live Gradle runner, Zoho Sprints MCP, greenfield bootstrap, device safety.

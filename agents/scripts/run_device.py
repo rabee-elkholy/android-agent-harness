@@ -16,15 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
 from _product import (  # noqa: E402
     ALLOW_EMULATOR,
-    APK_RELATIVE,
     APPLICATION_ID,
     ASSEMBLE_TASK,
     LAUNCHER,
     PRODUCT_NAME,
 )
 from _repo_files import REPO, first_adb_serial, first_physical_adb_serial  # noqa: E402
+from _variants import apk_relative, resolve_or_raise  # noqa: E402
 
-DEFAULT_APK = REPO / Path(APK_RELATIVE)
 DEFAULT_ACTIVITY = LAUNCHER
 
 
@@ -58,13 +57,26 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
     parser.add_argument("action", choices=["install", "start", "install-start", "uninstall"])
     parser.add_argument("-s", "--serial", default=None, help="Physical device serial")
-    parser.add_argument("--apk", default=str(DEFAULT_APK), help="Debug APK path")
+    parser.add_argument(
+        "--flavor",
+        default=None,
+        help="Build flavor for APK resolution (default: ACTIVE_FLAVOR in _product.py).",
+    )
+    parser.add_argument("--apk", default=None, help="Debug APK path (overrides --flavor resolution)")
     parser.add_argument("--activity", default=DEFAULT_ACTIVITY, help="Launch activity")
     parser.add_argument("--package", default=APPLICATION_ID, help="Package name to uninstall")
     args = parser.parse_args()
 
+    try:
+        active_flavor, _task = resolve_or_raise(args.flavor)
+    except SystemExit as exc:
+        live_print(str(exc), err=True)
+        return 1
+
+    apk = Path(args.apk) if args.apk else REPO / apk_relative()
+    variant_note = f" (variant: {active_flavor})" if active_flavor else ""
     serial = require_serial(args.serial)
-    live_print(f"[*] Physical device: {serial}")
+    live_print(f"[*] Physical device{variant_note}: {serial}")
 
     if args.action == "uninstall":
         live_print(f"[*] Uninstalling {args.package} from {serial}")

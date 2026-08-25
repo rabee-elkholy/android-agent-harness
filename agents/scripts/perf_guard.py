@@ -138,8 +138,20 @@ def main():
     print("==================================================")
 
     if args.all:
-        target_files = list(APP_DIR.glob("**/*.kt"))
-        print(f"Scanning all {len(target_files)} Kotlin files in {APP_DIR}...")
+        try:
+            from _modules import discover_source_roots
+
+            roots = discover_source_roots(REPO)
+        except Exception:
+            roots = []
+        if not roots:
+            roots = [APP_DIR] if APP_DIR.is_dir() else [REPO]
+        target_files = [
+            p
+            for root in roots
+            for p in root.glob("**/*.kt")
+        ]
+        print(f"Scanning {len(target_files)} Kotlin file(s) across {len(roots)} module source root(s)...")
     else:
         target_files = get_git_modified_files()
         if not target_files:

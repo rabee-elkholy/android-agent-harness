@@ -47,6 +47,18 @@ PREVIEW_SURFACE_SUFFIXES = (
     "Banner.kt",
 )
 
+FEATURE_CROSS_IMPORT_PATTERN = re.compile(
+    r"^\s*import\s+([a-zA-Z0-9_.]*\.features\.([A-Za-z0-9_]+))(\.|$)"
+)
+
+
+def _current_feature_segment(path: Path) -> str | None:
+    parts = [p.lower() for p in path.parts]
+    for i, part in enumerate(parts):
+        if part in ("features", "feature") and i + 1 < len(parts):
+            return parts[i + 1]
+    return None
+
 
 def _in_string_or_comment(line: str, index: int) -> bool:
     """True when index sits inside a // comment or a double-quoted string."""
@@ -158,6 +170,21 @@ def lint_file(file_path: Path) -> list[dict]:
                 "msg": "runBlocking found in production code. Use viewModelScope.launch or coroutineScope to avoid ANRs.",
             })
 
+        current_feature = _current_feature_segment(file_path)
+        if current_feature:
+            m = FEATURE_CROSS_IMPORT_PATTERN.match(trimmed)
+            if m and m.group(2).lower() != current_feature:
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "FEATURE_CROSS_IMPORT",
+                    "msg": (
+                        f"Feature module '{current_feature}' imports another feature "
+                        f"('{m.group(2)}'). Route shared logic through a :core/:common "
+                        "module instead of feature-to-feature imports."
+                    ),
+                })
+
         if "@AndroidEntryPoint" in trimmed:
             has_android_entry_point = True
         if CLASS_ENTRY_PATTERN.search(trimmed) and not trimmed.startswith("abstract class"):
@@ -212,13 +239,27 @@ def main() -> int:
 
     if args.all:
         try:
-            from _product import ANDROID_SRC
-            src_root = REPO.joinpath(*ANDROID_SRC)
+            from _modules import discover_source_roots
+
+            roots = discover_source_roots(REPO)
         except Exception:
-            src_root = REPO / "app" / "src" / "main"
-        if not src_root.is_dir():
-            src_root = REPO
-        target_files = [p for p in src_root.rglob("*.kt") if not any(x in p.parts for x in {".git", "build", ".gradle", ".agents", ".harness-backup", ".harness-setup", "__pycache__"})]
+            roots = []
+        if not roots:
+            try:
+                from _product import ANDROID_SRC
+
+                roots = [REPO.joinpath(*ANDROID_SRC)]
+            except Exception:
+                roots = [REPO / "app" / "src" / "main"]
+            if not roots[0].is_dir():
+                roots = [REPO]
+        skip = {".git", "build", ".gradle", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
+        target_files = [
+            p
+            for root in roots
+            for p in root.rglob("*.kt")
+            if not any(x in p.parts for x in skip)
+        ]
     else:
         target_files = [p for p in changed_paths() if p.suffix == ".kt"]
 

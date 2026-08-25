@@ -962,7 +962,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.6.0") > (0, 5, 7) and get_current_version() == "0.6.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.7.0") > (0, 6, 0) and get_current_version() == "0.7.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1090,6 +1090,141 @@ failed += int(not ok_groovy)
 
 os.environ["_IN_HOOK_SELFTEST"] = "1"
 from harness_doctor import HarnessDoctor
+
+# --- v0.7.0: Build Variants (flavors) ---
+import _variants  # noqa: E402
+
+_orig_tasks = dict(_variants.ASSEMBLE_TASKS)
+_orig_rels = dict(_variants.APK_RELATIVES)
+try:
+    _variants.ASSEMBLE_TASKS = {"staging": ":app:assembleStagingDebug"}
+    ok_var_default = (
+        _variants.assemble_task("") == ":app:assembleDebug"
+        and _variants.apk_relative("").endswith("app-debug.apk")
+    )
+    ok_var_mapped = _variants.assemble_task("staging") == ":app:assembleStagingDebug"
+    ok_var_computed = _variants.assemble_task("prodClient") == ":app:assembleProdclientDebug"
+    ok_var_apk = "staging/debug/app-staging-debug.apk" in _variants.apk_relative("staging")
+    ok_var_norm = _variants.normalize_flavor(" Pro-Client ") == "proclient"
+    raised_unknown = False
+    try:
+        _variants.resolve_or_raise("doesnotexist")
+    except SystemExit:
+        raised_unknown = True
+    ok_var_unknown = raised_unknown and _variants.known_flavors() == ["staging"]
+finally:
+    _variants.ASSEMBLE_TASKS = _orig_tasks
+    _variants.APK_RELATIVES = _orig_rels
+ok_variants = all([ok_var_default, ok_var_mapped, ok_var_computed, ok_var_apk, ok_var_norm, ok_var_unknown])
+print(
+    f"variants resolver matrix: {'OK' if ok_variants else 'FAIL ' + str([ok_var_default, ok_var_mapped, ok_var_computed, ok_var_apk, ok_var_norm, ok_var_unknown])}"
+)
+failed += int(not ok_variants)
+
+# --- v0.7.0: Wizard flavor discovery + I.19 wiring ---
+from setup_wizard import discover_flavors  # noqa: E402
+from setup_wizard import normalize as wiz_normalize  # noqa: E402
+from setup_wizard import questions_payload as qp_v7  # noqa: E402
+
+flavor_repo = Path(tempfile.mkdtemp())
+flavor_app_dir = flavor_repo / "app"
+flavor_app_dir.mkdir(parents=True)
+(flavor_repo / "gradlew.bat").write_text("rem", encoding="utf-8")
+(flavor_app_dir / "build.gradle.kts").write_text(
+    'android {\n'
+    '    flavorDimensions += "env"\n'
+    '    productFlavors {\n'
+    '        create("staging") { dimension = "env" }\n'
+    '        create("prodClient") { dimension = "env" }\n'
+    '        isDefault = true\n'
+    '    }\n'
+    '}\n',
+    encoding="utf-8",
+)
+flavors_found = discover_flavors(flavor_repo)
+ok_flavor_disc = flavors_found == ["staging", "prodClient"]
+
+facts_flavors = {
+    "product": "FApp", "pythons": ["python"], "modules": [":app"],
+    "launchers": ["com.f/.M"], "apk_hint": "", "locales": ["values"],
+    "stack": "Hilt", "classic_app_src": True, "gemini": False,
+    "zoho_config": False, "gradlew": True, "flavors": ["staging", "prodClient"],
+}
+q_ids_f = [q["id"] for q in qp_v7(Path("."), "en", facts_flavors)]
+q_ids_nf = [q["id"] for q in qp_v7(Path("."), "en", {**facts_flavors, "flavors": []})]
+ok_i19_conditional = ("i19" in q_ids_f) and ("i19" not in q_ids_nf)
+
+norm_f = wiz_normalize(
+    {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
+     "i15": "yes", "i14": ["cursor"], "i16": "skip", "i17": "en", "i18": "all_en", "i19": "staging"},
+    facts_flavors,
+)
+ok_i19_norm = (
+    norm_f.get("flavor") == "staging"
+    and norm_f.get("assemble_tasks", {}).get("staging") == ":app:assembleStagingDebug"
+    and norm_f.get("assemble_tasks", {}).get("prodClient") == ":app:assembleProdclientDebug"
+)
+norm_bad_raised = False
+try:
+    wiz_normalize(
+        {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
+         "i15": "yes", "i14": ["cursor"], "i16": "skip", "i17": "en", "i18": "all_en", "i19": "ghost"},
+        facts_flavors,
+    )
+except SystemExit:
+    norm_bad_raised = True
+ok_i19_guard = norm_bad_raised
+shutil.rmtree(flavor_repo, ignore_errors=True)
+ok_wizard_flavors = ok_flavor_disc and ok_i19_conditional and ok_i19_norm and ok_i19_guard
+print(
+    f"wizard flavors discovery+i19: {'OK' if ok_wizard_flavors else 'FAIL ' + str([ok_flavor_disc, ok_i19_conditional, ok_i19_norm, ok_i19_guard])}"
+)
+failed += int(not ok_wizard_flavors)
+
+# --- v0.7.0: Multi-module roots + feature boundary lint ---
+from _modules import discover_source_roots, module_name_of  # noqa: E402
+from fast_kt_lint import lint_file as lint_file_v7  # noqa: E402
+
+mm_repo = Path(tempfile.mkdtemp())
+for mod in ("app/src/main/java", "core/data/src/main/kotlin"):
+    (mm_repo / mod).mkdir(parents=True, exist_ok=True)
+(mm_repo / "app/src/main/java/A.kt").write_text("class A\n", encoding="utf-8")
+(mm_repo / "core/data/src/main/kotlin/B.kt").write_text("class B\n", encoding="utf-8")
+roots_mm = discover_source_roots(mm_repo)
+ok_roots = len(roots_mm) == 2
+names_mm = sorted(module_name_of(r, mm_repo) for r in roots_mm)
+ok_mod_names = names_mm == [":app", ":core:data"]
+shutil.rmtree(mm_repo, ignore_errors=True)
+
+feat_root = Path(tempfile.mkdtemp())
+orders_dir = feat_root / "features" / "orders"
+payments_dir = feat_root / "features" / "payments"
+plain_dir = feat_root / "plain"
+for d in (orders_dir, payments_dir, plain_dir):
+    d.mkdir(parents=True, exist_ok=True)
+cross_file = orders_dir / "Cross.kt"
+cross_file.write_text(
+    "package x.features.orders\nimport com.app.features.payments.Api\nimport com.app.features.orders.Local\nfun f() {}\n",
+    encoding="utf-8",
+)
+same_file = orders_dir / "Same.kt"
+same_file.write_text("package y\nimport com.app.features.orders.Other\nfun g() {}\n", encoding="utf-8")
+outside_file = plain_dir / "Out.kt"
+outside_file.write_text("package z\nimport com.app.features.payments.Api2\nfun h() {}\n", encoding="utf-8")
+cross_types = {i["type"] for i in lint_file_v7(cross_file)}
+same_types = {i["type"] for i in lint_file_v7(same_file)}
+outside_types = {i["type"] for i in lint_file_v7(outside_file)}
+ok_boundary = (
+    "FEATURE_CROSS_IMPORT" in cross_types
+    and "FEATURE_CROSS_IMPORT" not in same_types
+    and "FEATURE_CROSS_IMPORT" not in outside_types
+)
+shutil.rmtree(feat_root, ignore_errors=True)
+ok_multimodule = ok_roots and ok_mod_names and ok_boundary
+print(
+    f"multi-module roots+boundary lint: {'OK' if ok_multimodule else 'FAIL ' + str([ok_roots, ok_mod_names, ok_boundary])}"
+)
+failed += int(not ok_multimodule)
 
 STATE.write_text(
     json.dumps({"c-ttl": {"pending_reviews": True, "pending_since": time.time() - 100000}}),

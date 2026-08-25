@@ -207,6 +207,12 @@ T = {
         "i18_en_titles_ar_comments": "English task titles + Arabic comments and descriptions (Recommended)",
         "i18_all_en": "All English (Titles, Descriptions, and Comments in English)",
         "i18_all_ar": "All Arabic (عربي بالكامل)",
+        "i19": (
+            "This project defines Gradle product flavors. Which flavor do you test daily? "
+            "Install/launch/logcat will target that variant automatically. "
+            "Pick the default variant if you do not use flavors daily."
+        ),
+        "i19_default": "Default variant only — no daily flavor (Recommended if unsure)",
         "auto_blurb": (
             "From this project I will use (no extra questions): Python {py}, "
             "module {module}, launcher {launcher}, APK {apk}, stack {stack}, locales {locales}. "
@@ -371,6 +377,12 @@ T = {
         "i18_en_titles_ar_comments": "عناوين المهام بالإنجليزي والوصف/التعليقات بالعربي (مفضّل)",
         "i18_all_en": "إنجليزي بالكامل (العناوين والوصف والتعليقات بالإنجليزي)",
         "i18_all_ar": "عربي بالكامل",
+        "i19": (
+            "المشروع فيه Product Flavors. أنهي نسخة بتختبر عليها يومياً؟ "
+            "التثبيت والتشغيل واللوج هيشتغلوا على النسخة دي. "
+            "اختار الافتراضي لو مش بتستخدم Flavors في الشغل اليومي."
+        ),
+        "i19_default": "الافتراضي فقط — بدون Flavor يومي (مفضّل لو مش متأكد)",
         "auto_blurb": (
             "من المشروع هستخدم من غير أسئلة زيادة: Python {py}، "
             "الموديول {module}، الشاشة الأولى {launcher}، ملف APK {apk}، طريقة الكتابة {stack}، "
@@ -644,6 +656,48 @@ def has_classic_app_src(repo: Path) -> bool:
     ).is_dir()
 
 
+_FLAVOR_KEYWORDS = {"dimension", "missingdimensionstrategy", "isdefault", "targetsdk", "versionname"}
+
+
+def _product_flavors_block(text: str) -> str:
+    m = re.search(r"productFlavors\s*\{", text)
+    if not m:
+        return ""
+    start = m.end() - 1
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return text[start:]
+
+
+def discover_flavors(repo: Path) -> list[str]:
+    names: list[str] = []
+    for path in gradle_files(repo):
+        block = _product_flavors_block(read_text(path))
+        if not block:
+            continue
+        for cm in re.finditer(r'create\s*\(\s*["\']([^"\']+)["\']', block):
+            names.append(cm.group(1))
+        for lm in re.finditer(r"(?m)^\s{2,}([a-z][a-zA-Z0-9_]*)\s*\{", block):
+            if lm.group(1).lower() not in _FLAVOR_KEYWORDS:
+                names.append(lm.group(1))
+    seen: list[str] = []
+    for n in names:
+        if n not in seen:
+            seen.append(n)
+    return seen
+
+
+def _flavor_pascal(name: str) -> str:
+    return "".join(part.capitalize() for part in re.split(r"[^a-zA-Z0-9]", name) if part)
+
+
 def gemini_exists() -> bool:
     return (Path.home() / ".gemini" / "config.json").is_file() or (
         Path.home() / ".gemini" / "config" / "config.json"
@@ -689,6 +743,7 @@ def discover(repo: Path) -> dict:
         "gradlew": (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file(),
         "source_count": source_count,
         "is_empty": source_count == 0,
+        "flavors": discover_flavors(repo),
     }
 
 
@@ -919,6 +974,19 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
+    flavors = d.get("flavors") or []
+    if flavors:
+        flavor_opts = [{"id": f, "label": f} for f in flavors]
+        flavor_opts.append({"id": "default", "label": t(lang, "i19_default")})
+        qs.append(
+            {
+                "id": "i19",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "i19"),
+                "options": flavor_opts,
+            }
+        )
     is_greenfield = d.get("is_empty") or d.get("source_count", 0) < 4 or d.get("stack") in ("unknown", "unknown (confirm in chat)", "")
     if is_greenfield:
         qs.append(
@@ -1164,6 +1232,17 @@ def normalize(raw: dict, facts: dict) -> dict:
     zoho_lang = raw.get("i18") or auto.get("zoho_language") or "en_titles_ar_comments"
     if zoho_lang not in {"en_titles_ar_comments", "all_en", "all_ar"}:
         zoho_lang = "en_titles_ar_comments"
+    discovered_flavors = [str(f) for f in (facts.get("flavors") or [])]
+    flavor = str(raw.get("i19") or "").strip()
+    if flavor in ("", "default"):
+        flavor = ""
+    if discovered_flavors and flavor and flavor not in discovered_flavors:
+        raise SystemExit(f"Unknown flavor '{flavor}'. Known: {', '.join(discovered_flavors)}")
+    assemble_tasks = (
+        {f: f"{module}:assemble{_flavor_pascal(f)}Debug" for f in discovered_flavors}
+        if module
+        else {}
+    )
     gemini = raw.get("i12") or auto["gemini_config"]
     if not facts.get("gemini"):
         gemini = "skip"
@@ -1180,6 +1259,8 @@ def normalize(raw: dict, facts: dict) -> dict:
         "device_policy": device,
         "module": module,
         "assemble": f"{module}:assembleDebug",
+        "flavor": flavor,
+        "assemble_tasks": assemble_tasks,
         "launcher": launcher,
         "apk": apk,
         "apk_path": apk_path,
@@ -1231,6 +1312,8 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.16 Zoho Sprints: {answers.get('zoho_mcp')}",
         f"- I.17 Chat & Engineering Language: {answers.get('chat_language', 'en')}",
         f"- I.18 Zoho Updates Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
+        f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
+        f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
         "",

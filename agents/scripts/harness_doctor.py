@@ -48,8 +48,10 @@ CORE_SCRIPTS = (
     "_hook_selftest.py",
     "_hook_state.py",
     "_live_process.py",
+    "_modules.py",
     "_product.py",
     "_repo_files.py",
+    "_variants.py",
     "capture_screen.py",
     "cc_pre_tool_safety.py",
     "check_kit_update.py",
@@ -310,6 +312,28 @@ class HarnessDoctor:
         else:
             self.log(category, "Safety Hooks Config", "WARN", "hooks.json missing (runtime hooks will not trigger).")
 
+        if self.is_raw_kit:
+            return
+        try:
+            from _modules import discover_source_roots
+
+            roots = discover_source_roots(self.repo)
+            if roots:
+                names = []
+                for r in roots:
+                    rel = r.relative_to(self.repo).as_posix()
+                    names.append(":" + rel.split("/src/")[0].replace("/", ":"))
+                self.log(
+                    category,
+                    "Module Source Roots",
+                    "PASS",
+                    f"{len(roots)} module source root(s): {', '.join(names)}",
+                )
+            else:
+                self.log(category, "Module Source Roots", "WARN", "No */src/main/{java,kotlin} source roots detected.")
+        except Exception as exc:
+            self.log(category, "Module Source Roots", "WARN", f"Source-root discovery failed: {exc}")
+
     def check_subagent_roster(self) -> None:
         category = "3. Subagent Roster"
         subagents_dir = self.agents_dir / "subagents"
@@ -410,6 +434,27 @@ class HarnessDoctor:
             )
 
         try:
+            from _variants import assemble_task as variant_task
+
+            answers_flavor = str(answers.get("flavor") or "").strip()
+            product_flavor = str(getattr(_product, "ACTIVE_FLAVOR", "") or "").strip()
+            if answers_flavor and product_flavor and answers_flavor != product_flavor:
+                drift.append(
+                    f"daily flavor mismatch: answers.json '{answers_flavor}' vs "
+                    f"_product.py ACTIVE_FLAVOR '{product_flavor}'."
+                )
+            answers_tasks = answers.get("assemble_tasks") or {}
+            for flavor_name, task in sorted(answers_tasks.items()):
+                resolved = variant_task(flavor_name)
+                if str(task).strip() and resolved != str(task).strip() and flavor_name == product_flavor:
+                    drift.append(
+                        f"flavor task mismatch for '{flavor_name}': answers.json '{task}' "
+                        f"resolves to '{resolved}'."
+                    )
+        except Exception:
+            pass
+
+        try:
             from install_tool_adapters import MANAGED, TOOL_FILES
 
             selected_tools = [str(t) for t in (answers.get("tools") or [])]
@@ -462,7 +507,9 @@ class HarnessDoctor:
         leaks = []
         token_re = re.compile(r"\{\{[A-Z0-9_]+\}\}")
         for path in self.agents_dir.rglob("*"):
-            if not path.is_file() or any(x in path.parts for x in {"__pycache__", "state", "tool-adapters"}):
+            if not path.is_file() or any(
+                x in path.parts for x in {"__pycache__", "state", "tool-adapters", "command-packs"}
+            ):
                 continue
             try:
                 content = path.read_text(encoding="utf-8", errors="ignore")

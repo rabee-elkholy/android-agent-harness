@@ -10,6 +10,10 @@ UNIT_TEST_TASK = ":app:testDebugUnitTest"
 APK_RELATIVE = "app/build/outputs/apk/debug/app-debug.apk"
 # Classic Android source root. KMP is often composeApp/src/androidMain — setup rewrites this.
 ANDROID_SRC = ("app", "src", "main")
+# Build variants (flavors). Setup wizard I.19 fills these when productFlavors exist.
+ACTIVE_FLAVOR = ""  # "" = default variant (no flavors). e.g. "staging"
+ASSEMBLE_TASKS = {}  # flavor -> task, e.g. {"staging": ":app:assembleStagingDebug"}
+APK_RELATIVES = {}  # flavor -> debug APK path, e.g. {"staging": "app/build/outputs/apk/staging/debug/app-staging-debug.apk"}
 # Language & Zoho settings (configured during setup)
 CHAT_LANGUAGE = "en"  # "en" (Strict English), "mirror" (Mirror developer input), "ar" (Arabic)
 ZOHO_LANGUAGE = "en_titles_ar_comments"  # "en_titles_ar_comments", "all_en", "all_ar"
