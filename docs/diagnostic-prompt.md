@@ -39,7 +39,7 @@ Tell the developer **first**, in their language:
    | # | Dimension | Status | Verified Subsystem |
    |---|---|:---:|---|
    | 1 | **Environment & Host** | `PASS / FAIL` | Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` audit, Git working tree status |
-   | 2 | **File Structure & Version** | `PASS / FAIL` | `.agents/VERSION`, `harness-rules.md`, 29 core scripts, `hooks.json` |
+   | 2 | **File Structure & Version** | `PASS / FAIL` | `.agents/VERSION`, `harness-rules.md`, 31 core scripts, `hooks.json` |
    | 3 | **Subagent Roster** | `PASS / FAIL` | All 8 subagents verified with active fingerprints |
    | 4 | **Product Configuration** | `PASS / FAIL` | `_product.py`, package prefix, application ID, source root, assemble task, and recorded answers consistency (device policy, adapters) |
    | 5 | **Template Leakage** | `PASS / FAIL` | Zero un-replaced template placeholders (`{{...}}`) in `.agents/` |
@@ -48,7 +48,7 @@ Tell the developer **first**, in their language:
    | 8 | **Safety Hooks & State Locking** | `PASS / FAIL` | Cross-platform atomic `state_lock()`, zero selftest failures |
    | 9 | **Process Streaming** | `PASS / FAIL` | Line-buffered standard I/O and process tree lifecycle termination |
    | 10 | **Preflight Pipeline** | `PASS / FAIL` | String parity & hardcoded UI text, Room migration graph, Fast Kotlin lint |
-   | 11 | **Zoho MCP Security** | `PASS / FAIL` | Zero credentials in repo, valid MCP config, server stdio handshake |
+   | 11 | **Project Tracker & PM Security** | `PASS / FAIL` | Active `PM_PROVIDER` report, zero provider credentials in repo (`<provider>.json` globs), valid MCP config, server stdio handshake |
    | 12 | **Connected Devices** | `PASS / WARN` | ADB device connectivity, hardware model, Android API level |
 
 4. **Actionable Remediation Guidance**:

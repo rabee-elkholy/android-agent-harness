@@ -962,7 +962,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.7.0") > (0, 6, 0) and get_current_version() == "0.7.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.8.0") > (0, 7, 0) and get_current_version() == "0.8.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1226,6 +1226,227 @@ print(
 )
 failed += int(not ok_multimodule)
 
+# --- v0.8.0: PM abstraction layer — policy engine matrix ---
+import pm_policy  # noqa: E402
+from pm_policy import normalize_status as pm_norm_status  # noqa: E402
+from pm_policy import validate_handoff as pm_validate  # noqa: E402
+from pm_policy import mutation_trigger as pm_trigger  # noqa: E402
+from pm_policy import resolve_provider as pm_resolve  # noqa: E402
+from pm_policy import status_label as pm_label_of  # noqa: E402
+
+ok_pm_registry = set(pm_policy.PROVIDERS) == {"zoho_sprints", "github_projects", "jira", "linear"}
+ok_pm_defaults = (
+    pm_resolve(None) == "zoho_sprints"
+    and pm_resolve("") == "zoho_sprints"
+    and pm_resolve("jira_mcp") == "jira"
+    and pm_resolve("linear_mcp") == "linear"
+    and pm_resolve("none") == "none"
+    and pm_policy.WIZARD_PROVIDER_IDS == ("zoho_sprints", "github_projects", "jira_mcp", "linear_mcp", "none")
+)
+ok_pm_triggers = (
+    pm_trigger("zoho_sprints") == "update zoho"
+    and pm_trigger("github_projects") == "update github"
+    and pm_trigger("jira") == "update jira"
+    and pm_trigger("linear") == "update linear"
+    and pm_trigger(None) == "update zoho"
+    and pm_trigger("none") == ""
+)
+
+status_matrix = {
+    "zoho_sprints": {"in_progress": "In progress", "ready_to_retest": "Ready To ReTest"},
+    "github_projects": {"in_progress": "In Progress", "ready_to_retest": "In Review"},
+    "jira": {"in_progress": "In Progress", "ready_to_retest": "Ready for Testing"},
+    "linear": {"in_progress": "In Progress", "ready_to_retest": "In Review"},
+}
+pm_map_results = []
+for prov, canon_to_label in status_matrix.items():
+    for canon, label in canon_to_label.items():
+        fwd_ok = pm_label_of(prov, canon) == label
+        rev_ok = pm_norm_status(prov, label) == canon
+        ci_ok = pm_norm_status(prov, label.upper()) == canon
+        pm_map_results.append(fwd_ok and rev_ok and ci_ok)
+ok_pm_maps = all(pm_map_results) and len(pm_map_results) == 8
+
+def _raises_system_exit(fn, *a, **kw) -> bool:
+    try:
+        fn(*a, **kw)
+    except SystemExit:
+        return True
+    return False
+
+ok_pm_unknown = (
+    _raises_system_exit(pm_norm_status, "zoho_sprints", "Ghost Status")
+    and _raises_system_exit(pm_norm_status, "jira", "Done")
+    and _raises_system_exit(pm_norm_status, "linear", "Canceled")
+    and _raises_system_exit(pm_norm_status, "github_projects", "Shipped")
+    and _raises_system_exit(pm_resolve, "carrier_pigeon")
+    and _raises_system_exit(pm_policy.status_label, "none", "in_progress")
+    and _raises_system_exit(pm_validate, "x", "klingon")
+)
+
+VALID_EN_BUG = (
+    "Commit: abc1234\n\nRoot Cause:\nFunctional explanation.\n\nSolution:\nFunctional fix.\n\n"
+    "Impact Area (Blast Radius):\n- Home screen\n\nTest Cases & Verification Steps:\n1. Happy path\n2. Edge case\n"
+)
+VALID_AR_BUG = (
+    "Commit: abc1234\n\nسبب المشكلة:\nشرح وظيفي.\n\nالحل المطبق:\nإصلاح وظيفي.\n\n"
+    "نطاق التأثير (Impact Area):\n- الشاشة الرئيسية\n\nخطوات الفحص وحالات الاختبار (Test Cases):\n1. المسار الأساسي\n"
+)
+ok_pm_valid_en = pm_validate(VALID_EN_BUG, "all_en", "zoho_sprints") == []
+ok_pm_valid_ar = pm_validate(VALID_AR_BUG, "all_ar", "zoho_sprints") == []
+missing_cases = []
+for needle in ("Root Cause:", "Solution:", "Impact Area (Blast Radius):", "Test Cases & Verification Steps:"):
+    missing_cases.append(
+        len(pm_validate(VALID_EN_BUG.replace(needle + "\n", "\n"), "all_en", "zoho_sprints")) == 1
+        or len(pm_validate(VALID_EN_BUG.replace(needle, "Removed:"), "all_en", "zoho_sprints")) == 1
+    )
+ok_pm_missing_sections = all(missing_cases) and len(missing_cases) == 4
+commit_probe = pm_validate(VALID_EN_BUG[len("Commit: abc1234"):].lstrip("\n"), "all_en")
+commit_hit = any("Commit" in v for v in commit_probe)
+denied_probes = [
+    pm_validate(VALID_EN_BUG + "Status: Done\n", "all_en", "zoho_sprints"),
+    pm_validate(VALID_EN_BUG + "status = Solved\n", "all_en", "zoho_sprints"),
+    pm_validate(VALID_EN_BUG + "Status to Closed\n", "all_en", "jira"),
+]
+ok_pm_denied = all(len(v) == 1 for v in denied_probes)
+ok_pm_allowed_status = pm_validate(VALID_EN_BUG + "Status: Ready To ReTest\n", "all_en", "zoho_sprints") == []
+ok_pm_policy = all([
+    ok_pm_registry,
+    ok_pm_defaults,
+    ok_pm_triggers,
+    ok_pm_maps,
+    ok_pm_unknown,
+    ok_pm_valid_en,
+    ok_pm_valid_ar,
+    ok_pm_missing_sections,
+    commit_hit,
+    ok_pm_denied,
+    ok_pm_allowed_status,
+])
+print(
+    f"pm_policy provider registry & handoff validation: "
+    f"{'OK' if ok_pm_policy else 'FAIL ' + str([ok_pm_registry, ok_pm_defaults, ok_pm_triggers, ok_pm_maps, ok_pm_unknown, ok_pm_valid_en, ok_pm_valid_ar, ok_pm_missing_sections, commit_hit, ok_pm_denied, ok_pm_allowed_status])}"
+)
+failed += int(not ok_pm_policy)
+
+# --- v0.8.0: GitHub adapter with mocked subprocess (zero network) ---
+import shutil as _shutil  # noqa: E402
+import pm_github  # noqa: E402
+
+class _FakeProc:
+    def __init__(self, rc=0, out="", err=""):
+        self.returncode = rc
+        self.stdout = out
+        self.stderr = err
+
+_orig_run = pm_github.subprocess.run
+_gh_calls: list[list[str]] = []
+try:
+    def _fake_run_ok(cmd, **kwargs):
+        _gh_calls.append(list(cmd))
+        assert kwargs.get("timeout") == pm_github.GH_TIMEOUT_SECONDS
+        joined = " ".join(cmd[1:])
+        if joined.startswith("issue list"):
+            return _FakeProc(0, json.dumps([{"number": 7, "title": "T", "url": "u", "state": "OPEN"}]))
+        if joined.startswith("issue view"):
+            return _FakeProc(0, json.dumps({"number": 7, "title": "T", "body": "old", "state": "OPEN", "url": "u", "labels": []}))
+        if "--body-file -" in joined:
+            stdin_payload = kwargs.get("input") or ""
+            assert stdin_payload.strip()
+            return _FakeProc(0, "posted\n")
+        return _FakeProc(0, "{}")
+
+    pm_github.subprocess.run = _fake_run_ok
+    listed = pm_github.list_issues("o/r")
+    viewed = pm_github.view_issue(7, "o/r")
+    comment_out = pm_github.add_comment(7, "QA handoff body", "o/r")
+    label = pm_github.set_issue_status(7, pm_policy.CANONICAL_READY_RETEST, "o/r")
+    ok_gh_ops = (
+        listed[0]["number"] == 7
+        and viewed["title"] == "T"
+        and comment_out.strip() == "posted"
+        and label == "In Review"
+    )
+
+    def _fake_run_fail(cmd, **kwargs):
+        return _FakeProc(1, "", "boom: not authenticated")
+
+    pm_github.subprocess.run = _fake_run_fail
+    ok_gh_fail_closed = _raises_system_exit(pm_github.list_issues, "o/r")
+
+    def _fake_run_never(cmd, **kwargs):
+        raise AssertionError("gh must not be called")
+
+    pm_github.subprocess.run = _fake_run_never
+    ok_gh_denied_done = _raises_system_exit(pm_github.set_issue_status, 7, "done", "o/r")
+finally:
+    pm_github.subprocess.run = _orig_run
+
+_orig_which = _shutil.which
+try:
+    _shutil.which = lambda name: None
+    ok_gh_missing_binary = _raises_system_exit(pm_github.list_issues, "o/r")
+finally:
+    _shutil.which = _orig_which
+ok_pm_github = ok_gh_ops and ok_gh_fail_closed and ok_gh_denied_done and ok_gh_missing_binary
+print(
+    f"pm_github adapter (mocked gh): {'OK' if ok_pm_github else 'FAIL ' + str([ok_gh_ops, ok_gh_fail_closed, ok_gh_denied_done, ok_gh_missing_binary])}"
+)
+failed += int(not ok_pm_github)
+
+# --- v0.8.0: Wizard I.20 tracker question wiring ---
+from setup_wizard import pm_next_steps as wiz_pm_next  # noqa: E402
+
+facts_v8 = {**facts, "flavors": []}
+q_ids_v8 = [q["id"] for q in qp_v7(Path("."), "en", facts_v8)]
+i20_labels = [
+    o["id"]
+    for q in qp_v7(Path("."), "en", facts_v8) if q["id"] == "i20"
+    for o in q["options"]
+]
+ok_i20_present = "i20" in q_ids_v8 and i20_labels == ["zoho_sprints", "github_projects", "jira_mcp", "linear_mcp", "none"]
+
+norm_v8 = wiz_normalize(
+    {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
+     "i15": "yes", "i14": ["cursor"], "i16": "enable", "i17": "en", "i18": "all_en",
+     "i20": "github_projects"},
+    facts_v8,
+)
+ok_i20_norm = norm_v8.get("pm_provider") == "github_projects"
+norm_v8_default = wiz_normalize(
+    {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
+     "i15": "yes", "i14": ["cursor"], "i16": "skip", "i17": "en", "i18": "all_en"},
+    facts_v8,
+)
+ok_i20_backward = norm_v8_default.get("pm_provider") == "zoho_sprints"
+bad_i20_raised = False
+try:
+    wiz_normalize(
+        {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
+         "i15": "yes", "i14": ["cursor"], "i16": "skip", "i17": "en", "i18": "all_en",
+         "i20": "trello"},
+        facts_v8,
+    )
+except SystemExit:
+    bad_i20_raised = True
+hints_gh = wiz_pm_next({"pm_provider": "github_projects"})
+hints_jira = wiz_pm_next({"pm_provider": "jira_mcp"})
+hints_lin = wiz_pm_next({"pm_provider": "linear_mcp"})
+hints_default = wiz_pm_next({})
+hints_none = wiz_pm_next({"pm_provider": "none"})
+ok_hints = (
+    any("pm_github.py check" in h for h in hints_gh)
+    and any("mcp_registration.jira.md" in h for h in hints_jira)
+    and any("mcp_registration.linear.md" in h for h in hints_lin)
+    and hints_default == []
+    and hints_none == ["PM: no tracker selected; delivery stays local-only."]
+)
+ok_wizard_i20 = ok_i20_present and ok_i20_norm and ok_i20_backward and bad_i20_raised and ok_hints
+print(
+    f"wizard I.20 project-tracker wiring: {'OK' if ok_wizard_i20 else 'FAIL ' + str([ok_i20_present, ok_i20_norm, ok_i20_backward, bad_i20_raised, ok_hints])}"
+)
+failed += int(not ok_wizard_i20)
+
 STATE.write_text(
     json.dumps({"c-ttl": {"pending_reviews": True, "pending_since": time.time() - 100000}}),
     encoding="utf-8",
@@ -1364,6 +1585,13 @@ ok_doctor = (
     and any(r.name == "Python Runtime" and r.status == "PASS" for r in doc_results)
     and any(r.name == "Subagents Templates" and r.status == "PASS" for r in doc_results)
 )
+pm_provider_line = next((r for r in doc_results if r.name == "PM Provider"), None)
+ok_pm_doctor_line = pm_provider_line is not None and pm_provider_line.status in ("PASS", "WARN")
+print(
+    f"doctor PM provider line (Dimension 11): "
+    f"{'OK' if ok_pm_doctor_line else 'FAIL ' + (json.dumps(pm_provider_line.message) if pm_provider_line else 'missing')}"
+)
+failed += int(not ok_pm_doctor_line)
 print(f"harness_doctor 12-dimension diagnostic suite: {'OK' if ok_doctor else 'FAIL'}")
 failed += int(not ok_doctor)
 

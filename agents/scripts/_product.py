@@ -18,4 +18,7 @@ APK_RELATIVES = {}  # flavor -> debug APK path, e.g. {"staging": "app/build/outp
 CHAT_LANGUAGE = "en"  # "en" (Strict English), "mirror" (Mirror developer input), "ar" (Arabic)
 ZOHO_LANGUAGE = "en_titles_ar_comments"  # "en_titles_ar_comments", "all_en", "all_ar"
 ALLOW_EMULATOR = True  # True (both physical and emulator allowed), False (physical device only)
+# Project tracker (setup wizard I.20). Absent/empty = zoho_sprints (historical default).
+# Options: zoho_sprints | github_projects | jira_mcp | linear_mcp | none
+PM_PROVIDER = "zoho_sprints"
 

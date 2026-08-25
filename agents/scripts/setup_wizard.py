@@ -23,6 +23,11 @@ import sys
 from pathlib import Path
 
 SCHEMA = 1
+try:
+    from pm_policy import WIZARD_PROVIDER_IDS as PM_PROVIDER_IDS  # noqa: E402
+except ImportError:  # pragma: no cover - kit layout always ships pm_policy
+    PM_PROVIDER_IDS = ("zoho_sprints", "github_projects", "jira_mcp", "linear_mcp", "none")
+DEFAULT_PM_PROVIDER = "zoho_sprints"
 SKIP_DIRS = {
     ".git",
     "build",
@@ -207,6 +212,18 @@ T = {
         "i18_en_titles_ar_comments": "English task titles + Arabic comments and descriptions (Recommended)",
         "i18_all_en": "All English (Titles, Descriptions, and Comments in English)",
         "i18_all_ar": "All Arabic (عربي بالكامل)",
+        "i20": (
+            "Which project tracker should govern task ingest and updates? "
+            "Zoho Sprints is the built-in default. GitHub Projects uses the gh CLI. "
+            "Jira and Linear use their official upstream MCP servers (a registration "
+            "guide is printed after install). Mutations stay locked behind an explicit "
+            "trigger phrase for every tracker."
+        ),
+        "i20_zoho_sprints": "Zoho Sprints — built-in MCP server (Recommended, current default)",
+        "i20_github_projects": "GitHub Projects & Issues — via the gh CLI",
+        "i20_jira_mcp": "Jira — official upstream MCP server (registration guide)",
+        "i20_linear_mcp": "Linear — official upstream MCP server (registration guide)",
+        "i20_none": "None — local-only delivery, no tracker",
         "i19": (
             "This project defines Gradle product flavors. Which flavor do you test daily? "
             "Install/launch/logcat will target that variant automatically. "
@@ -377,6 +394,17 @@ T = {
         "i18_en_titles_ar_comments": "عناوين المهام بالإنجليزي والوصف/التعليقات بالعربي (مفضّل)",
         "i18_all_en": "إنجليزي بالكامل (العناوين والوصف والتعليقات بالإنجليزي)",
         "i18_all_ar": "عربي بالكامل",
+        "i20": (
+            "أنهي نظام مهام (Tracker) يحكم استلام المهام وتحديثها؟ "
+            "Zoho Sprints هو الافتراضي المدمج. GitHub Projects بيشتغل عبر gh CLI. "
+            "Jira و Linear عندهم خوادم MCP رسمية (دليل التسجيل هيطبع بعد التثبيت). "
+            "التحديث محجوز لعبارة صريحة في الشات مع كل نظام."
+        ),
+        "i20_zoho_sprints": "Zoho Sprints — خادم MCP مدمج (مفضّل، الافتراضي الحالي)",
+        "i20_github_projects": "GitHub Projects و Issues — عبر gh CLI",
+        "i20_jira_mcp": "Jira — خادم MCP رسمي (دليل تسجيل)",
+        "i20_linear_mcp": "Linear — خادم MCP رسمي (دليل تسجيل)",
+        "i20_none": "بدون نظام مهام — تسليم محلي فقط",
         "i19": (
             "المشروع فيه Product Flavors. أنهي نسخة بتختبر عليها يومياً؟ "
             "التثبيت والتشغيل واللوج هيشتغلوا على النسخة دي. "
@@ -778,6 +806,7 @@ def auto_from_facts(facts: dict) -> dict:
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
         "chat_language": "en",
         "zoho_language": "en_titles_ar_comments",
+        "pm_provider": DEFAULT_PM_PROVIDER,
     }
 
 
@@ -972,6 +1001,15 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                     "label": t(lang, "i18_all_ar"),
                 },
             ],
+        }
+    )
+    qs.append(
+        {
+            "id": "i20",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i20"),
+            "options": [{"id": pid, "label": t(lang, f"i20_{pid}")} for pid in PM_PROVIDER_IDS],
         }
     )
     flavors = d.get("flavors") or []
@@ -1232,6 +1270,11 @@ def normalize(raw: dict, facts: dict) -> dict:
     zoho_lang = raw.get("i18") or auto.get("zoho_language") or "en_titles_ar_comments"
     if zoho_lang not in {"en_titles_ar_comments", "all_en", "all_ar"}:
         zoho_lang = "en_titles_ar_comments"
+    pm_provider = str(raw.get("i20") or auto.get("pm_provider") or DEFAULT_PM_PROVIDER).strip()
+    if pm_provider not in PM_PROVIDER_IDS:
+        raise SystemExit(
+            f"Unknown project tracker '{pm_provider}'. Known: {', '.join(PM_PROVIDER_IDS)}"
+        )
     discovered_flavors = [str(f) for f in (facts.get("flavors") or [])]
     flavor = str(raw.get("i19") or "").strip()
     if flavor in ("", "default"):
@@ -1277,6 +1320,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "zoho_mcp": zoho,
         "chat_language": chat_lang,
         "zoho_language": zoho_lang,
+        "pm_provider": pm_provider,
         "tools": tools,
         "asked": asked,
     }
@@ -1313,6 +1357,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.17 Chat & Engineering Language: {answers.get('chat_language', 'en')}",
         f"- I.18 Zoho Updates Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
+        f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
@@ -1352,6 +1397,33 @@ def flags_from_answers(answers: dict) -> str:
         f"--assemble {answers['assemble']} --device-policy {answers['device_policy']} "
         f"--git-policy {answers['git_policy']} --tools {tools}"
     )
+
+
+def pm_next_steps(answers: dict) -> list[str]:
+    """Deterministic post-install guidance for the selected project tracker."""
+    provider = str((answers or {}).get("pm_provider") or DEFAULT_PM_PROVIDER).strip()
+    if provider == "github_projects":
+        return [
+            "PM: GitHub Projects selected (trigger phrase: update github).",
+            "Verify the gh CLI when convenient:",
+            "  python .agents/scripts/pm_github.py check",
+            "Auth stays with gh ('gh auth login'); never paste tokens into the repo.",
+        ]
+    if provider == "jira_mcp":
+        return [
+            "PM: Jira MCP selected (trigger phrase: update jira).",
+            "Registration guide: .agents/pm/mcp_registration.jira.md",
+            "Credentials stay in ~/.android-harness/jira.json; never in the repo.",
+        ]
+    if provider == "linear_mcp":
+        return [
+            "PM: Linear MCP selected (trigger phrase: update linear).",
+            "Registration guide: .agents/pm/mcp_registration.linear.md",
+            "Credentials stay in ~/.android-harness/linear.json; never in the repo.",
+        ]
+    if provider == "none":
+        return ["PM: no tracker selected; delivery stays local-only."]
+    return []
 
 
 def interactive(repo: Path, lang: str) -> dict:
@@ -1456,11 +1528,15 @@ def main(argv: list[str] | None = None) -> int:
         write_answers(repo, answers)
         print(t(args.lang, "wrote", path=str(answers_path(repo))))
         print("installer flags:", flags_from_answers(answers))
+        for line in pm_next_steps(answers):
+            print(line)
         return 0
     answers = interactive(repo, args.lang)
     write_answers(repo, answers)
     print(t(args.lang, "wrote", path=str(answers_path(repo))))
     print("installer flags:", flags_from_answers(answers))
+    for line in pm_next_steps(answers):
+        print(line)
     return 0
 
 

@@ -351,7 +351,7 @@ Before compiling the application with Gradle, `preflight_check.py` runs three ra
 To verify that an installation or update was 100% successful, `harness_doctor.py` and `docs/diagnostic-prompt.md` execute an exhaustive audit across 12 operational dimensions:
 
 1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` security audit, and Git working tree status / commit advisory.
-2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 29 core scripts, and `hooks.json`.
+2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 31 core scripts, and `hooks.json`.
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
 4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency (`answers.json` vs device policy, assemble task, and selected tool adapters).
 5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.
@@ -360,7 +360,7 @@ To verify that an installation or update was 100% successful, `harness_doctor.py
 8. **Safety Hooks & State Locking**: Cross-platform atomic `state_lock()` and hook selftest execution.
 9. **Process Streaming**: Line-buffered standard I/O and process tree lifecycle termination.
 10. **Preflight Pipeline**: String parity & hardcoded UI text, Room migration graph, and Fast Kotlin lint.
-11. **Zoho MCP Security**: Zero credentials in repo, valid MCP config, and server stdio handshake.
+11. **Project Tracker & PM Security**: Active `PM_PROVIDER` report, zero provider credentials in repo (`<provider>.json` globs), valid MCP config, and server stdio handshake.
 12. **Connected Devices**: ADB device connectivity, hardware model, and Android API level.
 
 ```bash
@@ -403,9 +403,14 @@ python .agents/scripts/run_device.py install-start --package com.example.app --a
 
 ---
 
-## Zoho Sprints MCP Integration
+## Project Tracker Integrations (Zoho Sprints, GitHub, Jira, Linear)
 
-The harness includes a built-in **Model Context Protocol (MCP) server** for Zoho Sprints:
+The harness ships a provider-agnostic PM layer: one deterministic policy
+engine (`pm_policy.py`), one concrete adapter (`pm_github.py` for the `gh`
+CLI), and configuration-only registration playbooks for upstream Jira/Linear
+MCP servers (`agents/pm/mcp_registration.*.md`). The playbook lives in
+`docs/workflows/pm-integrations.md`. Zoho Sprints remains the flagship,
+built-in integration:
 
 ```mermaid
 sequenceDiagram
@@ -427,6 +432,23 @@ sequenceDiagram
 - **Bi-Directional Sync**: Reads tasks, subtasks, bug reports, and attachments directly.
 - **QA-First Handoff Standards**: Eliminates internal code dumps and XML/Kotlin jargon in favor of functional explanations, mandatory `Commit: <hash>` traceability, explicit **Impact Area (Blast Radius)**, and structured test cases.
 - **Dual-Language Mapping**: Dynamic translation matrix supporting English titles with Arabic descriptions/comments (`en_titles_ar_comments`), full English (`all_en`), or full Arabic (`all_ar`) per `_product.py`.
+
+### Multi-Provider Policy Matrix
+
+| Tracker | Transport | Trigger phrase | Ready To ReTest maps to | Denied statuses |
+| :--- | :--- | :--- | :--- | :--- |
+| **Zoho Sprints** *(default)* | Built-in MCP server | `update zoho` | `Ready To ReTest` | `Done`, `Solved` |
+| **GitHub Projects** | `gh` CLI adapter | `update github` | `In Review` | `Done`, `Shipped` |
+| **Jira** | Official upstream MCP server | `update jira` | `Ready for Testing` | `Done`, `Resolved`, `Closed` |
+| **Linear** | Official upstream MCP server | `update linear` | `In Review` | `Done`, `Canceled` |
+| **None** | Local-only delivery | (no mutations) | n/a | n/a |
+
+All providers share the identical handoff contract (bilingual mandatory
+sections, commit-hash first line, QA-centric tone) and the identical
+credential isolation pattern: secrets stay in user-level files under
+`~/.android-harness/`, never in the repository. Selecting a tracker happens
+in setup wizard question **I.20** (`PM_PROVIDER` in `_product.py`; absent
+field keeps the Zoho default).
 
 ---
 
@@ -495,7 +517,7 @@ Choose the prompt for your current repository lifecycle needs:
 
 ## Setup Wizard & Configuration Reference
 
-The setup wizard configures 18 parameters (`I.1` to `I.18`) stored in `_product.py`:
+The setup wizard configures its parameters (`I.1` to `I.20`) stored in `_product.py`:
 
 | Parameter | Name | Default | Options / Description |
 | :--- | :--- | :--- | :--- |
@@ -517,6 +539,7 @@ The setup wizard configures 18 parameters (`I.1` to `I.18`) stored in `_product.
 | `I.16` | **Zoho Sprints MCP** | *Optional* | Configure Zoho Sprints integration. Enable is recommended when PC credentials already exist; otherwise skip. Never copies tokens. |
 | `I.17` | **Chat Language** | `Strict English` | English documentation, commit messages, and reviews. |
 | `I.18` | **Zoho Language** | `En Title + Ar Note` | English task titles with Arabic QA testing notes. |
+| `I.20` | **Project Tracker** | `Zoho Sprints` | `zoho_sprints` *(Recommended, current default)* / `github_projects` (gh CLI) / `jira_mcp` / `linear_mcp` (upstream registration guides) / `none`. Writes `PM_PROVIDER`; absent field keeps Zoho behavior. |
 
 ---
 

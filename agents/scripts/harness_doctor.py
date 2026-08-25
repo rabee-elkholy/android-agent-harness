@@ -4,7 +4,7 @@ Comprehensive 12-Dimension diagnostic suite inspecting every layer of the
 installed harness: Host & Environment, File Structure, Subagent Roster,
 Product Configuration, Template Leakage, Domain Skills & Workflows, Multi-IDE
 Adapters, Safety Hooks & State Locking, Live Process Streaming, Preflight
-Pipeline, Zoho MCP Security, and Connected Android Devices.
+Pipeline, Project Tracker & PM Security, and Connected Android Devices.
 
 Usage:
     python .agents/scripts/harness_doctor.py
@@ -65,6 +65,8 @@ CORE_SCRIPTS = (
     "logcat_doctor.py",
     "new_feature_scaffold.py",
     "perf_guard.py",
+    "pm_github.py",
+    "pm_policy.py",
     "pre_commit_gate.py",
     "pre_invocation_reminder.py",
     "pre_tool_safety.py",
@@ -779,7 +781,51 @@ class HarnessDoctor:
             self.log(category, "Preflight Sanity Suite", "WARN", "preflight_check.py missing.")
 
     def check_zoho_mcp(self) -> None:
-        category = "11. Zoho Sprints MCP"
+        category = "11. Project Tracker & PM Security"
+        pm_provider_raw = ""
+        try:
+            import _product as _pm_product
+
+            pm_provider_raw = str(getattr(_pm_product, "PM_PROVIDER", "") or "").strip()
+        except Exception:
+            pm_provider_raw = ""
+        try:
+            from pm_policy import PROVIDERS, resolve_provider
+
+            resolved = resolve_provider(pm_provider_raw)
+        except SystemExit as exc:
+            self.log(
+                category,
+                "PM Provider",
+                "FAIL",
+                f"Invalid PM_PROVIDER in _product.py: {exc}",
+            )
+        else:
+            if resolved == "none":
+                self.log(
+                    category,
+                    "PM Provider",
+                    "PASS",
+                    "PM_PROVIDER=none (local-only delivery; no tracker mutations possible).",
+                )
+            else:
+                display = str(PROVIDERS[resolved]["display"])
+                trigger = str(PROVIDERS[resolved]["trigger"])
+                config_file = str(PROVIDERS[resolved].get("config_file") or "")
+                user_cfg_ok = bool(config_file) and (Path.home() / ".android-harness" / config_file).is_file()
+                cfg_note = (
+                    f"user-level config present ({config_file})"
+                    if user_cfg_ok
+                    else f"no user-level config yet (~/.android-harness/{config_file}) - optional until first use"
+                )
+                self.log(
+                    category,
+                    "PM Provider",
+                    "PASS",
+                    f"Active tracker: {display} (PM_PROVIDER={resolved or 'zoho_sprints'}); "
+                    f"mutations require the explicit phrase '{trigger}'. {cfg_note}.",
+                )
+
         mcp_config = self.agents_dir / "mcp_config.json"
         if mcp_config.is_file():
             try:
@@ -794,9 +840,29 @@ class HarnessDoctor:
         else:
             self.log(category, "MCP Configuration", "PASS", "No mcp_config.json found (Zoho Sprints is optional).")
 
-        repo_tokens = list(self.repo.glob("**/zoho_config.json")) + list(self.repo.glob("**/*zoho*token*.json"))
+        repo_tokens: list[Path] = []
+        seen_token_paths: set[str] = set()
+        secret_globs = [
+            "**/zoho_config.json",
+            "**/*zoho*token*.json",
+            "**/zoho_sprints.json",
+            "**/github_projects.json",
+            "**/jira.json",
+            "**/linear.json",
+        ]
+        for pattern in secret_globs:
+            for path in self.repo.glob(pattern):
+                marker = str(path).lower()
+                if marker not in seen_token_paths:
+                    seen_token_paths.add(marker)
+                    repo_tokens.append(path)
         if not repo_tokens:
-            self.log(category, "Credential Isolation", "PASS", "Zero Zoho tokens or secret files in repository.")
+            self.log(
+                category,
+                "Credential Isolation",
+                "PASS",
+                "Zero PM/Zoho tokens or provider secret files in repository.",
+            )
         else:
             self.log(category, "Credential Isolation", "FAIL", f"Tokens detected in repository: {', '.join(str(p) for p in repo_tokens)}")
 
