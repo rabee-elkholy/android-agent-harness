@@ -513,6 +513,7 @@ def install_git_gate(repo: Path, *, dry_run: bool) -> list[str]:
     if dry_run:
         logs.append(f"dry-run write {rel_of(hook_path, repo)}")
         logs.append("dry-run git config core.hooksPath .githooks")
+        logs.append("dry-run exclude .githooks/ in .git/info/exclude")
         return logs
     hook_path.parent.mkdir(parents=True, exist_ok=True)
     hook_path.write_text(GIT_GATE_HOOK, encoding="utf-8", newline="\n")
@@ -528,6 +529,22 @@ def install_git_gate(repo: Path, *, dry_run: bool) -> list[str]:
         logs.append("git core.hooksPath -> .githooks")
     else:
         logs.append("WARNING: could not set core.hooksPath; run: git config core.hooksPath .githooks")
+
+    # Automatically exclude .githooks/ in .git/info/exclude so it stays local and never pollutes shared team commits
+    exclude_path = repo / ".git" / "info" / "exclude"
+    if (repo / ".git").is_dir() or exclude_path.is_file():
+        try:
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
+            text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
+            lines = [ln.strip() for ln in text.splitlines()]
+            if ".githooks/" not in lines and ".githooks" not in lines:
+                with exclude_path.open("a", encoding="utf-8", newline="\n") as f:
+                    if text and not text.endswith("\n"):
+                        f.write("\n")
+                    f.write(".githooks/\n")
+                logs.append("git exclude -> .git/info/exclude (.githooks/)")
+        except Exception:
+            pass
     return logs
 
 

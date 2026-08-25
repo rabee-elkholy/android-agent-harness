@@ -1301,7 +1301,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.5") > (0, 10, 4) and get_current_version() == "0.10.5"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.6") > (0, 10, 5) and get_current_version() == "0.10.6"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2036,6 +2036,7 @@ cp_tmpls = command_pack_templates()
 ok_cp_tmpls = len(cp_tmpls) == 11 or _is_installed
 tmp_adapt_dir = Path(tempfile.mkdtemp())
 try:
+    (tmp_adapt_dir / ".git" / "info").mkdir(parents=True, exist_ok=True)
     # No --git-gate flag: the staged quality gate is DEFAULT ON since v0.10.0.
     adapt_args = parse_args([
         "--repo", str(tmp_adapt_dir),
@@ -2051,6 +2052,8 @@ try:
     ok_copilot_pack = (tmp_adapt_dir / ".github" / "prompts" / "deliver.prompt.md").is_file()
     ok_codex_pack = (tmp_adapt_dir / ".codex" / "prompts" / "deliver.md").is_file()
     ok_git_gate_hook = (tmp_adapt_dir / ".githooks" / "pre-commit").is_file()
+    exclude_file = tmp_adapt_dir / ".git" / "info" / "exclude"
+    ok_git_exclude = exclude_file.is_file() and ".githooks/" in exclude_file.read_text(encoding="utf-8")
     ok_cc_settings = (tmp_adapt_dir / ".claude" / "settings.json").is_file()
     copilot_hooks_file = tmp_adapt_dir / ".github" / "hooks" / "android-harness-pre-tool-use.json"
     ok_copilot_hooks = copilot_hooks_file.is_file()
@@ -2090,6 +2093,7 @@ try:
         and ok_copilot_pack
         and ok_codex_pack
         and ok_git_gate_hook
+        and ok_git_exclude
         and ok_cc_settings
         and ok_copilot_hooks
         and ok_prune_codex

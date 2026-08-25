@@ -1459,6 +1459,21 @@ def write_answers(repo: Path, answers: dict) -> None:
         text += "\n"
     gi.write_text(text, encoding="utf-8")
 
+    # Local exclude: keep .githooks/ local to developer PC so team working trees stay clean
+    exclude_path = repo / ".git" / "info" / "exclude"
+    if (repo / ".git").is_dir() or exclude_path.is_file():
+        try:
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
+            ex_text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
+            ex_lines = [ln.strip() for ln in ex_text.splitlines()]
+            if ".githooks/" not in ex_lines and ".githooks" not in ex_lines:
+                with exclude_path.open("a", encoding="utf-8", newline="\n") as f:
+                    if ex_text and not ex_text.endswith("\n"):
+                        f.write("\n")
+                    f.write(".githooks/\n")
+        except Exception:
+            pass
+
 
 def flags_from_answers(answers: dict) -> str:
     tools = ",".join(answers.get("tools") or [])

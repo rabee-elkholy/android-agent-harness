@@ -5,6 +5,14 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6] - 2026-08-25
+
+### Team Cleanliness: Automatic `.git/info/exclude` for `.githooks/`
+- **Automatic Local Git Exclusion (`install_tool_adapters.py`, `setup_wizard.py`)**: When the staged pre-commit quality gate is installed or configured, `.githooks/` is now automatically registered in `.git/info/exclude`.
+- **Zero Team Friction**: Pre-commit hooks remain active and protective locally on the individual developer's machine without polluting the shared git working tree, forcing unwanted team commits, or modifying shared `.gitignore` files.
+
+---
+
 ## [0.10.5] - 2026-08-25
 
 ### Established & Modern Codebase Reviewer Enhancement (Five-Leaf Review Gate)
@@ -103,18 +111,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **11 Native Slash Command Packs (`agents/command-packs/`, `install_tool_adapters.py`)**: Added standardized, tool-native prompt templates automatically installed into `.claude/commands/` (Claude Code `/deliver`, `/debug`, `/doctor`, etc.), `.github/prompts/*.prompt.md` (GitHub Copilot), and `.codex/prompts/` (OpenAI Codex) with automated managed-marker pruning.
 - **Deterministic Staged Pre-Commit Quality Gate (`agents/scripts/pre_commit_gate.py`, `--git-gate`)**: Implemented an ultra-fast (<5s), stdlib-only Git hook scanning staged changes for bilingual string parity, Room entity migrations, and fast Kotlin lint issues prior to commit. Installed via `--git-gate` setting `git config core.hooksPath .githooks`.
 - **Claude Code PreToolUse Safety Bridge (`agents/scripts/cc_pre_tool_safety.py`, `--cc-hooks`)**: Ported the deterministic runtime safety hook to Claude Code sessions via the `PreToolUse` hook protocol in `.claude/settings.json`, enforcing zero-tolerance Git mutations and ADB restrictions outside Antigravity.
+- **Parser Adversarial Immunity & Cross-Tool Review Ledger (v0.5.7)**: Added comment truncation and triple-quoted string support in `check_strings.py`, review ledger verification (`state/review_ledger.json`) across non-Antigravity IDEs, barrier TTL expiry unblocks, and install-consistency audit in `harness_doctor.py`.
 - **Core Script Inventory Expansion (`harness_doctor.py`, `_hook_selftest.py`)**: Expanded the audited core script manifest from 25 to 27 scripts in Dimension 2, with new selftests covering CLI dispatch, command packs, pre-commit gate, and Claude Code PreToolUse bridge.
-
----
-
-## [0.5.7] - 2026-08-24
-
-### Architectural Resilience Release: Parser Immunity, Cross-Tool Review Ledger, Barrier TTL & Install-Consistency Audit
-- **Parser Adversarial Immunity (`check_strings.py`)**: The hardcoded-string scanner now truncates trailing `//` comments (string-literal aware) and skips Kotlin triple-quoted string blocks across lines, eliminating false positives from decoy `Text("...")` samples in comments/KDoc/multiline documentation strings while still flagging real code after a trailing comment.
-- **Cross-Tool Review Ledger (`_hook_state.py`, `review_package.py`, `run_gradle_task.py`)**: `review_package.py` now records a review ledger (`state/review_ledger.json`) containing the package hash plus a fingerprint of the protected code tree at generation time. `run_gradle_task.py` prints a deterministic `REVIEW ADVISORY` when Kotlin/XML code changed after the last package was generated — giving Cursor/Claude/Copilot sessions (where Antigravity hooks do not run) a script-level, tool-agnostic staleness signal instead of prompt-only compliance.
-- **Barrier TTL Expiry (`pre_tool_safety.py`)**: A pending 5-leaf review round now auto-expires after `HARNESS_BARRIER_TTL` seconds (default 6h) instead of wedging forever if the platform transcript format changes or subagents never reply. Format drift degrades to a time-based unblock with an explicit re-review reminder rather than a permanent assemble lockout.
-- **Install-Consistency Dimension (`harness_doctor.py`)**: In installed checkouts (`.harness-setup/answers.json` present), the doctor cross-checks recorded answers against reality: device policy vs `_product.py ALLOW_EMULATOR`, assemble task parity, and presence/managed-marker of every selected tool adapter plus root `AGENTS.md`. A weak-model install that skipped steps now fails diagnostics with exact remediation commands instead of silently drifting.
-- **Selftest Expansion**: New regression cases for triple-string/trailing-comment immunity, ledger recording + staleness comparator, and barrier TTL expiry; version assertions synced to 0.5.7.
 
 ---
 
