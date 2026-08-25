@@ -5,6 +5,14 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8] - 2026-08-25
+
+### Git Working Tree Cleanliness: Automatic `--assume-unchanged` for Tracked Hooks
+- **Tracked Hook Isolation (`install_tool_adapters.py`, `setup_wizard.py`)**: When the pre-commit quality gate is installed or updated on repositories that previously had tracked hook files, the kit now automatically executes `git update-index --assume-unchanged .githooks/pre-commit`.
+- **Zero Dirty Changes**: Guarantees that local hook overwrites never show up as uncommitted changes (`M .githooks/pre-commit`) in developer Git status or IDE change lists, even if `.githooks/` was committed to the repository history by team members in the past.
+
+---
+
 ## [0.10.7] - 2026-08-25
 
 ### Update & Setup Determinism: Strict Execution Order & Modal Hardening
@@ -114,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.6.0] - 2026-08-24
+**Included in 0.6.0:**
 
 ### Standalone CLI Dispatcher, 11 Native Slash Command Packs, Pre-Commit Quality Gate & Claude Code PreToolUse Bridge
 - **Zero-Dependency CLI Dispatcher (`harness_cli.py`, `pyproject.toml`)**: Introduced the standalone `android-harness` command-line executable (`pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git`, or run in place via `python harness_cli.py`). Features 6 core subcommands (`init`, `update`, `doctor`, `preflight`, `selftest`, `version`), automatic engine discovery, and remote fallback kit provisioning.
