@@ -18,7 +18,7 @@ Same **engine** (5-leaf review, live Gradle runner, safety hook). **Different pr
 1. **Read-Only Kit Source**: The kit directory (`<kit>` / `android-harness-kit`) is strictly **READ-ONLY**. NEVER edit, create, or modify any file in `<kit>`. All file copies, edits, patches, and configurations MUST occur strictly in the target Android repository (`<this-android-root>/.agents`).
 2. **Scope Isolation (No Modifying App Source Code)**: Setup is strictly for configuring `.agents/` and AI tool rules. NEVER edit, rewrite, or modify the target application's production source code (e.g. `strings.xml`, `values-ar/strings.xml`, Kotlin files, or Room entities) to force preflight to pass. If preflight detects pre-existing issues in the app's codebase (such as untranslated strings or Room schema discrepancies), report them clearly to the developer in chat as pre-existing findings.
 3. **No `schedule` Timers**: NEVER call the `schedule` tool or create background sleep/polling timers during setup. Execute commands synchronously or wait for automatic task completion via Reactive Wakeup.
-4. **Mandatory Step 3b Approval**: The installer MUST present the domain references table to the developer via `ask_question` modal in Step 3b and obtain explicit approval before finalizing setup.
+4. **Mandatory Step 3b Approval (First Install Only)**: The installer MUST present the domain references table to the developer via `ask_question` modal in Step 3b during first-time installation and obtain explicit approval before finalizing setup.
 
 Before the wizard questions, tell the developer in their language **as a warning**: this setup needs a **strong model** in this chat, not a fast/cheap one. Install is a structural port. A weak model skips steps and leaves a broken helper. Stay until `Total test failures: 0`. If this chat is a small model, **stop** and start a new chat on a stronger model. Then: setup takes a few minutes (backup, port, selftest).
 
@@ -236,12 +236,13 @@ Scan all module folders (`features/`, `core/`, `domain/`, etc.), packages, and G
 #### 3. Update `daily-scenarios.md`:
 - Register and link to ALL active domain references (foundation + newly discovered).
 
-#### 4. Present Approval Table:
+#### 4. Present Approval Table (First-Time Install Only):
 Present a clear summary table to the developer showing:
 - Foundation references filled
 - Discovered domain references created
-Ask for approval via `ask_question` modal before proceeding:
+During a **first-time installation**, ask for approval via `ask_question` modal before proceeding:
 - `Approve the reference files` / `I have changes to make`
+*(During an update session, skip this modal as restored references are already approved).*
 
 ## 4) Leftover grep
 
@@ -288,6 +289,7 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
   git add .
   git commit -m "chore: setup android harness kit"
   ```
+- **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
   - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`.

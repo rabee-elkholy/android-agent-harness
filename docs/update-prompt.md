@@ -33,12 +33,29 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
    - Do **not** copy from a named branch or a stale unverified clone. Do **not** clone into `app/`, `composeApp/`, or any module source tree.
 4. If `.harness-setup/answers.json` exists, print it. Ask **U.1** with a full prompt: keep these answers, or run `setup_wizard.py` again to change some. Do not use a two-word title.
 5. If they change answers, run `<kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>` (or `questions` + print `auto_blurb` + verbatim `ask_question` prompts for **only** the JSON `questions` list + `write`). Copy the new `.harness-setup/SETUP_ANSWERS.md` into the backup folder.
-6. Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills they added). Those must be restored from backup after the copy.
-7. Copy `<kit>/agents/` → `<this repo>/.agents/`. Empty `state/`. Then run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file. Do not overwrite the developer's Continue / Aider / `kilo.jsonc` / `~/.gemini` configs.
-8. Restore extra non-kit paths from the backup into `.agents/` (custom skills only). Do **not** restore old kit files on top of the new copy.
-9. Open `<kit>/docs/setup-prompt.md` and run **from “3) Port structurally” through verify** using the recorded answers. Discover from disk again (module/package may have changed). Leftover grep must pass. Run `install_tool_adapters.py` with the recorded `--tools` (and `--product`, `--py`, `--assemble`, `--device-policy`, `--git-policy`, and the recorded git-gate choice). If Copilot is selected, optionally pass `--copilot-hooks` to register the native `preToolUse` bridge.
-10. `$PY .agents/scripts/_hook_selftest.py` → `Total test failures: 0`. Then `$PY .agents/scripts/preflight_check.py` and `$PY .agents/scripts/harness_doctor.py` (must report zero critical failures).
-11. If `harness_doctor.py` reported uncommitted changes, advise the developer in their language to commit their updated harness (`git add . && git commit -m "chore: update android harness kit"`). Then tell them to start a **new chat** on this Android folder. System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`).
+6. **Identify Custom Files to Preserve**: Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills and tailored domain references in `skills/android-harness/references/`).
+7. **Copy New Engine & Restore State**:
+   - Copy `<kit>/agents/` → `<this repo>/.agents/`.
+   - Empty `.agents/state/` and ensure `.gitkeep` exists.
+   - Restore extra non-kit paths and custom domain reference files from the backup into `.agents/` (do **not** restore old kit scripts over new ones).
+   - Run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file.
+8. **Port Product Constants & Adapters (Strict Order — DO NOT run selftest yet)**:
+   - **Immediately write `.agents/scripts/_product.py`** using recorded facts from `answers.json` or backup (product name, applicationId, launcher, assemble task, device policy, PM_PROVIDER).
+   - **Port foundation references** (`architecture-mvi.md`, `ui-compose-theme.md`, `room-database-migrations.md`, `daily-scenarios.md`) using recorded project facts. (Note: DO NOT ask the developer to re-approve domain references via `ask_question` during an update; they were approved during initial install).
+   - **Run tool adapters**: `$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5> --device-policy <I.4> --git-policy <I.3> --tools <I.14> <git_gate_flag>`. This automatically registers `.githooks/` into `.git/info/exclude` to keep local hooks strictly machine-local.
+9. **Verify & Diagnostics (Run in order)**:
+   - `$PY .agents/scripts/_hook_selftest.py` → must report `Total test failures: 0`.
+   - `$PY .agents/scripts/preflight_check.py` → application checks.
+   - `$PY .agents/scripts/harness_doctor.py` → run once and wait for completion without launching duplicate background tasks. Must report 0 critical failures.
+10. **Tell the developer**:
+    - Inform them that `.githooks/` is automatically excluded in `.git/info/exclude` to protect team repositories from local git hook churn.
+    - If `harness_doctor.py` reported uncommitted changes, advise the developer in their language to review and commit their updated harness files (`.agents/`, `AGENTS.md`):
+      ```bash
+      git add .
+      git commit -m "chore: update android harness kit"
+      ```
+    - Tell them to start a **new chat** on this Android folder before starting daily work.
+    - System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`).
 
 Do not copy `local.properties` `sdk.dir` or `~/.gemini` hostnames. `adb monkey` stays denied. Emulator deny only if I.4 is physical-only.
 

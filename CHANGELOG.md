@@ -5,6 +5,16 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.7] - 2026-08-25
+
+### Update & Setup Determinism: Strict Execution Order & Modal Hardening
+- **Strict Porting Sequence (`docs/update-prompt.md`, `docs/setup-prompt.md`)**: Enforced a strict execution order (copy engine -> populate `_product.py` and tool adapters -> run selftest/doctor). Prevents premature hook selftest failures caused by unported placeholder constants.
+- **Update Modal Elimination (`docs/setup-prompt.md`, `docs/update-prompt.md`)**: Scoped domain references approval modals (`ask_question`) strictly to first-time installations, completely eliminating redundant modal interruptions during update workflows where references are already preserved from backup.
+- **Single Diagnostic Execution**: Hardened instructions to prevent duplicate background task spawning during diagnostics.
+- **Local Hooks Privacy Note**: Clarified that `.githooks/` is automatically excluded in `.git/info/exclude` to preserve clean shared team working trees.
+
+---
+
 ## [0.10.6] - 2026-08-25
 
 ### Team Cleanliness: Automatic `.git/info/exclude` for `.githooks/`
@@ -144,7 +154,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.5.0] - 2026-08-24
+**Included in 0.5.0:**
 
 ### Automated Post-Setup Diagnostics, `.gitignore` Hygiene & Git Working Tree Guard
 - **Automated Post-Setup & Post-Update Diagnostics**: Standardized `harness_doctor.py` as an automatic verification stage executed across `docs/setup-prompt.md`, `docs/install-prompt.md`, and `docs/update-prompt.md` to validate full 12-dimension health immediately after harness provisioning.
