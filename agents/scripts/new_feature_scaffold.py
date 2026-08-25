@@ -59,9 +59,9 @@ def fill(template: str, mapping: dict[str, str]) -> str:
 CONTRACT = """package __PACKAGE__
 
 import androidx.compose.runtime.Immutable
-import com.example.core.common.bases.Action as CoreAction
-import com.example.core.common.bases.Event as CoreEvent
-import com.example.core.common.bases.State as CoreState
+import com.yourapp.core.common.bases.Action as CoreAction
+import com.yourapp.core.common.bases.Event as CoreEvent
+import com.yourapp.core.common.bases.State as CoreState
 
 class __PASCAL__Contract {
 
@@ -88,8 +88,8 @@ class __PASCAL__Contract {
 VIEWMODEL = """package __PACKAGE__
 
 import androidx.lifecycle.viewModelScope
-import com.example.core.common.bases.MVIViewModel
-import com.example.core.common.utils.applicationExceptionHandler
+import com.yourapp.core.common.bases.MVIViewModel
+import com.yourapp.core.common.utils.applicationExceptionHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -145,8 +145,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import __PACKAGE__.__PASCAL__Contract
-import com.example.core.ui.themes.MyAppTheme
-import com.example.app.R
+import com.yourapp.core.ui.themes.MyAppTheme
+import com.yourapp.app.R
 
 @Composable
 fun __PASCAL__Screen(
@@ -263,7 +263,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.example.core.common.bases.BaseComposeFragment
+import com.yourapp.core.common.bases.BaseComposeFragment
 import __PACKAGE__.ui.__PASCAL__Screen
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch

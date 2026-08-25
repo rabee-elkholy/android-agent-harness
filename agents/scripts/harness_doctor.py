@@ -376,8 +376,8 @@ class HarnessDoctor:
         try:
             import _product
             product_name = getattr(_product, "PRODUCT_NAME", getattr(_product, "PRODUCT", "Android Product"))
-            app_id = getattr(_product, "APPLICATION_ID", "com.example.app")
-            pkg_prefix = getattr(_product, "PACKAGE_PREFIX", "com.example")
+            app_id = getattr(_product, "APPLICATION_ID", "")
+            pkg_prefix = getattr(_product, "PACKAGE_PREFIX", "")
             assemble_task = getattr(_product, "ASSEMBLE_TASK", ":app:assembleDebug")
             allow_emu = getattr(_product, "ALLOW_EMULATOR", True)
             android_src = getattr(_product, "ANDROID_SRC", ("app", "src", "main"))

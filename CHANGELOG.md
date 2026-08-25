@@ -5,6 +5,14 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2026-08-25
+ 
+### Fix: Neutralize Kit-Shipped Placeholders in Installed-Mode Selftest
+- **Neutralized kit-shipped example tokens**: Replaced `com.example` needles across kit-shipped files that legitimately contained illustrative code (`harness_doctor.py` fallback defaults, `new_feature_scaffold.py` dead template imports, `convention-reviewer-agent.json` example inline FQCN prompt illustration, and `harness-rules.md` example adb start command) with neutral `""` sentinels or generic `<APPLICATION_ID>` / `com.yourapp` tokens.
+- **Installed needle scan integrity**: The `kit placeholder grep agents/` check in `_hook_selftest.py` now runs strictly against the entire installed `.agents/` tree without false positives on fresh installs, while continuing to catch real unported placeholders.
+
+---
+
 ## [0.10.3] - 2026-08-25
 
 ### Fix: Selftest No Longer Crashes in Installed Checkouts
