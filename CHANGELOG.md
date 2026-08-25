@@ -5,6 +5,16 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] - 2026-08-25
+
+### Fix: Selftest No Longer Crashes in Installed Checkouts
+- **Installed-checkout awareness (`_hook_selftest.py`)**: Three probe groups introduced in v0.9.x/v0.10.x assumed the kit-root layout and crashed with `FileNotFoundError` / `ModuleNotFoundError` when run from an installed app checkout (which receives only `agents/`): (1) the grants-example consistency probe resolving `templates/gemini-runtime/`, (2) the `harness_cli.py` explain subprocess plus the pin-to-tag provisioning group importing `harness_cli`, and (3) the `scripts_dev/make_android_fixture` import. Each group now degrades to an explicit `OK (skipped - installed checkout)` line, matching the skip pattern the dispatcher test already used.
+- **Fixture fallback for installs**: When `scripts_dev/` is absent, equivalent minimal fixture builders are defined inline so the flavor-discovery, multi-module, pre-fill, and doctor-remediation engine tests keep running everywhere instead of being skipped.
+- **Robust git HEAD (`review_package.py`)**: `GIT_SHA` / ledger `git_sha` now accept only a valid 40-hex commit hash; outside a git repository they record an empty value instead of git's error text, keeping package headers and ledger comparisons sane in non-git contexts.
+- **Verified in the reported failure scenario**: a simulation copying only `agents/` into a clean directory now completes with `Total test failures: 0`, zero tracebacks, and explicit skip lines.
+
+---
+
 ## [0.10.2] - 2026-08-25
 
 ### Maintenance & Documentation Consistency
@@ -101,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.5.4] - 2026-08-24
+**Folded patch release 0.5.4 (2026-08-24):**
 
 **Included in 0.5.5:**
 

@@ -31,6 +31,10 @@ os.environ["HARNESS_MAX_REVIEWS"] = "20"
 # Existing barrier groups exercise legacy token semantics; v0.9.0 evidence
 # groups below flip HARNESS_EVIDENCE_MODE explicitly per scenario.
 os.environ.setdefault("HARNESS_EVIDENCE_MODE", "legacy")
+# Kit-only probes (grants example, harness_cli, scripts_dev fixtures) exist only
+# in the kit checkout. Installed app repos receive agents/ alone, so those
+# probe groups must degrade to explicit skips instead of crashing.
+KIT_LAYOUT = (SCRIPTS.parents[1] / "harness_cli.py").is_file()
 
 PROMPT_BUG = json.loads(TEMPLATE_BUG.read_text(encoding="utf-8"))["system_prompt"]
 PROMPT_CONV = json.loads(TEMPLATE_CONV.read_text(encoding="utf-8"))["system_prompt"]
@@ -526,31 +530,40 @@ from policy_vocab import (  # noqa: E402
 )
 
 grants_file = SCRIPTS.parents[1] / "templates" / "gemini-runtime" / "config.grants.example.json"
-grants = json.loads(grants_file.read_text(encoding="utf-8"))
-deny_entries = grants["globalPermissionGrants"]["deny"]
-allow_entries = grants["globalPermissionGrants"]["allow"]
-deny_git_verbs = [
-    e[len("command(git ") : -1].strip() for e in deny_entries if e.startswith("command(git ")
-]
-allow_git_verbs = [
-    e.split(" ", 2)[1].strip()
-    for e in allow_entries
-    if e.startswith("command(git ") and len(e.split(" ", 2)) > 1
-]
-ok_vocab_deny = bool(deny_git_verbs) and all(v in GIT_MUTATIONS for v in deny_git_verbs)
-ok_vocab_allow = bool(allow_git_verbs) and all(v not in GIT_MUTATIONS for v in allow_git_verbs)
-ok_vocab_adb = "devices" not in DEVICE_BOUND_ADB
-tool_denies = ("command(emulator)", "command(avdmanager)", "command(android emulator)", "command(adb monkey)")
-ok_vocab_tools = all(
-    entry in deny_entries for entry in tool_denies
-) and all(
-    any(tool in entry for entry in deny_entries) for tool in FORBIDDEN_TOOLS
-)
+if grants_file.is_file():
+    grants = json.loads(grants_file.read_text(encoding="utf-8"))
+    deny_entries = grants["globalPermissionGrants"]["deny"]
+    allow_entries = grants["globalPermissionGrants"]["allow"]
+    deny_git_verbs = [
+        e[len("command(git ") : -1].strip() for e in deny_entries if e.startswith("command(git ")
+    ]
+    allow_git_verbs = [
+        e.split(" ", 2)[1].strip()
+        for e in allow_entries
+        if e.startswith("command(git ") and len(e.split(" ", 2)) > 1
+    ]
+    ok_vocab_deny = bool(deny_git_verbs) and all(v in GIT_MUTATIONS for v in deny_git_verbs)
+    ok_vocab_allow = bool(allow_git_verbs) and all(v not in GIT_MUTATIONS for v in allow_git_verbs)
+    ok_vocab_adb = "devices" not in DEVICE_BOUND_ADB
+    tool_denies = ("command(emulator)", "command(avdmanager)", "command(android emulator)", "command(adb monkey)")
+    ok_vocab_tools = all(
+        entry in deny_entries for entry in tool_denies
+    ) and all(
+        any(tool in entry for entry in deny_entries) for tool in FORBIDDEN_TOOLS
+    )
+else:
+    # Installed checkout: the grants example ships with the kit root, not with agents/.
+    ok_vocab_deny = ok_vocab_allow = ok_vocab_adb = ok_vocab_tools = True
 ok_vocab_pm = sorted(DENIED_PM_OPS) == ["clear", "uninstall"]
 ok_vocab = ok_vocab_deny and ok_vocab_allow and ok_vocab_adb and ok_vocab_tools and ok_vocab_pm
-print(
-    f"policy_vocab matches grants example: {'OK' if ok_vocab else 'FAIL deny=' + str(ok_vocab_deny) + ' allow=' + str(ok_vocab_allow) + ' tools=' + str(ok_vocab_tools) + ' pm=' + str(ok_vocab_pm)}"
-)
+if not KIT_LAYOUT:
+    print("policy_vocab matches grants example: OK (skipped — kit-only probe, installed checkout)")
+elif ok_vocab:
+    print("policy_vocab matches grants example: OK")
+else:
+    print(
+        f"policy_vocab matches grants example: FAIL deny={ok_vocab_deny} allow={ok_vocab_allow} tools={ok_vocab_tools} pm={ok_vocab_pm}"
+    )
 failed += int(not ok_vocab)
 
 # --- v0.9.0: append-only audit log + explain rendering ---
@@ -584,109 +597,116 @@ print(f"audit_log caps at 1000 records: {'OK' if ok_cap else 'FAIL len=' + str(l
 failed += int(not ok_cap)
 os.environ["HARNESS_HOOK_STATE"] = str(STATE)
 
-explain_proc = subprocess.run(
-    [sys.executable, str(SCRIPTS.parents[1] / "harness_cli.py"), "explain", "--last", "3", "--kit", str(SCRIPTS.parents[1])],
-    capture_output=True,
-    text=True,
-    check=False,
-    env=os.environ.copy(),
-)
-ok_explain = explain_proc.returncode == 0 and "[i] showed" in explain_proc.stdout
-print(f"cli explain renders audit: {'OK' if ok_explain else 'FAIL ' + explain_proc.stdout + explain_proc.stderr}")
-failed += int(not ok_explain)
-
-# --- v0.9.0: pin-to-tag provisioning (local git remotes, zero network) ---
-import harness_cli as hcli  # noqa: E402
-
-ok_cli_semver = hcli._semver_tuple("0.10.0") == (0, 10, 0) and hcli._semver_tuple("v9.8.7") == (9, 8, 7)
-print(f"cli semver tuple parser: {'OK' if ok_cli_semver else 'FAIL'}")
-failed += int(not ok_cli_semver)
-
-pin_root = Path(tempfile.mkdtemp())
-origin = pin_root / "origin"
-origin.mkdir()
-
-
-def _git_quiet(*args: str, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
-
-
-def _git_commit_quiet(cwd: Path, msg: str) -> None:
-    subprocess.run(
-        ["git", "-c", "user.email=selftest@harness.local", "-c", "user.name=selftest", "commit", "-q", "-m", msg],
-        cwd=str(cwd),
+if KIT_LAYOUT:
+    explain_proc = subprocess.run(
+        [sys.executable, str(SCRIPTS.parents[1] / "harness_cli.py"), "explain", "--last", "3", "--kit", str(SCRIPTS.parents[1])],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
+        env=os.environ.copy(),
     )
+    ok_explain = explain_proc.returncode == 0 and "[i] showed" in explain_proc.stdout
+    print(f"cli explain renders audit: {'OK' if ok_explain else 'FAIL ' + explain_proc.stdout + explain_proc.stderr}")
+    failed += int(not ok_explain)
+else:
+    print("cli explain renders audit: OK (skipped — installed checkout)")
 
+# --- v0.9.0: pin-to-tag provisioning (local git remotes, zero network) ---
+if KIT_LAYOUT:
+    import harness_cli as hcli  # noqa: E402
 
-_git_quiet("init", "-q", cwd=origin)
-(origin / "agents").mkdir()
-(origin / "agents" / "VERSION").write_text("9.9.8", encoding="utf-8")
-_git_quiet("add", "agents/VERSION", cwd=origin)
-_git_commit_quiet(origin, "v9.9.8")
-_git_quiet("tag", "v9.9.8", cwd=origin)
+    ok_cli_semver = hcli._semver_tuple("0.10.0") == (0, 10, 0) and hcli._semver_tuple("v9.8.7") == (9, 8, 7)
+    print(f"cli semver tuple parser: {'OK' if ok_cli_semver else 'FAIL'}")
+    failed += int(not ok_cli_semver)
 
-provisioned = pin_root / "provisioned"
-hcli._provision_pinned(str(origin), provisioned, "9.9.8")
-ok_provision = (provisioned / "agents" / "VERSION").read_text(encoding="utf-8").strip() == "9.9.8"
-detached = subprocess.run(
-    ["git", "-C", str(provisioned), "symbolic-ref", "-q", "HEAD"],
-    capture_output=True,
-    text=True,
-    check=False,
-)
-ok_provision = ok_provision and detached.returncode != 0
-print(f"cli pinned provision: {'OK' if ok_provision else 'FAIL'}")
-failed += int(not ok_provision)
+    pin_root = Path(tempfile.mkdtemp())
+    origin = pin_root / "origin"
+    origin.mkdir()
 
-# Drift the "main" ahead untagged, then prove refresh re-pins to the tag.
-(origin / "agents" / "VERSION").write_text("9.9.9", encoding="utf-8")
-_git_quiet("add", "agents/VERSION", cwd=origin)
-_git_commit_quiet(origin, "untagged drift")
+    def _git_quiet(*args: str, cwd: Path) -> None:
+        subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
 
-clone_kit = pin_root / "clone"
-subprocess.run(["git", "clone", "-q", str(origin), str(clone_kit)], capture_output=True, text=True, check=True)
-subprocess.run(["git", "-C", str(clone_kit), "checkout", "-q", "master"], capture_output=True, text=True, check=False)
-subprocess.run(
-    ["git", "-C", str(clone_kit), "checkout", "-q", "-"],
-    capture_output=True,
-    text=True,
-    check=False,
-)
-hcli.refresh_kit(clone_kit, "9.9.8")
-ok_repin = (clone_kit / "agents" / "VERSION").read_text(encoding="utf-8").strip() == "9.9.8"
-print(f"cli refresh re-pins drifted checkout: {'OK' if ok_repin else 'FAIL'}")
-failed += int(not ok_repin)
+    def _git_commit_quiet(cwd: Path, msg: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=selftest@harness.local", "-c", "user.name=selftest", "commit", "-q", "-m", msg],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
 
-# Fail closed when the tag's VERSION file contradicts the requested version.
-lying_origin = pin_root / "lying-origin"
-lying_origin.mkdir()
-_git_quiet("init", "-q", cwd=lying_origin)
-(lying_origin / "agents").mkdir()
-(lying_origin / "agents" / "VERSION").write_text("4.4.4", encoding="utf-8")
-_git_quiet("add", "agents/VERSION", cwd=lying_origin)
-_git_commit_quiet(lying_origin, "lying")
-_git_quiet("tag", "v9.9.9", cwd=lying_origin)
-lying_clone = pin_root / "lying-clone"
-subprocess.run(["git", "clone", "-q", str(lying_origin), str(lying_clone)], capture_output=True, text=True, check=True)
-ok_fail_closed = False
-try:
-    hcli.refresh_kit(lying_clone, "9.9.9")
-except SystemExit as exc:
-    ok_fail_closed = "Refusing to continue" in str(exc)
-print(f"cli pin mismatch fails closed: {'OK' if ok_fail_closed else 'FAIL'}")
-failed += int(not ok_fail_closed)
+    _git_quiet("init", "-q", cwd=origin)
+    (origin / "agents").mkdir()
+    (origin / "agents" / "VERSION").write_text("9.9.8", encoding="utf-8")
+    _git_quiet("add", "agents/VERSION", cwd=origin)
+    _git_commit_quiet(origin, "v9.9.8")
+    _git_quiet("tag", "v9.9.8", cwd=origin)
 
-# refresh_kit with an unreachable tag keeps the current pinned checkout.
-kept = pin_root / "kept"
-subprocess.run(["git", "clone", "-q", str(origin), str(kept)], capture_output=True, text=True, check=True)
-hcli.refresh_kit(kept, "9.9.8")
-hcli.refresh_kit(kept, "0.0.0-missing")
-ok_keep = (kept / "agents" / "VERSION").read_text(encoding="utf-8").strip() == "9.9.8"
-print(f"cli refresh unreachable tag keeps pin: {'OK' if ok_keep else 'FAIL'}")
-failed += int(not ok_keep)
+    provisioned = pin_root / "provisioned"
+    hcli._provision_pinned(str(origin), provisioned, "9.9.8")
+    ok_provision = (provisioned / "agents" / "VERSION").read_text(encoding="utf-8").strip() == "9.9.8"
+    detached = subprocess.run(
+        ["git", "-C", str(provisioned), "symbolic-ref", "-q", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ok_provision = ok_provision and detached.returncode != 0
+    print(f"cli pinned provision: {'OK' if ok_provision else 'FAIL'}")
+    failed += int(not ok_provision)
+
+    # Drift the "main" ahead untagged, then prove refresh re-pins to the tag.
+    (origin / "agents" / "VERSION").write_text("9.9.9", encoding="utf-8")
+    _git_quiet("add", "agents/VERSION", cwd=origin)
+    _git_commit_quiet(origin, "untagged drift")
+
+    clone_kit = pin_root / "clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone_kit)], capture_output=True, text=True, check=True)
+    subprocess.run(["git", "-C", str(clone_kit), "checkout", "-q", "master"], capture_output=True, text=True, check=False)
+    subprocess.run(
+        ["git", "-C", str(clone_kit), "checkout", "-q", "-"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    hcli.refresh_kit(clone_kit, "9.9.8")
+    ok_repin = (clone_kit / "agents" / "VERSION").read_text(encoding="utf-8").strip() == "9.9.8"
+    print(f"cli refresh re-pins drifted checkout: {'OK' if ok_repin else 'FAIL'}")
+    failed += int(not ok_repin)
+
+    # Fail closed when the tag's VERSION file contradicts the requested version.
+    lying_origin = pin_root / "lying-origin"
+    lying_origin.mkdir()
+    _git_quiet("init", "-q", cwd=lying_origin)
+    (lying_origin / "agents").mkdir()
+    (lying_origin / "agents" / "VERSION").write_text("4.4.4", encoding="utf-8")
+    _git_quiet("add", "agents/VERSION", cwd=lying_origin)
+    _git_commit_quiet(lying_origin, "lying")
+    _git_quiet("tag", "v9.9.9", cwd=lying_origin)
+    lying_clone = pin_root / "lying-clone"
+    subprocess.run(["git", "clone", "-q", str(lying_origin), str(lying_clone)], capture_output=True, text=True, check=True)
+    ok_fail_closed = False
+    try:
+        hcli.refresh_kit(lying_clone, "9.9.9")
+    except SystemExit as exc:
+        ok_fail_closed = "Refusing to continue" in str(exc)
+    print(f"cli pin mismatch fails closed: {'OK' if ok_fail_closed else 'FAIL'}")
+    failed += int(not ok_fail_closed)
+
+    # refresh_kit with an unreachable tag keeps the current pinned checkout.
+    kept = pin_root / "kept"
+    subprocess.run(["git", "clone", "-q", str(origin), str(kept)], capture_output=True, text=True, check=True)
+    hcli.refresh_kit(kept, "9.9.8")
+    hcli.refresh_kit(kept, "0.0.0-missing")
+    ok_keep = (kept / "agents" / "VERSION").read_text(encoding="utf-8").strip() == "9.9.8"
+    print(f"cli refresh unreachable tag keeps pin: {'OK' if ok_keep else 'FAIL'}")
+    failed += int(not ok_keep)
+else:
+    print("cli semver tuple parser: OK (skipped — installed checkout)")
+    print("cli pinned provision: OK (skipped — installed checkout)")
+    print("cli refresh re-pins drifted checkout: OK (skipped — installed checkout)")
+    print("cli pin mismatch fails closed: OK (skipped — installed checkout)")
+    print("cli refresh unreachable tag keeps pin: OK (skipped — installed checkout)")
 
 # Scaffold templates must not emit invalid try {{ and must include Empty + dual locale
 sys.path.insert(0, str(SCRIPTS))
@@ -1281,7 +1301,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.2") > (0, 10, 1) and get_current_version() == "0.10.2"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.3") > (0, 10, 2) and get_current_version() == "0.10.3"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1455,7 +1475,48 @@ from setup_wizard import normalize as wiz_normalize  # noqa: E402
 from setup_wizard import questions_payload as qp_v7  # noqa: E402
 
 sys.path.insert(0, str(SCRIPTS.parents[1] / "scripts_dev" / "fixtures"))
-from make_android_fixture import make_fixture  # noqa: E402
+try:
+    from make_android_fixture import make_fixture  # noqa: E402
+except ModuleNotFoundError:
+    # Installed checkout: scripts_dev/ ships with the kit only. Provide the
+    # minimal equivalent builders so these engine tests stay runnable.
+    def make_fixture(profile: str, root: Path | None = None) -> Path:
+        root = root or Path(tempfile.mkdtemp(prefix="ahk-fixture-"))
+        root.mkdir(parents=True, exist_ok=True)
+
+        def _w(rel: str, text: str) -> None:
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8", newline="\n")
+
+        _w("gradlew.bat", "rem gradle wrapper fixture\n")
+        if profile in ("classic", "flavors"):
+            body = (
+                'android {\n    flavorDimensions += "env"\n    productFlavors {\n'
+                '        create("staging") { dimension = "env" }\n'
+                '        create("prodClient") { dimension = "env" }\n'
+                "        isDefault = true\n    }\n}\n"
+                if profile == "flavors"
+                else 'plugins { id("com.android.application") }\nandroid {}\n'
+            )
+            _w("app/build.gradle.kts", body)
+            _w("app/src/main/java/A.kt", "class A\n")
+        elif profile == "multimodule":
+            _w("app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+            _w("core/data/build.gradle.kts", 'plugins { id("com.android.library") }\n')
+            _w("app/src/main/java/A.kt", "class A\n")
+            _w("core/data/src/main/kotlin/B.kt", "class B\n")
+        elif profile == "kmp":
+            _w("settings.gradle.kts", 'include(":shared")\n')
+            _w("shared/build.gradle.kts", "kotlin {\n    androidTarget()\n}\n")
+            _w("shared/src/commonMain/kotlin/Shared.kt", "expect fun platform(): String\n")
+            _w(
+                "shared/src/androidMain/kotlin/Shared.android.kt",
+                'actual fun platform() = "android"\n',
+            )
+        else:
+            raise SystemExit(f"Unknown fixture profile: {profile}")
+        return root
 
 flavor_repo = make_fixture("flavors")
 flavor_app_dir = flavor_repo / "app"
@@ -1553,18 +1614,17 @@ ok_fixture = (
     and "create(\"staging\")" in (fix_flavors / "app" / "build.gradle.kts").read_text(encoding="utf-8")
     and (fix_kmp / "shared" / "src" / "androidMain" / "kotlin" / "Shared.android.kt").is_file()
 )
-proc_fix = subprocess.run(
-    [
-        sys.executable,
-        str(SCRIPTS.parents[1] / "scripts_dev" / "fixtures" / "make_android_fixture.py"),
-        "--profile",
-        "classic",
-    ],
-    capture_output=True,
-    text=True,
-    check=False,
-)
-ok_fix_cli = proc_fix.returncode == 0 and Path(proc_fix.stdout.strip()).is_dir()
+fixture_cli_script = SCRIPTS.parents[1] / "scripts_dev" / "fixtures" / "make_android_fixture.py"
+if fixture_cli_script.is_file():
+    proc_fix = subprocess.run(
+        [sys.executable, str(fixture_cli_script), "--profile", "classic"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ok_fix_cli = proc_fix.returncode == 0 and Path(proc_fix.stdout.strip()).is_dir()
+else:
+    ok_fix_cli = True  # scripts_dev/ is kit-only; the builder fallback above covers installs.
 ok_fixtures = ok_fixture and ok_fix_cli
 print(f"make_android_fixture profiles + CLI: {'OK' if ok_fixtures else 'FAIL'}")
 failed += int(not ok_fixtures)
@@ -2094,7 +2154,7 @@ doc_results = doc.run_all()
 doc_failures = sum(1 for r in doc_results if r.status == "FAIL")
 ok_doctor = (
     doc_failures == 0
-    and ((repo_root / "docs" / "diagnostic-prompt.md").is_file() or _is_installed)
+    and ((repo_root / "docs" / "diagnostic-prompt.md").is_file() or _is_installed or not KIT_LAYOUT)
     and any(r.name == "Python Runtime" and r.status == "PASS" for r in doc_results)
     and any(r.name == "Subagents Templates" and r.status == "PASS" for r in doc_results)
 )

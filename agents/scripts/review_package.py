@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import time
@@ -34,8 +35,17 @@ def git(*args: str) -> str:
     return (proc.stdout or "") + (proc.stderr or "")
 
 
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def git_head() -> str:
+    """Commit hash, or empty string when the checkout has no usable git HEAD."""
+    out = git("rev-parse", "HEAD").strip()
+    return out if _GIT_SHA_RE.fullmatch(out) else ""
+
+
 def build_header(task_id: str) -> list[str]:
-    sha = git("rev-parse", "HEAD").strip()
+    sha = git_head()
     fingerprint = tree_code_fingerprint() or ""
     return [
         HEADER_BEGIN,
@@ -110,7 +120,7 @@ def main(argv=None) -> int:
         )
     )
 
-    git_sha = git("rev-parse", "HEAD").strip()
+    git_sha = git_head()
     record_review_ledger(out, git_sha=git_sha)
     print(f"HARNESS_REVIEW_PACKAGE={out}")
     print(f"HARNESS_PACKAGE_SHA256_12={pre_digest[:12]}")
