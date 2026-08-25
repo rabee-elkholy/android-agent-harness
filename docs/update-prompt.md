@@ -40,16 +40,13 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
    - Restore extra non-kit paths and custom domain reference files from the backup into `.agents/` (do **not** restore old kit scripts over new ones).
    - Run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file.
 8. **Port Product Constants & Adapters (Strict Order — DO NOT run selftest yet)**:
-   - Discover from disk again (module/package/launcher may have changed).
    - **Immediately write `.agents/scripts/_product.py`** using recorded facts from `answers.json` or backup (product name, applicationId, launcher, assemble task, device policy, PM_PROVIDER).
-   - **Port foundation references** (`architecture-mvi.md`, `ui-compose-theme.md`, `room-database-migrations.md`, `daily-scenarios.md`) using recorded project facts. (Note: DO NOT ask the developer to re-approve domain references via `ask_question` during an update; they were approved during initial install and restored from backup in Step 7).
-   - **Leftover grep**: Ensure `.agents/` has zero leftover placeholder tokens from parent templates (`docs/porting.md`).
-   - **Run tool adapters**: `$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5> --device-policy <I.4> --git-policy <I.3> --tools <I.14> <git_gate_flag>`. If GitHub Copilot is selected, optionally pass `--copilot-hooks` to register the native `preToolUse` bridge. This automatically registers `.githooks/` into `.git/info/exclude` to keep local hooks strictly machine-local.
+   - **Port foundation references** (`architecture-mvi.md`, `ui-compose-theme.md`, `room-database-migrations.md`, `daily-scenarios.md`) using recorded project facts. (Note: DO NOT ask the developer to re-approve domain references via `ask_question` during an update; they were approved during initial install).
+   - **Run tool adapters**: `$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5> --device-policy <I.4> --git-policy <I.3> --tools <I.14> <git_gate_flag>`. This automatically registers `.githooks/` into `.git/info/exclude` to keep local hooks strictly machine-local.
 9. **Verify & Diagnostics (Run in order)**:
    - `$PY .agents/scripts/_hook_selftest.py` → must report `Total test failures: 0`.
    - `$PY .agents/scripts/preflight_check.py` → application checks.
    - `$PY .agents/scripts/harness_doctor.py` → run once and wait for completion without launching duplicate background tasks. Must report 0 critical failures.
-   - Confirm adapter files exist for **I.14** tools only (always `AGENTS.md`).
 10. **Tell the developer**:
     - Inform them that `.githooks/` is automatically excluded in `.git/info/exclude` to protect team repositories from local git hook churn.
     - If `harness_doctor.py` reported uncommitted changes, advise the developer in their language to review and commit their updated harness files (`.agents/`, `AGENTS.md`):

@@ -1474,6 +1474,15 @@ def write_answers(repo: Path, answers: dict) -> None:
         except Exception:
             pass
 
+    # If .githooks/pre-commit is tracked in git history, mark it assume-unchanged so it never dirties working trees
+    subprocess.run(
+        ["git", "update-index", "--assume-unchanged", ".githooks/pre-commit"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
 
 def flags_from_answers(answers: dict) -> str:
     tools = ",".join(answers.get("tools") or [])

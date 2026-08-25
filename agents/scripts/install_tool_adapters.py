@@ -545,6 +545,15 @@ def install_git_gate(repo: Path, *, dry_run: bool) -> list[str]:
                 logs.append("git exclude -> .git/info/exclude (.githooks/)")
         except Exception:
             pass
+
+    # If .githooks/pre-commit is tracked in git history, mark it assume-unchanged so it never dirties working trees
+    subprocess.run(
+        ["git", "update-index", "--assume-unchanged", ".githooks/pre-commit"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     return logs
 
 
