@@ -2,7 +2,6 @@
 Usage: python .agents/scripts/perf_guard.py [--all] [--device <ID>]
 """
 import argparse
-import os
 import re
 import subprocess
 import sys

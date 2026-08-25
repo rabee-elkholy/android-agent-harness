@@ -28,6 +28,8 @@ jobs:
           ver = Path('agents/VERSION').read_text().strip()
           tag = os.environ.get('REF_NAME', '').lstrip('v')
           assert ver == tag, f'agents/VERSION ({ver}) does not match tag ({tag})'
+          pyproject = Path('pyproject.toml').read_text(encoding='utf-8')
+          assert f'version = \"{ver}\"' in pyproject, f'pyproject.toml version does not match agents/VERSION ({ver})'
           changelog = Path('CHANGELOG.md').read_text(encoding='utf-8')
           assert f'[{ver}]' in changelog, f'Version {ver} not found in CHANGELOG.md'
           print(f'Release version {ver} is valid and aligned.')

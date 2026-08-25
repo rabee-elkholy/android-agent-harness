@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _product import ALLOW_EMULATOR  # noqa: E402
-from _repo_files import REPO, first_adb_serial, first_physical_adb_serial  # noqa: E402
+from _repo_files import REPO, first_adb_serial  # noqa: E402
 
 enable_line_buffered_stdio()
 

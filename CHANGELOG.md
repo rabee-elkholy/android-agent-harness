@@ -5,6 +5,15 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Maintenance & Documentation Consistency
+- Synchronized package metadata with `agents/VERSION` and added release-CI validation.
+- Removed stale runtime grants for the intentionally disabled feature scaffold and unused imports without removing public helper contracts.
+- Aligned install/update/setup prompts, README, issue forms, and rollback documentation with tagged provisioning, current wizard questions, Copilot hooks, and the default-on git gate.
+
+---
+
 ## [0.10.1] - 2026-08-25
 
 ### Setup Answers Change Flow: Wizard Pre-Fill, Doctor Remediation & Documentation
@@ -165,4 +174,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workflow & Doctor Integration**: Integrated `harness_doctor.py` into `docs/quickstart.md`, `docs/update-prompt.md`, `README.md`, and `_hook_selftest.py`.
 
 ---
-

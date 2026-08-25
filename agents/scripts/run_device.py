@@ -21,7 +21,7 @@ from _product import (  # noqa: E402
     LAUNCHER,
     PRODUCT_NAME,
 )
-from _repo_files import REPO, first_adb_serial, first_physical_adb_serial  # noqa: E402
+from _repo_files import REPO, first_adb_serial  # noqa: E402
 from _variants import apk_relative, resolve_or_raise  # noqa: E402
 
 DEFAULT_ACTIVITY = LAUNCHER

@@ -14,7 +14,7 @@ Installer: `$PY .agents/scripts/install_tool_adapters.py`.
 | Review protocol, git, device, architecture | `.agents/rules/harness-rules.md` | Every tool, via adapters |
 | Live Gradle + heartbeat + staleness advisory | `.agents/scripts/run_gradle_task.py` | Same Python on every tool |
 | Device install/launch | `.agents/scripts/run_device.py` | Same Python on every tool |
-| Assemble barrier (5 `*_PASS`) | `.agents/hooks.json` + `pre_tool_safety.py` | **Antigravity** (runtime hook) & **Claude Code** (`PreToolUse` bridge). Others: follow `AGENTS.md` |
+| Assemble barrier (5 `*_PASS` + matching evidence) | `.agents/hooks.json` + `pre_tool_safety.py` | **Antigravity** (runtime hook), **Claude Code** (`PreToolUse` bridge), and **GitHub Copilot** when `--copilot-hooks` is installed. Others: follow `AGENTS.md` |
 | Staged Pre-Commit Quality Gate | `.agents/scripts/pre_commit_gate.py` (`.githooks/`) | Universal across all tools via Git |
 | 11 Native Slash Command Packs | `.claude/commands/`, `.github/prompts/`, `.codex/prompts/` | Claude Code, GitHub Copilot, OpenAI Codex |
 | Reviewer & Specialist prompts | `.agents/subagents/*.json` | Claude Code also gets `.claude/agents/*.md` |
@@ -31,7 +31,7 @@ Do **not** overwrite `.aider.conf.yml`, Continue user config, unrelated MCP conf
 | **Claude Code** | `CLAUDE.md` (`@AGENTS.md`), `.claude/agents/*.md`, `.claude/commands/*.md`, `.claude/settings.json` | Prompt + named agents + PreToolUse bridge |
 | **Google Antigravity** | `GEMINI.md` + `.agents/hooks.json` | Prompt; **hook barrier in Antigravity** |
 | **OpenAI Codex CLI** | `AGENTS.md` + `CODEX.md` + `.codex/prompts/*.md` | Prompt + native prompt commands |
-| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` + `.github/prompts/*.prompt.md` | Prompt + native prompt files |
+| **GitHub Copilot / VS Code** | `.github/copilot-instructions.md` + `.github/prompts/*.prompt.md`; optional `.github/hooks/*.json` | Prompt + native prompt files; optional native `preToolUse` bridge |
 | **Windsurf** | `.windsurf/rules/android-harness.md` (`trigger: always_on`) + `.windsurfrules` | Prompt |
 | **Cline** | `.clinerules` | Prompt |
 | **Roo Code** | `.roo/rules/android-harness.md` | Prompt |
@@ -69,6 +69,10 @@ Re-run the installer with the **new** `--tools` list (include tools you still us
 ```
 
 `--tools all` writes every row in the matrix. `--keep-extra-adapters` writes the selected files without deleting the others.
+
+The staged git gate is installed by default. Use `--no-git-gate` only when the
+project has an intentionally managed replacement hook. Add `--copilot-hooks`
+when Copilot is selected and its native `preToolUse` enforcement is desired.
 
 Also re-run after changing Python command, assemble task, device policy, or git policy.
 
@@ -114,4 +118,3 @@ For any supported AI assistant, use the following raw GitHub URLs:
 - **Update**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md`
 - **Diagnostic Doctor**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`
 - **Rollback**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`
-

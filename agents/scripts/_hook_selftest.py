@@ -1285,6 +1285,15 @@ ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.1") > (0,
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
+pyproject_file = _repo_root / "pyproject.toml"
+if pyproject_file.is_file():
+    pyproject_text = pyproject_file.read_text(encoding="utf-8")
+    ok_packaging_version = f'version = "{get_current_version()}"' in pyproject_text
+else:
+    ok_packaging_version = True
+print(f"packaging metadata version alignment: {'OK' if ok_packaging_version else 'FAIL'}")
+failed += int(not ok_packaging_version)
+
 # Release quality invariants: zero emojis, zero literal escapes, and milestone release consolidation
 import re
 
@@ -2101,5 +2110,4 @@ failed += int(not ok_doctor)
 
 print(f"\nTotal test failures: {failed}")
 sys.exit(failed)
-
 

@@ -11,7 +11,7 @@ Answer in the developer's language. Do not commit unless they ask. Do not only r
 
 Tell the developer **first**, in their language, as a warning they must read: this setup needs a **strong reasoning model** in this chat (such as Anthropic `Claude Opus 5 / 3.7 Sonnet (Thinking)`, Google `Gemini 3.1 Pro (Deep Think)`, OpenAI `GPT-5.6 Sol / o3`, or DeepSeek `DeepSeek-V4 Pro / R1`), not a fast/lightweight one without deep reasoning. Install is a structural port (package, module, APK, architecture, leftover grep, selftest). A weak model skips steps, shortens questions, and leaves a broken helper. They should stay until selftest `Total test failures: 0`. If they say this chat is a small model, **stop** and tell them to open a new chat on a stronger model, then paste this file again.
 
-Then tell them: a few short questions (backup, app name, who commits, phone vs emulator, ask before install, unit tests, which AI tools, Zoho Sprints), then backup, port, and selftest. Stopping early yields a weak harness.
+Then tell them: the wizard asks only the questions it returns (backup, app name, git policy, device policy, install confirmation, unit tests, tools, Zoho, language, tracker, and git gate; conditional Python/module/launcher/flavor/bootstrap questions may also appear), then backup, port, and selftest. Stopping early yields a weak harness.
 
 ## Start now
 
@@ -22,16 +22,18 @@ Then tell them: a few short questions (backup, app name, who commits, phone vs e
      - If this is an **established codebase**, the wizard will automatically discover your architecture, DI, ViewModels, and UI from disk.
      - If this is a **brand-new / blank project**, the wizard will automatically guide you through the **Greenfield Bootstrap Questionnaire** (Platform, MVI/MVVM, Koin/Hilt, Voyager/ComposeNav, Room/SQLDelight, Ktor/Retrofit) to establish the architectural blueprint and governance rules from day one.
 2. **Get the Kit (Remote & Local Support)**:
-   - If a clone already exists nearby (sibling `android-harness-kit`, a path the developer gives, or a previous temp clone), use that. `git pull` on `main` if they want the latest.
-   - Otherwise (for developers who do not have the kit locally): Clone the kit directly into a temporary folder or sibling path:
-     ```bash
-     git clone https://github.com/rabee-elkholy/android-harness-kit.git
-     ```
-     (Do **not** clone into `app/`, `composeApp/`, or any module source tree).
+    - Preferred: run `android-harness init --repo <this-android-root>`. The CLI resolves a release tag, provisions the kit at detached `v<version>`, and verifies that `agents/VERSION` matches the tag. It never provisions from `main`.
+    - For a manual kit clone, fetch and check out an exact release tag before copying anything:
+      ```bash
+      git clone --no-checkout https://github.com/rabee-elkholy/android-harness-kit.git
+      git -C android-harness-kit fetch origin --tags --prune
+      git -C android-harness-kit checkout --detach v<requested-version>
+      ```
+      Verify `android-harness-kit/agents/VERSION` equals `<requested-version>`. Do **not** clone into `app/`, `composeApp/`, or any module source tree, and do **not** pull `main`.
 3. **Answers first (do not invent short questions).** `--lang ar` if the developer writes Arabic, else `--lang en`.
    - Preferred: they run this in **their** terminal, then tell you when it finishes:
      `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>`
-   - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>`. Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list (usually i0, i1, i3, i4, i10, i15, i14, i16). Do not invent extra questions. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
+    - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>`. Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list; the JSON payload is the sole interview authority. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
 4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, open `<kit>/docs/setup-prompt.md` and execute it from **0) Backup** onward. If `"backup": false`, skip copying backups and say rollback will not work. Skip section **I** (answers are already recorded). Copy `.harness-setup/SETUP_ANSWERS.md` into the new backup folder when a backup was made. Installer flags: `$PY <kit>/agents/scripts/setup_wizard.py flags --repo <this-android-root>`. Copy source: `<kit>/agents/` → `<this repo>/.agents`.
 5. After setup: run `$PY .agents/scripts/harness_doctor.py` for automated 12-dimension verification. If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.

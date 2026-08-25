@@ -28,15 +28,12 @@ from _hook_state import (  # noqa: E402
     record_task_poll,
     resolve_transcript_path,
     reviews_pending,
-    subagents_poll_count,
-    task_poll_count,
     transcript_path,
 )
 from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
 from policy_vocab import (  # noqa: E402
     DEVICE_BOUND_ADB,
     DENIED_PM_OPS,
-    FORBIDDEN_TOOLS,
     GIT_MUTATIONS,
     SHELL_INDIRECTION_PATTERNS,
     classify_reason,

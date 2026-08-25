@@ -42,6 +42,7 @@
   - [Strict Git Mutation Protection](#strict-git-mutation-protection)
   - [Deterministic Staged Pre-Commit Quality Gate](#deterministic-staged-pre-commit-quality-gate)
   - [Claude Code PreToolUse Safety Bridge](#claude-code-pretooluse-safety-bridge)
+  - [GitHub Copilot preToolUse Safety Bridge](#github-copilot-pretooluse-safety-bridge)
   - [Anti-Polling Guardrails](#anti-polling-guardrails)
   - [Ephemeral State Machine](#ephemeral-state-machine)
 - [Preflight Verification Pipeline](#preflight-verification-pipeline)
@@ -51,7 +52,7 @@
 - [12-Dimension System Doctor & Diagnostics](#12-dimension-system-doctor--diagnostics)
 - [Live Gradle Streaming Runner](#live-gradle-streaming-runner)
 - [Physical Device Runner & Logcat Doctor](#physical-device-runner--logcat-doctor)
-- [Zoho Sprints MCP Integration](#zoho-sprints-mcp-integration)
+- [Project Tracker Integrations](#project-tracker-integrations-zoho-sprints-github-jira-linear)
 - [Supported AI Tools, Slash Commands & Adapters](#supported-ai-tools-slash-commands--adapters)
 - [Installation & Setup Modes](#installation--setup-modes)
   - [Mode A: Existing Android / KMP App](#mode-a-existing-android--kmp-app)
@@ -78,7 +79,7 @@ When AI coding assistants like **Cursor**, **Google Antigravity**, **Claude Code
 
 | Without Android Harness | With Android Agent Harness |
 | :--- | :--- |
-| **Casual "LGTM"**: AI writes code and declares completion without compiling or verifying. | **Mandatory Review Gate**: AI is locked out of assembly until 5 specialized subagents sign off (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`). |
+| **Casual "LGTM"**: AI writes code and declares completion without compiling or verifying. | **Mandatory Review Gate**: AI is locked out of assembly until 5 specialized subagents sign off with matching evidence footers (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`). |
 | **Silent Regressions**: Modifying one ViewModel or UI component breaks dependent flows. | **Regression Blast Radius**: Maps every caller, navigation route, and data model to verify impact. |
 | **Missing Translations & Broken RTL**: Adding a string in English without adding Arabic or vice versa. | **Bilingual String Parity**: Automated validation enforcing 1-to-1 string parity and Jetpack Compose `@Preview` tags. |
 | **UI Freezes & ANRs**: Heavy operations placed on Dispatchers.Main or unnecessary recompositions. | **ANR Guardian**: Static heuristics flag main-thread disk/network I/O, heavy canvas draws, and recomposition loops. |
@@ -117,8 +118,11 @@ android-harness doctor --device
 # Run rapid preflight checks (strings + Room + fast lint)
 android-harness preflight
 
-# Update kit engine to latest release
+# Update kit engine to the latest tagged release
 android-harness update
+
+# Explain recent safety-hook decisions
+android-harness explain --last 20
 ```
 
 ### Option 2: One-Prompt Installer in AI Assistant Chat
@@ -132,7 +136,7 @@ Read and execute the Android Harness Kit installer:
 https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md
 ```
 
-4. Follow the interactive questionnaire to configure your app. Once verified with `Total test failures: 0`, your repository is fully protected.
+4. Follow the interactive questionnaire to configure your app. Once verified with `Total test failures: 0`, the harness checks have passed and the configured protections are installed.
 
 For detailed step-by-step guidance, see the [Quickstart Guide](docs/quickstart.md).
 
@@ -143,7 +147,7 @@ For detailed step-by-step guidance, see the [Quickstart Guide](docs/quickstart.m
 Beyond initial installation, Android Harness Kit provides 3 dedicated on-demand prompts for upgrades, system health auditing, and instant emergency restoration. Simply paste the relevant prompt into a **new chat session** on your Android project whenever needed:
 
 ### 1. Update Prompt (Upgrade to Latest Release)
-- **What it does**: Pulls the newest version of Android Harness Kit from GitHub and updates your `.agents/` scripts, safety hooks, and subagent prompts while preserving your custom product configuration and domain skill guides.
+- **What it does**: Resolves the newest release tag and updates your `.agents/` scripts, safety hooks, and subagent prompts while preserving your custom product configuration and domain skill guides. It never floats to `main`.
 - **Why it matters**: Gives you the latest compiler lint rules, security hardening, new reviewer capabilities, and IDE adapters without requiring manual file editing.
 - **When to use**: Whenever a new harness release is published, or when notified by the automated update reminder.
 - **How to use**: Copy and paste this prompt into a new chat:
@@ -154,7 +158,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/up
 
 ### 2. Diagnostic Doctor Prompt (12-Dimension Health Check)
 - **What it does**: Runs an automated 12-dimension health inspection (`harness_doctor.py`) auditing host runtime, subagent fingerprints, product configuration, template integrity, safety hooks, preflight pipeline, and ADB device connectivity.
-- **Why it matters**: Confirms that your harness installation is 100% healthy, no scripts are missing or corrupted, and all 5 reviewer gates and safety hooks are actively defending your repository.
+- **Why it matters**: Confirms that the configured harness checks pass, reports missing or corrupted scripts, and verifies the reviewer gates and safety hooks. Application and device health still require project-specific verification.
 - **When to use**: After installing, after updating, when switching AI assistants/IDEs, or whenever you want to confirm system readiness and fix warnings.
 - **How to use**: Copy and paste this prompt into a new chat:
 ```markdown
@@ -310,6 +314,12 @@ Cross-tool runtime safety bridge (`agents/scripts/cc_pre_tool_safety.py`, instal
 - Bridges Claude Code's native `PreToolUse` hook protocol in `.claude/settings.json` to the harness safety engine.
 - Denies forbidden Git mutations (`git push`, `git commit`) and unauthorized ADB actions with deterministic `permissionDecision: "deny"`.
 
+### GitHub Copilot preToolUse Safety Bridge
+Cross-tool runtime safety bridge (`agents/scripts/copilot_pre_tool_safety.py`, installed with `--copilot-hooks`):
+- Registers the documented Copilot repository hook at `.github/hooks/android-harness-pre-tool-use.json`.
+- Accepts Copilot's camelCase and VS Code-compatible snake_case `preToolUse` payloads.
+- Reuses the same engine as Antigravity and Claude Code, returning deterministic `permissionDecision: "allow"` or `"deny"` for shell tools.
+
 ### Anti-Polling Guardrails
 To prevent models from getting stuck in infinite polling loops (>2 calls to `manage_task` or `manage_subagents`), the hook enforces event-driven reactive wakeups and denies redundant poll requests.
 
@@ -353,7 +363,7 @@ To verify that an installation or update was 100% successful, `harness_doctor.py
 1. **Environment & Host**: Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` security audit, and Git working tree status / commit advisory.
 2. **File Topology & Version**: `.agents/VERSION`, `harness-rules.md`, 34 core scripts, and `hooks.json`.
 3. **Subagent Roster**: All 8 subagents verified with active security fingerprints.
-4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency (`answers.json` vs device policy, assemble task, and selected tool adapters).
+4. **Product Configuration**: `_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency (`answers.json` vs device policy, assemble task, flavor, git gate, and selected tool adapters).
 5. **Template Leakage**: Zero un-replaced template placeholders (`{{...}}`) in `.agents/`.
 6. **Skills & Workflows**: 10 workflow playbooks, foundation references integrity, automated project domain coverage discovery, and 100% reference indexing in `daily-scenarios.md`.
 7. **Multi-IDE Tool Adapters**: `AGENTS.md` at root and active tool adapters (Cursor, Claude Code, GitHub Copilot).
@@ -448,7 +458,8 @@ sections, commit-hash first line, QA-centric tone) and the identical
 credential isolation pattern: secrets stay in user-level files under
 `~/.android-harness/`, never in the repository. Selecting a tracker happens
 in setup wizard question **I.20** (`PM_PROVIDER` in `_product.py`; absent
-field keeps the Zoho default).
+field keeps the Zoho default). The pre-commit quality gate is configured by
+**I.21** and is on by default unless `--no-git-gate` is selected.
 
 ---
 
@@ -461,7 +472,7 @@ The harness supports **14+ AI coding assistants and IDEs**, automatically genera
 | **Google Antigravity** | `agents/rules/`, `agents/hooks.json` | Subagent dispatch, hook blockers, ephemeral reminders | Workflow playbooks (`.agents/workflows/`) |
 | **Cursor** | `.cursor/rules/android-harness.mdc` | Architecture constraints, review protocol, terminal execution gates | Rule-driven workflows |
 | **Claude Code** | `CLAUDE.md`, `.claude/settings.json` | PreToolUse safety bridge, subagent prompts | Native Slash Commands (`.claude/commands/*.md`) |
-| **GitHub Copilot** | `.github/copilot-instructions.md` | Workspace instructions, domain conventions | Prompt Files (`.github/prompts/*.prompt.md`) |
+| **GitHub Copilot** | `.github/copilot-instructions.md`, optional `.github/hooks/*.json` | Workspace instructions, domain conventions, native preToolUse safety bridge | Prompt Files (`.github/prompts/*.prompt.md`) |
 | **OpenAI Codex CLI** | `AGENTS.md` | Universal agent instructions, execution limits | Prompt Commands (`.codex/prompts/*.md`) |
 | **Windsurf** | `.windsurfrules` | Cascade AI rules and architectural constraints | Cascade workflows |
 | **Cline & Roo Code** | `.clinerules`, `.roo/rules/android-harness.md` | System prompts, mode definitions, tool permissions | Mode instructions |
@@ -517,29 +528,27 @@ Choose the prompt for your current repository lifecycle needs:
 
 ## Setup Wizard & Configuration Reference
 
-The setup wizard configures its parameters (`I.1` to `I.20`) stored in `_product.py`:
+The setup wizard records its answers in `.harness-setup/answers.json` and writes the applicable product values into `_product.py`:
 
 | Parameter | Name | Default | Options / Description |
 | :--- | :--- | :--- | :--- |
-| `I.1` | **Backup Creation** | `Yes` | Create timestamped backup in `.harness-backup/` before install. |
-| `I.2` | **Product Name** | *Auto-detected* | Clean product display name (e.g. `Rashaqa`). |
-| `I.3` | **Git Commit Policy** | `Manual in IDE` | `Manual in IDE` *(Recommended)* vs `Agent upon explicit chat request`. |
-| `I.4` | **Device Target Policy** | `Physical + Emulator` | `Physical + Emulator` *(Recommended)* vs `Physical Only`. Default matches `_product.py` (`ALLOW_EMULATOR = True`). |
-| `I.5` | **Install Confirmation** | `Yes` | Require explicit confirmation before `adb install`. |
-| `I.6` | **Assemble Task** | `:app:assembleDebug` | Gradle assemble task path. |
-| `I.7` | **Launcher Activity** | *Auto-detected* | Target Activity for physical device launch. |
-| `I.8` | **Bilingual Parity** | `Arabic + English` | Dual Arabic/English string and preview parity. |
-| `I.9` | **Compose Rules** | `Yes` | Enforce Jetpack Compose state & recomposition rules. |
-| `I.10` | **Room DB Migrations**| `Yes` | Enforce Room database migration verification. |
-| `I.11` | **Logcat Doctor** | `Yes` | Enable automated Logcat stack trace diagnostics. |
-| `I.12` | **Python Executable** | `python` | Python executable name (`python` or `python3`). |
-| `I.13` | **Custom Heuristics**| `Yes` | Discover and generate domain reference skill guides. |
-| `I.14` | **AI Tool Adapters** | *Multi-select* | Select target IDEs (Antigravity, Cursor, Claude, etc.). |
-| `I.15` | **Unit Tests Gate** | `Yes` | Run `testDebugUnitTest` before assemble. |
-| `I.16` | **Zoho Sprints MCP** | *Optional* | Configure Zoho Sprints integration. Enable is recommended when PC credentials already exist; otherwise skip. Never copies tokens. |
-| `I.17` | **Chat Language** | `Strict English` | English documentation, commit messages, and reviews. |
-| `I.18` | **Zoho Language** | `En Title + Ar Note` | English task titles with Arabic QA testing notes. |
-| `I.20` | **Project Tracker** | `Zoho Sprints` | `zoho_sprints` *(Recommended, current default)* / `github_projects` (gh CLI) / `jira_mcp` / `linear_mcp` (upstream registration guides) / `none`. Writes `PM_PROVIDER`; absent field keeps Zoho behavior. |
+| `I.0` | **Continue / Backup** | `Backup` | Continue the install and create the rollback backup. |
+| `I.1` | **Product Name** | *Auto-detected* | Clean product display name. |
+| `I.2` | **Python Executable** | *Auto-detected* | Asked only when Python is missing or ambiguous. |
+| `I.3` | **Git Commit Policy** | `Manual in IDE` | Developer commits manually *(Recommended)* or agent commits only on explicit request. |
+| `I.4` | **Device Target Policy** | `Physical + Emulator` | Both allowed *(Recommended)* or physical phone only. |
+| `I.5` | **Application Module** | *Auto-detected* | Asked only when the module is missing or ambiguous. |
+| `I.6` | **Launcher / APK** | *Auto-detected* | Asked only when the launcher or APK is missing or ambiguous. |
+| `I.10` | **Install Confirmation** | `Ask first` | Require confirmation before device installation. |
+| `I.14` | **AI Tool Adapters** | *Multi-select* | Select only the IDEs and agents used for this project. |
+| `I.15` | **Unit Tests Gate** | `Yes` | Run the targeted unit-test task before assemble. |
+| `I.16` | **Zoho Sprints MCP** | *Optional* | Configure the built-in integration without copying tokens. |
+| `I.17` | **Chat Language** | `Strict English` | Language for engineering chat, plans, reviews, and commits. |
+| `I.18` | **Zoho Language** | `English titles + Arabic notes` | Language policy for Zoho task content. |
+| `I.19` | **Daily Flavor** | *Conditional* | Asked only when Gradle product flavors are discovered. |
+| `I.20` | **Project Tracker** | `Zoho Sprints` | Zoho, GitHub Projects, Jira, Linear, or none. Writes `PM_PROVIDER`. |
+| `I.21` | **Pre-Commit Git Gate** | `Yes` | Install the staged quality gate; use `--no-git-gate` only when managing your own hook. |
+| `b_*` | **Greenfield Architecture** | *Conditional* | Platform, architecture, DI, navigation, UI, database, networking, and locale questions for blank projects. |
 
 ---
 
@@ -550,6 +559,7 @@ The harness includes a comprehensive self-test suite (`_hook_selftest.py`) valid
 - 5-Leaf Review Gate verification tokens and hash lockout recovery.
 - Python syntax, fast linting, and Room migration parsers.
 - Zero credential leaks in MCP configurations.
+- Adversarial security cases, Copilot/Claude bridge parity, strict evidence footers, and fixture profiles.
 
 ### Run Local Self-Tests:
 ```bash

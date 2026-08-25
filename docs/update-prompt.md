@@ -24,18 +24,19 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
    - If backup fails, **STOP IMMEDIATELY**.
    - Copy `<kit>/docs/rollback-prompt.md` into that backup folder. Tell the developer: *"A rollback backup was saved. If you do not like this update at any point, simply paste `docs/rollback-prompt.md` in a new chat to restore your previous version."*
 3. **Get the Latest Kit (Remote & Local Support)**:
-   - If a clone already exists nearby: `git fetch` and `git pull` on `main` in that clone. Print the new commit.
-   - Otherwise (for developers who do not have the kit locally): Clone the latest kit directly into a temporary folder or sibling path:
+   - Preferred: run `android-harness update --repo <this-android-root>`. It resolves the latest release tag, fetches that exact tag, checks it out detached, and verifies `agents/VERSION`; it never pulls `main`.
+   - For a manual update, fetch tags, choose the requested release tag, check it out detached, and verify `agents/VERSION` equals the tag version:
      ```bash
-     git clone https://github.com/rabee-elkholy/android-harness-kit.git
+     git -C <kit> fetch origin --tags --prune
+     git -C <kit> checkout --detach v<requested-version>
      ```
-   - Do **not** reuse a stale clone without pulling. (Do **not** clone into `app/`, `composeApp/`, or any module source tree).
+   - Do **not** copy from a named branch or a stale unverified clone. Do **not** clone into `app/`, `composeApp/`, or any module source tree.
 4. If `.harness-setup/answers.json` exists, print it. Ask **U.1** with a full prompt: keep these answers, or run `setup_wizard.py` again to change some. Do not use a two-word title.
 5. If they change answers, run `<kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>` (or `questions` + print `auto_blurb` + verbatim `ask_question` prompts for **only** the JSON `questions` list + `write`). Copy the new `.harness-setup/SETUP_ANSWERS.md` into the backup folder.
 6. Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills they added). Those must be restored from backup after the copy.
 7. Copy `<kit>/agents/` → `<this repo>/.agents/`. Empty `state/`. Then run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file. Do not overwrite the developer's Continue / Aider / `kilo.jsonc` / `~/.gemini` configs.
 8. Restore extra non-kit paths from the backup into `.agents/` (custom skills only). Do **not** restore old kit files on top of the new copy.
-9. Open `<kit>/docs/setup-prompt.md` and run **from “3) Port structurally” through verify** using the recorded answers. Discover from disk again (module/package may have changed). Leftover grep must pass. Run `install_tool_adapters.py` with the recorded `--tools` (and `--product`, `--py`, `--assemble`, `--device-policy`, `--git-policy`).
+9. Open `<kit>/docs/setup-prompt.md` and run **from “3) Port structurally” through verify** using the recorded answers. Discover from disk again (module/package may have changed). Leftover grep must pass. Run `install_tool_adapters.py` with the recorded `--tools` (and `--product`, `--py`, `--assemble`, `--device-policy`, `--git-policy`, and the recorded git-gate choice). If Copilot is selected, optionally pass `--copilot-hooks` to register the native `preToolUse` bridge.
 10. `$PY .agents/scripts/_hook_selftest.py` → `Total test failures: 0`. Then `$PY .agents/scripts/preflight_check.py` and `$PY .agents/scripts/harness_doctor.py` (must report zero critical failures).
 11. If `harness_doctor.py` reported uncommitted changes, advise the developer in their language to commit their updated harness (`git add . && git commit -m "chore: update android harness kit"`). Then tell them to start a **new chat** on this Android folder. System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`).
 

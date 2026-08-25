@@ -20,7 +20,6 @@
       "command(python .agents/scripts/logcat_doctor.py)",
       "command(python .agents/scripts/capture_screen.py)",
       "command(python .agents/scripts/gradle_error_parser.py)",
-      "command(python .agents/scripts/new_feature_scaffold.py)",
       "command(python .agents/scripts/ensure_hook_selftest.py)",
       "command(python .agents/scripts/_hook_selftest.py)",
       "command(python scripts/ensure_hook_selftest.py)"

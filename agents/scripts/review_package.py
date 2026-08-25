@@ -1,7 +1,6 @@
 """Write a working-tree review package (staged + unstaged + untracked vs HEAD). Inspection only. No git mutations."""
 import argparse
 import hashlib
-import json
 import os
 import subprocess
 import sys

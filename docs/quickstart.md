@@ -1,6 +1,6 @@
 # Quickstart Guide
 
-Get started with **Android Agent Harness** in 4 simple steps.
+Get started with **Android Agent Harness** in 5 simple steps.
 
 ---
 
@@ -44,16 +44,16 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/in
 
 The interactive installer will ask you a series of quick questions:
 1. **Backup**: Confirm creating a rollback backup.
-2. **Product Details**: Your app name and package namespace.
+2. **Product Details**: Your app name and discovered project facts.
 3. **Commit & Device Policies**: Physical device only vs emulator, manual vs automated commits.
 4. **AI Tool Adapters**: Select the tools you use (Cursor, Antigravity, Claude, Copilot, etc.).
-5. **Zoho Sprints**: Connect Zoho Sprints project management (Optional).
+5. **Quality & Project Policy**: Unit tests, Zoho/other tracker, language, flavor, and the default-on pre-commit git gate.
 
 Once completed, the installer will automatically run the 12-dimension diagnostic doctor (`harness_doctor.py`), verify `.gitignore` security, and confirm:
 ```
 Total test failures: 0
 PREFLIGHT PASSED
-[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.
+[SUCCESS] Harness checks passed and the configured delivery gates are ready.
 ```
 
 ---

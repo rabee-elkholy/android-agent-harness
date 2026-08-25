@@ -72,7 +72,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ## Release Governance & Formatting Invariants
 
-1. **Milestone Consolidation**: Do not create fragmented micro-releases for intermediate commits. Consolidate sprint improvements into clean minor/major milestone releases (`v0.1.0`, `v0.2.0`, `v0.3.0`, `v0.4.0`, `v0.5.0`, `v0.5.1`).
+1. **Milestone Consolidation**: Do not create fragmented micro-releases for intermediate commits. Consolidate sprint improvements into clean semantic-version releases and keep the changelog's bracketed milestone count at or below the repository gate limit.
 2. **Safe Release Creation (`--notes-file`)**: Always write release notes to a clean UTF-8 markdown file and publish using `gh release create <tag> --notes-file <file>`. Never pass multiline markdown as command-line strings to avoid PowerShell/Bash escape character corruption.
 3. **Zero Emojis**: Maintain strict technical typography with zero casual emojis across all documentation, commits, and release notes.
 4. **Automated Verification**: All changes must satisfy `_hook_selftest.py` with 0 failures before opening a PR.

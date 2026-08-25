@@ -7,7 +7,7 @@ The installing agent **executes** this file (usually after the developer pasted 
 
 ---
 
-You are installing a portable **Android AI harness** into THIS checkout. The kit is a clone of `android-harness-kit` (sibling, temp, or a path the developer gave via `git clone https://github.com/rabee-elkholy/android-harness-kit.git`). Copy from that clone’s `agents/` folder.
+You are installing a portable **Android AI harness** into THIS checkout. The kit is a checkout of an exact release tag from `android-harness-kit` (sibling, temp, or a path the developer gave). Copy from that detached tag’s `agents/` folder only after verifying `agents/VERSION` matches the requested tag. Never copy from `main`.
 
 ## Goal
 
@@ -26,9 +26,9 @@ Answer in the developer's language. Do not commit unless they ask.
 
 If `<repo>/.harness-setup/answers.json` exists and `"i0": true`, **skip section I**. Use those answers. Copy `.harness-setup/SETUP_ANSWERS.md` into the backup folder. Installer argv: `$PY <kit-or-.agents>/scripts/setup_wizard.py flags --repo <this-android-root>`.
 
-Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions` (usually eight: backup, app name, git, phone vs emulator, ask before install, unit tests, which tools, Zoho Sprints). Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
+Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions`; the JSON list is the sole authority and can include I.17-I.21 plus conditional I.2/I.5/I.6/I.19/bootstrap questions. Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
 
-**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. Do not guess which tools they use (I.14), Zoho (I.16), or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until I.0 / I.1 / I.3 / I.4 / I.10 / I.15 / I.14 / I.16 are answered.
+**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. On a re-run, previous answers are marked `(current)` and Enter keeps them; only deliberate changes need a new choice. Do not guess which tools they use (I.14), Zoho (I.16), tracker (I.20), git gate (I.21), or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until the required questions returned by the wizard are answered.
 
 Python, module, launcher, APK, architecture, and locales come from disk (`auto` in the wizard JSON). Defaults you must **not** ask: scaffold disabled (I.9), Gemini = merge script grants only if `~/.gemini` exists else skip (I.12 — never write a global Gemini rule during setup), tests only at the end (I.13). The wizard adds I.2 / I.5 / I.6 **only** when Python, module, or launcher is missing or ambiguous.
 
@@ -65,7 +65,7 @@ Print `model_warning` then `auto_blurb` from the wizard JSON. Then ask **only** 
 
 ## I) Interview — only what the wizard JSON lists
 
-Ask **only** `questions` from `setup_wizard.py questions`. Typically seven forms:
+Ask **only** `questions` from `setup_wizard.py questions`. The JSON list is the sole authority. In a normal established project it includes I.0, I.1, I.3, I.4, I.10, I.14, I.15, I.16, I.17, I.18, I.20, and I.21; I.2/I.5/I.6/I.19 and `b_*` are conditional.
 
 ### I.0 Backup? (required)
 
@@ -117,6 +117,43 @@ Ask **only** `questions` from `setup_wizard.py questions`. Typically seven forms
 - **If skip:** run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --disable` so a leftover `.cursor/mcp.json` Zoho entry is removed. Keep `.agents/mcp_config.json` empty.
 - **If enable:** follow the Zoho setup flow below.
 - Never write `~/.gemini/config/mcp_config.json`. Never paste tokens in chat.
+
+### I.17 Engineering chat language (required)
+
+- **Modal prompt:** use the wizard JSON `prompt` verbatim.
+- **Choices:** strict English / mirror the developer's language / Arabic.
+- Apply the selected language to plans, reviewer reports, and commit messages; this does not change code or user-facing app strings.
+
+### I.18 Zoho content language (required)
+
+- **Modal prompt:** use the wizard JSON `prompt` verbatim.
+- **Choices:** English titles with Arabic comments/descriptions / all English / all Arabic.
+- This controls PM handoff text only. It is independent of I.17.
+
+### I.19 Daily flavor (conditional)
+
+- Ask only when the wizard discovers Gradle product flavors.
+- The selected flavor becomes the daily assemble/install target. `default` keeps the default variant.
+
+### I.20 Project tracker (required)
+
+- **Modal prompt:** use the wizard JSON `prompt` verbatim.
+- **Choices:** `zoho_sprints` / `github_projects` / `jira_mcp` / `linear_mcp` / `none`.
+- Write the selected value to `_product.py` as `PM_PROVIDER`. Absent/legacy data keeps the Zoho default; never copy credentials into the repository.
+
+### I.21 Pre-commit git gate (required)
+
+- **Modal prompt:** use the wizard JSON `prompt` verbatim.
+- **Choices:** install the staged quality gate (Recommended) / manage your own git hooks.
+- The recommended choice passes `--git-gate` to `install_tool_adapters.py` (the default). The opt-out passes `--no-git-gate` and leaves `.githooks/pre-commit` absent.
+
+### Re-running after installation
+
+If `.harness-setup/answers.json` already exists, re-run the wizard when the
+developer wants to change a choice. The wizard marks stored choices as
+`(current)` and Enter keeps them; a new number changes only that answer. Then
+run the installer with the flags printed by the wizard and verify with
+`harness_doctor.py`.
 
 #### Zoho setup flow (only when I.16 = enable)
 

@@ -10,7 +10,6 @@
     "adb devices",
     "python .agents/scripts/review_package.py",
     "python .agents/scripts/check_strings.py",
-    "python .agents/scripts/new_feature_scaffold.py",
     "python .agents/scripts/logcat_doctor.py",
     "python .agents/scripts/preflight_check.py",
     "python .agents/scripts/perf_guard.py",

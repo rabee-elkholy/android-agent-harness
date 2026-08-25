@@ -102,8 +102,16 @@ AI assistants frequently get stuck or timeout when running long Gradle builds. `
 
 ---
 
-### 6. Zoho Sprints MCP Integration
-Provides bidirectional synchronization with Zoho Sprints:
+### 6. Project Tracker Integrations
+Provides provider-agnostic synchronization with the selected project tracker:
+- Zoho Sprints uses the built-in MCP server.
+- GitHub Projects uses the official `gh` CLI adapter.
+- Jira and Linear use their official upstream MCP registration playbooks.
+- `none` keeps delivery local-only.
+
+All providers share the same policy engine, status mapping, explicit mutation
+trigger, QA-centric handoff contract, and credential isolation boundary.
+The built-in Zoho implementation provides:
 - Automatically reads bug descriptions, steps to reproduce, and attached screenshots/logs (`attachments`).
 - Creates hierarchical tasks and subtasks.
 - Generates **QA-Centric Handoff Descriptions & Comments**: Strictly eliminates low-level internal code jargon (XML tags, Kotlin classes, `dp` values) in favor of functional, user-facing explanations.
@@ -122,11 +130,11 @@ Provides deterministic, end-to-end verification of repository health across 12 o
 - Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status, **`.gitignore` security & transient state audit**, **Git working tree status & commit reminders**).
 - File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 34 core scripts).
 - Complete subagent roster (all 8 subagents with active security fingerprints).
-- Product configuration (`_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency: device policy vs `ALLOW_EMULATOR`, assemble parity, selected adapter presence).
+- Product configuration (`_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency: device policy, assemble task, flavor, git gate, and selected adapter presence).
 - Template leakage check (verifying zero un-replaced `{{...}}` tokens in `.agents/`).
 - Domain skills & workflow playbooks (10 workflow playbooks, foundation references integrity, automated project domain coverage discovery, and 100% reference indexing in `daily-scenarios.md`).
 - Multi-IDE tool adapter parity (`AGENTS.md` and tool-specific rule configuration).
-- Safety hooks & atomic state locking (cross-platform atomic `state_lock()`, zero selftest failures).
+- Safety hooks & atomic state locking (cross-platform atomic `state_lock()`, append-only audit log, strict evidence barrier, zero selftest failures).
 - Process streaming & heartbeat (line-buffered standard I/O and process tree lifecycle termination).
 - Preflight verification pipeline (string parity & hardcoded UI text, Room migration graph, fast Kotlin lint).
 - Zoho Sprints MCP security boundaries (zero token leakage in repository).
@@ -139,3 +147,4 @@ Provides deterministic, end-to-end verification of repository health across 12 o
 - **11 Native Slash Command Packs (`agents/command-packs/`)**: Standardized command packs generating native slash shortcuts for Claude Code (`.claude/commands/`), GitHub Copilot (`.github/prompts/*.prompt.md`), and OpenAI Codex (`.codex/prompts/`) with automatic pruning.
 - **Staged Pre-Commit Quality Gate (`pre_commit_gate.py`, on by default; `--no-git-gate` opts out)**: Deterministic, stdlib-only Git hook (`.githooks/pre-commit`) running bilingual string parity, Room database migrations, and fast Kotlin lint against staged changes in <5s before commit.
 - **Claude Code PreToolUse Safety Bridge (`cc_pre_tool_safety.py`, `--cc-hooks`)**: Intercepts terminal tool execution in Claude Code sessions via `.claude/settings.json` `PreToolUse` hook, enforcing strict Git mutation and ADB safety boundaries outside Antigravity.
+- **GitHub Copilot preToolUse Safety Bridge (`copilot_pre_tool_safety.py`, `--copilot-hooks`)**: Registers `.github/hooks/android-harness-pre-tool-use.json` and maps Copilot's documented camelCase or VS Code-compatible snake_case payload into the same safety engine.
