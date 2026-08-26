@@ -144,6 +144,28 @@ The interactive wizard automatically analyzes your project and discovers:
 
 ---
 
+### What Happens After Installation: Seamless Architectural Adaptation
+
+Once installed, the harness becomes a **native, non-invasive guardian** that seamlessly integrates into your existing codebase:
+
+1. **Adapts to YOUR Architecture (No Forced Rewrites)**:
+   * The harness does not impose foreign paradigms or demand code refactoring.
+   * **Established / Legacy Codebases**: If your project uses XML Views, ViewBinding, ViewModel + LiveData, and Java interop, the reviewers adapt to enforce `viewLifecycleOwner` Fragment observation, ViewBinding nulling in `onDestroyView()`, and Java/Kotlin nullability boundaries.
+   * **Modern / Reactive Codebases**: If your project uses Jetpack Compose, MVI, StateFlow, or Kotlin Multiplatform (KMP), the reviewers enforce Unidirectional Data Flow, atomic `StateFlow.update { }`, 48dp touch targets, and Compose recomposition stability.
+   * **Architectural Boundaries**: Agents are strictly barred from violating module boundaries or injecting UI dependencies into Domain/Data layers.
+
+2. **The Invisible Daily Workflow (Silent Guardianship in Action)**:
+   * **Step 1: Normal Prompting**: You interact with your AI coding assistant (Cursor, Claude, Copilot, Antigravity) exactly as usual.
+   * **Step 2: Transparent Safety Interception**: If the AI attempts destructive shell commands (`git commit`, `git reset --hard`, `pm clear`, `adb monkey`), the harness intercepts the execution in Python, preserves your workspace, and redirects the model safely.
+   * **Step 3: Parallel Review Barrier**: When the AI attempts to build (`:assembleDebug`) or run on a device, the harness triggers the **Five-Leaf Review Gate** against the working diff. Once all 5 subagents verify the code with matching SHA-256 evidence footers, APK assembly unlocks automatically.
+   * **Step 4: Human-Owned Commits**: You retain full control over your Git history. When you commit from your IDE, the staged pre-commit gate validates string parity and Room schemas in **<5 seconds**.
+
+3. **Zero Team Pollution (Seamless Team Coexistence)**:
+   * Local safety hooks and configurations are automatically registered in `.git/info/exclude` and marked with `git update-index --assume-unchanged`.
+   * Your team members can work on the same shared repository without experiencing Git merge conflicts or unwanted configuration commits.
+
+---
+
 ### 2. Maintenance & Health Diagnostics (12-Dimension Doctor)
 
 Verify the complete health of your harness installation, SDK paths, and configuration at any time:
