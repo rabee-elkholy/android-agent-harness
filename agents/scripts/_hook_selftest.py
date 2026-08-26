@@ -2176,13 +2176,76 @@ if cli_file.is_file():
     from harness_cli import build_parser as cli_build_parser, resolve_kit as cli_resolve_kit
     cli_p = cli_build_parser()
     cli_cmds = set(next(a.choices for a in cli_p._actions if a.dest == "command").keys())
-    ok_cli_cmds = cli_cmds == {"init", "update", "explain", "doctor", "preflight", "selftest", "version"}
+    ok_cli_cmds = cli_cmds == {"init", "update", "explain", "verify", "doctor", "preflight", "selftest", "version"}
     ok_cli_kit = bool(cli_resolve_kit(str(repo_root)))
     proc_cli_ver = subprocess.run([sys.executable, str(cli_file), "version"], capture_output=True, text=True)
     ok_cli_ver = proc_cli_ver.returncode == 0 and bool(proc_cli_ver.stdout.strip())
     ok_cli = ok_cli_cmds and ok_cli_kit and ok_cli_ver
     print(f"harness_cli dispatch & subcommands: {'OK' if ok_cli else 'FAIL'}")
     failed += int(not ok_cli)
+
+# --- v0.10.x: android-harness verify round trip ---
+if cli_file.is_file():
+    verify_repo = make_fixture("classic")
+    try:
+        vstate = verify_repo / ".agents" / "state" / "verdicts"
+        vstate.mkdir(parents=True, exist_ok=True)
+        fake_pkg = vstate / "pkg.diff"
+        fake_pkg.write_text("diff --git a/x b/x\n", encoding="utf-8")
+        target_rel = "app/src/main/java/A.kt"
+        target_abs = verify_repo / "app" / "src" / "main" / "java" / "A.kt"
+        record_v = {
+            "schema_version": 1,
+            "task_id": "",
+            "git_sha": "",
+            "package": {
+                "path": str(fake_pkg),
+                "sha256": hashlib.sha256(fake_pkg.read_bytes()).hexdigest(),
+                "sha256_12": hashlib.sha256(fake_pkg.read_bytes()).hexdigest()[:12],
+            },
+            "tree_fingerprint": None,
+            "files": {target_rel: hashlib.sha256(target_abs.read_bytes()).hexdigest()},
+            "dispatched_at": None,
+            "completed_at": "2026-08-26T00:00:00Z",
+            "completed_reason": "All subagents completed.",
+            "verdict": "PASS",
+            "leaves": {
+                leaf: {"token": token, "evidence": {"pkg": "0123456789ab", "cites": 1, "valid": True}}
+                for leaf, token in (
+                    ("bug", "BUG_PASS"),
+                    ("convention", "CONVENTION_PASS"),
+                    ("security", "SECURITY_PASS"),
+                    ("perf", "PERF_PASS"),
+                    ("regression", "REGRESSION_PASS"),
+                )
+            },
+            "checks": [],
+            "findings": [],
+        }
+        verdict_file = vstate / "verdict-0123456789ab.json"
+        verdict_file.write_text(json.dumps(record_v), encoding="utf-8")
+        proc_v_ok = subprocess.run(
+            [sys.executable, str(cli_file), "verify", "--repo", str(verify_repo)],
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        ok_verify_pass = proc_v_ok.returncode == 0 and "[PASS]" in proc_v_ok.stdout
+        target_abs.write_text("class A changed\n", encoding="utf-8")
+        proc_v_fail = subprocess.run(
+            [sys.executable, str(cli_file), "verify", "--repo", str(verify_repo)],
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        ok_verify_fail = proc_v_fail.returncode == 1 and "[FAIL]" in proc_v_fail.stdout
+        ok_verify = ok_verify_pass and ok_verify_fail
+        print(
+            f"harness_cli verify round trip: {'OK' if ok_verify else 'FAIL ' + proc_v_ok.stdout + proc_v_fail.stdout}"
+        )
+        failed += int(not ok_verify)
+    finally:
+        shutil.rmtree(verify_repo, ignore_errors=True)
 else:
     print("harness_cli dispatch & subcommands: OK (skipped — installed checkout)")
 

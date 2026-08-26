@@ -24,8 +24,10 @@ Or without installing:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -414,6 +416,133 @@ def cmd_explain(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    kit = ensure_kit(args.kit)
+    repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
+    if args.verdict:
+        verdict_path = Path(args.verdict).expanduser().resolve()
+    else:
+        candidates: list[Path] = []
+        for rel in (".agents/state/verdicts", "agents/state/verdicts"):
+            vdir = repo / rel
+            if vdir.is_dir():
+                candidates.extend(sorted(vdir.glob("verdict-*.json")))
+        if not candidates:
+            raise SystemExit(
+                "[ERROR] No verdict artifacts found under the repo state dirs. "
+                "Run `python .agents/scripts/review_package.py` and complete a "
+                "5-leaf review round first."
+            )
+        verdict_path = candidates[-1]
+    try:
+        record = json.loads(verdict_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"[ERROR] Cannot read verdict {verdict_path}: {exc}")
+    if not isinstance(record, dict) or record.get("schema_version") != 1:
+        raise SystemExit("[FAIL] verdict artifact missing or unsupported schema_version (expected 1).")
+    print(f"[*] Verifying {verdict_path.name} against {repo}")
+
+    problems: list[str] = []
+
+    if record.get("verdict") != "PASS":
+        problems.append(f"verdict is {record.get('verdict')!r}, expected PASS")
+
+    package = record.get("package") or {}
+    pkg_path = Path(str(package.get("path") or ""))
+    pkg_sha = str(package.get("sha256") or "")
+    if pkg_path.is_file() and pkg_sha:
+        digest = hashlib.sha256(pkg_path.read_bytes()).hexdigest()
+        if digest != pkg_sha:
+            problems.append(f"review package content changed since the round: {pkg_path.name}")
+    elif not pkg_path.is_file():
+        problems.append(f"review package file missing: {pkg_path}")
+
+    files = record.get("files") or {}
+    missing: list[str] = []
+    changed: list[str] = []
+    for rel, want in sorted(files.items()):
+        fpath = repo / str(rel).replace("/", os.sep)
+        if not fpath.is_file():
+            missing.append(str(rel))
+            continue
+        digest = hashlib.sha256(fpath.read_bytes()).hexdigest()
+        if digest != want:
+            changed.append(str(rel))
+    for rel in missing[:10]:
+        problems.append(f"file from the reviewed diff is missing in this checkout: {rel}")
+    if len(missing) > 10:
+        problems.append(f"... and {len(missing) - 10} more missing files")
+    for rel in changed[:10]:
+        problems.append(f"file changed since the verified round: {rel}")
+    if len(changed) > 10:
+        problems.append(f"... and {len(changed) - 10} more changed files")
+
+    leaves = record.get("leaves") or {}
+    if record.get("verdict") == "PASS" and len(leaves) != 5:
+        problems.append(f"{len(leaves)}/5 leaf verdicts recorded")
+
+    stale = False
+    git_sha = str(record.get("git_sha") or "")
+    if git_sha:
+        proc_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        head = (proc_head.stdout or "").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", head) and head != git_sha:
+            stale = True
+            print(f"[!] STALE: verdict generated at {git_sha[:12]} but HEAD is {head[:12]}.")
+
+    if args.rerun_checks:
+        engine_scripts = repo / ".agents" / "scripts"
+        if not engine_scripts.is_dir():
+            print("[i] --rerun-checks skipped: this checkout has no installed .agents engine.")
+        else:
+            checks_ok = True
+            for script in ("fast_kt_lint.py", "check_strings.py"):
+                target = engine_scripts / script
+                if not target.is_file():
+                    continue
+                proc_chk = subprocess.run(
+                    [sys.executable, str(target)],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                if proc_chk.returncode != 0:
+                    checks_ok = False
+                    tail = "\n".join((proc_chk.stdout or "").strip().splitlines()[-8:])
+                    print(f"[FAIL] {script}:")
+                    print(tail)
+            if not checks_ok:
+                problems.append("re-run checks failed")
+
+    if problems:
+        print(f"\n[FAIL] verify failed with {len(problems)} problem(s):")
+        for item in problems:
+            print(f"  - {item}")
+        return 1
+    if stale:
+        print(
+            "\n[STALE] Package and file hashes match the recorded verdict, but it was "
+            "generated at a different commit than the current HEAD."
+        )
+        return 2
+    print(
+        "\n[PASS] Verdict artifact verified: package hash, changed-file hashes, and "
+        "5 evidenced leaves all match this checkout."
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="android-harness",
@@ -460,6 +589,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--last", type=int, default=20, metavar="N", help="How many records to show.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
     sp.set_defaults(func=cmd_explain)
+
+    sp = sub.add_parser(
+        "verify",
+        help="Verify a review verdict.json artifact against actual repo state.",
+    )
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument(
+        "--verdict",
+        help="Path to a verdict-*.json file (default: newest under the repo state dir).",
+    )
+    sp.add_argument(
+        "--rerun-checks",
+        action="store_true",
+        help="Additionally re-run fast_kt_lint.py and check_strings.py (requires an installed .agents engine).",
+    )
+    sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
+    sp.set_defaults(func=cmd_verify)
 
     return p
 
