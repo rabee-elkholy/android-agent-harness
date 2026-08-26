@@ -1,6 +1,7 @@
 """Write a working-tree review package (staged + unstaged + untracked vs HEAD). Inspection only. No git mutations."""
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -11,7 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
-from _hook_state import record_review_ledger, tree_code_fingerprint  # noqa: E402
+from _hook_state import (  # noqa: E402
+    file_sha256,
+    record_review_ledger,
+    tree_code_fingerprint,
+    write_verdict_record,
+)
+from _repo_files import changed_paths  # noqa: E402
 
 enable_line_buffered_stdio()
 
@@ -44,9 +51,8 @@ def git_head() -> str:
     return out if _GIT_SHA_RE.fullmatch(out) else ""
 
 
-def build_header(task_id: str) -> list[str]:
+def build_header(task_id: str, fingerprint: str) -> list[str]:
     sha = git_head()
-    fingerprint = tree_code_fingerprint() or ""
     return [
         HEADER_BEGIN,
         f"TASK_ID={task_id}",
@@ -54,6 +60,23 @@ def build_header(task_id: str) -> list[str]:
         f"TREE_FINGERPRINT={fingerprint}",
         f"GENERATED_AT={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
     ]
+
+
+def build_files_map(max_files: int = 200) -> dict[str, str]:
+    """SHA-256 per changed working-tree file (rel path -> hex), capped."""
+    files_map: dict[str, str] = {}
+    for path in changed_paths():
+        if len(files_map) >= max_files:
+            break
+        try:
+            rel = path.relative_to(REPO).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        try:
+            files_map[rel] = file_sha256(path)
+        except Exception:
+            continue
+    return files_map
 
 
 def main(argv=None) -> int:
@@ -76,8 +99,11 @@ def main(argv=None) -> int:
         diff_cmd.extend(["--", *paths])
 
     task_id = (args.task or os.environ.get("HARNESS_TASK_ID") or "").strip()
+    fingerprint = tree_code_fingerprint() or ""
+    files_map = build_files_map()
+    files_json = json.dumps(files_map, ensure_ascii=False, separators=(",", ":"))
     chunks = [
-        "\n".join([*build_header(task_id), PACKAGE_SHA_PENDING]) + "\n",
+        "\n".join([*build_header(task_id, fingerprint), f"FILES_SHA256={files_json}", PACKAGE_SHA_PENDING]) + "\n",
         f"# Harness review package (unstaged vs HEAD)\n# repo: {REPO}\n",
         "## git status\n",
         git(*status_cmd),
@@ -122,8 +148,24 @@ def main(argv=None) -> int:
 
     git_sha = git_head()
     record_review_ledger(out, git_sha=git_sha)
+    pkg12 = pre_digest[:12]
+    pending = {
+        "schema_version": 1,
+        "task_id": task_id,
+        "git_sha": git_sha,
+        "package": {"path": str(out.resolve()), "sha256": pre_digest, "sha256_12": pkg12},
+        "tree_fingerprint": fingerprint or None,
+        "files": files_map,
+        "dispatched_at": None,
+        "completed_at": None,
+        "verdict": "PENDING",
+        "leaves": {},
+        "checks": [],
+        "findings": [],
+    }
+    write_verdict_record(pkg12, pending)
     print(f"HARNESS_REVIEW_PACKAGE={out}")
-    print(f"HARNESS_PACKAGE_SHA256_12={pre_digest[:12]}")
+    print(f"HARNESS_PACKAGE_SHA256_12={pkg12}")
     return 0
 
 

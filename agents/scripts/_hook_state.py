@@ -508,3 +508,36 @@ def review_advisory() -> str:
     return ledger_verdict(tree_code_fingerprint(), led.get("tree_fingerprint"))
 
 
+def _verdicts_dir() -> Path:
+    return state_path().parent / "verdicts"
+
+
+def write_verdict_record(pkg12: str, record: dict) -> bool:
+    """Best-effort write of the machine-readable review verdict artifact.
+
+    Never raises: evidence recording must not alter any safety decision.
+    Returns True when the record was written.
+    """
+    try:
+        target = _verdicts_dir() / f"verdict-{pkg12}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(record, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, target)
+        return True
+    except Exception:
+        return False
+
+
+def read_verdict_record(pkg12: str) -> dict | None:
+    target = _verdicts_dir() / f"verdict-{pkg12}.json"
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+

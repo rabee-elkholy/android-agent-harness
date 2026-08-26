@@ -468,6 +468,28 @@ ok_sha12 = len(pkg_sha12_stdout) == 12 and recorded.startswith(pkg_sha12_stdout)
 print(f"review_package prints sha256_12: {'OK' if ok_sha12 else 'FAIL ' + repr(pkg_sha12_stdout)}")
 failed += int(not ok_sha12)
 
+# v0.10.x: machine-readable verdict artifact (PENDING) + per-file hashes in the header
+if pkg_path is not None:
+    from _hook_state import read_verdict_record  # noqa: E402
+
+    pending_rec = read_verdict_record(recorded[:12])
+    ok_pending = (
+        pending_rec is not None
+        and pending_rec.get("schema_version") == 1
+        and pending_rec.get("verdict") == "PENDING"
+        and pending_rec.get("package", {}).get("sha256") == recorded
+        and pending_rec.get("package", {}).get("sha256_12") == recorded[:12]
+        and isinstance(pending_rec.get("files"), dict)
+        and b"FILES_SHA256=" in body
+    )
+else:
+    ok_pending = False
+print(
+    f"review_package verdict PENDING artifact: "
+    f"{'OK' if ok_pending else 'FAIL ' + json.dumps(pending_rec) if pkg_path is not None else 'FAIL (no package)'}"
+)
+failed += int(not ok_pending)
+
 ledger_path = STATE.parent / "review_ledger.json"
 try:
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
