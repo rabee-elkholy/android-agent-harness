@@ -1,11 +1,12 @@
 # Rollback prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/rollback-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-
+> **Kit version**: `v0.10.8` — **SHA-256**: `ca58a61185a2701a74a35c51faeea97ee3c3bda4ac6ed720059ff5617153a3b8` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** to the agent if you want the previous system restored.
 
 ---
+Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
 You are rolling back the Android AI harness install on THIS checkout. The developer may use **any** coding agent (Claude Code, Codex, Antigravity, Cursor, Copilot, Qwen, Windsurf, Cline, Kilo, Goose, …) on **macOS**, **Windows**, or **Linux**.
 

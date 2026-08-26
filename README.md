@@ -133,7 +133,7 @@ android-harness explain --last 20
 
 ```markdown
 Read and execute the Android Harness Kit installer:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/install-prompt.md
 ```
 
 4. Follow the interactive questionnaire to configure your app. Once verified with `Total test failures: 0`, the harness checks have passed and the configured protections are installed.
@@ -153,7 +153,7 @@ Beyond initial installation, Android Harness Kit provides 3 dedicated on-demand 
 - **How to use**: Copy and paste this prompt into a new chat:
 ```markdown
 Read and execute the Android Harness Kit updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/update-prompt.md
 ```
 
 ### 2. Diagnostic Doctor Prompt (12-Dimension Health Check)
@@ -163,7 +163,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/up
 - **How to use**: Copy and paste this prompt into a new chat:
 ```markdown
 Read and execute the Android Harness Kit diagnostic doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/diagnostic-prompt.md
 ```
 
 ### 3. Rollback Prompt (Instant Backup Restoration)
@@ -173,7 +173,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/di
 - **How to use**: Copy and paste this prompt into a new chat:
 ```markdown
 Read and execute the Android Harness Kit rollback:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/rollback-prompt.md
 ```
 
 ---
@@ -520,9 +520,9 @@ Choose the prompt for your current repository lifecycle needs:
 
 | Operation | When to Use | One-Click Copy-Paste AI Prompt URL |
 | :--- | :--- | :--- |
-| **Upgrade** | Upgrade installed harness to latest release while preserving custom domain rules | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md` |
-| **System Doctor** | Comprehensive 12-dimension health and safety audit at any time | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/diagnostic-prompt.md` |
-| **Rollback** | Restore previous backup state cleanly if needed | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/rollback-prompt.md` |
+| **Upgrade** | Upgrade installed harness to latest release while preserving custom domain rules | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/update-prompt.md` |
+| **System Doctor** | Comprehensive 12-dimension health and safety audit at any time | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/diagnostic-prompt.md` |
+| **Rollback** | Restore previous backup state cleanly if needed | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/rollback-prompt.md` |
 
 ---
 

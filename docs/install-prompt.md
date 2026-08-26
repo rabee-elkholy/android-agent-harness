@@ -1,9 +1,10 @@
 # Install prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/install-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-
+> **Kit version**: `v0.10.8` — **SHA-256**: `f6a43344a915e9c5389b9970e9ddb6b3484eb007845fe88fa5bf47165fd91321` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
+Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
 You are installing the portable **Android AI harness** into **this** checkout. This folder is the Android product. It is not `android-harness-kit`.
 

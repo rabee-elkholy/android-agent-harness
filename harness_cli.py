@@ -36,12 +36,14 @@ from pathlib import Path
 KIT_REPO_URL = "https://github.com/rabee-elkholy/android-harness-kit.git"
 RELEASES_API_URL = "https://api.github.com/repos/rabee-elkholy/android-harness-kit/releases/latest"
 KIT_DIR = Path.home() / ".android-harness" / "kit"
-INSTALL_PROMPT_URL = (
-    "https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/install-prompt.md"
-)
-UPDATE_PROMPT_URL = (
-    "https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/main/docs/update-prompt.md"
-)
+
+
+def _prompt_url(version: str, doc: str) -> str:
+    """Immutable release-tag URL for a one-click lifecycle prompt doc."""
+    return (
+        "https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/"
+        f"v{str(version).strip().lstrip('v')}/docs/{doc}"
+    )
 
 
 def _manual_remediation(version: str) -> str:
@@ -288,7 +290,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
     print()
     print("[NEXT] Answers recorded. Finish the structural port with your AI agent:")
-    print(f"       paste {INSTALL_PROMPT_URL}")
+    print(f"       paste {_prompt_url(version, 'install-prompt.md')}")
     print("       in a NEW strong-model chat opened at the Android project root.")
     print(f"[VERIFY] afterwards: android-harness doctor --repo \"{repo}\"")
     return 0
@@ -318,7 +320,7 @@ def cmd_update(args: argparse.Namespace) -> int:
     new_version = _read_version_file(kit)
     print(f"[i] Local kit engine now at: v{new_version}")
     print("[NEXT] Port the new engine into your app checkout:")
-    print(f"       paste {UPDATE_PROMPT_URL}")
+    print(f"       paste {_prompt_url(new_version, 'update-prompt.md')}")
     print("       in a NEW strong-model chat opened at the Android project root.")
     return 0
 
