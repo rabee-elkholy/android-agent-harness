@@ -29,12 +29,17 @@
 - [x] Benchmark task list, metrics collector, and results template (`docs/benchmark/`)
 - [x] Demo-media placeholder section with recording shot list (`docs/media/`)
 
+## Phase 5 — Modular Architecture & Enterprise Governance
+- [x] Monolith splits: `setup_wizard.py` modularized into `agents/scripts/wizard/` (discovery, i18n, questions)
+- [x] Monolith splits: `harness_doctor.py` modularized into `agents/scripts/doctor/` (models, engine)
+- [x] Monolith splits: `zoho_sprints/server.py` modularized into `_client.py`, `_dns.py`, and `_formatter.py`
+- [x] Reviewer conflict adjudication model & ADR-006 (`docs/adr/006-reviewer-conflict-adjudication.md`)
+- [x] Structured findings schema & severity classification (`HARD_BLOCKER` vs `SOFT_FINDING`) in `_hook_state.py` and `pre_tool_safety.py`
+
 ## Future
 
-- Split monolith modules (`_hook_selftest.py`, `setup_wizard.py`, `harness_doctor.py`, `agents/mcp/zoho_sprints/server.py`) — TODO markers in place at each split point
-- Formal conflict-resolution workflow for reviewer disagreements (adjudication rules, escalation criteria)
 - Signed release artifacts (Sigstore/cosign) for the kit distribution
-- Per-leaf structured findings (JSON) in reviewer replies instead of transcript parsing
 - Native hook bridges for Windsurf / Cursor / Codex when their hook protocols ship
 - Python 3.14 CI coverage extension
 - Opt-in telemetry to automate benchmark collection
+

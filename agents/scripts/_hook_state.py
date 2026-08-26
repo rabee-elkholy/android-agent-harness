@@ -541,3 +541,67 @@ def read_verdict_record(pkg12: str) -> dict | None:
         return None
 
 
+SEVERITY_HARD_BLOCKER = "HARD_BLOCKER"
+SEVERITY_SOFT_FINDING = "SOFT_FINDING"
+
+SEVERITY_LEVELS = {
+    SEVERITY_HARD_BLOCKER,
+    SEVERITY_SOFT_FINDING,
+}
+
+_FINDING_JSON_RE = re.compile(r"```json\s*(\{[\s\S]*?\})\s*```")
+_SEVERITY_BLOCKER_RE = re.compile(r"(?i)\b(?:BLOCKER|HARD_BLOCKER|SECURITY_FAIL|CRITICAL)\b")
+
+
+def parse_structured_finding(text: str) -> dict | None:
+    """Extract structured finding from JSON codeblock or text snippet."""
+    if not text:
+        return None
+    for match in _FINDING_JSON_RE.finditer(text):
+        try:
+            data = json.loads(match.group(1))
+            if isinstance(data, dict) and "severity" in data:
+                sev = str(data.get("severity", "")).upper()
+                data["severity"] = (
+                    SEVERITY_HARD_BLOCKER
+                    if "BLOCK" in sev or "CRIT" in sev
+                    else SEVERITY_SOFT_FINDING
+                )
+                return data
+        except Exception:
+            continue
+    is_blocker = bool(_SEVERITY_BLOCKER_RE.search(text))
+    return {
+        "severity": SEVERITY_HARD_BLOCKER if is_blocker else SEVERITY_SOFT_FINDING,
+        "raw": text[:1000],
+    }
+
+
+def adjudicate_review_findings(findings: list[str | dict]) -> dict:
+    """Adjudicate findings list into severity classes and determine blocking status.
+
+    Returns dict with keys:
+      - hard_blockers: list[dict]
+      - soft_findings: list[dict]
+      - has_hard_blockers: bool
+      - can_override: bool (True only if soft findings exist but zero hard blockers)
+    """
+    hard_blockers = []
+    soft_findings = []
+    for f in findings:
+        parsed = f if isinstance(f, dict) else parse_structured_finding(str(f))
+        if not parsed:
+            continue
+        if parsed.get("severity") == SEVERITY_HARD_BLOCKER:
+            hard_blockers.append(parsed)
+        else:
+            soft_findings.append(parsed)
+    return {
+        "hard_blockers": hard_blockers,
+        "soft_findings": soft_findings,
+        "has_hard_blockers": len(hard_blockers) > 0,
+        "can_override": len(hard_blockers) == 0 and len(soft_findings) > 0,
+    }
+
+
+

@@ -1122,6 +1122,39 @@ print(
 )
 failed += int(not ok_good_verdict)
 
+from _hook_state import (  # noqa: E402
+    SEVERITY_HARD_BLOCKER,
+    SEVERITY_SOFT_FINDING,
+    adjudicate_review_findings,
+    parse_structured_finding,
+)
+
+sample_blocker = "Security Reviewer: HARD_BLOCKER at MainActivity.kt:42 plaintext secret."
+sample_soft = "Convention Reviewer: SOFT_FINDING at MainActivity.kt:10 missing trailing comma."
+sample_json_blocker = '```json\n{"severity": "BLOCKER", "message": "SQL Injection"}\n```'
+
+parsed_b = parse_structured_finding(sample_blocker)
+parsed_s = parse_structured_finding(sample_soft)
+parsed_j = parse_structured_finding(sample_json_blocker)
+
+adj_conflict = adjudicate_review_findings([sample_blocker, sample_soft])
+adj_soft_only = adjudicate_review_findings([sample_soft])
+
+ok_adjudication = (
+    parsed_b is not None
+    and parsed_b.get("severity") == SEVERITY_HARD_BLOCKER
+    and parsed_s is not None
+    and parsed_s.get("severity") == SEVERITY_SOFT_FINDING
+    and parsed_j is not None
+    and parsed_j.get("severity") == SEVERITY_HARD_BLOCKER
+    and adj_conflict["has_hard_blockers"] is True
+    and adj_conflict["can_override"] is False
+    and adj_soft_only["has_hard_blockers"] is False
+    and adj_soft_only["can_override"] is True
+)
+print(f"adr006_reviewer_conflict_adjudication: {'OK' if ok_adjudication else 'FAIL'}")
+failed += int(not ok_adjudication)
+
 # Legacy mode preserves today's token-only behavior.
 legacy_res = _evidence_conv("c-ev-legacy", token_entries, "legacy")
 ok_legacy = legacy_res["decision"] == "allow"

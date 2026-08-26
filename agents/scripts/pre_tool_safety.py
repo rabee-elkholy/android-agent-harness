@@ -15,6 +15,7 @@ from _hook_state import (  # noqa: E402
     MAX_TEST_REVIEWS,
     MAX_UI_REVIEWS,
     active_package_hash,
+    adjudicate_review_findings,
     bump_invoke,
     canonical_subagent_name,
     clear_pending_reviews,
@@ -461,6 +462,7 @@ def _record_verdict(
                 findings.append(chunk[:2000])
         record["leaves"] = leaves
         record["findings"] = findings[:50]
+        record["adjudication"] = adjudicate_review_findings(findings)
         write_verdict_record(active_pkg12, record)
     except Exception:
         pass
