@@ -6,6 +6,33 @@ files: `agents/scripts/pm_policy.py` (policy), `agents/scripts/pm_github.py`
 (GitHub adapter), `agents/pm/mcp_registration.jira.md` and
 `agents/pm/mcp_registration.linear.md` (upstream MCP registration).
 
+## Overview
+
+Zoho Sprints remains the flagship, built-in integration:
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer / AI Agent
+    participant MCP as Zoho Sprints MCP Server
+    participant Zoho as Zoho Sprints API
+    participant QA as QA Testing Team
+
+    Dev->>MCP: zoho_get_task_details(task_id)
+    MCP->>Zoho: Fetch Bug Description & Attachments
+    Zoho-->>Dev: Ticket Context, Steps to Reproduce
+    Note over Dev: Code Implementation & 5-Leaf Review Gate
+    Dev->>MCP: zoho_update_task_status("Ready To ReTest")
+    Dev->>MCP: zoho_add_comment(QA-Centric Handoff + Commit Hash + Impact Area)
+    MCP-->>Zoho: Status Updated & Commit Traceability Logged
+    Zoho-->>QA: Notification with Exact Testing Steps & Blast Radius
+```
+
+The built-in Zoho implementation provides:
+- **Bi-Directional Sync**: Reads tasks, subtasks, bug reports, and attachments directly.
+- **Hierarchical Items**: Creates hierarchical tasks and subtasks.
+- **QA-First Handoff Standards**: Eliminates internal code dumps and XML/Kotlin jargon in favor of functional explanations, mandatory `Commit: <hash>` traceability, explicit **Impact Area (Blast Radius)**, and structured test cases.
+- **Dual-Language Mapping**: Dynamic translation matrix supporting English titles with Arabic descriptions/comments (`en_titles_ar_comments`), full English (`all_en`), or full Arabic (`all_ar`) per `_product.py`.
+
 ## Provider selection
 
 Set during setup (wizard question I.20) or by editing `PM_PROVIDER` in

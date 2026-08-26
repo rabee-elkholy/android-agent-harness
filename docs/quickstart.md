@@ -120,4 +120,51 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs
 
 ---
 
+## Standalone CLI Reference
+
+Install globally via `pipx` directly from this repository (PyPI publication pending):
+
+```bash
+pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
+```
+
+No install needed? Run it in place from any kit clone:
+
+```bash
+python harness_cli.py --help
+```
+
+| Command | Purpose |
+| :--- | :--- |
+| `android-harness init [--repo PATH] [--lang en\|ar]` | Run the setup wizard against an Android checkout; provisions the kit pinned to an exact release tag. |
+| `android-harness update [--repo PATH] [--force]` | Refresh the local kit engine to the latest release tag and print upgrade steps. |
+| `android-harness explain [--last N] [--repo PATH]` | Print recent safety-hook decisions from the append-only audit log of the checkout whose hooks ran. |
+| `android-harness verify [--repo PATH] [--verdict PATH] [--rerun-checks]` | Validate a review `verdict.json` artifact against actual repo state (package hash, per-file hashes, evidenced leaves). Exit codes: 0 PASS, 1 FAIL, 2 STALE. |
+| `android-harness doctor [--repo PATH] [--json] [--device]` | Audit 12-dimension health at any time. |
+| `android-harness preflight [--repo PATH]` | Rapid preflight checks (strings + Room + fast lint). |
+| `android-harness selftest` | Run the kit hook selftest suite in the kit checkout. |
+| `android-harness version` | Print the active kit engine version. |
+
+---
+
+## Installation & Setup Modes
+
+### Mode A: Existing Android / KMP App
+Run the installer in an established codebase. The setup wizard inspects your `libs.versions.toml`, Gradle dependencies, and existing architecture (MVI/MVVM, Compose, Room, Koin/Hilt) and generates custom domain reference skills tailored to your app.
+
+### Mode B: Greenfield / Blank Project
+For brand-new or blank projects, the wizard guides you through an **8-question Architecture Foundation Questionnaire**:
+1. **Target Platform**: Android Native vs Kotlin Multiplatform (KMP).
+2. **Architecture**: MVI (Unidirectional) vs MVVM.
+3. **Dependency Injection**: Koin vs Hilt vs Manual.
+4. **Navigation**: Voyager vs AndroidX Navigation Compose.
+5. **UI Framework**: Jetpack Compose vs XML Views.
+6. **Local Database**: Room vs SQLDelight vs Realm.
+7. **Networking**: Ktor Client vs Retrofit + OkHttp.
+8. **Localization**: Bilingual Arabic (RTL) + English (LTR) vs Single Locale.
+
+Every wizard question and default is documented in the [Setup Wizard Reference](setup-wizard.md).
+
+---
+
 Your Android repository is now governed by the 5-Leaf Review Gate.

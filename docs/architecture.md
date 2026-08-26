@@ -54,6 +54,54 @@ graph TB
 
 ---
 
+## Delivery Workflow (Seven Deterministic Stages)
+
+The harness enforces a deterministic, 7-stage quality delivery lifecycle:
+
+```mermaid
+flowchart TD
+    Start(["1. Task / Feature Request"]) --> Plan["2. Planning Guard: implementation_plan.md"]
+    Plan --> Approval{"Developer Approval"}
+    Approval -- Revisions --> Plan
+    Approval -- Approved --> Code["3. Code Implementation & Edits"]
+
+    Code --> ReviewGate["4. Five-Leaf Parallel Review Gate"]
+    subgraph ReviewGate ["Parallel Reviewer Subagents"]
+        R1["Bug & Null-Safety Reviewer"]
+        R2["Architecture & Convention"]
+        R3["Security & Permissions"]
+        R4["Perf & ANR Guardian"]
+        R5["Regression Blast Radius"]
+    end
+
+    ReviewGate --> Verdict{"All 5 Leaves PASS?"}
+    Verdict -- Findings Found --> Code
+    Verdict -- All 5 PASS --> Preflight["5. Preflight Sanity Verification"]
+
+    subgraph Preflight ["Automated Preflight Suite"]
+        P1["Fast Kotlin Lint"]
+        P2["Room DB Migrations"]
+        P3["Bilingual String Parity"]
+    end
+
+    Preflight --> TestCheck{"Unit Tests Enabled?"}
+    TestCheck -- Enabled --> TestQualityReview["Test Quality Specialist: test-quality-reviewer-agent"]
+    TestQualityReview --> UnitTests["Unit Tests: testDebugUnitTest"]
+    UnitTests -- Tests Fail --> Code
+    UnitTests -- Tests PASS --> Gradle["6. Live Gradle Runner: assembleDebug"]
+    TestCheck -- Skipped --> Gradle
+
+    Gradle --> Device["7. Physical Device Runner: run_device.py"]
+    Device --> ManualSignoff["Manual 4-Phase Verification"]
+    ManualSignoff -- Bugs Found --> Code
+    ManualSignoff -- All PASS --> ZohoCheck{"Zoho Sprints Connected?"}
+    ZohoCheck -- Enabled --> Zoho["Zoho Sprints: Status Update & Commit Traceability"]
+    ZohoCheck -- Skipped --> Finish(["Delivery Complete & Safe Manual Commit"])
+    Zoho --> Finish
+```
+
+---
+
 ## Core Pillars
 
 ### 1. Shift-Left Proactive Quality Invariants
@@ -67,13 +115,35 @@ The Harness enforces proactive quality standards before any code is written, ens
 ---
 
 ### 2. The Five-Leaf Review Gate
-Unlike traditional assistants that output unreviewed code, the Harness intercepts tool execution until **5 specialized reviewer subagents** evaluate the review package in parallel:
+Before any Gradle build or device installation can proceed, the AI assistant must dispatch **5 specialized reviewer subagents** in parallel (exactly one `invoke_subagent`). Every subagent inspects the exact package diff and outputs a structured pass token plus a mandatory evidence footer (`EVIDENCE pkg=<sha256_12> cites=<n>` matching the dispatched package hash — forged or missing footers keep the barrier up):
 
-1. **`bug-reviewer-agent`**: Detects memory leaks, unchecked `NullPointerExceptions`, coroutine race conditions, uncaught network/I/O timeouts, and missing error state propagation.
-2. **`convention-reviewer-agent`**: Enforces strict MVI / Clean Architecture, single source of truth StateFlows, accessibility standards (`contentDescription`, 48dp touch targets), and KMP commonMain cleanliness.
-3. **`security-reviewer-agent`**: Inspects exported components, permission declarations, SQL injection, and secret leakage.
-4. **`perf-anr-guardian-agent`**: Prevents main-thread blocking operations, unoptimized recompositions, unreleased WakeLocks, sensor listener leaks, and Android 14 foreground service violations.
-5. **`regression-impact-reviewer-agent`**: Maps the exact blast radius of changes to ensure dependent screens and ViewModels remain unbroken.
+```
+[BUG_PASS]         -- Verified by Bug & Network Resiliency Reviewer
+[CONVENTION_PASS]  -- Verified by Architecture, Accessibility & KMP Reviewer
+[SECURITY_PASS]    -- Verified by Security & Privacy Reviewer
+[PERF_PASS]        -- Verified by Performance, Battery & ANR Guardian
+[REGRESSION_PASS]  -- Verified by Regression Blast Radius Reviewer
+```
+
+1. **Bug & Network Resiliency Reviewer (`bug-reviewer-agent`)**
+   - **Focus**: Logical correctness, null safety, lifecycle, and network error recovery.
+   - **Catches**: Unhandled `NullPointerException` risks, uncaught coroutine cancellations, improper `StateFlow` collection without `repeatOnLifecycle`, uncaught `SocketTimeoutException`/`IOException` in API flows, missing error UI states, and infinite retry storms without exponential backoff.
+2. **Convention, Accessibility & KMP Reviewer (`convention-reviewer-agent`)**
+   - **Focus**: Structural cleanliness, MVI/Clean Architecture, accessibility compliance, and KMP code purity.
+   - **Catches**: Mutable state exposed outside ViewModels, missing `contentDescription` on Compose icons/images, clickable components with touch targets < 48dp, `android.*` framework imports leaking into KMP `commonMain`, and missing dual-locale `@Preview` annotations (en/ar).
+3. **Security & Privacy Reviewer (`security-reviewer-agent`)**
+   - **Focus**: Android component security, permission boundaries, and data storage.
+   - **Catches**: Exported Activities/Receivers without explicit intent filters or permissions, plaintext credentials/API keys, SQL injection in raw Room queries, and sensitive data printed to production Logcat.
+4. **Performance, Battery & ANR Guardian (`perf-anr-guardian-agent`)**
+   - **Focus**: UI fluidity (60/120 FPS), main thread responsiveness, sensor lifecycles, and battery footprint.
+   - **Catches**: Disk or network I/O executed on `Dispatchers.Main`, heavy allocations during Jetpack Compose recomposition phases, unreleased WakeLocks, active `SensorEventListener` (pedometer/accelerometer) leaks during background/pause, and Android 14+ foreground service type violations.
+5. **Regression Blast Radius Reviewer (`regression-impact-reviewer-agent`)**
+   - **Focus**: Cross-feature dependency graphs and change impact radius.
+   - **Catches**: Renamed ViewModel functions breaking secondary screens, altered data models breaking JSON serialization, modified navigation arguments breaking deep links, and shared database migrations.
+
+Every completed round is recorded as a machine-verifiable artifact
+(`state/verdicts/verdict-<pkg12>.json`) that `android-harness verify`
+re-checks against the working tree.
 
 ---
 
@@ -86,19 +156,86 @@ Specialists dispatched only when specific forensic, UI, or test quality tasks ar
   - Enforces `StandardTestDispatcher` injection over hardcoded `Dispatchers.IO` / `Dispatchers.Main`.
   - Verifies Turbine sequential assertions for reactive `StateFlow` and `SharedFlow` streams.
   - Audits in-memory Room database DAO tests and `MigrationTestHelper` assertions.
+  - **Reference**: [Test Quality Guidelines](../agents/skills/android-harness/references/test-quality-guidelines.md) and the `/test-quality-audit` workflow.
 
 ---
 
 ### 4. Safety Interceptors & Git Mutation Protection
-The harness intercepts destructive commands before they execute:
-- **`git commit` / `git push`**: Hard blocked from autonomous execution. Developers retain sole authority over repository history (unless explicitly authorized via `I.3`).
-- **`adb monkey` / `pm clear`**: Blocked to protect developer device state and prevent data wiping.
-- **Anti-Polling Guardrails**: Limits tool poll loops (`>2` polls) to prevent infinite agent spin and enforce event-driven reactive wakeups.
+The harness incorporates a Python-driven safety interception layer (`pre_tool_safety.py` + `policy_vocab.py`, registered via `hooks.json`) that monitors all AI tool invocations in real time.
+
+**Strict Git Mutation Protection** — AI models frequently attempt to cover mistakes by making unauthorized commits or force-pushing branches. The harness intercepts:
+- `git commit` / `git push` / `git reset --hard` and every other mutating verb.
+- PowerShell and bash subshell bypasses (`sh -c "git commit"`, `cmd.exe /c git commit`).
+- Executable paths (`git.exe commit`), chained segments (`git status && git push`), config-option wrapping (`git -c k=v commit`), and homoglyph/zero-width laundering.
+
+Developers retain sole authority over repository history.
+
+**Deterministic Staged Pre-Commit Quality Gate** — a standalone, stdlib-only Git hook (`.githooks/pre-commit`, installed by default; `--no-git-gate` opts out) running against staged files in <5 seconds:
+- Bilingual string parity and hardcoded UI string detection.
+- Fast Kotlin syntax and import lint.
+- Room database working-tree schema and migration invariant checks.
+- Blocks commits containing regressions without interfering with the developer's commit authority. Universal across all tools via Git.
+
+**Claude Code PreToolUse Safety Bridge** (`agents/scripts/cc_pre_tool_safety.py`, installed via `--cc-hooks`) — bridges Claude Code's native `PreToolUse` hook protocol in `.claude/settings.json` to the harness safety engine; denies forbidden Git mutations and unauthorized ADB actions with a deterministic `permissionDecision: "deny"`.
+
+**GitHub Copilot preToolUse Safety Bridge** (`agents/scripts/copilot_pre_tool_safety.py`, installed with `--copilot-hooks`) — registers the documented Copilot repository hook at `.github/hooks/android-harness-pre-tool-use.json`; accepts Copilot's camelCase and VS Code-compatible snake_case `preToolUse` payloads; reuses the same engine as Antigravity and Claude Code.
+
+**Device & Package-Manager Safety** — `adb monkey` and `pm clear` are blocked to protect developer device state and prevent data wiping (`cmd package clear|uninstall` variants included); device-bound adb verbs require an explicit `-d`/`-s <serial>` binding; emulator tooling is denied when the project is configured physical-only.
+
+**Anti-Polling Guardrails** — to prevent models from getting stuck in infinite polling loops (>2 calls to `manage_task` or `manage_subagents`), the hook enforces event-driven reactive wakeups and denies redundant poll requests.
+
+**Ephemeral State Machine** — `_hook_state.py` tracks the review lifecycle per conversation:
+- Packages are hashed to ensure reviewers inspect the exact active changes.
+- Automatically unlocks re-dispatching if missing subagent templates are defined (`re_dispatch_allowed`).
+- Clears review tokens when new code modifications are detected; pending rounds expire after a TTL (`HARNESS_BARRIER_TTL`, default 6h).
 
 ---
 
 ### 5. Live Gradle Streaming (`run_gradle_task.py`)
-AI assistants frequently get stuck or timeout when running long Gradle builds. `run_gradle_task.py` executes Gradle with a **10-second heartbeat monitor**, streaming build output and capturing structured diagnostics if compilation fails.
+Executing Gradle builds directly through AI tool interfaces often causes timeouts, silent freezes, or lost output. `run_gradle_task.py` provides:
+- **10-Second Live Heartbeat**: Continuously streams stdout/stderr to prevent assistant timeout.
+- **Review Staleness Advisory**: Deterministic warning when Kotlin/XML code changed after the last `review_package.py` generation (works in every tool, not just Antigravity).
+- **Intelligent Error Parser (`gradle_error_parser.py`)**: Filters thousands of lines of Gradle output to extract the exact compiler error, file path, and line number.
+- **Build Isolation**: Executes safely with project-specific daemon configurations.
+
+```bash
+python .agents/scripts/run_gradle_task.py :app:assembleDebug
+```
+
+### 5b. Physical Device Runner & Logcat Doctor
+
+The harness prioritizes **real-world physical hardware testing** over emulators:
+
+```bash
+python .agents/scripts/run_device.py install-start --package com.example.app --activity .MainActivity
+```
+
+- **Auto-Discovery**: Automatically identifies connected physical Android devices over ADB USB / Wi-Fi.
+- **Logcat Doctor (`logcat_doctor.py`)**: Captures real-time stack traces, uncaught exceptions, and ANR traces specifically filtered to your application ID.
+- **Screen Capture (`capture_screen.py`)**: Automatically captures UI screenshots for visual sign-off.
+
+### 5c. Preflight Verification Pipeline
+
+Before compiling the application with Gradle, `preflight_check.py` runs three rapid static verification checks in under 2 seconds:
+
+**Fast Kotlin Lint (`fast_kt_lint.py`)**
+- Verifies package declarations, import hygiene, and Kotlin syntax.
+- Enforces Jetpack Compose `@Preview` tags for both LTR (English) and RTL (Arabic) locales.
+- Whitelists standard Android SDK symbols (`Build.VERSION.SDK_INT`, `UUID`, `@androidx.annotation.*`, `@file:OptIn`).
+- Ignores `abstract class` definitions to prevent false `@AndroidEntryPoint` annotations that crash the Hilt compiler.
+- Dynamically scans lookback annotations for Compose `@Immutable` and `@Stable` state data classes.
+
+**Room Database Migration Guard (`room_guard.py`)**
+- Scans `@Database` and `@Entity` declarations for schema modifications.
+- Recursively discovers nested `@Embedded` entity data classes to prevent undetected SQLite schema mismatches.
+- Fully supports modern Room 2.4+ `AutoMigration(from = X, to = Y)` annotations.
+- Implements BFS graph traversal to validate transitive multi-step migration paths (e.g. 1 -> 2 -> 3).
+
+**Bilingual String Parity Check (`check_strings.py`)**
+- Analyzes `res/values/strings.xml` and `res/values-ar/strings.xml` for complete 1-to-1 key parity.
+- Matches multiline Jetpack Compose `Text(...)` parameters and arbitrary argument positions.
+- Strips `stringResource(...)` calls before regex matching to prevent string concatenation bypasses.
+- Supports Kotlin Multiplatform `composeResources` fallback paths.
 
 ---
 
@@ -139,6 +276,14 @@ Provides deterministic, end-to-end verification of repository health across 12 o
 - Preflight verification pipeline (string parity & hardcoded UI text, Room migration graph, fast Kotlin lint).
 - Zoho Sprints MCP security boundaries (zero token leakage in repository).
 - Connected devices & ADB hardware diagnostics (querying physical devices, emulators, and Android API levels).
+
+```bash
+# Run full automated diagnostic (automatically executed post-setup and post-update)
+python .agents/scripts/harness_doctor.py
+
+# Run with hardware ADB check and JSON output
+python .agents/scripts/harness_doctor.py --device --json
+```
 
 ---
 

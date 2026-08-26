@@ -43,6 +43,37 @@ Do **not** overwrite `.aider.conf.yml`, Continue user config, unrelated MCP conf
 
 Aider, Zed, Amp, Devin, Factory, Jules, Warp, and OpenCode pick up `AGENTS.md` with no extra file. Do not add `.cursorrules` (Cursor legacy; `.mdc` is the current file). Do not add `CONVENTIONS.md` (Aider can already read `AGENTS.md`; that filename often belongs to humans).
 
+## Integration features by assistant
+
+| Assistant / IDE | Generated Adapter | Integration Features | Native Commands |
+| :--- | :--- | :--- | :--- |
+| **Google Antigravity** | `agents/rules/`, `agents/hooks.json` | Subagent dispatch, hook blockers, ephemeral reminders | Workflow playbooks (`.agents/workflows/`) |
+| **Cursor** | `.cursor/rules/android-harness.mdc` | Architecture constraints, review protocol, terminal execution gates | Rule-driven workflows |
+| **Claude Code** | `CLAUDE.md`, `.claude/settings.json` | PreToolUse safety bridge, subagent prompts | Native Slash Commands (`.claude/commands/*.md`) |
+| **GitHub Copilot** | `.github/copilot-instructions.md`, optional `.github/hooks/*.json` | Workspace instructions, domain conventions, native preToolUse safety bridge | Prompt Files (`.github/prompts/*.prompt.md`) |
+| **OpenAI Codex CLI** | `AGENTS.md` | Universal agent instructions, execution limits | Prompt Commands (`.codex/prompts/*.md`) |
+| **Windsurf** | `.windsurfrules` | Cascade AI rules and architectural constraints | Cascade workflows |
+| **Cline & Roo Code** | `.clinerules`, `.roo/rules/android-harness.md` | System prompts, mode definitions, tool permissions | Mode instructions |
+| **Amazon Q / Continue / Junie / Kilo / Goose** | Native Adapter Files | Full rule compliance across all supported environments | Rule integration |
+
+## 11 Standardized Slash Command Packs
+
+When installed with Claude Code, GitHub Copilot, or Codex, the harness automatically generates 11 command shortcuts:
+
+| Command / Prompt | Purpose |
+| :--- | :--- |
+| `/deliver [request]` | Full 7-stage delivery lifecycle: plan artifact, implement, 5-leaf review gate, preflight, assemble, device testing. |
+| `/debug [symptoms]` | Hypothesis-driven debugging with root cause isolation, 5-leaf review, and physical device validation. |
+| `/new-feature [spec]` | Implement new feature with interactive planning artifact and five-leaf delivery gate. |
+| `/preflight` | Rapid preflight sanity suite: string parity, Room migrations, and fast Kotlin lint. |
+| `/check-strings` | Bilingual English/Arabic string parity and hardcoded UI string audit. |
+| `/perf-audit` | Static heuristics and ANR audit for main-thread I/O and Compose recompositions. |
+| `/test-quality-audit`| Audit unit/UI test files (`*Test.kt`) for assertion depth, TestDispatcher, and mocking integrity. |
+| `/crash-triage [issue]`| Pull live physical device Logcat fatal exceptions and dispatch to `qa-diagnostics-agent`. |
+| `/commit-msg` | Draft Conventional Commit message with Blast Radius for manual developer commit in Android Studio. |
+| `/zoho-sprints [item]` | Zoho Sprints task synchronization, subtask creation, and QA handoff comments. |
+| `/doctor` | Run automated 12-dimension health inspection (`harness_doctor.py --device`). |
+
 ---
 
 ## Recommended Models by Assistant (Setup vs Daily)
