@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Honest Tool Badge**: The "14 Supported" badge now reads "14 IDs | 11 Templates" and links to the enforcement mapping.
 - **Tool -> Template -> Enforcement Mapping (`docs/tool-support.md`)**: New explicit table mapping each of the 14 wizard tool ids to its adapter template file(s), the files written at the app root, and its enforcement tier (hook-enforced / rule-driven / prompt-only), including the eight AGENTS.md-only agents.
 - **macOS CI Coverage (`.github/workflows/ci.yml`, `.github/workflows/release-check.yml`)**: `macos-latest` added to the CI test matrix and the release-validation job now runs as a three-OS matrix, matching the engine's cross-platform shell handling.
+- **Roadmap (`ROADMAP.md`)**: New roadmap tracking the four delivered audit phases and future items (monolith splits, reviewer-conflict adjudication, signed artifacts).
 
 ### Machine-Verifiable Evidence: verdict.json Artifact
 - **Structured Verdict Schema (`agents/scripts/_hook_state.py`, `review_package.py`)**: New `verdicts/verdict-<pkg12>.json` artifact per review round (schema_version 1: task_id, git_sha, package path+sha256, tree fingerprint, per-file SHA-256 map, dispatched/completed timestamps, per-leaf tokens+evidence, findings, PASS/PENDING/EXPIRED verdict). `review_package.py` emits the PENDING record at package generation and a `FILES_SHA256=` header line (capped at 200 files) so every review package carries per-file hashes.
