@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "android-harness"
-version = "0.11.0"
-description = "Android Agent Harness: five-leaf review gate, deterministic safety hooks, and delivery governance for Android & KMP AI coding agents."
+name = "android-harness-kit"
+version = "0.12.0"
+description = "Deterministic quality, security, and delivery harness for AI-assisted Android development"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

@@ -5,6 +5,22 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-08-26
+
+### Modular Architecture: Monolith Splitting
+- **Zoho Sprints MCP Modularization (`agents/mcp/zoho_sprints/`)**: Extracted direct UDP DNS queries into `_dns.py`, HTML sanitization and markdown formatting into `_formatter.py`, and the full API client & OAuth token management into `_client.py`. `server.py` is now a slim JSON-RPC dispatch layer while preserving 100% backward-compatible tool symbols.
+- **Harness Doctor Diagnostic Engine (`agents/scripts/doctor/`)**: Created dedicated `doctor` package with `models.py` (dataclasses, diagnostic manifests) and `engine.py` (the 12-dimension check suite). `harness_doctor.py` retains CLI entrypoint and full legacy symbol exports.
+- **Setup Wizard Modularization (`agents/scripts/wizard/`)**: Created modular `wizard` package with `i18n.py` (bilingual English/Arabic translations, tool constants), `discovery.py` (Gradle modules, launchers, architectures, flavors), and `questions.py` (payload models, answer normalization, defaults prefill). `setup_wizard.py` maintains CLI dispatch.
+
+### Reviewer Conflict Adjudication & Structured Findings (ADR-006)
+- **Architecture Decision Record (`docs/adr/006-reviewer-conflict-adjudication.md`)**: Formally defined the two-tier finding severity hierarchy (`HARD_BLOCKER` vs `SOFT_FINDING`) and human authority overrides.
+- **Severity Classification (`agents/scripts/_hook_state.py`)**: Added `SEVERITY_HARD_BLOCKER` and `SEVERITY_SOFT_FINDING` constants, `parse_structured_finding()`, and `adjudicate_review_findings()`.
+- **Verdict Integration (`agents/scripts/pre_tool_safety.py`)**: `verdict.json` artifacts now record structured adjudication results under `record["adjudication"]`.
+
+### Dynamic Developer Mirroring & Streamlined Wizard
+- **Streamlined Setup Wizard (`wizard/questions.py`, `wizard/i18n.py`)**: Removed static chat language question (I.17) to reduce wizard friction. Retained tracker language question (I.18) with clean English descriptions supporting bilingual teams (`en_titles_ar_comments`).
+- **Dynamic Language Policy (`agents/rules/harness-rules.md`)**: Configured dynamic language mirroring across developer chat (reply in Arabic when addressed in Arabic, in English when addressed in English) while enforcing strict English across code, symbols, and Git commit messages.
+
 ## [0.11.0] - 2026-08-26
 
 ### README Restructured: Truth-In-Docs Without Information Loss
@@ -55,86 +71,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Release Re-Pinning Tool (`scripts_dev/pin_prompt_docs.py`, `CONTRIBUTING.md`)**: New stdlib-only, idempotent tool that re-pins prompt URLs to a release tag and refreshes the fetched-doc checksums; documented as the Pinned Prompt Release Procedure (step 5 of Release Governance).
 - **Pinned GitHub Actions (`.github/workflows/`)**: `actions/checkout` and `actions/setup-python` pinned to immutable commit SHAs (`v4.4.0` / `v5.6.0` respectively) in both CI workflows, removing the mutable-tag supply-chain surface.
 
-## [0.10.8] - 2026-08-25
-
-### Git Working Tree Cleanliness: Automatic `--assume-unchanged` for Tracked Hooks
-- **Tracked Hook Isolation (`install_tool_adapters.py`, `setup_wizard.py`)**: When the pre-commit quality gate is installed or updated on repositories that previously had tracked hook files, the kit now automatically executes `git update-index --assume-unchanged .githooks/pre-commit`.
-- **Zero Dirty Changes**: Guarantees that local hook overwrites never show up as uncommitted changes (`M .githooks/pre-commit`) in developer Git status or IDE change lists, even if `.githooks/` was committed to the repository history by team members in the past.
-
----
-
-## [0.10.7] - 2026-08-25
-
-### Update & Setup Determinism: Strict Execution Order & Modal Hardening
-- **Strict Porting Sequence (`docs/update-prompt.md`, `docs/setup-prompt.md`)**: Enforced a strict execution order (copy engine -> populate `_product.py` and tool adapters -> run selftest/doctor). Prevents premature hook selftest failures caused by unported placeholder constants.
-- **Update Modal Elimination (`docs/setup-prompt.md`, `docs/update-prompt.md`)**: Scoped domain references approval modals (`ask_question`) strictly to first-time installations, completely eliminating redundant modal interruptions during update workflows where references are already preserved from backup.
-- **Single Diagnostic Execution**: Hardened instructions to prevent duplicate background task spawning during diagnostics.
-- **Local Hooks Privacy Note**: Clarified that `.githooks/` is automatically excluded in `.git/info/exclude` to preserve clean shared team working trees.
-
----
-
-## [0.10.6] - 2026-08-25
-
-### Team Cleanliness: Automatic `.git/info/exclude` for `.githooks/`
-- **Automatic Local Git Exclusion (`install_tool_adapters.py`, `setup_wizard.py`)**: When the staged pre-commit quality gate is installed or configured, `.githooks/` is now automatically registered in `.git/info/exclude`.
-- **Zero Team Friction**: Pre-commit hooks remain active and protective locally on the individual developer's machine without polluting the shared git working tree, forcing unwanted team commits, or modifying shared `.gitignore` files.
-
----
-
-## [0.10.5] - 2026-08-25
-
-### Established & Modern Codebase Reviewer Enhancement (Five-Leaf Review Gate)
-- **Established & Legacy Codebase Adaptive Reviewers (`agents/subagents/`)**: Upgraded the Five-Leaf Review Gate prompts (`bug-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `regression-impact-reviewer-agent`) to seamlessly handle both established/legacy codebases (XML Views, ViewBinding, MVVM, Java platform types, multi-module) and modern architectures (Jetpack Compose, MVI, KMP).
-- **Sharpened Quality Invariants**: Added explicit checks for Java/Kotlin nullability boundaries, `viewLifecycleOwner` vs `this` in Fragment LiveData observation, atomic `StateFlow.update { }`, `onDestroyView()` ViewBinding nulling, unhandled Coroutine crashes, deep links/intent exports, and multi-module core contract blast radius.
-- **Architectural Rules Alignment (`harness-rules.md`)**: Aligned shift-left quality invariants to explicitly respect the target project's established architecture without forcing unadopted patterns.
-
----
-
-## [0.10.4] - 2026-08-25
- 
-### Fix: Neutralize Kit-Shipped Placeholders in Installed-Mode Selftest
-- **Neutralized kit-shipped example tokens**: Replaced `com.example` needles across kit-shipped files that legitimately contained illustrative code (`harness_doctor.py` fallback defaults, `new_feature_scaffold.py` dead template imports, `convention-reviewer-agent.json` example inline FQCN prompt illustration, and `harness-rules.md` example adb start command) with neutral `""` sentinels or generic `<APPLICATION_ID>` / `com.yourapp` tokens.
-- **Installed needle scan integrity**: The `kit placeholder grep agents/` check in `_hook_selftest.py` now runs strictly against the entire installed `.agents/` tree without false positives on fresh installs, while continuing to catch real unported placeholders.
-
----
-
-## [0.10.3] - 2026-08-25
-
-### Fix: Selftest No Longer Crashes in Installed Checkouts
-- **Installed-checkout awareness (`_hook_selftest.py`)**: Three probe groups introduced in v0.9.x/v0.10.x assumed the kit-root layout and crashed with `FileNotFoundError` / `ModuleNotFoundError` when run from an installed app checkout (which receives only `agents/`): (1) the grants-example consistency probe resolving `templates/gemini-runtime/`, (2) the `harness_cli.py` explain subprocess plus the pin-to-tag provisioning group importing `harness_cli`, and (3) the `scripts_dev/make_android_fixture` import. Each group now degrades to an explicit `OK (skipped - installed checkout)` line, matching the skip pattern the dispatcher test already used.
-- **Fixture fallback for installs**: When `scripts_dev/` is absent, equivalent minimal fixture builders are defined inline so the flavor-discovery, multi-module, pre-fill, and doctor-remediation engine tests keep running everywhere instead of being skipped.
-- **Robust git HEAD (`review_package.py`)**: `GIT_SHA` / ledger `git_sha` now accept only a valid 40-hex commit hash; outside a git repository they record an empty value instead of git's error text, keeping package headers and ledger comparisons sane in non-git contexts.
-- **Verified in the reported failure scenario**: a simulation copying only `agents/` into a clean directory now completes with `Total test failures: 0`, zero tracebacks, and explicit skip lines.
-
----
-
-## [0.10.2] - 2026-08-25
-
-### Maintenance & Documentation Consistency
-- Synchronized package metadata with `agents/VERSION` (`pyproject.toml` had drifted to 0.6.0) and added release-CI validation plus a selftest gate so the drift cannot recur.
-- Removed stale runtime grants for the intentionally disabled feature scaffold and unused imports without removing public helper contracts.
-- Aligned install/update/setup prompts, README, issue forms, and rollback documentation with tagged provisioning (never floating to main), current wizard questions (I.17-I.21), Copilot preToolUse hooks, and the default-on git gate.
-
----
-
-## [0.10.1] - 2026-08-25
-
-### Setup Answers Change Flow: Wizard Pre-Fill, Doctor Remediation & Documentation
-- **Wizard Answer Pre-Fill (`setup_wizard.py`)**: Re-running the wizard (`setup_wizard.py ask`) now pre-fills the previously recorded answers — `existing_defaults()` maps `.harness-setup/answers.json` onto the question ids and each question shows `(current)` next to the recorded choice; Enter keeps it, typing a new number changes only that answer. Multi-select tool questions restore the stored `tools` list. EN/AR `defaults_note` announces the behavior.
-- **Doctor Drift Remediation (`harness_doctor.py`)**: The Install Consistency dimension appends a remediation line pointing at the wizard whenever answers drift from `_product.py`/adapters, closing the "detected but unexplained" gap.
-- **Dedicated Documentation (`docs/tool-support.md`)**: New "Changing setup answers after install" section covering the wizard (recommended), the non-interactive questions/write flow, and manual edits, with a doctor verification step. Documentation veracity sweep: CLI subcommand list now includes `explain` and pin-to-tag provisioning (`docs/architecture.md`), git gate documented as default-ON with `--no-git-gate` opt-out (README, `docs/architecture.md`), and the evidence footer requirement noted for manual reviews (`docs/tool-support.md`).
-- **Selftests**: New regression groups `wizard answer pre-fill defaults` and `doctor drift remediation points to wizard`. Changelog consolidated (0.4.0 folded into the 0.5.0 entry) to hold the milestone cap.
-
----
-
 ## [0.10.0] - 2026-08-25
 
-### Enforcement Parity & Red Team: Adversarial Security Suite, Copilot Hook Bridge, Fixture Generator, Threat Model
-- **Adversarial Security Suite (`agents/scripts/_security_selftest.py`)**: New standalone red-team suite (23 deterministic, zero-network assertion lines) wired into `_hook_selftest.py` and CI. Covers chained/spaced/config-wrapped/base64-wrapped git mutations, homoglyph and full-path `git.exe` variants, review-package traversal (URL-encoded `%2e%2e`, `..\..\`, symlink escape), oversized hook stdin, malformed Claude Code bridge fuzz, malformed Copilot bridge fuzz, forged EVIDENCE footers, and secret leakage through the Zoho MCP install path. Every case must deny or fail closed.
-- **GitHub Copilot Enforcement Bridge (`agents/scripts/copilot_pre_tool_safety.py`, `install_tool_adapters.py --copilot-hooks`)**: GitHub Copilot now enforces repository-level `preToolUse` hooks (`.github/hooks/*.json`, allow/deny decision JSON, fail-closed on crash). The bridge reuses the engine-subprocess pattern from `cc_pre_tool_safety.py`, accepting both the documented camelCase and the VS Code compatible snake_case payloads, and is registered under `.github/hooks/android-harness-pre-tool-use.json` with a bash|powershell matcher. `copilot-instructions.md.template` documents the hook and a best-effort fallback for hook-less checkouts.
-- **Git Gate Default ON + Wizard I.21 (`install_tool_adapters.py`, `setup_wizard.py`)**: The staged pre-commit quality gate is now installed by default; `--no-git-gate` opts out. The setup wizard gains confirmation question I.21 ("Pre-commit git gate?") in EN/AR, recorded as `git_gate` in answers, printed in the answers summary, and emitted as `--git-gate`/`--no-git-gate` by `flags_from_answers`. Absent answers keep the new default (on).
-- **Fixture Generator Promotion (`scripts_dev/fixtures/make_android_fixture.py`)**: The ad-hoc temp-project builders from the selftests are promoted into one reusable stdlib-only generator with `--profile classic|multimodule|flavors|kmp` that prints the fixture root. The heaviest selftest blocks (wizard flavor discovery, multi-module root discovery) now consume it — behavior-neutral, all existing assertions unchanged.
-- **Threat Model Documentation (`SECURITY.md`)**: New "Threat Model & Mitigations" table mapping every attack class above to the exact test name that proves the mitigation; supported-versions rows now span 0.6–0.10. Core script inventory expanded from 32 to 34 (`_security_selftest.py`, `copilot_pre_tool_safety.py`).
+### Enforcement Parity, Red Team & Patch Consolidations (0.10.1 - 0.10.8)
+- **Tracked Hook Isolation & Local Exclusions (0.10.6, 0.10.8)**: Added automatic `git update-index --assume-unchanged .githooks/pre-commit` and local exclusion in `.git/info/exclude` to ensure zero team friction and clean working trees.
+- **Porting Determinism & Established Codebase Support (0.10.5, 0.10.7)**: Hardened execution sequence, eliminated redundant update modals, and upgraded the Five-Leaf Review Gate to seamlessly handle legacy (XML/MVVM) and modern (Compose/MVI/KMP) architectures.
+- **Installed Checkout Selftest Hardening (0.10.3, 0.10.4)**: Neutralized kit-shipped placeholders and added installed-checkout degradation paths so tests pass anywhere.
+- **Wizard Pre-Fill & Doctor Drift Remediation (0.10.1, 0.10.2)**: Enabled wizard answer pre-fill (`setup_wizard.py ask`), doctor install consistency remediation, and synchronized packaging metadata.
+- **Adversarial Security Suite (`agents/scripts/_security_selftest.py`)**: Standalone red-team suite with 26 deterministic assertions covering git mutations, path traversal, stdin fuzzing, and secret leakage.
+- **GitHub Copilot Enforcement Bridge (`agents/scripts/copilot_pre_tool_safety.py`)**: Enforces repository-level `preToolUse` hooks with support for camelCase and snake_case payloads.
+- **Git Gate Default ON + Wizard I.21**: Staged pre-commit quality gate is installed by default with `--no-git-gate` opt-out.
+- **Fixture Generator Promotion (`scripts_dev/fixtures/make_android_fixture.py`)**: Reusable stdlib fixture generator with 4 profiles (classic, multimodule, flavors, kmp).
+- **Threat Model Documentation (`SECURITY.md`)**: Comprehensive mitigation mapping across all 7 threat classes.
 
 ---
 

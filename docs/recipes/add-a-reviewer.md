@@ -1,6 +1,6 @@
-﻿# Recipe: Add a reviewer subagent
+# Recipe: Add a reviewer subagent
 
-Registration points verified against kit v0.11.0 code.
+Registration points verified against kit v0.12.0 code.
 
 1. Create `agents/subagents/<name>.json` with `name`, `description`,
    `model: "inherit"`, `workspace: "inherit"`, `enable_write_tools: false`,

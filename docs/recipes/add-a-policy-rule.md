@@ -1,6 +1,6 @@
-﻿# Recipe: Add a policy rule (new deny class)
+# Recipe: Add a policy rule (new deny class)
 
-Registration points verified against kit v0.11.0 code.
+Registration points verified against kit v0.12.0 code.
 
 1. Add the verb/pattern to the canonical vocabulary in
    `agents/scripts/policy_vocab.py`: `GIT_MUTATIONS`, `DEVICE_BOUND_ADB`,

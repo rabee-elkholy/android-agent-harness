@@ -1,6 +1,6 @@
-﻿# Recipe: Add a tool adapter
+# Recipe: Add a tool adapter
 
-Registration points verified against kit v0.11.0 code.
+Registration points verified against kit v0.12.0 code.
 
 1. Create `agents/tool-adapters/<tool>.template` using the fill placeholders
    `{{PRODUCT}}`, `{{PY}}`, `{{ASSEMBLE}}`, `{{DEVICE_POLICY}}`, and
