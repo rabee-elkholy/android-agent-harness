@@ -43,6 +43,36 @@ Do **not** overwrite `.aider.conf.yml`, Continue user config, unrelated MCP conf
 
 Aider, Zed, Amp, Devin, Factory, Jules, Warp, and OpenCode pick up `AGENTS.md` with no extra file. Do not add `.cursorrules` (Cursor legacy; `.mdc` is the current file). Do not add `CONVENTIONS.md` (Aider can already read `AGENTS.md`; that filename often belongs to humans).
 
+## Tool -> template -> enforcement mapping
+
+The kit ships **14 selectable tool ids** (wizard I.14) backed by **11 adapter
+templates**; eight additional agents are covered by `AGENTS.md` alone.
+
+| Wizard id (`--tools`) | Template file(s) in `agents/tool-adapters/` | Files written at the app root | Enforcement tier |
+|---|---|---|---|
+| `cursor` | `cursor-android-harness.mdc.template` | `.cursor/rules/android-harness.mdc` | Rule-driven |
+| `claude` | `CLAUDE.md.template` | `CLAUDE.md`, `.claude/agents/*.md`, `.claude/commands/*.md`, `.claude/settings.json` (`--cc-hooks`) | **Hook-enforced** (PreToolUse bridge) + rule-driven |
+| `copilot` | `copilot-instructions.md.template`, `github-instructions.md.template` | `.github/copilot-instructions.md`, `.github/instructions/android-harness.instructions.md`, `.github/prompts/*.prompt.md`, `.github/hooks/android-harness-pre-tool-use.json` (`--copilot-hooks`) | **Hook-enforced** (preToolUse bridge) + rule-driven |
+| `gemini` | `GEMINI.md.template` | `GEMINI.md` (+ `.agents/hooks.json`) | **Hook-enforced** (Antigravity PreToolUse engine) + rule-driven |
+| `codex` | `CODEX.md.template` | `CODEX.md`, `.codex/prompts/*.md` | Rule-driven + native prompt commands |
+| `qwen` | `QWEN.md.template` | `QWEN.md` | Rule-driven |
+| `windsurf` | `windsurf-android-harness.md.template`, `pointer.md.template` | `.windsurf/rules/android-harness.md`, `.windsurfrules` | Rule-driven |
+| `cline` | `pointer.md.template` | `.clinerules` | Rule-driven |
+| `roo` | `pointer.md.template` | `.roo/rules/android-harness.md` | Rule-driven |
+| `amazonq` | `pointer.md.template` | `.amazonq/rules/android-harness.md` | Rule-driven |
+| `continue` | `continue-android-harness.md.template` | `.continue/rules/android-harness.md` | Rule-driven |
+| `junie` | `pointer.md.template` | `.junie/guidelines.md` | Rule-driven |
+| `kilo` | `pointer.md.template` | `.kilocode/rules/android-harness.md` | Rule-driven |
+| `goose` | `pointer.md.template` | `.goosehints` | Rule-driven |
+| *(always)* | `AGENTS.md.template` | `AGENTS.md` | Prompt-only baseline for every tool |
+
+Agents covered by `AGENTS.md` alone (no dedicated template, prompt-only):
+Aider, Zed, Amp, Devin, Factory, Jules, Warp, OpenCode.
+
+Universal across every tool regardless of tier: the staged pre-commit quality
+gate (`.githooks/pre-commit`, default ON) fires on commits made by any agent
+or human.
+
 ## Integration features by assistant
 
 | Assistant / IDE | Generated Adapter | Integration Features | Native Commands |
