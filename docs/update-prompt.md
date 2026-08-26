@@ -1,8 +1,8 @@
 # Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.1/docs/update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-> **Kit version**: `v0.13.1` — **SHA-256**: `eb919085608beb437107a977dcffe4293ada353bc1ebd8e7234dd73944fae626` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.13.2` — **SHA-256**: `827bf98ddff2752ee07b07b78ed60128093517600e3c823cf2eeb39e204464f4` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** (already has `.agents` from a previous install). The agent must execute it, not summarize it.
 
 ---
@@ -56,7 +56,7 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
       git commit -m "chore: update android harness kit"
       ```
     - Tell them to start a **new chat** on this Android folder before starting daily work.
-    - System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.1/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.1/docs/rollback-prompt.md`).
+    - System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/rollback-prompt.md`).
 
 Do not copy `local.properties` `sdk.dir` or `~/.gemini` hostnames. `adb monkey` stays denied. Emulator deny only if I.4 is physical-only.
 

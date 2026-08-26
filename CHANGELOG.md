@@ -5,6 +5,12 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-08-26
+
+### Fix: Neutralize Kit Placeholders in the Security Selftest
+- **Neutral Placeholder in `_security_selftest.py`**: Replaced the `com.example.app` test literal in the `adb_cmd_package_clear_denied` case with the neutral `com.selftest.app` token (assertion semantics unchanged). Previously, every fresh install/update of v0.13.x failed the installed-checkout placeholder scan and required a manual patch of the shipped security selftest.
+- **Always-On Placeholder Guard (`_hook_selftest.py`)**: The `kit placeholder grep agents/` scan now runs in the raw kit as well as installed checkouts, so a new `com.example` literal in any shipped file (other than the deliberate `_product.py` port canary and the self-exempt hook selftest) fails kit CI immediately instead of surfacing later on developer machines.
+
 ## [0.13.1] - 2026-08-26
 
 ### Atomic Milestone Enforcement & Mandatory PM Prompting

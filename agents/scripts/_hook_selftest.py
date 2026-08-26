@@ -1234,31 +1234,34 @@ failed += int(not ok_example)
 # Kit placeholders — a successful install replaces these with real values.
 # The selftest proves nothing from the example kit leaked into the installed copy.
 # During install, setup_wizard adds project-specific needles via _product.py.
-# This check only applies AFTER install (when answers.json exists).
+# Installed checkouts: every file must be clean (an unported _product.py fails).
+# Raw kit: _product.py is exempt — it deliberately ships the port canary.
 needles = (
     "com.example.app",
     "com.example",
 )
 ok_left = True
-if _is_installed:
-    for path in SCRIPTS.parent.rglob("*"):
-        if not path.is_file() or path.suffix == ".pyc":
-            continue
-        if "__pycache__" in path.parts or "state" in path.parts:
-            continue
-        if path.resolve() == Path(__file__).resolve():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        for needle in needles:
-            if needle in text:
-                ok_left = False
-                print(f"kit placeholder {needle!r} in {path.relative_to(SCRIPTS.parent)}")
-    print(f"kit placeholder grep agents/: {'OK' if ok_left else 'FAIL'}")
-else:
-    print("kit placeholder grep agents/: OK (skipped — raw kit, not an installed checkout)")
+for path in SCRIPTS.parent.rglob("*"):
+    if not path.is_file() or path.suffix == ".pyc":
+        continue
+    if "__pycache__" in path.parts or "state" in path.parts:
+        continue
+    if path.resolve() == Path(__file__).resolve():
+        continue
+    if not _is_installed and path.name == "_product.py":
+        continue
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        continue
+    for needle in needles:
+        if needle in text:
+            ok_left = False
+            print(f"kit placeholder {needle!r} in {path.relative_to(SCRIPTS.parent)}")
+print(
+    f"kit placeholder grep agents/: {'OK' if ok_left else 'FAIL'}"
+    + ("" if _is_installed else " (raw kit scan)")
+)
 failed += int(not ok_left)
 
 tmp = Path(tempfile.mkdtemp())
@@ -1438,7 +1441,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.13.1"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.13.2"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

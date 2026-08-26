@@ -131,7 +131,7 @@ def main() -> int:
     )
     failed += _case(
         "adb_cmd_package_clear_denied",
-        _engine_verdict(_cmd("adb -s DEV shell cmd package clear com.example.app"))["decision"] == "deny",
+        _engine_verdict(_cmd("adb -s DEV shell cmd package clear com.selftest.app"))["decision"] == "deny",
     )
 
     # --- review package path traversal: all must deny ---
