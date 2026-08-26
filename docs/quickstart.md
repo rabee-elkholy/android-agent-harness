@@ -35,7 +35,7 @@ Copy the entire content of [`docs/install-prompt.md`](install-prompt.md) and pas
 
 ```markdown
 Run the Android Harness Kit Installer:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/install-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.3/docs/install-prompt.md
 ```
 
 ---
@@ -64,7 +64,7 @@ To perform a comprehensive 12-dimension health audit at any time, audit `.gitign
 
 ```markdown
 Run the Android Harness Kit Diagnostic Doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.3/docs/diagnostic-prompt.md
 ```
 
 Or execute directly from your terminal:
@@ -85,7 +85,7 @@ You can copy and paste any of the following prompts directly into your AI assist
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit installer:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/install-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.3/docs/install-prompt.md
 ```
 
 ### 2. Update Prompt (Harness Upgrade)
@@ -95,7 +95,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.3/docs/update-prompt.md
 ```
 
 ### 3. Diagnostic Doctor Prompt (12-Dimension Health Check)
@@ -105,7 +105,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit diagnostic doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.3/docs/diagnostic-prompt.md
 ```
 
 ### 4. Rollback Prompt (Instant Backup Restoration)
@@ -115,7 +115,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit rollback:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.2/docs/rollback-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.13.3/docs/rollback-prompt.md
 ```
 
 ---

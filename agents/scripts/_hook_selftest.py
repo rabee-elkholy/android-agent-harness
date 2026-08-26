@@ -267,7 +267,7 @@ cases = [
     (
         "define_fingerprint_only",
         define(
-            "HARNESS_BUG_FINGERPRINT=quality-first-bug-review-v1\nYou are a different prompt.",
+            "HARNESS_BUG_FINGERPRINT=quality-first-bug-review-v2\nYou are a different prompt.",
             name="bug-reviewer-agent",
         ),
         "deny",
@@ -466,7 +466,7 @@ print(
     f"review_package v2 header: {'OK' if ok_header else 'FAIL ' + pkg_proc.stdout}"
 )
 failed += int(not ok_header)
-ok_sha12 = len(pkg_sha12_stdout) == 12 and recorded.startswith(pkg_sha12_stdout)
+ok_sha12 = len(pkg_sha12_stdout) == 12 and _hl.sha256(body).hexdigest()[:12] == pkg_sha12_stdout
 print(f"review_package prints sha256_12: {'OK' if ok_sha12 else 'FAIL ' + repr(pkg_sha12_stdout)}")
 failed += int(not ok_sha12)
 
@@ -474,13 +474,14 @@ failed += int(not ok_sha12)
 if pkg_path is not None:
     from _hook_state import read_verdict_record  # noqa: E402
 
-    pending_rec = read_verdict_record(recorded[:12])
+    file_digest = _hl.sha256(body).hexdigest()
+    pending_rec = read_verdict_record(file_digest[:12])
     ok_pending = (
         pending_rec is not None
         and pending_rec.get("schema_version") == 1
         and pending_rec.get("verdict") == "PENDING"
-        and pending_rec.get("package", {}).get("sha256") == recorded
-        and pending_rec.get("package", {}).get("sha256_12") == recorded[:12]
+        and pending_rec.get("package", {}).get("sha256") == file_digest
+        and pending_rec.get("package", {}).get("sha256_12") == file_digest[:12]
         and isinstance(pending_rec.get("files"), dict)
         and b"FILES_SHA256=" in body
     )
@@ -1441,7 +1442,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.13.2"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.13.3"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

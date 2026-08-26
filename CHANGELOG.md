@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-08-26
+
+### Fix: Review Package Digest Alignment & Infinite Review Barrier Resolution
+- **Canonical Whole-File SHA-256 Digest (`review_package.py`)**: Aligned the printed `HARNESS_PACKAGE_SHA256_12` with the whole-file SHA-256 hash computed by the engine at dispatch time. Previously, `review_package.py` printed the pre-digest (bytes before `PACKAGE_SHA256` marker), causing `EVIDENCE` footers cited by reviewers to mismatch the engine's expected package hash and preventing the review barrier from clearing.
+- **Subagent Evidence Fallback Correction**: Corrected the misleading fallback sentence in all 8 subagent system prompts. Reviewers are explicitly instructed to use the value printed by `review_package.py` and never derive it from the package header.
+- **Fingerprint Bump (`v2` / `v4` / `v3`)**: Updated subagent template fingerprints across all 8 subagents and `doctor/models.py`.
+
 ## [0.13.2] - 2026-08-26
 
 ### Fix: Neutralize Kit Placeholders in the Security Selftest

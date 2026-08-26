@@ -131,8 +131,13 @@ def main(argv=None) -> int:
 
     out.write_text("".join(chunks), encoding="utf-8", newline="\n")
 
-    # PACKAGE_SHA256 covers every byte preceding its own line (header + body),
-    # so the digest is computable post-write without a self-referential hash.
+    # The header's PACKAGE_SHA256 is a self-check covering every byte preceding
+    # its own line (no self-referential hash). The CANONICAL evidence id used by
+    # the review barrier, however, is the SHA-256 of the FINAL file: the engine
+    # hashes the whole file at dispatch time, so HARNESS_PACKAGE_SHA256_12 must
+    # be the whole-file digest's first 12 hex, otherwise the EVIDENCE footers
+    # reviewers are instructed to cite can never match and the barrier never
+    # clears (infinite re-dispatch).
     data = out.read_bytes()
     marker_pos = data.find(PACKAGE_SHA_MARKER.encode("utf-8"))
     if marker_pos < 0:
@@ -146,14 +151,15 @@ def main(argv=None) -> int:
         )
     )
 
+    file_digest = file_sha256(out)
+    pkg12 = file_digest[:12]
     git_sha = git_head()
     record_review_ledger(out, git_sha=git_sha)
-    pkg12 = pre_digest[:12]
     pending = {
         "schema_version": 1,
         "task_id": task_id,
         "git_sha": git_sha,
-        "package": {"path": str(out.resolve()), "sha256": pre_digest, "sha256_12": pkg12},
+        "package": {"path": str(out.resolve()), "sha256": file_digest, "sha256_12": pkg12},
         "tree_fingerprint": fingerprint or None,
         "files": files_map,
         "dispatched_at": None,

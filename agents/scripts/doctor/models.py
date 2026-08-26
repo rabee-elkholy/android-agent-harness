@@ -4,14 +4,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CORE_SUBAGENTS = {
-    "bug-reviewer-agent": "HARNESS_BUG_FINGERPRINT=quality-first-bug-review-v1",
-    "convention-reviewer-agent": "HARNESS_CONVENTION_FINGERPRINT=quality-first-convention-review-v1",
-    "security-reviewer-agent": "HARNESS_SECURITY_FINGERPRINT=quality-first-security-review-v1",
-    "perf-anr-guardian-agent": "HARNESS_PERF_FINGERPRINT=performance-anr-guardian-v3",
-    "regression-impact-reviewer-agent": "HARNESS_REGRESSION_FINGERPRINT=quality-first-regression-impact-v1",
-    "qa-diagnostics-agent": "HARNESS_QA_FINGERPRINT=deep-device-diagnostics-v2",
-    "android-ui-expert-agent": "HARNESS_UI_FINGERPRINT=comprehensive-android-ui-expert-v3",
-    "test-quality-reviewer-agent": "HARNESS_TEST_FINGERPRINT=quality-first-test-review-v1",
+    "bug-reviewer-agent": "HARNESS_BUG_FINGERPRINT=quality-first-bug-review-v2",
+    "convention-reviewer-agent": "HARNESS_CONVENTION_FINGERPRINT=quality-first-convention-review-v2",
+    "security-reviewer-agent": "HARNESS_SECURITY_FINGERPRINT=quality-first-security-review-v2",
+    "perf-anr-guardian-agent": "HARNESS_PERF_FINGERPRINT=performance-anr-guardian-v4",
+    "regression-impact-reviewer-agent": "HARNESS_REGRESSION_FINGERPRINT=quality-first-regression-impact-v2",
+    "qa-diagnostics-agent": "HARNESS_QA_FINGERPRINT=deep-device-diagnostics-v3",
+    "android-ui-expert-agent": "HARNESS_UI_FINGERPRINT=comprehensive-android-ui-expert-v4",
+    "test-quality-reviewer-agent": "HARNESS_TEST_FINGERPRINT=quality-first-test-review-v2",
 }
 
 CORE_SCRIPTS = (
