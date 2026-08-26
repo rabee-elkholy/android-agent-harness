@@ -12,7 +12,8 @@ version and any mismatch fails closed with remediation instructions.
 Usage:
     android-harness init  [--repo PATH] [--lang en|ar] [--kit PATH]
     android-harness update [--repo PATH] [--kit PATH]
-    android-harness explain [--last N] [--kit PATH]
+    android-harness explain [--last N] [--repo PATH] [--kit PATH]
+    android-harness verify [--repo PATH] [--verdict PATH] [--rerun-checks] [--kit PATH]
     android-harness doctor [--repo PATH] [--json] [--device] [--kit PATH]
     android-harness preflight [--repo PATH] [--kit PATH]
     android-harness selftest [--kit PATH]
@@ -371,13 +372,31 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_explain(args: argparse.Namespace) -> int:
-    kit = resolve_kit(args.kit)
+def _resolve_audit_path(repo: Path | None, kit: Path) -> Path:
+    """Audit log of the checkout whose hooks actually ran.
+
+    Priority: an explicit --repo checkout, then the HARNESS_HOOK_STATE
+    override, then cwd discovery, then the kit's own state dir.
+    """
+    if repo is not None:
+        for rel in (".agents/state/audit_log.jsonl", "agents/state/audit_log.jsonl"):
+            candidate = (repo / rel).resolve()
+            if candidate.is_file():
+                return candidate
     override = os.environ.get("HARNESS_HOOK_STATE", "").strip()
     if override:
-        audit_path = Path(override).with_name("audit_log.jsonl")
-    else:
-        audit_path = _script_root(kit).parent / "state" / "audit_log.jsonl"
+        return Path(override).with_name("audit_log.jsonl")
+    for rel in (".agents/state/audit_log.jsonl", "agents/state/audit_log.jsonl"):
+        candidate = (Path.cwd() / rel).resolve()
+        if candidate.is_file():
+            return candidate
+    return _script_root(kit).parent / "state" / "audit_log.jsonl"
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    kit = resolve_kit(args.kit)
+    repo = Path(args.repo).expanduser().resolve() if getattr(args, "repo", None) else None
+    audit_path = _resolve_audit_path(repo, kit)
     if not audit_path.is_file():
         print(f"[i] No audit log yet at {audit_path}")
         return 0
@@ -587,6 +606,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print recent safety-hook decisions from the append-only audit log.",
     )
     sp.add_argument("--last", type=int, default=20, metavar="N", help="How many records to show.")
+    sp.add_argument(
+        "--repo",
+        help="Checkout whose audit log to read (default: cwd, falling back to the kit's own log).",
+    )
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
     sp.set_defaults(func=cmd_explain)
 

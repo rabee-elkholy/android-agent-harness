@@ -640,6 +640,59 @@ if KIT_LAYOUT:
 else:
     print("cli explain renders audit: OK (skipped — installed checkout)")
 
+# --- v0.10.x: explain prefers the installed checkout's audit log over the kit's ---
+if KIT_LAYOUT:
+    import shutil as _sh_explain
+
+    explain_repo = Path(tempfile.mkdtemp())
+    try:
+        planted = explain_repo / ".agents" / "state" / "audit_log.jsonl"
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_text(
+            json.dumps(
+                {
+                    "ts": time.time(),
+                    "decision": "deny",
+                    "tool": "run_command",
+                    "reason_code": "GIT_MUTATION_DENIED",
+                    "reason_short": "planted-audit-marker-xyz",
+                    "cmd_sha256_12": "a" * 12,
+                    "conv_hint": "",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        proc_planted = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS.parents[1] / "harness_cli.py"),
+                "explain",
+                "--repo",
+                str(explain_repo),
+                "--kit",
+                str(SCRIPTS.parents[1]),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=os.environ.copy(),
+        )
+        ok_planted = (
+            proc_planted.returncode == 0
+            and "planted-audit-marker-xyz" in proc_planted.stdout
+            and "GIT_MUTATION_DENIED" in proc_planted.stdout
+        )
+        print(
+            f"cli explain reads installed repo log first: "
+            f"{'OK' if ok_planted else 'FAIL ' + proc_planted.stdout + proc_planted.stderr}"
+        )
+        failed += int(not ok_planted)
+    finally:
+        _sh_explain.rmtree(explain_repo, ignore_errors=True)
+else:
+    print("cli explain reads installed repo log first: OK (skipped — installed checkout)")
+
 # --- v0.9.0: pin-to-tag provisioning (local git remotes, zero network) ---
 if KIT_LAYOUT:
     import harness_cli as hcli  # noqa: E402
