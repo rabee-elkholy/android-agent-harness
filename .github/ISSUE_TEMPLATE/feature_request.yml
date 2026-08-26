@@ -16,7 +16,7 @@ body:
         - Safety Hook & Guardrail Improvement
         - Python Runner / Script Enhancement
         - Documentation / Reference Expansion
-         - Project Tracker / PM Integration (Zoho, GitHub, Jira, Linear)
+        - Project Tracker / PM Integration (Zoho, GitHub, Jira, Linear)
     validations:
       required: true
   - type: textarea

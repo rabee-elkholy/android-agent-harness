@@ -1478,6 +1478,40 @@ if (repo_root / "CHANGELOG.md").is_file():
 else:
     print("changelog milestone release consolidation: OK (skipped — installed checkout)")
 
+# --- v0.10.x: GitHub issue templates must stay YAML-shaped ---
+issue_tpl_dir = repo_root / ".github" / "ISSUE_TEMPLATE"
+if issue_tpl_dir.is_dir():
+    def _odd_indent_lines(path: Path) -> list[int]:
+        bad: list[int] = []
+        block_indent = None
+        for idx, raw in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
+            if not raw.strip():
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            if block_indent is not None:
+                if indent > block_indent:
+                    continue
+                block_indent = None
+            if raw.rstrip().endswith(("|", "|-", "|+")):
+                block_indent = indent
+                continue
+            if indent % 2 != 0:
+                bad.append(idx)
+        return bad
+
+    bad_reports: list[str] = []
+    for tpl in sorted(issue_tpl_dir.glob("*.yml")) + sorted(issue_tpl_dir.glob("*.yaml")):
+        bad = _odd_indent_lines(tpl)
+        if bad:
+            bad_reports.append(f"{tpl.name}: lines {bad}")
+    ok_issue_tpl = not bad_reports
+    print(f"issue template yaml indentation: {'OK' if ok_issue_tpl else 'FAIL ' + '; '.join(bad_reports)}")
+    failed += int(not ok_issue_tpl)
+else:
+    print("issue template yaml indentation: OK (skipped — no ISSUE_TEMPLATE dir)")
+
 ok_test_specialist_files = (
     (agents_root / "subagents" / "test-quality-reviewer-agent.json").is_file()
     and (agents_root / "skills" / "android-harness" / "references" / "test-quality-guidelines.md").is_file()

@@ -16,32 +16,32 @@ body:
         - Cursor
         - Claude Code
         - GitHub Copilot
-         - Windsurf
-         - Cline / Roo Code
-         - OpenAI Codex / CLI
-         - Qwen Code
-         - Amazon Q Developer
-         - Continue
-         - JetBrains Junie
-         - Kilo Code
-         - Goose
-         - Other (specify below)
+        - Windsurf
+        - Cline / Roo Code
+        - OpenAI Codex / CLI
+        - Qwen Code
+        - Amazon Q Developer
+        - Continue
+        - JetBrains Junie
+        - Kilo Code
+        - Goose
+        - Other (specify below)
     validations:
       required: true
   - type: input
     id: kit-version
     attributes:
       label: Harness Kit Version
-       description: Check agents/VERSION or .agents/VERSION (for example, 0.10.1)
-       placeholder: "0.10.1"
+      description: Check agents/VERSION or .agents/VERSION (for example, 0.10.1)
+      placeholder: "0.10.1"
     validations:
-       required: true
-   - type: input
-     id: ai-tool-other
-     attributes:
-       label: Other AI Tool or Environment
-       description: If you selected Other, name the tool, client, or integration.
-       placeholder: "Tool name and version"
+      required: true
+  - type: input
+    id: ai-tool-other
+    attributes:
+      label: Other AI Tool or Environment
+      description: If you selected Other, name the tool, client, or integration.
+      placeholder: "Tool name and version"
   - type: dropdown
     id: os
     attributes:
@@ -54,7 +54,7 @@ body:
         - Linux (Other)
     validations:
       required: true
-   - type: textarea
+  - type: textarea
     id: description
     attributes:
       label: Describe the Bug
