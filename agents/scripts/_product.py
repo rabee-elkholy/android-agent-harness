@@ -14,9 +14,10 @@ ANDROID_SRC = ("app", "src", "main")
 ACTIVE_FLAVOR = ""  # "" = default variant (no flavors). e.g. "staging"
 ASSEMBLE_TASKS = {}  # flavor -> task, e.g. {"staging": ":app:assembleStagingDebug"}
 APK_RELATIVES = {}  # flavor -> debug APK path, e.g. {"staging": "app/build/outputs/apk/staging/debug/app-staging-debug.apk"}
-# Language & Zoho settings (configured during setup)
-CHAT_LANGUAGE = "en"  # "en" (Strict English), "mirror" (Mirror developer input), "ar" (Arabic)
-ZOHO_LANGUAGE = "en_titles_ar_comments"  # "en_titles_ar_comments", "all_en", "all_ar"
+# Language & Tracker settings (configured during setup)
+CHAT_LANGUAGE = "mirror"  # "mirror" (Mirror developer language in chat: Arabic with Arabic, English with English)
+TRACKER_LANGUAGE = "en_titles_ar_comments"  # "en_titles_ar_comments", "all_en", "all_ar" (Zoho / Jira / Linear / GitHub)
+ZOHO_LANGUAGE = TRACKER_LANGUAGE  # Alias for backward compatibility
 ALLOW_EMULATOR = True  # True (both physical and emulator allowed), False (physical device only)
 # Project tracker (setup wizard I.20). Absent/empty = zoho_sprints (historical default).
 # Options: zoho_sprints | github_projects | jira_mcp | linear_mcp | none
