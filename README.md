@@ -25,28 +25,13 @@ Every developer using AI coding assistants (Cursor, Claude Code, Copilot, Antigr
 
 The **Android Agent Harness** is fundamentally different. It does not plead with the AI to behave; it places **deterministic, cryptographic, and OS-level execution barriers outside the model**:
 
-```
-+---------------------------------------------------------------------------------------------------+
-| PROMPT / SKILL.MD / .CURSORRULES                  | ANDROID AGENT HARNESS                         |
-| (Soft In-Context Advice)                         | (Deterministic OS & Cryptographic Gate)       |
-+---------------------------------------------------+-----------------------------------------------+
-| * Model judges its own work ("LGTM!").            | * Assembly (:assembleDebug) is physically     |
-|                                                   |   locked until 5 parallel subagents emit      |
-|                                                   |   matching SHA-256 cryptographic evidence.    |
-|                                                   |                                               |
-| * Model can execute destructive shell commands    | * Python PreToolUse interceptor blocks git    |
-|   (git commit, push --force, pm clear).           |   mutations, bare ADB, and pm clear at OS.    |
-|                                                   |                                               |
-| * Attention fades as context grows (token decay). | * Fixed Python engine outside the model;      |
-|                                                   |   zero token decay, enforces rules forever.   |
-|                                                   |                                               |
-| * Zero protection when committing from IDE.       | * Universal staged pre-commit gate (.githooks)|
-|                                                   |   blocks bad strings, Room, & lint in <5s.    |
-|                                                   |                                               |
-| * Blind to Android SDK & hardware states.         | * 12-Dimension Doctor auditing 30 checks with |
-|                                                   |   10s live process streaming heartbeats.      |
-+---------------------------------------------------------------------------------------------------+
-```
+| Dimension | Prompt / Skill.md / `.cursorrules`<br>*(Soft In-Context Advice)* | Android Agent Harness<br>*(Deterministic OS & Cryptographic Gate)* |
+| :--- | :--- | :--- |
+| **Review & Verification** | Model judges its own work ("LGTM!"). | **Cryptographic Barrier**: Assembly (`:assembleDebug`) is physically locked until 5 parallel subagents emit matching SHA-256 evidence. |
+| **Execution Safety** | Model can execute destructive shell commands (`git commit`, `push --force`, `pm clear`). | **OS Interceptor**: Python `PreToolUse` hook hard-denies git mutations, bare ADB, and `pm clear` before reaching the OS shell. |
+| **Attention & Reliability** | Attention fades as conversation context expands (token decay / lost in the middle). | **Zero Token Decay**: Fixed Python engine running outside the model enforces rules identically on turn 1 or turn 1,000. |
+| **Offline IDE Commits** | Zero protection when developer commits from Android Studio / terminal. | **Deterministic Git Gate**: Universal staged pre-commit hook (`.githooks/pre-commit`) blocks bad strings, Room, & lint in <5s. |
+| **Environment & Diagnostics** | Blind to Android SDK paths, ADB serials, and system health. | **12-Dimension Doctor**: Audits 30 checks with 10s live process streaming heartbeats during Gradle operations. |
 
 ---
 
