@@ -46,7 +46,7 @@ The **Android Agent Harness** places deterministic, machine-enforced barriers **
                                      v
 +-------------------------------------------------------------------------+
 | 1. PRE-TOOL SAFETY INTERCEPTOR (Python Hook Engine)                     |
-|    - Hard-denies git commit, push, reset (Zero Git Authority)           |
+|    - Blocks autonomous git commit, push, reset (Human Git Authority)    |
 |    - Intercepts bare ADB, pm clear, adb monkey, homoglyphs, base64      |
 |    - Anti-polling rate limits & ephemeral conversation state tracking   |
 +-------------------------------------------------------------------------+
@@ -108,7 +108,7 @@ The **Android Agent Harness** places deterministic, machine-enforced barriers **
 | **UI Freezes & ANRs** | Blocking I/O or Room access executed on `Dispatchers.Main`. | **ANR Guardian**: Static heuristics intercept main-thread I/O, canvas bottlenecks, and runaway recomposition loops. |
 | **Database Migrations** | Modifying `@Entity` without migrations causes runtime launch crashes. | **Room Guard**: Validates entity hash schemas, migration paths, and test coverage before allowing builds. |
 | **Bilingual Localization & RTL** | Adding English strings without Arabic translations breaks RTL layouts. | **Bilingual String Parity**: Automated validation enforces 1-to-1 key parity and Compose dual-locale previews. |
-| **Git Safety & History** | AI commits incomplete code, overwrites branches, or pushes dirty state. | **Zero Git Authority**: Hard Python interception blocks all autonomous Git mutations. Commits stay strictly human. |
+| **Git Safety & History** | AI commits incomplete code, overwrites branches, or pushes dirty state. | **Human Git Authority**: Blocks autonomous Git mutations by default (agent drafts messages, developer commits from IDE; configurable during setup). |
 | **Pre-Commit Cleanliness** | Hardcoded strings and lint errors slip into Git history. | **Deterministic Git Gate**: Staged pre-commit hook runs in <5s and blocks dirty commits before they land. |
 | **Device Protection** | AI runs `pm clear` or `adb monkey`, wiping device databases. | **Device Guard**: Hard-denies destructive device commands; binds all execution to physical device serials. |
 | **Supply Chain Safety** | Tooling clones mutable `main` branches with potential drifts. | **Pin-to-Tag Provisioning**: Provisions immutable, tag-pinned releases with SHA-256 tamper-evident verification. |
