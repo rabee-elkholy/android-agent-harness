@@ -6,6 +6,7 @@ We actively maintain and provide security patches for the following versions of 
 
 | Version | Supported |
 | ------- | --------- |
+| 0.11.x  | Yes       |
 | 0.10.x  | Yes       |
 | 0.9.x   | Yes       |
 | 0.8.x   | Yes       |

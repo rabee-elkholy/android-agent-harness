@@ -5,7 +5,7 @@ Attackers: a compromised or misbehaving AI agent, a malicious prompt payload,
 a malicious repository file, or a poisoned upstream dependency. Local humans
 with filesystem write access are out of scope (they own the machine).
 
-Version note: mitigation pointers below reference kit v0.10.8 code. Deny-class
+Version note: mitigation pointers below reference kit v0.11.0 code. Deny-class
 mappings to deterministic test names live in `SECURITY.md`.
 
 | Threat | Attack vector | Mitigation layer | Where enforced |

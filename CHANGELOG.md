@@ -5,7 +5,7 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-08-26
 
 ### README Restructured: Truth-In-Docs Without Information Loss
 - **README Condensed (`README.md`)**: Rewritten from 598 lines / 36 KB to 103 lines, keeping the hero + badges, the Before/After problem table verbatim, a new "Why this exists" narrative (agents self-report success without verification; deterministic gates must sit outside the model), a <=5-command quickstart, an Enforcement Levels table promoted from `docs/tool-support.md`, a five-leaf summary with evidence-footer semantics, pinned lifecycle-prompt URLs, and full doc/community footer links.
@@ -162,7 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.7.0] - 2026-08-24
+**Folded minor release 0.7.0 (2026-08-24):**
 
 ### P1 Domain Depth: Build Flavors (Variants) & Multi-Module Governance
 - **Build Flavor Support (`_variants.py`, `run_gradle_task.py --flavor`, `run_device.py --flavor`, setup I.19)**: Full product-flavor lifecycle. The wizard discovers flavors from Groovy/KTS `productFlavors` blocks and asks which variant is the daily test target; runners resolve assemble tasks (`:app:assemble{Flavor}Debug`) and flavor APK paths automatically, with unknown-flavor rejection. Backward compatible: empty flavor = classic single-variant behavior. Debug-only discipline enforced by construction.

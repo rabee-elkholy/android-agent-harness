@@ -49,7 +49,7 @@ android-harness init          # setup wizard -> answers recorded
 
 Then paste the install prompt in a **new strong-model chat** opened at the
 Android project root:
-`https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/install-prompt.md`
+`https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.11.0/docs/install-prompt.md`
 
 No pipx? Run in place from any kit clone: `python harness_cli.py --help`.
 More CLI: `update` (pin-to-tag upgrade), `preflight` (strings+Room+lint),
@@ -106,12 +106,12 @@ Paste into a **new chat** on your Android project root with a strong
 reasoning model. Each fetched doc carries a version + SHA-256 header -
 verify it before executing.
 
-| Operation | Prompt URL (pinned to v0.10.8) |
+| Operation | Prompt URL (pinned to v0.11.0) |
 | :--- | :--- |
-| **Install** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/install-prompt.md` |
-| **Update** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/update-prompt.md` |
-| **Doctor** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/diagnostic-prompt.md` |
-| **Rollback** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.10.8/docs/rollback-prompt.md` |
+| **Install** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.11.0/docs/install-prompt.md` |
+| **Update** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.11.0/docs/update-prompt.md` |
+| **Doctor** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.11.0/docs/diagnostic-prompt.md` |
+| **Rollback** | `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.11.0/docs/rollback-prompt.md` |
 
 ## Demo
 

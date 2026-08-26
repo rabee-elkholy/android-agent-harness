@@ -1,6 +1,6 @@
-# Recipe: Add a reviewer subagent
+﻿# Recipe: Add a reviewer subagent
 
-Registration points verified against kit v0.10.8 code.
+Registration points verified against kit v0.11.0 code.
 
 1. Create `agents/subagents/<name>.json` with `name`, `description`,
    `model: "inherit"`, `workspace: "inherit"`, `enable_write_tools: false`,
@@ -13,7 +13,7 @@ Registration points verified against kit v0.10.8 code.
    doctor's dimension-3 roster check validates it.
 3. Allow-list the name in `pre_tool_safety.py`:
    - Specialist (on-demand): add to `ALLOWED_KINDS` only.
-   - Delivery leaf: add to BOTH `ALLOWED_KINDS` and `REVIEW_FIVE` — this
+   - Delivery leaf: add to BOTH `ALLOWED_KINDS` and `REVIEW_FIVE` â€” this
      changes the barrier to six leaves and must be called out in the ADR and
      CHANGELOG.
 4. Optional alias: `_hook_state.py` `TEMPLATE_ALIASES`.
