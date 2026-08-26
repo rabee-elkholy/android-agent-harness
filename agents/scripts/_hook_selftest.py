@@ -1,4 +1,6 @@
 """Local self-test for this app multi-agent hooks. Does not execute shell commands."""
+# TODO(audit/2026-02): consider splitting this ~88KB module into per-area suites
+# (engine, wizard, doctor, CLI, adapters, security) — deferred, see ROADMAP.md.
 from __future__ import annotations
 
 import json

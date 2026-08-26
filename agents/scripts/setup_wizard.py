@@ -13,6 +13,8 @@ Agent-assisted (do not shorten the printed prompts):
 Writes <repo>/.harness-setup/answers.json and SETUP_ANSWERS.md.
 Does not copy .agents or port the engine.
 """
+# TODO(audit/2026-02): consider splitting this ~72KB module (discovery, i18n
+# tables, questions, normalize/write CLI) — deferred, see ROADMAP.md.
 from __future__ import annotations
 
 import argparse

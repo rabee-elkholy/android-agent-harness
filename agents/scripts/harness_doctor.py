@@ -12,6 +12,8 @@ Usage:
     python .agents/scripts/harness_doctor.py --device
     python .agents/scripts/harness_doctor.py --repo /path/to/app
 """
+# TODO(audit/2026-02): consider splitting this ~44KB module into one checker
+# module per dimension — deferred, see ROADMAP.md.
 from __future__ import annotations
 
 import argparse

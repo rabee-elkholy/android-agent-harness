@@ -1,4 +1,6 @@
 """Zoho Sprints MCP server (stdio JSON-RPC). Credentials stay in a user-level file."""
+# TODO(audit/2026-02): consider splitting this ~36KB server (API client, HTML
+# formatter, DNS fallback, tool registry) — deferred, see ROADMAP.md.
 from __future__ import annotations
 
 import json
