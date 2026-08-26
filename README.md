@@ -17,20 +17,70 @@
 
 ---
 
-## The Hard Reality: Why AI Coding Agents Break Android Apps
+## The Core Revelation: Prompts are Polite Requests. The Harness is an Engineering Cage.
 
-AI coding assistants (Cursor, Claude Code, Copilot, Antigravity, Windsurf, Devin) are exceptional at generating isolated Kotlin snippets. However, when unleashed on production Android codebases, they introduce **critical silent bugs, performance regressions, and destructive actions**:
+Every developer using AI coding assistants (Cursor, Claude Code, Copilot, Antigravity, Windsurf) eventually discovers the same painful truth:
+
+> **A prompt, `.cursorrules`, or `SKILL.md` file is just advice inside the model's brain. When context grows, the model ignores the advice, declares fake success, and breaks production.**
+
+The **Android Agent Harness** is fundamentally different. It does not plead with the AI to behave; it places **deterministic, cryptographic, and OS-level execution barriers outside the model**:
+
+```
++---------------------------------------------------------------------------------------------------+
+| PROMPT / SKILL.MD / .CURSORRULES                  | ANDROID AGENT HARNESS                         |
+| (Soft In-Context Advice)                         | (Deterministic OS & Cryptographic Gate)       |
++---------------------------------------------------+-----------------------------------------------+
+| * Model judges its own work ("LGTM!").            | * Assembly (:assembleDebug) is physically     |
+|                                                   |   locked until 5 parallel subagents emit      |
+|                                                   |   matching SHA-256 cryptographic evidence.    |
+|                                                   |                                               |
+| * Model can execute destructive shell commands    | * Python PreToolUse interceptor blocks git    |
+|   (git commit, push --force, pm clear).           |   mutations, bare ADB, and pm clear at OS.    |
+|                                                   |                                               |
+| * Attention fades as context grows (token decay). | * Fixed Python engine outside the model;      |
+|                                                   |   zero token decay, enforces rules forever.   |
+|                                                   |                                               |
+| * Zero protection when committing from IDE.       | * Universal staged pre-commit gate (.githooks)|
+|                                                   |   blocks bad strings, Room, & lint in <5s.    |
+|                                                   |                                               |
+| * Blind to Android SDK & hardware states.         | * 12-Dimension Doctor auditing 30 checks with |
+|                                                   |   10s live process streaming heartbeats.      |
++---------------------------------------------------------------------------------------------------+
+```
+
+---
+
+## Why a Prompt or Skill File CANNOT Protect Your Android App
+
+If you rely solely on system prompts or markdown skills to govern your AI assistant, failure is mathematically guaranteed:
+
+1. **Zero OS-Level Command Interception**:
+   * A prompt can ask the AI *"Please do not commit or clear app data"*. But when the AI generates a shell command calling `git reset --hard` or `adb shell pm clear`, the prompt has zero power to stop the operating system from executing it. The Harness intercepts the command in Python **before it reaches your shell**.
+2. **"Vibe Checking" vs Cryptographic Proof**:
+   * Under prompt-only setups, models hallucinate successful reviews (*"I reviewed my code, it is 100% bug-free"*). The Harness **locks the Gradle build task**. It hashes the working tree diff with SHA-256 and requires 5 independent reviewer subagents to provide matching cryptographic evidence footers (`EVIDENCE pkg=<sha256_12>`). If one leaf fails or the hash drifts, **compilation is impossible**.
+3. **Offline Human Git Protection**:
+   * Prompts only exist inside active AI chats. When you commit from Android Studio or your terminal, prompts are dead. The Harness installs a staged `.githooks/pre-commit` gate that runs locally on your machine, validating string parity, Room schemas, and Kotlin imports in <5 seconds before any commit can land.
+4. **Context Degradation & Instruction Collision**:
+   * In long chats (>50 turns), LLMs suffer from attention degradation (*lost in the middle*). If a developer casually prompts *"Fix this and commit it"*, the prompt's anti-commit rule is overridden by user intent. The Harness is hardcoded in Python; it never forgets and never yields to prompt pressure.
+5. **Real Hardware & Concurrency Management**:
+   * Prompts cannot inspect `adb devices` serials, verify Room migration schema hashes, stream live Gradle output with 10-second heartbeats, or manage cross-platform file locks (`state_lock()`) during concurrent subagent dispatches.
+
+---
+
+## The 5 Fatal Production Failures We Solve
+
+AI coding assistants without an external harness routinely cause severe Android production incidents:
 
 1. **The "Self-Deluding" Agent & Fake Success**:
-   * Models declare tasks "completed and verified" based purely on generating code. They do not compile the Gradle module, leaving fatal nullability mismatches across Java/Kotlin boundaries, unhandled Coroutine exceptions in background jobs, and broken Jetpack Compose navigation routes.
+   * Models declare tasks "completed and verified" based purely on generating text. They do not compile the Gradle module, leaving fatal nullability crashes across Java/Kotlin boundaries, unhandled Coroutine exceptions in background jobs, and broken Jetpack Compose navigation routes.
 2. **Main-Thread ANRs & Silent Memory Leaks**:
    * Models routinely execute Room database transactions, disk I/O, or JSON parsing on `Dispatchers.Main`. In Jetpack Compose, they trigger unstable recomposition loops or fail to clean up listeners and sensors in `DisposableEffect.onDispose`, resulting in battery drain and Application Not Responding (ANR) dialogs.
 3. **Database Schema Corruption & Launch Crashes**:
    * When modifying `@Entity` classes, AI models frequently forget Room `AutoMigration` specs or export schema updates. The project compiles without warning, but crashes immediately upon launch on user devices with `IllegalStateException: Room cannot verify the data integrity`.
 4. **Destructive Git & Device Actions**:
    * Under context window pressure, agents hallucinate destructive shell commands -- executing `git commit`, `git push --force`, `git reset --hard`, or running `adb shell pm clear` and `adb monkey`, wiping uncommitted developer work and deleting local application test databases.
-5. **The Prompt-Only Illusion**:
-   * Prompt rules like *"Please review carefully"* or *"Do not commit"* reliably fail as conversation context expands. **Soft system prompts cannot enforce hard engineering boundaries.**
+5. **Bilingual Localization Drift & Broken RTL**:
+   * Models add UI strings in `values/strings.xml` without updating `values-ar/strings.xml`, causing missing resource crashes, broken right-to-left (RTL) layouts, and degraded international user experience.
 
 ---
 
@@ -100,6 +150,28 @@ The **Android Agent Harness** places deterministic, machine-enforced barriers **
 
 ---
 
+## What Happens After Installation: Seamless Architectural Adaptation
+
+Once installed, the harness becomes a **native, non-invasive guardian** that seamlessly integrates into your existing codebase:
+
+1. **Adapts to YOUR Architecture (No Forced Rewrites)**:
+   * The harness does not impose foreign paradigms or demand code refactoring.
+   * **Established / Legacy Codebases**: If your project uses XML Views, ViewBinding, ViewModel + LiveData, and Java interop, the reviewers adapt to enforce `viewLifecycleOwner` Fragment observation, ViewBinding nulling in `onDestroyView()`, and Java/Kotlin nullability boundaries.
+   * **Modern / Reactive Codebases**: If your project uses Jetpack Compose, MVI, StateFlow, or Kotlin Multiplatform (KMP), the reviewers enforce Unidirectional Data Flow, atomic `StateFlow.update { }`, 48dp touch targets, and Compose recomposition stability.
+   * **Architectural Boundaries**: Agents are strictly barred from violating module boundaries or injecting UI dependencies into Domain/Data layers.
+
+2. **The Invisible Daily Workflow (Silent Guardianship in Action)**:
+   * **Step 1: Normal Prompting**: You interact with your AI coding assistant (Cursor, Claude, Copilot, Antigravity) exactly as usual.
+   * **Step 2: Transparent Safety Interception**: If the AI attempts destructive shell commands (`git commit`, `git reset --hard`, `pm clear`, `adb monkey`), the harness intercepts the execution in Python, preserves your workspace, and redirects the model safely.
+   * **Step 3: Parallel Review Barrier**: When the AI attempts to build (`:assembleDebug`) or run on a device, the harness triggers the **Five-Leaf Review Gate** against the working diff. Once all 5 subagents verify the code with matching SHA-256 evidence footers, APK assembly unlocks automatically.
+   * **Step 4: Human-Owned Commits**: You retain full control over your Git history. When you commit from your IDE, the staged pre-commit gate validates string parity and Room schemas in **<5 seconds**.
+
+3. **Zero Team Pollution (Seamless Team Coexistence)**:
+   * Local safety hooks and configurations are automatically registered in `.git/info/exclude` and marked with `git update-index --assume-unchanged`.
+   * Your team members can work on the same shared repository without experiencing Git merge conflicts or unwanted configuration commits.
+
+---
+
 ## Side-by-Side Comparison
 
 | Failure Mode / Capability | Without Android Harness | With Android Agent Harness |
@@ -141,28 +213,6 @@ The interactive wizard automatically analyzes your project and discovers:
 * Gradle application modules, launcher activities, and package names.
 * Product Flavors & Build Variants (e.g. `devDebug`, `stagingRelease`, `prodRelease`).
 * Architecture stack (MVI / MVVM / Clean Architecture + Koin / Hilt + Room + Jetpack Compose / XML).
-
----
-
-### What Happens After Installation: Seamless Architectural Adaptation
-
-Once installed, the harness becomes a **native, non-invasive guardian** that seamlessly integrates into your existing codebase:
-
-1. **Adapts to YOUR Architecture (No Forced Rewrites)**:
-   * The harness does not impose foreign paradigms or demand code refactoring.
-   * **Established / Legacy Codebases**: If your project uses XML Views, ViewBinding, ViewModel + LiveData, and Java interop, the reviewers adapt to enforce `viewLifecycleOwner` Fragment observation, ViewBinding nulling in `onDestroyView()`, and Java/Kotlin nullability boundaries.
-   * **Modern / Reactive Codebases**: If your project uses Jetpack Compose, MVI, StateFlow, or Kotlin Multiplatform (KMP), the reviewers enforce Unidirectional Data Flow, atomic `StateFlow.update { }`, 48dp touch targets, and Compose recomposition stability.
-   * **Architectural Boundaries**: Agents are strictly barred from violating module boundaries or injecting UI dependencies into Domain/Data layers.
-
-2. **The Invisible Daily Workflow (Silent Guardianship in Action)**:
-   * **Step 1: Normal Prompting**: You interact with your AI coding assistant (Cursor, Claude, Copilot, Antigravity) exactly as usual.
-   * **Step 2: Transparent Safety Interception**: If the AI attempts destructive shell commands (`git commit`, `git reset --hard`, `pm clear`, `adb monkey`), the harness intercepts the execution in Python, preserves your workspace, and redirects the model safely.
-   * **Step 3: Parallel Review Barrier**: When the AI attempts to build (`:assembleDebug`) or run on a device, the harness triggers the **Five-Leaf Review Gate** against the working diff. Once all 5 subagents verify the code with matching SHA-256 evidence footers, APK assembly unlocks automatically.
-   * **Step 4: Human-Owned Commits**: You retain full control over your Git history. When you commit from your IDE, the staged pre-commit gate validates string parity and Room schemas in **<5 seconds**.
-
-3. **Zero Team Pollution (Seamless Team Coexistence)**:
-   * Local safety hooks and configurations are automatically registered in `.git/info/exclude` and marked with `git update-index --assume-unchanged`.
-   * Your team members can work on the same shared repository without experiencing Git merge conflicts or unwanted configuration commits.
 
 ---
 
