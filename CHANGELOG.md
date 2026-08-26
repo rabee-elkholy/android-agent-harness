@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Threat Model Documentation
 - **Dedicated Threat Model (`docs/threat-model.md`)**: New threat model covering prompt injection via repo instructions, `.agents/` config tampering, symlink/path-traversal attacks, secret exfiltration (logcat/env/MCP wiring), MCP tool poisoning, adb data-wipe/privilege bypasses, and floating kit provisioning — each mapped to its deterministic mitigation layer and enforcement code, with accepted residual risks called out explicitly.
+- **Cross-Linked Security Docs (`SECURITY.md`, `docs/threat-model.md`)**: SECURITY.md gains an "Agent-Behavior Threat Model" pointer section; the threat model links back to the SECURITY.md reporting policy. No duplication between the two files.
 
 ### Supply-Chain Integrity: Pinned One-Click Prompt URLs & Checksum Headers
 - **Immutable Prompt Pinning (`README.md`, `docs/`, `harness_cli.py`)**: All 29 raw one-click lifecycle prompt URLs moved from the floating `main` branch to the immutable `v0.10.8` release tag; the CLI now builds prompt URLs from the resolved kit version via `_prompt_url()` instead of hardcoded `main` constants.

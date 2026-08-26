@@ -32,3 +32,8 @@ mappings to deterministic test names live in `SECURITY.md`.
 
 Physical access, OS-level compromise, git history forgery by repo owners, and
 denial-of-service of the developer's own machine.
+
+## Reporting
+
+Report vulnerabilities per `SECURITY.md` — private security advisories only,
+never a public issue.

@@ -43,6 +43,17 @@ deterministic and performs zero network I/O.
 
 ---
 
+## Agent-Behavior Threat Model
+
+The table above covers the machine-enforced deny classes. Agent-behavior
+threats (prompt injection via repository instructions, `.agents/` config
+tampering, secret exfiltration vectors, MCP tool poisoning, and the accepted
+residual risks) are modeled in [`docs/threat-model.md`](docs/threat-model.md).
+This file remains the source for deny-class -> test-name mapping and the
+reporting policy.
+
+---
+
 ## Reporting a Vulnerability
 
 If you discover a potential security vulnerability (such as a safety hook bypass, unintended command execution, or credential exposure in MCP integrations):
