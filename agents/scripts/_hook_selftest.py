@@ -1768,6 +1768,35 @@ ok_fixtures = ok_fixture and ok_fix_cli
 print(f"make_android_fixture profiles + CLI: {'OK' if ok_fixtures else 'FAIL'}")
 failed += int(not ok_fixtures)
 
+# --- v0.10.x: committed golden fixtures must byte-match the generator ---
+golden_root = repo_root / "tests" / "fixtures" / "golden"
+if golden_root.is_dir():
+    def _tree_files(base: Path) -> dict:
+        out: dict = {}
+        for p in sorted(base.rglob("*")):
+            if p.is_file():
+                out[p.relative_to(base).as_posix()] = p.read_bytes()
+        return out
+
+    ok_golden = True
+    golden_notes: list[str] = []
+    for profile in ("classic", "multimodule", "flavors", "kmp"):
+        want_dir = golden_root / profile
+        got_dir = make_fixture(profile)
+        try:
+            if _tree_files(want_dir) != _tree_files(got_dir):
+                ok_golden = False
+                golden_notes.append(profile)
+        finally:
+            shutil.rmtree(got_dir, ignore_errors=True)
+    print(
+        f"golden fixtures match generator output: "
+        f"{'OK' if ok_golden else 'FAIL drifted=' + ', '.join(golden_notes)}"
+    )
+    failed += int(not ok_golden)
+else:
+    print("golden fixtures match generator output: OK (skipped — no tests/fixtures/golden)")
+
 # --- v0.10.0: wizard answer pre-fill + doctor remediation guidance ---
 from setup_wizard import default_for_question, existing_defaults, write_answers  # noqa: E402
 
@@ -2119,10 +2148,13 @@ print(
 )
 failed += int(not ok_wizard_i21)
 
-STATE.write_text(
-    json.dumps({"c-ttl": {"pending_reviews": True, "pending_since": time.time() - 100000}}),
-    encoding="utf-8",
-)
+# Dispatch one real review round for c-ttl so the tree-cleanliness gate sees
+# review history (the TTL probe must not depend on an empty working tree),
+# then backdate pending_since to drive the TTL expiry being tested.
+run(invoke_five("c-ttl"))
+_state_now = json.loads(STATE.read_text(encoding="utf-8"))
+_state_now["c-ttl"]["pending_since"] = time.time() - 100000
+STATE.write_text(json.dumps(_state_now), encoding="utf-8")
 ttl_res = run(cmd("gradlew.bat :app:assembleDebug", conversation="c-ttl"))
 ok_ttl = ttl_res["decision"] == "allow"
 print(f"barrier_ttl_expiry_unblocks: {ttl_res['decision']} {'OK' if ok_ttl else 'FAIL ' + json.dumps(ttl_res)}")
