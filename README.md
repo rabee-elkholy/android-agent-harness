@@ -2,7 +2,7 @@
 
 # Android Agent Harness
 
-**Deterministic Quality Gate, Five-Leaf Parallel Review, and Execution Safety Interceptor for AI-Assisted Android & Kotlin Multiplatform Development.**
+**Deterministic Quality Gate, Five-Leaf Parallel Cryptographic Review, and Execution Safety Interceptor for AI-Assisted Android & Kotlin Multiplatform Development.**
 
 [![CI Build](https://img.shields.io/github/actions/workflow/status/rabee-elkholy/android-harness-kit/ci.yml?branch=main&style=flat-square&label=CI%20Build)](https://github.com/rabee-elkholy/android-harness-kit/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/rabee-elkholy/android-harness-kit?color=2ea44f&style=flat-square&label=Release)](https://github.com/rabee-elkholy/android-harness-kit/releases)
@@ -17,69 +17,113 @@
 
 ---
 
-## The Core Problem: Why AI Coding Agents Break Android Apps
+## The Hard Reality: Why AI Coding Agents Break Android Apps
 
-AI coding assistants (Cursor, Claude Code, Copilot, Antigravity, Windsurf) have become exceptionally capable at writing isolated Kotlin snippets. However, in real-world Android projects, they routinely cause **silent production failures, architectural degradation, and data loss**:
+AI coding assistants (Cursor, Claude Code, Copilot, Antigravity, Windsurf, Devin) are exceptional at generating isolated Kotlin snippets. However, when unleashed on production Android codebases, they introduce **critical silent bugs, performance regressions, and destructive actions**:
 
-1. **The "Self-Deluding" Agent & Fake Success**: Models self-report success based on superficial text completion. They declare a feature "implemented and verified" without compiling the Gradle module, leaving subtle nullability bugs at Java/Kotlin boundaries, unhandled Coroutine exceptions, or broken navigation graphs.
-2. **Main-Thread ANRs & Memory Leaks**: Agents frequently perform disk I/O, Room database access, or JSON parsing on `Dispatchers.Main`, introduce runaway recomposition loops in Jetpack Compose, or forget to unregister sensors/listeners in `DisposableEffect.onDispose`, draining battery life and causing Application Not Responding (ANR) crashes.
-3. **Database Schema Corruption & Crash on Launch**: When modifying `@Entity` data classes, models often neglect Room `AutoMigration` specs or export schema updates. The project compiles successfully, but crashes immediately upon runtime launch with `IllegalStateException: Room cannot verify the data integrity`.
-4. **Destructive Git & Device Mutations**: Under context pressure, agents hallucinate destructive shell commands -- attempting `git commit`, `git push --force`, `git reset --hard`, or executing `adb shell pm clear` and `adb monkey`, wiping uncommitted developer work and deleting local application databases.
-5. **The Prompt-Only Illusion**: System prompts like *"Please review your code"* or *"Do not commit"* reliably fail as conversation context grows. **Soft prompt instructions cannot enforce hard engineering boundaries.**
+1. **The "Self-Deluding" Agent & Fake Success**:
+   * Models declare tasks "completed and verified" based purely on generating code. They do not compile the Gradle module, leaving fatal nullability mismatches across Java/Kotlin boundaries, unhandled Coroutine exceptions in background jobs, and broken Jetpack Compose navigation routes.
+2. **Main-Thread ANRs & Silent Memory Leaks**:
+   * Models routinely execute Room database transactions, disk I/O, or JSON parsing on `Dispatchers.Main`. In Jetpack Compose, they trigger unstable recomposition loops or fail to clean up listeners and sensors in `DisposableEffect.onDispose`, resulting in battery drain and Application Not Responding (ANR) dialogs.
+3. **Database Schema Corruption & Launch Crashes**:
+   * When modifying `@Entity` classes, AI models frequently forget Room `AutoMigration` specs or export schema updates. The project compiles without warning, but crashes immediately upon launch on user devices with `IllegalStateException: Room cannot verify the data integrity`.
+4. **Destructive Git & Device Actions**:
+   * Under context window pressure, agents hallucinate destructive shell commands -- executing `git commit`, `git push --force`, `git reset --hard`, or running `adb shell pm clear` and `adb monkey`, wiping uncommitted developer work and deleting local application test databases.
+5. **The Prompt-Only Illusion**:
+   * Prompt rules like *"Please review carefully"* or *"Do not commit"* reliably fail as conversation context expands. **Soft system prompts cannot enforce hard engineering boundaries.**
 
 ---
 
-## The Solution: Deterministic Gates Outside the Model
+## The 7-Layer Defense Architecture
 
 The **Android Agent Harness** places deterministic, machine-enforced barriers **outside the model's brain**:
 
 ```
-[ Developer Prompt / IDE Chat ]
-              |
-              v
-[ Pre-Tool Safety Interceptor ] --> Blocks destructive Git mutations, bare ADB, pm clear
-              |
-              v
-[ Implementation / Coding ]
-              |
-              v
-[ Five-Leaf Review Barrier ] -----> 5 Specialized subagents run in parallel (Bug, Conv, Sec, Perf, Reg)
-              |                     Must produce cryptographic SHA-256 evidence footers + verdict.json
-              v
-[ Preflight Quality Gate ] -------> Fast Kotlin lint (<5s), Room migration check, Bilingual string parity
-              |
-              v
-[ Gradle Build & Live Device ] ---> APK Assembly & device install only unlocked after FULL PASS
++-------------------------------------------------------------------------+
+|                      Developer Prompt / IDE Chat                        |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| 1. PRE-TOOL SAFETY INTERCEPTOR (Python Hook Engine)                     |
+|    - Hard-denies git commit, push, reset (Zero Git Authority)           |
+|    - Intercepts bare ADB, pm clear, adb monkey, homoglyphs, base64      |
+|    - Anti-polling rate limits & ephemeral conversation state tracking   |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| 2. FIVE-LEAF PARALLEL CRYPTOGRAPHIC REVIEW GATE                         |
+|    - Locks :assembleDebug and device execution                          |
+|    - Dispatches 5 specialized subagents in ONE call on hashed diff      |
+|    - Validates cryptographic SHA-256 evidence footers (EVIDENCE pkg=...) |
+|    - Emits machine-readable verdict.json & resolves ADR-006 conflicts   |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| 3. SPECIALIZED ANDROID PREFLIGHT TRIO (<5s Fast Checks)                 |
+|    - Bilingual String Parity: 1-to-1 sync between values/ & values-ar/  |
+|    - Room Database Guard: Validates entity hashes & AutoMigrations      |
+|    - Fast Kotlin Lint: 48dp touch targets, contentDescription, previews |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| 4. UNIVERSAL PRE-COMMIT QUALITY GATE (.githooks/pre-commit)             |
+|    - Runs on staged files before any human commit lands in history      |
+|    - Isolated locally via .git/info/exclude and --assume-unchanged      |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| 5. GRADLE BUILD & LIVE PROCESS STREAMING                                |
+|    - APK Assembly unlocked only after full evidence verification        |
+|    - Live 10-second heartbeat progress streaming to IDE chat            |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| 6. PHYSICAL DEVICE RUNNER & FORENSICS                                   |
+|    - Serial-bound ADB installation (-d / -s <serial>)                   |
+|    - Real-time Logcat ANR & crash forensics on actual hardware          |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| 7. ENTERPRISE PROJECT TRACKER GOVERNANCE                                |
+|    - Modular Zoho Sprints, GitHub Projects, Jira, Linear integrations   |
+|    - Zero secret leakage in repo (credentials stored in ~/.android-*)   |
+|    - Gated behind explicit trigger phrases (e.g. 'update zoho')         |
++-------------------------------------------------------------------------+
 ```
 
-* **Zero Git Authority**: The agent is physically barred from executing `git commit` or `git push`. History remains strictly under human developer control.
-* **Cryptographic Delivery Barrier**: Gradle assembly and device deployment stay locked until 5 independent reviewer subagents evaluate the exact working tree diff and emit valid cryptographic evidence footers (`EVIDENCE pkg=<sha256_12>`).
-* **Universal Pre-Commit Quality Gate**: Fast (<5s) staged-file validation ensuring zero hardcoded UI strings, valid Room migrations, and clean Kotlin imports before any commit can land in history.
-
 ---
 
-## Comparison: Development With vs Without Harness
+## Side-by-Side Comparison
 
-| Failure Mode | Without Android Harness | With Android Agent Harness |
+| Failure Mode / Capability | Without Android Harness | With Android Agent Harness |
 | :--- | :--- | :--- |
-| **Verification Integrity** | Casual self-reported "LGTM". Agent declares success without compiling. | **Mandatory Review Gate**: Locked out of `:assembleDebug` until all 5 specialized subagents sign off with cryptographic proof. |
-| **UI Freezes & ANRs** | Blocking I/O or heavy operations placed on `Dispatchers.Main`. | **ANR Guardian**: Static heuristics intercept main-thread disk/network I/O, canvas bottlenecks, and recomposition loops. |
-| **Database Migrations** | Modifying `@Entity` without migrations causes launch crashes. | **Room Guard**: Validates entity hash schemas, migration paths, and test coverage before allowing builds. |
-| **Localization & RTL** | Adding English strings without Arabic translations breaks bilingual UI. | **Bilingual String Parity**: Automated validation enforces 1-to-1 key parity and Compose dual-locale previews. |
-| **Git Safety** | AI commits incomplete code, overwrites branches, or pushes dirty state. | **Hard Interception**: Zero autonomous Git mutations allowed. All commit attempts are blocked by Python hooks. |
-| **Device Integrity** | AI runs `pm clear` or `adb monkey`, wiping test databases. | **Device Guard**: Intercepts destructive device commands and binds ADB commands to explicit device serials. |
+| **Verification Integrity** | Casual self-reported "LGTM". Agent declares success without compiling. | **Mandatory 5-Leaf Review Gate**: Assembly is physically blocked until 5 specialized subagents sign off with cryptographic proof. |
+| **UI Freezes & ANRs** | Blocking I/O or Room access executed on `Dispatchers.Main`. | **ANR Guardian**: Static heuristics intercept main-thread I/O, canvas bottlenecks, and runaway recomposition loops. |
+| **Database Migrations** | Modifying `@Entity` without migrations causes runtime launch crashes. | **Room Guard**: Validates entity hash schemas, migration paths, and test coverage before allowing builds. |
+| **Bilingual Localization & RTL** | Adding English strings without Arabic translations breaks RTL layouts. | **Bilingual String Parity**: Automated validation enforces 1-to-1 key parity and Compose dual-locale previews. |
+| **Git Safety & History** | AI commits incomplete code, overwrites branches, or pushes dirty state. | **Zero Git Authority**: Hard Python interception blocks all autonomous Git mutations. Commits stay strictly human. |
+| **Pre-Commit Cleanliness** | Hardcoded strings and lint errors slip into Git history. | **Deterministic Git Gate**: Staged pre-commit hook runs in <5s and blocks dirty commits before they land. |
+| **Device Protection** | AI runs `pm clear` or `adb monkey`, wiping device databases. | **Device Guard**: Hard-denies destructive device commands; binds all execution to physical device serials. |
+| **Supply Chain Safety** | Tooling clones mutable `main` branches with potential drifts. | **Pin-to-Tag Provisioning**: Provisions immutable, tag-pinned releases with SHA-256 tamper-evident verification. |
 
 ---
 
-## Lifecycle Operations: Install, Maintain, Update & Rollback
+## Complete Lifecycle Operations (CLI & AI Chat Prompts)
 
-The harness provides two frictionless paths for every lifecycle operation: **CLI-First** (for terminal workflows) and **One-Click Prompts** (for direct IDE AI chat).
+Every lifecycle operation provides two frictionless execution paths: **CLI-First** (for terminal workflows) and **One-Click Prompts** (for direct IDE AI chat).
 
-### 1. Installation & Setup
+### 1. Installation & Greenfield/Existing Project Setup
 
-Set up deterministic governance in any Android or Kotlin Multiplatform repository in under a minute:
+Set up deterministic governance in any Android or Kotlin Multiplatform repository in under 60 seconds:
 
-#### Path A: Via CLI (Recommended)
+#### Path A: Via CLI (Terminal)
 ```bash
 cd /path/to/your/android-project
 pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
@@ -88,17 +132,21 @@ android-harness init
 
 #### Path B: Via AI Chat (One-Click Prompt)
 Open a **new strong-model chat** at your Android repository root and paste:
-```
+```markdown
+Run the Android Harness Kit Installer:
 https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.12.0/docs/install-prompt.md
 ```
 
-The interactive wizard automatically discovers your Gradle modules, launcher activities, build flavors, and project architecture (MVI/MVVM/Clean + Koin/Hilt + Room + Compose).
+The interactive wizard automatically analyzes your project and discovers:
+* Gradle application modules, launcher activities, and package names.
+* Product Flavors & Build Variants (e.g. `devDebug`, `stagingRelease`, `prodRelease`).
+* Architecture stack (MVI / MVVM / Clean Architecture + Koin / Hilt + Room + Jetpack Compose / XML).
 
 ---
 
-### 2. Maintenance & Health Diagnostics (Doctor)
+### 2. Maintenance & Health Diagnostics (12-Dimension Doctor)
 
-Verify the integrity of your installed harness, subagent fingerprints, SDK paths, and file locks at any time:
+Verify the complete health of your harness installation, SDK paths, and configuration at any time:
 
 ```bash
 # Terminal execution
@@ -108,12 +156,19 @@ android-harness doctor
 # https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.12.0/docs/diagnostic-prompt.md
 ```
 
-The **12-Dimension Harness Doctor** runs 30 automated checks covering:
-* Host Python environment & Android SDK discovery
-* Subagent template fingerprints & prompt integrity
-* Git repository status & local hook exclusions
-* Preflight linters (Strings, Room, Fast Kotlin lint)
-* Project tracker configuration & credential isolation (zero secrets in repo)
+The **12-Dimension Harness Doctor** runs 30 automated checks across:
+1. **Host Environment**: Python 3.10+ runtime, OS platform, and path isolation.
+2. **Android SDK & Toolchain**: `adb`, `JAVA_HOME`, and Gradle wrapper execution.
+3. **Subagent Prompt Integrity**: Verifies SHA-256 fingerprints of all 8 reviewer subagents.
+4. **Git Hygiene & Cleanliness**: Local hook exclusions (`.git/info/exclude`) and working tree status.
+5. **Template Consistency**: Ensures zero unreplaced `{{...}}` placeholders in configs.
+6. **Domain References**: Tailored architectural rules and guidelines.
+7. **AI Tool Adapters**: Status of configuration files across selected IDEs.
+8. **Concurrency Locks**: Ephemeral review state machine locks and TTL hygiene.
+9. **Core Safety Selftests**: Verifies passing status of all deterministic security hooks.
+10. **Preflight Linters**: String parity, Room migration check, and Fast Kotlin lint.
+11. **Project Tracker Security**: Credential isolation and trigger-phrase wiring.
+12. **Build Flavors**: Active variant selection and multi-module boundary guards.
 
 ---
 
@@ -129,8 +184,8 @@ android-harness update
 # https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.12.0/docs/update-prompt.md
 ```
 
-* Upgrades preserve all existing project settings, tailored domain references, and tracker credentials.
-* Automatically creates an isolated snapshot in `.harness-backup/<timestamp>/` before updating.
+* Preserves all tailored project preferences, custom domain references, and tracker credentials.
+* Automatically creates an isolated snapshot in `.harness-backup/<timestamp>/` before performing the update.
 
 ---
 
@@ -148,17 +203,22 @@ android-harness rollback
 
 ---
 
-## The Five-Leaf Review Gate
+## The Five-Leaf Review Gate & Subagents Roster
 
 Before any APK assembly or device execution, the Lead Agent dispatches **5 specialized review subagents in parallel in a single invocation** against a hashed diff of the working tree (`HARNESS_REVIEW_PACKAGE`):
 
-| Specialized Subagent | Pass Token | Review Focus & Quality Invariant |
+| Specialized Subagent | Pass Token | Review Focus & Quality Invariants |
 | :--- | :--- | :--- |
-| **`bug-reviewer-agent`** | `BUG_PASS` | Logic correctness, Kotlin null-safety, Coroutine exception handling, network resiliency. |
-| **`convention-reviewer-agent`** | `CONVENTION_PASS` | Unidirectional Data Flow, Clean Architecture/MVI, zero inline FQCNs, Compose accessibility (48dp touch targets). |
-| **`security-reviewer-agent`** | `SECURITY_PASS` | Exported components, deep link validation, secret leakage in logs, hardcoded tokens. |
-| **`perf-anr-guardian-agent`** | `PERF_PASS` | Main-thread disk/network I/O, recomposition loops, sensor/listener lifecycle disposal. |
-| **`regression-impact-reviewer-agent`** | `REGRESSION_PASS` | Blast radius analysis, caller graph verification, data model contract changes. |
+| **`bug-reviewer-agent`** | `BUG_PASS` | Logic correctness, Kotlin null-safety across Java/Kotlin boundaries, Coroutine exception handling, network resiliency, and state preservation across configuration changes. |
+| **`convention-reviewer-agent`** | `CONVENTION_PASS` | Unidirectional Data Flow (UDF), Clean Architecture / MVI, zero inline FQCNs, Compose accessibility standards (touch targets >= 48dp, contentDescription). |
+| **`security-reviewer-agent`** | `SECURITY_PASS` | Exported components security, deep link intent validation, secret leakage in Logcat, hardcoded tokens, and least-privilege runtime permissions. |
+| **`perf-anr-guardian-agent`** | `PERF_PASS` | Intercepts main-thread disk/network I/O, canvas drawing bottlenecks, recomposition loops in Compose, and uncleaned sensor/listener leaks in `DisposableEffect`. |
+| **`regression-impact-reviewer-agent`** | `REGRESSION_PASS` | Blast radius analysis, caller graph verification, deep link route integrity, and data model contract stability. |
+
+### On-Demand Specialists (Task-Specific Delegation)
+* **`qa-diagnostics-agent`**: Deep Logcat forensics, ANR stack trace parsing, memory leak analysis, and test device inspection.
+* **`android-ui-expert-agent`**: Jetpack Compose and XML layout optimization, RTL alignment, accessibility styling, and multi-screen responsiveness.
+* **`test-quality-reviewer-agent`**: Audits unit and UI test suites for assertions validity, coroutine test dispatchers, and mock isolation.
 
 Every review round produces a machine-readable verdict record at `.agents/state/verdicts/verdict-<pkg12>.json`. Validate any verdict record using:
 ```bash
@@ -167,7 +227,7 @@ android-harness verify
 
 ---
 
-## Multi-IDE AI Tool Support
+## Multi-IDE AI Tool Support (14 Tools, 3 Tiers)
 
 The harness provides 3 tiers of enforcement across 14 AI coding environments:
 
@@ -192,7 +252,7 @@ Pinned lifecycle prompts with cryptographic tamper-evident headers:
 
 ---
 
-## Documentation & Architecture Deep-Dives
+## Documentation & Deep-Dives
 
 * **[Architecture Guide](docs/architecture.md)**: 7-stage delivery lifecycle, safety interceptor mechanics, and preflight pipeline.
 * **[Quickstart & CLI Reference](docs/quickstart.md)**: Complete CLI command matrix and environment setup.
