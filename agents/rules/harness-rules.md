@@ -75,10 +75,14 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - Inspect with `grep_search` / `view_file` before editing. Do not guess symbols.
 - Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
 - **MANDATORY PLANNING**: Any new feature, new screen, new schema/table, or multi-file change MUST create an `implementation_plan.md` artifact (`ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`) and obtain developer approval (via the native interactive **Proceed** button or chat approval) BEFORE modifying or creating production code. Do NOT fire an `ask_question` modal for plan approval; let the native artifact Proceed action handle it. Do not start coding before plan approval.
-- **MILESTONE EXECUTION STRATEGY**: For multi-phase plans (>3–4 files, or data + domain + UI layers), present two execution strategies to the developer in the plan:
-  1. **Strategy 1 (Recommended for safety)**: Step-by-Step Phase Delivery (Implement Phase -> Preflight & Tests -> Review Gate -> Phase Validation & Commit -> Proceed to Next Phase).
+- **MILESTONE EXECUTION STRATEGY (ATOMIC PER-PHASE LIFECYCLE)**: For multi-phase plans (>3–4 files, or data + domain + UI layers), present two execution strategies to the developer in the plan:
+  1. **Strategy 1 (Recommended for safety - Step-by-Step Phase Delivery)**:
+     - **NEVER create a separate "Review Phase" at the end of the plan**.
+     - **EVERY SINGLE PHASE is an atomic, self-contained lifecycle**:
+       `Phase Implementation & TDD -> Stage 0.5 Pre-Review Test Gate -> Stage 1 Parallel 5-Leaf Review Gate -> Targeted Unit Tests & Build -> Physical Device Verification (or Unit Test verification for pure Data/Domain) -> Developer Sign-off -> Phase Walkthrough & Conventional Commit -> Advance to Next Phase`.
+     - This guarantees diffs stay small (<3-4 files per review round) and prevents massive end-of-project review loops.
   2. **Strategy 2**: Single-Pass Delivery (Execute all phases in a single turn for lightweight, tightly coupled changes).
-- **PROACTIVE PM STORY & TASK BREAKDOWN**: When a multi-phase plan is approved and a PM provider (e.g. Zoho Sprints / GitHub Projects) is active, proactively ask in chat:
+- **MANDATORY PROACTIVE PM STORY & TASK PROMPT**: When presenting a multi-phase plan in chat (accompanying the `implementation_plan.md` creation), the Lead Agent **MUST proactively ask the developer in the accompanying chat message**:
   *"هل ترغب في إنشاء User Story على Zoho Sprints مع Tasks فرعية لكل مرحلة وتحديث حالتها تلقائياً مع كل إنجاز؟"*
 - **STANDARDIZED MILESTONE PROGRESS FORMAT**: When executing multi-phase tasks, use this clean, professional status format in chat:
   ```markdown
@@ -91,7 +95,8 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
   ### [Review Summary Phase N]:
   * [PASS] **Test Quality**: `TEST_PASS` (when test files are present)
   * [PASS] **5-Leaf Review Gate**: `BUG_PASS` | `CONVENTION_PASS` | `SECURITY_PASS` | `PERF_PASS` | `REGRESSION_PASS`
-  * [PASS] **Unit Tests**: `X Passed` (:module:testDebugUnitTest)
+  * [PASS] **Unit Tests & Build**: `X Passed` (:module:testDebugUnitTest) + `BUILD SUCCESSFUL`
+  * [PASS] **Device Verification**: Installed via `run_device.py` & verified by developer on device (for UI phases)
 
   ---
   ### [Phase N Complete]

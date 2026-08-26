@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-08-26
+
+### Atomic Milestone Enforcement & Mandatory PM Prompting
+- **Strict Prohibition of Standalone Review Phases (`harness-rules.md`)**: Formally prohibited creating deferred "Review Phases" at the end of multi-phase plans. Mandated that every phase is an atomic lifecycle ending with its own test gate, 5-leaf review gate, build, device verification, and commit checkpoint before proceeding to the next phase.
+- **Mandatory Proactive PM Chat Prompt**: Mandated that the Lead Agent proactively includes the Zoho Sprints User Story and Sub-tasks proposal directly in the chat message accompanying plan generation.
+- **Explicit Device Sign-off Barrier**: Clarified that physical device verification (or unit test suite pass for pure Data/Domain layers) is the mandatory human sign-off barrier before presenting any conventional commit.
+
 ## [0.13.0] - 2026-08-26
 
 ### Superpowers Skills Integration
