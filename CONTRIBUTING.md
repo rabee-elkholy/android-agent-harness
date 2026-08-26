@@ -61,7 +61,7 @@ Total test failures: 0
 ### Continuous Integration
 
 Every push and pull request is automatically tested across:
-- **Operating Systems**: `ubuntu-latest`, `windows-latest`
+- **Operating Systems**: `ubuntu-latest`, `windows-latest`, `macos-latest`
 - **Python Versions**: `3.10`, `3.11`, `3.12`, `3.13`
 
 ---
