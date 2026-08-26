@@ -26,7 +26,7 @@ Answer in the developer's language. Do not commit unless they ask.
 
 If `<repo>/.harness-setup/answers.json` exists and `"i0": true`, **skip section I**. Use those answers. Copy `.harness-setup/SETUP_ANSWERS.md` into the backup folder. Installer argv: `$PY <kit-or-.agents>/scripts/setup_wizard.py flags --repo <this-android-root>`.
 
-Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions`; the JSON list is the sole authority and can include I.17-I.21 plus conditional I.2/I.5/I.6/I.19/bootstrap questions. Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
+Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions`; the JSON list is the sole authority and can include I.18-I.21 plus conditional I.2/I.5/I.6/I.19/bootstrap questions. Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
 
 **Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. On a re-run, previous answers are marked `(current)` and Enter keeps them; only deliberate changes need a new choice. Do not guess which tools they use (I.14), Zoho (I.16), tracker (I.20), git gate (I.21), or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until the required questions returned by the wizard are answered.
 
@@ -64,71 +64,65 @@ Print a **proposed facts** table in chat (module, assemble task, APK path, appli
 Print `model_warning` then `auto_blurb` from the wizard JSON. Then ask **only** the `questions` array (section I). Do not re-ask facts already in `auto`.
 
 ## I) Interview — only what the wizard JSON lists
-
-Ask **only** `questions` from `setup_wizard.py questions`. The JSON list is the sole authority. In a normal established project it includes I.0, I.1, I.3, I.4, I.10, I.14, I.15, I.16, I.17, I.18, I.20, and I.21; I.2/I.5/I.6/I.19 and `b_*` are conditional.
-
+ 
+Ask **only** `questions` from `setup_wizard.py questions`. The JSON list is the sole authority. In a normal established project it includes I.0, I.1, I.3, I.4, I.10, I.14, I.15, I.16, I.18, I.20, and I.21 (chat language dynamically mirrors the developer per `harness-rules.md`); I.2/I.5/I.6/I.19 and `b_*` are conditional.
+ 
 ### I.0 Backup? (required)
-
+ 
 - **Modal prompt:** Setup will replace the AI helper files in this project. A backup lets you restore them if something goes wrong. Without a backup, the old files cannot be restored.
 - **Choices:** `Back up and start` (Recommended) / `Start without a backup` / `Stop setup`
-
+ 
 ### I.1 App name (required)
-
+ 
 - **Modal prompt:** What name should the helper use for this app? I found “<discovered>”. Reviews and AGENTS.md will show that name.
 - **Choices:** `Use “<discovered>”` (Recommended) / `Other name (I will type it)`
 - **Free text** only if they pick Other.
-
+ 
 ### I.3 Git (required)
-
+ 
 - **Modal prompt:** Who should create git commits? If you are not sure, keep commits in your own hands (you commit from the IDE).
 - **Choices:** `I commit myself` (Recommended) / `The agent may commit when I ask in chat`
-
+ 
 ### I.4 Phone or emulator? (required)
-
+ 
 - **Modal prompt:** Will you test this app on a real phone, an emulator (AVD), or both? Pick both unless you never use an emulator. Physical only blocks emulator install and logcat.
 - **Choices:** `Phone and emulator both allowed` (Recommended) / `Physical phone only — no emulator`
 - **If both allowed:** relax “physical only” in `harness-rules.md`, `pre_tool_safety.py` (do **not** deny `emulator-` serials or `emulator`/`avdmanager`), `run_device.py`, `logcat_doctor.py`, `capture_screen.py`, adapters, and do not add emulator to the Gemini `deny` list. Keep `adb monkey` denied. Rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow`.
 - **If physical only:** keep the kit’s physical-only denies.
-
+ 
 ### I.10 Ask before install? (required)
-
+ 
 - **Modal prompt:** Before the helper installs the app on the phone or emulator, should it ask you first? Asking avoids installing on the wrong device. Skipping is faster if you trust the serial.
 - **Choices:** `Ask me first` (Recommended) / `Install without asking`
 - **If ask:** `harness-rules.md` requires one confirmation before `run_device.py` / `adb install` in a session.
 - **If without asking:** do not add that confirmation. Keep `adb monkey` denied.
-
+ 
 ### I.15 Unit tests? (required)
-
+ 
 - **Modal prompt:** After the helper finishes code and review, should it run unit tests (checks logic without opening the app)? Pick no if this project has no tests and you will not add them.
 - **Choices:** `Yes, run unit tests` (Recommended) / `No, skip unit tests`
 - **If yes:** keep a targeted `:<module>:testDebugUnitTest` step after the 5 leaves and before assemble. Use **this** module. Drop leftover payment-test paths unless they exist here. If there is no `src/test` yet, still leave the step — the agent must not invent fake tests.
 - **If no:** remove the unit-test step from `harness-rules.md` section 3, `workflows/deliver.md`, and `gradle-build-optimizer`. Do **not** skip the 5-leaf review or assemble. Do not require TDD.
-
+ 
 ### I.14 Coding tools (required)
-
+ 
 - **Modal prompt:** Which programs do you open this project in? Select every one you use. If you use Cursor, you must select Cursor so its rules get written.
 - **Choices (multi-select):** `Cursor` / `Claude Code` / `GitHub Copilot` / `Gemini / Antigravity` / `Codex` / `Qwen Code` / `Windsurf` / `Cline` / `Roo` / `Amazon Q` / `Continue` / `Junie` / `Kilo` / `Goose` / `All of them`
 - Wait. Do not default to all. Do not default to only the tool running this chat.
-
+ 
 ### I.16 Zoho Sprints (required)
-
+ 
 - **Modal prompt:** use the wizard JSON `prompt` verbatim. Setup will not ask for tokens and will not copy them.
 - **Choices:** enable / skip. If a user-level Zoho config already exists on this PC, enable is recommended. Otherwise skip is recommended.
 - **If skip:** run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --disable` so a leftover `.cursor/mcp.json` Zoho entry is removed. Keep `.agents/mcp_config.json` empty.
 - **If enable:** follow the Zoho setup flow below.
 - Never write `~/.gemini/config/mcp_config.json`. Never paste tokens in chat.
-
-### I.17 Engineering chat language (required)
-
+ 
+### I.18 Project tracker content language (required)
+ 
 - **Modal prompt:** use the wizard JSON `prompt` verbatim.
-- **Choices:** strict English / mirror the developer's language / Arabic.
-- Apply the selected language to plans, reviewer reports, and commit messages; this does not change code or user-facing app strings.
-
-### I.18 Zoho content language (required)
-
-- **Modal prompt:** use the wizard JSON `prompt` verbatim.
-- **Choices:** English titles with Arabic comments/descriptions / all English / all Arabic.
-- This controls PM handoff text only. It is independent of I.17.
+- **Choices:** English task titles + Arabic comments/descriptions / all English / all Arabic.
+- Controls PM handoff text and comments across Zoho Sprints, Jira, Linear, and GitHub Projects. Conversational chat dynamically mirrors the developer's language per `harness-rules.md`.
 
 ### I.19 Daily flavor (conditional)
 

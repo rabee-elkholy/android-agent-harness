@@ -18,8 +18,7 @@ after install, re-run the wizard (previous answers are pre-filled) — see
 | `I.14` | **AI Tool Adapters** | *Multi-select* | Select only the IDEs and agents used for this project. |
 | `I.15` | **Unit Tests Gate** | `Yes` | Run the targeted unit-test task before assemble. |
 | `I.16` | **Zoho Sprints MCP** | *Optional* | Configure the built-in integration without copying tokens. |
-| `I.17` | **Chat Language** | `Strict English` | Language for engineering chat, plans, reviews, and commits. |
-| `I.18` | **Zoho Language** | `English titles + Arabic notes` | Language policy for Zoho task content. |
+| `I.18` | **Tracker Language** | `English titles + Arabic notes` | Language policy for task tracker content (Zoho / Jira / Linear / GitHub). |
 | `I.19` | **Daily Flavor** | *Conditional* | Asked only when Gradle product flavors are discovered. |
 | `I.20` | **Project Tracker** | `Zoho Sprints` | Zoho, GitHub Projects, Jira, Linear, or none. Writes `PM_PROVIDER`. |
 | `I.21` | **Pre-Commit Git Gate** | `Yes` | Install the staged quality gate; use `--no-git-gate` only when managing your own hook. |
