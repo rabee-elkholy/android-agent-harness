@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TTL Probe Hardening (`_hook_selftest.py`)**: The barrier-TTL test now dispatches a real review round before backdating `pending_since`, so it no longer depends on an empty working tree (uncommitted Kotlin files would otherwise correctly trip the tree-cleanliness gate).
 - **Fixed: Golden-Fixture EOL Stability (`.gitattributes`, `_hook_selftest.py`)**: `core.autocrlf` smudge rewrote the committed fixture trees to CRLF, faking generator drift. Golden fixtures are now excluded from EOL normalization via `.gitattributes`, and the drift probe compares EOL-normalized bytes so it is robust to any git config.
 
+### Demo Media Placeholder
+- **Recording Guide (`docs/media/README.md`)**: Placeholder section backing the README demo table, with an exact four-shot list (install wizard, five-leaf dispatch with evidence footers and verify, blocked commit plus pre-commit gate, doctor report), export commands, and hygiene rules (<=30s, 1200px, no secrets).
+
 ### Benchmark Scaffold
 - **Standardized Task List (`docs/benchmark/tasks.md`)**: Twelve benchmark tasks, each mapped to the harness gate with a determinate outcome (parity, Room, previews, network resiliency, blast radius, sensors, security, git authority, module boundaries).
 - **Metrics Collector (`scripts_dev/benchmark/metrics.py`)**: Stdlib-only, zero-network collector rendering per-task markdown tables from a run directory (events.jsonl, harness audit_log.jsonl denies as unsafe-action blocks, manual interventions.json, tokens.jsonl) covering retries, unsafe-action blocks, build/test failures, human interventions, token counts, and wall time.
