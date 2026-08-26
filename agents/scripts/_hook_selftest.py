@@ -1438,7 +1438,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.12.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.13.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1553,6 +1553,31 @@ ok_test_specialist_files = (
 )
 print(f"test-quality-reviewer-agent files and references: {'OK' if ok_test_specialist_files else 'FAIL'}")
 failed += int(not ok_test_specialist_files)
+
+expected_skills = (
+    "android-harness",
+    "brainstorming",
+    "test-driven-development",
+    "systematic-debugging",
+    "compose-inspector",
+    "kotlin-coroutines-expert",
+    "gradle-build-optimizer",
+    "git-pr-automator",
+)
+missing_skills = [
+    s for s in expected_skills
+    if not (agents_root / "skills" / s / "SKILL.md").is_file()
+]
+ok_skills_catalog = len(missing_skills) == 0
+if ok_skills_catalog:
+    # Verify valid frontmatter
+    for s in ("brainstorming", "test-driven-development"):
+        content = (agents_root / "skills" / s / "SKILL.md").read_text(encoding="utf-8")
+        if not (content.startswith("---") and f"name: {s}" in content and "description:" in content):
+            ok_skills_catalog = False
+            missing_skills.append(f"{s} (invalid frontmatter)")
+print(f"8-skills catalog and Superpowers skills: {'OK' if ok_skills_catalog else 'FAIL: ' + ', '.join(missing_skills)}")
+failed += int(not ok_skills_catalog)
 
 from _repo_files import _unquote_git_path
 ok_unquote = (

@@ -68,15 +68,39 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 
 ---
 
-## 1) Inspect, Plan, Implement
+## 1) Inspect, Brainstorm, Plan, Implement
 
 - Read `android-harness/SKILL.md` and any matching domain reference before non-trivial work.
+- **BRAINSTORM FIRST**: For non-trivial features, new screens, or architectural refactors, consult `brainstorming/SKILL.md` to probe requirements and formulate 2–3 technical alternatives with trade-offs before drafting a plan.
 - Inspect with `grep_search` / `view_file` before editing. Do not guess symbols.
 - Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
 - **MANDATORY PLANNING**: Any new feature, new screen, new schema/table, or multi-file change MUST create an `implementation_plan.md` artifact (`ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`) and obtain developer approval (via the native interactive **Proceed** button or chat approval) BEFORE modifying or creating production code. Do NOT fire an `ask_question` modal for plan approval; let the native artifact Proceed action handle it. Do not start coding before plan approval.
-- Large work (>3–4 files, or a shared ViewModel / service): split into milestones (data → domain → state → UI). One milestone per increment. No 10-file big-bang turns.
-- Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer.
-- TDD when it protects real logic. No placeholder tests.
+- **MILESTONE EXECUTION STRATEGY**: For multi-phase plans (>3–4 files, or data + domain + UI layers), present two execution strategies to the developer in the plan:
+  1. **Strategy 1 (Recommended for safety)**: Step-by-Step Phase Delivery (Implement Phase -> Preflight & Tests -> Review Gate -> Phase Validation & Commit -> Proceed to Next Phase).
+  2. **Strategy 2**: Single-Pass Delivery (Execute all phases in a single turn for lightweight, tightly coupled changes).
+- **PROACTIVE PM STORY & TASK BREAKDOWN**: When a multi-phase plan is approved and a PM provider (e.g. Zoho Sprints / GitHub Projects) is active, proactively ask in chat:
+  *"هل ترغب في إنشاء User Story على Zoho Sprints مع Tasks فرعية لكل مرحلة وتحديث حالتها تلقائياً مع كل إنجاز؟"*
+- **STANDARDIZED MILESTONE PROGRESS FORMAT**: When executing multi-phase tasks, use this clean, professional status format in chat:
+  ```markdown
+  ### [Phase N/Total]: [Phase Name]
+  * **Scope**: [Brief 1-line description]
+  * **Target Files**: `File1.kt`, `File2.kt`
+  ```
+  *(During review: remain 100% silent in chat while IDE displays live visual cards)*
+  ```markdown
+  ### [Review Summary Phase N]:
+  * [PASS] **Test Quality**: `TEST_PASS` (when test files are present)
+  * [PASS] **5-Leaf Review Gate**: `BUG_PASS` | `CONVENTION_PASS` | `SECURITY_PASS` | `PERF_PASS` | `REGRESSION_PASS`
+  * [PASS] **Unit Tests**: `X Passed` (:module:testDebugUnitTest)
+
+  ---
+  ### [Phase N Complete]
+  * **Accomplished**: [1-2 concise points]
+  * **Suggested Commit**: `feat(domain): brief description`
+  *(Ready to proceed to Phase [N+1] or request developer confirmation)*
+  ```
+- Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer. Consult `systematic-debugging/SKILL.md`.
+- **TEST-DRIVEN DEVELOPMENT (TDD)**: For business logic, UseCases, Repositories, ViewModels, or reproducing bug fixes, follow `test-driven-development/SKILL.md` (Red -> Prove Failure -> Green -> Refactor). Zero placeholder/empty tests.
 
 ---
 
@@ -129,13 +153,28 @@ Skip the **5 review leaves** only when the working tree is strictly:
 
 This skip is not a token optimization. Code changes never skip reviews.
 
-### Stage 1: One tool call, five leaves
+### Stage 0.5: Pre-Review Test Quality Gate (Mandatory for test diffs)
+
+If the package diff contains any modified or newly created unit/UI test files (`*Test.kt` or `src/test/`):
+
+1. Dispatch `test-quality-reviewer-agent` in a dedicated pre-review invocation.
+2. The reviewer audits:
+   - **Assertion Depth**: $\ge 2$ meaningful assertions per `@Test` (no `assertTrue(true)` or empty checks).
+   - **Coroutines Concurrency**: Use of `StandardTestDispatcher` with `advanceUntilIdle()` or `Turbine` for Flow assertion.
+   - **Mock Isolation**: Pure Fakes or explicit `coEvery` definitions with `@After` teardown.
+   - **Zero Test Stubs**: No placeholder tests or empty stubs.
+3. Advance to Stage 1 only upon receiving `TEST_PASS`. If findings are returned, fix test assertions before triggering the 5-leaf gate.
+
+### Stage 1: One tool call, five leaves (with Silent Review Wait)
 
 From repo root:
 
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
-3. Stop calling tools. Do not poll `transcript.jsonl`. Do not run lint/tests/assemble while they run.
+3. **SILENT REVIEW WAIT (Zero Chat Noise)**:
+   - When subagents are running in the background, the Lead Agent **MUST REMAIN COMPLETELY SILENT in chat** upon receiving intermediate notifications (e.g. do NOT output *"Waiting for 4 remaining..."* or *"Waiting for 3 remaining..."*).
+   - The IDE interface natively displays live progress cards and spinners for each subagent.
+   - Output a single, consolidated, professional summary in chat **ONLY when all 5 subagents have finished and all verdicts are in context**.
 4. Collect verdicts. BLOCKER/MAJOR → fix at the producer → regenerate the package → dispatch the same 5 again. Identical package content is rejected; the diff must change.
 5. Advance only when all five returned `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`.
 
@@ -150,7 +189,7 @@ Optional sixth slot in the same invoke: `qa-diagnostics-agent`, `android-ui-expe
 Only after the 5 leaves have finished (PASS, not still running):
 
 1. `python .agents/scripts/fast_kt_lint.py` — dual-locale `@Preview` is required on Compose `*Screen.kt`, `*Card.kt`, `*Dialog.kt`, `*BottomSheet.kt`, `*Sheet.kt`, and `*Banner.kt`. Screens also need Loading/Empty/Error.
-2. Targeted tests: If test files (`*Test.kt`) were modified or added, audit test quality via `test-quality-reviewer-agent`. Run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."` when this checkout has unit tests. Use this module, not a leftover test path.
+2. Targeted tests: Run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."` when this checkout has unit tests. Use this module, not a leftover test path.
 3. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
 4. `adb devices` — physical serial only.
 5. `python .agents/scripts/run_device.py install-start` (live adb install + launch). Equivalent: `adb -s <DEVICE_ID> install -r -d app/build/outputs/apk/debug/app-debug.apk` then `adb -s <DEVICE_ID> shell am start -n <APPLICATION_ID>/<LAUNCHER_ACTIVITY>`.
@@ -207,9 +246,11 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 ## Skills (read on demand)
 
 - `android-harness` and its `references/` — architecture, Compose, Room, performance, checkout facts
-- `kotlin-coroutines-expert`
-- `systematic-debugging`
-- `compose-inspector`
-- `gradle-build-optimizer`
+- `brainstorming` — requirements exploration & architectural trade-offs
+- `test-driven-development` — strict Red-Green-Refactor test-first development
+- `systematic-debugging` — root-cause hypothesis isolation
+- `compose-inspector` — Compose performance, recomposition, stability & RTL
+- `kotlin-coroutines-expert` — structured concurrency & Flow dispatchers
+- `gradle-build-optimizer` — daemon, build cache & speed optimization
 - `git-pr-automator` — commit **message** format only
 - Zoho Sprints playbook: `.agents/workflows/zoho-sprints.md` (mutate only on `update zoho`)

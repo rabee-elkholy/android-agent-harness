@@ -293,3 +293,15 @@ python .agents/scripts/harness_doctor.py --device --json
 - **Staged Pre-Commit Quality Gate (`pre_commit_gate.py`, on by default; `--no-git-gate` opts out)**: Deterministic, stdlib-only Git hook (`.githooks/pre-commit`) running bilingual string parity, Room database migrations, and fast Kotlin lint against staged changes in <5s before commit.
 - **Claude Code PreToolUse Safety Bridge (`cc_pre_tool_safety.py`, `--cc-hooks`)**: Intercepts terminal tool execution in Claude Code sessions via `.claude/settings.json` `PreToolUse` hook, enforcing strict Git mutation and ADB safety boundaries outside Antigravity.
 - **GitHub Copilot preToolUse Safety Bridge (`copilot_pre_tool_safety.py`, `--copilot-hooks`)**: Registers `.github/hooks/android-harness-pre-tool-use.json` and maps Copilot's documented camelCase or VS Code-compatible snake_case payload into the same safety engine.
+
+---
+
+### 9. Complete Skills Catalog (8 Modular Skills)
+- **`android-harness`**: Core architecture governance, platform invariants, and daily checkout facts.
+- **`brainstorming`**: Interactive requirements exploration, constraint probing, and 2–3 architectural options evaluation before plan drafting.
+- **`test-driven-development`**: Strict **RED-GREEN-REFACTOR** test-first methodology with empirical failure proof.
+- **`systematic-debugging`**: Root-cause hypothesis isolation, stack trace forensics, and producer-level fixes.
+- **`compose-inspector`**: Jetpack Compose recomposition stability, state hoisting, Lazy list keys, and RTL localization.
+- **`kotlin-coroutines-expert`**: Structured concurrency, Flow lifecycles, and dispatcher thread-safety.
+- **`gradle-build-optimizer`**: Gradle daemon acceleration, configuration caching, and compile speed tuning.
+- **`git-pr-automator`**: Conventional commit message generation and PR branch safety.

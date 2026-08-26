@@ -5,6 +5,27 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-08-26
+
+### Superpowers Skills Integration
+- **`brainstorming` Skill (`agents/skills/brainstorming/SKILL.md`)**: Structured 4-phase requirements probing, 2–3 architectural alternatives evaluation with trade-offs & blast radius, pre-screening of Android invariants, and spec locking before plan generation.
+- **`test-driven-development` Skill (`agents/skills/test-driven-development/SKILL.md`)**: Strict **RED-GREEN-REFACTOR** protocol. Enforces writing failing unit tests in `src/test/`, empirical failure verification via Gradle test task, minimal implementation, green verification, and refactoring with Shift-Left quality invariants.
+- **Complete 8-Skills Catalog**: Formalized catalog documenting `android-harness`, `brainstorming`, `test-driven-development`, `systematic-debugging`, `compose-inspector`, `kotlin-coroutines-expert`, `gradle-build-optimizer`, and `git-pr-automator`.
+
+### Pre-Review Test Quality Gate (Stage 0.5)
+- **Dedicated Test Gate (`agents/rules/harness-rules.md`)**: Automatically triggers `test-quality-reviewer-agent` independently whenever `*Test.kt` or `src/test/` files are present in the package diff.
+- **Strict Quality Invariants**: Enforces assertion depth ($\ge 2$ asserts per test), Coroutines `StandardTestDispatcher` control with `advanceUntilIdle()`, pure Fakes and isolated Mock behaviors with `@After` teardown, and zero placeholder/empty stubs before advancing to the 5-leaf gate.
+
+### Milestone Delivery & Standardized Progress Tracking
+- **Phase-by-Phase Delivery Strategy**: Mandates presenting Strategy 1 (Iterative Phase-by-Phase) vs Strategy 2 (All-in-One) to the developer during plan drafting.
+- **Standardized Milestone Status Format**: Clean, professional progress tracking in chat displaying active phase, target files, consolidated review verdicts, and completion summary without conversational noise.
+
+### Silent Review Wait & UX Noise Elimination
+- **Silent Review Wait Protocol (`harness-rules.md`)**: Lead Agent remains 100% silent in chat on intermediate subagent wakeups, letting the IDE's native visual cards display live progress spinners and checkmarks cleanly. Consolidated summary is printed only after all 5 verdicts are in context.
+
+### Proactive Project Tracker Integration
+- **Proactive Story & Task Breakdown**: Proactively prompts developer upon multi-phase plan approval to generate a User Story on Zoho Sprints / GitHub Projects with sub-tasks for each phase and track progress automatically.
+
 ## [0.12.0] - 2026-08-26
 
 ### Modular Architecture: Monolith Splitting
