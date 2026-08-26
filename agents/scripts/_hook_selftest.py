@@ -189,6 +189,13 @@ cases = [
     ("run_device_uninstall", cmd("python .agents/scripts/run_device.py uninstall"), "allow"),
     ("pm_clear", cmd("adb -s DEV shell pm clear com.example.app"), "deny"),
     ("pm_uninstall", cmd("adb -s DEV shell pm uninstall com.example.app"), "deny"),
+    ("adb_cmd_package_clear", cmd("adb -s DEV shell cmd package clear com.example.app"), "deny"),
+    ("adb_cmd_package_uninstall", cmd("adb -s DEV shell cmd package uninstall com.example.app"), "deny"),
+    ("adb_cmd_package_list_ok", cmd("adb -s DEV shell cmd package list packages"), "allow"),
+    ("adb_root_bare", cmd("adb root"), "deny"),
+    ("adb_backup_bare", cmd("adb backup -apk -shared -all"), "deny"),
+    ("adb_remount_bare", cmd("adb remount"), "deny"),
+    ("adb_reboot_bound_ok", cmd("adb -s DEV reboot"), "allow"),
     ("sub_share", invoke("c-share", Workspace="share"), "deny"),
     ("sub_not_allowed", invoke("c-other", name="arbitrary-unregistered-agent"), "deny"),
     (

@@ -120,6 +120,20 @@ def main() -> int:
         _engine_verdict(_cmd("C:/Program Files/Git/bin/git.exe push origin main"))["decision"] == "deny",
     )
 
+    # --- adb data-wipe / privilege escalation laundering: all must deny ---
+    failed += _case(
+        "adb_root_bare_denied",
+        _engine_verdict(_cmd("adb root"))["decision"] == "deny",
+    )
+    failed += _case(
+        "adb_backup_bare_denied",
+        _engine_verdict(_cmd("adb backup -apk -shared -all"))["decision"] == "deny",
+    )
+    failed += _case(
+        "adb_cmd_package_clear_denied",
+        _engine_verdict(_cmd("adb -s DEV shell cmd package clear com.example.app"))["decision"] == "deny",
+    )
+
     # --- review package path traversal: all must deny ---
     pkg = _pkg_file()
     encoded_traversal = _engine_verdict(

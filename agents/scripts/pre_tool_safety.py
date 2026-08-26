@@ -749,7 +749,9 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         "uninstall": "Denied: pm uninstall is forbidden. Use python .agents/scripts/run_device.py uninstall or adb -s <serial> uninstall <package>.",
     }
     for op in sorted(DENIED_PM_OPS):
-        if re.search(rf"\bpm\s+{re.escape(op)}\b", lower):
+        # Also cover the `cmd package clear|uninstall <pkg>` laundering path:
+        # it performs the same data wipe as `pm <op>` and must deny identically.
+        if re.search(rf"\b(?:pm\s+|cmd\s+package\s+){re.escape(op)}\b", lower):
             deny(pm_messages[op])
             return
 

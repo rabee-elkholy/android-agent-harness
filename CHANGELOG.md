@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Safety Engine Hardening: adb Exfiltration Verbs & cmd-package Wipe Denials
+- **Device-Bound Exfil Verbs (`policy_vocab.py`)**: `root`, `remount`, `backup`, `reboot`, and `sync` added to `DEVICE_BOUND_ADB` — bare invocations now deny exactly like every other device-bound verb and require `-d`/`-s <serial>`.
+- **cmd-package Wipe Denial (`pre_tool_safety.py`)**: `adb shell cmd package clear|uninstall <pkg>` now denies identically to `pm clear`/`pm uninstall`, closing the data-wipe laundering path; `cmd package list` remains allowed.
+- **Regression Coverage (`_hook_selftest.py`, `_security_selftest.py`, `SECURITY.md`)**: Seven new hook cases (deny/allow matrix) and three adversarial security assertions; SECURITY.md threat table gained the two new attack-class rows.
+
 ### Threat Model Documentation
 - **Dedicated Threat Model (`docs/threat-model.md`)**: New threat model covering prompt injection via repo instructions, `.agents/` config tampering, symlink/path-traversal attacks, secret exfiltration (logcat/env/MCP wiring), MCP tool poisoning, adb data-wipe/privilege bypasses, and floating kit provisioning — each mapped to its deterministic mitigation layer and enforcement code, with accepted residual risks called out explicitly.
 - **Cross-Linked Security Docs (`SECURITY.md`, `docs/threat-model.md`)**: SECURITY.md gains an "Agent-Behavior Threat Model" pointer section; the threat model links back to the SECURITY.md reporting policy. No duplication between the two files.

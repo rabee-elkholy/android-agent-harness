@@ -33,16 +33,23 @@ GIT_MUTATIONS = frozenset(
 )
 
 # adb verbs that touch a device and therefore require -d / -s <serial>.
+# Privilege/data-exfil verbs (root, remount, backup, reboot, sync) are
+# deliberately included so they cannot run without an explicit device binding.
 DEVICE_BOUND_ADB = frozenset(
     {
+        "backup",
         "exec-out",
         "forward",
         "install",
         "logcat",
         "pull",
         "push",
+        "reboot",
+        "remount",
         "reverse",
+        "root",
         "shell",
+        "sync",
         "uninstall",
     }
 )
