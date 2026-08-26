@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Machine-Verifiable Evidence: verdict.json Artifact
 - **Structured Verdict Schema (`agents/scripts/_hook_state.py`, `review_package.py`)**: New `verdicts/verdict-<pkg12>.json` artifact per review round (schema_version 1: task_id, git_sha, package path+sha256, tree fingerprint, per-file SHA-256 map, dispatched/completed timestamps, per-leaf tokens+evidence, findings, PASS/PENDING/EXPIRED verdict). `review_package.py` emits the PENDING record at package generation and a `FILES_SHA256=` header line (capped at 200 files) so every review package carries per-file hashes.
-- **Regression Coverage (`_hook_selftest.py`)**: New probe asserts the PENDING artifact, its schema, package digest, and the FILES_SHA256 header.
+- **Barrier-Clear Emission (`agents/scripts/pre_tool_safety.py`)**: The review barrier now completes the verdict artifact alongside the existing text evidence footer convention (additive only): PASS on evidence-verified clear, EXPIRED on TTL expiry, FAIL on evidence-shortfall denials — with per-leaf tokens, evidence validity, and findings captured best-effort. A safety decision can never be altered by the emission.
+- **Regression Coverage (`_hook_selftest.py`)**: New probe asserts the PENDING artifact, its schema, package digest, and the FILES_SHA256 header; a second probe asserts the artifact reaches `verdict: PASS` with all 5 evidenced leaves after the barrier clears.
 
 ### Safety Engine Hardening: adb Exfiltration Verbs & cmd-package Wipe Denials
 - **Device-Bound Exfil Verbs (`policy_vocab.py`)**: `root`, `remount`, `backup`, `reboot`, and `sync` added to `DEVICE_BOUND_ADB` — bare invocations now deny exactly like every other device-bound verb and require `-d`/`-s <serial>`.

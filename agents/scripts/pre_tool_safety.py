@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -22,6 +23,7 @@ from _hook_state import (  # noqa: E402
     package_already_reviewed,
     pending_since,
     prompts_match,
+    read_verdict_record,
     record_review_round,
     record_subagent_defined,
     record_subagents_poll,
@@ -29,6 +31,7 @@ from _hook_state import (  # noqa: E402
     resolve_transcript_path,
     reviews_pending,
     transcript_path,
+    write_verdict_record,
 )
 from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
 from policy_vocab import (  # noqa: E402
@@ -409,6 +412,60 @@ PASS_TOKENS = ("BUG_PASS", "CONVENTION_PASS", "SECURITY_PASS", "PERF_PASS", "REG
 EVIDENCE_RE = re.compile(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\b")
 
 
+def _record_verdict(
+    conv_id: str,
+    active_pkg12: str,
+    verdict: str,
+    reason: str,
+    chunks: list[str] | None = None,
+) -> None:
+    """Best-effort completion record for the machine-readable verdict artifact.
+
+    Strictly additive: never raises and never alters the allow/deny decision.
+    """
+    try:
+        if not active_pkg12:
+            return
+        record = read_verdict_record(active_pkg12) or {
+            "schema_version": 1,
+            "task_id": "",
+            "git_sha": "",
+            "package": {"path": "", "sha256": "", "sha256_12": active_pkg12},
+            "tree_fingerprint": None,
+            "files": {},
+            "dispatched_at": None,
+        }
+        record["verdict"] = verdict
+        record["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        record["completed_reason"] = reason[:400]
+        leaves: dict[str, dict] = {}
+        findings: list[str] = []
+        for chunk in chunks or []:
+            for token in PASS_TOKENS:
+                if token in chunk:
+                    leaf = token.split("_")[0].lower()
+                    evidence = EVIDENCE_RE.search(chunk)
+                    leaves.setdefault(
+                        leaf,
+                        {
+                            "token": token,
+                            "evidence": {
+                                "pkg": evidence.group(1) if evidence else "",
+                                "cites": int(evidence.group(2)) if evidence else 0,
+                                "valid": bool(evidence)
+                                and evidence.group(1).lower() == active_pkg12.lower(),
+                            },
+                        },
+                    )
+            if "Findings" in chunk:
+                findings.append(chunk[:2000])
+        record["leaves"] = leaves
+        record["findings"] = findings[:50]
+        write_verdict_record(active_pkg12, record)
+    except Exception:
+        pass
+
+
 def _evidence_mode() -> str:
     raw = os.environ.get("HARNESS_EVIDENCE_MODE", "strict").strip().lower()
     return "legacy" if raw == "legacy" else "strict"
@@ -543,6 +600,7 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
     since = pending_since(conv_id)
     if barrier_ttl > 0 and since is not None and time.time() - since > barrier_ttl:
         clear_pending_reviews(conv_id)
+        _record_verdict(conv_id, active_pkg12, "EXPIRED", "Review round expired after the barrier TTL.")
         return True, (
             f"Pending review round expired after {int(barrier_ttl)}s barrier TTL. "
             "Re-run the 5 review leaves if the code changed."
@@ -581,9 +639,17 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
         whole = "\n".join(_entry_blob(entry) for entry in lines)
         if _tail_has_verdicts(whole) and not strict_shortfall([whole]):
             clear_pending_reviews(conv_id)
+            _record_verdict(
+                conv_id, active_pkg12, "PASS",
+                "Review verdicts found in transcript (invoke record missing).", [whole],
+            )
             return True, "Review verdicts found in transcript (invoke record missing)."
         if evidence_mode == "strict" and _tail_has_verdicts(whole):
             missing = _evidenced_verdict_count([whole], active_pkg12)
+            _record_verdict(
+                conv_id, active_pkg12, "FAIL",
+                f"Only {missing}/5 verdicts carried a valid EVIDENCE footer.", [whole],
+            )
             return False, (
                 f"PASS/Findings tokens found for {missing}/5 leaves but EVIDENCE footers are missing "
                 f"or cite the wrong package (expected pkg={active_pkg12}). "
@@ -617,12 +683,18 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
             chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
             if strict_shortfall(chunks):
                 evidenced = _evidenced_verdict_count(chunks, active_pkg12)
+                _record_verdict(
+                    conv_id, active_pkg12, "FAIL",
+                    f"All subagent senders replied, but only {evidenced}/5 verdicts carried a valid EVIDENCE footer.",
+                    chunks,
+                )
                 return False, (
                     f"All subagent senders replied, but only {evidenced}/5 verdicts carry a valid "
                     f"EVIDENCE footer (expected pkg={active_pkg12}). "
                     "Forged, missing, or mismatched footers keep the barrier up; re-request the replies."
                 )
             clear_pending_reviews(conv_id)
+            _record_verdict(conv_id, active_pkg12, "PASS", "All subagents completed.", chunks)
             return True, "All subagents completed."
         return False, (
             f"Waiting for {len(pending)}/{len(spawned_ids)} review subagents to deliver their verdicts."
@@ -631,9 +703,15 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
     chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
     if _tail_has_verdicts(after) and not strict_shortfall(chunks):
         clear_pending_reviews(conv_id)
+        _record_verdict(conv_id, active_pkg12, "PASS", "All subagents completed.", chunks)
         return True, "All subagents completed."
     if evidence_mode == "strict" and _tail_has_verdicts(after):
         evidenced = _evidenced_verdict_count(chunks, active_pkg12)
+        _record_verdict(
+            conv_id, active_pkg12, "FAIL",
+            f"A 5-leaf review round is pending: only {evidenced}/5 verdicts carried a valid EVIDENCE footer.",
+            chunks,
+        )
         return False, (
             f"A 5-leaf review round is pending: {evidenced}/5 verdicts carry a valid EVIDENCE footer "
             f"(expected pkg={active_pkg12}). Tokens alone no longer clear the barrier — "

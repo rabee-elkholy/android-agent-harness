@@ -1046,6 +1046,27 @@ print(
 )
 failed += int(not ok_good)
 
+# v0.10.x: the barrier-clear path completes the machine-readable verdict artifact.
+from _hook_state import read_verdict_record  # noqa: E402
+
+good_rec = read_verdict_record(evidence_active_pkg12)
+ok_good_verdict = (
+    good_rec is not None
+    and good_rec.get("verdict") == "PASS"
+    and good_rec.get("schema_version") == 1
+    and bool(good_rec.get("completed_at"))
+    and len(good_rec.get("leaves") or {}) == 5
+    and all(
+        leaf.get("evidence", {}).get("valid") is True
+        for leaf in (good_rec.get("leaves") or {}).values()
+    )
+)
+print(
+    f"verdict artifact PASS after evidence barrier: "
+    f"{'OK' if ok_good_verdict else 'FAIL ' + json.dumps(good_rec)}"
+)
+failed += int(not ok_good_verdict)
+
 # Legacy mode preserves today's token-only behavior.
 legacy_res = _evidence_conv("c-ev-legacy", token_entries, "legacy")
 ok_legacy = legacy_res["decision"] == "allow"
