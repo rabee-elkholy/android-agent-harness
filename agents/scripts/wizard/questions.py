@@ -171,19 +171,6 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
     )
     qs.append(
         {
-            "id": "i17",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i17"),
-            "options": [
-                {"id": "en", "label": t(lang, "i17_en")},
-                {"id": "mirror", "label": t(lang, "i17_mirror")},
-                {"id": "ar", "label": t(lang, "i17_ar")},
-            ],
-        }
-    )
-    qs.append(
-        {
             "id": "i18",
             "required": True,
             "allow_multiple": False,
@@ -505,9 +492,9 @@ def normalize(raw: dict, facts: dict) -> dict:
     zoho = raw.get("i16") or "skip"
     if zoho not in {"enable", "skip"}:
         zoho = "skip"
-    chat_lang = raw.get("i17") or auto.get("chat_language") or "en"
+    chat_lang = raw.get("i17") or auto.get("chat_language") or "mirror"
     if chat_lang not in {"en", "mirror", "ar"}:
-        chat_lang = "en"
+        chat_lang = "mirror"
     zoho_lang = raw.get("i18") or auto.get("zoho_language") or "en_titles_ar_comments"
     if zoho_lang not in {"en_titles_ar_comments", "all_en", "all_ar"}:
         zoho_lang = "en_titles_ar_comments"
@@ -596,8 +583,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.13 Assemble now: {answers.get('assemble_now')}",
         f"- I.15 Unit tests: {answers.get('unit_tests')}",
         f"- I.16 Zoho Sprints: {answers.get('zoho_mcp')}",
-        f"- I.17 Chat & Engineering Language: {answers.get('chat_language', 'en')}",
-        f"- I.18 Zoho Updates Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
+        f"- I.18 Tracker Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- I.21 Pre-commit git gate: {answers.get('git_gate', 'yes')}",
@@ -711,7 +697,6 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         ("i10", "install_confirm"),
         ("i15", "unit_tests"),
         ("i16", "zoho_mcp"),
-        ("i17", "chat_language"),
         ("i18", "zoho_language"),
         ("i19", "flavor"),
         ("i20", "pm_provider"),

@@ -16,8 +16,9 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 
 - **Answer First, Then Ask**: If the developer asks anything, answer in visible chat first. Only then may you call `ask_question` for a pending device phase or tradeoff. Never fire a bare modal that ignores the question.
 - **Language Policy**:
-  - **Engineering & System Language**: Per `_product.py` (`CHAT_LANGUAGE = "en"` by default): All reasoning, chat responses, implementation plans (`implementation_plan.md`), walkthroughs (`walkthrough.md`), subagent review findings, and Conventional Commit drafts MUST be written in **clear, standard English** to ensure technical precision and prevent RTL/LTR formatting issues. If `CHAT_LANGUAGE = "mirror"`, strictly mirror the developer's language (English if addressed in English, Arabic if addressed in Arabic).
-  - **`ask_question` Modals**: Prompts and options must follow `CHAT_LANGUAGE` (English by default, or mirror developer language).
+  - **Dynamic Developer Communication**: Strictly mirror the developer's language in conversational chat (reply in Arabic when addressed in Arabic, and in English when addressed in English). Keep all code, Kotlin symbols, variable names, file paths, and Conventional Git commit messages strictly in English.
+  - **Task Trackers & PM**: When logging or updating tasks in Zoho Sprints, Jira, Linear, or GitHub, adhere to the configured tracker language policy (`zoho_language` in `_product.py`, e.g., English titles + Arabic descriptions/comments for bilingual teams).
+  - **`ask_question` Modals**: Prompts and options must follow the active conversation language.
 - **`(Recommended)`**: Only for technical / architectural tradeoffs. Forbidden on Pass/Fail device results, plan approval, and simple confirmations.
 - **Native Artifact Planning & Approval**: Implementation plans MUST be written as user-facing artifacts (`implementation_plan.md`) with `ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`. This natively renders the interactive **"Proceed"** button in the chat interface. **Never call `ask_question` for plan approval**; stop calling tools and wait for the developer to approve via the **Proceed** button or provide feedback in chat.
 - **`ask_question` is strictly reserved for**:

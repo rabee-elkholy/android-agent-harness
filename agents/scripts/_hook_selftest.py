@@ -1391,8 +1391,8 @@ facts = {
     "gradlew": True,
 }
 q_ids = [q["id"] for q in questions_payload(Path("."), "en", facts)]
-ok_q = "i16" in q_ids and "i17" in q_ids and "i18" in q_ids
-print(f"wizard includes I.16, I.17, I.18: {'OK' if ok_q else 'FAIL'}")
+ok_q = "i16" in q_ids and "i17" not in q_ids and "i18" in q_ids
+print(f"wizard includes I.16, I.18 (I.17 omitted for dynamic chat): {'OK' if ok_q else 'FAIL'}")
 failed += int(not ok_q)
 norm = normalize(
     {
@@ -1404,14 +1404,13 @@ norm = normalize(
         "i15": "yes",
         "i14": ["cursor"],
         "i16": "enable",
-        "i17": "en",
         "i18": "en_titles_ar_comments",
     },
     facts,
 )
 ok_norm = (
     norm.get("zoho_mcp") == "enable"
-    and norm.get("chat_language") == "en"
+    and norm.get("chat_language") == "mirror"
     and norm.get("zoho_language") == "en_titles_ar_comments"
 )
 print(f"wizard records zoho_mcp and language preferences: {'OK' if ok_norm else 'FAIL'}")
@@ -1849,7 +1848,7 @@ prefill_answers = {
     "unit_tests": "no",
     "tools": ["cursor", "gemini"],
     "zoho_mcp": "skip",
-    "chat_language": "ar",
+    "chat_language": "mirror",
     "zoho_language": "all_ar",
     "flavor": "staging",
     "pm_provider": "github_projects",
@@ -1863,7 +1862,7 @@ ok_prefill = (
     and prefill_defaults.get("i4") == "physical-only"
     and prefill_defaults.get("i15") == "no"
     and prefill_defaults.get("i14") == ["cursor", "gemini"]
-    and prefill_defaults.get("i17") == "ar"
+    and prefill_defaults.get("i18") == "all_ar"
     and prefill_defaults.get("i20") == "github_projects"
     and prefill_defaults.get("i21") == "no"
 )
@@ -2119,14 +2118,14 @@ ok_i20_present = "i20" in q_ids_v8 and i20_labels == ["zoho_sprints", "github_pr
 
 norm_v8 = wiz_normalize(
     {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
-     "i15": "yes", "i14": ["cursor"], "i16": "enable", "i17": "en", "i18": "all_en",
+     "i15": "yes", "i14": ["cursor"], "i16": "enable", "i18": "all_en",
      "i20": "github_projects"},
     facts_v8,
 )
 ok_i20_norm = norm_v8.get("pm_provider") == "github_projects"
 norm_v8_default = wiz_normalize(
     {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
-     "i15": "yes", "i14": ["cursor"], "i16": "skip", "i17": "en", "i18": "all_en"},
+     "i15": "yes", "i14": ["cursor"], "i16": "skip", "i18": "all_en"},
     facts_v8,
 )
 ok_i20_backward = norm_v8_default.get("pm_provider") == "zoho_sprints"
@@ -2134,7 +2133,7 @@ bad_i20_raised = False
 try:
     wiz_normalize(
         {"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow", "i10": "confirm",
-         "i15": "yes", "i14": ["cursor"], "i16": "skip", "i17": "en", "i18": "all_en",
+         "i15": "yes", "i14": ["cursor"], "i16": "skip", "i18": "all_en",
          "i20": "trello"},
         facts_v8,
     )
@@ -2164,11 +2163,11 @@ from setup_wizard import flags_from_answers  # noqa: E402
 ok_i21_present = "i21" in q_ids_v8
 norm_i21_yes = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
                              "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
-                             "i17": "en", "i18": "all_en", "i20": "zoho_sprints", "i21": "no"},
+                             "i18": "all_en", "i20": "zoho_sprints", "i21": "no"},
                           }, facts_v8)
 norm_i21_absent = normalize({"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
                               "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
-                              "i17": "en", "i18": "all_en", "i20": "zoho_sprints"}, facts_v8)
+                              "i18": "all_en", "i20": "zoho_sprints"}, facts_v8)
 ok_i21_norm = (
     norm_i21_yes.get("git_gate") == "no"
     and norm_i21_absent.get("git_gate") == "yes"

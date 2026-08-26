@@ -342,7 +342,7 @@ def auto_from_facts(facts: dict) -> dict:
         "assemble_now": "tests-only",
         "unit_tests": "yes",
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
-        "chat_language": "en",
+        "chat_language": "mirror",
         "zoho_language": "en_titles_ar_comments",
         "pm_provider": DEFAULT_PM_PROVIDER,
     }

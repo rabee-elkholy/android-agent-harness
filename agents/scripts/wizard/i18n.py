@@ -182,18 +182,12 @@ T = {
         "i16_enable": "Enable Zoho Sprints — I will add credentials after setup",
         "i16_skip": "Skip — no Zoho on this project",
         "i16_skip_rec": "Skip — no Zoho (Recommended)",
-        "i17": (
-            "What is your preferred language for engineering chat, implementation plans, subagent reviews, and git commits?"
-        ),
-        "i17_en": "Strict English everywhere (Recommended for Android engineering)",
-        "i17_mirror": "Mirror developer language (English if addressed in English, Arabic if addressed in Arabic)",
-        "i17_ar": "Arabic (عربي)",
         "i18": (
-            "What is your preferred language for Zoho Sprints task descriptions and comments?"
+            "What is your preferred language for task tracker descriptions and comments (Zoho / Jira / Linear / GitHub)?"
         ),
-        "i18_en_titles_ar_comments": "English task titles + Arabic comments and descriptions (Recommended)",
-        "i18_all_en": "All English (Titles, Descriptions, and Comments in English)",
-        "i18_all_ar": "All Arabic (عربي بالكامل)",
+        "i18_en_titles_ar_comments": "English task titles + Arabic comments and descriptions (Recommended for bilingual teams)",
+        "i18_all_en": "All English (Titles, descriptions, and comments in English)",
+        "i18_all_ar": "All Arabic (Titles, descriptions, and comments in Arabic)",
         "i20": (
             "Which project tracker should govern task ingest and updates? "
             "Zoho Sprints is the built-in default. GitHub Projects uses the gh CLI. "
@@ -375,16 +369,10 @@ T = {
         "i16_enable": "فعّل Zoho Sprints — هضيف بيانات الدخول بعد التثبيت",
         "i16_skip": "تخطي — المشروع من غير Zoho",
         "i16_skip_rec": "تخطي — من غير Zoho (مفضّل)",
-        "i17": (
-            "ما هي لغة المحادثة والخطط الهندسية وتقارير المراجعين والكوميت المفضلة؟"
-        ),
-        "i17_en": "إنجليزي هندسي فقط في كل شيء (مفضّل لتطوير أندرويد ومنع تداخل النصوص)",
-        "i17_mirror": "مطابقة لغة المطور (إنجليزي لو كلمته إنجليزي، عربي لو كلمته عربي)",
-        "i17_ar": "عربي بالكامل",
         "i18": (
-            "ما هي اللغة المفضلة لتحديثات ووصف وتعليقات مهام Zoho Sprints؟"
+            "ما هي اللغة المفضلة لتحديثات ووصف وتعليقات مهام نظام إدارة المشاريع (Zoho / Jira / Linear / GitHub)؟"
         ),
-        "i18_en_titles_ar_comments": "عناوين المهام بالإنجليزي والوصف/التعليقات بالعربي (مفضّل)",
+        "i18_en_titles_ar_comments": "عناوين المهام بالإنجليزي والوصف/التعليقات بالعربي (مفضّل لفرق العمل)",
         "i18_all_en": "إنجليزي بالكامل (العناوين والوصف والتعليقات بالإنجليزي)",
         "i18_all_ar": "عربي بالكامل",
         "i20": (
