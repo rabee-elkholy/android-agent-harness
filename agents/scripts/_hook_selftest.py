@@ -1775,7 +1775,8 @@ if golden_root.is_dir():
         out: dict = {}
         for p in sorted(base.rglob("*")):
             if p.is_file():
-                out[p.relative_to(base).as_posix()] = p.read_bytes()
+                # Normalize EOLs so git smudge/clean configs cannot fake drift.
+                out[p.relative_to(base).as_posix()] = p.read_bytes().replace(b"\r\n", b"\n")
         return out
 
     ok_golden = True

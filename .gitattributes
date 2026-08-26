@@ -1,0 +1,3 @@
+# Keep the golden fixtures byte-stable: git must not normalize EOLs on these
+# trees in either direction, so they always match the generator output exactly.
+tests/fixtures/golden/** -text

@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Golden Fixtures Committed
 - **In-Repo Fixture Projects (`tests/fixtures/golden/`)**: All four generator profiles (classic, multimodule, flavors, kmp) committed as byte-stable golden trees with a provenance README; a selftest probe regenerates each profile into temp and asserts byte equality, so generator drift fails CI.
 - **TTL Probe Hardening (`_hook_selftest.py`)**: The barrier-TTL test now dispatches a real review round before backdating `pending_since`, so it no longer depends on an empty working tree (uncommitted Kotlin files would otherwise correctly trip the tree-cleanliness gate).
+- **Fixed: Golden-Fixture EOL Stability (`.gitattributes`, `_hook_selftest.py`)**: `core.autocrlf` smudge rewrote the committed fixture trees to CRLF, faking generator drift. Golden fixtures are now excluded from EOL normalization via `.gitattributes`, and the drift probe compares EOL-normalized bytes so it is robust to any git config.
 
 ### Benchmark Scaffold
 - **Standardized Task List (`docs/benchmark/tasks.md`)**: Twelve benchmark tasks, each mapped to the harness gate with a determinate outcome (parity, Room, previews, network resiliency, blast radius, sensors, security, git authority, module boundaries).
