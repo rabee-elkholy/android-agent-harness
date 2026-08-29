@@ -5,6 +5,19 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-08-29
+
+### Mandatory Phase Sign-Off Hard Barrier & Atomic Delivery
+- **Unbreakable Phase Boundary Barrier (`harness-rules.md`, `AGENTS.md`)**: Mandated that the Lead Agent is strictly forbidden from creating, modifying, or planning any files for Phase N+1 until Phase N completes its full verification lifecycle (5-leaf review, unit tests, assembleDebug, device smoke test) and receives explicit developer sign-off in chat.
+- **Universal Device Smoke Testing**: Mandated live physical device smoke testing across all phases (including pure Data/Repository refactoring) to verify application startup and existing screen stability before advancing.
+
+### High-Signal Communication Policy & Zero Chat Noise
+- **Chat Noise Elimination (`harness-rules.md`)**: Strictly prohibited mechanical progress messages (e.g. "reading file...", "running tests...", "waiting for reviews...") in chat.
+- **Actionable Chat Invariants**: Restricted agent chat output exclusively to 4 high-value moments: plan approval, critical engineering tradeoffs, standardized Phase Milestone Cards, and final delivery with Conventional Commit.
+
+### Shift-Left Coroutines & Test Quality Standards
+- **Mandatory `runTest` Invariant (`test-quality-reviewer-agent.json`, `harness-rules.md`)**: Strictly banned `runBlocking` inside `*Test.kt` unit test suites, enforcing `runTest`, `StandardTestDispatcher`, Turbine for Flow assertion, and dual-branch (success + error) assertions from the very first draft.
+
 ## [0.14.0] - 2026-08-29
 
 ### Universal Adaptive Discovery & Architecture Flexibility

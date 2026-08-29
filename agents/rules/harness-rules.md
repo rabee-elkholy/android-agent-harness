@@ -12,8 +12,16 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 
 ---
 
-## Quality-First & Clarification
+## Quality-First & High-Signal Communication
 
+- **High-Signal Developer Communication (Zero Chat Noise)**:
+  - The Lead Agent **MUST NEVER output mechanical status spam** in chat (e.g., do NOT output *"جاري قراءة الملف..."*, *"جاري تشغيل الاختبارات..."*, *"جاري تجميع التطبيق..."*, or *"جاري انتظار تقارير المراجعة..."*).
+  - The IDE interface already renders native tool cards, execution spinners, and subagent progress visually.
+  - The Lead Agent speaks in chat ONLY at four high-value, actionable moments:
+    1. **Plan Proposal**: Presenting `implementation_plan.md` for developer feedback and approval.
+    2. **Critical Engineering Tradeoffs**: Asking an explicit question via `ask_question` when requirements are ambiguous.
+    3. **Phase Milestone Completion Card**: Reporting the completion of a full phase (Reviews PASS + Tests PASS + Build SUCCESS) and asking for permission to proceed.
+    4. **Final Task Deliverable & Conventional Commit**: Delivering the walkthrough summary and suggested commit message after all phases are verified.
 - **Answer First, Then Ask**: If the developer asks anything, answer in visible chat first. Only then may you call `ask_question` for a pending device phase or tradeoff. Never fire a bare modal that ignores the question.
 - **Language Policy**:
   - **Dynamic Developer Communication**: Strictly mirror the developer's language in conversational chat (reply in Arabic when addressed in Arabic, and in English when addressed in English). Keep all code, Kotlin symbols, variable names, file paths, and Conventional Git commit messages strictly in English.
@@ -25,7 +33,6 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
   1. **Design / architectural tradeoffs** when requirements are ambiguous. `(Recommended)` is allowed here.
   2. **One manual device-verification phase at a time**:
      - `Phase passed` / `Phase failed` / `Retest / I need help`
-- **Clean chat**: No filler per tool step. Never echo `<SYSTEM_MESSAGE>`, raw Gradle dumps, or internal task dumps. Speak when answering, presenting a plan, presenting one device phase, or delivering the final summary.
 - **Quality over tokens**: Uncompromising code quality always wins. Never skip, serialize, or drop the 5 review leaves to save tokens.
 - **Bugs**: Trace data to the producer. No empty `try-catch`, no swallowing `CancellationException`, no dummy business fallbacks (`null` / `0` as fake success). Framework recovery (for example DataStore `emit(emptyPreferences())` on a corrupt file) is not a dummy business fallback.
 - **Colors**: Use this app's theme tokens (or `MaterialTheme`). Prefer `MaterialTheme.colorScheme` / `MaterialTheme.typography`. `colorResource(R.color…)` is allowed when matching existing XML colors. No raw hex and no hardcoded fonts.
@@ -75,16 +82,16 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - Inspect with `grep_search` / `view_file` before editing. Do not guess symbols.
 - Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
 - **MANDATORY PLANNING**: Any new feature, new screen, new schema/table, or multi-file change MUST create an `implementation_plan.md` artifact (`ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`) and obtain developer approval (via the native interactive **Proceed** button or chat approval) BEFORE modifying or creating production code. Do NOT fire an `ask_question` modal for plan approval; let the native artifact Proceed action handle it. Do not start coding before plan approval.
-- **MILESTONE EXECUTION STRATEGY (ATOMIC PER-PHASE LIFECYCLE)**: For multi-phase plans (>3–4 files, or data + domain + UI layers), present two execution strategies to the developer in the plan:
-  1. **Strategy 1 (Recommended for safety - Step-by-Step Phase Delivery)**:
-     - **NEVER create a separate "Review Phase" at the end of the plan**.
-     - **EVERY SINGLE PHASE is an atomic, self-contained lifecycle**:
-       `Phase Implementation & TDD -> Stage 0.5 Pre-Review Test Gate -> Stage 1 Parallel 5-Leaf Review Gate -> Targeted Unit Tests & Build -> Physical Device Verification (or Unit Test verification for pure Data/Domain) -> Developer Sign-off -> Phase Walkthrough & Conventional Commit -> Advance to Next Phase`.
-     - This guarantees diffs stay small (<3-4 files per review round) and prevents massive end-of-project review loops.
-  2. **Strategy 2**: Single-Pass Delivery (Execute all phases in a single turn for lightweight, tightly coupled changes).
+- **MILESTONE EXECUTION STRATEGY (ATOMIC PER-PHASE LIFECYCLE)**: For multi-phase plans (>3–4 files, or data + domain + UI layers), execute strictly phase-by-phase:
+  - **MANDATORY PHASE HARD BARRIER (NO UNILATERAL PHASE-JUMPING)**:
+    - **EVERY SINGLE PHASE is an atomic, self-contained lifecycle**:
+      `Phase Implementation & TDD -> Stage 0.5 Pre-Review Test Gate -> Stage 1 Parallel 5-Leaf Review Gate -> Targeted Unit Tests & Build (:assembleDebug) -> Physical Device Smoke Test -> Developer Sign-off -> Phase Milestone Card -> STOP & Wait for Developer Authorization`.
+    - **STRICT PROHIBITION**: The Lead Agent is **STRICTLY FORBIDDEN from creating, editing, modifying, or planning ANY files belonging to Phase N+1** until Phase N has received explicit developer sign-off in chat.
+    - **Device Smoke Testing Across All Phases**: Even for data/repository/domain refactoring phases, running the app on device (`run_device.py install-start`) to verify the app launches cleanly and existing screens do not crash on navigation is required whenever a physical device is connected.
+    - **NEVER create a separate "Review Phase" at the end of the plan**. Diffs must stay small (<3-4 files per review round) to prevent massive end-of-project review loops.
 - **MANDATORY PROACTIVE PM STORY & TASK PROMPT**: When presenting a multi-phase plan in chat (accompanying the `implementation_plan.md` creation), the Lead Agent **MUST proactively ask the developer in the accompanying chat message**:
   *"هل ترغب في إنشاء User Story على Zoho Sprints مع Tasks فرعية لكل مرحلة وتحديث حالتها تلقائياً مع كل إنجاز؟"*
-- **STANDARDIZED MILESTONE PROGRESS FORMAT**: When executing multi-phase tasks, use this clean, professional status format in chat:
+- **STANDARDIZED MILESTONE PROGRESS FORMAT**: When executing multi-phase tasks, output this clean, high-signal format in chat:
   ```markdown
   ### [Phase N/Total]: [Phase Name]
   * **Scope**: [Brief 1-line description]
@@ -96,13 +103,13 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
   * [PASS] **Test Quality**: `TEST_PASS` (when test files are present)
   * [PASS] **5-Leaf Review Gate**: `BUG_PASS` | `CONVENTION_PASS` | `SECURITY_PASS` | `PERF_PASS` | `REGRESSION_PASS`
   * [PASS] **Unit Tests & Build**: `X Passed` (:module:testDebugUnitTest) + `BUILD SUCCESSFUL`
-  * [PASS] **Device Verification**: Installed via `run_device.py` & verified by developer on device (for UI phases)
+  * [PASS] **Device Smoke Test**: Installed via `run_device.py` & verified by developer on device
 
   ---
-  ### [Phase N Complete]
+  ### [Phase N Complete - Awaiting Sign-Off]
   * **Accomplished**: [1-2 concise points]
-  * **Suggested Commit**: `feat(domain): brief description`
-  *(Ready to proceed to Phase [N+1] or request developer confirmation)*
+  * **Status**: Phase N is fully verified.
+  *(Awaiting developer authorization before touching Phase N+1)*
   ```
 - Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer. Consult `systematic-debugging/SKILL.md`.
 - **TEST-DRIVEN DEVELOPMENT (TDD)**: For business logic, UseCases, Repositories, ViewModels, or reproducing bug fixes, follow `test-driven-development/SKILL.md` (Red -> Prove Failure -> Green -> Refactor). Zero placeholder/empty tests.
@@ -111,26 +118,31 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 
 ## Shift-Left Quality Invariants (Pre-Implementation Guard)
 
-Before writing or modifying any code, the Lead Agent must proactively verify compliance with all 6 quality pillars to achieve **first-pass review approval** and avoid review rejection rounds:
+Before writing or modifying any code, the Lead Agent must proactively verify compliance with all quality pillars to achieve **first-pass review approval** and avoid review rejection rounds:
 
-1. **Null-Safety & Network Resiliency**:
+1. **Coroutines & Shift-Left Unit Testing Standards**:
+   - In all `*Test.kt` files, **STRICTLY USE `runTest`** (never `runBlocking`).
+   - Use `StandardTestDispatcher` with `advanceUntilIdle()` or `Turbine` for Flow assertion.
+   - Every test MUST have $\ge 2$ explicit assertions covering BOTH the success path and the error/exception path (e.g. `Result.Failure` or `Resource.Error`).
+   - All repository/domain Flow streams MUST safely wrap exceptions with `.catch { emit(Resource.Error(...)) }`.
+2. **Null-Safety & Network Resiliency**:
    - Never use `!!` on nullable types or unvetted platform types.
    - All network/remote calls in coroutines must safely handle `IOException`, `SocketTimeoutException`, `UnknownHostException` (e.g. via `runCatching` or explicit `Result` wrapping).
    - ViewModels must expose clear error states to the UI with retry mechanisms; never swallow network failures silently.
-2. **Clean Architecture & Import Hygiene**:
+3. **Clean Architecture & Import Hygiene**:
    - Strict Unidirectional Data Flow (StateFlow / LiveData as the single source of truth for UI state, matching this project's architecture).
    - **STRICTLY ZERO INLINE FQCNs**: Never use inline package paths (e.g. `androidx.compose...`, `android.view...`). Always import at the top and use typealiases (`as CoreState`, `as CoreAction`) to resolve collisions.
-3. **Accessibility & Jetpack Compose Standards**:
+4. **Accessibility & Jetpack Compose Standards**:
    - Every `Image`, `Icon`, and `IconButton` MUST specify a meaningful `contentDescription` (or explicit `null` only if decorative).
    - Clickable UI components must have a minimum touch target size of 48dp (`Modifier.minimumInteractiveComponentSize()` or `>= 48.dp`).
    - Every new or modified Compose component MUST have dedicated dual-locale `@Preview` (Arabic RTL `locale = "ar"` & English LTR `locale = "en"`) wrapped in the app theme. Screens also require Loading, Empty, and Error previews.
-4. **Performance, Battery & Sensor Life**:
+5. **Performance, Battery & Sensor Life**:
    - Strictly zero disk I/O, database access, or JSON parsing on `Dispatchers.Main`.
    - Any `SensorEventListener` (pedometer, accelerometer, GPS) MUST be unregistered in `onPause()`, `onStop()`, or `DisposableEffect.onDispose`.
    - Android 14+ Foreground Services must specify valid `foregroundServiceType` in the Manifest and handle start restrictions gracefully.
-5. **Room Database & Migrations**:
+6. **Room Database & Migrations**:
    - Any modification to an `@Entity` class or `@Database` schema MUST increment the database `version` and supply an explicit `Migration(from, to)` registered via `addMigrations(...)`.
-6. **Blast Radius & Contract Integrity**:
+7. **Blast Radius & Contract Integrity**:
    - Check all usages across the codebase before altering public function signatures, ViewModel contracts, or navigation arguments.
 
 ---
@@ -203,16 +215,20 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 ---
 
-## 4) Manual Device Verification & Sign-off
+## 4) Manual Device Verification & Phase Sign-Off Barrier
 
-- Short phases: Happy path, then edge/offline, then RTL/orientation, then lifecycle/re-entry. **One phase per `ask_question`.**
+- **Multi-Phase Execution & Phase Hard Barrier**:
+  - When Phase N completes its review gate, unit tests, build (`:assembleDebug`), and device smoke testing/installation, the Lead Agent **MUST END ITS TURN IMMEDIATELY** with the standardized Phase Milestone Card.
+  - Ask the developer explicitly: *"تم إنهاء واختبار المرحلة [N] بنجاح على الجهاز. هل تأذن بالبدء في المرحلة [N+1]؟"*
+  - **STRICT ENFORCEMENT**: Do NOT touch, open, or write to any file for Phase N+1 until the developer explicitly confirms and authorizes moving to the next phase in chat.
+- **Single-Phase Task Completion / Final Sign-off**:
+  - When all phases are completed and verified on device:
+    1. Write `.agents/state/plans/walkthrough.md`
+    2. Final Task Summary in chat: what / why / files / gates (`*_PASS` + `BUILD SUCCESSFUL`)
+    3. Conventional Commit message for Android Studio
+    4. If the work came from a Zoho id: one-line reminder that Zoho is not updated — wait for `update zoho`. No modal.
+    5. Never present the commit message before every phase is Pass.
 - On Fail: ask for symptoms in chat (not a modal). Do not guess. For crashes, offer `qa-diagnostics-agent` + `logcat_doctor.py`. Then fix producer, re-run gates, re-install, re-present the **same** phase.
-- After **every** phase is Pass:
-  1. Write `.agents/state/plans/walkthrough.md`
-  2. Final Task Summary in chat: what / why / files / gates (`*_PASS` + `BUILD SUCCESSFUL`)
-  3. Conventional Commit message for Android Studio
-  4. If the work came from a Zoho id: one-line reminder that Zoho is not updated — wait for `update zoho`. No modal.
-  5. Never present the commit message before every phase is Pass.
 
 ---
 

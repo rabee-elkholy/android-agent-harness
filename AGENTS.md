@@ -1,4 +1,5 @@
-# {{PRODUCT}} — agent instructions
+<!-- managed-by: android-harness-kit -->
+# android-harness-kit — agent instructions
 
 **Source of truth:** `.agents/rules/harness-rules.md`. If any other file disagrees, that file wins.
 
@@ -7,16 +8,16 @@ This checkout uses a portable Android harness. The same rules apply in Cursor, C
 ## Environment
 
 - Android SDK: this machine only (`local.properties` `sdk.dir`). Never copy another PC’s path.
-- Python: `{{PY}}` for every harness script.
-- Gradle: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` (picks `gradlew` / `gradlew.bat`). Never call raw `gradlew` from the agent.
-- Device: {{DEVICE_POLICY}}
-- Install/launch: `{{PY}} .agents/scripts/run_device.py install-start`
+- Python: `python` for every harness script.
+- Gradle: `python .agents/scripts/run_gradle_task.py :app:assembleDebug` (picks `gradlew` / `gradlew.bat`). Never call raw `gradlew` from the agent.
+- Device: Physical device or emulator. Resolve the serial with `adb devices`. Prefer a physical device when both are connected. Never hardcode a serial.
+- Install/launch: `python .agents/scripts/run_device.py install-start`
 
 ## Delivery gate (do not skip)
 
 After non-trivial implementation:
 
-1. `{{PY}} .agents/scripts/review_package.py`
+1. `python .agents/scripts/review_package.py`
 2. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
    - `bug-reviewer-agent` → `BUG_PASS`
    - `convention-reviewer-agent` → `CONVENTION_PASS`
@@ -24,8 +25,8 @@ After non-trivial implementation:
    - `perf-anr-guardian-agent` → `PERF_PASS`
    - `regression-impact-reviewer-agent` → `REGRESSION_PASS`
 3. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
-4. `{{PY}} .agents/scripts/fast_kt_lint.py`
-5. `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+4. `python .agents/scripts/fast_kt_lint.py`
+5. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`
 
 Antigravity `hooks.json` enforces this barrier automatically. Other tools must follow it from this file.
 
@@ -45,7 +46,7 @@ Dispatch when needed:
 
 ## Git
 
-{{GIT_POLICY}}
+The agent must not run `git add`, `commit`, `push`, merge, rebase, stash, or reset. Leave changes unstaged. Draft a Conventional Commit message only. The developer commits.
 
 ## Zoho Sprints
 
