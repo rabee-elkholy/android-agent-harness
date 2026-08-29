@@ -175,7 +175,7 @@ If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still 
 ## One-Click Lifecycle Prompt URLs
 
 For any supported AI assistant, use the following raw GitHub URLs:
-- **Install**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.1/docs/install-prompt.md`
-- **Update**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.1/docs/update-prompt.md`
-- **Diagnostic Doctor**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.1/docs/diagnostic-prompt.md`
-- **Rollback**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.1/docs/rollback-prompt.md`
+- **Install**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/install-prompt.md`
+- **Update**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/update-prompt.md`
+- **Diagnostic Doctor**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/diagnostic-prompt.md`
+- **Rollback**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/rollback-prompt.md`

@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] - 2026-08-29
+
+### Zero Git Pollution & Team Working Tree Protection
+- **Comprehensive Local Exclusion (`install_tool_adapters.py`, `wizard/questions.py`)**: Automatically configured `.git/info/exclude` across all project setups and updates to strictly isolate all AI manifests, adapter rule files, and transient harness state (`.agents/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`, `*.secret`).
+- **Clean Android Studio Working Tree**: Ensured that zero harness or AI rule files appear as modified or untracked in Android Studio Git, preventing any unintended commits or merge friction on shared team repositories.
+- **Index Protection**: Applied automatic `git update-index --assume-unchanged` guards on adapter files to keep working trees permanently pristine.
+
 ## [0.14.1] - 2026-08-29
 
 ### Mandatory Phase Sign-Off Hard Barrier & Atomic Delivery
