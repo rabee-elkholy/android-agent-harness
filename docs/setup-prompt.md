@@ -51,7 +51,7 @@ If `"backup"` is true or unset (default): Timestamp `YYYYMMDD-HHMMSS`. Prune any
 
 ## 1) Place the engine
 
-Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state/` + `scripts/__pycache__/` + `mcp/zoho_sprints/__pycache__/` + `mcp/zoho_sprints/zoho_config.json`. Leave kit `mcp_config.json` empty until **I.16** is applied by `install_zoho_mcp.py`. Never copy a Zoho token file into the repo.
+Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state/` + `cache/` + `__pycache__/` + `scripts/__pycache__/` + `mcp/*/__pycache__/` + `mcp/zoho_sprints/zoho_config.json` + `*zoho*token*` + `*.secret`. Root `.gitignore` must include `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.agents/state/`, `.agents/cache/`, `*.diff`, `*.patch`, and `.agents/` (unless developer opted to commit it) so zero transient files ever appear in Android Studio Git. Leave kit `mcp_config.json` empty until **I.16** is applied by `install_zoho_mcp.py`. Never copy a Zoho token file into the repo.
 
 ## 2) Discover from disk (do not invent)
 

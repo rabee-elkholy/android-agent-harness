@@ -612,7 +612,19 @@ def write_answers(repo: Path, answers: dict) -> None:
         ])
     markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
     gi = repo / ".gitignore"
-    extra = [".harness-setup/", ".harness-backup/", ".agents/"]
+    extra = [
+        ".harness-setup/",
+        ".harness-backup/",
+        ".harness-backups/",
+        ".agents/state/",
+        ".agents/cache/",
+        ".agents/__pycache__/",
+        "*.diff",
+        "*.patch",
+        ".githooks/",
+    ]
+    if answers.get("agents_git") != "commit":
+        extra.append(".agents/")
     lines = read_text(gi).splitlines()
     for line in extra:
         if line not in lines:
@@ -621,6 +633,28 @@ def write_answers(repo: Path, answers: dict) -> None:
     if text:
         text += "\n"
     gi.write_text(text, encoding="utf-8")
+
+    agents_gi = repo / ".agents" / ".gitignore"
+    if (repo / ".agents").is_dir():
+        ag_extra = [
+            "state/",
+            "cache/",
+            "__pycache__/",
+            "scripts/__pycache__/",
+            "mcp/*/__pycache__/",
+            "mcp/zoho_sprints/__pycache__/",
+            "mcp/zoho_sprints/zoho_config.json",
+            "*zoho*token*",
+            "*.secret",
+        ]
+        ag_lines = read_text(agents_gi).splitlines() if agents_gi.is_file() else []
+        for line in ag_extra:
+            if line not in ag_lines:
+                ag_lines.append(line)
+        ag_text = "\n".join(ag_lines)
+        if ag_text:
+            ag_text += "\n"
+        agents_gi.write_text(ag_text, encoding="utf-8")
 
     exclude_path = repo / ".git" / "info" / "exclude"
     if (repo / ".git").is_dir() or exclude_path.is_file():
