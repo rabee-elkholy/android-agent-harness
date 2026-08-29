@@ -172,32 +172,44 @@ Once installed, the harness becomes a **native, non-invasive guardian** that sea
 
 ---
 
-## Complete Lifecycle Operations (CLI & AI Chat Prompts)
+## Complete Lifecycle Operations (AI Prompts vs CLI)
 
-Every lifecycle operation provides two frictionless execution paths: **CLI-First** (for terminal workflows) and **One-Click Prompts** (for direct IDE AI chat).
+The Android Harness Kit provides two distinct execution models designed for different stages of the development lifecycle:
+
+| Capability | AI Chat Prompt (Recommended for Setup) | CLI Tool (`android-harness`) |
+| :--- | :--- | :--- |
+| **Primary Purpose** | **First-Time Setup & Deep Porting** | **Headless CI/CD, Maintenance & Diagnostics** |
+| **Execution Context** | Inside IDE AI Chat (Cursor, Antigravity, Windsurf) | Terminal, Shell Scripts, or CI/CD Pipelines |
+| **Domain References** | **Dynamic Domain Discovery**: Synthesizes custom domain references for your app's specific features (e.g. checkout, audio, chat) | Copies foundation reference templates only |
+| **IDE Adapters & Hooks** | Generates native adapter files (`.cursorrules`, `AGENTS.md`) and binds safety hooks | Records answers in `.harness-setup/answers.json` |
+| **Health Diagnostics** | Runs Doctor and automatically self-remediates any setup discrepancies | Instant 30-check 12-dimension health report in <1s with zero tokens |
+| **CI/CD Gatekeeping** | N/A (Requires interactive chat) | Headless evaluation with standard POSIX exit codes (`android-harness verify`) |
+
+---
 
 ### 1. Installation & Greenfield/Existing Project Setup
 
-Set up deterministic governance in any Android or Kotlin Multiplatform repository in under 60 seconds:
-
-#### Path A: Via CLI (Terminal)
-```bash
-cd /path/to/your/android-project
-pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
-android-harness init
-```
-
-#### Path B: Via AI Chat (One-Click Prompt)
+#### Recommended Path: Via AI Chat (One-Click Prompt)
 Open a **new strong-model chat** at your Android repository root and paste:
 ```markdown
 Run the Android Harness Kit Installer:
 https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.0/docs/install-prompt.md
 ```
 
-The interactive wizard automatically analyzes your project and discovers:
-* Gradle application modules, launcher activities, and package names.
-* Product Flavors & Build Variants (e.g. `devDebug`, `stagingRelease`, `prodRelease`).
-* Architecture stack (MVI / MVVM / Clean Architecture + Koin / Hilt + Room + Jetpack Compose / XML).
+The interactive installer agent autonomously executes a complete structural port:
+* **Deep Stack Introspection**: Detects Gradle modules, launcher activities, DI frameworks (Hilt/Koin/Dagger), UI frameworks (Compose/XML), and locales.
+* **Dynamic Domain Discovery**: Deeply scans your features and generates tailored architectural reference files in `.agents/skills/android-harness/references/`.
+* **Multi-IDE Adapter Generation**: Creates targeted rule files (`.cursorrules`, `AGENTS.md`, `.windsurfrules`) for your chosen AI tools.
+* **Integrity Self-Verification**: Executes all 30 doctor diagnostic checks to ensure 100% operational readiness.
+
+#### Alternative Path: Via CLI (Terminal Setup)
+If you prefer a terminal-guided question flow before handing off to your AI:
+```bash
+cd /path/to/your/android-project
+pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
+android-harness init
+```
+*Gathers your project preferences into `.harness-setup/answers.json`, which the AI Prompt consumes to complete custom domain generation.*
 
 ---
 
