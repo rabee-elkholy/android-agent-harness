@@ -193,7 +193,7 @@ The Android Harness Kit provides two distinct execution models designed for diff
 Open a **new strong-model chat** at your Android repository root and paste:
 ```markdown
 Run the Android Harness Kit Installer:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/install-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/install-prompt.md
 ```
 
 The interactive installer agent autonomously executes a complete structural port:
@@ -217,12 +217,17 @@ android-harness init
 
 Verify the complete health of your harness installation, SDK paths, and configuration at any time:
 
-```bash
-# Terminal execution
-android-harness doctor
+#### Primary Method: Via IDE Chat Prompt (One-Click)
+Paste into your IDE AI chat:
+```markdown
+Run the Android Harness Kit Diagnostic Doctor:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/diagnostic-prompt.md
+```
 
-# Or execute via IDE Chat prompt:
-# https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/diagnostic-prompt.md
+#### Alternative Method: Via CLI (Terminal)
+```bash
+android-harness doctor
+# Or: python .agents/scripts/harness_doctor.py
 ```
 
 The **12-Dimension Harness Doctor** runs 30 automated checks across:
@@ -245,12 +250,16 @@ The **12-Dimension Harness Doctor** runs 30 automated checks across:
 
 Upgrade your harness installation to the latest stable release with pin-to-tag supply-chain safety and zero configuration drift:
 
-```bash
-# Terminal execution
-android-harness update
+#### Primary Method: Via IDE Chat Prompt (One-Click)
+Paste into your IDE AI chat:
+```markdown
+Run the Android Harness Kit Updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/update-prompt.md
+```
 
-# Or execute via IDE Chat prompt:
-# https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/update-prompt.md
+#### Alternative Method: Via CLI (Terminal)
+```bash
+android-harness update
 ```
 
 * Preserves all tailored project preferences, custom domain references, and tracker credentials.
@@ -262,12 +271,16 @@ android-harness update
 
 If you ever need to restore your repository configuration to an exact previous state:
 
-```bash
-# Terminal execution
-android-harness rollback
+#### Primary Method: Via IDE Chat Prompt (One-Click)
+Paste into your IDE AI chat:
+```markdown
+Run the Android Harness Kit Rollback:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/rollback-prompt.md
+```
 
-# Or execute via IDE Chat prompt:
-# https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/rollback-prompt.md
+#### Alternative Method: Via CLI (Terminal)
+```bash
+android-harness rollback
 ```
 
 ---
@@ -314,10 +327,10 @@ Pinned lifecycle prompts with cryptographic tamper-evident headers:
 
 | Operation | Prompt URL (Pinned to v0.12.0) | Purpose |
 | :--- | :--- | :--- |
-| **Install** | [`docs/install-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/install-prompt.md) | Full guided installation, module discovery, and adapter generation. |
-| **Update** | [`docs/update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/update-prompt.md) | In-place version upgrade preserving project preferences. |
-| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
-| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
+| **Install** | [`docs/install-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/install-prompt.md) | Full guided installation, module discovery, and adapter generation. |
+| **Update** | [`docs/update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/update-prompt.md) | In-place version upgrade preserving project preferences. |
+| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
+| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.3/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
 
 ---
 
