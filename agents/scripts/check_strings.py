@@ -16,18 +16,23 @@ from _repo_files import REPO, changed_paths  # noqa: E402
 enable_line_buffered_stdio()
 
 try:
-    from _product import ANDROID_SRC
-    RES_DIR = REPO.joinpath(*ANDROID_SRC) / "res"
+    from _product import ANDROID_SRC, SUPPORTED_LOCALES
 except Exception:
-    RES_DIR = REPO / "app" / "src" / "main" / "res"
+    ANDROID_SRC = ("app", "src", "main")
+    SUPPORTED_LOCALES = ["en", "ar"]
 
-if not RES_DIR.is_dir():
-    _candidates = list(REPO.glob("**/src/*/res")) or list(REPO.glob("**/res")) or list(REPO.glob("**/composeResources"))
-    if _candidates:
-        RES_DIR = _candidates[0]
+RES_DIRS: list[Path] = []
+primary_res = REPO.joinpath(*ANDROID_SRC) / "res"
+if primary_res.is_dir():
+    RES_DIRS.append(primary_res)
+for candidate in list(REPO.glob("**/src/*/res")) + list(REPO.glob("**/composeResources")):
+    if candidate.is_dir() and candidate not in RES_DIRS and "/build/" not in candidate.as_posix():
+        RES_DIRS.append(candidate)
 
-STR_EN = RES_DIR / "values" / "strings.xml"
-STR_AR = RES_DIR / "values-ar" / "strings.xml"
+if not RES_DIRS:
+    RES_DIRS = [primary_res]
+
+PLACEHOLDER_RE = re.compile(r"%(?:(\d+)\$)?([+\-# 0,(]*\d*(?:\.\d+)?[a-zA-Z%])|\{([a-zA-Z0-9_]+)\}")
 
 # UI call sites that must not carry a raw user-facing literal.
 HARDCODED_KT = [
@@ -65,29 +70,62 @@ SKIP_KT_LINE = re.compile(
 )
 
 
-def _resource_names(xml_file: Path) -> set[str]:
+
+def _extract_placeholders(text: str) -> list[str]:
+    if not text:
+        return []
+    placeholders = []
+    for m in PLACEHOLDER_RE.finditer(text):
+        placeholders.append(m.group(0))
+    return sorted(placeholders)
+
+
+def _parse_resources(xml_file: Path) -> dict[str, dict]:
     if not xml_file.is_file():
-        return set()
-    names: set[str] = set()
+        return {}
+    res: dict[str, dict] = {}
     try:
         root = ET.parse(xml_file).getroot()
     except Exception as exc:
         print(f"Warning: Failed to parse XML {xml_file.name}: {exc}")
-        return set()
+        return {}
     for tag in ("string", "plurals", "string-array"):
         for elem in root.findall(tag):
             if elem.get("translatable") == "false":
                 continue
             name = elem.get("name")
-            if name:
-                names.add(name)
-    return names
+            if not name:
+                continue
+            if tag == "string":
+                text = "".join(elem.itertext()).strip()
+                res[name] = {"tag": tag, "text": text, "placeholders": _extract_placeholders(text)}
+            elif tag == "plurals":
+                items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
+                placeholders = []
+                for it in items:
+                    placeholders.extend(_extract_placeholders(it))
+                res[name] = {"tag": tag, "items": items, "placeholders": sorted(set(placeholders))}
+            elif tag == "string-array":
+                items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
+                res[name] = {"tag": tag, "items": items, "placeholders": []}
+    return res
 
 
-def check_key_parity() -> tuple[set[str], set[str]]:
-    en_keys = _resource_names(STR_EN)
-    ar_keys = _resource_names(STR_AR)
-    return en_keys - ar_keys, ar_keys - en_keys
+def discover_locale_pairs() -> list[tuple[Path, Path, str]]:
+    """Find all (base_values_strings, localized_values_strings, locale_tag) pairs."""
+    pairs: list[tuple[Path, Path, str]] = []
+    for res_dir in RES_DIRS:
+        base_file = res_dir / "values" / "strings.xml"
+        if not base_file.is_file():
+            continue
+        for val_dir in sorted(res_dir.glob("values-*")):
+            if not val_dir.is_dir():
+                continue
+            loc_strings = val_dir / "strings.xml"
+            if loc_strings.is_file():
+                tag = val_dir.name[len("values-") :]
+                pairs.append((base_file, loc_strings, tag))
+    return pairs
 
 
 def _is_test_path(path: Path) -> bool:
@@ -163,31 +201,64 @@ def check_hardcoded_strings(files: list[Path]) -> list[str]:
 
 def main() -> int:
     print("==================================================")
-    print("[Strings] this app Localization & Strings Parity Checker")
+    print("[Strings] Adaptive Localization & Placeholder Guard")
     print("==================================================")
 
-    if not STR_AR.is_file():
-        print("[OK] Single-locale checkout (no values-ar). Skipping AR/EN key parity.")
-        missing_in_ar, missing_in_en = set(), set()
-    else:
-        missing_in_ar, missing_in_en = check_key_parity()
+    pairs = discover_locale_pairs()
     errors = 0
 
-    if missing_in_ar:
-        print(f"\n[!] Missing in values-ar/strings.xml ({len(missing_in_ar)} keys):")
-        for key in sorted(missing_in_ar):
-            print(f"   - {key}")
-        errors += len(missing_in_ar)
+    if not pairs:
+        print("[OK] Single-locale checkout (no locale variants). Skipping translation parity.")
     else:
-        print("[OK] All English keys exist in Arabic.")
+        for base_file, loc_file, tag in pairs:
+            try:
+                base_rel = base_file.relative_to(REPO).as_posix()
+                loc_rel = loc_file.relative_to(REPO).as_posix()
+            except ValueError:
+                base_rel = str(base_file)
+                loc_rel = str(loc_file)
 
-    if missing_in_en:
-        print(f"\n[!] Missing in values/strings.xml ({len(missing_in_en)} keys):")
-        for key in sorted(missing_in_en):
-            print(f"   - {key}")
-        errors += len(missing_in_en)
-    else:
-        print("[OK] All Arabic keys exist in English.")
+            base_data = _parse_resources(base_file)
+            loc_data = _parse_resources(loc_file)
+
+            base_keys = set(base_data.keys())
+            loc_keys = set(loc_data.keys())
+
+            missing_in_loc = base_keys - loc_keys
+            missing_in_base = loc_keys - base_keys
+
+            if missing_in_loc:
+                print(f"\n[!] Missing in {loc_rel} ({len(missing_in_loc)} keys vs {base_rel}):")
+                for key in sorted(missing_in_loc):
+                    print(f"   - {key}")
+                errors += len(missing_in_loc)
+            else:
+                print(f"[OK] All keys from {base_rel} exist in {loc_rel}.")
+
+            if missing_in_base:
+                print(f"\n[!] Missing in {base_rel} ({len(missing_in_base)} keys from {loc_rel}):")
+                for key in sorted(missing_in_base):
+                    print(f"   - {key}")
+                errors += len(missing_in_base)
+
+            # Deep placeholder matching
+            placeholder_mismatches = []
+            common_keys = base_keys & loc_keys
+            for key in sorted(common_keys):
+                base_ph = base_data[key].get("placeholders", [])
+                loc_ph = loc_data[key].get("placeholders", [])
+                if base_ph != loc_ph:
+                    placeholder_mismatches.append(
+                        f"   - key '{key}': base has {base_ph}, {loc_rel} has {loc_ph}"
+                    )
+
+            if placeholder_mismatches:
+                print(f"\n[!] Placeholder format mismatches in {loc_rel} ({len(placeholder_mismatches)}):")
+                for item in placeholder_mismatches:
+                    print(item)
+                errors += len(placeholder_mismatches)
+            elif common_keys:
+                print(f"[OK] Placeholders matched across {len(common_keys)} keys in {loc_rel}.")
 
     modified = [p for p in changed_paths() if p.suffix in {".kt", ".xml"}]
     hardcoded: list[str] = []
@@ -204,11 +275,12 @@ def main() -> int:
 
     print("\n==================================================")
     if errors == 0:
-        print("[SUCCESS] String Parity Check Passed Successfully!")
+        print("[SUCCESS] String Parity & Placeholder Check Passed Successfully!")
         return 0
-    print(f"[FAIL] Found {errors} string issue(s). Synchronize keys and extract hardcoded text.")
+    print(f"[FAIL] Found {errors} string issue(s). Synchronize keys, match placeholders, and extract hardcoded text.")
     return 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
+

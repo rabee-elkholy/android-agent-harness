@@ -62,10 +62,11 @@ def build_header(task_id: str, fingerprint: str) -> list[str]:
     ]
 
 
-def build_files_map(max_files: int = 200) -> dict[str, str]:
-    """SHA-256 per changed working-tree file (rel path -> hex), capped."""
+def build_files_map(max_files: int = 200) -> tuple[dict[str, str], int]:
+    """SHA-256 per changed working-tree file (rel path -> hex), capped, with total count."""
     files_map: dict[str, str] = {}
-    for path in changed_paths():
+    all_changed = list(changed_paths())
+    for path in all_changed:
         if len(files_map) >= max_files:
             break
         try:
@@ -76,7 +77,8 @@ def build_files_map(max_files: int = 200) -> dict[str, str]:
             files_map[rel] = file_sha256(path)
         except Exception:
             continue
-    return files_map
+    return files_map, len(all_changed)
+
 
 
 def main(argv=None) -> int:
@@ -100,7 +102,8 @@ def main(argv=None) -> int:
 
     task_id = (args.task or os.environ.get("HARNESS_TASK_ID") or "").strip()
     fingerprint = tree_code_fingerprint() or ""
-    files_map = build_files_map()
+    files_map, total_changed = build_files_map()
+    skipped_count = max(0, total_changed - len(files_map))
     files_json = json.dumps(files_map, ensure_ascii=False, separators=(",", ":"))
     chunks = [
         "\n".join([*build_header(task_id, fingerprint), f"FILES_SHA256={files_json}", PACKAGE_SHA_PENDING]) + "\n",
@@ -156,12 +159,15 @@ def main(argv=None) -> int:
     git_sha = git_head()
     record_review_ledger(out, git_sha=git_sha)
     pending = {
-        "schema_version": 1,
+        "schema_version": 2,
         "task_id": task_id,
         "git_sha": git_sha,
         "package": {"path": str(out.resolve()), "sha256": file_digest, "sha256_12": pkg12},
         "tree_fingerprint": fingerprint or None,
         "files": files_map,
+        "reviewed_files": len(files_map),
+        "skipped_files": skipped_count,
+        "is_truncated": skipped_count > 0,
         "dispatched_at": None,
         "completed_at": None,
         "verdict": "PENDING",
@@ -170,6 +176,8 @@ def main(argv=None) -> int:
         "findings": [],
     }
     write_verdict_record(pkg12, pending)
+    if skipped_count > 0:
+        print(f"[!] Warning: Working tree has {total_changed} files; {skipped_count} files were skipped in review package.")
     print(f"HARNESS_REVIEW_PACKAGE={out}")
     print(f"HARNESS_PACKAGE_SHA256_12={pkg12}")
     return 0

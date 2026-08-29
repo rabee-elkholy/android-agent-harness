@@ -5,6 +5,25 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-08-29
+
+### Universal Adaptive Discovery & Architecture Flexibility
+- **Adaptive Stack Introspection (`wizard/discovery.py`)**: Added automatic detection for DI frameworks (Hilt, Koin, Dagger, Manual/None), UI frameworks (Jetpack Compose, XML Views, Hybrid), Supported Locales (`res/values-*`), and Project Structure (Single-module, Multi-module, KMP).
+- **Product Model Architecture Constants (`_product.py`)**: Added `DI_FRAMEWORK`, `UI_FRAMEWORK`, `SUPPORTED_LOCALES`, and `PROJECT_STRUCTURE` to product facts and answer normalization in `wizard/questions.py`.
+- **Dynamic Heuristic Linting (`fast_kt_lint.py`)**: Made `@AndroidEntryPoint` enforcement conditionally active only when `DI_FRAMEWORK == "hilt"`, eliminating false alarms on Koin/Dagger projects. Dynamicized `@Preview` requirements based on active project locales.
+
+### Deep Localization & Format Placeholder Guard
+- **Deep Format Placeholder Matching (`check_strings.py`)**: Added positional and named placeholder validation (`%1$s`, `%2$d`, `%s`, `{name}`) across base and translated strings to prevent runtime StringFormat crashes.
+- **Dynamic Multi-Locale Scan (`check_strings.py`)**: Added automatic discovery and parity auditing across all `values-*` resource folders with graceful bypass for single-locale projects.
+
+### Offline Bundled Packaging & Standardized Exit Codes
+- **Offline Wheel Distribution (`pyproject.toml`)**: Configured `package_data` mappings to include all agent templates, scripts, rules, and workflows inside the wheel.
+- **Local Kit Resolution (`harness_cli.py`)**: Updated `resolve_kit()` to prioritize local bundled engine paths, eliminating runtime Git cloning requirements and enabling 100% offline installation.
+- **Standardized POSIX Exit Codes (`harness_cli.py`)**: Implemented standardized CLI return codes (`0=PASS`, `1=FINDINGS`, `2=CONFIG_ERROR`, `3=INFRA_ERROR`, `4=INCOMPLETE_OR_STALE`).
+
+### Structured Review Schema v2 & Monorepo Scaling
+- **Verdict Schema v2 (`review_package.py`, `_hook_state.py`)**: Added `reviewed_files`, `skipped_files`, and `is_truncated` fields to review package metadata, warning developers if working tree changes exceed file limits in large monorepos.
+
 ## [0.13.3] - 2026-08-26
 
 ### Fix: Review Package Digest Alignment & Infinite Review Barrier Resolution

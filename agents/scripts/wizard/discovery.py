@@ -174,6 +174,46 @@ def discover_locales(repo: Path) -> list[str]:
     return sorted(names)
 
 
+def discover_di_framework(text: str) -> str:
+    if "org.koin" in text or "koin-android" in text or "startKoin" in text or "koin-compose" in text:
+        return "koin"
+    if "dagger.hilt" in text or "@HiltViewModel" in text or "hilt-android" in text or "@HiltAndroidApp" in text:
+        return "hilt"
+    if "dagger." in text or "javax.inject" in text or "jakarta.inject" in text:
+        return "dagger"
+    return "none"
+
+
+def discover_ui_framework(text: str, modules: list[str]) -> str:
+    has_compose = "androidx.compose" in text or any("composeApp" in m for m in modules)
+    has_xml = "viewBinding" in text or "dataBinding" in text or "findViewById" in text or "R.layout" in text or "BaseFragment" in text
+    if has_compose and has_xml:
+        return "hybrid"
+    if has_compose:
+        return "compose"
+    if has_xml:
+        return "xml_views"
+    return "compose"
+
+
+def discover_clean_locales(raw_locales: list[str]) -> list[str]:
+    locales: list[str] = ["en"]
+    for item in raw_locales:
+        if item.startswith("values-"):
+            tag = item[len("values-") :].split("-")[0].lower()
+            if tag and tag not in locales:
+                locales.append(tag)
+    return locales
+
+
+def discover_project_structure(repo: Path, modules: list[str]) -> str:
+    if any("composeApp" in m or "shared" in m for m in modules) or (repo / "composeApp").is_dir():
+        return "kmp"
+    if len(modules) > 1 or len(gradle_files(repo)) > 2:
+        return "multi_module"
+    return "single_module"
+
+
 def discover_stack(repo: Path) -> str:
     chunks: list[str] = []
     for path in gradle_files(repo):
@@ -293,16 +333,25 @@ def count_source_files(repo: Path) -> int:
 def discover(repo: Path) -> dict:
     modules = discover_modules(repo)
     pythons = discover_pythons()
-    locales = discover_locales(repo)
+    raw_locales = discover_locales(repo)
+    clean_locales = discover_clean_locales(raw_locales)
     source_count = count_source_files(repo)
+    stack_text = discover_stack(repo)
+    di_framework = discover_di_framework(stack_text)
+    ui_framework = discover_ui_framework(stack_text, modules)
+    structure = discover_project_structure(repo, modules)
     return {
         "product": discover_product(repo),
         "pythons": pythons,
         "modules": modules,
         "launchers": discover_launchers(repo),
         "apk_hint": discover_apk_hint(repo),
-        "locales": locales,
-        "stack": discover_stack(repo),
+        "locales": raw_locales,
+        "clean_locales": clean_locales,
+        "stack": stack_text,
+        "di_framework": di_framework,
+        "ui_framework": ui_framework,
+        "project_structure": structure,
         "classic_app_src": has_classic_app_src(repo),
         "gemini": gemini_exists(),
         "zoho_config": zoho_config_present(),
@@ -324,6 +373,7 @@ def auto_from_facts(facts: dict) -> dict:
     else:
         apk_mode = "glob"
         apk_path = "**/outputs/apk/debug/*.apk"
+    clean_locales = facts.get("clean_locales") or ["en"]
     return {
         "product": facts.get("product") or "App",
         "py": pythons[0] if pythons else "",
@@ -333,6 +383,10 @@ def auto_from_facts(facts: dict) -> dict:
         "apk_path": apk_path,
         "architecture": facts.get("stack") or "unknown",
         "architecture_mode": "discovered",
+        "di_framework": facts.get("di_framework") or "hilt",
+        "ui_framework": facts.get("ui_framework") or "compose",
+        "project_structure": facts.get("project_structure") or "single_module",
+        "supported_locales": clean_locales,
         "locales": ", ".join(facts.get("locales") or ["values"]),
         "device_policy": "allow",
         "scaffold": "disable",

@@ -22,4 +22,10 @@ ALLOW_EMULATOR = True  # True (both physical and emulator allowed), False (physi
 # Project tracker (setup wizard I.20). Absent/empty = zoho_sprints (historical default).
 # Options: zoho_sprints | github_projects | jira_mcp | linear_mcp | none
 PM_PROVIDER = "zoho_sprints"
+# Adaptive architecture & stack properties (auto-configured by setup wizard)
+DI_FRAMEWORK = "hilt"  # "hilt" | "koin" | "dagger" | "manual" | "none"
+UI_FRAMEWORK = "compose"  # "compose" | "xml_views" | "hybrid"
+SUPPORTED_LOCALES = ["en", "ar"]  # List of discovered locale tags e.g. ["en", "ar", "fr"]
+PROJECT_STRUCTURE = "single_module"  # "single_module" | "multi_module" | "kmp"
+
 

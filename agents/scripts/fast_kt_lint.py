@@ -17,6 +17,14 @@ from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _product import PACKAGE_PREFIX  # noqa: E402
 from _repo_files import REPO, changed_paths  # noqa: E402
 
+try:
+    from _product import DI_FRAMEWORK, SUPPORTED_LOCALES, UI_FRAMEWORK
+except Exception:
+    DI_FRAMEWORK = "hilt"
+    SUPPORTED_LOCALES = ["en", "ar"]
+    UI_FRAMEWORK = "compose"
+
+
 enable_line_buffered_stdio()
 
 FQCN_PATTERN = re.compile(
@@ -208,26 +216,36 @@ def lint_file(file_path: Path) -> list[dict]:
                     "msg": f"MVI State class '{trimmed}' is missing @Immutable or @Stable for Compose stability.",
                 })
 
-    if has_fragment_activity and not has_android_entry_point and not is_test:
+    if DI_FRAMEWORK.lower() == "hilt" and has_fragment_activity and not has_android_entry_point and not is_test:
         issues.append({
             "file": str(file_path),
             "line": 1,
             "type": "MISSING_HILT_ENTRY_POINT",
-            "msg": "Fragment / Activity class is missing '@AndroidEntryPoint'.",
+            "msg": "Fragment / Activity class is missing '@AndroidEntryPoint' for Hilt dependency injection.",
         })
 
     if has_compose_function and is_preview_surface(file_path.name):
-        if not PREVIEW_AR.search(text) or not PREVIEW_EN.search(text):
-            extra = " plus Loading/Empty/Error." if requires_state_previews(file_path.name) else "."
-            issues.append({
-                "file": str(file_path),
-                "line": 1,
-                "type": "MISSING_COMPOSE_PREVIEW",
-                "msg": (
-                    f"'{file_path.name}' needs dual-locale @Preview "
-                    f"(locale=\"ar\" and locale=\"en\"){extra}"
-                ),
-            })
+        is_dual_locale = "ar" in SUPPORTED_LOCALES and "en" in SUPPORTED_LOCALES
+        extra = " plus Loading/Empty/Error." if requires_state_previews(file_path.name) else "."
+        if is_dual_locale:
+            if not PREVIEW_AR.search(text) or not PREVIEW_EN.search(text):
+                issues.append({
+                    "file": str(file_path),
+                    "line": 1,
+                    "type": "MISSING_COMPOSE_PREVIEW",
+                    "msg": (
+                        f"'{file_path.name}' needs dual-locale @Preview "
+                        f"(locale=\"ar\" and locale=\"en\"){extra}"
+                    ),
+                })
+        else:
+            if not PREVIEW_EN.search(text) and "@Preview" not in text:
+                issues.append({
+                    "file": str(file_path),
+                    "line": 1,
+                    "type": "MISSING_COMPOSE_PREVIEW",
+                    "msg": f"'{file_path.name}' needs @Preview composable function{extra}",
+                })
 
     return issues
 

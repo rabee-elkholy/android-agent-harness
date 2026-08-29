@@ -127,6 +127,13 @@ def _has_engine(kit: Path) -> bool:
     return (_script_root(kit) / "setup_wizard.py").is_file() and (kit / "agents" / "VERSION").is_file()
 
 
+EXIT_PASS = 0
+EXIT_FINDINGS = 1
+EXIT_CONFIG_ERROR = 2
+EXIT_INFRA_ERROR = 3
+EXIT_INCOMPLETE_OR_STALE = 4
+
+
 def resolve_kit(explicit: str | None) -> Path:
     candidates: list[Path] = []
     if explicit:
@@ -134,6 +141,7 @@ def resolve_kit(explicit: str | None) -> Path:
     env = os.environ.get("HARNESS_KIT", "").strip()
     if env:
         candidates.append(Path(env).expanduser().resolve())
+    candidates.append(Path(__file__).resolve().parent)
     candidates.append(Path.cwd().resolve())
     candidates.append(KIT_DIR)
     cwd = Path.cwd().resolve()
@@ -457,8 +465,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         record = json.loads(verdict_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise SystemExit(f"[ERROR] Cannot read verdict {verdict_path}: {exc}")
-    if not isinstance(record, dict) or record.get("schema_version") != 1:
-        raise SystemExit("[FAIL] verdict artifact missing or unsupported schema_version (expected 1).")
+    if not isinstance(record, dict) or record.get("schema_version") not in (1, 2):
+        raise SystemExit("[FAIL] verdict artifact missing or unsupported schema_version (expected 1 or 2).")
     print(f"[*] Verifying {verdict_path.name} against {repo}")
 
     problems: list[str] = []

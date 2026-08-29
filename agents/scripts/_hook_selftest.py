@@ -478,7 +478,7 @@ if pkg_path is not None:
     pending_rec = read_verdict_record(file_digest[:12])
     ok_pending = (
         pending_rec is not None
-        and pending_rec.get("schema_version") == 1
+        and pending_rec.get("schema_version") in (1, 2)
         and pending_rec.get("verdict") == "PENDING"
         and pending_rec.get("package", {}).get("sha256") == file_digest
         and pending_rec.get("package", {}).get("sha256_12") == file_digest[:12]
@@ -1442,7 +1442,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.13.3"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
