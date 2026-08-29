@@ -530,30 +530,65 @@ def install_git_gate(repo: Path, *, dry_run: bool) -> list[str]:
     else:
         logs.append("WARNING: could not set core.hooksPath; run: git config core.hooksPath .githooks")
 
-    # Automatically exclude .githooks/ in .git/info/exclude so it stays local and never pollutes shared team commits
+    # Automatically exclude all harness rules, manifests, and adapter directories in .git/info/exclude
+    # so they remain 100% local to this machine and NEVER pollute shared team branches or appear in Android Studio Git.
     exclude_path = repo / ".git" / "info" / "exclude"
     if (repo / ".git").is_dir() or exclude_path.is_file():
         try:
             exclude_path.parent.mkdir(parents=True, exist_ok=True)
             text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
             lines = [ln.strip() for ln in text.splitlines()]
-            if ".githooks/" not in lines and ".githooks" not in lines:
+            local_patterns = [
+                ".agents/",
+                ".harness-setup/",
+                ".harness-backup/",
+                ".harness-backups/",
+                ".githooks/",
+                "AGENTS.md",
+                "GEMINI.md",
+                "CLAUDE.md",
+                "CODEX.md",
+                "QWEN.md",
+                ".cursor/",
+                ".cursorrules",
+                ".windsurf/",
+                ".windsurfrules",
+                ".claude/",
+                ".clinerules",
+                ".amazonq/",
+                ".continue/",
+                ".junie/",
+                ".kilocode/",
+                ".roo/",
+                ".goosehints",
+                "*.diff",
+                "*.patch",
+                "*.secret",
+            ]
+            added = []
+            for pat in local_patterns:
+                if pat not in lines and pat.rstrip("/") not in lines:
+                    added.append(pat)
+            if added:
                 with exclude_path.open("a", encoding="utf-8", newline="\n") as f:
                     if text and not text.endswith("\n"):
                         f.write("\n")
-                    f.write(".githooks/\n")
-                logs.append("git exclude -> .git/info/exclude (.githooks/)")
+                    f.write("# Android Harness Kit — Local AI Manifests & Transient State\n")
+                    for pat in added:
+                        f.write(f"{pat}\n")
+                logs.append(f"git exclude -> .git/info/exclude ({len(added)} harness patterns)")
         except Exception:
             pass
 
-    # If .githooks/pre-commit is tracked in git history, mark it assume-unchanged so it never dirties working trees
-    subprocess.run(
-        ["git", "update-index", "--assume-unchanged", ".githooks/pre-commit"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # If any harness adapter is accidentally tracked in git index, mark assume-unchanged so working tree stays clean
+    for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
+        subprocess.run(
+            ["git", "update-index", "--assume-unchanged", tracked_cand],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     return logs
 
 

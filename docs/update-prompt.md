@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.1/docs/update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-> **Kit version**: `v0.14.1` — **SHA-256**: `a5822237e7d2ca08d21969736e7a6951eca68fbb111506a4b88859bc0d1b13ed` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.1` — **SHA-256**: `3e56065471d556f183f754f7e33f7da48a02fddb924e21ab30e60cd9bec9b369` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** (already has `.agents` from a previous install). The agent must execute it, not summarize it.
 
 ---
@@ -37,7 +37,7 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
 6. **Identify Custom Files to Preserve**: Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills and tailored domain references in `skills/android-harness/references/`).
 7. **Copy New Engine & Restore State**:
    - Copy `<kit>/agents/` → `<this repo>/.agents/`.
-   - Empty `.agents/state/` and ensure `.gitkeep` exists. Ensure `.agents/.gitignore` contains `state/`, `cache/`, `__pycache__/`, `scripts/__pycache__/`, `mcp/*/__pycache__/`, `mcp/zoho_sprints/zoho_config.json`, `*zoho*token*`, `*.secret`. Ensure root `.gitignore` includes `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.agents/state/`, `.agents/cache/`, `*.diff`, `*.patch` so zero transient files appear in Android Studio Git.
+   - Empty `.agents/state/` and ensure `.gitkeep` exists. Ensure `.agents/.gitignore` contains `state/`, `cache/`, `__pycache__/`, `scripts/__pycache__/`, `mcp/*/__pycache__/`, `mcp/zoho_sprints/zoho_config.json`, `*zoho*token*`, `*.secret`. Ensure `.git/info/exclude` (and `.gitignore`) includes all harness dirs and AI adapter files (`.agents/`, `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.githooks/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`) so **strictly ZERO harness or AI files ever appear in Android Studio Git or pollute shared team branches**.
    - Restore extra non-kit paths and custom domain reference files from the backup into `.agents/` (do **not** restore old kit scripts over new ones).
    - Run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file.
 8. **Port Product Constants & Adapters (Strict Order — DO NOT run selftest yet)**:

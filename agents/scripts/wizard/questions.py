@@ -622,6 +622,23 @@ def write_answers(repo: Path, answers: dict) -> None:
         "*.diff",
         "*.patch",
         ".githooks/",
+        "AGENTS.md",
+        "GEMINI.md",
+        "CLAUDE.md",
+        "CODEX.md",
+        "QWEN.md",
+        ".cursor/",
+        ".cursorrules",
+        ".windsurf/",
+        ".windsurfrules",
+        ".claude/",
+        ".clinerules",
+        ".amazonq/",
+        ".continue/",
+        ".junie/",
+        ".kilocode/",
+        ".roo/",
+        ".goosehints",
     ]
     if answers.get("agents_git") != "commit":
         extra.append(".agents/")
@@ -662,21 +679,55 @@ def write_answers(repo: Path, answers: dict) -> None:
             exclude_path.parent.mkdir(parents=True, exist_ok=True)
             ex_text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
             ex_lines = [ln.strip() for ln in ex_text.splitlines()]
-            if ".githooks/" not in ex_lines and ".githooks" not in ex_lines:
+            local_ex = [
+                ".agents/",
+                ".harness-setup/",
+                ".harness-backup/",
+                ".harness-backups/",
+                ".githooks/",
+                "AGENTS.md",
+                "GEMINI.md",
+                "CLAUDE.md",
+                "CODEX.md",
+                "QWEN.md",
+                ".cursor/",
+                ".cursorrules",
+                ".windsurf/",
+                ".windsurfrules",
+                ".claude/",
+                ".clinerules",
+                ".amazonq/",
+                ".continue/",
+                ".junie/",
+                ".kilocode/",
+                ".roo/",
+                ".goosehints",
+                "*.diff",
+                "*.patch",
+                "*.secret",
+            ]
+            added_ex = []
+            for pat in local_ex:
+                if pat not in ex_lines and pat.rstrip("/") not in ex_lines:
+                    added_ex.append(pat)
+            if added_ex:
                 with exclude_path.open("a", encoding="utf-8", newline="\n") as f:
                     if ex_text and not ex_text.endswith("\n"):
                         f.write("\n")
-                    f.write(".githooks/\n")
+                    f.write("# Android Harness Kit — Local AI Manifests & Transient State\n")
+                    for pat in added_ex:
+                        f.write(f"{pat}\n")
         except Exception:
             pass
 
-    subprocess.run(
-        ["git", "update-index", "--assume-unchanged", ".githooks/pre-commit"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
+        subprocess.run(
+            ["git", "update-index", "--assume-unchanged", tracked_cand],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
 
 def flags_from_answers(answers: dict) -> str:
