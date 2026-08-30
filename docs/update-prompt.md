@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.12/docs/update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-> **Kit version**: `v0.14.12` — **SHA-256**: `57a24e92890c4be871ba5aa6875556707b4e1b9f3d4c02eda4b4f255a3f15272` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.12` — **SHA-256**: `54bed30f287871abb8cf68834e0b190f45b834dfd7ae3fa97a1f326e33742709` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** (already has `.agents` from a previous install). The agent must execute it, not summarize it.
 
 ---
@@ -34,15 +34,16 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
    - Do **not** copy from a named branch or a stale unverified clone. Do **not** clone into `app/`, `composeApp/`, or any module source tree.
 4. If `.harness-setup/answers.json` exists, print it. Ask **U.1** with a full prompt: keep these answers, or run `setup_wizard.py` again to change some. Do not use a two-word title.
 5. If they change answers, run `<kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>` (or `questions` + print `auto_blurb` + verbatim `ask_question` prompts for **only** the JSON `questions` list + `write`). Copy the new `.harness-setup/SETUP_ANSWERS.md` into the backup folder.
-6. **Identify Custom Files to Preserve**: Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills and tailored domain references in `skills/android-harness/references/`).
+6. **Identify Custom Files to Preserve**: Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills and tailored domain references in `skills/android-harness/references/`). When migrating from older versions (< v0.14.12), old foundation filenames (`architecture-mvi.md`, `ui-compose-theme.md`, `room-database-migrations.md`, `performance-anr-optimization.md`) MUST NOT be preserved; their contents are replaced by the new universal foundation files.
 7. **Copy New Engine & Restore State**:
    - Copy `<kit>/agents/` → `<this repo>/.agents/`.
+   - Ensure old legacy foundation filenames (`architecture-mvi.md`, `ui-compose-theme.md`, `room-database-migrations.md`, `performance-anr-optimization.md`) are deleted if present from an earlier install.
    - Empty `.agents/state/` and ensure `.gitkeep` exists. Ensure `.agents/.gitignore` contains `state/`, `cache/`, `__pycache__/`, `scripts/__pycache__/`, `mcp/*/__pycache__/`, `mcp/zoho_sprints/zoho_config.json`, `*zoho*token*`, `*.secret`. Automatically register all harness directories and local AI manifests (`.agents/`, `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.githooks/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`) in `.git/info/exclude` (and prune any harness lines from shared `.gitignore`) so **strictly ZERO harness or AI files ever appear in Android Studio Git or pollute shared team branches**. Transient helper scripts must run in memory or be unlinked immediately.
    - Restore extra non-kit paths and custom domain reference files from the backup into `.agents/` (do **not** restore old kit scripts over new ones).
    - Run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file.
 8. **Port Product Constants & Adapters (Strict Order — DO NOT run selftest yet)**:
    - **Immediately write `.agents/scripts/_product.py`** using recorded facts from `answers.json` or backup (product name, applicationId, launcher, assemble task, device policy, PM_PROVIDER).
-   - **Port foundation references** (`architecture-guidelines.md`, `ui-layout-and-theming.md`, `database-and-persistence.md`, `daily-scenarios.md`) using recorded project facts. (Note: DO NOT ask the developer to re-approve domain references via `ask_question` during an update; they were approved during initial install).
+   - **Port foundation references** (`architecture-guidelines.md`, `ui-layout-and-theming.md`, `database-and-persistence.md`, `performance-and-optimization.md`, `daily-scenarios.md`) using recorded project facts. Ensure `daily-scenarios.md` indexes all 7 foundation files plus any active tailored domain files. (Note: DO NOT ask the developer to re-approve domain references via `ask_question` during an update; they were approved during initial install).
    - **Run tool adapters**: `$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5> --device-policy <I.4> --git-policy <I.3> --tools <I.14> <git_gate_flag>`. This automatically registers `.githooks/` into `.git/info/exclude` to keep local hooks strictly machine-local.
 9. **Verify & Diagnostics (Run in order)**:
    - `$PY .agents/scripts/_hook_selftest.py` → must report `Total test failures: 0`.
