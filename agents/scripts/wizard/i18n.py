@@ -442,7 +442,7 @@ T = {
         "b_arch": "ما هو نمط المعمارية (Architecture Pattern) الذي سيتبعه المشروع؟",
         "b_arch_mvi": "MVI مع تدفق بيانات أحادي (State + Action + Channel Events مع BaseViewModel) (مفضّل)",
         "b_arch_mvvm": "MVVM مع StateFlow / SharedFlow و ViewModel",
-        "b_arch_clean": "Clean Architecture + MVI (طبقات Data ➔ Domain/UseCases ➔ Presentation/MVI)",
+        "b_arch_clean": "Clean Architecture + MVI (طبقات Data -> Domain/UseCases -> Presentation/MVI)",
         "b_di": "ما هي مكتبة حقن الاعتماديات (Dependency Injection) المستخدمة؟",
         "b_di_koin": "Koin (koin-core / koin-compose / koin-android) (مفضّل لـ KMP وكوتلن)",
         "b_di_hilt": "Dagger Hilt (@HiltViewModel, @Inject, @AndroidEntryPoint) (مفضّل لـ Native Android)",
