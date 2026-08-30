@@ -16,16 +16,17 @@ This checkout uses a portable Android harness. The same rules apply in Cursor, C
 
 After non-trivial implementation:
 
-1. `{{PY}} .agents/scripts/review_package.py`
-2. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
+1. `{{PY}} .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Shift-Left pre-gate: empirically verifies compilation and unit tests before requesting reviews)
+2. `{{PY}} .agents/scripts/review_package.py`
+3. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
    - `bug-reviewer-agent` → `BUG_PASS`
    - `convention-reviewer-agent` → `CONVENTION_PASS`
    - `security-reviewer-agent` → `SECURITY_PASS`
    - `perf-anr-guardian-agent` → `PERF_PASS`
    - `regression-impact-reviewer-agent` → `REGRESSION_PASS`
-3. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
-4. `{{PY}} .agents/scripts/fast_kt_lint.py`
-5. `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+4. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
+5. `{{PY}} .agents/scripts/fast_kt_lint.py`
+6. `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
 
 Antigravity `hooks.json` enforces this barrier automatically. Other tools must follow it from this file.
 

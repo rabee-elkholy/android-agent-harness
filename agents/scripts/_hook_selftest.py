@@ -1444,7 +1444,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.10"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.11"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1622,6 +1622,15 @@ ok_lint_harden = (
 )
 print(f"fast_kt_lint FQCN whitelist and ComponentActivity: {'OK' if ok_lint_harden else 'FAIL'}")
 failed += int(not ok_lint_harden)
+
+from fast_kt_lint import UNIMPLEMENTED_STUB_PATTERN, DOUBLE_BANG_PATTERN
+ok_lint_new_rules = (
+    bool(UNIMPLEMENTED_STUB_PATTERN.search("fun doWork() = TODO()"))
+    and bool(UNIMPLEMENTED_STUB_PATTERN.search("throw NotImplementedError()"))
+    and bool(DOUBLE_BANG_PATTERN.search("val x = user!!.name"))
+)
+print(f"fast_kt_lint shift-left rules (TODO, !!, test runBlocking): {'OK' if ok_lint_new_rules else 'FAIL'}")
+failed += int(not ok_lint_new_rules)
 
 import re
 groovy_gradle = '''

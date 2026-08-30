@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.11] - 2026-08-30
+
+### Shift-Left Test Pre-Gate & Lead Agent Review First-Pass Optimization
+- **Mandatory Shift-Left Test & Compilation Pre-Gate (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Mandated executing `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` before generating review packages whenever Kotlin/Java code or tests are touched, catching constructor/signature mismatches and assertion errors in seconds before subagent dispatch.
+- **Expanded Fast Kotlin Linter (`fast_kt_lint.py`)**: Added instant static checks for `TEST_RUNBLOCKING` (`runBlocking` inside `*Test.kt`), `UNIMPLEMENTED_STUB` (`TODO()` or `throw NotImplementedError()`), and `UNCHECKED_DOUBLE_BANG` (`!!` operators in production code).
+- **Embedded Pre-Dispatch Quality Checklist (`pre_invocation_reminder.py`)**: Integrated an immediate 4-point verification checklist into agent context prompts to guarantee high first-pass review clearance rates.
+
 ## [0.14.10] - 2026-08-30
 
 ### Product Module Isolation in Doctor & Lifecycle Cross-Compatibility
@@ -101,7 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Structured Review Schema v2 & Monorepo Scaling
 - **Verdict Schema v2 (`review_package.py`, `_hook_state.py`)**: Added `reviewed_files`, `skipped_files`, and `is_truncated` fields to review package metadata, warning developers if working tree changes exceed file limits in large monorepos.
 
-## [0.13.3] - 2026-08-26
+---
+
+**Included in 0.13.3 (2026-08-26):**
 
 ### Fix: Review Package Digest Alignment & Infinite Review Barrier Resolution
 - **Canonical Whole-File SHA-256 Digest (`review_package.py`)**: Aligned the printed `HARNESS_PACKAGE_SHA256_12` with the whole-file SHA-256 hash computed by the engine at dispatch time. Previously, `review_package.py` printed the pre-digest (bytes before `PACKAGE_SHA256` marker), causing `EVIDENCE` footers cited by reviewers to mismatch the engine's expected package hash and preventing the review barrier from clearing.

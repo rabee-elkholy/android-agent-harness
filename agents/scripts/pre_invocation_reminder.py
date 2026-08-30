@@ -45,7 +45,8 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
     return (
         f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{update_directive} "
         "PRIORITY: uncompromising quality. Never skip the 5-leaf review to save tokens. "
-        "SHIFT-LEFT QUALITY: Before writing code, proactively satisfy all review pillars (null/network resilience, MVI single-source StateFlow, no inline FQCNs, Compose contentDescription & 48dp touch targets, dual-locale en/ar previews, zero Main-thread I/O, Room migration if @Entity changes) to achieve first-pass review approval. "
+        "SHIFT-LEFT QUALITY: Before requesting reviews, proactively satisfy all review pillars (null/network resilience, MVI single-source StateFlow, no inline FQCNs, Compose contentDescription & 48dp touch targets, dual-locale en/ar previews, zero Main-thread I/O, Room migration if @Entity changes). "
+        "SHIFT-LEFT TEST PRE-GATE: Before calling review_package.py and invoke_subagent, when code or unit tests are touched, ALWAYS run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` to empirically verify compiler/signature parity and unit test passes before dispatching subagents. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create implementation_plan.md artifact with RequestFeedback=true and get developer approval via Proceed button BEFORE writing code. "
         "ANSWER FIRST in chat before ask_question. Match ask_question language to the developer. "
         "(Recommended) is only for engineering tradeoffs — never on Pass/Fail. "

@@ -187,6 +187,7 @@ If the package diff contains any modified or newly created unit/UI test files (`
 
 From repo root:
 
+0. **Shift-Left Test & Signature Pre-Gate**: When code or unit tests are touched, run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (or module equivalent) *before* requesting review packages to empirically verify that signatures, constructor invocations, and unit test assertions pass cleanly.
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
 3. **SILENT REVIEW WAIT (Zero Chat Noise)**:

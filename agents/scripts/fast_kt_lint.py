@@ -37,6 +37,8 @@ FQCN_WHITELIST = re.compile(
 WILDCARD_IMPORT_PATTERN = re.compile(r"^import\s+[a-zA-Z0-9_.]+\.\*")
 STATE_CLASS_PATTERN = re.compile(r"data\s+class\s+[A-Za-z0-9_]*State\b")
 RUNBLOCKING_PATTERN = re.compile(r"\brunBlocking\s*(\(|{)")
+UNIMPLEMENTED_STUB_PATTERN = re.compile(r"\b(TODO\s*\(|throw\s+NotImplementedError\s*\()")
+DOUBLE_BANG_PATTERN = re.compile(r"[a-zA-Z0-9_\)\]]\s*!!")
 CLASS_ENTRY_PATTERN = re.compile(
     r"^(?:(?:public|internal|open)\s+)?class\s+\w+[^{]*:\s*(?:BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity|ComponentActivity|FragmentActivity|DialogFragment|BottomSheetDialogFragment)\b"
 )
@@ -171,12 +173,44 @@ def lint_file(file_path: Path) -> list[dict]:
                 break
 
         if not is_test and RUNBLOCKING_PATTERN.search(trimmed):
-            issues.append({
-                "file": str(file_path),
-                "line": idx,
-                "type": "RUNBLOCKING_ANR",
-                "msg": "runBlocking found in production code. Use viewModelScope.launch or coroutineScope to avoid ANRs.",
-            })
+            m_rb = RUNBLOCKING_PATTERN.search(trimmed)
+            if not _in_string_or_comment(line, m_rb.start()):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "RUNBLOCKING_ANR",
+                    "msg": "runBlocking found in production code. Use viewModelScope.launch or coroutineScope to avoid ANRs.",
+                })
+
+        if is_test and RUNBLOCKING_PATTERN.search(trimmed):
+            m_trb = RUNBLOCKING_PATTERN.search(trimmed)
+            if not _in_string_or_comment(line, m_trb.start()):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "TEST_RUNBLOCKING",
+                    "msg": "runBlocking found in test file. Use runTest { ... } with StandardTestDispatcher / advanceUntilIdle() for robust coroutine testing.",
+                })
+
+        if not is_test and UNIMPLEMENTED_STUB_PATTERN.search(trimmed):
+            m_stub = UNIMPLEMENTED_STUB_PATTERN.search(trimmed)
+            if not _in_string_or_comment(line, m_stub.start()):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "UNIMPLEMENTED_STUB",
+                    "msg": f"Unimplemented stub found in production code: '{trimmed}'. Provide complete implementation.",
+                })
+
+        if not is_test and DOUBLE_BANG_PATTERN.search(trimmed):
+            m_db = DOUBLE_BANG_PATTERN.search(trimmed)
+            if not _in_string_or_comment(line, m_db.start()):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "UNCHECKED_DOUBLE_BANG",
+                    "msg": f"Unchecked double-bang (!!) found in production code: '{trimmed}'. Replace with safe call (?.) or checkNotNull()/requireNotNull() with clear message.",
+                })
 
         current_feature = _current_feature_segment(file_path)
         if current_feature:
