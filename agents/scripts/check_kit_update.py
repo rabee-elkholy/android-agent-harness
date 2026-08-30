@@ -157,7 +157,7 @@ def update_banner() -> str:
     if res["has_update"]:
         return (
             f"[HARNESS UPDATE AVAILABLE] v{res['latest']} is out (installed: v{res['current']})!\n"
-            f"   To upgrade your project harness, paste docs/update-prompt.md in a new chat."
+            f"   To upgrade your project harness, paste docs/install-or-update-prompt.md in a new chat."
         )
     return ""
 
@@ -194,7 +194,7 @@ def main() -> int:
         else:
             print(f"\n[!] A new version is available: v{res['latest']}")
             print(f"    Release details: {res['html_url']}")
-            print("    To upgrade, paste docs/update-prompt.md in a new chat.")
+            print("    To upgrade, paste docs/install-or-update-prompt.md in a new chat.")
     else:
         print("[OK] You are running the latest version.")
 

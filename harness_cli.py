@@ -302,7 +302,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
     print()
     print("[NEXT] Answers recorded. Finish the structural port with your AI agent:")
-    print(f"       paste {_prompt_url(version, 'install-prompt.md')}")
+    print(f"       paste {_prompt_url(version, 'install-or-update-prompt.md')}")
     print("       in a NEW strong-model chat opened at the Android project root.")
     print(f"[VERIFY] afterwards: android-harness doctor --repo \"{repo}\"")
     return 0
@@ -332,7 +332,7 @@ def cmd_update(args: argparse.Namespace) -> int:
     new_version = _read_version_file(kit)
     print(f"[i] Local kit engine now at: v{new_version}")
     print("[NEXT] Port the new engine into your app checkout:")
-    print(f"       paste {_prompt_url(new_version, 'update-prompt.md')}")
+    print(f"       paste {_prompt_url(new_version, 'install-or-update-prompt.md')}")
     print("       in a NEW strong-model chat opened at the Android project root.")
     return 0
 

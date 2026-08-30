@@ -1,9 +1,9 @@
 # Setup prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/setup-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/setup-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
 
-The installing agent **executes** this file (usually after the developer pasted [`install-prompt.md`](install-prompt.md) or [`update-prompt.md`](update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
+The installing agent **executes** this file (usually after the developer pasted [`install-or-update-prompt.md`](install-or-update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
 
 ---
 
@@ -26,7 +26,7 @@ Answer in the developer's language. Do not commit unless they ask.
 
 If `<repo>/.harness-setup/answers.json` exists and `"i0": true`, **skip section I**. Use those answers. Copy `.harness-setup/SETUP_ANSWERS.md` into the backup folder. Installer argv: `$PY <kit-or-.agents>/scripts/setup_wizard.py flags --repo <this-android-root>`.
 
-Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-prompt.md`](install-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions`; the JSON list is the sole authority and can include I.18-I.21 plus conditional I.2/I.5/I.6/I.19/bootstrap questions. Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
+Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-or-update-prompt.md`](install-or-update-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions`; the JSON list is the sole authority and can include I.18-I.21 plus conditional I.2/I.5/I.6/I.19/bootstrap questions. Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
 
 **Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. On a re-run, previous answers are marked `(current)` and Enter keeps them; only deliberate changes need a new choice. Do not guess which tools they use (I.14), Zoho (I.16), tracker (I.20), git gate (I.21), or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until the required questions returned by the wizard are answered.
 
@@ -286,6 +286,6 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 - **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
-  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/diagnostic-prompt.md`.
-  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/rollback-prompt.md`.
+  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/diagnostic-prompt.md`.
+  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/rollback-prompt.md`.
   - Remember: Five `*_PASS` required before real feature/bug delivery.

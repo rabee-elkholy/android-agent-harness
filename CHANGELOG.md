@@ -5,6 +5,12 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.15] - 2026-08-30
+
+### Unified Install & Update Prompt File Consolidation
+- **Unified Setup & Upgrade Architecture (`docs/install-or-update-prompt.md`)**: Consolidated installation and update workflows by renaming `docs/install-prompt.md` to `docs/install-or-update-prompt.md` and removing `docs/update-prompt.md`, retaining the original structural port and setup steps while clarifying its dual capability for fresh installations and project upgrades.
+- **Synchronized Roster & Documentation Links**: Updated `README.md`, `docs/quickstart.md`, `docs/tool-support.md`, `docs/diagnostic-prompt.md`, `docs/setup-prompt.md`, `docs/sync.md`, `check_kit_update.py`, `pre_invocation_reminder.py`, `harness_cli.py`, and `scripts_dev/pin_prompt_docs.py`.
+
 ## [0.14.14] - 2026-08-30
 
 ### Autonomous Phase Pipeline, Review Round Cards & Zero-Timer Invariant
@@ -87,7 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Non-Destructive Managed Block Preservation (`install_tool_adapters.py`)**: Enhanced adapter file generation to cleanly preserve existing user-defined custom rules and instructions in `CLAUDE.md`, `AGENTS.md`, and `.cursorrules` using bounded `<!-- BEGIN ANDROID-HARNESS MANAGED BLOCK -->` markers.
 - **Security Policy Modernization (`SECURITY.md`)**: Updated supported versions table to actively cover `0.14.x` through `0.10.x` with clear demarcation of AI developer safety vs mobile runtime application security boundaries.
 
-## [0.14.3] - 2026-08-29
+---
+
+**Included in 0.14.3 (2026-08-29):**
 
 ### Documentation & Developer Experience Priority
 - **Primary AI Chat Prompt Workflow (`README.md`, `quickstart.md`)**: Restructured all lifecycle operations (Installation, Diagnostics & Health, Upgrades & Updates, and Emergency Rollback) to feature the one-click AI Chat Prompt URL as the primary, recommended method for maximum developer convenience and automated domain discovery.

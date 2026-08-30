@@ -23,7 +23,7 @@ def check_update_directive() -> str:
                 f"Choices: 'View Changes (عرض التغييرات)' / 'Remind me tomorrow (ذكرني غداً)' / 'Update now (تحديث الآن)'. "
                 f"If they pick 'Remind me tomorrow': run `python .agents/scripts/check_kit_update.py --snooze 1` and proceed with their request. "
                 f"If they pick 'View Changes': run `python .agents/scripts/check_kit_update.py --show-changes` to show the changelog, then ask 'Update now' or 'Remind me tomorrow'. "
-                f"If they pick 'Update now': execute docs/update-prompt.md."
+                f"If they pick 'Update now': execute docs/install-or-update-prompt.md."
             )
     except Exception:
         pass

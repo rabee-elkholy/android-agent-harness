@@ -22,13 +22,13 @@ For initial setup and structural porting, select a model capable of deep archite
 
 ## Step 3: Run the Installer (AI Prompt or CLI)
 
-### Option A: One-Prompt Installer (Chat Prompt — Recommended)
+### Option A: One-Prompt Installer & Updater (Chat Prompt — Recommended)
 
-Copy the entire content of [`docs/install-prompt.md`](install-prompt.md) or paste the URL into your chat prompt:
+Copy the entire content of [`docs/install-or-update-prompt.md`](install-or-update-prompt.md) or paste the URL into your chat prompt:
 
 ```markdown
-Run the Android Harness Kit Installer:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/install-prompt.md
+Run the Android Harness Kit Installer or Updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/install-or-update-prompt.md
 ```
 
 ### Option B: Standalone CLI (Terminal)
@@ -64,7 +64,7 @@ To perform a comprehensive 12-dimension health audit at any time, audit `.gitign
 
 ```markdown
 Run the Android Harness Kit Diagnostic Doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/diagnostic-prompt.md
 ```
 
 Or execute directly from your terminal:
@@ -78,24 +78,14 @@ python .agents/scripts/harness_doctor.py
 
 You can copy and paste any of the following prompts directly into your AI assistant in a new chat:
 
-### 1. Install Prompt (Setup & Greenfield Bootstrap)
-- **What it does**: Sets up `.agents/`, safety hooks, IDE adapters, and architectural rules tailored to your project.
-- **Why it matters**: Turns standard AI coding assistants into architecture-compliant engineering teammates.
-- **When to use**: Onboarding an existing Android repository or bootstrapping a brand-new Greenfield app.
+### 1. Install & Update Prompt (Setup, Greenfield Bootstrap & In-Place Upgrades)
+- **What it does**: Sets up or upgrades `.agents/`, safety hooks, IDE adapters, and architectural rules tailored to your project.
+- **Why it matters**: Turns standard AI coding assistants into architecture-compliant engineering teammates and delivers new lint rules and security hardening.
+- **When to use**: Onboarding an existing Android repository, bootstrapping a brand-new Greenfield app, or upgrading to a new harness release.
 - **Prompt URL**:
 ```markdown
-Read and execute the Android Harness Kit installer:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/install-prompt.md
-```
-
-### 2. Update Prompt (Harness Upgrade)
-- **What it does**: Upgrades `.agents/` scripts, hooks, and subagent prompts to the newest release while retaining your custom app settings.
-- **Why it matters**: Delivers new lint rules, security hardening, and framework improvements without touching your application source code.
-- **When to use**: Whenever a new harness release is published.
-- **Prompt URL**:
-```markdown
-Read and execute the Android Harness Kit updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/update-prompt.md
+Read and execute the Android Harness Kit installer or updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/install-or-update-prompt.md
 ```
 
 ### 3. Diagnostic Doctor Prompt (12-Dimension Health Check)
@@ -105,7 +95,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/doc
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit diagnostic doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/diagnostic-prompt.md
 ```
 
 ### 4. Rollback Prompt (Instant Backup Restoration)
@@ -115,7 +105,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/doc
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit rollback:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.14/docs/rollback-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.15/docs/rollback-prompt.md
 ```
 
 ---

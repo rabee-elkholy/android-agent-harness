@@ -10,7 +10,7 @@ Use a **file-level patch**, one direction, then prove it.
 |---|---|---|---|
 | **Engine** | `pre_tool_safety.py`, `_live_process.py`, `run_gradle_task.py`, `run_device.py`, `_hook_selftest.py`, `hooks.json`, 5 reviewer JSON files, `*_PASS` protocol | Yes (generic identity in `_product.py`) | Yes (parent fills its own `_product.py` / rules) |
 | **Product identity** | Parent company/package/launcher/domain skills | **Must not** appear in `agents/` | **Must stay** (this is the real app) |
-| **Kit packaging** | `docs/install-prompt.md`, `update-prompt.md`, `setup-prompt.md`, `install_tool_adapters.py --tools`, empty kit `mcp_config.json`, Zoho MCP **server code** (no tokens) | Yes | No (do not “install” the kit into the parent as if it were a stranger app) |
+| **Kit packaging** | `docs/install-or-update-prompt.md`, `setup-prompt.md`, `install_tool_adapters.py --tools`, empty kit `mcp_config.json`, Zoho MCP **server code** (no tokens) | Yes | No (do not “install” the kit into the parent as if it were a stranger app) |
 | **Machine / secrets** | `state/`, `local.properties`, `~/.gemini`, Zoho tokens / `zoho_config.json`, `sdk.dir` | Never | Never copy into the kit |
 
 Do not weaken the engine (see `docs/porting.md`).
@@ -19,7 +19,7 @@ Do not weaken the engine (see `docs/porting.md`).
 
 - Overwrite the parent’s live `.agents` with the kit tree (or with `dist/android-harness-kit`).
 - Overwrite the GitHub kit with the parent’s live `.agents` (it contains `state/`, product-only edits, and often a nested `dist/`).
-- Run `install-prompt.md` or `update-prompt.md` **on the parent product**. Those prompts fill generic kit defaults from disk. The parent already has its real identity.
+- Run `install-or-update-prompt.md` **on the parent product**. Those prompts fill generic kit defaults from disk. The parent already has its real identity.
 - Copy `~/.gemini` either way.
 - Naive find-replace of the product name in either direction.
 - Promote parent product-specific domain skills (ads, GPS, audio, education, payments) into the kit.
@@ -31,7 +31,7 @@ Do not weaken the engine (see `docs/porting.md`).
 3. Copy those files into `android-harness-kit/agents/…` (same relative path).
 4. If the change is product-specific (package, launcher, theme, domain copy), **do not** promote it. Strip identity first; kit `_product.py` stays generic.
 5. In the kit: `$PY agents/scripts/_hook_selftest.py`. Grep `agents/` for parent identity tokens — must be clean.
-6. Commit the kit. Products update with `docs/update-prompt.md` (not the parent).
+6. Commit the kit. Products update with `docs/install-or-update-prompt.md` (not the parent).
 
 ## Kit → parent (bring a portable engine fix home)
 
