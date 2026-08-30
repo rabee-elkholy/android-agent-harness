@@ -1,120 +1,84 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#080C14"/>
-      <stop offset="50%" stop-color="#0D1322"/>
-      <stop offset="100%" stop-color="#070A10"/>
+      <stop offset="0%" stop-color="#070A11"/>
+      <stop offset="50%" stop-color="#0E1626"/>
+      <stop offset="100%" stop-color="#06090F"/>
     </linearGradient>
-    <linearGradient id="primary-glow" x1="0%" y1="0%" x2="100%" y2="0%">
+    <linearGradient id="glow-text" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#3DDC84"/>
       <stop offset="50%" stop-color="#38BDF8"/>
       <stop offset="100%" stop-color="#818CF8"/>
     </linearGradient>
-    <linearGradient id="card-bg" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#1E293B" stop-opacity="0.7"/>
-      <stop offset="100%" stop-color="#0F172A" stop-opacity="0.9"/>
+    <linearGradient id="badge-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#0F172A" stop-opacity="0.95"/>
     </linearGradient>
-    <filter id="blur-glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="60" result="blur"/>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="80" result="blur"/>
     </filter>
   </defs>
 
   <!-- Background -->
   <rect width="1280" height="640" fill="url(#bg)"/>
 
-  <!-- Ambient Glow Circles -->
-  <circle cx="200" cy="150" r="180" fill="#3DDC84" opacity="0.12" filter="url(#blur-glow)"/>
-  <circle cx="1080" cy="200" r="220" fill="#6366F1" opacity="0.15" filter="url(#blur-glow)"/>
-  <circle cx="640" cy="480" r="200" fill="#0EA5E9" opacity="0.10" filter="url(#blur-glow)"/>
+  <!-- Glowing Aura Backdrops -->
+  <circle cx="240" cy="180" r="220" fill="#3DDC84" opacity="0.16" filter="url(#glow)"/>
+  <circle cx="1040" cy="220" r="240" fill="#6366F1" opacity="0.18" filter="url(#glow)"/>
+  <circle cx="640" cy="500" r="220" fill="#0EA5E9" opacity="0.12" filter="url(#glow)"/>
 
-  <!-- Grid Pattern Overlay -->
-  <g stroke="#334155" stroke-width="1" opacity="0.15">
-    <line x1="0" y1="80" x2="1280" y2="80"/>
-    <line x1="0" y1="160" x2="1280" y2="160"/>
-    <line x1="0" y1="240" x2="1280" y2="240"/>
-    <line x1="0" y1="320" x2="1280" y2="320"/>
-    <line x1="0" y1="400" x2="1280" y2="400"/>
-    <line x1="0" y1="480" x2="1280" y2="480"/>
-    <line x1="0" y1="560" x2="1280" y2="560"/>
-    <line x1="160" y1="0" x2="160" y2="640"/>
-    <line x1="320" y1="0" x2="320" y2="640"/>
-    <line x1="480" y1="0" x2="480" y2="640"/>
-    <line x1="640" y1="0" x2="640" y2="640"/>
-    <line x1="800" y1="0" x2="800" y2="640"/>
-    <line x1="960" y1="0" x2="960" y2="640"/>
-    <line x1="1120" y1="0" x2="1120" y2="640"/>
+  <!-- Top System Badge -->
+  <g transform="translate(640, 95)">
+    <rect x="-190" y="-22" width="380" height="44" rx="22" fill="#0F172A" stroke="#3DDC84" stroke-width="2"/>
+    <circle cx="-155" cy="0" r="6" fill="#3DDC84"/>
+    <text text-anchor="middle" x="10" y="7" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="800" letter-spacing="2">ANDROID AGENT HARNESS</text>
   </g>
 
-  <!-- Top Badge -->
-  <g transform="translate(640, 70)">
-    <rect x="-170" y="-18" width="340" height="36" rx="18" fill="#1E293B" stroke="#3DDC84" stroke-width="1.5" opacity="0.9"/>
-    <text text-anchor="middle" y="5" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="700" letter-spacing="1.5">ANDROID AGENT HARNESS</text>
-  </g>
-
-  <!-- Main Hero Slogan -->
-  <text x="640" y="150" text-anchor="middle" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="44" font-weight="800" letter-spacing="-0.5">
+  <!-- Main Hero Headlines (Large, Ultra-Bold) -->
+  <text x="640" y="195" text-anchor="middle" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="900" letter-spacing="-1">
     Deterministic Android Engineering
   </text>
-  <text x="640" y="205" text-anchor="middle" fill="url(#primary-glow)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="44" font-weight="800" letter-spacing="-0.5">
+  <text x="640" y="265" text-anchor="middle" fill="url(#glow-text)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="900" letter-spacing="-1">
     for the AI Era
   </text>
 
-  <!-- Subtitle -->
-  <text x="640" y="255" text-anchor="middle" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="500">
+  <!-- Tagline (High Contrast, Large) -->
+  <text x="640" y="325" text-anchor="middle" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="600" letter-spacing="-0.2">
     Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team.
   </text>
 
-  <!-- Feature Pillar Cards (3 Columns) -->
-  <!-- Card 1: 6 Quality Guardians -->
-  <g transform="translate(80, 295)">
-    <rect width="340" height="230" rx="16" fill="url(#card-bg)" stroke="#334155" stroke-width="1.2"/>
-    <rect x="20" y="20" width="36" height="36" rx="8" fill="#3DDC84" fill-opacity="0.15"/>
-    <circle cx="38" cy="38" r="8" fill="#3DDC84"/>
-    <text x="68" y="44" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700">6 Quality Guardians</text>
-    <text x="20" y="85" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="400" line-height="1.6">
-      <tspan x="20" dy="0">• Bug &amp; Logic Reviewer</tspan>
-      <tspan x="20" dy="24">• Convention &amp; Architecture</tspan>
-      <tspan x="20" dy="24">• Security &amp; OWASP Mobile</tspan>
-      <tspan x="20" dy="24">• Performance &amp; ANR Guardian</tspan>
-      <tspan x="20" dy="24">• Regression &amp; Test Quality</tspan>
-    </text>
+  <!-- 3 Core Architectural Pillars (Large High-Impact Badges) -->
+  <g transform="translate(640, 410)">
+    <!-- Pillar 1: 6 Quality Guardians -->
+    <g transform="translate(-360, 0)">
+      <rect x="-160" y="-38" width="320" height="76" rx="16" fill="url(#badge-bg)" stroke="#334155" stroke-width="1.5"/>
+      <circle cx="-120" cy="0" r="10" fill="#3DDC84"/>
+      <text x="-95" y="-6" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="800">6 Quality Guardians</text>
+      <text x="-95" y="18" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500">Parallel Review Gate</text>
+    </g>
+
+    <!-- Pillar 2: Deterministic OS Hooks -->
+    <g transform="translate(0, 0)">
+      <rect x="-160" y="-38" width="320" height="76" rx="16" fill="url(#badge-bg)" stroke="#38BDF8" stroke-width="1.8"/>
+      <circle cx="-120" cy="0" r="10" fill="#38BDF8"/>
+      <text x="-95" y="-6" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="800">Deterministic OS Hooks</text>
+      <text x="-95" y="18" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500">Cryptographic Delivery Cage</text>
+    </g>
+
+    <!-- Pillar 3: Targeted E2E Smoke -->
+    <g transform="translate(360, 0)">
+      <rect x="-160" y="-38" width="320" height="76" rx="16" fill="url(#badge-bg)" stroke="#818CF8" stroke-width="1.5"/>
+      <circle cx="-120" cy="0" r="10" fill="#818CF8"/>
+      <text x="-95" y="-6" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="800">Targeted E2E Smoke</text>
+      <text x="-95" y="18" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500">Autonomous Device QA</text>
+    </g>
   </g>
 
-  <!-- Card 2: Deterministic OS Hooks -->
-  <g transform="translate(470, 295)">
-    <rect width="340" height="230" rx="16" fill="url(#card-bg)" stroke="#38BDF8" stroke-width="1.2" stroke-opacity="0.6"/>
-    <rect x="20" y="20" width="36" height="36" rx="8" fill="#38BDF8" fill-opacity="0.15"/>
-    <rect x="30" y="30" width="16" height="16" rx="3" fill="#38BDF8"/>
-    <text x="68" y="44" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700">Deterministic OS Hooks</text>
-    <text x="20" y="85" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="400">
-      <tspan x="20" dy="0">• Cryptographic Delivery Barrier</tspan>
-      <tspan x="20" dy="24">• Zero Git Pollution Isolation</tspan>
-      <tspan x="20" dy="24">• Offline IDE Pre-Commit Gates</tspan>
-      <tspan x="20" dy="24">• Room Graph Integrity Audit</tspan>
-      <tspan x="20" dy="24">• 12-Dimension Harness Doctor</tspan>
-    </text>
-  </g>
-
-  <!-- Card 3: Autonomous E2E Smoke -->
-  <g transform="translate(860, 295)">
-    <rect width="340" height="230" rx="16" fill="url(#card-bg)" stroke="#334155" stroke-width="1.2"/>
-    <rect x="20" y="20" width="36" height="36" rx="8" fill="#818CF8" fill-opacity="0.15"/>
-    <polygon points="38,28 46,44 30,44" fill="#818CF8"/>
-    <text x="68" y="44" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700">Targeted E2E Smoke</text>
-    <text x="20" y="85" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="400">
-      <tspan x="20" dy="0">• Diff-Aware Target Discovery</tspan>
-      <tspan x="20" dy="24">• Physical Device &amp; AVD Testing</tspan>
-      <tspan x="20" dy="24">• UI Automator Gesture Stress</tspan>
-      <tspan x="20" dy="24">• Real-Time Logcat Crash Triage</tspan>
-      <tspan x="20" dy="24">• Visual Screenshot Capture</tspan>
-    </text>
-  </g>
-
-  <!-- Footer Info Bar -->
-  <g transform="translate(80, 560)">
-    <rect width="1120" height="50" rx="12" fill="#0F172A" stroke="#1E293B" stroke-width="1"/>
-    <text x="25" y="31" fill="#64748B" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600">COMPATIBLE WITH:</text>
-    <text x="160" y="31" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500">Cursor • Claude Code • Gemini • Antigravity • Copilot • Windsurf • Cline • Roo • Qwen</text>
-    <text x="960" y="31" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="700">KOTLIN &amp; COMPOSE</text>
+  <!-- Bottom Compatibility Strip -->
+  <g transform="translate(640, 535)">
+    <rect x="-560" y="-24" width="1120" height="48" rx="12" fill="#0A0F1D" stroke="#1E293B" stroke-width="1.2"/>
+    <text x="-530" y="6" fill="#64748B" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="700" letter-spacing="1">COMPATIBLE WITH</text>
+    <text x="-370" y="6" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="600">Cursor • Claude Code • Gemini • Antigravity • Copilot • Windsurf • Cline</text>
+    <text x="440" y="6" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="800" letter-spacing="1">KOTLIN &amp; COMPOSE</text>
   </g>
 </svg>

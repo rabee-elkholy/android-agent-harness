@@ -39,6 +39,14 @@ The **Android Agent Harness** is fundamentally different. It does not plead with
 
 ---
 
+## See it in Action: Parallel Review Gate & Targeted E2E Smoke
+
+<div align="center">
+  <img src="docs/assets/demo.gif" alt="Android Agent Harness: Live Parallel Review and Autonomous E2E Smoke Demo" width="100%" />
+</div>
+
+---
+
 ## Universal Android Engineering: Built for ALL Stacks & Architectures
 
 The harness seamlessly adapts to any Android project topology from day one:
