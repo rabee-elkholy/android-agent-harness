@@ -44,22 +44,36 @@ Read https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2
 Here is what fixing a production bug or shipping a feature actually feels like with the harness:
 
 ```text
-[1] YOU PROMPT
-    "Fix race condition crash on Cart Screen during item removal"
+[1] INGESTION & IMPACT ANALYSIS
+    Reads ticket / prompt -> Analyzes multi-module dependencies & caller graph
     │
     ▼
-[2] SHIFT-LEFT TDD (RED -> GREEN)
-    Writes failing unit test -> Applies surgical fix -> Unit tests pass
+[2] IMPLEMENTATION PLAN & DEVELOPER ALIGNMENT
+    Drafts architectural plan (implementation_plan.md) with open questions
+    -> Developer reviews & approves before a single line of code changes
     │
     ▼
-[3] SIX-GUARDIAN PARALLEL REVIEW GATE
-    6 specialized reviewers audit the diff simultaneously:
+[3] SHIFT-LEFT TDD (RED -> GREEN)
+    Writes failing unit test -> Applies surgical fix -> Empirically verifies pass
+    │
+    ▼
+[4] ANDROID PREFLIGHT TRIO (<5s Fast Checks)
+    Validates Room schema migrations, Bilingual string parity (values-ar), & Lint
+    │
+    ▼
+[5] SIX-GUARDIAN PARALLEL REVIEW GATE
+    6 specialized AI reviewers audit the diff simultaneously with cryptographic evidence:
     (Bug, Security, Convention, Perf/ANR, Regression, Test Quality)
     │
     ▼
-[4] VERIFIED DEVICE DELIVERY
-    Builds :app:assembleDebug -> Installs on USB device via ADB
-    -> Runs autonomous E2E smoke test -> Emits Conventional Commit
+[6] AUTONOMOUS DEVICE E2E SMOKE
+    Builds :app:assembleDebug -> Installs on physical device via ADB
+    -> Runs live UI smoke test & audits Logcat for runtime exceptions
+    │
+    ▼
+[7] PM TRACKER SYNC & HUMAN GIT SIGN-OFF
+    Updates Zoho Sprints / Jira -> Drafts verified Conventional Commit
+    -> Leaves final commit & push to developer authority
 ```
 
 ### The Real-World Difference in Your Daily Flow
