@@ -146,6 +146,9 @@ Before writing or modifying any code, the Lead Agent must proactively verify com
    - Any modification to an `@Entity` class or `@Database` schema MUST increment the database `version` and supply an explicit `Migration(from, to)` registered via `addMigrations(...)`.
 7. **Blast Radius & Contract Integrity**:
    - Check all usages across the codebase before altering public function signatures, ViewModel contracts, or navigation arguments.
+8. **Mandatory Architectural KDoc Documentation**:
+   - Every newly created or refactored Repository interface method, UseCase class & `invoke()`, ViewModel public state/events contract, and DataSource method MUST proactively include standard, meaningful KDoc (`/** ... */`) documenting its architectural purpose, `@param` parameters, `@return` value, and `@throws` exceptions (if any).
+   - KDoc must document business intent and contract boundaries clearly (never generate bare uncommented domain/data layers).
 
 ---
 
