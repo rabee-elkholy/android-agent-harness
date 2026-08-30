@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-harness-kit"
-version = "0.14.15"
-description = "Deterministic quality, security, and delivery harness for AI-assisted Android development"
+version = "0.14.16"
+description = "Deterministic Android Engineering for the AI Era: Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

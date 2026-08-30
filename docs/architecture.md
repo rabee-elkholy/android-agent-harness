@@ -1,6 +1,7 @@
 # Android Agent Harness: Architecture Guide
 
-The **Android Agent Harness** is an enterprise-grade delivery gate and governance system designed to transform AI coding assistants from unconstrained code generators into disciplined, architecture-compliant engineering teammates.
+> **Deterministic Android Engineering for the AI Era**  
+> *Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team.*
 
 ---
 
@@ -9,35 +10,35 @@ The **Android Agent Harness** is an enterprise-grade delivery gate and governanc
 ```mermaid
 graph TB
     subgraph Client ["Client Android Project"]
-        IDE["AI Assistant / IDE (Cursor / Antigravity / Claude)"]
-        FS[".agents / Workspace Rules"]
+        IDE["AI Assistant / IDE (Cursor / Antigravity / Claude / Copilot)"]
+        FS[".agents / Workspace Rules & Adapters"]
     end
 
     subgraph Governance ["Harness Governance Engine"]
         SafetyHooks["pre_tool_safety.py & hooks.json"]
-        StateManager["_hook_state.py (Ephemeral State)"]
+        StateManager["_hook_state.py (State Machine & Locking)"]
         Preflight["preflight_check.py (Lint + Room + Strings)"]
         GradleStream["run_gradle_task.py (Live Heartbeat)"]
-        DeviceRunner["run_device.py (Adb / Live Activity)"]
+        DeviceRunner["run_device.py & run_e2e_smoke.py"]
     end
 
-    subgraph Reviewers ["Parallel 5-Leaf Review Gate"]
-        R1["Bug & Null-Safety Reviewer"]
-        R2["Architecture & Convention Reviewer"]
-        R3["Security & Permissions Reviewer"]
-        R4["Perf & ANR Guardian Reviewer"]
-        R5["Regression Impact Reviewer"]
+    subgraph Reviewers ["Parallel 6-Leaf Quality Guardians"]
+        R1["1. Bug & Logic Reviewer (bug-reviewer-agent)"]
+        R2["2. Architecture & Convention (convention-reviewer-agent)"]
+        R3["3. Security & OWASP Reviewer (security-reviewer-agent)"]
+        R4["4. Perf & ANR Guardian (perf-anr-guardian-agent)"]
+        R5["5. Regression & Blast Radius (regression-impact-reviewer-agent)"]
+        R6["6. Test Quality Specialist (test-quality-reviewer-agent)"]
     end
 
     subgraph Specialists ["On-Demand Dedicated Specialists"]
-        S1["QA Diagnostics Agent (Logcat / ANR)"]
-        S2["Android UI Expert (Compose / RTL)"]
-        S3["Test Quality Specialist (*Test.kt Suites)"]
+        S1["QA Diagnostics Agent (Logcat Forensics & ANR Triage)"]
+        S2["Android UI Expert (Compose / XML & RTL Layouts)"]
     end
 
-    subgraph Integrations ["Ecosystem Integrations"]
-        ZohoMCP["Zoho Sprints MCP Server"]
-        GitGuard["Git Mutation Interceptor"]
+    subgraph Integrations ["Ecosystem & PM Bridges"]
+        ZohoMCP["Zoho Sprints & PM Integrations"]
+        GitGuard["Git Mutation Interceptor & Pre-Commit Gate"]
     end
 
     IDE --> SafetyHooks
@@ -63,41 +64,36 @@ flowchart TD
     Start(["1. Task / Feature Request"]) --> Plan["2. Planning Guard: implementation_plan.md"]
     Plan --> Approval{"Developer Approval"}
     Approval -- Revisions --> Plan
-    Approval -- Approved --> Code["3. Code Implementation & Edits"]
+    Approval -- Approved --> Code["3. Code Implementation & TDD"]
 
-    Code --> ReviewGate["4. Five-Leaf Parallel Review Gate"]
-    subgraph ReviewGate ["Parallel Reviewer Subagents"]
-        R1["Bug & Null-Safety Reviewer"]
+    Code --> PreTest["4. Shift-Left Test Pre-Gate (:app:testDebugUnitTest)"]
+    PreTest -- Test Compile Fail --> Code
+    PreTest -- Tests Pass --> ReviewGate["5. Parallel Review Gate (Single Invoke)"]
+    
+    subgraph ReviewGate ["Parallel Quality Guardians"]
+        R1["Bug Reviewer"]
         R2["Architecture & Convention"]
-        R3["Security & Permissions"]
+        R3["Security Reviewer"]
         R4["Perf & ANR Guardian"]
         R5["Regression Blast Radius"]
     end
 
-    ReviewGate --> Verdict{"All 5 Leaves PASS?"}
-    Verdict -- Findings Found --> Code
-    Verdict -- All 5 PASS --> Preflight["5. Preflight Sanity Verification"]
+    ReviewGate --> Verdict{"All Leaves PASS?"}
+    Verdict -- Findings Detected --> Card["Review Round Summary Card (Chat Transparency)"]
+    Card --> Code
+    Verdict -- All PASS --> Preflight["6. Preflight Gate & :app:assembleDebug"]
 
     subgraph Preflight ["Automated Preflight Suite"]
-        P1["Fast Kotlin Lint"]
-        P2["Room DB Migrations"]
+        P1["Fast Kotlin Lint (<1s)"]
+        P2["Room DB Schema Migrations"]
         P3["Bilingual String Parity"]
     end
 
-    Preflight --> TestCheck{"Unit Tests Enabled?"}
-    TestCheck -- Enabled --> TestQualityReview["Test Quality Specialist: test-quality-reviewer-agent"]
-    TestQualityReview --> UnitTests["Unit Tests: testDebugUnitTest"]
-    UnitTests -- Tests Fail --> Code
-    UnitTests -- Tests PASS --> Gradle["6. Live Gradle Runner: assembleDebug"]
-    TestCheck -- Skipped --> Gradle
-
-    Gradle --> Device["7. Physical Device Runner: run_device.py"]
-    Device --> ManualSignoff["Manual 4-Phase Verification"]
-    ManualSignoff -- Bugs Found --> Code
-    ManualSignoff -- All PASS --> ZohoCheck{"Zoho Sprints Connected?"}
-    ZohoCheck -- Enabled --> Zoho["Zoho Sprints: Status Update & Commit Traceability"]
-    ZohoCheck -- Skipped --> Finish(["Delivery Complete & Safe Manual Commit"])
-    Zoho --> Finish
+    Preflight --> Device["7. Device Smoke Verification"]
+    Device --> E2E{"Mode: autonomous_e2e?"}
+    E2E -- Yes & E2E Pass --> NextPhase(["Proceed Autonomously to Next Phase"])
+    E2E -- manual_only --> ManualModal["Interactive Developer Sign-Off"]
+    ManualModal -- PASS --> NextPhase
 ```
 
 ---

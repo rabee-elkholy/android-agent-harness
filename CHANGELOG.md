@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.16] - 2026-08-30
+
+### Official Slogan, 6-Leaf Review Gate & Workflows Guide
+- **Official Identity & Tagline**: Adopted official slogan *"Deterministic Android Engineering for the AI Era"* with tagline *"Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team."* across `README.md`, `docs/architecture.md`, `docs/quickstart.md`, and `pyproject.toml`.
+- **6-Leaf Review Gate & 8-Specialist Roster**: Clarified documentation topology to explicitly reflect all 6 parallel Quality Guardians (`bug-reviewer`, `convention-reviewer`, `security-reviewer`, `perf-anr-guardian`, `regression-impact-reviewer`, `test-quality-reviewer`) and 2 on-demand specialists (`qa-diagnostics`, `android-ui-expert`).
+- **Comprehensive Developer Workflows Playbook (`docs/workflows.md`)**: Created dedicated engineering playbooks guide covering all 10 core Android development workflows (feature delivery, systematic debugging, forensic crash triage, ANR audits, string parity, and PM sync).
+
 ## [0.14.15] - 2026-08-30
 
 ### Unified Install & Update Prompt File Consolidation
@@ -84,7 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interactive Phase Sign-Off Modal (`ask_question`)**: Required the Lead Agent to prompt the developer via an interactive choice modal (`(Recommended) PASS` / `FAIL`) to confirm device verification before unlocking Phase N+1.
 - **Chat Noise Elimination**: Strictly prohibited mechanical progress messages ("running tests...", "waiting for subagents...", "installing apk...") ensuring completely silent execution during background tool runs.
 
-## [0.14.4] - 2026-08-30
+---
+
+**Included in 0.14.4 (2026-08-30):**
 
 ### Repository Alignment, Security Hardening & Managed Block Preservation
 - **Repository Naming Alignment**: Completely unified repository identity to `android-harness-kit` across Git remotes, PyPI packaging, CLI endpoints, and documentation.
