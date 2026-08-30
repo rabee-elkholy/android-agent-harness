@@ -319,6 +319,48 @@ def zoho_config_present() -> bool:
     return resolve_config_path() is not None
 
 
+def discover_architectural_bases(repo: Path) -> dict:
+    bases: dict = {
+        "view_models": [],
+        "result_wrappers": [],
+        "activities": [],
+        "fragments": [],
+    }
+    for p in repo.glob("**/*.kt"):
+        if skip_path(p, repo) or ".agents" in str(p):
+            continue
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+            # 1. Base ViewModel
+            m_vm = re.search(r"abstract\s+class\s+([A-Za-z0-9_]+)(<[^>]+>)?\s*:\s*ViewModel\(\)", txt)
+            if m_vm:
+                pkg_m = re.search(r"package\s+([a-zA-Z0-9_.]+)", txt)
+                pkg = pkg_m.group(1) if pkg_m else ""
+                cls_name = m_vm.group(1)
+                generics = m_vm.group(2) or ""
+                bases["view_models"].append({
+                    "class_name": cls_name,
+                    "package": pkg,
+                    "generics": generics,
+                    "fqcn": f"{pkg}.{cls_name}" if pkg else cls_name,
+                    "file": str(p.relative_to(repo)),
+                })
+            # 2. Result / Resource wrapper
+            m_res = re.search(r"sealed\s+(class|interface)\s+(Result|Resource|NetworkResult|ApiResponse)(<[^>]+>)?", txt)
+            if m_res:
+                pkg_m = re.search(r"package\s+([a-zA-Z0-9_.]+)", txt)
+                pkg = pkg_m.group(1) if pkg_m else ""
+                bases["result_wrappers"].append({
+                    "class_name": m_res.group(2),
+                    "package": pkg,
+                    "fqcn": f"{pkg}.{m_res.group(2)}" if pkg else m_res.group(2),
+                    "file": str(p.relative_to(repo)),
+                })
+        except Exception:
+            pass
+    return bases
+
+
 def count_source_files(repo: Path) -> int:
     count = 0
     for pat in ("**/*.kt", "**/*.java"):
@@ -340,6 +382,7 @@ def discover(repo: Path) -> dict:
     di_framework = discover_di_framework(stack_text)
     ui_framework = discover_ui_framework(stack_text, modules)
     structure = discover_project_structure(repo, modules)
+    arch_bases = discover_architectural_bases(repo)
     return {
         "product": discover_product(repo),
         "pythons": pythons,
@@ -353,6 +396,7 @@ def discover(repo: Path) -> dict:
         "di_framework": di_framework,
         "ui_framework": ui_framework,
         "project_structure": structure,
+        "architectural_bases": arch_bases,
         "classic_app_src": has_classic_app_src(repo),
         "gemini": gemini_exists(),
         "zoho_config": zoho_config_present(),

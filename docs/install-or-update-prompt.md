@@ -1,8 +1,8 @@
 # Install or Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.19/docs/install-or-update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-> **Kit version**: `v0.14.19` — **SHA-256**: `bd9cd7f84583a3e88474db929d1b8466b0c45e8ad54e4f3006eddcf2b48d89e7` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.20` — **SHA-256**: `bd9cd7f84583a3e88474db929d1b8466b0c45e8ad54e4f3006eddcf2b48d89e7` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 

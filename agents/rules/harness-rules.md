@@ -149,6 +149,9 @@ Before writing or modifying any code, the Lead Agent must proactively verify com
 8. **Mandatory Architectural KDoc Documentation**:
    - Every newly created or refactored Repository interface method, UseCase class & `invoke()`, ViewModel public state/events contract, and DataSource method MUST proactively include standard, meaningful KDoc (`/** ... */`) documenting its architectural purpose, `@param` parameters, `@return` value, and `@throws` exceptions (if any).
    - KDoc must document business intent and contract boundaries clearly (never generate bare uncommented domain/data layers).
+9. **Mandatory Base ViewModel Inheritance**:
+   - When the project defines a standardized Base ViewModel (e.g. `MVIViewModel<S, E, A>` or `BaseViewModel` documented in `architecture-guidelines.md`), all new and refactored feature ViewModels MUST inherit directly from that Base Class.
+   - Strictly prohibit creating ad-hoc, reinvented state/event pipelines (`_uiState = MutableStateFlow`, custom Channel emitters) from scratch when a central base class exists.
 
 ---
 

@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.20] - 2026-08-30
+
+### Architectural Base Discovery & Mandatory Base ViewModel Inheritance
+- **Architectural Base Classes Discovery (`wizard/discovery.py`)**: Built `discover_architectural_bases()` to automatically scan and extract standardized Base ViewModel classes (e.g. `MVIViewModel<S : State, E : Event, A : Action>`, `BaseViewModel`), Domain Result wrappers (`Result<T>`, `Resource<T>`), and Base Activities/Fragments from client repositories.
+- **Mandatory Base ViewModel Inheritance Invariant (`harness-rules.md`, `convention-reviewer-agent.json`)**: Added Invariant 9 and Scope Item 10 strictly prohibiting ad-hoc reinvented `_uiState = MutableStateFlow` boilerplate when a standardized Base ViewModel exists in the project.
+- **Architecture Guidelines Tailoring (`architecture-guidelines.md`)**: Ensured all project reference documentation accurately captures the exact Base classes, package names, generic signatures, and state/event reduce/send functions.
+
 ## [0.14.19] - 2026-08-30
 
 ### Mandatory Architectural KDoc Standards & Proactive Domain Documentation
@@ -83,7 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero Shared `.gitignore` Pollution (`wizard/questions.py`, `doctor/engine.py`)**: Automatically removes all harness-related lines from the shared `.gitignore` file, keeping client repositories 100% clean with zero Git diff in Android Studio commit windows.
 - **Automatic Scratch Script Pruning**: Automatically detects and purges stray helper scripts (`fix_product.py`, `script_step3b*.py`, `update_worker.py`) to prevent untracked file clutter in Android Studio.
 
-## [0.14.8] - 2026-08-30
+---
+
+**Included in 0.14.8 (2026-08-30):**
 
 ### Mandatory Autonomous E2E Enforcement, Silent Review Wait & run_device Bugfix
 - **`run_device.py` APK Resolution Fix (`agents/scripts/run_device.py`)**: Fixed `TypeError` bug caused by redundant `apk = Path(args.apk)` assignment when running without explicit `--apk`, ensuring zero-argument `python .agents/scripts/run_device.py install-start` runs flawlessly.
