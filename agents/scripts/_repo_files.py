@@ -92,3 +92,153 @@ def first_adb_serial(*, allow_emulator: bool = True) -> str | None:
 def first_physical_adb_serial() -> str | None:
     return first_adb_serial(allow_emulator=False)
 
+
+HARNESS_LOCAL_EXCLUSIONS = [
+    ".agents/",
+    ".harness-setup/",
+    ".harness-backup/",
+    ".harness-backups/",
+    ".githooks/",
+    "AGENTS.md",
+    "GEMINI.md",
+    "CLAUDE.md",
+    "CODEX.md",
+    "QWEN.md",
+    ".cursor/",
+    ".cursorrules",
+    ".windsurf/",
+    ".windsurfrules",
+    ".claude/",
+    ".clinerules",
+    ".amazonq/",
+    ".continue/",
+    ".junie/",
+    ".kilocode/",
+    ".roo/",
+    ".goosehints",
+    "*.diff",
+    "*.patch",
+    "*.secret",
+    "android-harness-kit/",
+    "fix_product.py",
+    "script_step*.py",
+    "update_worker.py",
+]
+
+
+def ensure_local_git_privacy(target_repo: Path | None = None) -> list[str]:
+    """Ensure all harness rules are in .git/info/exclude (local to this PC) and clean shared .gitignore."""
+    repo = (target_repo or REPO).resolve()
+    logs: list[str] = []
+
+    # 1. Populate .git/info/exclude (100% private to local machine, never tracked in Git)
+    exclude_path = repo / ".git" / "info" / "exclude"
+    if (repo / ".git").is_dir() or exclude_path.is_file():
+        try:
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
+            text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
+            lines = [ln.strip() for ln in text.splitlines()]
+            added: list[str] = []
+            for pat in HARNESS_LOCAL_EXCLUSIONS:
+                if pat not in lines and pat.rstrip("/") not in lines:
+                    added.append(pat)
+            if added:
+                with exclude_path.open("a", encoding="utf-8", newline="\n") as f:
+                    if text and not text.endswith("\n"):
+                        f.write("\n")
+                    f.write("# Android Harness Kit — Local AI Manifests & Transient State (Private to this machine)\n")
+                    for pat in added:
+                        f.write(f"{pat}\n")
+                logs.append(f"local git exclude -> .git/info/exclude ({len(added)} patterns registered)")
+        except Exception:
+            pass
+
+    # 2. Ensure .agents/.gitignore has internal hygiene rules
+    agents_gi = repo / ".agents" / ".gitignore"
+    if (repo / ".agents").is_dir():
+        try:
+            ag_extra = [
+                "state/",
+                "cache/",
+                "__pycache__/",
+                "scripts/__pycache__/",
+                "mcp/*/__pycache__/",
+                "mcp/zoho_sprints/__pycache__/",
+                "mcp/zoho_sprints/zoho_config.json",
+                "*zoho*token*",
+                "*.secret",
+            ]
+            ag_lines = agents_gi.read_text(encoding="utf-8").splitlines() if agents_gi.is_file() else []
+            ag_added = False
+            for line in ag_extra:
+                if line not in ag_lines:
+                    ag_lines.append(line)
+                    ag_added = True
+            if ag_added or not agents_gi.is_file():
+                agents_gi.write_text("\n".join(ag_lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    # 3. Clean .gitignore: prune any harness rules from shared .gitignore so it remains clean
+    is_raw_kit = (repo / "agents" / "VERSION").is_file() and not (repo / ".agents").is_dir()
+    gi = repo / ".gitignore"
+    if not is_raw_kit and (repo / ".git").is_dir() and gi.is_file():
+        try:
+            raw_gi_lines = gi.read_text(encoding="utf-8").splitlines()
+            cleaned_gi_lines: list[str] = []
+            modified = False
+            for ln in raw_gi_lines:
+                s = ln.strip()
+                if (
+                    s in {pat.strip() for pat in HARNESS_LOCAL_EXCLUSIONS}
+                    or s in {pat.strip().rstrip("/") for pat in HARNESS_LOCAL_EXCLUSIONS}
+                    or s.startswith(".agents/")
+                    or s in ("# Android AI Harness Kit", "# Android Harness Kit")
+                ):
+                    modified = True
+                    continue
+                cleaned_gi_lines.append(ln)
+
+            if modified:
+                while cleaned_gi_lines and not cleaned_gi_lines[-1].strip():
+                    cleaned_gi_lines.pop()
+                new_text = "\n".join(cleaned_gi_lines) + ("\n" if cleaned_gi_lines else "")
+                gi.write_text(new_text, encoding="utf-8")
+                logs.append("cleaned shared .gitignore (harness exclusions moved to .git/info/exclude)")
+                diff_proc = subprocess.run(
+                    ["git", "diff", "--name-only", ".gitignore"],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                )
+                if not (diff_proc.stdout or "").strip():
+                    subprocess.run(["git", "checkout", "--", ".gitignore"], cwd=str(repo), capture_output=True)
+        except Exception:
+            pass
+
+    # 4. Clean stray scratch scripts from repo root
+    for stray_file in repo.glob("script_step*.py"):
+        try:
+            stray_file.unlink()
+        except OSError:
+            pass
+    for stray_name in ("fix_product.py", "update_worker.py"):
+        stray = repo / stray_name
+        if stray.is_file():
+            try:
+                stray.unlink()
+            except OSError:
+                pass
+
+    # 5. Assume unchanged for tracked adapter candidates
+    for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
+        if (repo / tracked_cand).is_file():
+            subprocess.run(
+                ["git", "update-index", "--assume-unchanged", tracked_cand],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+            )
+
+    return logs
+

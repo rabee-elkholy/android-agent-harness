@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
-from _repo_files import REPO, changed_paths  # noqa: E402
+from _repo_files import REPO, changed_paths, ensure_local_git_privacy  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -29,6 +29,7 @@ def run_step(title: str, script_name: str) -> int:
 
 def main() -> int:
     enable_line_buffered_stdio()
+    ensure_local_git_privacy(REPO)
     live_print("==================================================")
     live_print("[Preflight] Harness preflight verification")
     live_print("==================================================")

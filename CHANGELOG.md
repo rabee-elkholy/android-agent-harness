@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.9] - 2026-08-30
+
+### Automatic Local Git Privacy (.git/info/exclude) & Clean .gitignore Restoration
+- **Automated Local Exclusion Architecture (`_repo_files.py`, `ensure_local_git_privacy`)**: Centralized local Git exclusion management via `ensure_local_git_privacy()`, ensuring all 27 harness directories, manifests, and transient patterns are automatically registered in `.git/info/exclude` across setup, update, preflight, and doctor runs.
+- **Zero Shared `.gitignore` Pollution (`wizard/questions.py`, `doctor/engine.py`)**: Automatically removes all harness-related lines from the shared `.gitignore` file, keeping client repositories 100% clean with zero Git diff in Android Studio commit windows.
+- **Automatic Scratch Script Pruning**: Automatically detects and purges stray helper scripts (`fix_product.py`, `script_step3b*.py`, `update_worker.py`) to prevent untracked file clutter in Android Studio.
+
 ## [0.14.8] - 2026-08-30
 
 ### Mandatory Autonomous E2E Enforcement, Silent Review Wait & run_device Bugfix
@@ -100,7 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Neutral Placeholder in `_security_selftest.py`**: Replaced the `com.example.app` test literal in the `adb_cmd_package_clear_denied` case with the neutral `com.selftest.app` token (assertion semantics unchanged). Previously, every fresh install/update of v0.13.x failed the installed-checkout placeholder scan and required a manual patch of the shipped security selftest.
 - **Always-On Placeholder Guard (`_hook_selftest.py`)**: The `kit placeholder grep agents/` scan now runs in the raw kit as well as installed checkouts, so a new `com.example` literal in any shipped file (other than the deliberate `_product.py` port canary and the self-exempt hook selftest) fails kit CI immediately instead of surfacing later on developer machines.
 
-## [0.13.1] - 2026-08-26
+---
+
+**Included in 0.13.1 (2026-08-26):**
 
 ### Atomic Milestone Enforcement & Mandatory PM Prompting
 - **Strict Prohibition of Standalone Review Phases (`harness-rules.md`)**: Formally prohibited creating deferred "Review Phases" at the end of multi-phase plans. Mandated that every phase is an atomic lifecycle ending with its own test gate, 5-leaf review gate, build, device verification, and commit checkpoint before proceeding to the next phase.

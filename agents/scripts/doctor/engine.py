@@ -19,6 +19,9 @@ from .models import (
     CheckResult,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _repo_files import ensure_local_git_privacy  # noqa: E402
+
 AGENTS_DIR = Path(__file__).resolve().parent.parent.parent
 
 
@@ -78,6 +81,7 @@ class HarnessDoctor:
 
         if (self.repo / ".git").is_dir():
             self.log(category, "Git Repository", "PASS", "Active Git repository detected.")
+            ensure_local_git_privacy(self.repo)
             self._check_gitignore(category)
             self._check_git_status(category)
         else:
@@ -89,9 +93,11 @@ class HarnessDoctor:
             ignore_files.append(self.repo / ".gitignore")
         if (self.agents_dir / ".gitignore").is_file():
             ignore_files.append(self.agents_dir / ".gitignore")
+        if (self.repo / ".git" / "info" / "exclude").is_file():
+            ignore_files.append(self.repo / ".git" / "info" / "exclude")
 
         if not ignore_files:
-            self.log(category, "Git Ignore Rules", "WARN", "No .gitignore file detected. Critical transient and secret files may be tracked.")
+            self.log(category, "Git Ignore Rules", "WARN", "No .gitignore or .git/info/exclude file detected. Critical transient and secret files may be tracked.")
             return
 
         combined_ignore = ""
@@ -120,7 +126,7 @@ class HarnessDoctor:
                 category,
                 "Git Ignore Rules",
                 "PASS",
-                "Harness state, cache, backup, and secrets are properly ignored in .gitignore.",
+                "Harness state, cache, backup, and secrets are properly ignored (via .git/info/exclude or .gitignore).",
             )
         else:
             details = [f"Recommended pattern to add: {m}" for m in missing_patterns]

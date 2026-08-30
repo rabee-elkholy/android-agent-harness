@@ -1,8 +1,8 @@
 # Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.8/docs/update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.9/docs/update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-> **Kit version**: `v0.14.8` — **SHA-256**: `d41bacadb7a55216e8dd7e1a54e24b3e5ca49d2c83832823af2331cd8ba8f24a` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.9` — **SHA-256**: `d5016932a795860c127aa2e303cea485728397ca5b5984fd5d002df299b555a4` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** (already has `.agents` from a previous install). The agent must execute it, not summarize it.
 
 ---
@@ -37,7 +37,7 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
 6. **Identify Custom Files to Preserve**: Note extra paths under current `.agents/` that the kit `agents/` folder does **not** ship (custom skills and tailored domain references in `skills/android-harness/references/`).
 7. **Copy New Engine & Restore State**:
    - Copy `<kit>/agents/` → `<this repo>/.agents/`.
-   - Empty `.agents/state/` and ensure `.gitkeep` exists. Ensure `.agents/.gitignore` contains `state/`, `cache/`, `__pycache__/`, `scripts/__pycache__/`, `mcp/*/__pycache__/`, `mcp/zoho_sprints/zoho_config.json`, `*zoho*token*`, `*.secret`. Ensure `.git/info/exclude` (and `.gitignore`) includes all harness dirs and AI adapter files (`.agents/`, `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.githooks/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`) so **strictly ZERO harness or AI files ever appear in Android Studio Git or pollute shared team branches**.
+   - Empty `.agents/state/` and ensure `.gitkeep` exists. Ensure `.agents/.gitignore` contains `state/`, `cache/`, `__pycache__/`, `scripts/__pycache__/`, `mcp/*/__pycache__/`, `mcp/zoho_sprints/zoho_config.json`, `*zoho*token*`, `*.secret`. Automatically register all harness directories and local AI manifests (`.agents/`, `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.githooks/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`) in `.git/info/exclude` (and prune any harness lines from shared `.gitignore`) so **strictly ZERO harness or AI files ever appear in Android Studio Git or pollute shared team branches**. Transient helper scripts must run in memory or be unlinked immediately.
    - Restore extra non-kit paths and custom domain reference files from the backup into `.agents/` (do **not** restore old kit scripts over new ones).
    - Run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file.
 8. **Port Product Constants & Adapters (Strict Order — DO NOT run selftest yet)**:
@@ -56,7 +56,7 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
       git commit -m "chore: update android harness kit"
       ```
     - Tell them to start a **new chat** on this Android folder before starting daily work.
-    - System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.8/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.8/docs/rollback-prompt.md`).
+    - System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.9/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.9/docs/rollback-prompt.md`).
 
 Do not copy `local.properties` `sdk.dir` or `~/.gemini` hostnames. `adb monkey` stays denied. Emulator deny only if I.4 is physical-only.
 

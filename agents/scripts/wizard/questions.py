@@ -625,144 +625,20 @@ def write_answers(repo: Path, answers: dict) -> None:
             "",
         ])
     markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
-    gi = repo / ".gitignore"
-    ignore_whole_agents = answers.get("agents_git") != "commit"
-    extra = [
-        ".harness-setup/",
-        ".harness-backup/",
-        ".harness-backups/",
-        "*.diff",
-        "*.patch",
-        ".githooks/",
-        "AGENTS.md",
-        "GEMINI.md",
-        "CLAUDE.md",
-        "CODEX.md",
-        "QWEN.md",
-        ".cursor/",
-        ".cursorrules",
-        ".windsurf/",
-        ".windsurfrules",
-        ".claude/",
-        ".clinerules",
-        ".amazonq/",
-        ".continue/",
-        ".junie/",
-        ".kilocode/",
-        ".roo/",
-        ".goosehints",
-    ]
-    if ignore_whole_agents:
-        extra.append(".agents/")
-    else:
-        extra.extend([
-            ".agents/state/",
-            ".agents/cache/",
-            ".agents/__pycache__/",
-        ])
-
-    raw_lines = read_text(gi).splitlines() if gi.is_file() else []
-    has_agents_parent = ignore_whole_agents or any(line.strip() in {".agents/", ".agents"} for line in raw_lines)
-
-    # Prune any redundant subpaths if parent .agents/ is present or being added
-    lines: list[str] = []
-    for line in raw_lines:
-        s = line.strip()
-        if has_agents_parent and s.startswith(".agents/") and s not in {".agents/", ".agents"}:
-            continue
-        lines.append(line)
-
-    existing_stripped = {line.strip() for line in lines}
-    for item in extra:
-        item_clean = item.strip()
-        if has_agents_parent and item_clean.startswith(".agents/") and item_clean not in {".agents/", ".agents"}:
-            continue
-        if item_clean not in existing_stripped and item_clean.rstrip("/") not in existing_stripped:
-            lines.append(item)
-            existing_stripped.add(item_clean)
-
-    text = "\n".join(lines)
-    if text:
-        text += "\n"
-    gi.write_text(text, encoding="utf-8")
-
-    agents_gi = repo / ".agents" / ".gitignore"
-    if (repo / ".agents").is_dir():
-        ag_extra = [
-            "state/",
-            "cache/",
-            "__pycache__/",
-            "scripts/__pycache__/",
-            "mcp/*/__pycache__/",
-            "mcp/zoho_sprints/__pycache__/",
-            "mcp/zoho_sprints/zoho_config.json",
-            "*zoho*token*",
-            "*.secret",
-        ]
-        ag_lines = read_text(agents_gi).splitlines() if agents_gi.is_file() else []
-        for line in ag_extra:
-            if line not in ag_lines:
-                ag_lines.append(line)
-        ag_text = "\n".join(ag_lines)
-        if ag_text:
-            ag_text += "\n"
-        agents_gi.write_text(ag_text, encoding="utf-8")
-
-    exclude_path = repo / ".git" / "info" / "exclude"
-    if (repo / ".git").is_dir() or exclude_path.is_file():
+    # Ensure all harness rules are isolated locally via .git/info/exclude without polluting shared .gitignore
+    try:
+        from .._repo_files import ensure_local_git_privacy
+        ensure_local_git_privacy(repo)
+    except (ImportError, ValueError):
         try:
-            exclude_path.parent.mkdir(parents=True, exist_ok=True)
-            ex_text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
-            ex_lines = [ln.strip() for ln in ex_text.splitlines()]
-            local_ex = [
-                ".agents/",
-                ".harness-setup/",
-                ".harness-backup/",
-                ".harness-backups/",
-                ".githooks/",
-                "AGENTS.md",
-                "GEMINI.md",
-                "CLAUDE.md",
-                "CODEX.md",
-                "QWEN.md",
-                ".cursor/",
-                ".cursorrules",
-                ".windsurf/",
-                ".windsurfrules",
-                ".claude/",
-                ".clinerules",
-                ".amazonq/",
-                ".continue/",
-                ".junie/",
-                ".kilocode/",
-                ".roo/",
-                ".goosehints",
-                "*.diff",
-                "*.patch",
-                "*.secret",
-            ]
-            added_ex = []
-            for pat in local_ex:
-                if pat not in ex_lines and pat.rstrip("/") not in ex_lines:
-                    added_ex.append(pat)
-            if added_ex:
-                with exclude_path.open("a", encoding="utf-8", newline="\n") as f:
-                    if ex_text and not ex_text.endswith("\n"):
-                        f.write("\n")
-                    f.write("# Android Harness Kit — Local AI Manifests & Transient State\n")
-                    for pat in added_ex:
-                        f.write(f"{pat}\n")
+            import sys
+            scripts_dir = Path(__file__).resolve().parent.parent
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            from _repo_files import ensure_local_git_privacy
+            ensure_local_git_privacy(repo)
         except Exception:
             pass
-
-    for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
-        subprocess.run(
-            ["git", "update-index", "--assume-unchanged", tracked_cand],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
 
 
 def flags_from_answers(answers: dict) -> str:

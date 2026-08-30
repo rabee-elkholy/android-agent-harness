@@ -1,6 +1,6 @@
 # Setup prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.8/docs/setup-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.9/docs/setup-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
 
 The installing agent **executes** this file (usually after the developer pasted [`install-prompt.md`](install-prompt.md) or [`update-prompt.md`](update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
@@ -47,11 +47,11 @@ Do not write/delete `.agents` or user AI config until either a backup exists **o
 
 Ask **I.0** before copying (see section I), unless `.harness-setup/answers.json` already recorded it. If `"backup": false`, **skip file copies** and tell them rollback will not work. Then:
 
-If `"backup"` is true or unset (default): Timestamp `YYYYMMDD-HHMMSS`. Prune any previous backup directories under `.harness-backup/` so that **strictly only 1 backup copy is retained** (avoiding disk bloat while guaranteeing clean rollback). **A)** `<repo>/.harness-backup/<timestamp>/` for `.agents`, `.claude`, `.codex`, `.cursor`, `.github` (copilot/instructions only if present), `.windsurf`, `.roo`, `.amazonq`, `.continue`, `.junie`, `.kilocode`, repo `.gemini`, root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`/`CODEX.md`/`QWEN.md`/`.cursorrules`/`.clinerules`/`.windsurfrules`/`.goosehints`. **B)** `$HOME/.harness-backups/<repo>-<timestamp>/` for `~/.gemini/config.json` + `rules/`, `~/.claude/settings*.json`, `~/.codex/config.toml` or `json` — no tokens/transcripts. Do **not** write `~/.gemini` during this install when another product on this PC already uses it (I.12). Append `.harness-backup/` to `.gitignore`. Manifest with yes/no per item. Rollback = `docs/rollback-prompt.md` (copied into the backup folder).
+If `"backup"` is true or unset (default): Timestamp `YYYYMMDD-HHMMSS`. Prune any previous backup directories under `.harness-backup/` so that **strictly only 1 backup copy is retained** (avoiding disk bloat while guaranteeing clean rollback). **A)** `<repo>/.harness-backup/<timestamp>/` for `.agents`, `.claude`, `.codex`, `.cursor`, `.github` (copilot/instructions only if present), `.windsurf`, `.roo`, `.amazonq`, `.continue`, `.junie`, `.kilocode`, repo `.gemini`, root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`/`CODEX.md`/`QWEN.md`/`.cursorrules`/`.clinerules`/`.windsurfrules`/`.goosehints`. **B)** `$HOME/.harness-backups/<repo>-<timestamp>/` for `~/.gemini/config.json` + `rules/`, `~/.claude/settings*.json`, `~/.codex/config.toml` or `json` — no tokens/transcripts. Do **not** write `~/.gemini` during this install when another product on this PC already uses it (I.12). Append `.harness-backup/` to `<repo>/.git/info/exclude` (keep shared `.gitignore` untouched). Manifest with yes/no per item. Rollback = `docs/rollback-prompt.md` (copied into the backup folder).
 
 ## 1) Place the engine
 
-Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state/` + `cache/` + `__pycache__/` + `scripts/__pycache__/` + `mcp/*/__pycache__/` + `mcp/zoho_sprints/zoho_config.json` + `*zoho*token*` + `*.secret`. Automatically append all harness directories and local AI manifests (`.agents/`, `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.githooks/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`) to `<repo>/.git/info/exclude` (and `<repo>/.gitignore` if `.agents/` is ignored) so **strictly ZERO harness or AI files ever appear in Android Studio Git or pollute shared team branches**. Leave kit `mcp_config.json` empty until **I.16** is applied by `install_zoho_mcp.py`. Never copy a Zoho token file into the repo.
+Copy kit `agents/` → `.agents/`. Empty `state/`. `.agents/.gitignore` = `state/` + `cache/` + `__pycache__/` + `scripts/__pycache__/` + `mcp/*/__pycache__/` + `mcp/zoho_sprints/zoho_config.json` + `*zoho*token*` + `*.secret`. Automatically register all harness directories and local AI manifests (`.agents/`, `.harness-setup/`, `.harness-backup/`, `.harness-backups/`, `.githooks/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`) in `<repo>/.git/info/exclude` (and ensure shared `.gitignore` has strictly zero harness lines) so **strictly ZERO harness or AI files ever appear in Android Studio Git or pollute shared team branches**. Transient helper scripts must execute in memory (`python -c`) or be unlinked immediately so zero unversioned files remain. Leave kit `mcp_config.json` empty until **I.16** is applied by `install_zoho_mcp.py`. Never copy a Zoho token file into the repo.
 
 ## 2) Discover from disk (do not invent)
 
@@ -182,7 +182,7 @@ Ask them with the JSON `prompt` verbatim (ambiguous Python, several app modules,
 
 - **I.6b / I.7 / I.8:** APK path, stack, locales from disk. Use discovered stack. Rewrite architecture skills to match **this** app (do not keep kit placeholder architecture unless it matches disk).
 - **I.9:** always disable `new_feature_scaffold.py` `main()`. Keep `VIEWMODEL` / `SCREEN` constants for `_hook_selftest.py`.
-- **I.11:** always add `.agents/` to `.gitignore`. Helper rules stay on the machine that ran setup, even on a team. Teammates install their own copy. Do not commit `.agents` during this setup.
+- **I.11:** Exclude rules stay on the machine via `.git/info/exclude`. Helper rules stay on the machine that ran setup, even on a team. Teammates install their own copy. Do not modify shared `.gitignore` or commit `.agents` during this setup.
 - **I.12:** if `~/.gemini` exists, merge script grants only. Never write a global Gemini rule during this setup.
 - **I.13:** tests only (selftest + preflight). Do not run `:assembleDebug` at the end unless answers say assemble.
 
@@ -286,6 +286,6 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 - **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
-  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.8/docs/diagnostic-prompt.md`.
-  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.8/docs/rollback-prompt.md`.
+  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.9/docs/diagnostic-prompt.md`.
+  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.9/docs/rollback-prompt.md`.
   - Remember: Five `*_PASS` required before real feature/bug delivery.

@@ -1444,7 +1444,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.8"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.9"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2275,8 +2275,13 @@ from install_tool_adapters import parse_args as parse_adapter_args
 
 temp_app_root = Path(tempfile.mkdtemp(prefix="harness-gi-test-"))
 try:
+    (temp_app_root / ".git" / "info").mkdir(parents=True, exist_ok=True)
     gi_path = temp_app_root / ".gitignore"
-    # Simulate an existing .gitignore that had .agents/ at line 1 and redundant subpaths at lines 2-4
+    exclude_path = temp_app_root / ".git" / "info" / "exclude"
+    stray_script = temp_app_root / "script_step3b.py"
+    stray_script.write_text("print('stray')", encoding="utf-8")
+
+    # Simulate an existing .gitignore that had .agents/ and redundant subpaths + normal build/
     gi_path.write_text(".agents/\n.agents/state/\n.agents/cache/\n.agents/__pycache__/\nbuild/\n", encoding="utf-8")
 
     write_answers(temp_app_root, {
@@ -2298,17 +2303,20 @@ try:
     })
 
     updated_gi_lines = [ln.strip() for ln in gi_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    exclude_text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
+
     ok_gi_dedup = (
-        ".agents/" in updated_gi_lines
+        "build/" in updated_gi_lines
+        and ".agents/" not in updated_gi_lines
         and ".agents/state/" not in updated_gi_lines
-        and ".agents/cache/" not in updated_gi_lines
-        and ".agents/__pycache__/" not in updated_gi_lines
-        and "build/" in updated_gi_lines
+        and ".agents/" in exclude_text
+        and "AGENTS.md" in exclude_text
+        and not stray_script.is_file()
     )
 finally:
     shutil.rmtree(temp_app_root, ignore_errors=True)
 
-print(f"wizard .gitignore hierarchy-aware deduplication & auto-pruning: {'OK' if ok_gi_dedup else 'FAIL'}")
+print(f"automatic .git/info/exclude local privacy & clean .gitignore: {'OK' if ok_gi_dedup else 'FAIL'}")
 failed += int(not ok_gi_dedup)
 
 parsed_gg_yes = parse_adapter_args(["--product", "A", "--py", "python", "--assemble", ":app:assembleDebug", "--tools", "gemini", "--git-gate", "yes"])
