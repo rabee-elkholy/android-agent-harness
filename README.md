@@ -50,31 +50,31 @@ android-harness init
 ```text
 [1] INGESTION & IMPACT ANALYSIS
     Reads ticket / prompt -> Analyzes multi-module dependencies & caller graph
-    │
-    ▼
+    |
+    v
 [2] IMPLEMENTATION PLAN & DEVELOPER ALIGNMENT
     Drafts architectural plan (implementation_plan.md) with open questions
     -> Developer reviews & approves before a single line of code changes
-    │
-    ▼
+    |
+    v
 [3] SHIFT-LEFT TDD (RED -> GREEN)
     Writes failing unit test -> Applies surgical fix -> Empirically verifies pass
-    │
-    ▼
+    |
+    v
 [4] ANDROID PREFLIGHT TRIO (<5s Fast Checks)
     Validates Room schema migrations, Bilingual string parity (values-ar), & Lint
-    │
-    ▼
+    |
+    v
 [5] SIX-GUARDIAN PARALLEL REVIEW GATE
     6 specialized AI reviewers audit the diff simultaneously with cryptographic evidence:
     (Bug, Security, Convention, Perf/ANR, Regression, Test Quality)
-    │
-    ▼
+    |
+    v
 [6] AUTONOMOUS DEVICE E2E SMOKE
     Builds :app:assembleDebug -> Installs on physical device via ADB
     -> Runs live UI smoke test & audits Logcat for runtime exceptions
-    │
-    ▼
+    |
+    v
 [7] PM TRACKER SYNC & HUMAN GIT SIGN-OFF
     Updates Zoho Sprints / Jira -> Drafts verified Conventional Commit
     -> Leaves final commit & push to developer authority
