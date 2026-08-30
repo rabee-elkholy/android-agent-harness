@@ -5,6 +5,12 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.19] - 2026-08-30
+
+### Mandatory Architectural KDoc Standards & Proactive Domain Documentation
+- **Mandatory Architectural KDoc Invariant (`harness-rules.md`, `architecture-guidelines.md`)**: Added Invariant 8 to Shift-Left Quality Invariants strictly mandating standard, meaningful KDoc (`/** ... */`) documenting purpose, `@param`, `@return`, and `@throws` on all newly created or refactored Repository interfaces, Domain UseCases, ViewModel exposed contracts, and DataSource methods.
+- **Convention Reviewer KDoc Enforcement (`convention-reviewer-agent.json`)**: Added Scope Item 9 to `convention-reviewer-agent` enforcing proactive architectural KDoc documentation as a blocking delivery requirement.
+
 ## [0.14.18] - 2026-08-30
 
 ### Diff-Aware Targeted E2E Smoke Testing & Deep Logcat Forensics
@@ -84,7 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mandatory Autonomous E2E Execution (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Removed "optional" qualifier from Phase verification rules; strictly mandated `python .agents/scripts/run_e2e_smoke.py` execution immediately following APK installation when `DEVICE_VERIFICATION_MODE` is `autonomous_e2e`.
 - **Silent Intermediate Review Wait Protocol (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Explicitly prohibited conversational countdown spam on intermediate subagent wakeups, requiring the Lead Agent to remain 100% silent and present the consolidated review table only after all verdicts arrive in context.
 
-## [0.14.7] - 2026-08-30
+---
+
+**Included in 0.14.7 (2026-08-30):**
 
 ### Hierarchy-Aware Gitignore Deduplication, CLI Ergonomics & Windows UTF-8 Resilience
 - **Hierarchy-Aware `.gitignore` Deduplication (`wizard/questions.py`)**: Completely eliminated redundant subfolder entries (`.agents/state/`, `.agents/cache/`, `.agents/__pycache__/`) when parent `.agents/` is ignored, and automatically prunes legacy redundant entries from existing repositories to eliminate Git diff noise.
