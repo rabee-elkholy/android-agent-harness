@@ -344,6 +344,7 @@ def discover(repo: Path) -> dict:
         "product": discover_product(repo),
         "pythons": pythons,
         "modules": modules,
+        "application_ids": discover_application_ids(repo),
         "launchers": discover_launchers(repo),
         "apk_hint": discover_apk_hint(repo),
         "locales": raw_locales,

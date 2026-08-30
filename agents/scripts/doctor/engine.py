@@ -293,7 +293,17 @@ class HarnessDoctor:
             self.log(category, "Install Consistency", "WARN", f"answers.json unreadable: {exc}")
             return
 
-        import _product
+        product_file = self.agents_dir / "scripts" / "_product.py"
+        if product_file.is_file():
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("_target_product", str(product_file))
+            if spec and spec.loader:
+                _product = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(_product)
+            else:
+                import _product
+        else:
+            import _product
 
         drift = []
 
