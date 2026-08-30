@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.17] - 2026-08-30
+
+### Zero Git Pollution Hardening & Legacy Advisory Elimination
+- **Zero Git Pollution Hardening (`harness_doctor.py`, `doctor/engine.py`, `setup-prompt.md`, `_repo_files.py`)**: Completely removed legacy `chore: setup android harness` git commit advisories from diagnostic reports and setup documentation. All harness manifests (`.agents/`), adapters, and transient states are 100% locally private via `.git/info/exclude`, requiring zero git commits by developers.
+- **Temporary Wizard & Scratch File Isolation (`_repo_files.py`)**: Added `*.wizard_questions.json`, `.wizard_questions.json`, `*.tmp`, `*.json.tmp`, and `scratch_*.py` to `HARNESS_LOCAL_EXCLUSIONS`, ensuring temporary question payloads and scripts never appear in Android Studio unversioned files.
+- **Reference Indexing Synchronization (`daily-scenarios.md`)**: Fully synchronized foundation and tailored domain reference indexing across all setups and updates, ensuring 100% zero-warning diagnostics across client Android applications.
+
 ## [0.14.16] - 2026-08-30
 
 ### Official Slogan, 6-Leaf Review Gate & Workflows Guide
@@ -84,7 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Setup Wizard Question `I.22` (`wizard/questions.py`, `wizard/i18n.py`)**: Added user-selectable Device Verification Mode during project initialization (`autonomous_e2e` recommended default vs `manual_only`).
 - **Doctor Diagnostic Engine Updates (`doctor/engine.py`, `doctor/models.py`)**: Expanded core script inventory to 35 audited scripts and added Dimension 4 device verification mode reporting.
 
-## [0.14.5] - 2026-08-30
+---
+
+**Included in 0.14.5 (2026-08-30):**
 
 ### Interactive Device Verification & Chat UX Signal Maximization
 - **Explicit Manual Device Smoke Testing Steps (`harness-rules.md`, `AGENTS.md`)**: Mandated that upon completing APK installation on the connected physical device, the Lead Agent must provide explicit, numbered verification steps in the Phase Milestone Card detailing exact screens to open, interactions to perform, and expected behaviors to verify.
