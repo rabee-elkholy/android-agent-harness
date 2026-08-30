@@ -15,8 +15,26 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 <br/><br/>
-<img src="docs/assets/hero-banner-v2.svg" alt="Android Agent Harness: Deterministic Android Engineering for the AI Era" width="100%" />
+<img src="docs/assets/banner.svg" alt="Android Agent Harness: Deterministic Android Engineering for the AI Era" width="100%" />
 
+</div>
+
+---
+
+## Quickstart: Install or Update in Any Android Project
+
+Paste this exact prompt into your AI coding assistant (Cursor, Claude Code, Gemini, Antigravity, Copilot, Windsurf):
+
+```text
+Read https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/install-or-update-prompt.md and follow all its instructions.
+```
+
+---
+
+## Deterministic Execution Pipeline: From Prompt to Verified Device Delivery
+
+<div align="center">
+  <img src="docs/assets/architecture-pipeline.svg" alt="Deterministic Android Engineering Execution Pipeline" width="100%" />
 </div>
 
 ---
@@ -36,14 +54,6 @@ The **Android Agent Harness** is fundamentally different. It does not plead with
 | **Attention & Reliability** | Attention fades as conversation context expands (token decay / lost in the middle). | **Zero Token Decay**: Fixed Python engine running outside the model enforces rules identically on turn 1 or turn 1,000. |
 | **Offline IDE Commits** | Zero protection when developer commits from Android Studio / terminal. | **Deterministic Git Gate**: Universal staged pre-commit hook (`.githooks/pre-commit`) blocks bad strings, Room, & lint in <5s. |
 | **Environment & Diagnostics** | Blind to Android SDK paths, ADB serials, and system health. | **12-Dimension Doctor**: Audits 30 checks with 10s live process streaming heartbeats during Gradle operations. |
-
----
-
-## See it in Action: Parallel Review Gate & Targeted E2E Smoke
-
-<div align="center">
-  <img src="docs/assets/demo.gif" alt="Android Agent Harness: Live Parallel Review and Autonomous E2E Smoke Demo" width="100%" />
-</div>
 
 ---
 
