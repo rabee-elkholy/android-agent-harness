@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.14] - 2026-08-30
+
+### Autonomous Phase Pipeline, Review Round Cards & Zero-Timer Invariant
+- **Continuous Autonomous Phase Pipeline (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Enhanced `autonomous_e2e` device verification mode so that upon passing `run_e2e_smoke.py` ([SUCCESS]), the Lead Agent outputs the Phase Milestone Card with verification evidence and proceeds immediately and autonomously to Phase N+1 without blocking the developer with interactive modals. Interactive `ask_question` modals are reserved exclusively for `manual_only` mode (with explicit numbered checklists) or upon test failures/crashes.
+- **Transparent Review Round Summary Cards (`harness-rules.md`, `AGENTS.md`, `deliver.md`)**: Mandated outputting concise Review Round Summary Cards in chat whenever a review round finishes with non-PASS findings, detailing the exact findings and corrective fixes before re-dispatching the next round, eliminating developer loop anxiety.
+- **Strict Zero-Timer & No-Sleep Invariant (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Strictly banned invoking `schedule`, running shell `sleep` commands, or polling `manage_task` in a loop while waiting for subagents, relying 100% on the system's reactive wakeup.
+
 ## [0.14.13] - 2026-08-30
 
 ### Foundation Reference Indexing & Automated Upgrade Pruning
@@ -85,7 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation & Developer Experience Priority
 - **Primary AI Chat Prompt Workflow (`README.md`, `quickstart.md`)**: Restructured all lifecycle operations (Installation, Diagnostics & Health, Upgrades & Updates, and Emergency Rollback) to feature the one-click AI Chat Prompt URL as the primary, recommended method for maximum developer convenience and automated domain discovery.
 
-## [0.14.2] - 2026-08-29
+---
+
+**Included in 0.14.2 (2026-08-29):**
 
 ### Zero Git Pollution & Team Working Tree Protection
 - **Comprehensive Local Exclusion (`install_tool_adapters.py`, `wizard/questions.py`)**: Automatically configured `.git/info/exclude` across all project setups and updates to strictly isolate all AI manifests, adapter rule files, and transient harness state (`.agents/`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.cursor/`, `.cursorrules`, `.windsurf/`, `.windsurfrules`, `.claude/`, `.clinerules`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, `.roo/`, `.goosehints`, `*.diff`, `*.patch`, `*.secret`).

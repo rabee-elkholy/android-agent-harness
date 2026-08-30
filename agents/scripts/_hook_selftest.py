@@ -412,8 +412,9 @@ for needle in (
     "regression-impact-reviewer-agent",
     "qa-diagnostics-agent",
     "android-ui-expert-agent",
-    "SILENT REVIEW WAIT",
-    "DEVICE VERIFICATION",
+    "ZERO-TIMER INVARIANT",
+    "ROUND SUMMARY CARDS",
+    "AUTONOMOUS PHASE PIPELINE",
 ):
     ok = needle.lower() in msg0.lower() if needle == "QUALITY" else needle in msg0
     if needle == "QUALITY":
@@ -1444,7 +1445,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.13"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.14"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

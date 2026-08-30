@@ -14,15 +14,17 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 
 ## Quality-First & High-Signal Communication
 
-- **High-Signal Developer Communication (Zero Chat Noise)**:
-  - The Lead Agent **MUST NEVER output mechanical status spam** in chat (e.g., do NOT output *"جاري قراءة الملف..."*, *"جاري تشغيل الاختبارات..."*, *"جاري تجميع التطبيق..."*, or *"جاري انتظار تقارير المراجعة..."*).
-  - **Silent Intermediate Review Wait Protocol**: When review subagents are dispatched via `invoke_subagent`, they complete asynchronously. On each intermediate subagent arrival where remaining reviewers are still executing, the Lead Agent **MUST REMAIN 100% SILENT** in chat, make no tool calls, and end its turn immediately. NEVER emit intermediate countdown spam (e.g., do NOT say *"Waiting for 4 reviewers..."* or *"The third round is running..."*). Present the consolidated review verdict table only once ALL verdicts are received in context.
-  - The IDE interface already renders native tool cards, execution spinners, and subagent progress visually.
-  - The Lead Agent speaks in chat ONLY at four high-value, actionable moments:
+- **High-Signal Developer Communication (Zero Chat Noise & Actionable Transparency)**:
+  - The Lead Agent **MUST NEVER output mechanical status spam** in chat (e.g., do NOT output "reading file...", "running tests...", "waiting 5 seconds...", or "waiting for review reports...").
+  - **Strict Zero-Timer & No-Sleep Invariant**: The Lead Agent MUST NEVER invoke the `schedule` tool, run `sleep` commands in shell, or poll `manage_task status` in a loop while waiting for subagents. Rely 100% on the system's reactive wakeup.
+  - **Silent Intermediate Review Wait Protocol**: When review subagents are dispatched via `invoke_subagent`, they complete asynchronously. On each intermediate subagent arrival where remaining reviewers in that round are still executing, the Lead Agent **MUST REMAIN 100% SILENT** in chat, make no tool calls, and end its turn immediately. NEVER emit intermediate countdown spam (e.g., do NOT say "Waiting for 4 reviewers...").
+  - **Review Round Summary Card on Findings**: When all 5 review verdicts for Round N arrive in context and BLOCKER/MAJOR findings exist, the Lead Agent **MUST output a concise Review Round Summary Card in chat** detailing the findings by reviewer, the corrective actions taken, and the initiation of Round N+1. This ensures 100% visibility, eliminates false perceptions of silent loops, and proves the active quality gate.
+  - The Lead Agent speaks in chat ONLY at high-value, actionable moments:
     1. **Plan Proposal**: Presenting `implementation_plan.md` for developer feedback and approval.
-    2. **Critical Engineering Tradeoffs**: Asking an explicit question via `ask_question` when requirements are ambiguous.
-    3. **Phase Milestone Completion Card**: Reporting the completion of a full phase (Reviews PASS + Tests PASS + Build SUCCESS) and asking for permission to proceed.
-    4. **Final Task Deliverable & Conventional Commit**: Delivering the walkthrough summary and suggested commit message after all phases are verified.
+    2. **Review Round Summary Card (on Findings)**: Summarizing round findings and corrective fixes before launching Round N+1.
+    3. **Critical Engineering Tradeoffs**: Asking an explicit question via `ask_question` when requirements are ambiguous.
+    4. **Phase Milestone Completion Card**: Reporting the completion of a full phase with verification evidence.
+    5. **Final Task Deliverable & Conventional Commit**: Delivering the walkthrough summary and suggested commit message after all phases are verified.
 - **Answer First, Then Ask**: If the developer asks anything, answer in visible chat first. Only then may you call `ask_question` for a pending device phase or tradeoff. Never fire a bare modal that ignores the question.
 - **Language Policy**:
   - **Dynamic Developer Communication**: Strictly mirror the developer's language in conversational chat (reply in Arabic when addressed in Arabic, and in English when addressed in English). Keep all code, Kotlin symbols, variable names, file paths, and Conventional Git commit messages strictly in English.
@@ -90,27 +92,26 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
     - **STRICT PROHIBITION**: The Lead Agent is **STRICTLY FORBIDDEN from creating, editing, modifying, or planning ANY files belonging to Phase N+1** until Phase N has received explicit developer sign-off in chat.
     - **Device Smoke Testing Across All Phases**: Even for data/repository/domain refactoring phases, running the app on device (`run_device.py install-start`) to verify the app launches cleanly and existing screens do not crash on navigation is required whenever a physical device is connected.
     - **NEVER create a separate "Review Phase" at the end of the plan**. Diffs must stay small (<3-4 files per review round) to prevent massive end-of-project review loops.
-- **MANDATORY PROACTIVE PM STORY & TASK PROMPT**: When presenting a multi-phase plan in chat (accompanying the `implementation_plan.md` creation), the Lead Agent **MUST proactively ask the developer in the accompanying chat message**:
-  *"هل ترغب في إنشاء User Story على Zoho Sprints مع Tasks فرعية لكل مرحلة وتحديث حالتها تلقائياً مع كل إنجاز؟"*
-- **STANDARDIZED MILESTONE PROGRESS FORMAT**: When executing multi-phase tasks, output this clean, high-signal format in chat:
+- **MANDATORY PROACTIVE PM STORY & TASK PROMPT**: When presenting a multi-phase plan in chat (accompanying the `implementation_plan.md` creation), the Lead Agent **MUST proactively ask the developer in the active conversation language**:
+  *"Would you like to create a User Story on Zoho Sprints with sub-tasks for each phase and update their statuses automatically with each milestone?"* (or in Arabic: *"هل ترغب في إنشاء User Story على Zoho Sprints مع Tasks فرعية لكل مرحلة وتحديث حالتها تلقائياً مع كل إنجاز؟"*).
+- **STANDARDIZED PROGRESS & ROUND FORMATS**: When executing tasks, output these clean, high-signal formats in chat (STRICTLY ZERO EMOJIS, use clean ASCII markers):
+  
+  **1. Review Round Summary Card (When findings exist in Round N)**:
+  ```markdown
+  ### [ROUND N SUMMARY]: Findings Resolved & Re-dispatching
+  * [BUG]: Finding summary with `File.kt:Line` -> Fix explanation.
+  * [CONVENTION / QUALITY]: Finding summary with `File.kt:Line` -> Fix explanation.
+  [STATUS]: Re-running 5-leaf review round N+1 for verified changes.
+  ```
+
+  **2. Phase Milestone Progress Card (Phase N Complete)**:
   ```markdown
   ### [Phase N/Total]: [Phase Name]
   * **Scope**: [Brief 1-line description]
-  * **Target Files**: `File1.kt`, `File2.kt`
-  ```
-  *(During review: remain 100% silent in chat while IDE displays live visual cards)*
-  ```markdown
-  ### [Review Summary Phase N]:
-  * [PASS] **Test Quality**: `TEST_PASS` (when test files are present)
-  * [PASS] **5-Leaf Review Gate**: `BUG_PASS` | `CONVENTION_PASS` | `SECURITY_PASS` | `PERF_PASS` | `REGRESSION_PASS`
-  * [PASS] **Unit Tests & Build**: `X Passed` (:module:testDebugUnitTest) + `BUILD SUCCESSFUL`
-  * [PASS] **Device Smoke Test**: Installed via `run_device.py` & verified by developer on device
-
-  ---
-  ### [Phase N Complete - Awaiting Sign-Off]
-  * **Accomplished**: [1-2 concise points]
-  * **Status**: Phase N is fully verified.
-  *(Awaiting developer authorization before touching Phase N+1)*
+  * **5-Leaf Review Gate**: `BUG_PASS` | `CONVENTION_PASS` | `SECURITY_PASS` | `PERF_PASS` | `REGRESSION_PASS`
+  * **Unit Tests & Build**: `X Passed` (:module:testDebugUnitTest) + `BUILD SUCCESSFUL`
+  * **Device Verification**: [SUCCESS] `run_e2e_smoke.py` (autonomous E2E passed, zero crashes, scroll OK)
+  * **Transition**: [autonomous_e2e mode] -> Proceeding autonomously to Phase N+1.
   ```
 - Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer. Consult `systematic-debugging/SKILL.md`.
 - **TEST-DRIVEN DEVELOPMENT (TDD)**: For business logic, UseCases, Repositories, ViewModels, or reproducing bug fixes, follow `test-driven-development/SKILL.md` (Red -> Prove Failure -> Green -> Refactor). Zero placeholder/empty tests.
@@ -217,31 +218,34 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 ---
 
-## 4) Device Verification (Autonomous E2E / Manual) & Phase Sign-Off Barrier
+## 4) Device Verification & Phase Pipeline (`DEVICE_VERIFICATION_MODE` in `_product.py`)
 
-- **Dual Device Verification Modes (`DEVICE_VERIFICATION_MODE` in `_product.py`)**:
-  - **Mode A: `autonomous_e2e` (Recommended / Default)**:
+- **Dual Device Verification Modes**:
+  - **Mode A: `autonomous_e2e` (Fully Autonomous Multi-Phase Execution - Default)**:
     1. Run `python .agents/scripts/run_device.py install-start`.
     2. **MANDATORY**: Run `python .agents/scripts/run_e2e_smoke.py`. The E2E engine inspects the UI hierarchy, asserts component visibility and scroll responsiveness, verifies zero fatal crashes in Logcat, and captures a verification screenshot to `.agents/state/screenshots/`.
-    3. The Lead Agent includes the E2E verification evidence in the **Phase Milestone Card** along with concise manual verification steps for the developer.
-  - **Mode B: `manual_only`**:
-    1. The Lead Agent launches the app on device via `run_device.py install-start` and provides explicit, numbered manual smoke test steps.
+    3. **On E2E [SUCCESS]**: Output the **Phase Milestone Card** in chat with the E2E verification evidence and **PROCEED IMMEDIATELY & AUTONOMOUSLY to Phase N+1 without blocking the developer or firing interactive modals**.
+    4. **On E2E [FAIL] / Crash**: STOP immediately, capture Logcat via `logcat_doctor.py` or dispatch `qa-diagnostics-agent`, report findings in chat, fix at the root cause, re-run tests, re-install, and re-verify.
+  - **Mode B: `interactive_device` / `manual_only` (Developer-in-the-Loop Manual Verification)**:
+    1. Run `python .agents/scripts/run_device.py install-start`.
+    2. Output the **Phase Milestone Card** in chat containing explicit, numbered manual smoke test steps for the developer (rendered in the active conversation language):
+       - Step 1: Open the target screen / feature on the connected device.
+       - Step 2: Perform the specific test actions (browse, click buttons, scroll list, verify loaded data).
+       - Step 3: Verify the expected outcome (zero crashes, responsive UI, proper layout/text alignment).
+    3. Trigger an interactive verification prompt via `ask_question` (rendered in the active conversation language):
+       - **Question**: "Please test the steps above on your device and confirm the result:"
+       - **Options**: `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
+       - (Do NOT prefix Pass/Fail options with `(Recommended)`).
+    4. **STRICT ENFORCEMENT**: Do NOT touch, open, edit, or plan any file for Phase N+1 until the developer explicitly confirms `PASS`.
+  - **Mode C: `disabled`**:
+    1. Proceeds autonomously after Unit Tests (`:app:testDebugUnitTest`) + `:app:assembleDebug`.
+
 - **Phase Milestone Card Requirements**:
-  1. **نطاق المرحلة والتغييرات المنجزة** (Scope & Changes).
-  2. **نتائج بوابات الجودة** (`5-Leaf Review Gate`, `Unit Tests`, `:assembleDebug` BUILD SUCCESSFUL).
-  3. **نتائج الفحص الآلي** (`Autonomous E2E Smoke Test` results & screenshot if mode is `autonomous_e2e`).
-  4. **خطوات الفحص اليدوي المحددة على الهاتف** (`Manual Device Smoke Test Checklist`):
-     - Step 1: افتح الشاشة/الخاصية المستهدفة على الهاتف المتصل.
-     - Step 2: قم بالإجراء المحدد (تصفح، ضغط الأزرار، التمرير، فحص البيانات).
-     - Step 3: تحقق من النتيجة المتوقعة (عدم وجود كراش، استجابة الواجهة، اتجاه النصوص RTL).
-- **Interactive Phase Sign-Off Barrier (`ask_question`)**:
-  - The Lead Agent MUST trigger an interactive verification prompt via `ask_question`:
-    - **Question**: *"يرجى تجربة الخطوات أعلاه على هاتفك وتأكيد نتيجة الفحص:"*
-    - **Options**:
-      - `(Recommended) PASS — الفحص على الهاتف تم بنجاح بدون مشاكل (موافقة على بدء المرحلة التالية)`
-      - `FAIL — ظهرت مشكلة أو كراش أثناء الفحص على الهاتف`
-  - **STRICT ENFORCEMENT**: Do NOT touch, open, edit, or plan any file for Phase N+1 until the developer explicitly confirms `PASS`.
-  - **On FAIL**: Ask for symptoms or Logcat in chat (not a modal). Do not guess. For crashes, run `logcat_doctor.py` or dispatch `qa-diagnostics-agent`, fix the issue at the producer, re-run tests, re-install, and re-present the **same** phase verification checklist.
+  1. Scope & Changes.
+  2. Quality Gates (`5-Leaf Review Gate`, `Unit Tests`, `:assembleDebug` BUILD SUCCESSFUL).
+  3. Device Verification Evidence (`Autonomous E2E Smoke Test` results or manual checklist).
+  4. Next Step / Phase Transition Status.
+
 - **Single-Phase Task Completion / Final Sign-off**:
   - When all phases are completed and verified on device:
     1. Write `.agents/state/plans/walkthrough.md`
