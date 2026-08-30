@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use Android Agent Harness in your engineering research or software projects, please cite it as below."
+authors:
+  - family-names: "Elkholy"
+    given-names: "Rabee"
+title: "Android Agent Harness: Deterministic Android Engineering for the AI Era"
+version: 0.14.20
+date-released: 2026-08-30
+url: "https://github.com/rabee-elkholy/android-harness-kit"
+license: "MIT"
+keywords:
+  - "android"
+  - "kotlin"
+  - "ai-agents"
+  - "code-review"
+  - "quality-gate"
+  - "jetpack-compose"
+  - "clean-architecture"

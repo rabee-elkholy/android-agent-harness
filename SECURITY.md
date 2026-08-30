@@ -2,74 +2,37 @@
 
 ## Supported Versions
 
-We actively maintain and provide security patches for the following versions of **Android Agent Harness**:
+We actively maintain and provide security patches for the latest minor release line of the **Android Agent Harness**.
 
-| Version | Supported |
-| ------- | --------- |
-| 0.14.x  | Yes       |
-| 0.13.x  | Yes       |
-| 0.12.x  | Yes       |
-| 0.11.x  | Yes       |
-| 0.10.x  | Yes       |
-| < 0.10.0 | No        |
+| Version Line | Supported |
+| :--- | :--- |
+| **v0.14.x** | Yes |
+| < v0.14.0 | No |
 
 ---
 
-## Threat Model & Mitigations
+## Security Architecture & Invariants
 
-Each attack class below maps to the exact selftest assertion that proves the
-mitigation. The adversarial suite lives in `agents/scripts/_security_selftest.py`
-(run standalone, from `_hook_selftest.py`, and in CI) — every case is
-deterministic and performs zero network I/O.
+The Android Agent Harness is designed with strict OS-level containment and cryptographic security invariants:
 
-| Attack class | Mitigation | Proving test |
-| ------------ | ---------- | ------------ |
-| Git mutation hidden behind a chained inspection command (`git status && git push`) | Every shell-chained segment is scanned independently | `security_git_chained_push` |
-| Git mutation obfuscated by whitespace (`git     reset`) | Whitespace-collapsed command normalization before scanning | `security_git_spaced_reset` |
-| Git mutation hidden behind config options (`git -c k=v commit`, `--git-dir`) | Option tokenizer skips `-c/-C/--git-dir/--work-tree` values before verb lookup | `security_git_config_wrapped_commit` |
-| Homoglyph / extension laundering (`gıt.exe push`, full-path `git.exe`) | NFKC + confusables fold map applied before the mutation regex | `security_git_homoglyph_exe_push`, `security_git_fullpath_exe_push` |
-| Encoded payload piped into a shell (`base64 -d \| sh`, `sh -c`) | Shell-indirection patterns denied outright | `security_git_base64_wrapped_reset` |
-| Review-package path traversal (URL-encoded `%2e%2e`, `..\..\`, symlinked dir) | `resolve()` + repo/temp containment check on every HARNESS_REVIEW_PACKAGE | `security_review_pkg_url_encoded_traversal`, `security_review_pkg_dotdot_backslash_traversal`, `security_review_pkg_symlink_escape` |
-| pm-clear laundering via `adb shell cmd package clear/uninstall` (same data wipe, different verb) | cmd-package variants denied identically to `pm clear` / `pm uninstall` | `security_adb_cmd_package_clear_denied` |
-| Privilege/data-exfil adb verbs without device binding (`adb root`, `remount`, `backup`, `reboot`, `sync`) | Verbs added to the device-bound set: bare invocations deny, `-d`/`-s <serial>` required | `security_adb_root_bare_denied`, `security_adb_backup_bare_denied` |
-| Oversized hook stdin (memory exhaustion / payload smuggling) | 5 MB payload cap, fail-closed denial | `security_oversized_stdin_payload` |
-| Malformed bridge input (Claude Code PreToolUse fuzz) | Bridge always exits 0 with a JSON deny; garbage input denies | `security_cc_bridge_garbage_stdin`, `security_cc_bridge_git_push_denied` |
-| Malformed bridge input (GitHub Copilot preToolUse fuzz) | Deterministic allow/deny for camelCase + VS Code snake_case payloads; garbage denies | `security_copilot_camelcase_push_denied`, `security_copilot_snakecase_push_denied`, `security_copilot_garbage_stdin_denied` |
-| Forged review verdicts (PASS tokens without EVIDENCE footer, wrong pkg hash) | Evidence-backed barrier: footer `pkg=` must equal the dispatched package hash | `security_forged_evidence_footer_blocked`, `security_forged_evidence_wrong_pkg_blocked` |
-| Secret leakage through MCP wiring (token keys/values in server responses or configs) | Secret-key detection, token-value scan, and refuse-to-write guards in the Zoho install path | `security_zoho_helper_detects_secret_keys`, `security_zoho_helper_refuses_secret_write`, `security_zoho_helper_scans_token_values`, `security_zoho_install_leaves_no_token_values` |
-| Floating/unpinned kit provisioning (drift to `main`, tag/version mismatch) | Pin-to-tag clone/refresh with post-checkout VERSION assert, fail-closed remediation | `cli pinned provision`, `cli refresh re-pins drifted checkout`, `cli pin mismatch fails closed` (in `_hook_selftest.py`) |
-
----
-
-## Scope & Security Boundary Clarification
-
-The **Android Agent Harness** is a deterministic safety and governance layer designed to protect the **developer workspace, Git history, and AI-assisted development lifecycle**. It mitigates autonomous agent hazards (destructive shell commands, forced git mutations, unvalidated database schema drifts, secret leaks into logs/prompts, and forged review assertions).
-
-> [!NOTE]
-> Android Agent Harness is **NOT** a mobile runtime application security solution (e.g. RASP, root detection, APK anti-tampering, or binary obfuscation). App-runtime security measures remain the responsibility of the application's production build pipeline.
-
----
-
-## Agent-Behavior Threat Model
-
-The table above covers the machine-enforced deny classes. Agent-behavior
-threats (prompt injection via repository instructions, `.agents/` config
-tampering, secret exfiltration vectors, MCP tool poisoning, and the accepted
-residual risks) are modeled in [`docs/threat-model.md`](docs/threat-model.md).
-This file remains the source for deny-class -> test-name mapping and the
-reporting policy.
+1. **Zero Secret Leakage**:
+   - Provider tokens, API keys, and credentials are kept strictly out of Git repositories via `.git/info/exclude`.
+   - Logcat interceptors actively sanitize sensitive authentication tokens, authorization headers, and PII before output.
+2. **Deterministic PreToolUse Hook Containment**:
+   - Python safety hooks intercept and reject destructive commands (`git reset --hard`, `git push --force`, `pm clear`, bare destructive ADB commands) before they reach the OS shell.
+3. **Cryptographic Delivery Gate**:
+   - Subagent reviews produce SHA-256 evidence footers linked to the immutable review package diff. No forged or synthetic verdicts are accepted.
+4. **Local Git Privacy (Zero Team Pollution)**:
+   - All harness configurations, adapters, transient states, and pre-commit hooks are stored locally in `.git/info/exclude`, leaving the shared team repository 100% clean.
 
 ---
 
 ## Reporting a Vulnerability
 
-If you discover a potential security vulnerability (such as a safety hook bypass, unintended command execution, or credential exposure in MCP integrations):
+If you discover a potential security vulnerability within the Android Agent Harness:
 
-1. **Do NOT open a public GitHub issue.**
-2. Report the vulnerability privately via **[GitHub Private Security Advisories](https://github.com/rabee-elkholy/android-harness-kit/security/advisories/new)** or by contacting the maintainer directly at `rabeeaelkholy123@gmail.com`.
-3. Include:
-   - Description of the vulnerability.
-   - Step-by-step reproduction instructions or proof-of-concept.
-   - Affected harness version and environment (OS, Python version, AI tool).
+1. **Do not create a public GitHub issue.**
+2. Please disclose the vulnerability privately via **[GitHub Private Vulnerability Reporting](https://github.com/rabee-elkholy/android-harness-kit/security/advisories/new)**.
+3. Include detailed steps to reproduce the vulnerability, including platform information, Python version, and relevant logs.
 
-We take security issues seriously and will respond promptly within 48 hours to validate and resolve any verified concerns.
+We take security seriously and will investigate and patch verified vulnerabilities promptly.

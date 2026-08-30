@@ -14,6 +14,9 @@
 [![AI Tools](https://img.shields.io/badge/AI%20Tools-14%20IDs%20%7C%2011%20Templates-8A2BE2?style=flat-square)](docs/tool-support.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
+<br/><br/>
+<img src="docs/assets/social-preview.svg" alt="Android Agent Harness: Deterministic Android Engineering for the AI Era" width="100%" />
+
 </div>
 
 ---
