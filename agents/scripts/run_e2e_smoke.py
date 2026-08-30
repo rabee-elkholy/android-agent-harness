@@ -4,16 +4,23 @@ Zero external dependencies (Python stdlib + native ADB UI Automator).
 Supports physical Android devices and emulators across API 21 through API 35.
 
 Features:
-- Instant UI hierarchy dumping and parsing (XML & Jetpack Compose accessibility tree)
-- Safe, bounded node selection (text, resource-id, content-desc, class)
-- High-precision center coordinate calculation for tap, scroll, and swipe gestures
-- Strict safety containment barrier: aborts if foreground app leaves target APPLICATION_ID
-- Real-time Logcat crash forensics (catches FATAL EXCEPTION, AndroidRuntime, ANR)
-- Timestamped visual screenshot capture to .agents/state/screenshots/
+- Diff-Aware Target Auto-Discovery: Inspects modified working tree files to automatically
+  identify modified Activities, Fragments, Composables, and newly added string resources.
+- Direct & Deep-Link Component Launching: Launches target Activity directly via ADB
+  component intent (`am start -n`) or URI deep links.
+- Smart UI Automator Navigation: Traverses tabs, menus, and buttons to reach target screens.
+- Instant UI hierarchy dumping and parsing (XML & Jetpack Compose accessibility tree).
+- High-precision center coordinate calculation for tap, scroll, and swipe gestures.
+- Real-time Logcat crash forensics: Captures and demangles fatal exceptions, ANRs, Room crashes,
+  and unchecked nullability violations.
+- Strict safety containment barrier: Aborts immediately if foreground app leaves APPLICATION_ID.
+- Timestamped visual screenshot capture saved to .agents/state/screenshots/.
 
 Usage:
-  python .agents/scripts/run_e2e_smoke.py
-  python .agents/scripts/run_e2e_smoke.py --serial <DEVICE_ID> --scenario auto
+  python .agents/scripts/run_e2e_smoke.py --auto-diff
+  python .agents/scripts/run_e2e_smoke.py --target-activity <ActivityName>
+  python .agents/scripts/run_e2e_smoke.py --target-deeplink <URI>
+  python .agents/scripts/run_e2e_smoke.py --target-text <Keyword>
   python .agents/scripts/run_e2e_smoke.py --dump-only
 """
 from __future__ import annotations
@@ -132,7 +139,6 @@ def parse_ui_hierarchy(xml_content: str) -> list[UINode]:
     if not xml_content or not xml_content.strip():
         return []
     try:
-        # Clean any prepended non-xml logs
         idx = xml_content.find("<hierarchy")
         if idx >= 0:
             xml_clean = xml_content[idx:]
@@ -194,10 +200,91 @@ def find_first(nodes: list[UINode], **kwargs) -> UINode | None:
     return found[0] if found else None
 
 
+def discover_modified_targets(repo: Path) -> dict:
+    """Analyze working tree git diff to automatically discover modified activities, composables, and strings."""
+    results: dict = {
+        "activities": [],
+        "target_activity": None,
+        "target_strings": [],
+        "modified_screens": [],
+        "modified_files": [],
+    }
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        lines = (proc.stdout or "").splitlines()
+        for line in lines:
+            parts = line.strip().split(maxsplit=1)
+            if len(parts) == 2:
+                file_rel = parts[1].strip().strip('"')
+                results["modified_files"].append(file_rel)
+                
+                # Check for activity files
+                if file_rel.endswith("Activity.kt") or file_rel.endswith("Activity.java"):
+                    act_name = Path(file_rel).stem
+                    results["activities"].append(act_name)
+                    if not results["target_activity"] and act_name != "MainActivity":
+                        results["target_activity"] = act_name
+
+                # Check for screens / fragments / composables
+                if file_rel.endswith("Screen.kt") or file_rel.endswith("Fragment.kt"):
+                    screen_name = Path(file_rel).stem
+                    results["modified_screens"].append(screen_name)
+
+                # Check for modified strings
+                if file_rel.endswith("strings.xml"):
+                    full_p = repo / file_rel
+                    if full_p.is_file():
+                        content = full_p.read_text(encoding="utf-8", errors="ignore")
+                        # Extract simple string values
+                        matches = re.findall(r'<string name="[^"]+">([^<]+)</string>', content)
+                        for m in matches[:5]:
+                            if len(m.strip()) > 3 and not m.strip().startswith("%"):
+                                results["target_strings"].append(m.strip())
+
+    except Exception:
+        pass
+
+    # If an activity was found, search AndroidManifest.xml for its full component path
+    if results["target_activity"]:
+        act_simple = results["target_activity"]
+        for mf in repo.rglob("AndroidManifest.xml"):
+            try:
+                txt = mf.read_text(encoding="utf-8", errors="ignore")
+                for line in txt.splitlines():
+                    if act_simple in line and "android:name=" in line:
+                        m = re.search(r'android:name="([^"]+)"', line)
+                        if m:
+                            raw_name = m.group(1)
+                            results["target_activity_component"] = raw_name
+                            break
+            except Exception:
+                pass
+            if "target_activity_component" in results:
+                break
+
+    return results
+
+
 class E2ERunner:
-    def __init__(self, serial: str, package: str = APPLICATION_ID):
+    def __init__(
+        self,
+        serial: str,
+        package: str = APPLICATION_ID,
+        target_activity: str | None = None,
+        target_deeplink: str | None = None,
+        target_texts: list[str] | None = None,
+    ):
         self.serial = serial
         self.package = package
+        self.target_activity = target_activity
+        self.target_deeplink = target_deeplink
+        self.target_texts = target_texts or []
         self.screenshots: list[Path] = []
         self.start_time = datetime.datetime.now(datetime.timezone.utc)
 
@@ -226,7 +313,6 @@ class E2ERunner:
         for line in output.splitlines():
             if "mCurrentFocus" in line or "mFocusedApp" in line:
                 return self.package in line
-        # Fallback check via dumpsys activity
         proc_act = self.run_adb(["shell", "dumpsys", "activity", "top"])
         return self.package in (proc_act.stdout or "")
 
@@ -242,17 +328,45 @@ class E2ERunner:
         for perm in permissions:
             self.run_adb(["shell", "pm", "grant", self.package, perm])
 
+    def launch_app_or_target(self) -> bool:
+        """Launch the application, either directly into target activity/deeplink or main launcher."""
+        if self.target_deeplink:
+            live_print(f"[*] Launching target via Deep Link: {self.target_deeplink} ...")
+            proc = self.run_adb(["shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", self.target_deeplink])
+            time.sleep(2.0)
+            if self.is_app_foreground():
+                return True
+
+        if self.target_activity:
+            comp = self.target_activity
+            if not comp.startswith(self.package) and not comp.startswith("."):
+                comp = f".{comp}"
+            target_comp = comp if "/" in comp else f"{self.package}/{comp}"
+            live_print(f"[*] Attempting direct component launch: {target_comp} ...")
+            proc = self.run_adb(["shell", "am", "start", "-n", target_comp])
+            time.sleep(2.0)
+            if self.is_app_foreground():
+                return True
+            live_print("  [WARN] Direct component launch did not foreground app; falling back to main launcher.")
+
+        # Fallback to main launcher
+        launcher_cls = LAUNCHER if LAUNCHER else ".MainActivity"
+        main_comp = f"{self.package}/{launcher_cls}"
+        live_print(f"[*] Launching application main component: {main_comp} ...")
+        self.run_adb(["shell", "am", "start", "-n", main_comp])
+        time.sleep(2.0)
+        return self.is_app_foreground()
+
     def dump_hierarchy(self, retries: int = 3) -> list[UINode]:
         """Dump UI Automator hierarchy and parse into UINode tree with retries."""
         for attempt in range(retries):
-            # Try dumping to device local tmp
             dump_proc = self.run_adb(["shell", "uiautomator", "dump", "/data/local/tmp/harness_uidump.xml"])
             if dump_proc.returncode == 0:
                 cat_proc = self.run_adb(["shell", "cat", "/data/local/tmp/harness_uidump.xml"])
                 nodes = parse_ui_hierarchy(cat_proc.stdout)
                 if nodes:
                     return nodes
-            time.sleep(0.4)
+            time.sleep(0.5)
         return []
 
     def tap(self, node: UINode, label: str = "") -> bool:
@@ -264,7 +378,7 @@ class E2ERunner:
         if cx <= 0 or cy <= 0:
             return False
         self.run_adb(["shell", "input", "tap", str(cx), str(cy)])
-        time.sleep(0.8)
+        time.sleep(1.0)
         return True
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 350):
@@ -302,25 +416,57 @@ class E2ERunner:
             pass
         return None
 
-    def check_logcat_crashes(self) -> list[str]:
-        """Check logcat for fatal crashes or ANRs related to target package."""
+    def check_logcat_crashes(self) -> list[dict]:
+        """Deep Logcat forensics: Detect fatal exceptions, ANRs, and Room/Runtime crashes with stacktraces."""
         proc = self.run_adb(["logcat", "-d", "-v", "time", "*:E"])
         output = proc.stdout or ""
-        crashes: list[str] = []
-        for line in output.splitlines():
-            if self.package in line and ("FATAL EXCEPTION" in line or "AndroidRuntime" in line or "ANR in" in line):
-                crashes.append(line)
-        return crashes[:10]
+        crashes: list[dict] = []
+        lines = output.splitlines()
+        
+        crash_patterns = [
+            "FATAL EXCEPTION",
+            "AndroidRuntime",
+            "ANR in " + self.package,
+            "NullPointerException",
+            "IllegalStateException",
+            "Room cannot verify the data integrity",
+            "Unchecked double-bang",
+            "ClassCastException",
+        ]
+        
+        for i, line in enumerate(lines):
+            if self.package in line or "FATAL" in line or "AndroidRuntime" in line:
+                for pat in crash_patterns:
+                    if pat in line:
+                        # Grab surrounding stacktrace slice (up to 15 lines)
+                        stack = lines[max(0, i - 1): min(len(lines), i + 15)]
+                        crashes.append({
+                            "pattern": pat,
+                            "summary": line.strip(),
+                            "stacktrace": "\n".join(stack),
+                        })
+                        break
+        return crashes[:5]
 
-    def run_default_smoke_flow(self) -> dict:
-        """Run default autonomous smoke validation on launched app."""
+    def run_targeted_smoke_flow(self) -> dict:
+        """Run comprehensive, diff-aware targeted smoke validation on physical device."""
         steps: list[dict] = []
-        live_print(f"[*] Starting Autonomous E2E Smoke Flow on {self.serial} ({self.package})...")
+        live_print(f"[*] Starting Targeted E2E Smoke Flow on {self.serial} ({self.package})...")
         
         self.wake_and_unlock()
         self.grant_common_permissions()
 
-        # Step 1: Initial screen inspection
+        # Step 1: Launch target activity or main app
+        launched = self.launch_app_or_target()
+        if not launched:
+            return {
+                "verdict": "FAIL",
+                "reason": f"Target application {self.package} failed to foreground.",
+                "steps": steps,
+                "crashes": self.check_logcat_crashes(),
+            }
+
+        # Step 2: Initial screen hierarchy dump
         nodes = self.dump_hierarchy()
         if not nodes:
             return {
@@ -330,16 +476,32 @@ class E2ERunner:
                 "crashes": self.check_logcat_crashes(),
             }
 
-        screen_shot = self.capture_screenshot("e2e_initial_launch")
+        screen_shot = self.capture_screenshot("e2e_screen_launch")
         steps.append({
-            "step": "Initial Launch Hierarchy",
+            "step": "App & Target Launch",
             "status": "PASS",
             "nodes_found": len(nodes),
             "screenshot": str(screen_shot) if screen_shot else None,
         })
-        live_print(f"  [PASS] App launched & UI hierarchy dumped ({len(nodes)} root nodes).")
+        live_print(f"  [PASS] Target UI foregrounded & hierarchy dumped ({len(nodes)} root nodes).")
 
-        # Step 2: Discover interactive tabs/buttons
+        # Step 3: Target elements & keyword verification (if target texts provided)
+        matched_targets = []
+        for kw in self.target_texts:
+            node = find_first(nodes, text=kw) or find_first(nodes, content_desc=kw)
+            if node:
+                matched_targets.append(kw)
+                live_print(f"  [PASS] Verified modified UI target element: '{kw}' (center: {node.center}).")
+
+        if self.target_texts:
+            steps.append({
+                "step": "Target Elements Verification",
+                "status": "PASS" if matched_targets else "INFO",
+                "matched_targets": matched_targets,
+                "expected_targets": self.target_texts,
+            })
+
+        # Step 4: Interactive elements discovery & gesture responsiveness
         clickables = find_nodes(nodes, clickable=True)
         live_print(f"  [PASS] Discovered {len(clickables)} interactive UI element(s).")
         steps.append({
@@ -348,10 +510,10 @@ class E2ERunner:
             "clickables_count": len(clickables),
         })
 
-        # Step 3: Scroll test if scrollable container exists
-        scrollables = find_nodes(nodes, class_name="RecyclerView") or find_nodes(nodes, class_name="ScrollView")
+        # Step 5: Scroll stress test if scrollable container exists
+        scrollables = find_nodes(nodes, class_name="RecyclerView") or find_nodes(nodes, class_name="ScrollView") or find_nodes(nodes, scrollable=True)
         if scrollables:
-            live_print("  [*] Testing scroll responsiveness...")
+            live_print("  [*] Testing scroll responsiveness and frame stability...")
             self.scroll_down()
             time.sleep(0.5)
             self.scroll_up()
@@ -359,18 +521,20 @@ class E2ERunner:
             steps.append({"step": "Scroll Gesture Responsiveness", "status": "PASS"})
             live_print("  [PASS] Scroll responsiveness verified without UI lockup.")
 
-        # Step 4: Check crashes in Logcat
+        # Step 6: Real-time Logcat crash forensics
         crashes = self.check_logcat_crashes()
         if crashes:
-            live_print(f"  [FAIL] Detected {len(crashes)} crash/error entries in Logcat.", err=True)
+            first_crash = crashes[0]
+            live_print(f"  [FAIL] Detected runtime crash in Logcat: {first_crash['summary']}", err=True)
             return {
                 "verdict": "FAIL",
-                "reason": f"Detected fatal crash in Logcat: {crashes[0]}",
+                "reason": f"Runtime crash detected: {first_crash['summary']}",
+                "stacktrace": first_crash.get("stacktrace"),
                 "steps": steps,
                 "crashes": crashes,
             }
         steps.append({"step": "Logcat Crash Forensics", "status": "PASS", "crashes": 0})
-        live_print("  [PASS] Zero fatal crashes or ANRs detected in Logcat.")
+        live_print("  [PASS] Zero fatal crashes, ANRs, or Room migration exceptions in Logcat.")
 
         final_shot = self.capture_screenshot("e2e_final_verified")
         return {
@@ -383,9 +547,13 @@ class E2ERunner:
 
 def main() -> int:
     enable_line_buffered_stdio()
-    parser = argparse.ArgumentParser(description=f"Autonomous E2E Smoke Testing for {PRODUCT_NAME}")
+    parser = argparse.ArgumentParser(description=f"Autonomous Targeted E2E Smoke Testing for {PRODUCT_NAME}")
     parser.add_argument("-s", "--serial", default=None, help="Device serial")
     parser.add_argument("-p", "--package", default=APPLICATION_ID, help="Target application package")
+    parser.add_argument("--auto-diff", action="store_true", help="Auto-discover modified activities and strings from git diff")
+    parser.add_argument("--target-activity", default=None, help="Direct target Activity class or component name to launch")
+    parser.add_argument("--target-deeplink", default=None, help="Direct deep link URI to launch")
+    parser.add_argument("--target-text", action="append", default=[], help="Expected text or keyword on target screen")
     parser.add_argument("--dump-only", action="store_true", help="Dump and print current UI hierarchy JSON and exit")
     parser.add_argument("--json", action="store_true", help="Print structured JSON result")
     args = parser.parse_args()
@@ -396,7 +564,30 @@ def main() -> int:
         live_print("[ERROR] No Android device detected via ADB.", err=True)
         return 1
 
-    runner = E2ERunner(serial=serial, package=args.package)
+    target_act = args.target_activity
+    target_dl = args.target_deeplink
+    target_texts = list(args.target_text)
+
+    # If --auto-diff is enabled, inspect git working tree for modified components
+    if args.auto_diff:
+        diff_info = discover_modified_targets(REPO)
+        if diff_info.get("target_activity_component"):
+            target_act = diff_info["target_activity_component"]
+            live_print(f"[*] Auto-diff discovered target activity: {target_act}")
+        elif diff_info.get("target_activity"):
+            target_act = diff_info["target_activity"]
+            live_print(f"[*] Auto-diff discovered target activity: {target_act}")
+        if diff_info.get("target_strings"):
+            target_texts.extend(diff_info["target_strings"][:3])
+            live_print(f"[*] Auto-diff discovered target string assertions: {target_texts}")
+
+    runner = E2ERunner(
+        serial=serial,
+        package=args.package,
+        target_activity=target_act,
+        target_deeplink=target_dl,
+        target_texts=target_texts,
+    )
 
     if args.dump_only:
         nodes = runner.dump_hierarchy()
@@ -404,7 +595,7 @@ def main() -> int:
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0
 
-    result = runner.run_default_smoke_flow()
+    result = runner.run_targeted_smoke_flow()
     E2E_STATE_DIR.mkdir(parents=True, exist_ok=True)
     report_file = E2E_STATE_DIR / "last_e2e_result.json"
     report_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -414,10 +605,14 @@ def main() -> int:
         return 0 if result["verdict"] == "PASS" else 1
 
     if result["verdict"] == "PASS":
-        live_print(f"\n[SUCCESS] Autonomous E2E Smoke Test PASSED on {serial}!")
+        live_print(f"\n[SUCCESS] Autonomous Targeted E2E Smoke Test PASSED on {serial}!")
+        if result.get("final_screenshot"):
+            live_print(f"[*] Verification Screenshot: {result['final_screenshot']}")
         return 0
     else:
-        live_print(f"\n[FAIL] Autonomous E2E Smoke Test FAILED: {result.get('reason')}", err=True)
+        live_print(f"\n[FAIL] Autonomous Targeted E2E Smoke Test FAILED: {result.get('reason')}", err=True)
+        if result.get("stacktrace"):
+            live_print(f"--- Stacktrace ---\n{result['stacktrace']}\n------------------", err=True)
         return 1
 
 

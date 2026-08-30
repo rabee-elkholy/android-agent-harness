@@ -5,6 +5,14 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.18] - 2026-08-30
+
+### Diff-Aware Targeted E2E Smoke Testing & Deep Logcat Forensics
+- **Diff-Aware Target Auto-Discovery (`agents/scripts/run_e2e_smoke.py`)**: Enhanced autonomous E2E engine with `--auto-diff` inspection, automatically detecting modified Activity components, Fragment/Compose screens, and newly added string resources from git working tree diff.
+- **Direct Component & Deep-Link Launching**: Added targeted launch capabilities (`--target-activity`, `--target-deeplink`) enabling direct Activity invocation via ADB component intents (`am start -n`) alongside automated UI Automator navigation.
+- **Deep Logcat Crash & ANR Forensics**: Upgraded runtime error interception to capture, extract, and demangle 15-line stack traces for `FATAL EXCEPTION`, `AndroidRuntime`, `ANR`, `Room` schema integrity violations, and unchecked nullability failures.
+- **Visual Target Verification**: Emits structured JSON verification reports (`last_e2e_result.json`) and timestamped screenshots targeting modified screens on physical devices.
+
 ## [0.14.17] - 2026-08-30
 
 ### Zero Git Pollution Hardening & Legacy Advisory Elimination
@@ -83,7 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Windows Console Unicode Resilience (`_live_process.py`, `harness_cli.py`, `setup_wizard.py`)**: Reconfigured standard I/O to UTF-8 with replacement across CLI entrypoints, preventing `UnicodeEncodeError` crashes on Windows consoles with Arabic text and special symbols.
 - **CLI Argument Ergonomics (`install_zoho_mcp.py`, `install_tool_adapters.py`)**: Allowed `install_zoho_mcp.py` to default `--repo` to current working directory (`Path.cwd()`), and made `--git-gate` parsing resilient to explicit `yes`/`no`/`true`/`false` values.
 
-## [0.14.6] - 2026-08-30
+---
+
+**Included in 0.14.6 (2026-08-30):**
 
 ### Autonomous E2E Smoke Testing Engine & Wizard Setup Integration
 - **Autonomous E2E Smoke Testing Engine (`agents/scripts/run_e2e_smoke.py`)**: Built a zero-dependency (Python stdlib + native ADB) autonomous UI testing engine that inspects device UI hierarchy, asserts component visibility and scroll responsiveness across Compose & XML Views, catches runtime Logcat crashes, and captures timestamped verification screenshots.

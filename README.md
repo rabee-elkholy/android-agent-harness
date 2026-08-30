@@ -143,7 +143,7 @@ The **Android Agent Harness** places deterministic, machine-enforced barriers **
 Open a **new strong-model chat** at your Android repository root and paste:
 ```markdown
 Run the Android Harness Kit Installer or Updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.17/docs/install-or-update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.18/docs/install-or-update-prompt.md
 ```
 
 The installer autonomously executes a complete structural port:
@@ -179,9 +179,9 @@ Pinned lifecycle prompts with cryptographic tamper-evident headers:
 
 | Operation | Prompt URL | Purpose |
 | :--- | :--- | :--- |
-| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.17/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
-| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.17/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
-| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.17/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
+| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.18/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
+| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.18/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
+| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.18/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
 
 ---
 
