@@ -218,9 +218,21 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 ## 4) Manual Device Verification & Phase Sign-Off Barrier
 
 - **Multi-Phase Execution & Phase Hard Barrier**:
-  - When Phase N completes its review gate, unit tests, build (`:assembleDebug`), and device smoke testing/installation, the Lead Agent **MUST END ITS TURN IMMEDIATELY** with the standardized Phase Milestone Card.
-  - Ask the developer explicitly: *"تم إنهاء واختبار المرحلة [N] بنجاح على الجهاز. هل تأذن بالبدء في المرحلة [N+1]؟"*
-  - **STRICT ENFORCEMENT**: Do NOT touch, open, or write to any file for Phase N+1 until the developer explicitly confirms and authorizes moving to the next phase in chat.
+  - When Phase N completes its review gate, unit tests, build (`:assembleDebug`), and device installation (`run_device.py install-start`), the Lead Agent **MUST NEVER assume the device test passed automatically without developer verification**.
+  - The Lead Agent MUST output the **Phase Milestone Card** containing:
+    1. **نطاق المرحلة والتغييرات المنجزة** (Scope & Changes).
+    2. **نتائج بوابات الجودة** (`5-Leaf Review Gate`, `Unit Tests`, `:assembleDebug` BUILD SUCCESSFUL).
+    3. **خطوات الفحص اليدوي المحددة على الهاتف** (`Manual Device Smoke Test Checklist`):
+       - Step 1: افتح الشاشة/الخاصية المستهدفة على الهاتف المتصل.
+       - Step 2: قم بالإجراء المحدد (تصفح، ضغط الأزرار، التمرير، فحص البيانات).
+       - Step 3: تحقق من النتيجة المتوقعة (عدم وجود كراش، استجابة الواجهة، اتجاه النصوص RTL).
+  - Then the Lead Agent MUST trigger an interactive verification prompt via `ask_question`:
+    - **Question**: *"يرجى تجربة الخطوات أعلاه على هاتفك وتأكيد نتيجة الفحص:"*
+    - **Options**:
+      - `(Recommended) PASS — الفحص على الهاتف تم بنجاح بدون مشاكل (موافقة على بدء المرحلة التالية)`
+      - `FAIL — ظهرت مشكلة أو كراش أثناء الفحص على الهاتف`
+  - **STRICT ENFORCEMENT**: Do NOT touch, open, edit, or plan any file for Phase N+1 until the developer explicitly confirms `PASS`.
+  - **On FAIL**: Ask for symptoms or Logcat in chat (not a modal). Do not guess. For crashes, run `logcat_doctor.py` or dispatch `qa-diagnostics-agent`, fix the issue at the producer, re-run tests, re-install, and re-present the **same** phase verification checklist.
 - **Single-Phase Task Completion / Final Sign-off**:
   - When all phases are completed and verified on device:
     1. Write `.agents/state/plans/walkthrough.md`
@@ -228,7 +240,6 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
     3. Conventional Commit message for Android Studio
     4. If the work came from a Zoho id: one-line reminder that Zoho is not updated — wait for `update zoho`. No modal.
     5. Never present the commit message before every phase is Pass.
-- On Fail: ask for symptoms in chat (not a modal). Do not guess. For crashes, offer `qa-diagnostics-agent` + `logcat_doctor.py`. Then fix producer, re-run gates, re-install, re-present the **same** phase.
 
 ---
 

@@ -41,8 +41,8 @@ Dispatch when needed:
 
 ## Phase Boundaries & High-Signal Chat
 
-- **Atomic Phase Hard Barrier**: In multi-phase tasks, execute phase-by-phase. When Phase N finishes (review PASS, unit tests PASS, `:assembleDebug`, device smoke test), **STOP IMMEDIATELY**. Output the Phase Milestone Card and obtain explicit developer sign-off before opening, editing, or writing any files for Phase N+1.
-- **High-Signal Chat (Zero Noise)**: Never output mechanical status spam (e.g. "reading file...", "running tests...", "waiting for reviews..."). Speak only at plan approval, critical tradeoffs, phase milestone cards, and final delivery.
+- **Atomic Phase Hard Barrier & Interactive Device Verification**: In multi-phase tasks, execute phase-by-phase. When Phase N finishes (review PASS, unit tests PASS, `:assembleDebug`, device installation), **STOP IMMEDIATELY**. Output the Phase Milestone Card with explicit, numbered manual smoke test steps for the connected physical device, and trigger an interactive modal (`ask_question`) asking the developer to verify on device and confirm `PASS` or `FAIL`. Never touch, open, or write any files for Phase N+1 until the developer explicitly confirms `PASS`.
+- **High-Signal Chat (Zero Noise)**: The agent MUST NOT output mechanical progress spam (e.g. "reading file...", "running tests...", "waiting for reviews...", "dispatching subagents..."). The agent operates silently during tool executions. Speak only at plan approval, critical engineering tradeoffs, phase milestone cards with interactive verification, and final delivery.
 
 ## Git
 

@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.5] - 2026-08-30
+
+### Interactive Device Verification & Chat UX Signal Maximization
+- **Explicit Manual Device Smoke Testing Steps (`harness-rules.md`, `AGENTS.md`)**: Mandated that upon completing APK installation on the connected physical device, the Lead Agent must provide explicit, numbered verification steps in the Phase Milestone Card detailing exact screens to open, interactions to perform, and expected behaviors to verify.
+- **Interactive Phase Sign-Off Modal (`ask_question`)**: Required the Lead Agent to prompt the developer via an interactive choice modal (`(Recommended) PASS` / `FAIL`) to confirm device verification before unlocking Phase N+1.
+- **Chat Noise Elimination**: Strictly prohibited mechanical progress messages ("running tests...", "waiting for subagents...", "installing apk...") ensuring completely silent execution during background tool runs.
+
 ## [0.14.4] - 2026-08-30
 
 ### Repository Alignment, Security Hardening & Managed Block Preservation
@@ -165,7 +172,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Release Re-Pinning Tool (`scripts_dev/pin_prompt_docs.py`, `CONTRIBUTING.md`)**: New stdlib-only, idempotent tool that re-pins prompt URLs to a release tag and refreshes the fetched-doc checksums; documented as the Pinned Prompt Release Procedure (step 5 of Release Governance).
 - **Pinned GitHub Actions (`.github/workflows/`)**: `actions/checkout` and `actions/setup-python` pinned to immutable commit SHAs (`v4.4.0` / `v5.6.0` respectively) in both CI workflows, removing the mutable-tag supply-chain surface.
 
-## [0.10.0] - 2026-08-25
+---
+
+**Included in 0.10.0 (2026-08-25):**
 
 ### Enforcement Parity, Red Team & Patch Consolidations (0.10.1 - 0.10.8)
 - **Tracked Hook Isolation & Local Exclusions (0.10.6, 0.10.8)**: Added automatic `git update-index --assume-unchanged .githooks/pre-commit` and local exclusion in `.git/info/exclude` to ensure zero team friction and clean working trees.
