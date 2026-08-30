@@ -16,6 +16,7 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 
 - **High-Signal Developer Communication (Zero Chat Noise)**:
   - The Lead Agent **MUST NEVER output mechanical status spam** in chat (e.g., do NOT output *"جاري قراءة الملف..."*, *"جاري تشغيل الاختبارات..."*, *"جاري تجميع التطبيق..."*, or *"جاري انتظار تقارير المراجعة..."*).
+  - **Silent Intermediate Review Wait Protocol**: When review subagents are dispatched via `invoke_subagent`, they complete asynchronously. On each intermediate subagent arrival where remaining reviewers are still executing, the Lead Agent **MUST REMAIN 100% SILENT** in chat, make no tool calls, and end its turn immediately. NEVER emit intermediate countdown spam (e.g., do NOT say *"Waiting for 4 reviewers..."* or *"The third round is running..."*). Present the consolidated review verdict table only once ALL verdicts are received in context.
   - The IDE interface already renders native tool cards, execution spinners, and subagent progress visually.
   - The Lead Agent speaks in chat ONLY at four high-value, actionable moments:
     1. **Plan Proposal**: Presenting `implementation_plan.md` for developer feedback and approval.
@@ -219,11 +220,11 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 - **Dual Device Verification Modes (`DEVICE_VERIFICATION_MODE` in `_product.py`)**:
   - **Mode A: `autonomous_e2e` (Recommended / Default)**:
-    1. After `python .agents/scripts/run_device.py install-start`, run `python .agents/scripts/run_e2e_smoke.py`.
-    2. The E2E engine inspects the UI hierarchy, asserts component visibility and scroll responsiveness, verifies zero fatal crashes in Logcat, and captures a verification screenshot to `.agents/state/screenshots/`.
+    1. Run `python .agents/scripts/run_device.py install-start`.
+    2. **MANDATORY**: Run `python .agents/scripts/run_e2e_smoke.py`. The E2E engine inspects the UI hierarchy, asserts component visibility and scroll responsiveness, verifies zero fatal crashes in Logcat, and captures a verification screenshot to `.agents/state/screenshots/`.
     3. The Lead Agent includes the E2E verification evidence in the **Phase Milestone Card** along with concise manual verification steps for the developer.
   - **Mode B: `manual_only`**:
-    1. The Lead Agent launches the app on device and provides explicit, numbered manual smoke test steps.
+    1. The Lead Agent launches the app on device via `run_device.py install-start` and provides explicit, numbered manual smoke test steps.
 - **Phase Milestone Card Requirements**:
   1. **نطاق المرحلة والتغييرات المنجزة** (Scope & Changes).
   2. **نتائج بوابات الجودة** (`5-Leaf Review Gate`, `Unit Tests`, `:assembleDebug` BUILD SUCCESSFUL).

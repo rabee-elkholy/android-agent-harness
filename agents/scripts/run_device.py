@@ -88,7 +88,6 @@ def main() -> int:
         return 0
 
     if args.action in ("install", "install-start"):
-        apk = Path(args.apk)
         if not apk.is_file():
             live_print(f"[ERROR] APK not found: {apk}", err=True)
             live_print(f"Assemble debug first: python .agents/scripts/run_gradle_task.py {ASSEMBLE_TASK}", err=True)

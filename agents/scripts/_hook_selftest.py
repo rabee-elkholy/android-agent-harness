@@ -412,6 +412,8 @@ for needle in (
     "regression-impact-reviewer-agent",
     "qa-diagnostics-agent",
     "android-ui-expert-agent",
+    "SILENT REVIEW WAIT",
+    "DEVICE VERIFICATION",
 ):
     ok = needle.lower() in msg0.lower() if needle == "QUALITY" else needle in msg0
     if needle == "QUALITY":
@@ -1442,7 +1444,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.7"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.8"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2315,6 +2317,17 @@ parsed_gg_eq_yes = parse_adapter_args(["--product", "A", "--py", "python", "--as
 ok_gg_cli = parsed_gg_yes.git_gate is True and parsed_gg_no.git_gate is False and parsed_gg_eq_yes.git_gate is True
 print(f"install_tool_adapters --git-gate value parsing flexibility: {'OK' if ok_gg_cli else 'FAIL'}")
 failed += int(not ok_gg_cli)
+
+# Test run_device.py apk resolution when --apk is omitted (no TypeError)
+from run_device import main as run_device_main
+rd_test_proc = subprocess.run(
+    [sys.executable, str(SCRIPTS / "run_device.py"), "install-start", "--help"],
+    text=True,
+    capture_output=True,
+)
+ok_rd_cli = rd_test_proc.returncode == 0
+print(f"run_device CLI resolution (zero args crash guard): {'OK' if ok_rd_cli else 'FAIL'}")
+failed += int(not ok_rd_cli)
 
 # Dispatch one real review round for c-ttl so the tree-cleanliness gate sees
 # review history (the TTL probe must not depend on an empty working tree),

@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.8] - 2026-08-30
+
+### Mandatory Autonomous E2E Enforcement, Silent Review Wait & run_device Bugfix
+- **`run_device.py` APK Resolution Fix (`agents/scripts/run_device.py`)**: Fixed `TypeError` bug caused by redundant `apk = Path(args.apk)` assignment when running without explicit `--apk`, ensuring zero-argument `python .agents/scripts/run_device.py install-start` runs flawlessly.
+- **Mandatory Autonomous E2E Execution (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Removed "optional" qualifier from Phase verification rules; strictly mandated `python .agents/scripts/run_e2e_smoke.py` execution immediately following APK installation when `DEVICE_VERIFICATION_MODE` is `autonomous_e2e`.
+- **Silent Intermediate Review Wait Protocol (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Explicitly prohibited conversational countdown spam on intermediate subagent wakeups, requiring the Lead Agent to remain 100% silent and present the consolidated review table only after all verdicts arrive in context.
+
 ## [0.14.7] - 2026-08-30
 
 ### Hierarchy-Aware Gitignore Deduplication, CLI Ergonomics & Windows UTF-8 Resilience
@@ -100,7 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mandatory Proactive PM Chat Prompt**: Mandated that the Lead Agent proactively includes the Zoho Sprints User Story and Sub-tasks proposal directly in the chat message accompanying plan generation.
 - **Explicit Device Sign-off Barrier**: Clarified that physical device verification (or unit test suite pass for pure Data/Domain layers) is the mandatory human sign-off barrier before presenting any conventional commit.
 
-## [0.13.0] - 2026-08-26
+---
+
+**Included in 0.13.0 (2026-08-26):**
 
 ### Superpowers Skills Integration
 - **`brainstorming` Skill (`agents/skills/brainstorming/SKILL.md`)**: Structured 4-phase requirements probing, 2–3 architectural alternatives evaluation with trade-offs & blast radius, pre-screening of Android invariants, and spec locking before plan generation.
