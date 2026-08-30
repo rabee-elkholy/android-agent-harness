@@ -43,13 +43,23 @@ Read https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.2
 
 Here is what fixing a production bug or shipping a feature actually feels like with the harness:
 
-```
- [1] YOU PROMPT                     [2] SHIFT-LEFT TDD              [3] SIX GUARDIANS GATE           [4] VERIFIED DELIVERY
- ───────────────────                ────────────────────            ─────────────────────────        ───────────────────────
- "Fix race condition                Writes failing unit test        6 specialized reviewers          APK built & installed
-  crash on Cart Screen               -> Confirms RED                audit the diff in parallel       on connected device via ADB
-  during item removal"               -> Applies surgical fix        (Bug, Security, Convention,      -> Autonomous E2E smoke test
-                                     -> Confirms GREEN              Perf/ANR, Regression, Tests)     -> Ready-to-commit message!
+```text
+[1] YOU PROMPT
+    "Fix race condition crash on Cart Screen during item removal"
+    │
+    ▼
+[2] SHIFT-LEFT TDD (RED -> GREEN)
+    Writes failing unit test -> Applies surgical fix -> Unit tests pass
+    │
+    ▼
+[3] SIX-GUARDIAN PARALLEL REVIEW GATE
+    6 specialized reviewers audit the diff simultaneously:
+    (Bug, Security, Convention, Perf/ANR, Regression, Test Quality)
+    │
+    ▼
+[4] VERIFIED DEVICE DELIVERY
+    Builds :app:assembleDebug -> Installs on USB device via ADB
+    -> Runs autonomous E2E smoke test -> Emits Conventional Commit
 ```
 
 ### The Real-World Difference in Your Daily Flow
