@@ -7,7 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mcp" / "zoho_sprints"))
+from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _config import (  # noqa: E402
     ENV_CONFIG,
     SERVER_NAME,
@@ -143,7 +145,7 @@ def install(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Install or remove the Zoho Sprints MCP wiring.")
-    p.add_argument("--repo", required=True, help="Android checkout root.")
+    p.add_argument("--repo", default=".", help="Android checkout root (default: current working directory).")
     p.add_argument("--py", default="python", help="Python command for the MCP server.")
     p.add_argument("--enable", action="store_true", help="Wire Zoho Sprints MCP.")
     p.add_argument("--disable", action="store_true", help="Remove Zoho Sprints MCP from this checkout.")
@@ -153,6 +155,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_line_buffered_stdio()
     args = parse_args(argv)
     if args.enable == args.disable:
         raise SystemExit("Pass exactly one of --enable or --disable.")

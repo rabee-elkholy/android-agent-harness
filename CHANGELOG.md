@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.7] - 2026-08-30
+
+### Hierarchy-Aware Gitignore Deduplication, CLI Ergonomics & Windows UTF-8 Resilience
+- **Hierarchy-Aware `.gitignore` Deduplication (`wizard/questions.py`)**: Completely eliminated redundant subfolder entries (`.agents/state/`, `.agents/cache/`, `.agents/__pycache__/`) when parent `.agents/` is ignored, and automatically prunes legacy redundant entries from existing repositories to eliminate Git diff noise.
+- **Windows Console Unicode Resilience (`_live_process.py`, `harness_cli.py`, `setup_wizard.py`)**: Reconfigured standard I/O to UTF-8 with replacement across CLI entrypoints, preventing `UnicodeEncodeError` crashes on Windows consoles with Arabic text and special symbols.
+- **CLI Argument Ergonomics (`install_zoho_mcp.py`, `install_tool_adapters.py`)**: Allowed `install_zoho_mcp.py` to default `--repo` to current working directory (`Path.cwd()`), and made `--git-gate` parsing resilient to explicit `yes`/`no`/`true`/`false` values.
+
 ## [0.14.6] - 2026-08-30
 
 ### Autonomous E2E Smoke Testing Engine & Wizard Setup Integration
@@ -114,7 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Proactive Project Tracker Integration
 - **Proactive Story & Task Breakdown**: Proactively prompts developer upon multi-phase plan approval to generate a User Story on Zoho Sprints / GitHub Projects with sub-tasks for each phase and track progress automatically.
 
-## [0.12.0] - 2026-08-26
+---
+
+**Included in 0.12.0 (2026-08-26):**
 
 ### Modular Architecture: Monolith Splitting
 - **Zoho Sprints MCP Modularization (`agents/mcp/zoho_sprints/`)**: Extracted direct UDP DNS queries into `_dns.py`, HTML sanitization and markdown formatting into `_formatter.py`, and the full API client & OAuth token management into `_client.py`. `server.py` is now a slim JSON-RPC dispatch layer while preserving 100% backward-compatible tool symbols.

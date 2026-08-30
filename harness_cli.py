@@ -681,6 +681,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+            except Exception:
+                pass
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

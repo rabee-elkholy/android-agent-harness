@@ -20,6 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _live_process import enable_line_buffered_stdio  # noqa: E402
+
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = AGENTS_DIR / "tool-adapters"
 COMMAND_PACKS_DIR = AGENTS_DIR / "command-packs"
@@ -439,6 +442,24 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    cleaned_argv: list[str] = []
+    i = 0
+    while i < len(raw_argv):
+        arg = raw_argv[i]
+        if arg == "--git-gate" and i + 1 < len(raw_argv) and raw_argv[i + 1].lower() in {"yes", "no", "true", "false", "1", "0"}:
+            val = raw_argv[i + 1].lower()
+            cleaned_argv.append("--git-gate" if val in {"yes", "true", "1"} else "--no-git-gate")
+            i += 2
+            continue
+        if arg.startswith("--git-gate="):
+            val = arg.split("=", 1)[1].lower()
+            cleaned_argv.append("--git-gate" if val in {"yes", "true", "1"} else "--no-git-gate")
+            i += 1
+            continue
+        cleaned_argv.append(arg)
+        i += 1
+
     known = ", ".join(KNOWN_TOOLS)
     p = argparse.ArgumentParser(description="Install selected Android harness adapters.")
     p.add_argument("--repo", help="Android checkout root. Default: parent of .agents when installed.")
@@ -487,7 +508,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Register the GitHub Copilot preToolUse bridge under .github/hooks/ (requires --tools to include copilot).",
     )
-    return p.parse_args(argv)
+    return p.parse_args(cleaned_argv)
 
 
 def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
@@ -707,6 +728,7 @@ def install(args: argparse.Namespace) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_line_buffered_stdio()
     args = parse_args(argv)
     logs = install(args)
     for line in logs:

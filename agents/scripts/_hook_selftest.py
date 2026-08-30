@@ -1442,7 +1442,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.6"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.7"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2266,6 +2266,55 @@ ok_wizard_i22 = (
 )
 print(f"wizard I.22 device-verification wiring (default E2E): {'OK' if ok_wizard_i22 else 'FAIL'}")
 failed += int(not ok_wizard_i22)
+
+# --- v0.14.7: Hierarchy-Aware Gitignore Deduplication & CLI Ergonomics ---
+from setup_wizard import write_answers, answers_path
+from install_tool_adapters import parse_args as parse_adapter_args
+
+temp_app_root = Path(tempfile.mkdtemp(prefix="harness-gi-test-"))
+try:
+    gi_path = temp_app_root / ".gitignore"
+    # Simulate an existing .gitignore that had .agents/ at line 1 and redundant subpaths at lines 2-4
+    gi_path.write_text(".agents/\n.agents/state/\n.agents/cache/\n.agents/__pycache__/\nbuild/\n", encoding="utf-8")
+
+    write_answers(temp_app_root, {
+        "schema": 1,
+        "i0": True,
+        "product": "TestApp",
+        "py": "python",
+        "git_policy": "never",
+        "device_policy": "allow",
+        "module": ":app",
+        "assemble": ":app:assembleDebug",
+        "launcher": "com.example.MainActivity",
+        "apk": "path",
+        "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+        "architecture": "MVI",
+        "architecture_mode": "discovered",
+        "agents_git": "gitignore",
+        "tools": ["gemini"],
+    })
+
+    updated_gi_lines = [ln.strip() for ln in gi_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    ok_gi_dedup = (
+        ".agents/" in updated_gi_lines
+        and ".agents/state/" not in updated_gi_lines
+        and ".agents/cache/" not in updated_gi_lines
+        and ".agents/__pycache__/" not in updated_gi_lines
+        and "build/" in updated_gi_lines
+    )
+finally:
+    shutil.rmtree(temp_app_root, ignore_errors=True)
+
+print(f"wizard .gitignore hierarchy-aware deduplication & auto-pruning: {'OK' if ok_gi_dedup else 'FAIL'}")
+failed += int(not ok_gi_dedup)
+
+parsed_gg_yes = parse_adapter_args(["--product", "A", "--py", "python", "--assemble", ":app:assembleDebug", "--tools", "gemini", "--git-gate", "yes"])
+parsed_gg_no = parse_adapter_args(["--product", "A", "--py", "python", "--assemble", ":app:assembleDebug", "--tools", "gemini", "--git-gate", "no"])
+parsed_gg_eq_yes = parse_adapter_args(["--product", "A", "--py", "python", "--assemble", ":app:assembleDebug", "--tools", "gemini", "--git-gate=true"])
+ok_gg_cli = parsed_gg_yes.git_gate is True and parsed_gg_no.git_gate is False and parsed_gg_eq_yes.git_gate is True
+print(f"install_tool_adapters --git-gate value parsing flexibility: {'OK' if ok_gg_cli else 'FAIL'}")
+failed += int(not ok_gg_cli)
 
 # Dispatch one real review round for c-ttl so the tree-cleanliness gate sees
 # review history (the TTL probe must not depend on an empty working tree),

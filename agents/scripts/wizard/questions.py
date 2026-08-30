@@ -626,13 +626,11 @@ def write_answers(repo: Path, answers: dict) -> None:
         ])
     markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
     gi = repo / ".gitignore"
+    ignore_whole_agents = answers.get("agents_git") != "commit"
     extra = [
         ".harness-setup/",
         ".harness-backup/",
         ".harness-backups/",
-        ".agents/state/",
-        ".agents/cache/",
-        ".agents/__pycache__/",
         "*.diff",
         "*.patch",
         ".githooks/",
@@ -654,12 +652,35 @@ def write_answers(repo: Path, answers: dict) -> None:
         ".roo/",
         ".goosehints",
     ]
-    if answers.get("agents_git") != "commit":
+    if ignore_whole_agents:
         extra.append(".agents/")
-    lines = read_text(gi).splitlines()
-    for line in extra:
-        if line not in lines:
-            lines.append(line)
+    else:
+        extra.extend([
+            ".agents/state/",
+            ".agents/cache/",
+            ".agents/__pycache__/",
+        ])
+
+    raw_lines = read_text(gi).splitlines() if gi.is_file() else []
+    has_agents_parent = ignore_whole_agents or any(line.strip() in {".agents/", ".agents"} for line in raw_lines)
+
+    # Prune any redundant subpaths if parent .agents/ is present or being added
+    lines: list[str] = []
+    for line in raw_lines:
+        s = line.strip()
+        if has_agents_parent and s.startswith(".agents/") and s not in {".agents/", ".agents"}:
+            continue
+        lines.append(line)
+
+    existing_stripped = {line.strip() for line in lines}
+    for item in extra:
+        item_clean = item.strip()
+        if has_agents_parent and item_clean.startswith(".agents/") and item_clean not in {".agents/", ".agents"}:
+            continue
+        if item_clean not in existing_stripped and item_clean.rstrip("/") not in existing_stripped:
+            lines.append(item)
+            existing_stripped.add(item_clean)
+
     text = "\n".join(lines)
     if text:
         text += "\n"

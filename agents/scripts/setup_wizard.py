@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _live_process import enable_line_buffered_stdio  # noqa: E402
 from wizard.discovery import (  # noqa: E402
     _flavor_pascal,
     answers_path,
@@ -156,11 +157,7 @@ def load_write_payload(path: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        try:
-            sys.stdout.reconfigure(encoding="utf-8")
-        except OSError:
-            pass
+    enable_line_buffered_stdio()
     args = parse_args(argv)
     repo = find_repo(args.repo)
     if args.command == "discover":
