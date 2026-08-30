@@ -1442,7 +1442,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.5"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.14.6"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2209,6 +2209,63 @@ print(
     f"wizard I.21 git-gate confirmation (default ON): {'OK' if ok_wizard_i21 else 'FAIL ' + str([ok_i21_present, ok_i21_norm, ok_i21_flags])}"
 )
 failed += int(not ok_wizard_i21)
+
+# --- v0.14.6: Autonomous E2E Engine & Wizard I.22 ---
+from run_e2e_smoke import parse_ui_hierarchy, parse_bounds, find_nodes, find_first  # noqa: E402
+
+SAMPLE_UI_XML = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.example.app" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="false" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="الفعاليات" resource-id="com.example.app:id/tv_title" class="android.widget.TextView" package="com.example.app" content-desc="تبويب الفعاليات" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[40,100][300,200]" />
+    <node index="1" text="" resource-id="com.example.app:id/rv_events" class="androidx.recyclerview.widget.RecyclerView" package="com.example.app" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="true" long-clickable="false" password="false" selected="false" bounds="[0,200][1080,2200]">
+      <node index="0" text="ماراثون الجري" resource-id="com.example.app:id/tv_event_name" class="android.widget.TextView" package="com.example.app" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="false" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[60,250][1020,450]" />
+    </node>
+  </node>
+</hierarchy>
+"""
+
+e2e_nodes = parse_ui_hierarchy(SAMPLE_UI_XML)
+b_coords, b_center = parse_bounds("[40,100][300,200]")
+ok_bounds = b_coords == (40, 100, 300, 200) and b_center == (170, 150)
+
+node_ar = find_first(e2e_nodes, text="الفعاليات")
+node_desc = find_first(e2e_nodes, content_desc="تبويب الفعاليات")
+node_rv = find_first(e2e_nodes, class_name="RecyclerView")
+node_nested = find_first(e2e_nodes, text="ماراثون")
+
+ok_e2e_parser = (
+    len(e2e_nodes) == 1
+    and ok_bounds
+    and node_ar is not None
+    and node_ar.center == (170, 150)
+    and node_ar.clickable is True
+    and node_desc is not None
+    and node_rv is not None
+    and node_rv.scrollable is True
+    and node_nested is not None
+    and node_nested.center == (540, 350)
+)
+print(f"e2e_smoke parser & coordinate calculation: {'OK' if ok_e2e_parser else 'FAIL'}")
+failed += int(not ok_e2e_parser)
+
+ok_i22_present = "i22" in q_ids_v8
+norm_i22_e2e = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
+                             "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
+                             "i18": "all_en", "i20": "zoho_sprints", "i21": "yes", "i22": "autonomous_e2e"}}, facts_v8)
+norm_i22_manual = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
+                                "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
+                                "i18": "all_en", "i20": "zoho_sprints", "i21": "yes", "i22": "manual_only"}}, facts_v8)
+norm_i22_default = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
+                                 "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
+                                 "i18": "all_en", "i20": "zoho_sprints", "i21": "yes"}}, facts_v8)
+ok_wizard_i22 = (
+    ok_i22_present
+    and norm_i22_e2e.get("device_verification") == "autonomous_e2e"
+    and norm_i22_manual.get("device_verification") == "manual_only"
+    and norm_i22_default.get("device_verification") == "autonomous_e2e"
+)
+print(f"wizard I.22 device-verification wiring (default E2E): {'OK' if ok_wizard_i22 else 'FAIL'}")
+failed += int(not ok_wizard_i22)
 
 # Dispatch one real review round for c-ttl so the tree-cleanliness gate sees
 # review history (the TTL probe must not depend on an empty working tree),

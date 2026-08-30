@@ -268,6 +268,8 @@ class HarnessDoctor:
 
             self.log(category, "Assemble Task", "PASS", f"Configured assemble task: {assemble_task}")
             self.log(category, "Device Policy", "PASS", f"ALLOW_EMULATOR = {allow_emu}")
+            verification_mode = getattr(_product, "DEVICE_VERIFICATION_MODE", "autonomous_e2e")
+            self.log(category, "Device Verification", "PASS", f"DEVICE_VERIFICATION_MODE = {verification_mode}")
 
             self._check_install_consistency(category)
         except Exception as exc:

@@ -27,5 +27,8 @@ DI_FRAMEWORK = "hilt"  # "hilt" | "koin" | "dagger" | "manual" | "none"
 UI_FRAMEWORK = "compose"  # "compose" | "xml_views" | "hybrid"
 SUPPORTED_LOCALES = ["en", "ar"]  # List of discovered locale tags e.g. ["en", "ar", "fr"]
 PROJECT_STRUCTURE = "single_module"  # "single_module" | "multi_module" | "kmp"
+# Device verification mode (setup wizard I.22).
+# Options: autonomous_e2e (AI Agent smoke tests UI on phone + sign-off) | manual_only (Developer manual steps)
+DEVICE_VERIFICATION_MODE = "autonomous_e2e"
 
 

@@ -212,6 +212,18 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
+    qs.append(
+        {
+            "id": "i22",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i22"),
+            "options": [
+                {"id": "autonomous_e2e", "label": t(lang, "i22_e2e")},
+                {"id": "manual_only", "label": t(lang, "i22_manual")},
+            ],
+        }
+    )
     flavors = d.get("flavors") or []
     if flavors:
         flavor_opts = [{"id": f, "label": f} for f in flavors]
@@ -555,6 +567,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "pm_provider": pm_provider,
         "tools": tools,
         "git_gate": "no" if (raw.get("i21") or auto.get("git_gate", "yes")) == "no" else "yes",
+        "device_verification": raw.get("i22") or auto.get("device_verification", "autonomous_e2e"),
         "asked": asked,
     }
 
@@ -591,6 +604,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- I.21 Pre-commit git gate: {answers.get('git_gate', 'yes')}",
+        f"- I.22 Device verification: {answers.get('device_verification', 'autonomous_e2e')}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",
@@ -790,6 +804,7 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         ("i19", "flavor"),
         ("i20", "pm_provider"),
         ("i21", "git_gate"),
+        ("i22", "device_verification"),
     ):
         value = answers.get(field)
         if value:

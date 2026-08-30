@@ -47,6 +47,7 @@ CORE_SCRIPTS = (
     "review_package.py",
     "room_guard.py",
     "run_device.py",
+    "run_e2e_smoke.py",
     "run_gradle_task.py",
     "setup_wizard.py",
 )

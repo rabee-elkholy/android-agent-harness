@@ -215,18 +215,25 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 ---
 
-## 4) Manual Device Verification & Phase Sign-Off Barrier
+## 4) Device Verification (Autonomous E2E / Manual) & Phase Sign-Off Barrier
 
-- **Multi-Phase Execution & Phase Hard Barrier**:
-  - When Phase N completes its review gate, unit tests, build (`:assembleDebug`), and device installation (`run_device.py install-start`), the Lead Agent **MUST NEVER assume the device test passed automatically without developer verification**.
-  - The Lead Agent MUST output the **Phase Milestone Card** containing:
-    1. **نطاق المرحلة والتغييرات المنجزة** (Scope & Changes).
-    2. **نتائج بوابات الجودة** (`5-Leaf Review Gate`, `Unit Tests`, `:assembleDebug` BUILD SUCCESSFUL).
-    3. **خطوات الفحص اليدوي المحددة على الهاتف** (`Manual Device Smoke Test Checklist`):
-       - Step 1: افتح الشاشة/الخاصية المستهدفة على الهاتف المتصل.
-       - Step 2: قم بالإجراء المحدد (تصفح، ضغط الأزرار، التمرير، فحص البيانات).
-       - Step 3: تحقق من النتيجة المتوقعة (عدم وجود كراش، استجابة الواجهة، اتجاه النصوص RTL).
-  - Then the Lead Agent MUST trigger an interactive verification prompt via `ask_question`:
+- **Dual Device Verification Modes (`DEVICE_VERIFICATION_MODE` in `_product.py`)**:
+  - **Mode A: `autonomous_e2e` (Recommended / Default)**:
+    1. After `python .agents/scripts/run_device.py install-start`, run `python .agents/scripts/run_e2e_smoke.py`.
+    2. The E2E engine inspects the UI hierarchy, asserts component visibility and scroll responsiveness, verifies zero fatal crashes in Logcat, and captures a verification screenshot to `.agents/state/screenshots/`.
+    3. The Lead Agent includes the E2E verification evidence in the **Phase Milestone Card** along with concise manual verification steps for the developer.
+  - **Mode B: `manual_only`**:
+    1. The Lead Agent launches the app on device and provides explicit, numbered manual smoke test steps.
+- **Phase Milestone Card Requirements**:
+  1. **نطاق المرحلة والتغييرات المنجزة** (Scope & Changes).
+  2. **نتائج بوابات الجودة** (`5-Leaf Review Gate`, `Unit Tests`, `:assembleDebug` BUILD SUCCESSFUL).
+  3. **نتائج الفحص الآلي** (`Autonomous E2E Smoke Test` results & screenshot if mode is `autonomous_e2e`).
+  4. **خطوات الفحص اليدوي المحددة على الهاتف** (`Manual Device Smoke Test Checklist`):
+     - Step 1: افتح الشاشة/الخاصية المستهدفة على الهاتف المتصل.
+     - Step 2: قم بالإجراء المحدد (تصفح، ضغط الأزرار، التمرير، فحص البيانات).
+     - Step 3: تحقق من النتيجة المتوقعة (عدم وجود كراش، استجابة الواجهة، اتجاه النصوص RTL).
+- **Interactive Phase Sign-Off Barrier (`ask_question`)**:
+  - The Lead Agent MUST trigger an interactive verification prompt via `ask_question`:
     - **Question**: *"يرجى تجربة الخطوات أعلاه على هاتفك وتأكيد نتيجة الفحص:"*
     - **Options**:
       - `(Recommended) PASS — الفحص على الهاتف تم بنجاح بدون مشاكل (موافقة على بدء المرحلة التالية)`

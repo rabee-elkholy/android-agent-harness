@@ -5,6 +5,14 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.6] - 2026-08-30
+
+### Autonomous E2E Smoke Testing Engine & Wizard Setup Integration
+- **Autonomous E2E Smoke Testing Engine (`agents/scripts/run_e2e_smoke.py`)**: Built a zero-dependency (Python stdlib + native ADB) autonomous UI testing engine that inspects device UI hierarchy, asserts component visibility and scroll responsiveness across Compose & XML Views, catches runtime Logcat crashes, and captures timestamped verification screenshots.
+- **Physical Device First & High-Precision Gestures**: Fully compatible with real physical Android devices (and emulators) across Android 5.0 through Android 15 with strict safety containment (aborts immediately if foreground package leaves target app).
+- **Setup Wizard Question `I.22` (`wizard/questions.py`, `wizard/i18n.py`)**: Added user-selectable Device Verification Mode during project initialization (`autonomous_e2e` recommended default vs `manual_only`).
+- **Doctor Diagnostic Engine Updates (`doctor/engine.py`, `doctor/models.py`)**: Expanded core script inventory to 35 audited scripts and added Dimension 4 device verification mode reporting.
+
 ## [0.14.5] - 2026-08-30
 
 ### Interactive Device Verification & Chat UX Signal Maximization
@@ -122,7 +130,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Streamlined Setup Wizard (`wizard/questions.py`, `wizard/i18n.py`)**: Removed static chat language question (I.17) to reduce wizard friction. Retained tracker language question (I.18) with clean English descriptions supporting bilingual teams (`en_titles_ar_comments`).
 - **Dynamic Language Policy (`agents/rules/harness-rules.md`)**: Configured dynamic language mirroring across developer chat (reply in Arabic when addressed in Arabic, in English when addressed in English) while enforcing strict English across code, symbols, and Git commit messages.
 
-## [0.11.0] - 2026-08-26
+---
+
+**Included in 0.11.0 (2026-08-26):**
 
 ### README Restructured: Truth-In-Docs Without Information Loss
 - **README Condensed (`README.md`)**: Rewritten from 598 lines / 36 KB to 103 lines, keeping the hero + badges, the Before/After problem table verbatim, a new "Why this exists" narrative (agents self-report success without verification; deterministic gates must sit outside the model), a <=5-command quickstart, an Enforcement Levels table promoted from `docs/tool-support.md`, a five-leaf summary with evidence-footer semantics, pinned lifecycle-prompt URLs, and full doc/community footer links.

@@ -207,6 +207,13 @@ T = {
         ),
         "i21_yes": "Yes — install the pre-commit quality gate (Recommended)",
         "i21_no": "No — I manage my own git hooks",
+        "i22": (
+            "Device Verification Mode: How should the harness verify the app on the connected device after building? "
+            "Autonomous E2E explores, clicks, and asserts UI responsiveness on the phone before asking for your sign-off. "
+            "Manual-only launches the app and presents step-by-step test instructions for you to try."
+        ),
+        "i22_e2e": "Autonomous E2E Smoke Test — AI Agent inspects & exercises UI on device + Sign-Off (Recommended)",
+        "i22_manual": "Manual Smoke Test — App is launched; you follow step-by-step verification on device",
         "i19": (
             "This project defines Gradle product flavors. Which flavor do you test daily? "
             "Install/launch/logcat will target that variant automatically. "
@@ -393,6 +400,13 @@ T = {
         ),
         "i21_yes": "نعم — ركّب بوابة الجودة قبل الكوميت (مفضّل)",
         "i21_no": "لا — هدير hooks الجيت بنفسي",
+        "i22": (
+            "طريقة الفحص على الجهاز: كيف يفضل أن يقوم الهارنيس بفحص التطبيق على الهاتف بعد البناء؟ "
+            "الفحص التلقائي E2E بيقوم بفحص شجرة الواجهة والضغط والتمرير والتأكد من Logcat قبل طلب تأكيدك. "
+            "الفحص اليدوي بيفتح التطبيق ويعرض لك خطوات الفحص اليدوية للتجربة بنفسك."
+        ),
+        "i22_e2e": "فحص تلقائي ذكي E2E — الوكيل بيفحص الواجهة ويجربها على الهاتف + تأكيد المطور (مفضّل)",
+        "i22_manual": "فحص يدوي فقط — يتم فتح التطبيق وتقوم بتجربة خطوات الفحص بنفسك على الهاتف",
         "i19": (
             "المشروع فيه Product Flavors. أنهي نسخة بتختبر عليها يومياً؟ "
             "التثبيت والتشغيل واللوج هيشتغلوا على النسخة دي. "
