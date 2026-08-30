@@ -5,6 +5,13 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.10] - 2026-08-30
+
+### Product Module Isolation in Doctor & Lifecycle Cross-Compatibility
+- **`_product.py` Dynamic Module Isolation (`doctor/engine.py`)**: Isolated target app configuration loading in `_check_install_consistency` via `importlib.util.spec_from_file_location`, eliminating `sys.path` collision between raw kit templates and installed client checkouts.
+- **Discovered Application IDs Exposure (`wizard/discovery.py`)**: Added `application_ids` array to `discover()` facts dictionary, ensuring complete metadata transparency during Greenfield and established project setup.
+- **Lifecycle Cross-Compatibility Verification**: Completed and validated exhaustive empirical test matrix across Installation, Update, and Doctor lifecycles with 0 failures.
+
 ## [0.14.9] - 2026-08-30
 
 ### Automatic Local Git Privacy (.git/info/exclude) & Clean .gitignore Restoration
@@ -101,7 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Subagent Evidence Fallback Correction**: Corrected the misleading fallback sentence in all 8 subagent system prompts. Reviewers are explicitly instructed to use the value printed by `review_package.py` and never derive it from the package header.
 - **Fingerprint Bump (`v2` / `v4` / `v3`)**: Updated subagent template fingerprints across all 8 subagents and `doctor/models.py`.
 
-## [0.13.2] - 2026-08-26
+---
+
+**Included in 0.13.2 (2026-08-26):**
 
 ### Fix: Neutralize Kit Placeholders in the Security Selftest
 - **Neutral Placeholder in `_security_selftest.py`**: Replaced the `com.example.app` test literal in the `adb_cmd_package_clear_denied` case with the neutral `com.selftest.app` token (assertion semantics unchanged). Previously, every fresh install/update of v0.13.x failed the installed-checkout placeholder scan and required a manual patch of the shipped security selftest.
