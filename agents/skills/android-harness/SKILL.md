@@ -9,10 +9,10 @@ Setup fills product-specific references. Do not cite a stub file as if this app 
 
 ## References
 
-- [**Architecture**](./references/architecture-mvi.md): match this checkout's DI, navigation, and ViewModel base.
-- [**Jetpack Compose & Theme**](./references/ui-compose-theme.md): theme tokens, `@Preview`, strings.
-- [**Room Database & Migrations**](./references/room-database-migrations.md): explicit migrations when `@Entity` / `@Database` change.
-- [**Performance & ANR**](./references/performance-anr-optimization.md): main-thread safety, leaks, Compose jank, WakeLocks.
+- [**Architecture & Patterns**](./references/architecture-guidelines.md): match this checkout's DI, navigation, and ViewModel base.
+- [**UI Layout & Theming**](./references/ui-layout-and-theming.md): Compose & XML UI, theme tokens, `@Preview`, strings.
+- [**Database & Persistence**](./references/database-and-persistence.md): Room & SQLite migrations, DataStore, schema integrity.
+- [**Performance & Optimization**](./references/performance-and-optimization.md): main-thread safety, leaks, Compose jank, WakeLocks.
 - [**Test Quality Guidelines**](./references/test-quality-guidelines.md): unit test depth, Coroutine test dispatchers, Turbine streams.
 - [**Daily work notes**](./references/daily-scenarios.md): checkout facts after setup.
 - [**Automated skills**](./references/automated-skills.md): five-leaf delivery gate.

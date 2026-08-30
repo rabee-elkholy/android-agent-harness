@@ -1,6 +1,6 @@
 # Setup prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.11/docs/setup-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.12/docs/setup-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
 
 The installing agent **executes** this file (usually after the developer pasted [`install-prompt.md`](install-prompt.md) or [`update-prompt.md`](update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
@@ -198,23 +198,23 @@ Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Ro
 
 ### 3b) Dynamic Domain Discovery & Custom Reference Creation (with developer approval)
 
-The kit ships clean foundation references in `.agents/skills/android-harness/references/` (`architecture-mvi.md`, `ui-compose-theme.md`, `performance-anr-optimization.md`, `room-database-migrations.md`, `test-quality-guidelines.md`, `automated-skills.md`, `daily-scenarios.md`). During install, the installer agent MUST dynamically discover the project's actual core domains and create tailored reference files.
+The kit ships clean foundation references in `.agents/skills/android-harness/references/` (`architecture-guidelines.md`, `ui-layout-and-theming.md`, `performance-and-optimization.md`, `database-and-persistence.md`, `test-quality-guidelines.md`, `automated-skills.md`, `daily-scenarios.md`). During install, the installer agent MUST dynamically discover the project's actual core domains and create tailored reference files.
 
 #### 1. Foundation References (Always Port & Fill):
-1. **`architecture-mvi.md`**: 
+1. **`architecture-guidelines.md`**: 
    - **For Established Codebases**: Read Gradle, `libs.versions.toml`, and ViewModels / DI modules to port DI framework, ViewModel base, Navigation, State pattern, and Layer conventions.
-   - **For Greenfield / Brand-New Projects**: Write `architecture-mvi.md` directly using the developer's recorded `bootstrap_details` (Platform, Architecture pattern, DI, Navigation, Database, Networking, Locales), establishing the clean architectural foundation for the new project from day one!
+   - **For Greenfield / Brand-New Projects**: Write `architecture-guidelines.md` directly using the developer's recorded `bootstrap_details` (Platform, Architecture pattern, DI, Navigation, Database, Networking, Locales), establishing the clean architectural foundation for the new project from day one!
 
-2. **`ui-compose-theme.md`**:
-   - Detect Compose Multiplatform vs AndroidX Compose.
+2. **`ui-layout-and-theming.md`**:
+   - Detect Compose Multiplatform vs AndroidX Compose vs XML Views/Themes.
    - Document the real theme function (`AppTheme` / `MaterialTheme`), typography tokens, and preview patterns (`CompositionLocalProvider(LocalLayoutDirection...)` for KMP, `locale = "ar"` for AndroidX).
 
-3. **`performance-anr-optimization.md`**:
-   - Keep generic (UI thread safety, coroutine dispatchers, memory leaks, Compose recomposition stability).
+3. **`performance-and-optimization.md`**:
+   - Keep generic (UI thread safety, coroutine dispatchers, memory leaks, Compose recomposition stability, sensor/background lifecycle).
 
-4. **`room-database-migrations.md`**:
-   - If `@Database` exists: fill with real `AppDatabase` class name and entities.
-   - If no Room: delete this file or keep a minimal note ("No Room database in this project").
+4. **`database-and-persistence.md`**:
+   - If `@Database` / SQLite / DataStore exists: fill with real `AppDatabase` class name, entities, or preferences schema.
+   - If no database: keep a minimal note ("No local database in this project").
 
 #### 2. Dynamic Domain Discovery & Custom Reference Creation:
 Scan all module folders (`features/`, `core/`, `domain/`, etc.), packages, and Gradle dependencies to identify the project's actual core domains. For any major domain found in the project, **create a new dedicated reference file** in `.agents/skills/android-harness/references/`:
@@ -286,6 +286,6 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 - **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
-  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.11/docs/diagnostic-prompt.md`.
-  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.11/docs/rollback-prompt.md`.
+  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.12/docs/diagnostic-prompt.md`.
+  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.12/docs/rollback-prompt.md`.
   - Remember: Five `*_PASS` required before real feature/bug delivery.

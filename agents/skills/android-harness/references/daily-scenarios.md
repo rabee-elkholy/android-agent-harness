@@ -10,8 +10,8 @@ Follow `.agents/rules/harness-rules.md`. Setup fills checkout facts from Gradle/
 
 ## Where to read the rest
 
-- Architecture: `architecture-mvi.md`
-- Compose / theme: `ui-compose-theme.md`
-- Room: `room-database-migrations.md` (only if this checkout has `@Database`)
-- Performance: `performance-anr-optimization.md`
+- Architecture: `architecture-guidelines.md`
+- UI / Layout / Theming: `ui-layout-and-theming.md`
+- Database / Persistence: `database-and-persistence.md` (only if this checkout has local DB/storage)
+- Performance / Optimization: `performance-and-optimization.md`
 - Specialized domains: custom references created during setup (e.g. audio, education, media) if present in this checkout.

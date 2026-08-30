@@ -7,7 +7,7 @@ CORE_SUBAGENTS = {
     "bug-reviewer-agent": "HARNESS_BUG_FINGERPRINT=quality-first-bug-review-v2",
     "convention-reviewer-agent": "HARNESS_CONVENTION_FINGERPRINT=quality-first-convention-review-v2",
     "security-reviewer-agent": "HARNESS_SECURITY_FINGERPRINT=quality-first-security-review-v2",
-    "perf-anr-guardian-agent": "HARNESS_PERF_FINGERPRINT=performance-anr-guardian-v4",
+    "perf-anr-guardian-agent": "HARNESS_PERF_FINGERPRINT=performance-anr-guardian-v5",
     "regression-impact-reviewer-agent": "HARNESS_REGRESSION_FINGERPRINT=quality-first-regression-impact-v2",
     "qa-diagnostics-agent": "HARNESS_QA_FINGERPRINT=deep-device-diagnostics-v3",
     "android-ui-expert-agent": "HARNESS_UI_FINGERPRINT=comprehensive-android-ui-expert-v4",
@@ -66,10 +66,10 @@ CORE_WORKFLOWS = (
 )
 
 CORE_REFERENCES = (
-    "architecture-mvi.md",
-    "ui-compose-theme.md",
-    "room-database-migrations.md",
-    "performance-anr-optimization.md",
+    "architecture-guidelines.md",
+    "ui-layout-and-theming.md",
+    "database-and-persistence.md",
+    "performance-and-optimization.md",
     "test-quality-guidelines.md",
     "automated-skills.md",
     "daily-scenarios.md",

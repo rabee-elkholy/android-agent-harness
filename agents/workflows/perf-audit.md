@@ -12,4 +12,4 @@ Follow `.agents/rules/harness-rules.md`. Solo perf audit does not replace delive
 2. Optional: `python .agents/scripts/perf_guard.py --device <SERIAL>`
 3. Optional: invoke only `perf-anr-guardian-agent` for a deeper read of named files.
 4. If this audit is part of shipping a code change, still run the full 5-leaf gate.
-5. Reference: `.agents/skills/android-harness/references/performance-anr-optimization.md`
+5. Reference: `.agents/skills/android-harness/references/performance-and-optimization.md`

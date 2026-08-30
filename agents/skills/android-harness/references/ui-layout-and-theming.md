@@ -1,4 +1,4 @@
-# Jetpack Compose & theme
+# UI Layout, Compose, XML & Theming Guidelines
 
 Setup fills theme class names from this checkout. Until then, use `MaterialTheme` tokens.
 

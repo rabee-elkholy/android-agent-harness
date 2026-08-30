@@ -1,8 +1,8 @@
 # Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.11/docs/update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.12/docs/update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-> **Kit version**: `v0.14.11` — **SHA-256**: `2f714bbfaf93c95e09788ec68b2fb70bfa041f578b446ef95a53375fc2c20232` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.12` — **SHA-256**: `57a24e92890c4be871ba5aa6875556707b4e1b9f3d4c02eda4b4f255a3f15272` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** (already has `.agents` from a previous install). The agent must execute it, not summarize it.
 
 ---
@@ -42,7 +42,7 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
    - Run `install_zoho_mcp.py` from recorded I.16 (`--enable` or `--disable`). Never copy a Zoho token file.
 8. **Port Product Constants & Adapters (Strict Order — DO NOT run selftest yet)**:
    - **Immediately write `.agents/scripts/_product.py`** using recorded facts from `answers.json` or backup (product name, applicationId, launcher, assemble task, device policy, PM_PROVIDER).
-   - **Port foundation references** (`architecture-mvi.md`, `ui-compose-theme.md`, `room-database-migrations.md`, `daily-scenarios.md`) using recorded project facts. (Note: DO NOT ask the developer to re-approve domain references via `ask_question` during an update; they were approved during initial install).
+   - **Port foundation references** (`architecture-guidelines.md`, `ui-layout-and-theming.md`, `database-and-persistence.md`, `daily-scenarios.md`) using recorded project facts. (Note: DO NOT ask the developer to re-approve domain references via `ask_question` during an update; they were approved during initial install).
    - **Run tool adapters**: `$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5> --device-policy <I.4> --git-policy <I.3> --tools <I.14> <git_gate_flag>`. This automatically registers `.githooks/` into `.git/info/exclude` to keep local hooks strictly machine-local.
 9. **Verify & Diagnostics (Run in order)**:
    - `$PY .agents/scripts/_hook_selftest.py` → must report `Total test failures: 0`.
@@ -56,7 +56,7 @@ This is not a first install. Do **not** treat it as a blank product. Reuse recor
       git commit -m "chore: update android harness kit"
       ```
     - Tell them to start a **new chat** on this Android folder before starting daily work.
-    - System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.11/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.11/docs/rollback-prompt.md`).
+    - System diagnostics = `python .agents/scripts/harness_doctor.py` (or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.12/docs/diagnostic-prompt.md`), Rollback = `.harness-backup/<timestamp>/rollback-prompt.md` (or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.12/docs/rollback-prompt.md`).
 
 Do not copy `local.properties` `sdk.dir` or `~/.gemini` hostnames. `adb monkey` stays denied. Emulator deny only if I.4 is physical-only.
 

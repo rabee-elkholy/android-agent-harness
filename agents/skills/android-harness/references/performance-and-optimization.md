@@ -1,4 +1,4 @@
-# Performance & ANR Optimization
+# Performance, Threading & Optimization Guidelines
 
 Peak performance, 60/120 FPS rendering, zero ANRs, and low battery consumption are the bar. Apply the rules below to **this** checkout. Do not assume sensors, GPS, or ads exist unless the code does.
 

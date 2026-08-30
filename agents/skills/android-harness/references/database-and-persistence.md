@@ -1,6 +1,6 @@
-# Room Database & Storage Migration Protocol
+# Database, Persistence & Storage Migration Protocol
 
-Strict rules for modifying Room entities, DAOs, schema versions, and preferences in this Android app.
+Strict rules for modifying database entities, DAOs, schema versions, and preferences in this Android app.
 
 ---
 

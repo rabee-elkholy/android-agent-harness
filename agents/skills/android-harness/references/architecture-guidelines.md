@@ -1,4 +1,4 @@
-# Architecture
+# Android Architecture Guidelines & Layering
 
 Setup overwrites this file from the target app (DI, navigation, ViewModel base). Until then, match the files you opened. Do not invent a stack that is not in the repo.
 

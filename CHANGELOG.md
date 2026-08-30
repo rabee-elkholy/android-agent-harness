@@ -5,6 +5,16 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.12] - 2026-08-30
+
+### Universal Generic Architecture References
+- **Universal Reference Naming (`agents/skills/android-harness/references/`, `doctor/models.py`)**: Renamed foundation references to universal names to represent general Android development across modern and legacy codebases:
+  * `architecture-mvi.md` -> `architecture-guidelines.md` (covers MVI, MVVM, MVP, Clean Architecture, Unidirectional Data Flow, Layer Separation)
+  * `ui-compose-theme.md` -> `ui-layout-and-theming.md` (covers Jetpack Compose, XML Views, ViewBinding, Material 3/2 Theming, RTL/Arabic, Previews)
+  * `room-database-migrations.md` -> `database-and-persistence.md` (covers Room, SQLite, Migrations, DataStore, EncryptedSharedPreferences)
+  * `performance-anr-optimization.md` -> `performance-and-optimization.md` (covers ANR, Threading/Dispatchers, Memory Leaks, Battery, Sensors, Compose Jank)
+- **Synchronized Roster & Documentation**: Updated `SKILL.md`, `daily-scenarios.md`, `perf-audit.md`, `perf-anr-guardian-agent.json` (fingerprint `v5`), `setup-prompt.md`, `update-prompt.md`, and `porting.md`.
+
 ## [0.14.11] - 2026-08-30
 
 ### Shift-Left Test Pre-Gate & Lead Agent Review First-Pass Optimization
@@ -89,7 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Shift-Left Coroutines & Test Quality Standards
 - **Mandatory `runTest` Invariant (`test-quality-reviewer-agent.json`, `harness-rules.md`)**: Strictly banned `runBlocking` inside `*Test.kt` unit test suites, enforcing `runTest`, `StandardTestDispatcher`, Turbine for Flow assertion, and dual-branch (success + error) assertions from the very first draft.
 
-## [0.14.0] - 2026-08-29
+---
+
+**Included in 0.14.0 (2026-08-29):**
 
 ### Universal Adaptive Discovery & Architecture Flexibility
 - **Adaptive Stack Introspection (`wizard/discovery.py`)**: Added automatic detection for DI frameworks (Hilt, Koin, Dagger, Manual/None), UI frameworks (Jetpack Compose, XML Views, Hybrid), Supported Locales (`res/values-*`), and Project Structure (Single-module, Multi-module, KMP).

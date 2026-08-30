@@ -15,7 +15,7 @@ The kit ships generic defaults in `agents/scripts/_product.py` (`com.example.app
 | `APK_RELATIVE` | Real debug APK, **including** the `run_gradle_task.py` existence check. Glob `**/outputs/apk/debug/*.apk` if the filename is unknown. |
 | `ANDROID_SRC` path pieces | Real source root. Replacing only `"app"` is not enough: KMP Android res is often `composeApp/src/androidMain`, not `composeApp/src/main`. |
 | Theme wrapper in subagent JSON / `compose-inspector` | Real theme token, or `MaterialTheme` if none |
-| DI / ViewModel base in `architecture-mvi.md` | Real bases (Koin + `BaseViewModel`, Hilt + MVI, …) or delete invented rules |
+| DI / ViewModel base in `architecture-guidelines.md` | Real bases (Koin + `BaseViewModel`, Hilt + MVI, …) or delete invented rules |
 | Sender personal name | This team's developer name (who commits). Never copy portal ids or tokens. |
 
 `HARNESS_REVIEW_PACKAGE` and `HARNESS_*_FINGERPRINT` stay. Rename everywhere if you rebrand those env tokens.
