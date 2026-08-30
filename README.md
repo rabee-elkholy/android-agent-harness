@@ -1,6 +1,6 @@
 <div align="center">
 
-# Android Agent Harness
+# android-harness-kit
 
 ### Deterministic Android Engineering for the AI Era
 **Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team.**
@@ -15,7 +15,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 <br/><br/>
-<img src="docs/assets/banner.svg" alt="Android Agent Harness: Deterministic Android Engineering for the AI Era" width="100%" />
+<img src="docs/assets/banner.svg" alt="android-harness-kit: Deterministic Android Engineering for the AI Era" width="100%" />
 
 </div>
 

@@ -51,11 +51,11 @@
 
   <!-- Typography Content Area -->
   <g transform="translate(280, 0)">
-    <!-- Top System Tag (Spacious Bounding Box) -->
+    <!-- Top System Tag (Exact Project Name) -->
     <g transform="translate(0, 68)">
-      <rect width="285" height="32" rx="16" fill="#0F172A" stroke="#3DDC84" stroke-width="1.5"/>
-      <circle cx="20" cy="16" r="4.5" fill="#3DDC84"/>
-      <text x="36" y="21" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="800" letter-spacing="1">ANDROID AGENT HARNESS</text>
+      <rect width="250" height="32" rx="16" fill="#0F172A" stroke="#3DDC84" stroke-width="1.5"/>
+      <circle cx="18" cy="16" r="4.5" fill="#3DDC84"/>
+      <text x="34" y="21" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="800" letter-spacing="1">ANDROID-HARNESS-KIT</text>
     </g>
 
     <!-- Main Title -->
@@ -87,7 +87,7 @@
 
       <!-- Pill 4 (Universal Stacks) -->
       <rect x="610" y="0" width="200" height="34" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
-      <text x="626" y="22" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="700">Universal Android &amp; KMP</text>
+      <text x="626" y="22" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Universal Android &amp; KMP</text>
     </g>
   </g>
 </svg>
