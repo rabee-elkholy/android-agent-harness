@@ -5,6 +5,12 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.13] - 2026-08-30
+
+### Foundation Reference Indexing & Automated Upgrade Pruning
+- **Complete Foundation Indexing (`daily-scenarios.md`)**: Indexed all 7 universal foundation reference guides (`architecture-guidelines.md`, `ui-layout-and-theming.md`, `database-and-persistence.md`, `performance-and-optimization.md`, `test-quality-guidelines.md`, `automated-skills.md`, `daily-scenarios.md`) to guarantee 100% zero-warning diagnostics across all installations and updates.
+- **Enhanced Update Engine (`update-prompt.md`)**: Enforced automatic pruning of legacy reference file names during upgrade while strictly preserving tailored project domain references and developer configurations.
+
 ## [0.14.12] - 2026-08-30
 
 ### Universal Generic Architecture References
@@ -86,7 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Clean Android Studio Working Tree**: Ensured that zero harness or AI rule files appear as modified or untracked in Android Studio Git, preventing any unintended commits or merge friction on shared team repositories.
 - **Index Protection**: Applied automatic `git update-index --assume-unchanged` guards on adapter files to keep working trees permanently pristine.
 
-## [0.14.1] - 2026-08-29
+---
+
+**Included in 0.14.1 (2026-08-29):**
 
 ### Mandatory Phase Sign-Off Hard Barrier & Atomic Delivery
 - **Unbreakable Phase Boundary Barrier (`harness-rules.md`, `AGENTS.md`)**: Mandated that the Lead Agent is strictly forbidden from creating, modifying, or planning any files for Phase N+1 until Phase N completes its full verification lifecycle (5-leaf review, unit tests, assembleDebug, device smoke test) and receives explicit developer sign-off in chat.
