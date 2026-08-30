@@ -76,17 +76,6 @@ def print_report(results: list[CheckResult], already_streamed: bool = False) -> 
     print(f"  Diagnostic Summary: {pass_count} Passed, {warn_count} Warnings, {fail_count} Failures", flush=True)
     print("==================================================", flush=True)
 
-    # If uncommitted changes exist, print an explicit git commit reminder
-    uncommitted_warning = next((r for r in results if r.name == "Git Working Tree" and r.status == "WARN"), None)
-    if uncommitted_warning:
-        print("\n--------------------------------------------------", flush=True)
-        print("  [ADVISORY] Uncommitted changes detected in repository.", flush=True)
-        print("  If you just installed or updated the harness, remember to review", flush=True)
-        print("  and create a Git commit for your changes:", flush=True)
-        print("    git add .", flush=True)
-        print('    git commit -m "chore: setup / update android harness"', flush=True)
-        print("--------------------------------------------------", flush=True)
-
     if fail_count == 0:
         print("\n[SUCCESS] All core systems operational. Harness is 100% healthy and ready for active delivery.", flush=True)
         return 0

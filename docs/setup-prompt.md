@@ -278,14 +278,10 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 
 ## 7) Tell the developer
 
-- **Commit Reminder**: If `harness_doctor.py` reported uncommitted changes, instruct the developer in their language to review and commit their changes in Android Studio or Git:
-  ```bash
-  git add .
-  git commit -m "chore: setup android harness kit"
-  ```
+- **Zero Git Pollution**: All harness files (`.agents/`), adapters (`AGENTS.md`, `GEMINI.md`, `.cursorrules`), and transient state are 100% private and excluded locally via `.git/info/exclude`. No harness commit is needed; your repository working tree remains clean for your team.
 - **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
   - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.16/docs/diagnostic-prompt.md`.
   - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.16/docs/rollback-prompt.md`.
-  - Remember: Five `*_PASS` required before real feature/bug delivery.
+  - Remember: Six `*_PASS` required before real feature/bug delivery.

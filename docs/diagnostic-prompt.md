@@ -54,7 +54,7 @@ Tell the developer **first**, in their language:
 
 4. **Actionable Remediation Guidance**:
    - If all checks are `[PASS]`: Declare the harness **100% Operational & Ready for Active Feature Delivery**.
-   - If uncommitted files are reported in Dimension 1, remind the developer to commit their repository changes (`git add . && git commit -m "chore: setup android harness kit"`).
+   - Note that all harness files and adapters are 100% locally private via `.git/info/exclude` (Zero Git Pollution). Any uncommitted files belong to normal application development.
    - If any `[WARN]` or `[FAIL]` is present:
      - Provide the exact root cause.
      - Provide the verbatim, copy-paste terminal command to remediate the issue immediately.

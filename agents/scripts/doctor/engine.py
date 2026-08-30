@@ -155,8 +155,8 @@ class HarnessDoctor:
                     self.log(
                         category,
                         "Git Working Tree",
-                        "WARN",
-                        f"Uncommitted changes detected ({len(uncommitted)} file(s)). Remember to review and commit your changes in Android Studio / Git.",
+                        "PASS",
+                        f"Working tree has {len(uncommitted)} uncommitted application file(s). Harness files are 100% locally private.",
                         details=[f"Uncommitted: {l}" for l in uncommitted[:8]] + ([f"... and {len(uncommitted) - 8} more"] if len(uncommitted) > 8 else []),
                     )
         except Exception as exc:
