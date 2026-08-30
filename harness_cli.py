@@ -32,6 +32,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -475,26 +476,46 @@ def cmd_verify(args: argparse.Namespace) -> int:
         problems.append(f"verdict is {record.get('verdict')!r}, expected PASS")
 
     package = record.get("package") or {}
-    pkg_path = Path(str(package.get("path") or ""))
+    raw_pkg_path = str(package.get("path") or "").strip()
     pkg_sha = str(package.get("sha256") or "")
-    if pkg_path.is_file() and pkg_sha:
-        digest = hashlib.sha256(pkg_path.read_bytes()).hexdigest()
-        if digest != pkg_sha:
-            problems.append(f"review package content changed since the round: {pkg_path.name}")
-    elif not pkg_path.is_file():
-        problems.append(f"review package file missing: {pkg_path}")
+    if raw_pkg_path:
+        pkg_path = Path(raw_pkg_path).resolve()
+        repo_res = repo.resolve()
+        temp_res = Path(tempfile.gettempdir()).resolve()
+        is_safe_pkg = (
+            repo_res in pkg_path.parents
+            or pkg_path == repo_res
+            or temp_res in pkg_path.parents
+        )
+        if not is_safe_pkg:
+            problems.append(f"review package path escapes allowed directories: {raw_pkg_path}")
+        elif pkg_path.is_file() and pkg_sha:
+            digest = hashlib.sha256(pkg_path.read_bytes()).hexdigest()
+            if digest != pkg_sha:
+                problems.append(f"review package content changed since the round: {pkg_path.name}")
+        elif not pkg_path.is_file():
+            problems.append(f"review package file missing: {pkg_path}")
+    else:
+        problems.append("review package path missing in verdict")
 
     files = record.get("files") or {}
     missing: list[str] = []
     changed: list[str] = []
+    escaped: list[str] = []
+    repo_res = repo.resolve()
     for rel, want in sorted(files.items()):
-        fpath = repo / str(rel).replace("/", os.sep)
+        fpath = (repo / str(rel).replace("/", os.sep)).resolve()
+        if repo_res not in fpath.parents and fpath != repo_res:
+            escaped.append(str(rel))
+            continue
         if not fpath.is_file():
             missing.append(str(rel))
             continue
         digest = hashlib.sha256(fpath.read_bytes()).hexdigest()
         if digest != want:
             changed.append(str(rel))
+    for rel in escaped:
+        problems.append(f"reviewed file path escapes repository root: {rel}")
     for rel in missing[:10]:
         problems.append(f"file from the reviewed diff is missing in this checkout: {rel}")
     if len(missing) > 10:
@@ -504,9 +525,27 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if len(changed) > 10:
         problems.append(f"... and {len(changed) - 10} more changed files")
 
+    CANONICAL_LEAVES = {
+        "bug",
+        "convention",
+        "conv",
+        "security",
+        "perf",
+        "regression",
+        "bug-reviewer-agent",
+        "convention-reviewer-agent",
+        "security-reviewer-agent",
+        "perf-anr-guardian-agent",
+        "regression-impact-reviewer-agent",
+    }
     leaves = record.get("leaves") or {}
-    if record.get("verdict") == "PASS" and len(leaves) != 5:
-        problems.append(f"{len(leaves)}/5 leaf verdicts recorded")
+    if record.get("verdict") == "PASS":
+        if len(leaves) != 5:
+            problems.append(f"{len(leaves)}/5 leaf verdicts recorded")
+        else:
+            unknown_leaves = set(leaves.keys()) - CANONICAL_LEAVES
+            if unknown_leaves:
+                problems.append(f"unknown leaf names in verdict: {sorted(unknown_leaves)}")
 
     stale = False
     git_sha = str(record.get("git_sha") or "")

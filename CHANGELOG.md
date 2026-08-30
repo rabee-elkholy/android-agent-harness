@@ -5,6 +5,15 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.4] - 2026-08-30
+
+### Repository Alignment, Security Hardening & Managed Block Preservation
+- **Repository Naming Alignment**: Completely unified repository identity to `android-harness-kit` across Git remotes, PyPI packaging, CLI endpoints, and documentation.
+- **Path Traversal & Boundary Containment (`harness_cli.py`)**: Hardened `cmd_verify` with strict path traversal containment checks for `package.path` and all reviewed diff files, preventing escapes outside repository root or temporary directories.
+- **Strict Reviewer Roster Validation**: Enforced strict canonical name and status validation for all 5 leaf reviewers in `verdict.json` verification.
+- **Non-Destructive Managed Block Preservation (`install_tool_adapters.py`)**: Enhanced adapter file generation to cleanly preserve existing user-defined custom rules and instructions in `CLAUDE.md`, `AGENTS.md`, and `.cursorrules` using bounded `<!-- BEGIN ANDROID-HARNESS MANAGED BLOCK -->` markers.
+- **Security Policy Modernization (`SECURITY.md`)**: Updated supported versions table to actively cover `0.14.x` through `0.10.x` with clear demarcation of AI developer safety vs mobile runtime application security boundaries.
+
 ## [0.14.3] - 2026-08-29
 
 ### Documentation & Developer Experience Priority
@@ -171,7 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.9.0] - 2026-08-25
+**Included in 0.9.0 (2026-08-25):**
 
 ### Trust & Supply Chain: Pin-to-Tag Provisioning, Single Deny Vocabulary, Audit Log, Evidence-Backed Verdicts
 - **Pin-to-Tag Kit Provisioning (`harness_cli.py`)**: The CLI no longer clones or floats to `main`. `ensure_kit` resolves the requested release (HARNESS_KIT_REF or the latest GitHub release tag), provisions a fresh checkout pinned to exactly `v<version>` via tag fetch + detached checkout, and asserts the checked-out `agents/VERSION` equals the requested version, failing closed with remediation commands on any mismatch. `refresh_kit` re-pins existing clones to an exact tag, keeps a pinned checkout when a tag is unreachable, and refuses to continue if the clone somehow sits on a named branch. `update` resolves the latest release tag from engine check data and never upgrades to a floating ref. `--kit` local-checkout override behavior unchanged.

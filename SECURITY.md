@@ -6,17 +6,12 @@ We actively maintain and provide security patches for the following versions of 
 
 | Version | Supported |
 | ------- | --------- |
+| 0.14.x  | Yes       |
+| 0.13.x  | Yes       |
+| 0.12.x  | Yes       |
 | 0.11.x  | Yes       |
 | 0.10.x  | Yes       |
-| 0.9.x   | Yes       |
-| 0.8.x   | Yes       |
-| 0.7.x   | Yes       |
-| 0.6.x   | Yes       |
-| 0.5.x   | Yes       |
-| 0.4.x   | Yes       |
-| 0.3.x   | Yes       |
-| 0.2.x   | Yes       |
-| < 0.2.0 | No        |
+| < 0.10.0 | No        |
 
 ---
 
@@ -43,6 +38,15 @@ deterministic and performs zero network I/O.
 | Forged review verdicts (PASS tokens without EVIDENCE footer, wrong pkg hash) | Evidence-backed barrier: footer `pkg=` must equal the dispatched package hash | `security_forged_evidence_footer_blocked`, `security_forged_evidence_wrong_pkg_blocked` |
 | Secret leakage through MCP wiring (token keys/values in server responses or configs) | Secret-key detection, token-value scan, and refuse-to-write guards in the Zoho install path | `security_zoho_helper_detects_secret_keys`, `security_zoho_helper_refuses_secret_write`, `security_zoho_helper_scans_token_values`, `security_zoho_install_leaves_no_token_values` |
 | Floating/unpinned kit provisioning (drift to `main`, tag/version mismatch) | Pin-to-tag clone/refresh with post-checkout VERSION assert, fail-closed remediation | `cli pinned provision`, `cli refresh re-pins drifted checkout`, `cli pin mismatch fails closed` (in `_hook_selftest.py`) |
+
+---
+
+## Scope & Security Boundary Clarification
+
+The **Android Agent Harness** is a deterministic safety and governance layer designed to protect the **developer workspace, Git history, and AI-assisted development lifecycle**. It mitigates autonomous agent hazards (destructive shell commands, forced git mutations, unvalidated database schema drifts, secret leaks into logs/prompts, and forged review assertions).
+
+> [!NOTE]
+> Android Agent Harness is **NOT** a mobile runtime application security solution (e.g. RASP, root detection, APK anti-tampering, or binary obfuscation). App-runtime security measures remain the responsibility of the application's production build pipeline.
 
 ---
 

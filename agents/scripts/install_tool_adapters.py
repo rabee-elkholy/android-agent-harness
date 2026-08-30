@@ -184,6 +184,10 @@ def generate_command_packs(repo: Path, tool: str, mapping: dict[str, str], *, dr
     return logs
 
 
+MANAGED_START = "<!-- BEGIN ANDROID-HARNESS MANAGED BLOCK -->"
+MANAGED_END = "<!-- END ANDROID-HARNESS MANAGED BLOCK -->"
+
+
 def with_managed_marker(body: str) -> str:
     """Keep YAML frontmatter first; keep @imports first (Claude / Qwen)."""
     marker = MANAGED.strip()
@@ -210,6 +214,24 @@ def with_managed_marker(body: str) -> str:
     return text
 
 
+def merge_managed_content(existing_text: str, new_body: str) -> str:
+    """Preserve existing user content outside managed markers."""
+    harness_block = f"{MANAGED_START}\n{with_managed_marker(new_body).strip()}\n{MANAGED_END}\n"
+    if MANAGED_START in existing_text and MANAGED_END in existing_text:
+        start_idx = existing_text.find(MANAGED_START)
+        end_idx = existing_text.find(MANAGED_END) + len(MANAGED_END)
+        prefix = existing_text[:start_idx]
+        suffix = existing_text[end_idx:].lstrip("\n")
+        combined = prefix.rstrip() + ("\n\n" if prefix.strip() else "") + harness_block
+        if suffix:
+            combined += "\n" + suffix
+        return combined
+    if MANAGED.strip() in existing_text:
+        return with_managed_marker(new_body)
+    clean_existing = existing_text.rstrip()
+    return f"{clean_existing}\n\n{harness_block}" if clean_existing else with_managed_marker(new_body)
+
+
 def rel_of(path: Path, repo: Path) -> str:
     try:
         return path.relative_to(repo).as_posix()
@@ -218,7 +240,14 @@ def rel_of(path: Path, repo: Path) -> str:
 
 
 def write_file(path: Path, body: str, *, dry_run: bool, repo: Path) -> str:
-    text = with_managed_marker(body)
+    if path.is_file():
+        try:
+            existing = path.read_text(encoding="utf-8")
+            text = merge_managed_content(existing, body)
+        except OSError:
+            text = with_managed_marker(body)
+    else:
+        text = with_managed_marker(body)
     rel = rel_of(path, repo)
     if dry_run:
         return f"dry-run {rel} ({len(text)} bytes)"
@@ -231,7 +260,8 @@ def is_managed_file(path: Path) -> bool:
     if not path.is_file():
         return False
     try:
-        return MANAGED.strip() in path.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8")
+        return MANAGED.strip() in content or MANAGED_START in content
     except OSError:
         return False
 
