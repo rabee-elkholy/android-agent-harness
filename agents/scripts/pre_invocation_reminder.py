@@ -38,13 +38,14 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
             "Inspect why the same findings keep returning. Do not assemble a leftover APK."
         )
     pending_note = (
-        " A 5-leaf review round is still pending — do not assembleDebug until all 5 reply."
+        " [SILENCE MANDATE]: A 5-leaf review round is in flight. If some reviewers are still running, OUTPUT EXACTLY EMPTY STRING ('') AND DO NOT CALL TOOLS. Never output 'Waiting for...', 'Reviewers completing...', or 'Running tests...'. Do not assembleDebug until all 5 reply."
         if pending
         else ""
     )
     return (
         f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{update_directive} "
         "PRIORITY: uncompromising quality. Never skip the 5-leaf review to save tokens. "
+        "ZERO-NOISE CHAT: Never emit mechanical status updates in chat prose (e.g. 'Running tests...', 'Cleaning kapt cache...', 'Waiting for...'). Rely on IDE tool widgets for routine actions. Chat is reserved exclusively for Plan Approval, Review Round Cards (on findings), Phase Milestone Cards, and Final Delivery. "
         "SHIFT-LEFT QUALITY: Before requesting reviews, proactively satisfy all review pillars (null/network resilience, MVI single-source StateFlow, no inline FQCNs, Compose contentDescription & 48dp touch targets, dual-locale en/ar previews, zero Main-thread I/O, Room migration if @Entity changes). "
         "SHIFT-LEFT TEST PRE-GATE: Before calling review_package.py and invoke_subagent, when code or unit tests are touched, ALWAYS run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` to empirically verify compiler/signature parity and unit test passes before dispatching subagents. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create implementation_plan.md artifact with RequestFeedback=true and get developer approval via Proceed button BEFORE writing code. "
@@ -55,7 +56,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
         "in EXACTLY ONE invoke_subagent call with the same HARNESS_REVIEW_PACKAGE. "
         "Do not use code-review-guard-agent. Do not fire 5 separate invokes. "
         "REACTIVE WAKEUP & ZERO-TIMER INVARIANT: After invoke_subagent, stop calling tools immediately. NEVER use schedule, sleep, or polling timers for subagents. When woken up while some reviewers are still running, OUTPUT ZERO CHAT TEXT, call no tools, and end turn silently. "
-        "ROUND SUMMARY CARDS: When all 5 verdicts arrive and BLOCKER/MAJOR findings exist, output a concise Review Round Summary Card in chat detailing the findings and corrective fixes before re-dispatching the next round. "
+        "ROUND SUMMARY CARDS: When all 5 verdicts arrive and BLOCKER/MAJOR findings exist, output a concise Review Round Summary Card in chat detailing the findings and corrective fixes before re-dispatching the next round. Review rounds must converge in <= 2 rounds. "
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS. "
         "Fix BLOCKER/MAJOR, regenerate the package, re-run the same 5. "
         "On-demand only (not a substitute for the 5): qa-diagnostics-agent, android-ui-expert-agent, test-quality-reviewer-agent. "

@@ -294,6 +294,33 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 
 ---
 
+## 6) High-Signal Chat, Zero-Noise UI & Anti-Spam Governance
+
+To preserve a clean, professional, and readable IDE chat interface, the agent must distinguish between ephemeral tool widgets and permanent chat prose:
+
+1. **Tool Execution Widgets (Ephemeral / Collapsed)**:
+   - Command runs (`run_gradle_task.py`, `fast_kt_lint.py`, `review_package.py`) and file operations are rendered by the IDE as collapsible badges (`Worked for 15s >`, `Ran command >`).
+   - The agent MUST NOT narrate routine tool executions in permanent chat prose (e.g. NEVER write *"Running all unit tests to ensure complete stability..."*, *"Cleaning stale kapt cache..."*, *"Re-running tests with fresh task execution..."*, *"Reading file..."*).
+
+2. **Silent Intermediate Review Wait (Zero Chat Noise)**:
+   - When a 5-leaf review round or background tasks are in-flight, the agent receives intermediate reactive notifications as individual subagents finish.
+   - On EVERY intermediate wakeup where not all 5 verdicts are present, the agent **MUST OUTPUT AN EMPTY STRING (`""`) AND CALL NO TOOLS**, ending the turn instantly and silently.
+   - NEVER output status countdowns or waiting narrations (e.g. NEVER write *"Waiting for Bug Reviewer to finalize its verdict..."*, *"Reviewers are completing their final evaluations..."*, *"Waiting for remaining reviewers to complete their evaluations..."*).
+
+3. **The 4 Permitted Conversational Touchpoints**:
+   Permanent chat prose is reserved strictly for high-signal engineering milestones:
+   - **Touchpoint 1: Plan Presentation & Approval**: `implementation_plan.md` artifact presentation before starting non-trivial work.
+   - **Touchpoint 2: Review Round Summary Card**: EXACTLY ONE structured table emitted when all 5 reviewers finish and findings require corrective action.
+   - **Touchpoint 3: Phase Milestone Card**: Verification evidence, automated E2E results, and phase progression cards upon completing a milestone.
+   - **Touchpoint 4: Final Task Delivery**: Final walkthrough summary, verification evidence, and Conventional Commit draft.
+
+4. **Review Churn & Fast Convergence**:
+   - When addressing review findings, the agent must fix all findings across all 5 pillars comprehensively in a single pass.
+   - Empirically verify with `testDebugUnitTest` and `fast_kt_lint.py` before re-dispatching.
+   - Review rounds MUST converge in at most 2 rounds. High round churn (e.g. Round 5, Round 6, Round 7) is strictly prohibited.
+
+---
+
 ## Skills (read on demand)
 
 - `android-harness` and its `references/` — architecture, Compose, Room, performance, checkout facts
