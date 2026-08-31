@@ -328,6 +328,13 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
    - Empirically verify with `testDebugUnitTest` and `fast_kt_lint.py` before re-dispatching.
    - Review rounds MUST converge in at most 2 rounds. High round churn (e.g. Round 5, Round 6, Round 7) is strictly prohibited.
 
+5. **Conversation Language Parity Across All Developer Touchpoints**:
+   - The agent MUST dynamically match the active conversation language of the developer across ALL cards, interactive modals, and summaries:
+     * **Interactive Modals (`ask_question`)**: Questions, choices, and explanations must match the developer's language (Arabic for Arabic conversations, English for English conversations).
+     * **Review Round Summary Cards**: Summary of findings and corrective fixes rendered in the active conversation language.
+     * **Phase Milestone Cards**: Scope, verified evidence, manual smoke test steps, and waiting status rendered in the active conversation language.
+     * **Final Delivery**: Task overview, file changes, and walkthrough rendered in the active conversation language (while keeping Conventional Commit format in English).
+
 ---
 
 ## Skills (read on demand)

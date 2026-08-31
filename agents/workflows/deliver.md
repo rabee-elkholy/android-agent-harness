@@ -14,8 +14,9 @@ Follow `.agents/rules/harness-rules.md` exactly. Do not commit. Do not use workt
    - **Stage 0 Shift-Left Test Pre-Gate**: Run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` to catch signature mismatches and broken call sites.
    - **Stage 0.5 Test Specialist Gate**: If test files (`*Test.kt`) are modified/added, dispatch `test-quality-reviewer-agent` until `TEST_PASS`.
    - **Stage 1 Review Gate**: Dispatch 5 review leaves in one invoke. Zero timers/sleep. Silent wait on intermediate arrivals. When a round finishes with findings, output a **Review Round Summary Card** in chat and fix before re-dispatching until all 5 emit `*_PASS`.
-   - **Stage 2 Assemble & Lint**: `python .agents/scripts/fast_kt_lint.py` and `python .agents/scripts/run_gradle_task.py :app:assembleDebug`.
-   - **Stage 3 Device Verification & Transition**:
-     * In `autonomous_e2e` mode: Run `run_device.py install-start` and `run_e2e_smoke.py`. On [SUCCESS], output Phase Milestone Card and proceed autonomously to Phase N+1 without blocking the developer.
-     * In `manual_only` mode: Install on device, output numbered checklist, and trigger `ask_question`.
-3. **Task Completion**: Output walkthrough summary and suggest Conventional Commit message after all phases are verified.
+   - **Stage 2 Assemble & Preflight**: Run `python .agents/scripts/preflight_check.py` (guarantees zero lint/strings/Room issues) and `python .agents/scripts/run_gradle_task.py :app:assembleDebug`.
+   - **Stage 3 Device Verification & Checkpoint Commit**:
+     * In `autonomous_e2e` mode: Run `run_device.py install-start` and `run_e2e_smoke.py`. On [SUCCESS], output the **Phase Milestone Card** in chat with verification evidence and a drafted Conventional Commit message for Phase N.
+     * In `manual_only` mode: Install on device, output numbered checklist in the developer's language, trigger `ask_question`, and output the Phase Milestone Card with commit message upon PASS.
+     * **MANDATORY HARD STOP**: Stop immediately and wait for the developer to commit Phase N and explicitly instruct to begin Phase N+1. Never touch Phase N+1 files before developer commit.
+3. **Task Completion**: Output walkthrough summary and final task summary in the active conversation language after all phases are verified and committed.
