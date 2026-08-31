@@ -38,11 +38,38 @@ def capture_screenshot(device_id: str, name: str | None = None) -> Path | None:
             )
         if proc.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 1000:
             return out_path
-        if out_path.is_file():
-            out_path.unlink()
-        return None
     except Exception:
-        return None
+        pass
+
+    try:
+        remote_tmp = f"/data/local/tmp/harness_cap_{timestamp}.png"
+        proc_cap = subprocess.run(
+            ["adb", "-s", device_id, "shell", "screencap", "-p", remote_tmp],
+            capture_output=True,
+            check=False,
+        )
+        if proc_cap.returncode == 0:
+            proc_pull = subprocess.run(
+                ["adb", "-s", device_id, "pull", remote_tmp, str(out_path)],
+                capture_output=True,
+                check=False,
+            )
+            subprocess.run(
+                ["adb", "-s", device_id, "shell", "rm", "-f", remote_tmp],
+                capture_output=True,
+                check=False,
+            )
+            if proc_pull.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 1000:
+                return out_path
+    except Exception:
+        pass
+
+    if out_path.is_file():
+        try:
+            out_path.unlink()
+        except Exception:
+            pass
+    return None
 
 
 def main() -> int:

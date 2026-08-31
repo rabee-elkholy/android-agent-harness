@@ -110,6 +110,11 @@ def run_streaming(
         proc.wait()
     except BaseException:
         try:
+            if proc.stdout:
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
             proc.terminate()
             try:
                 proc.wait(timeout=2.0)

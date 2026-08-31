@@ -17,27 +17,12 @@ REPO = Path(__file__).resolve().parents[2]
 APP_DIR = REPO.joinpath(*ANDROID_SRC)
 
 
+from _repo_files import changed_paths  # noqa: E402
+
+
 def get_git_modified_files() -> list[Path]:
     try:
-        res = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        files = []
-        for line in (res.stdout or "").splitlines():
-            if len(line) > 3:
-                path_str = line[3:].strip()
-                if " -> " in path_str:
-                    path_str = path_str.split(" -> ")[1].strip()
-                f_path = REPO / path_str
-                if f_path.is_file() and f_path.suffix == ".kt":
-                    files.append(f_path)
-        return files
+        return [p for p in changed_paths() if p.suffix == ".kt"]
     except Exception:
         return []
 
@@ -93,7 +78,7 @@ def scan_file(file_path: Path) -> list[dict]:
             })
 
         # 5. Contract State without @Immutable
-        if "data class State(" in stripped:
+        if re.search(r"data\s+class\s+[A-Za-z0-9_]*(?:State|UiState)\b", stripped) and not stripped.startswith("//"):
             prev_lines = lines[max(0, idx - 5):idx - 1]
             has_immutable = any("@Immutable" in pl or "@Stable" in pl for pl in prev_lines)
             if not has_immutable:

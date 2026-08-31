@@ -7,7 +7,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO = SCRIPTS_DIR.parent.parent
 
-_CODE_SUFFIXES = {".kt", ".java", ".kts"}
+_CODE_SUFFIXES = {".kt", ".java", ".kts", ".cpp", ".c", ".h", ".hpp", ".aidl", ".pro"}
 
 
 def _unquote_git_path(raw: str) -> str:

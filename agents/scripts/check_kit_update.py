@@ -139,7 +139,22 @@ def check_for_update(force: bool = False) -> dict:
                     "snoozed": snoozed,
                 }
     except Exception:
-        pass
+        try:
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "timestamp": now - CACHE_TTL_SECONDS + 3600,
+                        "latest_version": current_ver,
+                        "html_url": f"https://github.com/{GITHUB_REPO}",
+                        "notes": "",
+                        "snoozed_until": 0,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     return {
         "has_update": False,

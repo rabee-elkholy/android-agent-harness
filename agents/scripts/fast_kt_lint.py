@@ -58,7 +58,7 @@ PREVIEW_SURFACE_SUFFIXES = (
 )
 
 FEATURE_CROSS_IMPORT_PATTERN = re.compile(
-    r"^\s*import\s+([a-zA-Z0-9_.]*\.features\.([A-Za-z0-9_]+))(\.|$)"
+    r"^\s*import\s+([a-zA-Z0-9_.]*\.(?:features|feature)\.([A-Za-z0-9_]+))(\.|$)"
 )
 
 

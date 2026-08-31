@@ -134,25 +134,34 @@ def discover_launchers(repo: Path) -> list[str]:
             continue
         if "android.intent.category.LAUNCHER" not in text:
             continue
-        for m in re.finditer(r'android:name="(\.[^"]+)"', text):
-            rel = m.group(1)
-            if "Activity" not in rel and rel not in {".MainActivity", ".app.MainActivity"}:
-                if "Activity" not in rel:
-                    continue
-            if pkg:
-                comp = f"{pkg}/{rel}"
+        act_blocks = re.findall(r"<(?:activity|activity-alias)\b[\s\S]*?</(?:activity|activity-alias)>", text)
+        for block in act_blocks:
+            if "android.intent.action.MAIN" not in block or "android.intent.category.LAUNCHER" not in block:
+                continue
+            m = re.search(r'android:name="([^"]+)"', block)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            if name.startswith("."):
+                comp = f"{pkg}/{name}" if pkg else name
+            elif "/" in name:
+                comp = name
+            elif pkg and name.startswith(pkg):
+                rest = name[len(pkg):]
+                comp = f"{pkg}/{rest if rest.startswith('.') else '.' + rest}"
+            elif pkg:
+                comp = f"{pkg}/{name}"
             else:
-                comp = rel
+                comp = name
             if comp not in found:
                 found.append(comp)
-        for m in re.finditer(r'android:name="([a-zA-Z0-9_.]+\.[A-Za-z][A-Za-z0-9_]*Activity)"', text):
-            comp = m.group(1)
-            if pkg and "/" not in comp:
-                if comp.startswith(pkg):
-                    rest = comp[len(pkg) :]
-                    comp = f"{pkg}/{rest if rest.startswith('.') else '.' + rest.split('.')[-1]}"
-            if comp not in found:
-                found.append(comp)
+
+        if not found:
+            for m in re.finditer(r'android:name="(\.[^"]+)"', text):
+                rel = m.group(1)
+                comp = f"{pkg}/{rel}" if pkg else rel
+                if comp not in found:
+                    found.append(comp)
     return found
 
 

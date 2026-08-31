@@ -44,6 +44,8 @@ def filter_forensics(raw_logs: str) -> dict:
         r"AndroidRuntime:\s*FATAL",
         r"CoroutineExceptionHandler",
         rf"ANR in {re.escape(APPLICATION_ID)}",
+        r"Fatal signal\s+\d+",
+        r"DEBUG\s*:\s*\*\*\*",
     ]
     sensor_patterns = [
         r"SensorManager",

@@ -131,8 +131,12 @@ def run_gradle(task_args: list[str]) -> int:
             except Exception:
                 apk = REPO_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
             if not apk.is_file():
-                found = sorted(REPO_ROOT.glob("**/outputs/apk/*debug/*.apk"))
-                apk = found[0] if found else apk
+                candidates = [
+                    p
+                    for p in REPO_ROOT.glob("**/outputs/apk/**/*.apk")
+                    if "debug" in p.as_posix().lower() and not p.name.endswith("-androidTest.apk")
+                ]
+                apk = sorted(candidates)[0] if candidates else apk
             if apk.is_file():
                 size_mb = apk.stat().st_size / (1024 * 1024)
                 rel = apk.relative_to(REPO_ROOT).as_posix()

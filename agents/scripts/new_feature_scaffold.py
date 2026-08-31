@@ -16,7 +16,13 @@ from _repo_files import REPO  # noqa: E402
 
 enable_line_buffered_stdio()
 
-FEATURES_DIR = REPO.joinpath(*ANDROID_SRC, "java", *APPLICATION_ID.split("."), "features")
+def _default_features_dir() -> Path:
+    kotlin_root = REPO.joinpath(*ANDROID_SRC, "kotlin")
+    src_lang = "kotlin" if kotlin_root.is_dir() else "java"
+    return REPO.joinpath(*ANDROID_SRC, src_lang, *APPLICATION_ID.split("."), "features")
+
+
+FEATURES_DIR = _default_features_dir()
 RES_DIR = REPO.joinpath(*ANDROID_SRC, "res")
 
 

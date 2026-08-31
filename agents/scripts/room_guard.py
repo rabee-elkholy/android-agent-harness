@@ -75,9 +75,20 @@ def resolve_all_entity_types(root_entities: frozenset[str], repo: Path) -> froze
     all_types = set(root_entities)
     frontier = list(root_entities)
     visited_files = set()
+    skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
     while frontier:
         curr = frontier.pop(0)
-        for kt_file in repo.rglob(f"{curr}.kt"):
+        matching_files = [f for f in repo.rglob(f"{curr}.kt") if not (set(f.parts) & skip_parts)]
+        if not matching_files:
+            class_decl = re.compile(rf"\bclass\s+{re.escape(curr)}\b")
+            for f in repo.rglob("*.kt"):
+                if f.is_file() and not (set(f.parts) & skip_parts) and f not in visited_files:
+                    try:
+                        if class_decl.search(f.read_text(encoding="utf-8", errors="replace")):
+                            matching_files.append(f)
+                    except Exception:
+                        pass
+        for kt_file in matching_files:
             if kt_file in visited_files or not kt_file.is_file():
                 continue
             visited_files.add(kt_file)

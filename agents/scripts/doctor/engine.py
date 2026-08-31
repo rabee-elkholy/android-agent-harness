@@ -769,8 +769,11 @@ class HarnessDoctor:
         self.log(category, "ADB Executable", "PASS", f"adb available at {adb_path}")
         try:
             proc = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=5.0)
-            lines = [l.strip() for l in proc.stdout.splitlines() if l.strip() and not l.startswith("List of")]
-            devices = [l.split()[0] for l in lines if "\tdevice" in l]
+            devices = []
+            for l in lines:
+                parts = l.split()
+                if len(parts) >= 2 and parts[1] == "device":
+                    devices.append(parts[0])
             if devices:
                 self.log(category, "Connected Devices", "PASS", f"Detected {len(devices)} active device(s): {', '.join(devices)}")
             else:

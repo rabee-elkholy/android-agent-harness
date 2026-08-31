@@ -11,18 +11,19 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print  # noqa: E402
-from _repo_files import REPO  # noqa: E402
+from _repo_files import REPO, _unquote_git_path  # noqa: E402
 from check_strings import check_hardcoded_strings  # noqa: E402
 from fast_kt_lint import lint_file  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
 
-CODE_SUFFIXES = {".kt", ".java", ".kts"}
+CODE_SUFFIXES = {".kt", ".java", ".kts", ".cpp", ".c", ".h", ".hpp", ".aidl", ".pro"}
 
 
 def staged_paths() -> list[Path]:
@@ -40,10 +41,10 @@ def staged_paths() -> list[Path]:
         return []
     paths: list[Path] = []
     for line in (proc.stdout or "").splitlines():
-        rel = line.strip()
+        rel = _unquote_git_path(line.strip())
         if not rel:
             continue
-        path = REPO / rel.replace("/", __import__("os").sep) if __import__("os").name == "nt" else REPO / rel
+        path = REPO / rel.replace("/", os.sep) if os.name == "nt" else REPO / rel
         if path.is_file():
             paths.append(path)
     return paths

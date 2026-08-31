@@ -65,6 +65,7 @@ def main() -> int:
     parser.add_argument("--apk", default=None, help="Debug APK path (overrides --flavor resolution)")
     parser.add_argument("--activity", default=DEFAULT_ACTIVITY, help="Launch activity")
     parser.add_argument("--package", default=APPLICATION_ID, help="Package name to uninstall")
+    parser.add_argument("--user", default=None, help="Target user ID for multi-user / work profile devices (e.g. 0)")
     args = parser.parse_args()
 
     try:
@@ -94,7 +95,11 @@ def main() -> int:
             return 1
         size_mb = apk.stat().st_size / (1024 * 1024)
         live_print(f"[*] Installing {apk.as_posix()} ({size_mb:.1f} MB)")
-        code = run_adb(serial, ["install", "-r", "-d", str(apk)], "adb install")
+        install_cmd = ["install", "-r", "-d", "-g"]
+        if args.user is not None:
+            install_cmd.extend(["--user", str(args.user)])
+        install_cmd.append(str(apk))
+        code = run_adb(serial, install_cmd, "adb install")
         if code != 0:
             live_print(f"[!] adb install failed (exit {code})", err=True)
             return code

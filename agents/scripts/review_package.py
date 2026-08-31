@@ -62,12 +62,26 @@ def build_header(task_id: str, fingerprint: str) -> list[str]:
     ]
 
 
-def build_files_map(max_files: int = 200) -> tuple[dict[str, str], int]:
+DEFAULT_MAX_REVIEW_FILES = 500
+
+
+def _configured_max_files() -> int:
+    env_val = os.environ.get("HARNESS_MAX_REVIEW_FILES")
+    if env_val:
+        try:
+            return max(50, int(env_val.strip()))
+        except ValueError:
+            pass
+    return DEFAULT_MAX_REVIEW_FILES
+
+
+def build_files_map(max_files: int | None = None) -> tuple[dict[str, str], int]:
     """SHA-256 per changed working-tree file (rel path -> hex), capped, with total count."""
+    effective_max = max_files if max_files is not None else _configured_max_files()
     files_map: dict[str, str] = {}
     all_changed = list(changed_paths())
     for path in all_changed:
-        if len(files_map) >= max_files:
+        if len(files_map) >= effective_max:
             break
         try:
             rel = path.relative_to(REPO).as_posix()

@@ -80,6 +80,29 @@ def _extract_placeholders(text: str) -> list[str]:
     return sorted(placeholders)
 
 
+NON_LOCALE_QUALIFIERS = {
+    "night", "notnight", "land", "port", "square", "round", "long", "notlong",
+    "ldr", "ldrtl", "ldltr", "hdpi", "mdpi", "xhdpi", "xxhdpi", "xxxhdpi", "nodpi",
+    "tvdpi", "anydpi", "small", "normal", "large", "xlarge",
+}
+NON_LOCALE_PATTERNS = [
+    re.compile(r"^v\d+$"),
+    re.compile(r"^sw\d+dp$"),
+    re.compile(r"^w\d+dp$"),
+    re.compile(r"^h\d+dp$"),
+    re.compile(r"^(?:mcc|mnc)\d+$"),
+]
+
+
+def _is_language_locale_tag(tag: str) -> bool:
+    tag_lower = tag.lower().strip()
+    if tag_lower in NON_LOCALE_QUALIFIERS:
+        return False
+    if any(pat.match(tag_lower) for pat in NON_LOCALE_PATTERNS):
+        return False
+    return bool(re.match(r"^(?:b\+[a-zA-Z0-9+]+|[a-z]{2,3}(?:-r?[a-zA-Z0-9]+)?)$", tag_lower))
+
+
 def _parse_resources(xml_file: Path) -> dict[str, dict]:
     if not xml_file.is_file():
         return {}
@@ -98,7 +121,8 @@ def _parse_resources(xml_file: Path) -> dict[str, dict]:
                 continue
             if tag == "string":
                 text = "".join(elem.itertext()).strip()
-                res[name] = {"tag": tag, "text": text, "placeholders": _extract_placeholders(text)}
+                placeholders = [] if elem.get("formatted") == "false" else _extract_placeholders(text)
+                res[name] = {"tag": tag, "text": text, "placeholders": placeholders}
             elif tag == "plurals":
                 items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
                 placeholders = []
@@ -124,7 +148,8 @@ def discover_locale_pairs() -> list[tuple[Path, Path, str]]:
             loc_strings = val_dir / "strings.xml"
             if loc_strings.is_file():
                 tag = val_dir.name[len("values-") :]
-                pairs.append((base_file, loc_strings, tag))
+                if _is_language_locale_tag(tag):
+                    pairs.append((base_file, loc_strings, tag))
     return pairs
 
 

@@ -427,7 +427,7 @@ def _ledger_path() -> Path:
     return state_path().with_name("review_ledger.json")
 
 
-_CODE_FP_SUFFIXES = {".kt", ".java", ".kts"}
+_CODE_FP_SUFFIXES = {".kt", ".java", ".kts", ".cpp", ".c", ".h", ".hpp", ".aidl", ".pro"}
 
 
 def tree_code_fingerprint() -> str | None:

@@ -5,6 +5,27 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.21] - 2026-08-31
+
+### Comprehensive Edge Case Hardening Across Harness Engines & Review Gates
+- **Multi-Module & Cross-Feature Import Flexibility (`fast_kt_lint.py`)**: Expanded cross-feature import regex to detect both singular `.feature.` and plural `.features.` package structures.
+- **Flavor & Case-Insensitive Linux APK Discovery (`run_gradle_task.py`)**: Upgraded APK search to be case-insensitive across subdirectories, ensuring reliable APK resolution for all product flavors on Linux/macOS filesystems.
+- **Multi-Class Room Entity & Embedded Resolution (`room_guard.py`)**: Added class declaration scanning fallback to discover `@Entity` and `@Embedded` types declared in shared model files.
+- **ADB Auto-Grant Permissions & Work Profile Support (`run_device.py`)**: Added `-g` flag to auto-grant runtime permissions on debug builds and added `--user` support for multi-user/work profile test devices.
+- **Scalable Review Package Cap (`review_package.py`)**: Increased default file cap from 200 to 500 files with configurable `HARNESS_MAX_REVIEW_FILES` for large-scale refactorings.
+- **Kotlin Script (.kts) & KSP Compiler Error Parsing (`gradle_error_parser.py`)**: Supported `.kts` build errors and `[ksp]` prefix tags in compiler diagnostics.
+- **Custom Launcher Activity Auto-Discovery (`wizard/discovery.py`)**: Enabled detection of launcher activities with custom class names from XML manifests.
+- **Universal MVI State Class Immutability Guard (`perf_guard.py`)**: Broadened `@Immutable` / `@Stable` static check to cover all `*State` and `*UiState` models.
+- **Native C++ / NDK Crash Forensics (`logcat_doctor.py`)**: Added SIGSEGV and native crash patterns (`Fatal signal`, `DEBUG: ***`) to Logcat triage.
+- **Whitespace-Flexible ADB Devices Parsing (`doctor/engine.py`)**: Improved device listing parser to handle spaces flexibly.
+- **Staged Quoted Path Decoding (`pre_commit_gate.py`)**: Integrated `_unquote_git_path` for staged files containing spaces or quotes.
+- **Kotlin-First Source Directory Scaffolding (`new_feature_scaffold.py`)**: Auto-detects `src/main/kotlin` vs `src/main/java` source roots.
+- **Process Stream Cleanup on Windows (`_live_process.py`)**: Guaranteed stdout pipe handle closure upon cancellation.
+- **Resource Qualifier Filtering & Formatted Attribute (`check_strings.py`)**: Excluded non-locale qualifiers (`values-night`, `values-sw600dp`) from 100% translation parity and honored `formatted="false"`.
+- **Legacy Screencap Fallback (`capture_screen.py`)**: Added fallback screencap via `/data/local/tmp` for older devices.
+- **Offline CLI Update Caching (`check_kit_update.py`)**: Cached transient network failures to eliminate command delays when offline.
+- **NDK, AIDL & Proguard Review Coverage (`_repo_files.py`, `_hook_state.py`, `pre_commit_gate.py`)**: Expanded code suffixes to include `.cpp`, `.c`, `.h`, `.hpp`, `.aidl`, and `.pro` across review gates.
+
 ## [0.14.20] - 2026-08-30
 
 ### Architectural Base Discovery & Mandatory Base ViewModel Inheritance
@@ -83,7 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Discovered Application IDs Exposure (`wizard/discovery.py`)**: Added `application_ids` array to `discover()` facts dictionary, ensuring complete metadata transparency during Greenfield and established project setup.
 - **Lifecycle Cross-Compatibility Verification**: Completed and validated exhaustive empirical test matrix across Installation, Update, and Doctor lifecycles with 0 failures.
 
-## [0.14.9] - 2026-08-30
+---
+
+**Included in 0.14.9 (2026-08-30):**
 
 ### Automatic Local Git Privacy (.git/info/exclude) & Clean .gitignore Restoration
 - **Automated Local Exclusion Architecture (`_repo_files.py`, `ensure_local_git_privacy`)**: Centralized local Git exclusion management via `ensure_local_git_privacy()`, ensuring all 27 harness directories, manifests, and transient patterns are automatically registered in `.git/info/exclude` across setup, update, preflight, and doctor runs.

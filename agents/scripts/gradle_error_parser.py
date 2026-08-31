@@ -15,7 +15,7 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 KOTLIN_ERROR_RE = re.compile(
-    r"^e:\s+(?:file:///?)?(.+?\.kt):\s*(?:\()?\s*(\d+)(?:[,\s:]+(\d+)\)?)?\s*:\s*(.+)$",
+    r"^e:\s+(?:\[[a-zA-Z0-9_-]+\]\s+)?(?:file:///?)?(.+?\.(?:kt|kts)):\s*(?:\()?\s*(\d+)(?:[,\s:]+(\d+)\)?)?\s*:\s*(.+)$",
     re.MULTILINE,
 )
 JAVAC_ERROR_RE = re.compile(
