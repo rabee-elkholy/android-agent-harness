@@ -101,7 +101,48 @@ def requires_state_previews(filename: str) -> bool:
     return filename.endswith("Screen.kt")
 
 
-def lint_file(file_path: Path) -> list[dict]:
+def get_modified_lines_map(repo: Path, files: list[Path]) -> dict[Path, set[int] | None]:
+    """Return map of file -> set of 1-indexed added/modified line numbers from git diff HEAD.
+    
+    If a file is untracked or git diff fails (e.g. no git HEAD), returns None for that file
+    (indicating that all lines in that file should be linted).
+    """
+    res: dict[Path, set[int] | None] = {}
+    hunk_re = re.compile(r"^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@")
+
+    for f in files:
+        try:
+            rel = f.relative_to(repo).as_posix()
+        except ValueError:
+            rel = str(f)
+
+        proc = subprocess.run(
+            ["git", "diff", "-U0", "HEAD", "--", rel],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            # Untracked file, brand new file, or git diff returned nothing
+            res[f] = None
+            continue
+
+        modified_lines: set[int] = set()
+        for line in proc.stdout.splitlines():
+            m = hunk_re.match(line)
+            if m:
+                start = int(m.group(1))
+                count = int(m.group(2)) if m.group(2) is not None else 1
+                for l_num in range(start, start + count):
+                    modified_lines.add(l_num)
+        res[f] = modified_lines
+    return res
+
+
+def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[dict]:
     issues = []
     posix = file_path.as_posix().lower()
     is_test = "/src/test/" in posix or "/androidtest/" in posix
@@ -112,9 +153,9 @@ def lint_file(file_path: Path) -> list[dict]:
     except Exception as e:
         return [{"file": str(file_path), "line": 1, "type": "IO_ERROR", "msg": str(e)}]
 
-    has_fragment_activity = False
+    has_fragment_activity_in_diff = False
     has_android_entry_point = False
-    has_compose_function = False
+    has_compose_function_in_diff = False
     has_compose_imports = any("androidx.compose" in l for l in lines[:60])
     in_block_comment = False
     in_triple_string = False
@@ -141,6 +182,25 @@ def lint_file(file_path: Path) -> list[dict]:
             count = trimmed.count('"""')
             if count % 2 != 0:
                 in_triple_string = True
+
+        # Track full-file markers
+        if "@AndroidEntryPoint" in trimmed:
+            has_android_entry_point = True
+
+        # Track if new fragment/activity class or compose function was modified/added
+        is_line_modified = modified_lines is None or idx in modified_lines
+
+        if CLASS_ENTRY_PATTERN.search(trimmed) and not trimmed.startswith("abstract class"):
+            if is_line_modified:
+                has_fragment_activity_in_diff = True
+
+        if "@Composable" in trimmed:
+            if is_line_modified:
+                has_compose_function_in_diff = True
+
+        # Line-level checks apply ONLY to added/modified lines in diff-scoped mode
+        if not is_line_modified:
+            continue
 
         if WILDCARD_IMPORT_PATTERN.match(trimmed):
             issues.append({
@@ -228,15 +288,7 @@ def lint_file(file_path: Path) -> list[dict]:
                     ),
                 })
 
-        if "@AndroidEntryPoint" in trimmed:
-            has_android_entry_point = True
-        if CLASS_ENTRY_PATTERN.search(trimmed) and not trimmed.startswith("abstract class"):
-            has_fragment_activity = True
-
-        if "@Composable" in trimmed:
-            has_compose_function = True
-
-        if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function):
+        if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function_in_diff):
             lookback_idx = idx - 2
             annotations = []
             while lookback_idx >= 0 and lines[lookback_idx].strip().startswith("@"):
@@ -251,7 +303,7 @@ def lint_file(file_path: Path) -> list[dict]:
                     "msg": f"MVI State class '{trimmed}' is missing @Immutable or @Stable for Compose stability.",
                 })
 
-    if DI_FRAMEWORK.lower() == "hilt" and has_fragment_activity and not has_android_entry_point and not is_test:
+    if DI_FRAMEWORK.lower() == "hilt" and has_fragment_activity_in_diff and not has_android_entry_point and not is_test:
         issues.append({
             "file": str(file_path),
             "line": 1,
@@ -259,7 +311,7 @@ def lint_file(file_path: Path) -> list[dict]:
             "msg": "Fragment / Activity class is missing '@AndroidEntryPoint' for Hilt dependency injection.",
         })
 
-    if has_compose_function and is_preview_surface(file_path.name):
+    if has_compose_function_in_diff and is_preview_surface(file_path.name):
         is_dual_locale = "ar" in SUPPORTED_LOCALES and "en" in SUPPORTED_LOCALES
         extra = " plus Loading/Empty/Error." if requires_state_previews(file_path.name) else "."
         if is_dual_locale:
@@ -313,8 +365,10 @@ def main() -> int:
             for p in root.rglob("*.kt")
             if not any(x in p.parts for x in skip)
         ]
+        modified_lines_map = {p: None for p in target_files}
     else:
         target_files = [p for p in changed_paths() if p.suffix == ".kt"]
+        modified_lines_map = get_modified_lines_map(REPO, target_files)
 
     if not target_files:
         git_head_proc = subprocess.run(
@@ -335,10 +389,11 @@ def main() -> int:
         print("[OK] No Kotlin files to lint in the working tree (including untracked).")
         return 0
 
-    print(f"[*] Fast Kotlin Lint: Scanning {len(target_files)} Kotlin file(s)...")
+    mode_label = "all files" if args.all else "modified lines in changed files"
+    print(f"[*] Fast Kotlin Lint: Scanning {len(target_files)} Kotlin file(s) ({mode_label})...")
     all_issues = []
     for path in target_files:
-        all_issues.extend(lint_file(path))
+        all_issues.extend(lint_file(path, modified_lines=modified_lines_map.get(path)))
 
     if not all_issues:
         print("[SUCCESS] Fast Kotlin Lint passed! 0 syntax/architectural violations detected.")

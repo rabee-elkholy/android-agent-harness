@@ -123,6 +123,31 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Hard Pre-Gate: run diff-scoped fast_kt_lint before generating the review package
+    fast_lint_script = Path(__file__).resolve().parent / "fast_kt_lint.py"
+    if fast_lint_script.is_file():
+        lint_proc = subprocess.run(
+            [sys.executable, str(fast_lint_script)],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if lint_proc.returncode != 0:
+            print(
+                "[FAIL] Cannot generate review package: Fast Kotlin Lint detected violations on modified lines:",
+                file=sys.stderr,
+            )
+            if lint_proc.stdout.strip():
+                print(lint_proc.stdout.strip(), file=sys.stderr)
+            if lint_proc.stderr.strip():
+                print(lint_proc.stderr.strip(), file=sys.stderr)
+            print("\n[!] Fix all lint violations above before generating a review package.", file=sys.stderr)
+            return 1
+
     fingerprint = tree_code_fingerprint() or ""
     files_map, total_changed = build_files_map()
     skipped_count = max(0, total_changed - len(files_map))

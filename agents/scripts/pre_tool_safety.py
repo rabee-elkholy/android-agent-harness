@@ -774,19 +774,29 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
             "review_package",
         )
     )
-    is_assemble_or_test = not is_setup_script and any(
+    is_lint = not is_setup_script and "fast_kt_lint" in lower_norm
+
+    # Differentiate unit testing from assemble / device deployment
+    is_unit_test = not is_setup_script and any(
         k in lower_norm
-        for k in ("gradlew", "run_gradle_task.py", "testdebug", "run_device.py")
+        for k in ("testdebug", "unittest")
+    ) and not any(k in lower_norm for k in ("assemble", "run_device.py", "install", "bundle"))
+
+    is_assemble_or_device = not is_setup_script and any(
+        k in lower_norm
+        for k in ("assemble", "run_device.py", "install-start", "bundle")
     )
     # Standalone `gradle <task>` (classic CLI) — but never bare file mentions
     # like `cat gradle.properties` / `gradle/libs.versions.toml`.
     is_gradle_cli = not is_setup_script and bool(
         re.search(r"\bgradle\b(?![\w./\\-]*\.)", lower_norm)
     )
-    is_assemble_or_test = is_assemble_or_test or is_gradle_cli
-    is_lint = not is_setup_script and "fast_kt_lint" in lower_norm
+    is_gradle_build = is_gradle_cli and not is_unit_test
+    is_assemble_or_device = is_assemble_or_device or is_gradle_build
 
-    if (is_assemble_or_test or is_lint) and conv != "unknown":
+    is_gradle_or_test = is_unit_test or is_assemble_or_device or ("run_gradle_task.py" in lower_norm)
+
+    if (is_gradle_or_test or is_lint) and conv != "unknown":
         ok, barrier_msg = check_subagents_barrier(conv, payload)
         if not ok:
             deny(
@@ -795,11 +805,13 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
             )
             return
 
-    if is_assemble_or_test and conv != "unknown":
+    # Delivery Gate: assembleDebug, bundle, and device run REQUIRE a 5-leaf review round first.
+    # Unit tests (:app:testDebugUnitTest) and fast_kt_lint are allowed BEFORE review as a pre-gate.
+    if is_assemble_or_device and conv != "unknown":
         if has_non_doc_code_changes() and invoke_count(conv, "review") < 1:
             deny(
                 "Denied: working tree has code changes but no 5-leaf review round ran in this conversation. "
-                "Generate a review package and dispatch all 5 review leaves in one invoke_subagent call first."
+                "Generate a review package and dispatch all 5 review leaves in one invoke_subagent call first before assemble/device run."
             )
             return
 

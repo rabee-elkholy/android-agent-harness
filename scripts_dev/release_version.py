@@ -244,11 +244,11 @@ def main(argv: list[str] | None = None) -> int:
 
     print("\n[5/5] Committing, tagging, and publishing release...")
     stage_paths = [
-        "agents/VERSION",
+        "agents/",
+        "AGENTS.md",
         "pyproject.toml",
         "CITATION.cff",
         "CHANGELOG.md",
-        "agents/scripts/_hook_selftest.py",
         "README.md",
         "docs/",
         "scripts_dev/",

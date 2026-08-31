@@ -195,9 +195,9 @@ If the package diff contains any modified or newly created unit/UI test files (`
 From repo root:
 
 0. **Shift-Left Test & Lint Pre-Gate**: When code or unit tests are touched, ALWAYS run BOTH before requesting review packages:
-   a. `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Compiler, signature parity & unit tests)
-   b. `python .agents/scripts/fast_kt_lint.py` (Fast Kotlin Lint: catches `!!`, `TODO` stubs, `runBlocking` in tests, inline FQCNs, missing `@Preview`s before review).
-   *Fix any compiler or lint issues BEFORE generating the review package so code sent to reviewers is 100% clean.*
+   a. `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Compiler, signature parity & unit tests — permitted before review as a pre-gate).
+   b. `python .agents/scripts/fast_kt_lint.py` (Diff-Scoped Fast Kotlin Lint: catches `!!`, `TODO` stubs, `runBlocking` in tests, inline FQCNs on modified/added lines without penalizing untouched legacy code).
+   *Fix any compiler or lint issues BEFORE generating the review package. `review_package.py` strictly validates lint and will refuse package generation on lint violations.*
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
 3. **SILENT REVIEW WAIT (Zero Chat Noise)**:

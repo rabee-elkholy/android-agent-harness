@@ -1493,7 +1493,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.15.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.16.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1672,7 +1672,7 @@ ok_lint_harden = (
 print(f"fast_kt_lint FQCN whitelist and ComponentActivity: {'OK' if ok_lint_harden else 'FAIL'}")
 failed += int(not ok_lint_harden)
 
-from fast_kt_lint import UNIMPLEMENTED_STUB_PATTERN, DOUBLE_BANG_PATTERN
+from fast_kt_lint import UNIMPLEMENTED_STUB_PATTERN, DOUBLE_BANG_PATTERN, lint_file as lint_file_diff_test
 ok_lint_new_rules = (
     bool(UNIMPLEMENTED_STUB_PATTERN.search("fun doWork() = TODO()"))
     and bool(UNIMPLEMENTED_STUB_PATTERN.search("throw NotImplementedError()"))
@@ -1680,6 +1680,57 @@ ok_lint_new_rules = (
 )
 print(f"fast_kt_lint shift-left rules (TODO, !!, test runBlocking): {'OK' if ok_lint_new_rules else 'FAIL'}")
 failed += int(not ok_lint_new_rules)
+
+# --- v0.16.0: Diff-Scoped Fast KT Linting (ignores untouched legacy lines) ---
+tmp_kt_file = Path(tempfile.mkdtemp()) / "SampleViewModel.kt"
+tmp_kt_file.write_text(
+    "package com.example\n"
+    "class SampleViewModel {\n"
+    "    fun legacyMethod() { val legacy = oldVal!! }\n"
+    "    fun touchedMethod() { val newClean = 123 }\n"
+    "    fun touchedBrokenMethod() { val bad = brokenVal!! }\n"
+    "}\n",
+    encoding="utf-8",
+)
+issues_clean_diff = lint_file_diff_test(tmp_kt_file, modified_lines={4})
+ok_diff_clean = len(issues_clean_diff) == 0
+issues_broken_diff = lint_file_diff_test(tmp_kt_file, modified_lines={5})
+ok_diff_broken = len(issues_broken_diff) == 1 and issues_broken_diff[0]["line"] == 5 and issues_broken_diff[0]["type"] == "UNCHECKED_DOUBLE_BANG"
+issues_full = lint_file_diff_test(tmp_kt_file, modified_lines=None)
+ok_diff_full = len(issues_full) == 2
+ok_diff_scoped = ok_diff_clean and ok_diff_broken and ok_diff_full
+print(f"fast_kt_lint diff-scoped line inspection: {'OK' if ok_diff_scoped else 'FAIL'}")
+failed += int(not ok_diff_scoped)
+
+# --- v0.16.0: check_strings precise placeholders & duplicate keys ---
+from check_strings import _extract_placeholders, _parse_resources
+ph_extra = _extract_placeholders("40% extra discount")
+ph_disc = _extract_placeholders("55 % Discount")
+ph_drastic = _extract_placeholders("20%, drastically decreases")
+ph_from = _extract_placeholders("% From your goal")
+ph_valid = _extract_placeholders("Hello %s, you have %d points")
+ok_ph_precision = (
+    ph_extra == []
+    and ph_disc == []
+    and ph_drastic == []
+    and ph_from == []
+    and ph_valid == ["%d", "%s"]
+)
+print(f"check_strings placeholder precision (no literal % false positives): {'OK' if ok_ph_precision else 'FAIL'}")
+failed += int(not ok_ph_precision)
+
+tmp_dup_xml = Path(tempfile.mkdtemp()) / "strings.xml"
+tmp_dup_xml.write_text(
+    '<resources>\n'
+    '    <string name="dummy_button">Button 1</string>\n'
+    '    <string name="dummy_button">Button 2</string>\n'
+    '</resources>\n',
+    encoding="utf-8",
+)
+_, dups = _parse_resources(tmp_dup_xml)
+ok_xml_dup = len(dups) == 1 and "dummy_button" in dups[0]
+print(f"check_strings duplicate resource key detection: {'OK' if ok_xml_dup else 'FAIL'}")
+failed += int(not ok_xml_dup)
 
 import re
 groovy_gradle = '''

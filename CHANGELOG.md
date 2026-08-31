@@ -5,6 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-08-31
+
+### Diff-Scoped Fast KT Lint, Pre-Gate Deadlock Fix, Hard Review Package Gate & Precision Strings
+- **Diff-Scoped Fast Kotlin Lint (`fast_kt_lint.py`, `_hook_selftest.py`)**: Added `get_modified_lines_map` parsing `git diff -U0 HEAD` to apply line-level coding invariants (`!!`, inline FQCNs, `runBlocking`, `TODO` stubs, wildcard imports) strictly to modified/added lines in the working tree diff without penalizing untouched legacy code in the same files.
+- **Pre-Gate Deadlock Resolution (`pre_tool_safety.py`)**: Disentangled unit tests from full assemble/device deployment in `handle_run_command`, explicitly unblocking `:app:testDebugUnitTest` (and unit test tasks) as a pre-review test gate while keeping `:app:assembleDebug`, bundle, and device installation strictly blocked until 5-leaf review PASS.
+- **Hard Deterministic Lint Pre-Gate in Review Package Generator (`review_package.py`)**: `review_package.py` now automatically executes `fast_kt_lint.py` before building diff packages and aborts with `Exit Code 1` on violations, preventing invalid packages and wasted review tokens.
+- **Adaptive Strings Guard & Duplicate Resource Key Detector (`check_strings.py`)**:
+  - Refactored `PLACEHOLDER_RE` with lookaround guards to eliminate false-positive placeholder matches on literal percentage phrases (e.g. `40% extra`, `55 % Discount`, `20%, drastically`, `% From`).
+  - Added duplicate resource key detection across `<string>`, `<plurals>`, and `<string-array>` in `_parse_resources`, catching duplicate insertions before Gradle AAPT2 merger crashes during assemble.
+- **Delivery Rules & Governance Synchronized (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Documented the diff-scoped linting contract and unblocked unit-testing flow across all agent instructions.
+
 ## [0.15.0] - 2026-08-31
 
 ### System Audit Report, Product-Policy Safety Hooks & Client-Facing Parameterization
@@ -97,19 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Unified Install & Update Prompt File Consolidation
 - **Unified Setup & Upgrade Architecture (`docs/install-or-update-prompt.md`)**: Consolidated installation and update workflows by renaming `docs/install-prompt.md` to `docs/install-or-update-prompt.md` and removing `docs/update-prompt.md`, retaining the original structural port and setup steps while clarifying its dual capability for fresh installations and project upgrades.
 - **Synchronized Roster & Documentation Links**: Updated `README.md`, `docs/quickstart.md`, `docs/tool-support.md`, `docs/diagnostic-prompt.md`, `docs/setup-prompt.md`, `docs/sync.md`, `check_kit_update.py`, `pre_invocation_reminder.py`, `harness_cli.py`, and `scripts_dev/pin_prompt_docs.py`.
-
-## [0.14.14] - 2026-08-30
-
-### Autonomous Phase Pipeline, Review Round Cards & Zero-Timer Invariant
-- **Continuous Autonomous Phase Pipeline (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Enhanced `autonomous_e2e` device verification mode so that upon passing `run_e2e_smoke.py` ([SUCCESS]), the Lead Agent outputs the Phase Milestone Card with verification evidence and proceeds immediately and autonomously to Phase N+1 without blocking the developer with interactive modals. Interactive `ask_question` modals are reserved exclusively for `manual_only` mode (with explicit numbered checklists) or upon test failures/crashes.
-- **Transparent Review Round Summary Cards (`harness-rules.md`, `AGENTS.md`, `deliver.md`)**: Mandated outputting concise Review Round Summary Cards in chat whenever a review round finishes with non-PASS findings, detailing the exact findings and corrective fixes before re-dispatching the next round, eliminating developer loop anxiety.
-- **Strict Zero-Timer & No-Sleep Invariant (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Strictly banned invoking `schedule`, running shell `sleep` commands, or polling `manage_task` in a loop while waiting for subagents, relying 100% on the system's reactive wakeup.
-
-## [0.14.13] - 2026-08-30
-
-### Foundation Reference Indexing & Automated Upgrade Pruning
-- **Complete Foundation Indexing (`daily-scenarios.md`)**: Indexed all 7 universal foundation reference guides (`architecture-guidelines.md`, `ui-layout-and-theming.md`, `database-and-persistence.md`, `performance-and-optimization.md`, `test-quality-guidelines.md`, `automated-skills.md`, `daily-scenarios.md`) to guarantee 100% zero-warning diagnostics across all installations and updates.
-- **Enhanced Update Engine (`update-prompt.md`)**: Enforced automatic pruning of legacy reference file names during upgrade while strictly preserving tailored project domain references and developer configurations.
+- **Autonomous Phase Pipeline & Zero-Timer Invariant (0.14.14)**: Enhanced `autonomous_e2e` device verification mode so that upon passing `run_e2e_smoke.py`, the Lead Agent outputs the Phase Milestone Card and proceeds autonomously to Phase N+1 without blocking modals. Strictly banned `schedule`, shell `sleep`, or `manage_task` busy loops.
+- **Foundation Reference Indexing (0.14.13)**: Indexed all 7 universal foundation reference guides to guarantee 100% zero-warning diagnostics across all installations and updates.
 
 ---
 

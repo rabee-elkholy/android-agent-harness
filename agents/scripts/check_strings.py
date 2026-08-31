@@ -32,7 +32,9 @@ for candidate in list(REPO.glob("**/src/*/res")) + list(REPO.glob("**/composeRes
 if not RES_DIRS:
     RES_DIRS = [primary_res]
 
-PLACEHOLDER_RE = re.compile(r"%(?:(\d+)\$)?([+\-# 0,(]*\d*(?:\.\d+)?[a-zA-Z%])|\{([a-zA-Z0-9_]+)\}")
+PLACEHOLDER_RE = re.compile(
+    r"(?<!\d)%(?:(\d+)\$)?([+\-# 0,(<]*\d*(?:\.\d+)?[tT]?[sSdDfFgGxXbBcCeEoaAn%])(?![a-zA-Z0-9])|\{([a-zA-Z0-9_]+)\}"
+)
 
 # UI call sites that must not carry a raw user-facing literal.
 HARDCODED_KT = [
@@ -103,21 +105,34 @@ def _is_language_locale_tag(tag: str) -> bool:
     return bool(re.match(r"^(?:b\+[a-zA-Z0-9+]+|[a-z]{2,3}(?:-r?[a-zA-Z0-9]+)?)$", tag_lower))
 
 
-def _parse_resources(xml_file: Path) -> dict[str, dict]:
+def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
+    """Parse XML strings/plurals/arrays, returning (resource_dict, duplicate_key_errors)."""
     if not xml_file.is_file():
-        return {}
+        return {}, []
     res: dict[str, dict] = {}
+    duplicates: list[str] = []
+    seen_names: set[str] = set()
+
     try:
         root = ET.parse(xml_file).getroot()
     except Exception as exc:
         print(f"Warning: Failed to parse XML {xml_file.name}: {exc}")
-        return {}
+        return {}, []
+
     for tag in ("string", "plurals", "string-array"):
         for elem in root.findall(tag):
-            if elem.get("translatable") == "false":
-                continue
             name = elem.get("name")
             if not name:
+                continue
+            if name in seen_names:
+                try:
+                    rel_p = xml_file.relative_to(REPO).as_posix()
+                except ValueError:
+                    rel_p = str(xml_file)
+                duplicates.append(f"Duplicate <{tag} name=\"{name}\"> in {rel_p}")
+            seen_names.add(name)
+
+            if elem.get("translatable") == "false":
                 continue
             if tag == "string":
                 text = "".join(elem.itertext()).strip()
@@ -132,7 +147,7 @@ def _parse_resources(xml_file: Path) -> dict[str, dict]:
             elif tag == "string-array":
                 items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
                 res[name] = {"tag": tag, "items": items, "placeholders": []}
-    return res
+    return res, duplicates
 
 
 def discover_locale_pairs() -> list[tuple[Path, Path, str]]:
@@ -165,6 +180,8 @@ def _cut_line_comment(line: str) -> str:
     i = 0
     while i < len(line):
         ch = line[i]
+        if not in_string and ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            return line[:i]
         if in_string:
             if escaped:
                 escaped = False
@@ -174,8 +191,6 @@ def _cut_line_comment(line: str) -> str:
                 in_string = False
         elif ch == '"':
             in_string = True
-        elif ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
-            return line[:i]
         i += 1
     return line
 
@@ -243,8 +258,20 @@ def main() -> int:
                 base_rel = str(base_file)
                 loc_rel = str(loc_file)
 
-            base_data = _parse_resources(base_file)
-            loc_data = _parse_resources(loc_file)
+            base_data, base_dups = _parse_resources(base_file)
+            loc_data, loc_dups = _parse_resources(loc_file)
+
+            if base_dups:
+                print(f"\n[!] Duplicate keys in {base_rel} ({len(base_dups)}):")
+                for d in base_dups:
+                    print(f"   - {d}")
+                errors += len(base_dups)
+
+            if loc_dups:
+                print(f"\n[!] Duplicate keys in {loc_rel} ({len(loc_dups)}):")
+                for d in loc_dups:
+                    print(f"   - {d}")
+                errors += len(loc_dups)
 
             base_keys = set(base_data.keys())
             loc_keys = set(loc_data.keys())
