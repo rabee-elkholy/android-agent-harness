@@ -1,4 +1,4 @@
-"""Doctor diagnostic package for Android Harness Kit."""
+"""Doctor diagnostic package for Android Agent Harness."""
 from __future__ import annotations
 
 from .models import (

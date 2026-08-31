@@ -1,12 +1,12 @@
 # Install or Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/install-or-update-prompt.md`  
-> **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
-> **Kit version**: `v0.14.22` — **SHA-256**: `bd9cd7f84583a3e88474db929d1b8466b0c45e8ad54e4f3006eddcf2b48d89e7` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/install-or-update-prompt.md`  
+> **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
+> **Kit version**: `v0.14.22` — **SHA-256**: `50668a7d82d2c5704793b95827541661c99f8f748d6d97c2ee4e1ca048508f98` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
-You are installing or updating the portable **Android AI harness** into **this** checkout. This folder is the Android product. It is not `android-harness-kit`.
+You are installing or updating the portable **Android AI harness** into **this** checkout. This folder is the Android product. It is not `android-agent-harness`.
 
 Answer in the developer's language. Do not commit unless they ask. Do not only rename the example app.
 
@@ -18,7 +18,7 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
 
 1. **Target Project Verification (Fail-Fast)**:
    - **Android Project Check**: Confirm this repo has `gradlew` or `gradlew.bat` AND Android Gradle build files (`build.gradle` / `build.gradle.kts`). If not, **STOP IMMEDIATELY** and tell the developer in their language:
-     `[ERROR] Target directory is NOT an Android project. Android Harness Kit requires a Gradle-based Android or Kotlin Multiplatform project.`
+     `[ERROR] Target directory is NOT an Android project. Android Agent Harness requires a Gradle-based Android or Kotlin Multiplatform project.`
    - **Greenfield / Established Codebase Support**:
      - If this is an **established codebase**, the wizard will automatically discover your architecture, DI, ViewModels, and UI from disk.
      - If this is a **brand-new / blank project**, the wizard will automatically guide you through the **Greenfield Bootstrap Questionnaire** (Platform, MVI/MVVM, Koin/Hilt, Voyager/ComposeNav, Room/SQLDelight, Ktor/Retrofit) to establish the architectural blueprint and governance rules from day one.
@@ -26,11 +26,11 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
     - Preferred: run `android-harness init --repo <this-android-root>`. The CLI resolves a release tag, provisions the kit at detached `v<version>`, and verifies that `agents/VERSION` matches the tag. It never provisions from `main`.
     - For a manual kit clone, fetch and check out an exact release tag before copying anything:
       ```bash
-      git clone --no-checkout https://github.com/rabee-elkholy/android-harness-kit.git
-      git -C android-harness-kit fetch origin --tags --prune
-      git -C android-harness-kit checkout --detach v<requested-version>
+      git clone --no-checkout https://github.com/rabee-elkholy/android-agent-harness.git
+      git -C android-agent-harness fetch origin --tags --prune
+      git -C android-agent-harness checkout --detach v<requested-version>
       ```
-      Verify `android-harness-kit/agents/VERSION` equals `<requested-version>`. Do **not** clone into `app/`, `composeApp/`, or any module source tree, and do **not** pull `main`.
+      Verify `android-agent-harness/agents/VERSION` equals `<requested-version>`. Do **not** clone into `app/`, `composeApp/`, or any module source tree, and do **not** pull `main`.
 3. **Answers first (do not invent short questions).** `--lang ar` if the developer writes Arabic, else `--lang en`.
    - Preferred: they run this in **their** terminal, then tell you when it finishes:
      `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>`
@@ -41,7 +41,7 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
 
 Kit rules that still apply during setup:
 
-- **Strict Read-Only Kit Source**: Never modify or write files in `<kit>` (`android-harness-kit`). Port and configure strictly into `<this repo>/.agents`.
+- **Strict Read-Only Kit Source**: Never modify or write files in `<kit>` (`android-agent-harness`). Port and configure strictly into `<this repo>/.agents`.
 - **Scope Isolation**: Setup configures `.agents/` only. Never edit app production files (`strings.xml`, Kotlin files) during install. Report pre-existing preflight issues in chat.
 - **No `schedule` Timers**: Never call `schedule` or create background sleep timers during install. Run commands synchronously or await reactive completion.
 - **Mandatory Step 3b Approval**: Must present the domain references table to the developer via `ask_question` and obtain approval.

@@ -1,4 +1,4 @@
-"""Android Harness Kit CLI: bootstrap, doctor, preflight, and selftest dispatch.
+"""Android Agent Harness CLI: bootstrap, doctor, preflight, and selftest dispatch.
 
 Zero runtime dependencies. The CLI is a thin dispatcher: the engine always lives
 in a kit checkout (agents/scripts). `android-harness init` reuses an existing
@@ -37,15 +37,15 @@ import time
 import urllib.request
 from pathlib import Path
 
-KIT_REPO_URL = "https://github.com/rabee-elkholy/android-harness-kit.git"
-RELEASES_API_URL = "https://api.github.com/repos/rabee-elkholy/android-harness-kit/releases/latest"
+KIT_REPO_URL = "https://github.com/rabee-elkholy/android-agent-harness.git"
+RELEASES_API_URL = "https://api.github.com/repos/rabee-elkholy/android-agent-harness/releases/latest"
 KIT_DIR = Path.home() / ".android-harness" / "kit"
 
 
 def _prompt_url(version: str, doc: str) -> str:
     """Immutable release-tag URL for a one-click lifecycle prompt doc."""
     return (
-        "https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/"
+        "https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/"
         f"v{str(version).strip().lstrip('v')}/docs/{doc}"
     )
 
@@ -54,7 +54,7 @@ def _manual_remediation(version: str) -> str:
     return (
         "Remediate manually:\n"
         f"    git clone {KIT_REPO_URL}\n"
-        f"    git -C android-harness-kit checkout v{version}\n"
+        f"    git -C android-agent-harness checkout v{version}\n"
         "then rerun with --kit <path>."
     )
 
@@ -147,13 +147,13 @@ def resolve_kit(explicit: str | None) -> Path:
     candidates.append(KIT_DIR)
     cwd = Path.cwd().resolve()
     for parent in [cwd, *cwd.parents[:2]]:
-        candidates.append(parent / "android-harness-kit")
+        candidates.append(parent / "android-agent-harness")
     for cand in candidates:
         if _has_engine(cand):
             return cand
     raise SystemExit(
-        "[ERROR] No Android Harness Kit engine found. "
-        "Pass --kit /path/to/android-harness-kit, set HARNESS_KIT, run from the kit "
+        "[ERROR] No Android Agent Harness engine found. "
+        "Pass --kit /path/to/android-agent-harness, set HARNESS_KIT, run from the kit "
         f"checkout, or let init clone it into {KIT_DIR}."
     )
 
@@ -172,7 +172,7 @@ def ensure_kit(explicit: str | None) -> Path:
             "The kit is never provisioned from a floating branch. "
             + _manual_remediation("latest")
         )
-    print(f"[*] Provisioning Android Harness Kit at pinned tag v{requested} into {KIT_DIR} ...")
+    print(f"[*] Provisioning Android Agent Harness at pinned tag v{requested} into {KIT_DIR} ...")
     _provision_pinned(KIT_REPO_URL, KIT_DIR, requested)
     if not _has_engine(KIT_DIR):
         shutil.rmtree(KIT_DIR, ignore_errors=True)
@@ -283,7 +283,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     version = (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip()
     print("==================================================")
-    print(f"[Android Harness Kit] v{version}")
+    print(f"[Android Agent Harness] v{version}")
     print(f"  target app : {repo}")
     print(f"  engine kit : {kit}")
     print("==================================================")

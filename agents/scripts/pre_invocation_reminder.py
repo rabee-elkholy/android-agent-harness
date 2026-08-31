@@ -18,8 +18,8 @@ def check_update_directive() -> str:
             curr = info.get("current", "")
             latest = info.get("latest", "")
             return (
-                f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Harness Kit (v{latest}) is available (installed: v{curr}). "
-                f"In this opening turn, notify the developer via ask_question in their language: 'New Android Harness Kit v{latest} is available! What would you like to do?' "
+                f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Agent Harness (v{latest}) is available (installed: v{curr}). "
+                f"In this opening turn, notify the developer via ask_question in their language: 'New Android Agent Harness v{latest} is available! What would you like to do?' "
                 f"Choices: 'View Changes (عرض التغييرات)' / 'Remind me tomorrow (ذكرني غداً)' / 'Update now (تحديث الآن)'. "
                 f"If they pick 'Remind me tomorrow': run `python .agents/scripts/check_kit_update.py --snooze 1` and proceed with their request. "
                 f"If they pick 'View Changes': run `python .agents/scripts/check_kit_update.py --show-changes` to show the changelog, then ask 'Update now' or 'Remind me tomorrow'. "

@@ -124,7 +124,7 @@ HARNESS_LOCAL_EXCLUSIONS = [
     "*.wizard_questions.json",
     ".wizard_questions.json",
     "scratch_*.py",
-    "android-harness-kit/",
+    "android-agent-harness/",
     "fix_product.py",
     "script_step*.py",
     "update_worker.py",
@@ -151,7 +151,7 @@ def ensure_local_git_privacy(target_repo: Path | None = None) -> list[str]:
                 with exclude_path.open("a", encoding="utf-8", newline="\n") as f:
                     if text and not text.endswith("\n"):
                         f.write("\n")
-                    f.write("# Android Harness Kit — Local AI Manifests & Transient State (Private to this machine)\n")
+                    f.write("# Android Agent Harness — Local AI Manifests & Transient State (Private to this machine)\n")
                     for pat in added:
                         f.write(f"{pat}\n")
                 logs.append(f"local git exclude -> .git/info/exclude ({len(added)} patterns registered)")
@@ -198,7 +198,7 @@ def ensure_local_git_privacy(target_repo: Path | None = None) -> list[str]:
                     s in {pat.strip() for pat in HARNESS_LOCAL_EXCLUSIONS}
                     or s in {pat.strip().rstrip("/") for pat in HARNESS_LOCAL_EXCLUSIONS}
                     or s.startswith(".agents/")
-                    or s in ("# Android AI Harness Kit", "# Android Harness Kit")
+                    or s in ("# Android AI Harness Kit", "# Android Agent Harness")
                 ):
                     modified = True
                     continue

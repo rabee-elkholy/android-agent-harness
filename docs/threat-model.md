@@ -1,4 +1,4 @@
-# Threat Model — Android Harness Kit
+# Threat Model — Android Agent Harness
 
 Scope: threats against the harness itself and the Android checkout it governs.
 Attackers: a compromised or misbehaving AI agent, a malicious prompt payload,

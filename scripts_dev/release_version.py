@@ -1,4 +1,4 @@
-"""Unified, one-command release automation for android-harness-kit.
+"""Unified, one-command release automation for android-agent-harness.
 
 Automates version bumping, prompt URL pinning, cryptographic checksum recalculation,
 changelog extraction, selftest verification, Git tagging, and GitHub Release publication.
@@ -118,7 +118,7 @@ def extract_changelog_notes(version: str) -> tuple[str, str]:
         prev_version = all_versions[1]
         full_notes += (
             f"\n\n**Full Changelog**: "
-            f"https://github.com/rabee-elkholy/android-harness-kit/compare/v{prev_version}...v{version}"
+            f"https://github.com/rabee-elkholy/android-agent-harness/compare/v{prev_version}...v{version}"
         )
 
     return f"v{version}: {title}", full_notes
@@ -138,7 +138,7 @@ def run_cmd(cmd: list[str], *, check: bool = True, cwd: Path = ROOT) -> subproce
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Unified one-command release automation for android-harness-kit."
+        description="Unified one-command release automation for android-agent-harness."
     )
     parser.add_argument(
         "version",
@@ -310,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
                 encoding="utf-8",
             )
         if gh_proc.returncode == 0:
-            print(f"  [SUCCESS] GitHub Release published: https://github.com/rabee-elkholy/android-harness-kit/releases/tag/{tag_name}")
+            print(f"  [SUCCESS] GitHub Release published: https://github.com/rabee-elkholy/android-agent-harness/releases/tag/{tag_name}")
         else:
             print(f"  [!] gh release warning: {gh_proc.stderr.strip()}")
     else:

@@ -17,7 +17,7 @@ Do not weaken the engine (see `docs/porting.md`).
 
 ## Never
 
-- Overwrite the parent’s live `.agents` with the kit tree (or with `dist/android-harness-kit`).
+- Overwrite the parent’s live `.agents` with the kit tree (or with `dist/android-agent-harness`).
 - Overwrite the GitHub kit with the parent’s live `.agents` (it contains `state/`, product-only edits, and often a nested `dist/`).
 - Run `install-or-update-prompt.md` **on the parent product**. Those prompts fill generic kit defaults from disk. The parent already has its real identity.
 - Copy `~/.gemini` either way.
@@ -28,7 +28,7 @@ Do not weaken the engine (see `docs/porting.md`).
 
 1. Backup the kit clone.
 2. Diff **only** the engine files you changed in the parent (scripts, hooks, reviewer JSON, selftest). Skip `state/`, MCP, Gemini, `dist/`.
-3. Copy those files into `android-harness-kit/agents/…` (same relative path).
+3. Copy those files into `android-agent-harness/agents/…` (same relative path).
 4. If the change is product-specific (package, launcher, theme, domain copy), **do not** promote it. Strip identity first; kit `_product.py` stays generic.
 5. In the kit: `$PY agents/scripts/_hook_selftest.py`. Grep `agents/` for parent identity tokens — must be clean.
 6. Commit the kit. Products update with `docs/install-or-update-prompt.md` (not the parent).

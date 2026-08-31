@@ -27,7 +27,7 @@ from _repo_files import ensure_local_git_privacy  # noqa: E402
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = AGENTS_DIR / "tool-adapters"
 COMMAND_PACKS_DIR = AGENTS_DIR / "command-packs"
-MANAGED = "<!-- managed-by: android-harness-kit -->\n"
+MANAGED = "<!-- managed-by: android-agent-harness -->\n"
 SKIP_SUBAGENTS = {
     "code-review-guard-agent",
     "review-prompt",
@@ -545,7 +545,7 @@ COPILOT_HOOKS_FILE = ".github/hooks/android-harness-pre-tool-use.json"
 def copilot_hooks_payload(py: str) -> dict:
     return {
         "version": 1,
-        "_comment": "<!-- managed-by: android-harness-kit -->",
+        "_comment": "<!-- managed-by: android-agent-harness -->",
         "hooks": {
             "preToolUse": [
                 {

@@ -1,4 +1,4 @@
-"""Lightweight, non-blocking check for newer Android Harness Kit releases on GitHub.
+"""Lightweight, non-blocking check for newer Android Agent Harness releases on GitHub.
 
 Supports 24h caching, release notes fetching, and "Remind me tomorrow" snoozing.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-GITHUB_REPO = "rabee-elkholy/android-harness-kit"
+GITHUB_REPO = "rabee-elkholy/android-agent-harness"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 CACHE_TTL_SECONDS = 86400  # 24 hours
 
@@ -178,7 +178,7 @@ def update_banner() -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check for Android Harness Kit updates.")
+    parser = argparse.ArgumentParser(description="Check for Android Agent Harness updates.")
     parser.add_argument("--snooze", type=float, metavar="DAYS", help="Snooze update reminders for N days (e.g. 1.0).")
     parser.add_argument("--show-changes", action="store_true", help="Print latest release notes / changelog.")
     parser.add_argument("--force", action="store_true", help="Force network check ignoring cache TTL.")
@@ -197,12 +197,12 @@ def main() -> int:
         return 0
 
     if args.show_changes:
-        print(f"=== Release Notes for Android Harness Kit v{res['latest']} ===")
+        print(f"=== Release Notes for Android Agent Harness v{res['latest']} ===")
         print(res["notes"] or "(No release notes provided)")
         print(f"\nRelease URL: {res['html_url']}")
         return 0
 
-    print(f"Android Harness Kit installed version: v{res['current']}")
+    print(f"Android Agent Harness installed version: v{res['current']}")
     if res["raw_has_update"]:
         if res["snoozed"]:
             print(f"[INFO] Newer version v{res['latest']} is available, but currently snoozed.")

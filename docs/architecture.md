@@ -284,7 +284,7 @@ python .agents/scripts/harness_doctor.py --device --json
 ---
 
 ### 8. CLI Dispatcher & Cross-Tool Hard Enforcement
-- **Standalone CLI Dispatcher (`harness_cli.py`)**: Zero-dependency executable (`android-harness` via `pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git`, or direct `python harness_cli.py`) providing unified `init`, `update`, `explain`, `doctor`, `preflight`, `selftest`, and `version` subcommands with automatic kit discovery and pin-to-tag remote provisioning (never `main`).
+- **Standalone CLI Dispatcher (`harness_cli.py`)**: Zero-dependency executable (`android-harness` via `pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git`, or direct `python harness_cli.py`) providing unified `init`, `update`, `explain`, `doctor`, `preflight`, `selftest`, and `version` subcommands with automatic kit discovery and pin-to-tag remote provisioning (never `main`).
 - **11 Native Slash Command Packs (`agents/command-packs/`)**: Standardized command packs generating native slash shortcuts for Claude Code (`.claude/commands/`), GitHub Copilot (`.github/prompts/*.prompt.md`), and OpenAI Codex (`.codex/prompts/`) with automatic pruning.
 - **Staged Pre-Commit Quality Gate (`pre_commit_gate.py`, on by default; `--no-git-gate` opts out)**: Deterministic, stdlib-only Git hook (`.githooks/pre-commit`) running bilingual string parity, Room database migrations, and fast Kotlin lint against staged changes in <5s before commit.
 - **Claude Code PreToolUse Safety Bridge (`cc_pre_tool_safety.py`, `--cc-hooks`)**: Intercepts terminal tool execution in Claude Code sessions via `.claude/settings.json` `PreToolUse` hook, enforcing strict Git mutation and ADB safety boundaries outside Antigravity.

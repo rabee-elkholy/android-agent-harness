@@ -1,4 +1,4 @@
-# Android Harness Kit: Workflows & Playbooks Guide
+# Android Agent Harness: Workflows & Playbooks Guide
 
 > **Deterministic Android Engineering for the AI Era**  
 > *Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team.*
@@ -7,7 +7,7 @@
 
 ## Overview
 
-The **Android Harness Kit** equips your AI assistant with deterministic, specialized engineering workflows designed specifically for Android development. Instead of unstructured prompting, developers and AI agents collaborate through disciplined, repeatable engineering playbooks.
+The **Android Agent Harness** equips your AI assistant with deterministic, specialized engineering workflows designed specifically for Android development. Instead of unstructured prompting, developers and AI agents collaborate through disciplined, repeatable engineering playbooks.
 
 ---
 

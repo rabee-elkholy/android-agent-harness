@@ -1,12 +1,12 @@
 <div align="center">
 
-# android-harness-kit
+# android-agent-harness
 
 ### Deterministic Android Engineering for the AI Era
 **Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team.**
 
-[![CI Build](https://img.shields.io/github/actions/workflow/status/rabee-elkholy/android-harness-kit/ci.yml?branch=main&style=flat-square&label=CI%20Build)](https://github.com/rabee-elkholy/android-harness-kit/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/rabee-elkholy/android-harness-kit?color=2ea44f&style=flat-square&label=Release)](https://github.com/rabee-elkholy/android-harness-kit/releases)
+[![CI Build](https://img.shields.io/github/actions/workflow/status/rabee-elkholy/android-agent-harness/ci.yml?branch=main&style=flat-square&label=CI%20Build)](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?color=2ea44f&style=flat-square&label=Release)](https://github.com/rabee-elkholy/android-agent-harness/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20KMP-3DDC84?style=flat-square)](https://android.com)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square)](https://python.org)
@@ -15,7 +15,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 <br/><br/>
-<img src="docs/assets/banner.svg" alt="android-harness-kit: Deterministic Android Engineering for the AI Era" width="100%" />
+<img src="docs/assets/banner.svg" alt="android-agent-harness: Deterministic Android Engineering for the AI Era" width="100%" />
 
 </div>
 
@@ -27,7 +27,7 @@
 Open a **new chat session** in your AI assistant (Antigravity, Claude Code, Cursor, Copilot, Windsurf) at your project root and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/install-or-update-prompt.md and follow all its instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/install-or-update-prompt.md and follow all its instructions.
 ```
 
 The installer autonomously inspects your project topology (Gradle modules, DI, UI framework, Room, Locales), creates target adapters, and executes self-diagnostic checks.
@@ -35,7 +35,7 @@ The installer autonomously inspects your project topology (Gradle modules, DI, U
 ### Path B: Via Terminal CLI
 ```bash
 cd /path/to/your/android-project
-pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
+pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git
 android-harness init
 ```
 
@@ -151,9 +151,9 @@ Pinned lifecycle prompts with cryptographic tamper-evident headers:
 
 | Operation | Prompt URL | Purpose |
 | :--- | :--- | :--- |
-| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
-| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
-| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
+| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
+| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
+| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
 
 ---
 
@@ -172,7 +172,7 @@ Pinned lifecycle prompts with cryptographic tamper-evident headers:
 
 ## Contributing & Community
 
-* **Report Bugs**: [GitHub Issue Tracker](https://github.com/rabee-elkholy/android-harness-kit/issues)
+* **Report Bugs**: [GitHub Issue Tracker](https://github.com/rabee-elkholy/android-agent-harness/issues)
 * **Contributions**: Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 * **Security Advisories**: See [SECURITY.md](SECURITY.md)
 

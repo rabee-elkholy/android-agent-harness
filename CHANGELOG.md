@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the **Android Harness Kit** will be documented in this file.
+All notable changes to the **Android Agent Harness** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -167,7 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Included in 0.14.4 (2026-08-30):**
 
 ### Repository Alignment, Security Hardening & Managed Block Preservation
-- **Repository Naming Alignment**: Completely unified repository identity to `android-harness-kit` across Git remotes, PyPI packaging, CLI endpoints, and documentation.
+- **Repository Naming Alignment**: Completely unified repository identity to `android-agent-harness` across Git remotes, PyPI packaging, CLI endpoints, and documentation.
 - **Path Traversal & Boundary Containment (`harness_cli.py`)**: Hardened `cmd_verify` with strict path traversal containment checks for `package.path` and all reviewed diff files, preventing escapes outside repository root or temporary directories.
 - **Strict Reviewer Roster Validation**: Enforced strict canonical name and status validation for all 5 leaf reviewers in `verdict.json` verification.
 - **Non-Destructive Managed Block Preservation (`install_tool_adapters.py`)**: Enhanced adapter file generation to cleanly preserve existing user-defined custom rules and instructions in `CLAUDE.md`, `AGENTS.md`, and `.cursorrules` using bounded `<!-- BEGIN ANDROID-HARNESS MANAGED BLOCK -->` markers.
@@ -398,7 +398,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Included in 0.6.0:**
 
 ### Standalone CLI Dispatcher, 11 Native Slash Command Packs, Pre-Commit Quality Gate & Claude Code PreToolUse Bridge
-- **Zero-Dependency CLI Dispatcher (`harness_cli.py`, `pyproject.toml`)**: Introduced the standalone `android-harness` command-line executable (`pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git`, or run in place via `python harness_cli.py`). Features 6 core subcommands (`init`, `update`, `doctor`, `preflight`, `selftest`, `version`), automatic engine discovery, and remote fallback kit provisioning.
+- **Zero-Dependency CLI Dispatcher (`harness_cli.py`, `pyproject.toml`)**: Introduced the standalone `android-harness` command-line executable (`pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git`, or run in place via `python harness_cli.py`). Features 6 core subcommands (`init`, `update`, `doctor`, `preflight`, `selftest`, `version`), automatic engine discovery, and remote fallback kit provisioning.
 - **11 Native Slash Command Packs (`agents/command-packs/`, `install_tool_adapters.py`)**: Added standardized, tool-native prompt templates automatically installed into `.claude/commands/` (Claude Code `/deliver`, `/debug`, `/doctor`, etc.), `.github/prompts/*.prompt.md` (GitHub Copilot), and `.codex/prompts/` (OpenAI Codex) with automated managed-marker pruning.
 - **Deterministic Staged Pre-Commit Quality Gate (`agents/scripts/pre_commit_gate.py`, `--git-gate`)**: Implemented an ultra-fast (<5s), stdlib-only Git hook scanning staged changes for bilingual string parity, Room entity migrations, and fast Kotlin lint issues prior to commit. Installed via `--git-gate` setting `git config core.hooksPath .githooks`.
 - **Claude Code PreToolUse Safety Bridge (`agents/scripts/cc_pre_tool_safety.py`, `--cc-hooks`)**: Ported the deterministic runtime safety hook to Claude Code sessions via the `PreToolUse` hook protocol in `.claude/settings.json`, enforcing zero-tolerance Git mutations and ADB restrictions outside Antigravity.

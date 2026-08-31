@@ -1,13 +1,13 @@
 # Setup prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/setup-prompt.md`  
-> **Kit Repository**: `https://github.com/rabee-elkholy/android-harness-kit.git`
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/setup-prompt.md`  
+> **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
 
 The installing agent **executes** this file (usually after the developer pasted [`install-or-update-prompt.md`](install-or-update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
 
 ---
 
-You are installing a portable **Android AI harness** into THIS checkout. The kit is a checkout of an exact release tag from `android-harness-kit` (sibling, temp, or a path the developer gave). Copy from that detached tag’s `agents/` folder only after verifying `agents/VERSION` matches the requested tag. Never copy from `main`.
+You are installing a portable **Android AI harness** into THIS checkout. The kit is a checkout of an exact release tag from `android-agent-harness` (sibling, temp, or a path the developer gave). Copy from that detached tag’s `agents/` folder only after verifying `agents/VERSION` matches the requested tag. Never copy from `main`.
 
 ## Goal
 
@@ -15,7 +15,7 @@ Same **engine** (5-leaf review, live Gradle runner, safety hook). **Different pr
 
 ## Critical Installation Guardrails (Zero-Tolerance Rules)
 
-1. **Read-Only Kit Source**: The kit directory (`<kit>` / `android-harness-kit`) is strictly **READ-ONLY**. NEVER edit, create, or modify any file in `<kit>`. All file copies, edits, patches, and configurations MUST occur strictly in the target Android repository (`<this-android-root>/.agents`).
+1. **Read-Only Kit Source**: The kit directory (`<kit>` / `android-agent-harness`) is strictly **READ-ONLY**. NEVER edit, create, or modify any file in `<kit>`. All file copies, edits, patches, and configurations MUST occur strictly in the target Android repository (`<this-android-root>/.agents`).
 2. **Scope Isolation (No Modifying App Source Code)**: Setup is strictly for configuring `.agents/` and AI tool rules. NEVER edit, rewrite, or modify the target application's production source code (e.g. `strings.xml`, `values-ar/strings.xml`, Kotlin files, or Room entities) to force preflight to pass. If preflight detects pre-existing issues in the app's codebase (such as untranslated strings or Room schema discrepancies), report them clearly to the developer in chat as pre-existing findings.
 3. **No `schedule` Timers**: NEVER call the `schedule` tool or create background sleep/polling timers during setup. Execute commands synchronously or wait for automatic task completion via Reactive Wakeup.
 4. **Mandatory Step 3b Approval (First Install Only)**: The installer MUST present the domain references table to the developer via `ask_question` modal in Step 3b during first-time installation and obtain explicit approval before finalizing setup.
@@ -282,6 +282,6 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 - **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
-  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/diagnostic-prompt.md`.
-  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/rollback-prompt.md`.
+  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/diagnostic-prompt.md`.
+  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/rollback-prompt.md`.
   - Remember: Six `*_PASS` required before real feature/bug delivery.

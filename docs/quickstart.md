@@ -28,14 +28,14 @@ For initial setup and structural porting, select a model capable of deep archite
 Copy the entire content of [`docs/install-or-update-prompt.md`](install-or-update-prompt.md) or paste the URL into your chat prompt:
 
 ```markdown
-Run the Android Harness Kit Installer or Updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/install-or-update-prompt.md
+Run the Android Agent Harness Installer or Updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/install-or-update-prompt.md
 ```
 
 ### Option B: Standalone CLI (Terminal)
 
 ```bash
-pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
+pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git
 android-harness init
 ```
 
@@ -64,8 +64,8 @@ PREFLIGHT PASSED
 To perform a comprehensive 12-dimension health audit at any time, audit `.gitignore` security rules, or check working tree status, paste the diagnostic prompt or run the CLI doctor:
 
 ```markdown
-Run the Android Harness Kit Diagnostic Doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/diagnostic-prompt.md
+Run the Android Agent Harness Diagnostic Doctor:
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/diagnostic-prompt.md
 ```
 
 Or execute directly from your terminal:
@@ -85,8 +85,8 @@ You can copy and paste any of the following prompts directly into your AI assist
 - **When to use**: Onboarding an existing Android repository, bootstrapping a brand-new Greenfield app, or upgrading to a new harness release.
 - **Prompt URL**:
 ```markdown
-Read and execute the Android Harness Kit installer or updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/install-or-update-prompt.md
+Read and execute the Android Agent Harness installer or updater:
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/install-or-update-prompt.md
 ```
 
 ### 3. Diagnostic Doctor Prompt (12-Dimension Health Check)
@@ -95,8 +95,8 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/doc
 - **When to use**: After installing, updating, switching IDEs, or troubleshooting warnings.
 - **Prompt URL**:
 ```markdown
-Read and execute the Android Harness Kit diagnostic doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/diagnostic-prompt.md
+Read and execute the Android Agent Harness diagnostic doctor:
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/diagnostic-prompt.md
 ```
 
 ### 4. Rollback Prompt (Instant Backup Restoration)
@@ -105,8 +105,8 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/doc
 - **When to use**: To revert recent harness configuration updates.
 - **Prompt URL**:
 ```markdown
-Read and execute the Android Harness Kit rollback:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/docs/rollback-prompt.md
+Read and execute the Android Agent Harness rollback:
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/rollback-prompt.md
 ```
 
 ---
@@ -116,7 +116,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.22/doc
 Install globally via `pipx` directly from this repository (PyPI publication pending):
 
 ```bash
-pipx install git+https://github.com/rabee-elkholy/android-harness-kit.git
+pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git
 ```
 
 No install needed? Run it in place from any kit clone:

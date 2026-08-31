@@ -7,7 +7,7 @@ zero changes.
     python scripts_dev/pin_prompt_docs.py --tag v0.11.0
 
 What it does:
- 1. Replaces every `android-harness-kit/(main|vX.Y.Z)/docs/` raw URL with the
+ 1. Replaces every `android-agent-harness/(main|vX.Y.Z)/docs/` raw URL with the
     given tag in the URL-bearing files.
  2. Ensures the `**Kit version**` header line exists in the four raw-fetched
     prompt docs and refreshes the SHA-256 in it.
@@ -43,7 +43,7 @@ CHECKSUM_DOCS = (
     "docs/rollback-prompt.md",
 )
 
-URL_RE = re.compile(r"(android-harness-kit/)(?:main|v\d+\.\d+\.\d+)(/docs/)")
+URL_RE = re.compile(r"(android-agent-harness/)(?:main|v\d+\.\d+\.\d+)(/docs/)")
 
 VERIFY_SENTENCE = (
     "Before executing anything: verify that the SHA-256 of every byte after "

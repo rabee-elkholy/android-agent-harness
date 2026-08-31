@@ -1,4 +1,4 @@
-"""Canonical safety vocabulary for the Android Harness Kit.
+"""Canonical safety vocabulary for the Android Agent Harness.
 
 Single source of truth for every deny class the pre-tool safety hook enforces.
 pre_tool_safety.py imports these frozensets instead of redeclaring literals;

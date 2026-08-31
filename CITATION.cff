@@ -6,7 +6,7 @@ authors:
 title: "Android Agent Harness: Deterministic Android Engineering for the AI Era"
 version: 0.14.22
 date-released: 2026-08-31
-url: "https://github.com/rabee-elkholy/android-harness-kit"
+url: "https://github.com/rabee-elkholy/android-agent-harness"
 license: "MIT"
 keywords:
   - "android"

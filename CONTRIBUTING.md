@@ -21,8 +21,8 @@ Please review and abide by our [Code of Conduct](CODE_OF_CONDUCT.md) in all proj
 
 2. **Clone the Repository**:
    ```bash
-   git clone https://github.com/rabee-elkholy/android-harness-kit.git
-   cd android-harness-kit
+   git clone https://github.com/rabee-elkholy/android-agent-harness.git
+   cd android-agent-harness
    ```
 
 3. **Verify Self-Tests**:
@@ -82,7 +82,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 2. **Safe Release Creation (`--notes-file`)**: Always write release notes to a clean UTF-8 markdown file and publish using `gh release create <tag> --notes-file <file>`. Never pass multiline markdown as command-line strings to avoid PowerShell/Bash escape character corruption.
 3. **Zero Emojis**: Maintain strict technical typography with zero casual emojis across all documentation, commits, and release notes.
 4. **Automated Verification**: All changes must satisfy `_hook_selftest.py` with 0 failures before opening a PR.
-5. **Pinned Prompt Release Procedure**: One-click prompt URLs must never float on `main`. Every release: bump `agents/VERSION` -> update `CHANGELOG.md` -> run `python scripts_dev/pin_prompt_docs.py --tag vX.Y.Z` (re-pins the URLs in README/docs/quickstart/tool-support/setup/update/diagnostic/rollback and refreshes the SHA-256 headers in the four raw-fetched prompt docs) -> verify `rg "android-harness-kit/main/docs" README.md docs harness_cli.py` returns nothing -> tag -> publish. `harness_cli.py` builds prompt URLs from the resolved kit version automatically, so it never needs a manual edit.
+5. **Pinned Prompt Release Procedure**: One-click prompt URLs must never float on `main`. Every release: bump `agents/VERSION` -> update `CHANGELOG.md` -> run `python scripts_dev/pin_prompt_docs.py --tag vX.Y.Z` (re-pins the URLs in README/docs/quickstart/tool-support/setup/update/diagnostic/rollback and refreshes the SHA-256 headers in the four raw-fetched prompt docs) -> verify `rg "android-agent-harness/main/docs" README.md docs harness_cli.py` returns nothing -> tag -> publish. `harness_cli.py` builds prompt URLs from the resolved kit version automatically, so it never needs a manual edit.
 
 ---
 

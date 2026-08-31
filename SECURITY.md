@@ -32,7 +32,7 @@ The Android Agent Harness is designed with strict OS-level containment and crypt
 If you discover a potential security vulnerability within the Android Agent Harness:
 
 1. **Do not create a public GitHub issue.**
-2. Please disclose the vulnerability privately via **[GitHub Private Vulnerability Reporting](https://github.com/rabee-elkholy/android-harness-kit/security/advisories/new)**.
+2. Please disclose the vulnerability privately via **[GitHub Private Vulnerability Reporting](https://github.com/rabee-elkholy/android-agent-harness/security/advisories/new)**.
 3. Include detailed steps to reproduce the vulnerability, including platform information, Python version, and relevant logs.
 
 We take security seriously and will investigate and patch verified vulnerabilities promptly.
