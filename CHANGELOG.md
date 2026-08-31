@@ -5,6 +5,16 @@ All notable changes to the **Android Harness Kit** will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.22] - 2026-08-31
+
+### Unified Release Automation, High-Signal Zero-Noise UI & Phase Checkpoint Commits
+- **One-Command Release Engine (`scripts_dev/release_version.py`)**: Built a fully automated release engine that handles version bumping, cryptographic prompt hashing, docs synchronization, selftest verification, Git tagging, and GitHub Release publication with a single command (`--patch`, `--minor`, `--dry-run`).
+- **High-Signal Chat & Zero-Noise UI Governance (`harness-rules.md`, `pre_invocation_reminder.py`, `AGENTS.md`)**: Formalized Section 6 strictly distinguishing collapsible IDE tool badges from permanent chat prose. Codified the Silent Intermediate Review Wait Protocol (`""` empty response during in-flight reviewer wakeups) and prohibited mechanical progress spam in chat.
+- **Phase Checkpoint Commits & Mandatory Hard Stop (`harness-rules.md`, `deliver.md`, `AGENTS.md`)**: Enforced phase-by-phase checkpoint commits. When Phase N passes all gates, the Lead Agent outputs the Phase Milestone Card with a drafted commit message and HALTS immediately, awaiting explicit developer commit and instruction before touching Phase N+1 files.
+- **Shift-Left Phase Preflight Gate (`harness-rules.md`, `deliver.md`)**: Integrated `preflight_check.py` into every phase boundary before milestone handoff, eliminating commit-time blocking on lint annotations, hardcoded strings, or Room schema issues.
+- **Dynamic Conversation Language Parity (`harness-rules.md`, `pre_invocation_reminder.py`, `AGENTS.md`)**: Mandated matching the developer's conversation language (Arabic/English) across all cards (Review Round, Phase Milestone, Final Delivery) and interactive `ask_question` modals.
+- **Security Selftest CI Matrix Hardening (`_security_selftest.py`)**: Guaranteed `_IN_HOOK_SELFTEST="1"` simulation during automated GitHub Actions CI runs across all 12 matrix platform jobs (Python 3.10-3.13 on Ubuntu, macOS, Windows).
+
 ## [0.14.21] - 2026-08-31
 
 ### Comprehensive Edge Case Hardening Across Harness Engines & Review Gates
@@ -97,7 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Expanded Fast Kotlin Linter (`fast_kt_lint.py`)**: Added instant static checks for `TEST_RUNBLOCKING` (`runBlocking` inside `*Test.kt`), `UNIMPLEMENTED_STUB` (`TODO()` or `throw NotImplementedError()`), and `UNCHECKED_DOUBLE_BANG` (`!!` operators in production code).
 - **Embedded Pre-Dispatch Quality Checklist (`pre_invocation_reminder.py`)**: Integrated an immediate 4-point verification checklist into agent context prompts to guarantee high first-pass review clearance rates.
 
-## [0.14.10] - 2026-08-30
+---
+
+**Included in 0.14.10 (2026-08-30):**
 
 ### Product Module Isolation in Doctor & Lifecycle Cross-Compatibility
 - **`_product.py` Dynamic Module Isolation (`doctor/engine.py`)**: Isolated target app configuration loading in `_check_install_consistency` via `importlib.util.spec_from_file_location`, eliminating `sys.path` collision between raw kit templates and installed client checkouts.
