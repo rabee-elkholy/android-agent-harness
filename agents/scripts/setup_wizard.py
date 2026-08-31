@@ -130,7 +130,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "command",
         nargs="?",
         default="ask",
-        choices=("ask", "discover", "questions", "write", "flags"),
+        choices=("ask", "discover", "questions", "write", "flags", "apply"),
     )
     p.add_argument("--answers-json", help="For write: JSON object of question ids to values.")
     return p.parse_args(argv)
@@ -181,6 +181,12 @@ def main(argv: list[str] | None = None) -> int:
         answers = json.loads(path.read_text(encoding="utf-8"))
         print(flags_from_answers(answers))
         return 0
+    if args.command == "apply":
+        from install_or_update import execute_install_or_update, find_kit
+        kit = find_kit(None)
+        res = execute_install_or_update(repo, kit, answers_path=args.answers_json)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res["success"] else 1
     if args.command == "write":
         if not args.answers_json:
             raise SystemExit("write needs --answers-json")

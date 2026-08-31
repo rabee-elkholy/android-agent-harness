@@ -32,6 +32,7 @@ CORE_SCRIPTS = (
     "fast_kt_lint.py",
     "gradle_error_parser.py",
     "harness_doctor.py",
+    "install_or_update.py",
     "install_tool_adapters.py",
     "install_zoho_mcp.py",
     "logcat_doctor.py",

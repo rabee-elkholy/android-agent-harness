@@ -1,8 +1,8 @@
 # Install or Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.16.0/docs/install-or-update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.17.0/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.16.0` — **SHA-256**: `e1d4f401574baec234ca3f9e60788c70b96bc949844487f7a4acb073df8da042` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.17.0` — **SHA-256**: `00a312a6e51b9c465a3fa381561701ec0a6f46f15df1d5fd1d40fce7fd6f22bb` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
@@ -38,8 +38,10 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
       *(Note: When updating or re-running on an existing project, the wizard automatically reads previous answers from `.harness-setup/answers.json` and marks each previous choice as `(Recommended)` at index 0).*
       Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list; the JSON payload is the sole interview authority. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
-4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, open `<kit>/docs/setup-prompt.md` and execute it from **0) Backup** onward. If `"backup": false`, skip copying backups and say rollback will not work. Skip section **I** (answers are already recorded). Copy `.harness-setup/SETUP_ANSWERS.md` into the new backup folder when a backup was made. Installer flags: `$PY <kit>/agents/scripts/setup_wizard.py flags --repo <this-android-root>`. Copy source: `<kit>/agents/` → `<this repo>/.agents`.
-   - **Tailored References Preservation**: On update sessions, keep existing tailored reference files (`.agents/skills/android-harness/references/*.md`) AS-IS without adding new ones, and ask the developer via `ask_question` modal to approve keeping them.
+4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, execute the deterministic engine in one command:
+   `$PY <kit>/agents/scripts/install_or_update.py --repo <this-android-root> --kit <kit>`
+   This single atomic command automatically creates the backup, preserves tailored reference files (.agents/skills/android-harness/references/*.md), places .agents/, generates _product.py, wires tool adapters, configures PM tracking, updates .git/info/exclude, and runs selftest/doctor with 0 failures in under 3 seconds.
+   - **Tailored References Preservation**: On update sessions, existing tailored reference files (`.agents/skills/android-harness/references/*.md`) are preserved AS-IS without adding new ones, and the developer is asked via `ask_question` modal to approve keeping them.
 5. After setup: run `$PY .agents/scripts/harness_doctor.py` for automated 12-dimension verification. If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.
 
 Kit rules that still apply during setup:

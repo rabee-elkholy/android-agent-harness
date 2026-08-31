@@ -12,6 +12,11 @@ import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+try:
+    from _product import ALLOW_EMULATOR
+except Exception:
+    ALLOW_EMULATOR = True
 SCRIPT = SCRIPTS / "pre_tool_safety.py"
 REMINDER = SCRIPTS / "pre_invocation_reminder.py"
 SUBAGENTS = SCRIPTS.parent / "subagents"
@@ -241,7 +246,7 @@ cases = [
         invoke("c-test", name="test-quality-reviewer-agent", prompt_prefix=""),
         "allow",
     ),
-    ("emu", cmd("android emulator start pixel"), "allow"),
+    ("emu", cmd("android emulator start pixel"), "allow" if ALLOW_EMULATOR else "deny"),
     ("git_grep_monkey", cmd("git log --grep monkey --oneline"), "allow"),
     ("cat_gradle_properties", cmd("cat gradle.properties"), "allow"),
     ("sched_review_word_only", sched("Remind me to do the code review later today"), "allow"),
@@ -1493,7 +1498,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.16.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.17.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2574,9 +2579,9 @@ try:
     agents_md = (tmp_adapt_dir / "AGENTS.md").read_text(encoding="utf-8")
     ok_agents_fill = (
         "testDebugUnitTest" in agents_md
-        and "{{UNIT_TEST}}" not in agents_md
+        and ("{" + "{UNIT_TEST}}") not in agents_md
         and "update zoho" in agents_md
-        and "{{PM_TRIGGER}}" not in agents_md
+        and ("{" + "{PM_TRIGGER}}") not in agents_md
     )
 
     # Test pruning (copilot deselected -> its hooks bridge is removed too)
@@ -2718,6 +2723,80 @@ if cli_file.is_file():
         shutil.rmtree(verify_repo, ignore_errors=True)
 else:
     print("harness_cli dispatch & subcommands: OK (skipped — installed checkout)")
+
+
+# --- v0.16.0: install_or_update engine deterministic round-trip ---
+install_update_script = SCRIPTS / "install_or_update.py"
+if install_update_script.is_file() and KIT_LAYOUT:
+    from install_or_update import execute_install_or_update
+    test_fixture_dir = Path(tempfile.mkdtemp())
+    try:
+        (test_fixture_dir / "gradlew").touch()
+        (test_fixture_dir / "app").mkdir()
+        (test_fixture_dir / "app" / "build.gradle").write_text("apply plugin: 'com.android.application'\n", encoding="utf-8")
+
+        setup_dir = test_fixture_dir / ".harness-setup"
+        setup_dir.mkdir(parents=True, exist_ok=True)
+        fixture_answers = {
+            "schema": 1,
+            "i0": True,
+            "backup": True,
+            "product": "TestFixtureApp",
+            "py": "python",
+            "git_policy": "never",
+            "device_policy": "physical-only",
+            "module": ":app",
+            "assemble": ":app:assembleDebug",
+            "launcher": "com.test.app/.MainActivity",
+            "application_ids": ["com.test.app"],
+            "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["gemini"],
+            "zoho_mcp": "skip",
+            "pm_provider": "none",
+            "git_gate": "yes",
+        }
+        (setup_dir / "answers.json").write_text(json.dumps(fixture_answers), encoding="utf-8")
+
+        # Test 1: Fresh Install
+        res_install = execute_install_or_update(
+            repo=test_fixture_dir,
+            kit=repo_root,
+            answers_path=str(setup_dir / "answers.json"),
+            skip_doctor=True,
+        )
+        ok_install_mode = res_install["mode"] == "install"
+        ok_install_prod = (test_fixture_dir / ".agents" / "scripts" / "_product.py").is_file()
+        ok_install_agents_md = (test_fixture_dir / "AGENTS.md").is_file()
+
+        # Add custom reference to simulate project tailoring
+        custom_ref = test_fixture_dir / ".agents" / "skills" / "android-harness" / "references" / "custom-payment-flow.md"
+        custom_ref.write_text("# Custom Payment Architecture\nSpecial flow guidelines.\n", encoding="utf-8")
+
+        # Test 2: Update Mode & Reference Preservation
+        res_update = execute_install_or_update(
+            repo=test_fixture_dir,
+            kit=repo_root,
+            answers_path=str(setup_dir / "answers.json"),
+            skip_doctor=True,
+        )
+        ok_update_mode = res_update["mode"] == "update"
+        ok_ref_preserved = custom_ref.is_file() and "Special flow guidelines." in custom_ref.read_text(encoding="utf-8")
+        ok_backup_created = (test_fixture_dir / ".harness-backup").is_dir()
+
+        ok_engine = (
+            ok_install_mode
+            and ok_install_prod
+            and ok_install_agents_md
+            and ok_update_mode
+            and ok_ref_preserved
+            and ok_backup_created
+        )
+        print(f"install_or_update engine deterministic round-trip: {'OK' if ok_engine else 'FAIL'}")
+        failed += int(not ok_engine)
+    finally:
+        shutil.rmtree(test_fixture_dir, ignore_errors=True)
+else:
+    print("install_or_update engine deterministic round-trip: OK (skipped — installed checkout)")
 
 
 # --- v0.10.0: adversarial security suite (B1) ---

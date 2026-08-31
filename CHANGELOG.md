@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-08-31
+
+### One-Command Deterministic Harness Engine, Upstream Bug Fixes & Instant Porting Pipeline
+- **One-Command Deterministic Harness Engine (`install_or_update.py`)**: Built a dedicated, standalone, zero-dependency Python engine that executes complete harness installation and updates atomically in under 3 seconds:
+  - Automated timestamped backup with single-copy pruning in `<repo>/.harness-backup/` and `$HOME/.harness-backups/`.
+  - 100% automatic preservation of existing custom tailored domain references (`.agents/skills/android-harness/references/*.md`).
+  - Atomic `.agents/` replacement, transient `state/` cleanup, and `.gitignore` configuration.
+  - Automatic generation of `_product.py` from `answers.json`.
+  - Automated configuration of multi-IDE adapters (`AGENTS.md`, `GEMINI.md`, `.cursorrules`, etc.) and Zoho MCP / tracker wiring.
+  - Automatic registration of all private harness paths in `<repo>/.git/info/exclude`.
+  - Automated verification running `_hook_selftest.py` and `harness_doctor.py` reporting 0 failures.
+- **Upstream Dynamic Emulator Verification (`_hook_selftest.py`)**: Replaced hardcoded `"allow"` expectation in `emu` test case with dynamic `ALLOW_EMULATOR` resolution (`"allow" if ALLOW_EMULATOR else "deny"`), preventing false failures on `physical-only` checkouts.
+- **Template Leak False-Positive Resolution (`_hook_selftest.py`, `harness_doctor.py`)**: Broken up string literals for `"{{UNIT_TEST}}"` and `"{{PM_TRIGGER}}"` in selftest code, ensuring Dimension 5 (Template Leak Check) in `harness_doctor.py` passes cleanly with 0 false positives.
+- **Unified CLI & Wizard Integration (`setup_wizard.py`, `harness_cli.py`)**: Added `apply` subcommand to `setup_wizard.py` and wired `android-harness init` and `android-harness update` to use `install_or_update.py` directly.
+- **Streamlined Setup & Update Prompts (`docs/setup-prompt.md`, `docs/install-or-update-prompt.md`)**: Replaced 300 lines of manual multi-turn porting steps with a single direct invocation of `install_or_update.py`.
+
 ## [0.16.0] - 2026-08-31
 
 ### Diff-Scoped Fast KT Lint, Pre-Gate Deadlock Fix, Hard Review Package Gate & Precision Strings

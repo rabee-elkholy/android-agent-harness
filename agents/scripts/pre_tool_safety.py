@@ -768,6 +768,7 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         s in lower_norm
         for s in (
             "install_tool_adapters",
+            "install_or_update",
             "setup_wizard",
             "install_zoho_mcp",
             "check_kit_update",
