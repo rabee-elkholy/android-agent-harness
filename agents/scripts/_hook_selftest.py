@@ -1498,7 +1498,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.17.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.17.1"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1736,6 +1736,19 @@ _, dups = _parse_resources(tmp_dup_xml)
 ok_xml_dup = len(dups) == 1 and "dummy_button" in dups[0]
 print(f"check_strings duplicate resource key detection: {'OK' if ok_xml_dup else 'FAIL'}")
 failed += int(not ok_xml_dup)
+
+# --- v0.17.1: check_strings diff-scoped translation parity (ignores legacy untouched keys) ---
+from check_strings import _extract_keys_from_xml_lines, main as check_strings_main
+extracted_keys = _extract_keys_from_xml_lines([
+    '    <string name="new_key_1">Hello</string>',
+    '    <plurals name="new_items_count">',
+    '        <item quantity="one">%d item</item>',
+    '    </plurals>',
+    '    <string-array name="new_colors">',
+])
+ok_extracted_keys = extracted_keys == {"new_key_1", "new_items_count", "new_colors"}
+print(f"check_strings diff-scoped key extraction: {'OK' if ok_extracted_keys else 'FAIL'}")
+failed += int(not ok_extracted_keys)
 
 import re
 groovy_gradle = '''

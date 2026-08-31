@@ -5,6 +5,24 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-08-31
+
+### Diff-Scoped Pre-Commit Quality Gate, String Parity Guard & Engine Hardening
+- **Diff-Scoped Pre-Commit Gate (`pre_commit_gate.py`, `fast_kt_lint.py`, `check_strings.py`)**:
+  - Refactored `pre_commit_gate.py` to be 100% diff-scoped on staged changes (`git diff -U0 --cached HEAD`).
+  - Line-level coding rules (unchecked double-bang `!!`, inline FQCNs, `TODO` stubs, wildcard imports, and hardcoded UI literals) are strictly evaluated against newly added or modified lines in staged files, completely ignoring untouched legacy code in the same files.
+- **Diff-Scoped String Parity Guard (`check_strings.py`, `_hook_selftest.py`)**:
+  - Refactored `check_strings.py` to be 100% diff-scoped by default: translation parity across `values/strings.xml` and localized `values-*/strings.xml` files is strictly restricted to newly added/modified keys in the working tree (`git diff -U0 HEAD`).
+  - Pre-existing untranslated legacy keys from past releases are ignored in preflight checks, preventing false-positive blocking `[FAIL]` and eliminating unexpected AI modifications to legacy XML files.
+  - Added `--all` flag to `check_strings.py` for full repository audits.
+- **Robust XML Launcher Activity Discovery (`wizard/discovery.py`)**:
+  - Replaced fragile non-greedy regex parsing of `<activity>` tags with structured `xml.etree.ElementTree` parsing, correctly identifying the true exported launcher activity (`android.intent.category.LAUNCHER`) and preventing false-positive identification caused by self-closing XML sibling tags.
+- **Autonomous E2E Smoke Testing Bugfix (`run_e2e_smoke.py`)**:
+  - Added missing `scrollable: bool | None = None` parameter to `find_nodes()` signature and matching predicate, preventing `TypeError` during autonomous UI Automator smoke execution.
+- **Safety Hook Review Barrier Extended to Preflight (`pre_tool_safety.py`)**:
+  - `pre_tool_safety.py` now enforces the active 5-leaf parallel review barrier against premature `preflight_check.py` execution, ensuring preflight and assemble commands cannot execute until all 5 leaf reviewer verdicts arrive.
+- **Progressive Streaming for Installer & Selftest (`install_or_update.py`)**: Added real-time step streaming with `flush=True` during installation and doctor runs.
+
 ## [0.17.0] - 2026-08-31
 
 ### One-Command Deterministic Harness Engine, Upstream Bug Fixes & Instant Porting Pipeline
@@ -119,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **6-Leaf Review Gate & 8-Specialist Roster**: Clarified documentation topology to explicitly reflect all 6 parallel Quality Guardians (`bug-reviewer`, `convention-reviewer`, `security-reviewer`, `perf-anr-guardian`, `regression-impact-reviewer`, `test-quality-reviewer`) and 2 on-demand specialists (`qa-diagnostics`, `android-ui-expert`).
 - **Comprehensive Developer Workflows Playbook (`docs/workflows.md`)**: Created dedicated engineering playbooks guide covering all 10 core Android development workflows (feature delivery, systematic debugging, forensic crash triage, ANR audits, string parity, and PM sync).
 
-## [0.14.15] - 2026-08-30
+**Included in 0.14.15 (2026-08-30):**
 
 ### Unified Install & Update Prompt File Consolidation
 - **Unified Setup & Upgrade Architecture (`docs/install-or-update-prompt.md`)**: Consolidated installation and update workflows by renaming `docs/install-prompt.md` to `docs/install-or-update-prompt.md` and removing `docs/update-prompt.md`, retaining the original structural port and setup steps while clarifying its dual capability for fresh installations and project upgrades.

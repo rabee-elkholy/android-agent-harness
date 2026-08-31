@@ -158,6 +158,7 @@ def find_nodes(
     content_desc: str | None = None,
     class_name: str | None = None,
     clickable: bool | None = None,
+    scrollable: bool | None = None,
 ) -> list[UINode]:
     """Recursively search for nodes matching query criteria (supports Arabic & English)."""
     results: list[UINode] = []
@@ -182,6 +183,8 @@ def find_nodes(
             if not node.class_name or class_name.lower() not in node.class_name.lower():
                 return False
         if clickable is not None and node.clickable != clickable:
+            return False
+        if scrollable is not None and node.scrollable != scrollable:
             return False
         return True
 

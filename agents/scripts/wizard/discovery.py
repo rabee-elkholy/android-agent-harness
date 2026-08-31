@@ -130,36 +130,68 @@ def discover_launchers(repo: Path) -> list[str]:
         if skip_path(path, repo):
             continue
         text = read_text(path)
-        if "android.intent.action.MAIN" not in text:
+        if "android.intent.action.MAIN" not in text or "android.intent.category.LAUNCHER" not in text:
             continue
-        if "android.intent.category.LAUNCHER" not in text:
-            continue
-        act_blocks = re.findall(r"<(?:activity|activity-alias)\b[\s\S]*?</(?:activity|activity-alias)>", text)
-        for block in act_blocks:
-            if "android.intent.action.MAIN" not in block or "android.intent.category.LAUNCHER" not in block:
-                continue
-            m = re.search(r'android:name="([^"]+)"', block)
-            if not m:
-                continue
-            name = m.group(1).strip()
-            if name.startswith("."):
-                comp = f"{pkg}/{name}" if pkg else name
-            elif "/" in name:
-                comp = name
-            elif pkg and name.startswith(pkg):
-                rest = name[len(pkg):]
-                comp = f"{pkg}/{rest if rest.startswith('.') else '.' + rest}"
-            elif pkg:
-                comp = f"{pkg}/{name}"
-            else:
-                comp = name
-            if comp not in found:
-                found.append(comp)
 
+        # 1. Structured XML parsing (robust against self-closing sibling tags)
+        try:
+            import xml.etree.ElementTree as ET
+            tree = ET.parse(path)
+            root = tree.getroot()
+            for elem in list(root.findall(".//activity")) + list(root.findall(".//activity-alias")):
+                has_main = False
+                has_launcher = False
+                for ifilter in elem.findall("intent-filter"):
+                    for action in ifilter.findall("action"):
+                        a_name = action.attrib.get("{http://schemas.android.com/apk/res/android}name") or action.attrib.get("android:name") or action.attrib.get("name")
+                        if a_name == "android.intent.action.MAIN":
+                            has_main = True
+                    for cat in ifilter.findall("category"):
+                        c_name = cat.attrib.get("{http://schemas.android.com/apk/res/android}name") or cat.attrib.get("android:name") or cat.attrib.get("name")
+                        if c_name == "android.intent.category.LAUNCHER":
+                            has_launcher = True
+
+                if has_main and has_launcher:
+                    name = elem.attrib.get("{http://schemas.android.com/apk/res/android}name") or elem.attrib.get("android:name") or elem.attrib.get("name")
+                    if name:
+                        name = name.strip()
+                        if name.startswith("."):
+                            comp = f"{pkg}/{name}" if pkg else name
+                        elif "/" in name:
+                            comp = name
+                        elif pkg and name.startswith(pkg):
+                            rest = name[len(pkg):]
+                            comp = f"{pkg}/{rest if rest.startswith('.') else '.' + rest}"
+                        elif pkg:
+                            comp = f"{pkg}/{name}"
+                        else:
+                            comp = name
+                        if comp not in found:
+                            found.append(comp)
+        except Exception:
+            pass
+
+        # 2. Fallback regex search if XML parser failed
         if not found:
-            for m in re.finditer(r'android:name="(\.[^"]+)"', text):
-                rel = m.group(1)
-                comp = f"{pkg}/{rel}" if pkg else rel
+            act_blocks = re.findall(r"<(?:activity|activity-alias)\b[\s\S]*?</(?:activity|activity-alias)>", text)
+            for block in act_blocks:
+                if "android.intent.action.MAIN" not in block or "android.intent.category.LAUNCHER" not in block:
+                    continue
+                m = re.search(r'android:name="([^"]+)"', block)
+                if not m:
+                    continue
+                name = m.group(1).strip()
+                if name.startswith("."):
+                    comp = f"{pkg}/{name}" if pkg else name
+                elif "/" in name:
+                    comp = name
+                elif pkg and name.startswith(pkg):
+                    rest = name[len(pkg):]
+                    comp = f"{pkg}/{rest if rest.startswith('.') else '.' + rest}"
+                elif pkg:
+                    comp = f"{pkg}/{name}"
+                else:
+                    comp = name
                 if comp not in found:
                     found.append(comp)
     return found

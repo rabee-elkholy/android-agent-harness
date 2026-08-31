@@ -101,7 +101,7 @@ def requires_state_previews(filename: str) -> bool:
     return filename.endswith("Screen.kt")
 
 
-def get_modified_lines_map(repo: Path, files: list[Path]) -> dict[Path, set[int] | None]:
+def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) -> dict[Path, set[int] | None]:
     """Return map of file -> set of 1-indexed added/modified line numbers from git diff HEAD.
     
     If a file is untracked or git diff fails (e.g. no git HEAD), returns None for that file
@@ -116,8 +116,13 @@ def get_modified_lines_map(repo: Path, files: list[Path]) -> dict[Path, set[int]
         except ValueError:
             rel = str(f)
 
+        cmd = ["git", "diff", "-U0"]
+        if cached:
+            cmd.append("--cached")
+        cmd.extend(["HEAD", "--", rel])
+
         proc = subprocess.run(
-            ["git", "diff", "-U0", "HEAD", "--", rel],
+            cmd,
             cwd=repo,
             capture_output=True,
             text=True,
@@ -126,9 +131,21 @@ def get_modified_lines_map(repo: Path, files: list[Path]) -> dict[Path, set[int]
             check=False,
         )
         if proc.returncode != 0 or not proc.stdout.strip():
-            # Untracked file, brand new file, or git diff returned nothing
-            res[f] = None
-            continue
+            if cached:
+                # Fallback for fresh repos before initial commit
+                proc = subprocess.run(
+                    ["git", "diff", "-U0", "--cached", "--", rel],
+                    cwd=repo,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+            if proc.returncode != 0 or not proc.stdout.strip():
+                # Untracked file, brand new file, or git diff returned nothing
+                res[f] = None
+                continue
 
         modified_lines: set[int] = set()
         for line in proc.stdout.splitlines():

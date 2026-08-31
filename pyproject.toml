@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-agent-harness"
-version = "0.17.0"
+version = "0.17.1"
 description = "Deterministic Android Engineering for the AI Era: Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team."
 readme = "README.md"
 requires-python = ">=3.10"

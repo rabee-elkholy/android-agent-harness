@@ -776,6 +776,7 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         )
     )
     is_lint = not is_setup_script and "fast_kt_lint" in lower_norm
+    is_preflight = not is_setup_script and "preflight_check" in lower_norm
 
     # Differentiate unit testing from assemble / device deployment
     is_unit_test = not is_setup_script and any(
@@ -797,12 +798,12 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
 
     is_gradle_or_test = is_unit_test or is_assemble_or_device or ("run_gradle_task.py" in lower_norm)
 
-    if (is_gradle_or_test or is_lint) and conv != "unknown":
+    if (is_gradle_or_test or is_lint or is_preflight) and conv != "unknown":
         ok, barrier_msg = check_subagents_barrier(conv, payload)
         if not ok:
             deny(
                 f"Denied: Parallel review barrier active. {barrier_msg} "
-                "You MUST NOT run tests/build until all review subagents have finished."
+                "You MUST NOT run preflight/tests/build until all review subagents have finished."
             )
             return
 
