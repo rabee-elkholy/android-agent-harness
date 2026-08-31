@@ -34,6 +34,7 @@ ZOHO_MCP = SCRIPTS.parent / "mcp" / "zoho_sprints"
 STATE = Path(tempfile.mkdtemp())
 os.environ["HARNESS_HOOK_STATE"] = str(STATE / "review-invokes.json")
 os.environ["HARNESS_EVIDENCE_MODE"] = "strict"
+os.environ["_IN_HOOK_SELFTEST"] = "1"
 
 
 def _case(name: str, ok: bool, detail: str = "") -> int:
