@@ -226,31 +226,40 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 ## 4) Device Verification & Phase Pipeline (`DEVICE_VERIFICATION_MODE` in `_product.py`)
 
+- **Phase Quality Pre-Gate & Checkpoint Commit Invariant**:
+  - In multi-phase refactors or features, execute strictly phase-by-phase.
+  - Before concluding Phase N, the agent MUST run:
+    1. `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest`
+    2. `python .agents/scripts/preflight_check.py` (Shift-Left validation: guarantees zero lint errors, zero hardcoded string mismatches, and zero Room migration issues before handoff).
+    3. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`
+    4. `python .agents/scripts/run_device.py install-start` + Device Verification (E2E smoke or manual checklist).
+  - **MANDATORY PHASE CHECKPOINT COMMIT & HANDSHAKE**:
+    * Upon passing all Phase N gates, output the **Phase Milestone Card** in chat containing verification evidence and a drafted Conventional Commit message for Phase N.
+    * **HARD STOP**: The agent **MUST STOP IMMEDIATELY** and wait for the developer to commit Phase N.
+    * **STRICT PROHIBITION**: The agent MUST NOT edit, create, open, or start any files for Phase N+1 until the developer explicitly confirms they have committed Phase N and commands the agent to proceed (e.g. *"Start Phase N+1"* / *"ابدأ المرحلة اللي بعدها"*).
+
 - **Dual Device Verification Modes**:
-  - **Mode A: `autonomous_e2e` (Fully Autonomous Multi-Phase Execution - Default)**:
+  - **Mode A: `autonomous_e2e` (Autonomous E2E Verification - Default)**:
     1. Run `python .agents/scripts/run_device.py install-start`.
     2. **MANDATORY**: Run `python .agents/scripts/run_e2e_smoke.py`. The E2E engine inspects the UI hierarchy, asserts component visibility and scroll responsiveness, verifies zero fatal crashes in Logcat, and captures a verification screenshot to `.agents/state/screenshots/`.
-    3. **On E2E [SUCCESS]**: Output the **Phase Milestone Card** in chat with the E2E verification evidence and **PROCEED IMMEDIATELY & AUTONOMOUSLY to Phase N+1 without blocking the developer or firing interactive modals**.
-    4. **On E2E [FAIL] / Crash**: STOP immediately, capture Logcat via `logcat_doctor.py` or dispatch `qa-diagnostics-agent`, report findings in chat, fix at the root cause, re-run tests, re-install, and re-verify.
+    3. **On E2E [SUCCESS]**: Output the **Phase Milestone Card** with E2E evidence and Phase N commit message, then stop and await developer commit and instruction to start Phase N+1.
+    4. **On E2E [FAIL] / Crash**: STOP immediately, capture Logcat via `logcat_doctor.py` or dispatch `qa-diagnostics-agent`, report findings in chat, fix at root cause, re-run tests, re-install, and re-verify.
   - **Mode B: `interactive_device` / `manual_only` (Developer-in-the-Loop Manual Verification)**:
     1. Run `python .agents/scripts/run_device.py install-start`.
-    2. Output the **Phase Milestone Card** in chat containing explicit, numbered manual smoke test steps for the developer (rendered in the active conversation language):
-       - Step 1: Open the target screen / feature on the connected device.
-       - Step 2: Perform the specific test actions (browse, click buttons, scroll list, verify loaded data).
-       - Step 3: Verify the expected outcome (zero crashes, responsive UI, proper layout/text alignment).
-    3. Trigger an interactive verification prompt via `ask_question` (rendered in the active conversation language):
+    2. Output the **Phase Milestone Card** with numbered manual smoke test steps and Phase N commit message.
+    3. Trigger interactive verification via `ask_question`:
        - **Question**: "Please test the steps above on your device and confirm the result:"
        - **Options**: `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
-       - (Do NOT prefix Pass/Fail options with `(Recommended)`).
-    4. **STRICT ENFORCEMENT**: Do NOT touch, open, edit, or plan any file for Phase N+1 until the developer explicitly confirms `PASS`.
+    4. Upon PASS, wait for the developer to commit Phase N and give the green light for Phase N+1.
   - **Mode C: `disabled`**:
-    1. Proceeds autonomously after Unit Tests (`:app:testDebugUnitTest`) + `:app:assembleDebug`.
+    1. Proceeds to Phase N Milestone Card after Unit Tests (`:app:testDebugUnitTest`) + `preflight_check.py` + `:app:assembleDebug`, then stops and awaits developer commit.
 
 - **Phase Milestone Card Requirements**:
   1. Scope & Changes.
-  2. Quality Gates (`5-Leaf Review Gate`, `Unit Tests`, `:assembleDebug` BUILD SUCCESSFUL).
+  2. Quality Gates (`5-Leaf Review Gate`, `Unit Tests`, `preflight_check.py` PASS, `:assembleDebug` BUILD SUCCESSFUL).
   3. Device Verification Evidence (`Autonomous E2E Smoke Test` results or manual checklist).
-  4. Next Step / Phase Transition Status.
+  4. Drafted Conventional Commit message for Phase N.
+  5. Clear message that the agent is waiting for developer commit before beginning Phase N+1.
 
 - **Single-Phase Task Completion / Final Sign-off**:
   - When all phases are completed and verified on device:

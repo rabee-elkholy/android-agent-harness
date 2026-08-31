@@ -61,8 +61,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
         "Fix BLOCKER/MAJOR, regenerate the package, re-run the same 5. "
         "On-demand only (not a substitute for the 5): qa-diagnostics-agent, android-ui-expert-agent, test-quality-reviewer-agent. "
         "Physical device only. Never commit. Assemble via python .agents/scripts/run_gradle_task.py :app:assembleDebug. "
-        "AUTONOMOUS PHASE PIPELINE: Install via python .agents/scripts/run_device.py install-start, and run python .agents/scripts/run_e2e_smoke.py when DEVICE_VERIFICATION_MODE is autonomous_e2e. When E2E passes [SUCCESS], output Phase Milestone Card and proceed autonomously to Phase N+1 without blocking modal. Only fire ask_question when DEVICE_VERIFICATION_MODE is manual_only (with numbered checklist) or on failure. "
-        "Commit message only after every phase Pass. "
+        "AUTONOMOUS PHASE PIPELINE & CHECKPOINT COMMITS: When Phase N finishes, run testDebugUnitTest + preflight_check.py (guarantees zero lint/strings/Room issues) + assembleDebug + install-start + E2E smoke. Output Phase Milestone Card with drafted Phase N commit message, STOP IMMEDIATELY, and wait for the developer to commit Phase N and command start of Phase N+1. Never touch Phase N+1 files before developer commit. "
         "Zoho: never mutate unless the developer says update zoho. Arabic Zoho prose. "
         "Status In progress or Ready To ReTest only. Never Done or Solved."
     )
