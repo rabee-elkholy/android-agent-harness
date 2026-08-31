@@ -4,8 +4,8 @@ authors:
   - family-names: "Elkholy"
     given-names: "Rabee"
 title: "Android Agent Harness: Deterministic Android Engineering for the AI Era"
-version: 0.14.20
-date-released: 2026-08-30
+version: 0.14.21
+date-released: 2026-08-31
 url: "https://github.com/rabee-elkholy/android-harness-kit"
 license: "MIT"
 keywords:

@@ -27,7 +27,7 @@
 Open a **new chat session** in your AI assistant (Antigravity, Claude Code, Cursor, Copilot, Windsurf) at your project root and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/install-or-update-prompt.md and follow all its instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/install-or-update-prompt.md and follow all its instructions.
 ```
 
 The installer autonomously inspects your project topology (Gradle modules, DI, UI framework, Room, Locales), creates target adapters, and executes self-diagnostic checks.
@@ -151,9 +151,9 @@ Pinned lifecycle prompts with cryptographic tamper-evident headers:
 
 | Operation | Prompt URL | Purpose |
 | :--- | :--- | :--- |
-| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
-| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
-| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
+| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
+| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
+| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
 
 ---
 

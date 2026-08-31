@@ -29,7 +29,7 @@ Copy the entire content of [`docs/install-or-update-prompt.md`](install-or-updat
 
 ```markdown
 Run the Android Harness Kit Installer or Updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/install-or-update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/install-or-update-prompt.md
 ```
 
 ### Option B: Standalone CLI (Terminal)
@@ -65,7 +65,7 @@ To perform a comprehensive 12-dimension health audit at any time, audit `.gitign
 
 ```markdown
 Run the Android Harness Kit Diagnostic Doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/diagnostic-prompt.md
 ```
 
 Or execute directly from your terminal:
@@ -86,7 +86,7 @@ You can copy and paste any of the following prompts directly into your AI assist
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit installer or updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/install-or-update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/install-or-update-prompt.md
 ```
 
 ### 3. Diagnostic Doctor Prompt (12-Dimension Health Check)
@@ -96,7 +96,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/doc
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit diagnostic doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/diagnostic-prompt.md
 ```
 
 ### 4. Rollback Prompt (Instant Backup Restoration)
@@ -106,7 +106,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/doc
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Harness Kit rollback:
-https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.20/docs/rollback-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-harness-kit/v0.14.21/docs/rollback-prompt.md
 ```
 
 ---
