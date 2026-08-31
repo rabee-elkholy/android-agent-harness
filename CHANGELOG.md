@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.23] - 2026-08-31
+
+### Shift-Left Fast KT Lint Pre-Gate, Strict Device Verification Halt & Update Reference Preservation
+- **Shift-Left Fast Kotlin Lint Pre-Gate (`harness-rules.md`, `AGENTS.md`, `deliver.md`, `pre_invocation_reminder.py`)**: Re-sequenced the delivery pipeline to run `fast_kt_lint.py` alongside `testDebugUnitTest` *before* generating the review package, eliminating review invalidation from post-approval lint fixes (e.g. double-bang `!!` or `TODO` cleanup).
+- **Strict Device Verification & No-Device Halt Policy (`harness-rules.md`, `deliver.md`, `pre_invocation_reminder.py`)**: Codified a hard invariant prohibiting the agent from silently skipping device installation (`run_device.py install-start`) or smoke testing (`run_e2e_smoke.py`) when no device/emulator is connected; mandates halting and prompting the developer.
+- **Preflight Gate Invariant (`harness-rules.md`, `deliver.md`, `pre_invocation_reminder.py`)**: Enforced that `preflight_check.py` MUST exit with code 0 (`[SUCCESS]`); strictly prohibited proceeding to `:app:assembleDebug` or delivery on `[FAIL]`.
+- **Zero-Noise Background Commands Protocol (`harness-rules.md`, `pre_invocation_reminder.py`, `AGENTS.md`)**: Mandated choosing Option A (proceed silently with zero chat text `""`) when launching asynchronous background tasks, strictly forbidding `# Background Task Started` chat spam and relying 100% on IDE tool execution badges.
+- **Wizard Previous Answers Recommendation (`wizard/questions.py`, `install-or-update-prompt.md`)**: Upgraded `questions_payload` with `_reorder_with_previous_answers` to automatically pre-fill previous configuration choices from `.harness-setup/answers.json` as the recommended first option (`Index 0`) with `(Recommended) ` / `(موصى به) `.
+- **Tailored References Preservation on Update (`docs/setup-prompt.md`, `docs/install-or-update-prompt.md`)**: Mandated that update sessions restore and keep all existing tailored project references (`.agents/skills/android-harness/references/`) AS-IS without injecting generic references, with an interactive confirmation modal (`ask_question`).
+
 ## [0.14.22] - 2026-08-31
 
 ### Unified Release Automation, High-Signal Zero-Noise UI & Phase Checkpoint Commits
@@ -100,7 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * `performance-anr-optimization.md` -> `performance-and-optimization.md` (covers ANR, Threading/Dispatchers, Memory Leaks, Battery, Sensors, Compose Jank)
 - **Synchronized Roster & Documentation**: Updated `SKILL.md`, `daily-scenarios.md`, `perf-audit.md`, `perf-anr-guardian-agent.json` (fingerprint `v5`), `setup-prompt.md`, `update-prompt.md`, and `porting.md`.
 
-## [0.14.11] - 2026-08-30
+---
+
+**Included in 0.14.11 (2026-08-30):**
 
 ### Shift-Left Test Pre-Gate & Lead Agent Review First-Pass Optimization
 - **Mandatory Shift-Left Test & Compilation Pre-Gate (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Mandated executing `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` before generating review packages whenever Kotlin/Java code or tests are touched, catching constructor/signature mismatches and assertion errors in seconds before subagent dispatch.
