@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] - 2026-08-31
+
+### Anti-Hallucination Invariant, Sequential Task Dependency Protection & Smoke Launcher Robustness
+- **Anti-Hallucination & Fake System Message Prohibition (`harness-rules.md`, `pre_invocation_reminder.py`, `AGENTS.md.template`, `AGENTS.md`)**:
+  - Explicitly prohibited fabricating, injecting, simulating, or writing fake `<MESSAGE_RECEIVED>` or `<SYSTEM_MESSAGE>` completion tags in agent thoughts or chat prose.
+  - Eliminated ambiguity in the "Option A" background task protocol: when launching background tasks whose completion is a prerequisite for downstream steps (e.g. `:assembleDebug` before `run_device.py install-start`; `install-start` before `run_e2e_smoke.py`), the agent MUST STOP calling tools immediately and end turn silently with empty string `""` to allow genuine platform reactive wakeup.
+- **Robust Component Launching & Multi-Package Foreground Detection (`run_e2e_smoke.py`)**:
+  - Added support for full component paths (`<package>/<activity>`) in `run_e2e_smoke.py` when `LAUNCHER` contains package prefix differing from `APPLICATION_ID`.
+  - Updated `is_app_foreground()` to dynamically check both `APPLICATION_ID` and manifest package prefix candidates across `dumpsys window windows` and `dumpsys activity top`.
+
 ## [0.17.1] - 2026-08-31
 
 ### Diff-Scoped Pre-Commit Quality Gate, String Parity Guard & Engine Hardening
@@ -130,14 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Temporary Wizard & Scratch File Isolation (`_repo_files.py`)**: Added `*.wizard_questions.json`, `.wizard_questions.json`, `*.tmp`, `*.json.tmp`, and `scratch_*.py` to `HARNESS_LOCAL_EXCLUSIONS`, ensuring temporary question payloads and scripts never appear in Android Studio unversioned files.
 - **Reference Indexing Synchronization (`daily-scenarios.md`)**: Fully synchronized foundation and tailored domain reference indexing across all setups and updates, ensuring 100% zero-warning diagnostics across client Android applications.
 
-## [0.14.16] - 2026-08-30
+**Included in 0.14.16 & 0.14.15 (2026-08-30):**
 
-### Official Slogan, 6-Leaf Review Gate & Workflows Guide
-- **Official Identity & Tagline**: Adopted official slogan *"Deterministic Android Engineering for the AI Era"* with tagline *"Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team."* across `README.md`, `docs/architecture.md`, `docs/quickstart.md`, and `pyproject.toml`.
-- **6-Leaf Review Gate & 8-Specialist Roster**: Clarified documentation topology to explicitly reflect all 6 parallel Quality Guardians (`bug-reviewer`, `convention-reviewer`, `security-reviewer`, `perf-anr-guardian`, `regression-impact-reviewer`, `test-quality-reviewer`) and 2 on-demand specialists (`qa-diagnostics`, `android-ui-expert`).
-- **Comprehensive Developer Workflows Playbook (`docs/workflows.md`)**: Created dedicated engineering playbooks guide covering all 10 core Android development workflows (feature delivery, systematic debugging, forensic crash triage, ANR audits, string parity, and PM sync).
-
-**Included in 0.14.15 (2026-08-30):**
+### Official Slogan, 6-Leaf Review Gate, Workflows Guide & Prompt Consolidation
+- **Official Identity & Tagline (0.14.16)**: Adopted official slogan *"Deterministic Android Engineering for the AI Era"* with tagline *"Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team."* across `README.md`, `docs/architecture.md`, `docs/quickstart.md`, and `pyproject.toml`.
+- **6-Leaf Review Gate & 8-Specialist Roster (0.14.16)**: Clarified documentation topology to explicitly reflect all 6 parallel Quality Guardians and 2 on-demand specialists.
+- **Comprehensive Developer Workflows Playbook (0.14.16)**: Created dedicated engineering playbooks guide covering all 10 core Android development workflows.
 
 ### Unified Install & Update Prompt File Consolidation
 - **Unified Setup & Upgrade Architecture (`docs/install-or-update-prompt.md`)**: Consolidated installation and update workflows by renaming `docs/install-prompt.md` to `docs/install-or-update-prompt.md` and removing `docs/update-prompt.md`, retaining the original structural port and setup steps while clarifying its dual capability for fresh installations and project upgrades.

@@ -342,13 +342,18 @@ class E2ERunner:
 
     def is_app_foreground(self) -> bool:
         """Check if target package is currently visible and active in foreground."""
+        pkg_candidates = {self.package}
+        if LAUNCHER and "/" in LAUNCHER:
+            pkg_candidates.add(LAUNCHER.split("/")[0])
         proc = self.run_adb(["shell", "dumpsys", "window", "windows"])
         output = proc.stdout or ""
         for line in output.splitlines():
             if "mCurrentFocus" in line or "mFocusedApp" in line:
-                return self.package in line
+                if any(pkg in line for pkg in pkg_candidates):
+                    return True
         proc_act = self.run_adb(["shell", "dumpsys", "activity", "top"])
-        return self.package in (proc_act.stdout or "")
+        top_out = proc_act.stdout or ""
+        return any(pkg in top_out for pkg in pkg_candidates)
 
     def grant_common_permissions(self):
         """Pre-grant common permissions to prevent system dialogs from blocking UI smoke flows."""
@@ -373,9 +378,12 @@ class E2ERunner:
 
         if self.target_activity:
             comp = self.target_activity
-            if not comp.startswith(self.package) and not comp.startswith("."):
-                comp = f".{comp}"
-            target_comp = comp if "/" in comp else f"{self.package}/{comp}"
+            if "/" in comp:
+                target_comp = comp
+            elif comp.startswith("."):
+                target_comp = f"{self.package}/{comp}"
+            else:
+                target_comp = f"{self.package}/.{comp}"
             live_print(f"[*] Attempting direct component launch: {target_comp} ...")
             proc = self.run_adb(["shell", "am", "start", "-n", target_comp])
             time.sleep(2.0)
@@ -385,7 +393,12 @@ class E2ERunner:
 
         # Fallback to main launcher
         launcher_cls = LAUNCHER if LAUNCHER else ".MainActivity"
-        main_comp = f"{self.package}/{launcher_cls}"
+        if "/" in launcher_cls:
+            main_comp = launcher_cls
+        elif launcher_cls.startswith("."):
+            main_comp = f"{self.package}/{launcher_cls}"
+        else:
+            main_comp = f"{self.package}/.{launcher_cls}"
         live_print(f"[*] Launching application main component: {main_comp} ...")
         self.run_adb(["shell", "am", "start", "-n", main_comp])
         time.sleep(2.0)

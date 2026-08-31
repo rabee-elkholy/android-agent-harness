@@ -345,10 +345,12 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
      * **Phase Milestone Cards**: Scope, verified evidence, manual smoke test steps, and waiting status rendered in the active conversation language.
      * **Final Delivery**: Task overview, file changes, and walkthrough rendered in the active conversation language (while keeping Conventional Commit format in English).
 
-6. **Background Tasks & Zero-Noise Tool Notice Handling**:
-   - When launching asynchronous background commands (`run_command`, Gradle tasks, preflight checks), the IDE engine may prompt: `YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work or B) simply update the user with a short message...`.
+6. **Background Tasks, Sequential Dependencies & Anti-Hallucination Invariant**:
+   - When launching asynchronous background commands (`run_command`, Gradle tasks, preflight checks, device install, E2E smoke), the IDE engine may prompt: `YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work or B) simply update the user with a short message...`.
    - **MANDATORY OPTION A PROTOCOL**: The agent **MUST ALWAYS CHOOSE OPTION A** (proceed silently with other work or end the turn with zero chat text `""`).
    - The agent is **STRICTLY PROHIBITED** from choosing Option B and writing status announcements in chat (e.g. NEVER write `# Background Task Started`, *"The Gradle build has been started in the background..."*, or *"Preflight checks have been started in the background..."*). The IDE's native tool execution badge already displays running status to the developer.
+   - **STRICT PROHIBITION ON FAKE SYSTEM MESSAGES (`<MESSAGE_RECEIVED>`)**: The agent **MUST NEVER** fabricate, simulate, inject, or write `<MESSAGE_RECEIVED>`, `<SYSTEM_MESSAGE>`, or assume task completion in thoughts or chat prose.
+   - **SEQUENTIAL DEPENDENCY INVARIANT**: When the next step in the pipeline depends on the current background task finishing (e.g. `:assembleDebug` must complete before `run_device.py install-start`; `install-start` must complete before `run_e2e_smoke.py`), the agent **MUST STOP CALLING TOOLS IMMEDIATELY and END TURN WITH EMPTY TEXT `""`**. Never invoke dependent tools concurrently. The agent must wait passively for the genuine platform `<SYSTEM_MESSAGE>` notifying task completion (`finished with result:`) before dispatching the next dependent step.
 
 ---
 
