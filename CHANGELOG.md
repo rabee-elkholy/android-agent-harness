@@ -111,7 +111,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Complete Foundation Indexing (`daily-scenarios.md`)**: Indexed all 7 universal foundation reference guides (`architecture-guidelines.md`, `ui-layout-and-theming.md`, `database-and-persistence.md`, `performance-and-optimization.md`, `test-quality-guidelines.md`, `automated-skills.md`, `daily-scenarios.md`) to guarantee 100% zero-warning diagnostics across all installations and updates.
 - **Enhanced Update Engine (`update-prompt.md`)**: Enforced automatic pruning of legacy reference file names during upgrade while strictly preserving tailored project domain references and developer configurations.
 
-## [0.14.12] - 2026-08-30
+---
+
+**Included in 0.14.12 (2026-08-30):**
 
 ### Universal Generic Architecture References
 - **Universal Reference Naming (`agents/skills/android-harness/references/`, `doctor/models.py`)**: Renamed foundation references to universal names to represent general Android development across modern and legacy codebases:
