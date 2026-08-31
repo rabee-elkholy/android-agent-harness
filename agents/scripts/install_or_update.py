@@ -399,6 +399,7 @@ def run_verification(repo: Path) -> dict:
     scripts_dir = repo / ".agents" / "scripts"
 
     # 1. Run hook selftest
+    print("      -> Executing hook selftest suite...", flush=True)
     selftest_script = scripts_dir / "_hook_selftest.py"
     selftest_code = 1
     selftest_out = ""
@@ -412,8 +413,10 @@ def run_verification(repo: Path) -> dict:
         )
         selftest_code = res.returncode
         selftest_out = res.stdout + res.stderr
+        print(f"      -> Hook selftest result: {'[PASS]' if selftest_code == 0 else '[FAIL]'}", flush=True)
 
     # 2. Run harness doctor
+    print("      -> Executing 12-dimension diagnostic doctor...", flush=True)
     doctor_script = scripts_dir / "harness_doctor.py"
     doctor_code = 1
     doctor_out = ""
@@ -427,6 +430,7 @@ def run_verification(repo: Path) -> dict:
         )
         doctor_code = res.returncode
         doctor_out = res.stdout + res.stderr
+        print(f"      -> Doctor diagnostic result: {'[PASS]' if doctor_code == 0 else '[FAIL]'}", flush=True)
 
     return {
         "selftest_code": selftest_code,
@@ -447,33 +451,41 @@ def execute_install_or_update(
 ) -> dict:
     """Main deterministic orchestration routine."""
     start_time = datetime.datetime.now()
+    version = (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip()
     answers = load_answers(repo, answers_path)
     is_update = (repo / ".agents").is_dir()
     mode = "update" if is_update else "install"
 
+    print(f"[*] Starting Android AI Harness {mode.capitalize()} (v{version})...", flush=True)
+
     # 1. Backup
     backup_dir = None
     if not skip_backup:
+        print("[1/5] Creating timestamped backup...", flush=True)
         backup_dir = create_backup(repo, answers)
+        if backup_dir:
+            print(f"      Backup created at: .harness-backup/{backup_dir.name}", flush=True)
 
     # 2. Preserve references
+    print("[2/5] Preserving custom domain reference guides...", flush=True)
     preserved_refs = preserve_references(repo)
+    if preserved_refs:
+        print(f"      Preserved {len(preserved_refs)} reference files.", flush=True)
 
     # 3. Place engine
+    print("[3/5] Placing harness engine (.agents/)...", flush=True)
     place_engine(repo, kit, preserved_refs)
 
-    # 4. Generate _product.py
+    # 4. Generate _product.py & Wire adapters
+    print("[4/5] Generating _product.py & wiring tool adapters...", flush=True)
     generate_product_py(repo, answers, kit)
-
-    # 5. Wire adapters & MCP
     configure_adapters_and_mcp(repo, answers)
-
-    # 6. Enforce git privacy
     enforce_git_privacy(repo)
 
-    # 7. Verify
+    # 5. Verify
     verification = {}
     if not skip_doctor:
+        print("[5/5] Running operational health verification...", flush=True)
         verification = run_verification(repo)
 
     duration = (datetime.datetime.now() - start_time).total_seconds()
