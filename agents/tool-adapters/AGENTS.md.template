@@ -16,17 +16,19 @@ This checkout uses a portable Android harness. The same rules apply in Cursor, C
 
 After non-trivial implementation:
 
-1. `{{PY}} .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Shift-Left pre-gate: empirically verifies compilation and unit tests before requesting reviews)
-2. `{{PY}} .agents/scripts/review_package.py`
-3. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
+1. `{{PY}} .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Shift-Left Test Pre-Gate: compiler parity and unit tests)
+2. `{{PY}} .agents/scripts/fast_kt_lint.py` (Shift-Left Lint Pre-Gate: catches `!!`, `TODO` stubs, `runBlocking` in tests, inline FQCNs before review)
+3. `{{PY}} .agents/scripts/review_package.py`
+4. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
    - `bug-reviewer-agent` → `BUG_PASS`
    - `convention-reviewer-agent` → `CONVENTION_PASS`
    - `security-reviewer-agent` → `SECURITY_PASS`
    - `perf-anr-guardian-agent` → `PERF_PASS`
    - `regression-impact-reviewer-agent` → `REGRESSION_PASS`
-4. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
-5. `{{PY}} .agents/scripts/fast_kt_lint.py`
-6. `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+5. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
+6. `{{PY}} .agents/scripts/preflight_check.py` (Mandatory Preflight Gate: must pass with 0 errors before assemble — never assemble if `[FAIL]`)
+7. `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+8. Live device install & verification: `{{PY}} .agents/scripts/run_device.py install-start` + `{{PY}} .agents/scripts/run_e2e_smoke.py`. If no device is connected, HALT and prompt the developer; never silently skip device verification.
 
 Antigravity `hooks.json` enforces this barrier automatically. Other tools must follow it from this file.
 
@@ -44,7 +46,7 @@ Dispatch when needed:
 - **Autonomous Phase Pipeline & Checkpoint Commits**: In multi-phase tasks, execute strictly phase-by-phase. When Phase N finishes (5-leaf review PASS, unit tests PASS, `preflight_check.py` PASS, `:assembleDebug`, device installation via `run_device.py install-start`, and device smoke verification):
   * The agent outputs the **Phase Milestone Card** with verification evidence and a drafted Conventional Commit message for Phase N.
   * **MANDATORY HARD STOP**: The agent **MUST STOP and wait for the developer to commit Phase N and explicitly instruct the agent to begin Phase N+1**. Never touch, edit, or plan Phase N+1 files before the developer commits Phase N.
-- **High-Signal Chat & Round Summary Cards (Zero Noise, Zero Timers)**: The agent MUST NOT output mechanical progress spam in chat prose (e.g. "running unit tests...", "cleaning kapt cache...", "waiting for reviewers..."). Rely on IDE tool execution widgets for routine status. NEVER use `schedule` or polling timers for subagents. On intermediate subagent arrivals where other reviewers in the round are still executing, remain 100% silent in chat (output empty string `""`) and end turn without tool calls. When a 5-leaf round finishes with findings, output a concise **Review Round Summary Card** in chat detailing the findings and corrective fixes before launching the next round (rounds must converge in <= 2 rounds). Speak only at the 4 permitted touchpoints: Plan Approval, Round Summary Cards (on findings), Phase Milestone Cards, and Final Delivery. Match the developer's active conversation language (Arabic/English) across all cards, interactive modals, and summaries.
+- **High-Signal Chat & Round Summary Cards (Zero Noise, Zero Timers)**: The agent MUST NOT output mechanical progress spam in chat prose (e.g. "running unit tests...", "cleaning kapt cache...", "waiting for reviewers..."). Rely on IDE tool execution widgets for routine status. When launching background commands, always choose Option A (silent / zero chat text `""`); never write `# Background Task Started` in chat. NEVER use `schedule` or polling timers for subagents. On intermediate subagent arrivals where other reviewers in the round are still executing, remain 100% silent in chat (output empty string `""`) and end turn without tool calls. When a 5-leaf round finishes with findings, output a concise **Review Round Summary Card** in chat detailing the findings and corrective fixes before launching the next round (rounds must converge in <= 2 rounds). Speak only at the 4 permitted touchpoints: Plan Approval, Round Summary Cards (on findings), Phase Milestone Cards, and Final Delivery. Match the developer's active conversation language (Arabic/English) across all cards, interactive modals, and summaries.
 
 ## Git
 

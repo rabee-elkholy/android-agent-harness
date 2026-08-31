@@ -194,14 +194,17 @@ If the package diff contains any modified or newly created unit/UI test files (`
 
 From repo root:
 
-0. **Shift-Left Test & Signature Pre-Gate**: When code or unit tests are touched, run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (or module equivalent) *before* requesting review packages to empirically verify that signatures, constructor invocations, and unit test assertions pass cleanly.
+0. **Shift-Left Test & Lint Pre-Gate**: When code or unit tests are touched, ALWAYS run BOTH before requesting review packages:
+   a. `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Compiler, signature parity & unit tests)
+   b. `python .agents/scripts/fast_kt_lint.py` (Fast Kotlin Lint: catches `!!`, `TODO` stubs, `runBlocking` in tests, inline FQCNs, missing `@Preview`s before review).
+   *Fix any compiler or lint issues BEFORE generating the review package so code sent to reviewers is 100% clean.*
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
 3. **SILENT REVIEW WAIT (Zero Chat Noise)**:
    - When subagents are running in the background, the Lead Agent **MUST REMAIN COMPLETELY SILENT in chat** upon receiving intermediate notifications (e.g. do NOT output *"Waiting for 4 remaining..."* or *"Waiting for 3 remaining..."*).
    - The IDE interface natively displays live progress cards and spinners for each subagent.
    - Output a single, consolidated, professional summary in chat **ONLY when all 5 subagents have finished and all verdicts are in context**.
-4. Collect verdicts. BLOCKER/MAJOR → fix at the producer → regenerate the package → dispatch the same 5 again. Identical package content is rejected; the diff must change.
+4. Collect verdicts. BLOCKER/MAJOR → output Review Round Summary Card in chat -> fix at the producer -> verify with `fast_kt_lint.py` -> regenerate the package -> dispatch the same 5 again. Identical package content is rejected; the diff must change.
 5. Advance only when all five returned `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`.
 
 Never fire five separate `invoke_subagent` calls. That burns the round counter and is denied.
@@ -210,17 +213,16 @@ Optional sixth slot in the same invoke: `qa-diagnostics-agent`, `android-ui-expe
 
 ---
 
-## 3) Lint, Tests, Build, Install, Launch
+## 3) Preflight Gate, Build, Install, Launch
 
-Only after the 5 leaves have finished (PASS, not still running):
+Only after the 5 leaves have finished (all 5 PASS):
 
-1. `python .agents/scripts/fast_kt_lint.py` — dual-locale `@Preview` is required on Compose `*Screen.kt`, `*Card.kt`, `*Dialog.kt`, `*BottomSheet.kt`, `*Sheet.kt`, and `*Banner.kt`. Screens also need Loading/Empty/Error.
-2. Targeted tests: Run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "..."` when this checkout has unit tests. Use this module, not a leftover test path.
-3. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
-4. `adb devices` — physical serial only.
-5. `python .agents/scripts/run_device.py install-start` (live adb install + launch). Equivalent: `adb -s <DEVICE_ID> install -r -d app/build/outputs/apk/debug/app-debug.apk` then `adb -s <DEVICE_ID> shell am start -n <APPLICATION_ID>/<LAUNCHER_ACTIVITY>`.
+1. `python .agents/scripts/preflight_check.py` — **Mandatory Preflight Quality Gate** (verifies string parity, Room migrations, and fast Kotlin lint).
+   - **STRICT PREFLIGHT INVARIANT**: If `preflight_check.py` returns exit code 1 (`[FAIL]`), the agent is **STRICTLY PROHIBITED from running `:app:assembleDebug` or delivering**. The agent MUST fix all string/lint/Room issues or halt and report them to the developer.
+2. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
+3. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start`.
 
-Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/logcat_doctor.py` (optional `--device <serial>`). Both reject emulators.
+Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/logcat_doctor.py` (optional `--device <serial>`).
 
 ---
 
@@ -237,6 +239,14 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
     * Upon passing all Phase N gates, output the **Phase Milestone Card** in chat containing verification evidence and a drafted Conventional Commit message for Phase N.
     * **HARD STOP**: The agent **MUST STOP IMMEDIATELY** and wait for the developer to commit Phase N.
     * **STRICT PROHIBITION**: The agent MUST NOT edit, create, open, or start any files for Phase N+1 until the developer explicitly confirms they have committed Phase N and commands the agent to proceed (e.g. *"Start Phase N+1"* / *"ابدأ المرحلة اللي بعدها"*).
+
+- **Strict Device Verification & No-Device Halt Policy**:
+  - Running on device (`run_device.py install-start`) and smoke testing (`run_e2e_smoke.py` or interactive manual checklist) is an **absolute delivery gate requirement**.
+  - **IF NO DEVICE / EMULATOR IS CONNECTED** (when `run_device.py` or `adb devices` reports no devices):
+    * The agent is **STRICTLY FORBIDDEN from silently skipping device verification, swallowing the error, or claiming verification passed**.
+    * The agent **MUST HALT** and trigger an interactive modal (`ask_question` in the conversation language) or alert the developer in chat:
+      > *"No connected Android device or emulator detected. Please connect a physical device or start an emulator to proceed with installation and E2E verification."*
+    * The agent must wait for the developer to connect a device or explicitly grant permission to proceed.
 
 - **Dual Device Verification Modes**:
   - **Mode A: `autonomous_e2e` (Autonomous E2E Verification - Default)**:
@@ -334,6 +344,11 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
      * **Review Round Summary Cards**: Summary of findings and corrective fixes rendered in the active conversation language.
      * **Phase Milestone Cards**: Scope, verified evidence, manual smoke test steps, and waiting status rendered in the active conversation language.
      * **Final Delivery**: Task overview, file changes, and walkthrough rendered in the active conversation language (while keeping Conventional Commit format in English).
+
+6. **Background Tasks & Zero-Noise Tool Notice Handling**:
+   - When launching asynchronous background commands (`run_command`, Gradle tasks, preflight checks), the IDE engine may prompt: `YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) either proceed to other relevant work or B) simply update the user with a short message...`.
+   - **MANDATORY OPTION A PROTOCOL**: The agent **MUST ALWAYS CHOOSE OPTION A** (proceed silently with other work or end the turn with zero chat text `""`).
+   - The agent is **STRICTLY PROHIBITED** from choosing Option B and writing status announcements in chat (e.g. NEVER write `# Background Task Started`, *"The Gradle build has been started in the background..."*, or *"Preflight checks have been started in the background..."*). The IDE's native tool execution badge already displays running status to the developer.
 
 ---
 
