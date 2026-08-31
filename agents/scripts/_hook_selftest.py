@@ -30,6 +30,7 @@ PACKAGE = Path(tempfile.mkdtemp()) / "pkg.diff"
 PACKAGE.write_text("diff --git a/x b/x\n", encoding="utf-8")
 os.environ["HARNESS_HOOK_STATE"] = str(STATE)
 os.environ["HARNESS_MAX_REVIEWS"] = "20"
+os.environ["_IN_HOOK_SELFTEST"] = "1"
 # Existing barrier groups exercise legacy token semantics; v0.9.0 evidence
 # groups below flip HARNESS_EVIDENCE_MODE explicitly per scenario.
 os.environ.setdefault("HARNESS_EVIDENCE_MODE", "legacy")

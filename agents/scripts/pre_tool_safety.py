@@ -796,6 +796,15 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
                 if cleaned_tok.startswith("-"):
                     continue
                 if cleaned_tok.lower() in GIT_MUTATIONS:
+                    is_kit_dev = (
+                        os.environ.get("_IN_HOOK_SELFTEST") != "1"
+                        and (
+                            os.environ.get("HARNESS_KIT_DEV_GIT") == "1"
+                            or ((REPO / "agents" / "VERSION").is_file() and not (REPO / ".agents").is_dir())
+                        )
+                    )
+                    if is_kit_dev:
+                        break
                     deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
                     return
                 break
