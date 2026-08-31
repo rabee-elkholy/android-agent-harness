@@ -342,6 +342,77 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                 ],
             }
         )
+    return _reorder_with_previous_answers(qs, repo, lang, d)
+
+
+def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dict) -> list[dict]:
+    ans_file = answers_path(repo)
+    if not ans_file.is_file():
+        return qs
+    try:
+        prev = json.loads(ans_file.read_text(encoding="utf-8"))
+    except Exception:
+        return qs
+    if not isinstance(prev, dict):
+        return qs
+
+    rec_prefix = "(موصى به) " if lang == "ar" else "(Recommended) "
+
+    def strip_rec(lbl: str) -> str:
+        return re.sub(r"^\((?:Recommended|موصى به)\)\s*", "", lbl, flags=re.IGNORECASE).strip()
+
+    def add_rec(lbl: str) -> str:
+        return f"{rec_prefix}{strip_rec(lbl)}"
+
+    prev_map = {
+        "i0": "yes" if prev.get("backup", True) else "skip",
+        "i1": "discovered" if prev.get("product") == (d.get("product") or "App") else ("other" if prev.get("product") else "discovered"),
+        "i2": prev.get("py"),
+        "i3": prev.get("git_policy"),
+        "i4": prev.get("device_policy"),
+        "i10": prev.get("install_confirm"),
+        "i15": prev.get("unit_tests"),
+        "i5": prev.get("module"),
+        "i6": prev.get("launcher"),
+        "i16": prev.get("zoho_mcp"),
+        "i18": prev.get("zoho_language"),
+        "i20": prev.get("pm_provider"),
+        "i21": prev.get("git_gate"),
+        "i22": prev.get("device_verification"),
+        "i19": prev.get("flavor") or "default",
+    }
+    b_details = prev.get("bootstrap_details") or {}
+    if isinstance(b_details, dict):
+        prev_map.update({
+            "b_platform": b_details.get("platform"),
+            "b_arch": b_details.get("architecture"),
+            "b_di": b_details.get("di"),
+            "b_nav": b_details.get("navigation"),
+            "b_ui": b_details.get("ui"),
+            "b_db": b_details.get("database"),
+            "b_net": b_details.get("networking"),
+            "b_locales": b_details.get("locales"),
+        })
+
+    for q in qs:
+        qid = q.get("id")
+        target_val = prev_map.get(qid)
+        if not target_val or q.get("allow_multiple"):
+            continue
+        options = q.get("options") or []
+        match_idx = -1
+        for idx, opt in enumerate(options):
+            if opt.get("id") == target_val:
+                match_idx = idx
+                break
+        if match_idx != -1:
+            for opt in options:
+                opt["label"] = strip_rec(opt["label"])
+            matched_opt = options.pop(match_idx)
+            matched_opt["label"] = add_rec(matched_opt["label"])
+            options.insert(0, matched_opt)
+            q["options"] = options
+
     return qs
 
 

@@ -216,27 +216,30 @@ The kit ships clean foundation references in `.agents/skills/android-harness/ref
    - If `@Database` / SQLite / DataStore exists: fill with real `AppDatabase` class name, entities, or preferences schema.
    - If no database: keep a minimal note ("No local database in this project").
 
-#### 2. Dynamic Domain Discovery & Custom Reference Creation:
-Scan all module folders (`features/`, `core/`, `domain/`, etc.), packages, and Gradle dependencies to identify the project's actual core domains. For any major domain found in the project, **create a new dedicated reference file** in `.agents/skills/android-harness/references/`:
-- **Audio / Media**: (ExoPlayer, Media3, SoundPool, AudioPlayer) -> Create `audio-media-playback.md`
-- **Networking & API**: (Ktor client, Retrofit, WebSockets, GraphQL) -> Create `networking-api-contracts.md`
-- **Hardware / IoT / Bluetooth**: (BLE, USB, CameraX, NFC, Wi-Fi) -> Create `hardware-bluetooth-camera.md`
-- **Ads / Mediation**: (AdMob, AppLovin, UnityAds, UMP) -> Create `ad-mediation-privacy.md`
-- **Payments / Billing**: (Google Play Billing, Stripe, RevenueCat) -> Create `payment-gateways-architecture.md`
-- **Location / Maps**: (GPS, Google Maps, Mapbox, LocationManager) -> Create `location-maps-services.md`
-- **Domain-Specific Engines**: e.g., Education & Alphabet Games, Shopping Cart & Checkout, Chat & Messaging -> Create `<feature-name>-system.md`
-- **Local Storage / Caching**: (SQLDelight, KeyValueCache, DataStore) -> Create `local-cache-storage.md`
+#### 2. References Handling: First-Time Install vs. Update Session:
 
-#### 3. Update `daily-scenarios.md`:
-- Register and link to ALL active domain references (foundation + newly discovered).
+- **A. During an UPDATE Session (Existing Harness)**:
+  1. **Preserve Existing References AS-IS**: Do NOT overwrite, delete, or unilaterally add generic reference files. Restore all existing project reference files from `.agents/skills/android-harness/references/*.md` (or backup) exactly as they are.
+  2. **Mandatory Approval Modal**: Ask the developer via `ask_question` in their language to confirm keeping existing references:
+     - **Question (Arabic)**: "تم استرجاع ملفات المراجع المعمارية المخصصة لهذا المشروع (.agents/skills/android-harness/references/). هل توافق على اعتمادها والإبقاء عليها كما هي، أم ترغب في إضافة أو تعديل مراجع معينة؟"
+     - **Question (English)**: "Restored existing tailored architecture reference files (.agents/skills/android-harness/references/). Do you approve keeping the existing reference guides as-is, or would you like to add/update any domain guides?"
+     - **Options (Arabic)**: `(Recommended) نعم، اعتمد المراجع الحالية كما هي دون تعديل` / `أرغب في تعديل أو إضافة مراجع معمارية جديدة`
+     - **Options (English)**: `(Recommended) Yes, approve and keep existing references as-is` / `I want to add or modify domain references`
+  3. If the developer approves, keep all reference files unchanged. If they want changes, make the requested adjustments before proceeding.
 
-#### 4. Present Approval Table (First-Time Install Only):
-Present a clear summary table to the developer showing:
-- Foundation references filled
-- Discovered domain references created
-During a **first-time installation**, ask for approval via `ask_question` modal before proceeding:
-- `Approve the reference files` / `I have changes to make`
-*(During an update session, skip this modal as restored references are already approved).*
+- **B. During a FIRST-TIME INSTALL**:
+  1. Scan all module folders (`features/`, `core/`, `domain/`, etc.), packages, and Gradle dependencies to identify the project's actual core domains. For any major domain found in the project, **create a new dedicated reference file** in `.agents/skills/android-harness/references/`:
+     - **Audio / Media**: (ExoPlayer, Media3, SoundPool, AudioPlayer) -> Create `audio-media-playback.md`
+     - **Networking & API**: (Ktor client, Retrofit, WebSockets, GraphQL) -> Create `networking-api-contracts.md`
+     - **Hardware / IoT / Bluetooth**: (BLE, USB, CameraX, NFC, Wi-Fi) -> Create `hardware-bluetooth-camera.md`
+     - **Ads / Mediation**: (AdMob, AppLovin, UnityAds, UMP) -> Create `ad-mediation-privacy.md`
+     - **Payments / Billing**: (Google Play Billing, Stripe, RevenueCat) -> Create `payment-gateways-architecture.md`
+     - **Location / Maps**: (GPS, Google Maps, Mapbox, LocationManager) -> Create `location-maps-services.md`
+     - **Domain-Specific Engines**: e.g., Education & Alphabet Games, Shopping Cart & Checkout, Chat & Messaging -> Create `<feature-name>-system.md`
+     - **Local Storage / Caching**: (SQLDelight, KeyValueCache, DataStore) -> Create `local-cache-storage.md`
+  2. **Update `daily-scenarios.md`**: Register and link to ALL active domain references (foundation + newly discovered).
+  3. **Present Summary Table & Approval Modal**: Present a clear summary table to the developer and ask for approval via `ask_question`:
+     - `Approve the reference files` (Recommended) / `I have changes to make`
 
 ## 4) Leftover grep
 

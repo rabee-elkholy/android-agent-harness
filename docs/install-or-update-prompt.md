@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.22/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.14.22` — **SHA-256**: `50668a7d82d2c5704793b95827541661c99f8f748d6d97c2ee4e1ca048508f98` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.22` — **SHA-256**: `8b6360ac809b546b03a4b5b58303c1ecd4a183025baf8a6b27777b7bb55f66ff` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
@@ -34,9 +34,12 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
 3. **Answers first (do not invent short questions).** `--lang ar` if the developer writes Arabic, else `--lang en`.
    - Preferred: they run this in **their** terminal, then tell you when it finishes:
      `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>`
-    - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>`. Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list; the JSON payload is the sole interview authority. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
+    - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>`.
+      *(Note: When updating or re-running on an existing project, the wizard automatically reads previous answers from `.harness-setup/answers.json` and marks each previous choice as `(Recommended)` at index 0).*
+      Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list; the JSON payload is the sole interview authority. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
 4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, open `<kit>/docs/setup-prompt.md` and execute it from **0) Backup** onward. If `"backup": false`, skip copying backups and say rollback will not work. Skip section **I** (answers are already recorded). Copy `.harness-setup/SETUP_ANSWERS.md` into the new backup folder when a backup was made. Installer flags: `$PY <kit>/agents/scripts/setup_wizard.py flags --repo <this-android-root>`. Copy source: `<kit>/agents/` → `<this repo>/.agents`.
+   - **Tailored References Preservation**: On update sessions, keep existing tailored reference files (`.agents/skills/android-harness/references/*.md`) AS-IS without adding new ones, and ask the developer via `ask_question` modal to approve keeping them.
 5. After setup: run `$PY .agents/scripts/harness_doctor.py` for automated 12-dimension verification. If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.
 
 Kit rules that still apply during setup:
@@ -44,7 +47,8 @@ Kit rules that still apply during setup:
 - **Strict Read-Only Kit Source**: Never modify or write files in `<kit>` (`android-agent-harness`). Port and configure strictly into `<this repo>/.agents`.
 - **Scope Isolation**: Setup configures `.agents/` only. Never edit app production files (`strings.xml`, Kotlin files) during install. Report pre-existing preflight issues in chat.
 - **No `schedule` Timers**: Never call `schedule` or create background sleep timers during install. Run commands synchronously or await reactive completion.
-- **Mandatory Step 3b Approval**: Must present the domain references table to the developer via `ask_question` and obtain approval.
+- **Mandatory Step 3b Approval & Reference Preservation**: On update sessions, restore all existing tailored reference files (.agents/skills/android-harness/references/) AS-IS without adding new ones, and ask the developer via `ask_question` to approve keeping them. On first-time installs, discover domains, create custom references, and obtain approval.
+- **Previous Answers Recommendation**: When updating or re-running setup on an existing project, previous answers must be presented as `(Recommended)` at index 0.
 - Backup before overwriting `.agents` or tool adapters.
 - Structural port (package, regex, Path pieces, APK name, architecture, locales). A find-replace of the example name is not a successful install.
 - Write adapters only for the tools in answers.json (`--tools`). Always write `AGENTS.md`.
