@@ -27,7 +27,7 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
     5. **Final Task Deliverable & Conventional Commit**: Delivering the walkthrough summary and suggested commit message after all phases are verified.
 - **Answer First, Then Ask**: If the developer asks anything, answer in visible chat first. Only then may you call `ask_question` for a pending device phase or tradeoff. Never fire a bare modal that ignores the question.
 - **Language Policy**:
-  - **Dynamic Developer Communication**: Strictly mirror the developer's language in conversational chat (reply in Arabic when addressed in Arabic, and in English when addressed in English). Keep all code, Kotlin symbols, variable names, file paths, and Conventional Git commit messages strictly in English.
+  - **Dynamic Developer Communication**: Strictly mirror the developer's language in conversational chat (reply in whatever language they write in). Keep all code, Kotlin symbols, variable names, file paths, and Conventional Git commit messages strictly in English.
   - **Task Trackers & PM**: When logging or updating tasks in Zoho Sprints, Jira, Linear, or GitHub, adhere to the configured tracker language policy (`zoho_language` in `_product.py`, e.g., English titles + Arabic descriptions/comments for bilingual teams).
   - **`ask_question` Modals**: Prompts and options must follow the active conversation language.
 - **`(Recommended)`**: Only for technical / architectural tradeoffs. Forbidden on Pass/Fail device results, plan approval, and simple confirmations.
@@ -93,7 +93,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
     - **Device Smoke Testing Across All Phases**: Even for data/repository/domain refactoring phases, running the app on device (`run_device.py install-start`) to verify the app launches cleanly and existing screens do not crash on navigation is required whenever a physical device is connected.
     - **NEVER create a separate "Review Phase" at the end of the plan**. Diffs must stay small (<3-4 files per review round) to prevent massive end-of-project review loops.
 - **MANDATORY PROACTIVE PM STORY & TASK PROMPT**: When presenting a multi-phase plan in chat (accompanying the `implementation_plan.md` creation), the Lead Agent **MUST proactively ask the developer in the active conversation language**:
-  *"Would you like to create a User Story on Zoho Sprints with sub-tasks for each phase and update their statuses automatically with each milestone?"* (or in Arabic: *"هل ترغب في إنشاء User Story على Zoho Sprints مع Tasks فرعية لكل مرحلة وتحديث حالتها تلقائياً مع كل إنجاز؟"*).
+  *"Would you like to create a User Story on Zoho Sprints with sub-tasks for each phase and update their statuses automatically with each milestone?"* (posed in the active conversation language).
 - **STANDARDIZED PROGRESS & ROUND FORMATS**: When executing tasks, output these clean, high-signal formats in chat (STRICTLY ZERO EMOJIS, use clean ASCII markers):
   
   **1. Review Round Summary Card (When findings exist in Round N)**:
@@ -238,7 +238,7 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
   - **MANDATORY PHASE CHECKPOINT COMMIT & HANDSHAKE**:
     * Upon passing all Phase N gates, output the **Phase Milestone Card** in chat containing verification evidence and a drafted Conventional Commit message for Phase N.
     * **HARD STOP**: The agent **MUST STOP IMMEDIATELY** and wait for the developer to commit Phase N.
-    * **STRICT PROHIBITION**: The agent MUST NOT edit, create, open, or start any files for Phase N+1 until the developer explicitly confirms they have committed Phase N and commands the agent to proceed (e.g. *"Start Phase N+1"* / *"ابدأ المرحلة اللي بعدها"*).
+    * **STRICT PROHIBITION**: The agent MUST NOT edit, create, open, or start any files for Phase N+1 until the developer explicitly confirms they have committed Phase N and commands the agent to proceed (e.g. *"Start Phase N+1"*).
 
 - **Strict Device Verification & No-Device Halt Policy**:
   - Running on device (`run_device.py install-start`) and smoke testing (`run_e2e_smoke.py` or interactive manual checklist) is an **absolute delivery gate requirement**.
@@ -340,7 +340,7 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
 
 5. **Conversation Language Parity Across All Developer Touchpoints**:
    - The agent MUST dynamically match the active conversation language of the developer across ALL cards, interactive modals, and summaries:
-     * **Interactive Modals (`ask_question`)**: Questions, choices, and explanations must match the developer's language (Arabic for Arabic conversations, English for English conversations).
+     * **Interactive Modals (`ask_question`)**: Questions, choices, and explanations must match the developer's language (mirror whatever language they write in).
      * **Review Round Summary Cards**: Summary of findings and corrective fixes rendered in the active conversation language.
      * **Phase Milestone Cards**: Scope, verified evidence, manual smoke test steps, and waiting status rendered in the active conversation language.
      * **Final Delivery**: Task overview, file changes, and walkthrough rendered in the active conversation language (while keeping Conventional Commit format in English).

@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.23/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.14.23` — **SHA-256**: `8b6360ac809b546b03a4b5b58303c1ecd4a183025baf8a6b27777b7bb55f66ff` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.23` — **SHA-256**: `e1d4f401574baec234ca3f9e60788c70b96bc949844487f7a4acb073df8da042` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
@@ -31,10 +31,10 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
       git -C android-agent-harness checkout --detach v<requested-version>
       ```
       Verify `android-agent-harness/agents/VERSION` equals `<requested-version>`. Do **not** clone into `app/`, `composeApp/`, or any module source tree, and do **not** pull `main`.
-3. **Answers first (do not invent short questions).** `--lang ar` if the developer writes Arabic, else `--lang en`.
+3. **Answers first (do not invent short questions).** The wizard is English-first; when asking in chat, pose each question in the developer's language.
    - Preferred: they run this in **their** terminal, then tell you when it finishes:
-     `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root> --lang <ar|en>`
-    - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root> --lang <ar|en>`.
+     `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root>`
+    - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root>`.
       *(Note: When updating or re-running on an existing project, the wizard automatically reads previous answers from `.harness-setup/answers.json` and marks each previous choice as `(Recommended)` at index 0).*
       Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list; the JSON payload is the sole interview authority. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.

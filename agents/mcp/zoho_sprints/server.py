@@ -78,8 +78,8 @@ TOOLS = [
                 "item_id": {"type": "string", "description": "Task/item ID."},
                 "status": {
                     "type": "string",
-                    "enum": ["To do", "In progress", "Ready To ReTest", "Solved", "Done", "Re Opened"],
-                    "description": "The target status.",
+                    "enum": ["To do", "In progress", "Ready To ReTest", "Re Opened"],
+                    "description": "The target status. Done/Solved are forbidden by harness policy (section 5): use Ready To ReTest when verified.",
                 },
             },
             "required": ["sprint_id", "item_id", "status"],

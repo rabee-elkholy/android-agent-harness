@@ -15,7 +15,7 @@ The **Android Agent Harness** equips your AI assistant with deterministic, speci
 
 | # | Playbook | Slash Command / Trigger | Primary Goal | Specialist Subagent |
 |---|---|---|---|---|
-| 1 | **Feature Delivery Lifecycle** | `/deliver` | Atomic planning, TDD, 6-leaf review, assemble, and device verification | 6 Quality Guardians |
+| 1 | **Feature Delivery Lifecycle** | `/deliver` | Atomic planning, TDD, 5-leaf review, assemble, and device verification | 5 Quality Guardians |
 | 2 | **New Feature Planning** | `/new-feature` | Multi-phase architecture breakdown, boundary isolation, and Proceed approval | Lead Agent |
 | 3 | **Systematic Debugging** | `/debug` | 3-hypothesis root-cause tracing, producer fix, and regression proof | Lead Agent |
 | 4 | **Forensic Crash & ANR Triage** | `/crash-triage` | Live Logcat capture, stacktrace demangling, and ANR thread dump triage | `qa-diagnostics-agent` |
@@ -38,7 +38,7 @@ flowchart TD
     B -- Revisions Needed --> A
     B -- Approved --> C["2. Implementation & TDD (Red -> Green -> Refactor)"]
     C --> D["3. Shift-Left Test Pre-Gate (:app:testDebugUnitTest)"]
-    D --> E["4. Parallel 6-Leaf Review Gate (Single Invoke)"]
+    D --> E["4. Parallel 5-Leaf Review Gate (Single Invoke)"]
     E --> F{"All Reviewers PASS?"}
     F -- Findings Detected --> G["Review Round Summary Card (Chat Transparency)"]
     G --> C

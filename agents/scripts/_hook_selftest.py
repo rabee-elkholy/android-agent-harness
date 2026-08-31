@@ -89,7 +89,7 @@ def cmd(line: str, conversation: str | None = None) -> dict:
 
 
 def invoke(conversation, name="bug-reviewer-agent", prompt_prefix="HARNESS_REVIEW_PACKAGE=", extra=None, **sub):
-    prompt_str = f"{prompt_prefix}{PACKAGE} Findings or PASS." if prompt_prefix else "Perform deep analysis."
+    prompt_str = f"{prompt_prefix}{PACKAGE}\nFindings or PASS." if prompt_prefix else "Perform deep analysis."
     subagent = {
         "Workspace": "inherit",
         "TypeName": name,
@@ -180,7 +180,7 @@ cases = [
     ("git_status_or_stash", cmd('powershell -Command "git status; git stash drop"'), "deny"),
     ("git_status_inspection_only", cmd("git status --short --branch && git diff HEAD --stat"), "allow"),
     ("git_log_pipe_head", cmd("git log --oneline -5 | head -20"), "allow"),
-    ("installer_adapters_allowed", cmd("python .agents/scripts/install_tool_adapters.py --product Rashaqa --assemble :app:assembleDebug --tools gemini"), "allow"),
+    ("installer_adapters_allowed", cmd("python .agents/scripts/install_tool_adapters.py --product SampleApp --assemble :app:assembleDebug --tools gemini"), "allow"),
     ("git_status", cmd("git status --short --branch"), "allow"),
     ("sched_waiting_subagents", sched("Waiting for 5 review subagents"), "deny"),
     ("sched_user_reminder", sched("Remind developer about coffee in 10 mins"), "allow"),
@@ -241,7 +241,10 @@ cases = [
         invoke("c-test", name="test-quality-reviewer-agent", prompt_prefix=""),
         "allow",
     ),
-    ("emu", cmd("android emulator start pixel"), "deny"),
+    ("emu", cmd("android emulator start pixel"), "allow"),
+    ("git_grep_monkey", cmd("git log --grep monkey --oneline"), "allow"),
+    ("cat_gradle_properties", cmd("cat gradle.properties"), "allow"),
+    ("sched_review_word_only", sched("Remind me to do the code review later today"), "allow"),
     ("android_run_bare", cmd("android run"), "deny"),
     ("android_run_device", cmd("android run --device DEV"), "allow"),
     ("adb_install_bare", cmd("adb install -r app.apk"), "deny"),
@@ -307,6 +310,50 @@ for name, payload, expected in cases:
     ok = got == expected
     print(f"{name}: {got} {'OK' if ok else 'FAIL expected ' + expected}")
     failed += int(not ok)
+
+# --- v0.15.0: product-policy-driven safety (I.3 / I.4 via _product.py) ---
+os.environ["HARNESS_TEST_ALLOW_EMULATOR"] = "false"
+emu_phys_deny = run(cmd("android emulator start pixel"))["decision"] == "deny"
+emu_avd_deny = run(cmd("avdmanager list avd"))["decision"] == "deny"
+os.environ.pop("HARNESS_TEST_ALLOW_EMULATOR", None)
+
+os.environ["HARNESS_TEST_GIT_POLICY"] = "agent-may-commit"
+git_add_allow = run(cmd("git add -A"))["decision"] == "allow"
+git_commit_allow = run(cmd("git commit -m fix"))["decision"] == "allow"
+git_push_deny = run(cmd("git push origin main"))["decision"] == "deny"
+git_reset_deny = run(cmd("git reset --hard"))["decision"] == "deny"
+os.environ.pop("HARNESS_TEST_GIT_POLICY", None)
+
+ok_policy_driven = emu_phys_deny and emu_avd_deny and git_add_allow and git_commit_allow and git_push_deny and git_reset_deny
+print(
+    f"product-policy-driven safety (I.3/I.4): "
+    f"{'OK' if ok_policy_driven else 'FAIL ' + str([emu_phys_deny, emu_avd_deny, git_add_allow, git_commit_allow, git_push_deny, git_reset_deny])}"
+)
+failed += int(not ok_policy_driven)
+
+# --- v0.15.0: HARNESS_REVIEW_PACKAGE path with spaces ---
+spaced_pkg = Path(tempfile.mkdtemp(prefix="harness spaced path ")) / "pkg review.diff"
+spaced_pkg.write_text("diff --git a/x b/x\n", encoding="utf-8")
+spaced_invoke = {
+    "conversationId": "c-spaced",
+    "toolCall": {
+        "name": "invoke_subagent",
+        "args": {
+            "Subagents": [
+                {
+                    "Workspace": "inherit",
+                    "TypeName": name,
+                    "Prompt": f"HARNESS_REVIEW_PACKAGE={spaced_pkg}\nFindings or PASS.",
+                }
+                for name in REVIEW_FIVE
+            ]
+        },
+    },
+}
+spaced_res = run(spaced_invoke)
+ok_spaced_path = spaced_res["decision"] == "allow"
+print(f"review package path with spaces: {spaced_res['decision']} {'OK' if ok_spaced_path else 'FAIL ' + json.dumps(spaced_res)}")
+failed += int(not ok_spaced_path)
 
 # 5-leaf happy path + identical hash reject + changed hash allow
 five_conv = "c-five"
@@ -1682,6 +1729,22 @@ print(
 )
 failed += int(not ok_variants)
 
+# --- v0.15.0: --flavor grammar parity + unit-test task derivation ---
+from run_gradle_task import extract_flavor  # noqa: E402
+from install_tool_adapters import _derive_unit_test  # noqa: E402
+
+ok_flavor_eq = extract_flavor(["--flavor=staging", ":app:assembleDebug"]) == ("staging", [":app:assembleDebug"])
+ok_flavor_pos = extract_flavor(["--flavor", "staging", ":app:assembleDebug"]) == ("staging", [":app:assembleDebug"])
+ok_flavor_none = extract_flavor([":app:assembleDebug"]) == (None, [":app:assembleDebug"])
+ok_unit_derive = (
+    _derive_unit_test(":app:assembleDebug") == ":app:testDebugUnitTest"
+    and _derive_unit_test(":composeApp:assembleDebug") == ":composeApp:testDebugUnitTest"
+    and _derive_unit_test(":app:assembleRelease") == ":app:testReleaseUnitTest"
+)
+ok_flavor_grammar = ok_flavor_eq and ok_flavor_pos and ok_flavor_none and ok_unit_derive
+print(f"--flavor grammar + unit-test derivation: {'OK' if ok_flavor_grammar else 'FAIL'}")
+failed += int(not ok_flavor_grammar)
+
 # --- v0.7.0: Wizard flavor discovery + I.19 wiring ---
 from setup_wizard import discover_flavors  # noqa: E402
 from setup_wizard import normalize as wiz_normalize  # noqa: E402
@@ -2290,7 +2353,9 @@ try:
     gi_path = temp_app_root / ".gitignore"
     exclude_path = temp_app_root / ".git" / "info" / "exclude"
     stray_script = temp_app_root / "script_step3b.py"
-    stray_script.write_text("print('stray')", encoding="utf-8")
+    stray_script.write_text("# Android Agent Harness setup step\nprint('stray')", encoding="utf-8")
+    user_file = temp_app_root / "fix_product.py"
+    user_file.write_text("print('user-owned')", encoding="utf-8")
 
     # Simulate an existing .gitignore that had .agents/ and redundant subpaths + normal build/
     gi_path.write_text(".agents/\n.agents/state/\n.agents/cache/\n.agents/__pycache__/\nbuild/\n", encoding="utf-8")
@@ -2323,6 +2388,7 @@ try:
         and ".agents/" in exclude_text
         and "AGENTS.md" in exclude_text
         and not stray_script.is_file()
+        and user_file.is_file()
     )
 finally:
     shutil.rmtree(temp_app_root, ignore_errors=True)
@@ -2408,11 +2474,28 @@ ok_cp_tmpls = len(cp_tmpls) == 11 or _is_installed
 tmp_adapt_dir = Path(tempfile.mkdtemp())
 try:
     (tmp_adapt_dir / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    hooks_json = tmp_adapt_dir / ".agents" / "hooks.json"
+    hooks_json.parent.mkdir(parents=True, exist_ok=True)
+    hooks_json.write_text(
+        json.dumps(
+            {
+                "adb-and-git-safety": {
+                    "enabled": True,
+                    "PreToolUse": [
+                        {"matcher": "run_command", "hooks": [{"type": "command", "command": "python scripts/pre_tool_safety.py"}]}
+                    ],
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     # No --git-gate flag: the staged quality gate is DEFAULT ON since v0.10.0.
     adapt_args = parse_args([
         "--repo", str(tmp_adapt_dir),
         "--product", "TestApp",
-        "--py", "python",
+        "--py", "python3",
         "--assemble", ":app:assembleDebug",
         "--tools", "claude,copilot,codex",
         "--cc-hooks",
@@ -2431,6 +2514,19 @@ try:
     if ok_copilot_hooks:
         hooks_body = copilot_hooks_file.read_text(encoding="utf-8")
         ok_copilot_hooks = "preToolUse" in hooks_body and "copilot_pre_tool_safety.py" in hooks_body
+
+    rewritten_hooks = json.loads(hooks_json.read_text(encoding="utf-8"))
+    ok_hooks_py = (
+        "python3 scripts/pre_tool_safety.py"
+        in rewritten_hooks["adb-and-git-safety"]["PreToolUse"][0]["hooks"][0]["command"]
+    )
+    agents_md = (tmp_adapt_dir / "AGENTS.md").read_text(encoding="utf-8")
+    ok_agents_fill = (
+        "testDebugUnitTest" in agents_md
+        and "{{UNIT_TEST}}" not in agents_md
+        and "update zoho" in agents_md
+        and "{{PM_TRIGGER}}" not in agents_md
+    )
 
     # Test pruning (copilot deselected -> its hooks bridge is removed too)
     adapt_args_prune = parse_args([
@@ -2467,6 +2563,8 @@ try:
         and ok_git_exclude
         and ok_cc_settings
         and ok_copilot_hooks
+        and ok_hooks_py
+        and ok_agents_fill
         and ok_prune_codex
         and ok_prune_copilot_hooks
         and ok_keep_claude
@@ -2607,5 +2705,5 @@ print(f"harness_doctor 12-dimension diagnostic suite: {'OK' if ok_doctor else 'F
 failed += int(not ok_doctor)
 
 print(f"\nTotal test failures: {failed}")
-sys.exit(failed)
+sys.exit(1 if failed else 0)
 

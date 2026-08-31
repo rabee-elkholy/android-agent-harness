@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -468,6 +469,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--py", required=True, help="Python command that actually runs here (python or python3).")
     p.add_argument("--assemble", required=True, help="Gradle assemble task (e.g. :composeApp:assembleDebug).")
     p.add_argument(
+        "--unit-test",
+        help="Gradle unit-test task. Default: derived from --assemble (assembleDebug -> testDebugUnitTest).",
+    )
+    p.add_argument(
+        "--pm-provider",
+        choices=sorted(_PM_TRIGGERS),
+        default="zoho_sprints",
+        help="I.20 project tracker id written into AGENTS.md (trigger phrase). Default: zoho_sprints.",
+    )
+    p.add_argument(
+        "--tracker-language",
+        choices=sorted(_PM_LANG_NOTES),
+        default="en_titles_ar_comments",
+        help="I.18 tracker content language written into AGENTS.md. Default: en_titles_ar_comments.",
+    )
+    p.add_argument(
         "--tools",
         required=True,
         help=f"Comma-separated tool ids the developer uses, or 'all'. Known: {known}",
@@ -512,13 +529,55 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(cleaned_argv)
 
 
+def _derive_unit_test(assemble: str) -> str:
+    """Derive the unit-test task from the assemble task (I.5).
+
+    `:app:assembleDebug` -> `:app:testDebugUnitTest`; KMP
+    `:composeApp:assembleDebug` -> `:composeApp:testDebugUnitTest`.
+    """
+    task = str(assemble or "").strip()
+    if "assemble" not in task:
+        return task
+    derived = task.replace("assemble", "test", 1)
+    if "UnitTest" not in derived:
+        derived = re.sub(r"(Debug|Release)$", r"\1UnitTest", derived)
+    return derived
+
+
+_PM_TRIGGERS = {
+    "zoho_sprints": "update zoho",
+    "github_projects": "update github",
+    "jira_mcp": "update jira",
+    "linear_mcp": "update linear",
+    "none": "(no tracker — mutations disabled)",
+}
+
+_PM_LANG_NOTES = {
+    "en_titles_ar_comments": "English task titles, Arabic descriptions/comments.",
+    "all_en": "English task titles, descriptions, and comments.",
+    "all_ar": "Arabic task titles, descriptions, and comments.",
+}
+
+
 def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
+    unit_test = (args.unit_test or "").strip() or _derive_unit_test(args.assemble)
+    provider = str(getattr(args, "pm_provider", "zoho_sprints") or "zoho_sprints").strip()
+    tracker_lang = str(
+        getattr(args, "tracker_language", "en_titles_ar_comments") or "en_titles_ar_comments"
+    ).strip()
+    if provider not in _PM_TRIGGERS:
+        provider = "zoho_sprints"
+    if tracker_lang not in _PM_LANG_NOTES:
+        tracker_lang = "en_titles_ar_comments"
     return {
         "PRODUCT": args.product.strip(),
         "PY": args.py.strip(),
         "ASSEMBLE": args.assemble.strip(),
+        "UNIT_TEST": unit_test,
         "DEVICE_POLICY": (args.device_text or DEVICE_TEXT[args.device_policy]).strip(),
         "GIT_POLICY": (args.git_text or GIT_TEXT[args.git_policy]).strip(),
+        "PM_TRIGGER": _PM_TRIGGERS[provider],
+        "PM_LANG_NOTE": _PM_LANG_NOTES[tracker_lang],
     }
 
 
@@ -633,6 +692,42 @@ def ensure_copilot_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
     return [f"wrote {rel} (Copilot preToolUse bridge)"]
 
 
+def sync_hooks_json(repo: Path, py: str, *, dry_run: bool) -> list[str]:
+    """Rewrite .agents/hooks.json hook commands to use the configured python (I.2)."""
+    hooks_path = repo / ".agents" / "hooks.json"
+    if not hooks_path.is_file():
+        return []
+    try:
+        data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ["WARNING: .agents/hooks.json is not valid JSON; python substitution skipped"]
+
+    changed = False
+
+    def walk(obj) -> None:
+        nonlocal changed
+        if isinstance(obj, dict):
+            for key, value in list(obj.items()):
+                if key == "command" and isinstance(value, str):
+                    new = re.sub(r"^python(?:\d+)?(?=\.exe\b|\s)", py, value, count=1)
+                    if new != value:
+                        obj[key] = new
+                        changed = True
+                else:
+                    walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(data)
+    if not changed:
+        return []
+    if dry_run:
+        return ["dry-run rewrite .agents/hooks.json commands with the configured python"]
+    hooks_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return ["rewrote .agents/hooks.json commands to use the configured python"]
+
+
 def install(args: argparse.Namespace) -> list[str]:
     if not TEMPLATES_DIR.is_dir():
         raise SystemExit(f"Templates missing: {TEMPLATES_DIR}")
@@ -644,7 +739,14 @@ def install(args: argparse.Namespace) -> list[str]:
 
     keep = keep_set(selected)
     if not args.keep_extra_adapters:
-        logs.extend(prune_unselected(repo, keep, selected, dry_run=args.dry_run))
+        prune_logs = prune_unselected(repo, keep, selected, dry_run=args.dry_run)
+        logs.extend(prune_logs)
+        deleted = [x for x in prune_logs if x.startswith(("deleted ", "removed "))]
+        if deleted:
+            logs.append(
+                f"pruned {len(deleted)} managed adapter file(s) for unselected tools "
+                "(re-run with --keep-extra-adapters to retain them)."
+            )
 
     logs.append(
         write_file(
@@ -654,6 +756,7 @@ def install(args: argparse.Namespace) -> list[str]:
             repo=repo,
         )
     )
+    logs.extend(sync_hooks_json(repo, mapping["PY"], dry_run=args.dry_run))
     for tool in sorted(selected):
         for rel, body in bodies_for_tool(tool, mapping, pointer).items():
             logs.append(write_file(repo / rel, body, dry_run=args.dry_run, repo=repo))

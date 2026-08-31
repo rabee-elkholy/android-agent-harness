@@ -16,5 +16,5 @@ Follow `.agents/rules/harness-rules.md` and `systematic-debugging`. Do not commi
    - `python .agents/scripts/review_package.py`.
    - **Stage 0.5**: If tests were added/modified, audit with `test-quality-reviewer-agent` first until `TEST_PASS`.
    - **Stage 1**: Dispatch all 5 review leaves in one invoke with **Silent Review Wait**.
-6. **Assemble & Verify**: `fast_kt_lint.py` → targeted tests → `run_gradle_task.py :app:assembleDebug`.
+6. **Assemble & Verify**: `run_gradle_task.py <unit-test-task>` → `fast_kt_lint.py` → `run_gradle_task.py :app:assembleDebug` (same Shift-Left order as `harness-rules.md` Stage 1 step 0).
 7. **Physical Device Validation**: Structured phases on physical device. Walkthrough only after Pass.

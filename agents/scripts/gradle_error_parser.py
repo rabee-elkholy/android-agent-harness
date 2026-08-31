@@ -81,7 +81,7 @@ def main():
 
     errors = parse_compiler_errors(raw_log)
     print(format_errors(errors))
-    sys.exit(len(errors))
+    sys.exit(1 if errors else 0)
 
 
 if __name__ == "__main__":

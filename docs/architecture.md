@@ -22,13 +22,12 @@ graph TB
         DeviceRunner["run_device.py & run_e2e_smoke.py"]
     end
 
-    subgraph Reviewers ["Parallel 6-Leaf Quality Guardians"]
+    subgraph Reviewers ["Parallel 5-Leaf Quality Guardians"]
         R1["1. Bug & Logic Reviewer (bug-reviewer-agent)"]
         R2["2. Architecture & Convention (convention-reviewer-agent)"]
         R3["3. Security & OWASP Reviewer (security-reviewer-agent)"]
         R4["4. Perf & ANR Guardian (perf-anr-guardian-agent)"]
         R5["5. Regression & Blast Radius (regression-impact-reviewer-agent)"]
-        R6["6. Test Quality Specialist (test-quality-reviewer-agent)"]
     end
 
     subgraph Specialists ["On-Demand Dedicated Specialists"]

@@ -172,9 +172,14 @@ def update_banner() -> str:
     if res["has_update"]:
         return (
             f"[HARNESS UPDATE AVAILABLE] v{res['latest']} is out (installed: v{res['current']})!\n"
-            f"   To upgrade your project harness, paste docs/install-or-update-prompt.md in a new chat."
+            f"   To upgrade your project harness, paste {install_prompt_url(res['latest'])} in a new chat."
         )
     return ""
+
+
+def install_prompt_url(version: str) -> str:
+    tag = str(version or "").strip().lstrip("v") or "main"
+    return f"https://raw.githubusercontent.com/{GITHUB_REPO}/v{tag}/docs/install-or-update-prompt.md"
 
 
 def main() -> int:
@@ -209,7 +214,7 @@ def main() -> int:
         else:
             print(f"\n[!] A new version is available: v{res['latest']}")
             print(f"    Release details: {res['html_url']}")
-            print("    To upgrade, paste docs/install-or-update-prompt.md in a new chat.")
+            print(f"    To upgrade, paste {install_prompt_url(res['latest'])} in a new chat.")
     else:
         print("[OK] You are running the latest version.")
 

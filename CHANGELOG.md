@@ -5,6 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-08-31
+
+### System Audit Report, Product-Policy Safety Hooks & Client-Facing Parameterization
+- **Kit Prose De-Arabized — Language Mirrors the Developer (`wizard/i18n.py`, `wizard/questions.py`, `harness-rules.md`, `AGENTS.md`, docs)**: Removed the wizard's Arabic table (I.18 tracker-language keys kept), Arabic update-modal labels, and the Arabic `schedule` deny keyword. Chat-language policy generalized to mirror whatever language the developer writes in. SHA-256 headers re-pinned for the edited prompt docs.
+- **System Audit Report (`docs/conflicts-and-edgecases-report.md`)**: New report documenting CLI conflicts (preflight target, exit codes, output markers), rules/enforcement contradictions (5-vs-6 leaves, sequential wording), 14 edge cases, and the full Arabic inventory with a priority matrix and resolution status.
+- **`preflight` CLI Checks the Client Checkout (`harness_cli.py`, `_repo_files.py`)**: `cmd_preflight` prefers the checkout's own `.agents/scripts/preflight_check.py`; falls back to the kit script with a new `HARNESS_REPO` env override. Kit-dir runs remain self-checks.
+- **Product-Policy-Driven Safety Hooks (`_product.py`, `pre_tool_safety.py`)**: Added `GIT_POLICY` and `INSTALL_CONFIRM`; the hook now honors `ALLOW_EMULATOR` (I.4) and `agent-may-commit` (I.3, `git add`/`commit` only — push/merge/rebase/reset stay denied). Wizard I.22 gained a `disabled` option.
+- **AGENTS.md & Reminder Parameterization (`install_tool_adapters.py`, `AGENTS.md.template`, `pre_invocation_reminder.py`)**: `{{UNIT_TEST}}` auto-derived from `--assemble`; `{{PM_TRIGGER}}`/`{{PM_LANG_NOTE}}` written from I.20/I.18; `.agents/hooks.json` rewritten with the configured python; reminder renders device/git/install policy lines from `_product.py`.
+- **Robustness Fixes**: review-package paths with spaces (`PACKAGE_RE` full-line capture); fail-loud when the checkout has no git HEAD (`review_package.py`, `fast_kt_lint.py`, `room_guard.py`); barrier-TTL expiry surfaced via `latest_expired_note()`; screen-relative E2E swipes from `wm size` with WARN (never PASS) when unavailable; deny false positives narrowed (schedule keywords, run-command triggers, adb-context monkey); normalized exit codes (selftest, gradle_error_parser, documented `verify` contract); setup-only content-gated stray cleanup; `--flavor=X` grammar; `bash`→`sh`→direct gradlew fallback; MCP statuses aligned with policy; neutral product name in selftest; legacy `src/` bytecode tree removed; `docs/` upgrade references point at raw prompt URLs.
+- **Docs Aligned**: 5-leaf wording everywhere (README, workflows, architecture, SVGs, setup-prompt), single-dispatch review rule, `debug.md` gate order, quickstart DB options, setup-wizard I.22 row, porting guide updated for the new `_product.py` policy fields.
+
 ## [0.14.23] - 2026-08-31
 
 ### Shift-Left Fast KT Lint Pre-Gate, Strict Device Verification Halt & Update Reference Preservation

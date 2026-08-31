@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -73,6 +74,14 @@ def gradle_wrapper() -> Path:
     raise FileNotFoundError(f"No Gradle wrapper in {REPO_ROOT} (expected gradlew or gradlew.bat)")
 
 
+def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
+    """Run the unix gradlew through bash, falling back to sh, then direct exec."""
+    for shell in ("bash", "sh"):
+        if shutil.which(shell):
+            return [shell, str(wrapper), *gradle_args]
+    return [str(wrapper), *gradle_args]
+
+
 def run_gradle(task_args: list[str]) -> int:
     enable_line_buffered_stdio()
     try:
@@ -90,7 +99,7 @@ def run_gradle(task_args: list[str]) -> int:
         live_print(f"[!] {exc}", err=True)
         return 1
     if os.name != "nt" and wrapper.name == "gradlew":
-        gradle_cmd = ["bash", str(wrapper), *gradle_args]
+        gradle_cmd = unix_wrapper_cmd(wrapper, gradle_args)
     else:
         gradle_cmd = [str(wrapper), *gradle_args]
     live_print(f"[*] Executing: {wrapper.name} {' '.join(gradle_args)}")
@@ -161,6 +170,17 @@ def _duration_hint(raw_log: str) -> str:
     return "done"
 
 
+def extract_flavor(task_args: list[str]) -> tuple[str | None, list[str]]:
+    """Pull a leading --flavor NAME or --flavor=NAME out of the task list."""
+    if task_args and task_args[0] == "--flavor":
+        if len(task_args) < 2:
+            return None, task_args
+        return task_args[1], task_args[2:]
+    if task_args and task_args[0].startswith("--flavor="):
+        return (task_args[0].split("=", 1)[1].strip() or None), task_args[1:]
+    return None, task_args
+
+
 def main() -> None:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Live Gradle runner for this app")
@@ -174,13 +194,10 @@ def main() -> None:
     if task_args and task_args[0] == "--":
         task_args = task_args[1:]
 
-    flavor: str | None = None
-    if task_args and task_args[0] == "--flavor":
-        if len(task_args) < 2:
-            live_print("Usage: python run_gradle_task.py --flavor <name> <gradle_tasks...>", err=True)
-            sys.exit(1)
-        flavor = task_args[1]
-        task_args = task_args[2:]
+    flavor, task_args = extract_flavor(task_args)
+    if flavor is None and any(arg == "--flavor" for arg in task_args[:2]):
+        live_print("Usage: python run_gradle_task.py --flavor <name> <gradle_tasks...>", err=True)
+        sys.exit(1)
 
     if not task_args:
         live_print("Usage: python run_gradle_task.py [--flavor <name>] <gradle_tasks_and_args>", err=True)

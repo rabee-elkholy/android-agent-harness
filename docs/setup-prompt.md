@@ -194,7 +194,7 @@ Record all answers in `.harness-backup/<timestamp>/SETUP_ANSWERS.md`.
 
 Patch **all** product constants (`docs/porting.md`): write `.agents/scripts/_product.py` from `applicationId`, launcher, assemble task, APK path, and source-root Path pieces. Rewrite `harness-rules.md` (I.1 name, I.3 git, I.4 device, I.15 tests). Glob `**/outputs/apk/debug/*.apk` if the filename is unknown. KMP: `androidMain`, not `src/main` after renaming only `"app"`. Apply **I.20** by writing the answered tracker into `.agents/scripts/_product.py` as `PM_PROVIDER` (`zoho_sprints` default keeps today's behavior; `none` disables tracker mutations). For `github_projects`, run `python .agents/scripts/pm_github.py check`; for `jira_mcp` / `linear_mcp`, point the developer at the matching `.agents/pm/mcp_registration.*.md` playbook instead of wiring anything yourself.
 
-Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Room/MVI/Hilt/theme wrappers unless this checkout has them. See **3b** for the full reference-fill protocol. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` via `_product.py` and the real source roots. `run_device.py` uses **I.6**. Apply **I.4**: physical-only keeps emulator denies; both-allowed = allow emulator serials — rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow` only when I.4 is not physical-only. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. Keep the generic Zoho Sprints section; I.16 only wires MCP. **I.8:** one locale → skip AR/EN parity.
+Apply **I.7**: rewrite or stub skills so reviewers cannot cite ads/streak/GPS/Room/MVI/Hilt/theme wrappers unless this checkout has them. See **3b** for the full reference-fill protocol. **Always disable** scaffold `main()` (keep `VIEWMODEL`/`SCREEN` constants for `_hook_selftest.py`). `logcat_doctor` / `perf_guard` / `fast_kt_lint` use **this** `applicationId` via `_product.py` and the real source roots. `run_device.py` uses **I.6**. Apply **I.4** by writing `ALLOW_EMULATOR` into `_product.py` (the safety hook honors it at runtime; no `if emulator` rewrite needed). Apply **I.3** (`GIT_POLICY`), **I.10** (`INSTALL_CONFIRM`), and **I.22** (`DEVICE_VERIFICATION_MODE`) the same way. Apply **I.15** (unit tests yes/no) in `harness-rules.md` / `deliver.md`. `harness-rules.md` uses **I.1–I.8** and git policy **I.3**. Keep the generic Zoho Sprints section; I.16 only wires MCP. **I.8:** one locale → skip AR/EN parity.
 
 ### 3b) Dynamic Domain Discovery & Custom Reference Creation (with developer approval)
 
@@ -221,10 +221,8 @@ The kit ships clean foundation references in `.agents/skills/android-harness/ref
 - **A. During an UPDATE Session (Existing Harness)**:
   1. **Preserve Existing References AS-IS**: Do NOT overwrite, delete, or unilaterally add generic reference files. Restore all existing project reference files from `.agents/skills/android-harness/references/*.md` (or backup) exactly as they are.
   2. **Mandatory Approval Modal**: Ask the developer via `ask_question` in their language to confirm keeping existing references:
-     - **Question (Arabic)**: "تم استرجاع ملفات المراجع المعمارية المخصصة لهذا المشروع (.agents/skills/android-harness/references/). هل توافق على اعتمادها والإبقاء عليها كما هي، أم ترغب في إضافة أو تعديل مراجع معينة؟"
-     - **Question (English)**: "Restored existing tailored architecture reference files (.agents/skills/android-harness/references/). Do you approve keeping the existing reference guides as-is, or would you like to add/update any domain guides?"
-     - **Options (Arabic)**: `(Recommended) نعم، اعتمد المراجع الحالية كما هي دون تعديل` / `أرغب في تعديل أو إضافة مراجع معمارية جديدة`
-     - **Options (English)**: `(Recommended) Yes, approve and keep existing references as-is` / `I want to add or modify domain references`
+     - **Question**: "Restored existing tailored architecture reference files (.agents/skills/android-harness/references/). Do you approve keeping the existing reference guides as-is, or would you like to add/update any domain guides?" (posed in the developer's language)
+     - **Options**: `(Recommended) Yes, approve and keep existing references as-is` / `I want to add or modify domain references` (localized to the developer's language)
   3. If the developer approves, keep all reference files unchanged. If they want changes, make the requested adjustments before proceeding.
 
 - **B. During a FIRST-TIME INSTALL**:
@@ -252,8 +250,10 @@ Do not write forbidden tokens even in “do not use …” sentences.
 `hooks.json` lives in `.agents/` for Antigravity. Write adapters **only** for the tools from **I.14**. Run:
 
 ```
-$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5 assembleDebug task> --device-policy <allow|physical-only from I.4> --git-policy <never|agent-may-commit from I.3> --tools <comma ids from I.14>
+$PY .agents/scripts/install_tool_adapters.py --product <I.1> --py <I.2> --assemble <I.5 assembleDebug task> --device-policy <allow|physical-only from I.4> --git-policy <never|agent-may-commit from I.3> --pm-provider <I.20 id> --tracker-language <I.18 mode> --tools <comma ids from I.14>
 ```
+
+The unit-test task is derived automatically from `--assemble` (assembleDebug → testDebugUnitTest; override with `--unit-test` when needed). `--pm-provider`/`--tracker-language` keep the Zoho defaults when omitted.
 
 `--tools` examples: `cursor,gemini` or `claude,copilot` or `all`. Map I.14 labels to ids: `cursor` `claude` `copilot` `gemini` `codex` `qwen` `windsurf` `cline` `roo` `amazonq` `continue` `junie` `kilo` `goose`. `--tools all` if they picked every tool.
 
@@ -287,4 +287,4 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 - **Diagnostics & Rollback**:
   - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.23/docs/diagnostic-prompt.md`.
   - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.23/docs/rollback-prompt.md`.
-  - Remember: Six `*_PASS` required before real feature/bug delivery.
+  - Remember: Five `*_PASS` required before real feature/bug delivery.

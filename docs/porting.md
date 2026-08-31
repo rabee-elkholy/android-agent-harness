@@ -22,7 +22,10 @@ The kit ships generic defaults in `agents/scripts/_product.py` (`com.example.app
 
 ## Install traps
 
-- **I.4 allow emulator:** Set `ALLOW_EMULATOR = True` (or `False` for physical device only) in `_product.py`. Device runners (`run_device.py`, `logcat_doctor.py`, `capture_screen.py`) automatically consume this centralized policy. Keep `adb monkey` denied.
+- **I.4 allow emulator:** Set `ALLOW_EMULATOR = True` (or `False` for physical device only) in `_product.py`. Device runners (`run_device.py`, `logcat_doctor.py`, `capture_screen.py`) and the safety hook (`pre_tool_safety.py`) automatically consume this centralized policy at runtime — no hook rewrite needed. Keep `adb monkey` denied always.
+- **I.3 git policy:** Set `GIT_POLICY = "never"` (default) or `"agent-may-commit"` in `_product.py`. The safety hook honors it: `agent-may-commit` allows only `git add`/`commit`; every other mutation stays denied.
+- **I.10 install confirmation:** Set `INSTALL_CONFIRM = "confirm"` or `"allow"` in `_product.py`; the invocation reminder enforces the ask-first duty.
+- **I.22 device verification:** Set `DEVICE_VERIFICATION_MODE = "autonomous_e2e"` / `"manual_only"` / `"disabled"` in `_product.py`.
 - **I.8 one locale:** if there is no second `values-*` folder, skip key parity in `check_strings.py` or preflight fails. Point `RES_DIR` at the real `res` root.
 - **I.9 scaffold:** do not ask. `main()` stays disabled. `_hook_selftest.py` still imports `new_feature_scaffold.VIEWMODEL` and `.SCREEN` (needs `locale = "ar"` / `"en"` and `isEmpty = true`). Keep those constants.
 - **Leftover grep:** do not write forbidden parent-product tokens even in “do not use …” sentences inside `.agents`.
@@ -35,7 +38,7 @@ The kit ships generic defaults in `agents/scripts/_product.py` (`com.example.app
 - 5-leaf review + `*_PASS`
 - `pre_tool_safety.py` barrier (except package/activity strings)
 - live `run_gradle_task.py` / `_live_process.py`
-- `adb monkey` deny always. Emulator deny **only** if setup I.4 = physical only
+- `adb monkey` deny always. Emulator deny **only** when `ALLOW_EMULATOR = False` in `_product.py` (setup I.4 = physical only)
 - `code-review-guard-agent` retired / no `LGTM`
 
 ## After port, grep `.agents` must not find

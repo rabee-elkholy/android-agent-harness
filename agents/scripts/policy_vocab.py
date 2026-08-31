@@ -61,7 +61,9 @@ EMULATOR_PATTERNS = (
     ("standalone_tool", r"(?:^|\s)(?:emulator|avdmanager)(?:\.exe|\.bat)?(?:\s|$)"),
     ("targeting_flag", r"(?:^|\s)-e(?:\s|$)"),
     ("emulator_port", r"emulator-\d+"),
-    ("monkey", r"(?:^|\s)monkey(?:\s|$)"),
+    # Only monkey launched through adb is denied; a bare word mention
+    # (e.g. `git log --grep monkey`) must not trip the deny.
+    ("monkey", r"(?:^|\s)adb(?:\s+[^\n]*)?\bmonkey\b"),
 )
 _EMULATOR_RES = tuple((name, re.compile(p, re.IGNORECASE)) for name, p in EMULATOR_PATTERNS)
 

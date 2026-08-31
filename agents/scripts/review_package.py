@@ -115,6 +115,14 @@ def main(argv=None) -> int:
         diff_cmd.extend(["--", *paths])
 
     task_id = (args.task or os.environ.get("HARNESS_TASK_ID") or "").strip()
+    if not git_head():
+        print(
+            "[!] This checkout has no git HEAD (no commits yet). A review package "
+            "against an empty HEAD is meaningless and the review barrier would pass "
+            "silently. Create an initial commit before requesting reviews.",
+            file=sys.stderr,
+        )
+        return 1
     fingerprint = tree_code_fingerprint() or ""
     files_map, total_changed = build_files_map()
     skipped_count = max(0, total_changed - len(files_map))

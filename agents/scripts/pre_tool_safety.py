@@ -51,6 +51,33 @@ _CONTEXT = {"tool": "", "command": ""}
 
 AUDIT_MAX_RECORDS = 1000
 
+# Git ops the agent may run only when _product.GIT_POLICY == "agent-may-commit".
+# push/merge/rebase/reset/stash and every other mutation stay forbidden forever.
+AGENT_ALLOWED_GIT_OPS = frozenset({"add", "commit"})
+
+
+def _product_policy() -> tuple[str, bool, str]:
+    """(git_policy, allow_emulator, install_confirm) read from _product.py.
+
+    Safe defaults: never / False / confirm. Installers rewrite _product.py
+    from the wizard answers (I.3, I.4, I.10). Selftest-only env knobs let the
+    suite exercise both policies without rewriting _product.py.
+    """
+    if os.environ.get("_IN_HOOK_SELFTEST") == "1":
+        test_emu = os.environ.get("HARNESS_TEST_ALLOW_EMULATOR", "").strip().lower()
+        test_git = os.environ.get("HARNESS_TEST_GIT_POLICY", "").strip()
+        if test_emu or test_git:
+            allow_emu = True if test_emu in ("true", "1", "yes") else False
+            return test_git or "never", allow_emu, "confirm"
+    try:
+        import _product  # noqa: PLC0415
+    except Exception:
+        return "never", False, "confirm"
+    git_policy = str(getattr(_product, "GIT_POLICY", "never") or "never").strip()
+    allow_emulator = bool(getattr(_product, "ALLOW_EMULATOR", False))
+    install_confirm = str(getattr(_product, "INSTALL_CONFIRM", "confirm") or "confirm").strip()
+    return git_policy, allow_emulator, install_confirm
+
 
 def _audit_path() -> Path:
     override = os.environ.get("HARNESS_HOOK_STATE")
@@ -132,7 +159,7 @@ def conversation_id(payload: dict) -> str:
     return str(payload.get("conversationId") or payload.get("conversation_id") or "unknown")
 
 
-PACKAGE_RE = re.compile(r"HARNESS_REVIEW_PACKAGE=(\S+)")
+PACKAGE_RE = re.compile(r"HARNESS_REVIEW_PACKAGE=([^\r\n]+)")
 
 REVIEW_FIVE = frozenset(
     {
@@ -170,6 +197,14 @@ def require_review_package(sub: dict) -> Path | None:
         )
         return None
     raw_path = match.group(1).strip().strip('"').strip("'")
+    candidate = Path(raw_path)
+    if not candidate.is_file() and not raw_path.startswith('"'):
+        # Old-style prompts put prose after the path on the same line; fall back
+        # to the first whitespace-delimited token (spaced paths work only when
+        # the marker is alone on its line, as review_package.py prints it).
+        first_token = raw_path.split(None, 1)[0].strip().strip('"').strip("'")
+        if first_token and Path(first_token).is_file():
+            raw_path = first_token
     path = Path(raw_path)
     if not path.is_file():
         deny(f"Denied: review package file does not exist: {path}")
@@ -741,8 +776,14 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
     )
     is_assemble_or_test = not is_setup_script and any(
         k in lower_norm
-        for k in ("gradle", "assemble", "testdebug", ":app:test", "run_device.py")
+        for k in ("gradlew", "run_gradle_task.py", "testdebug", "run_device.py")
     )
+    # Standalone `gradle <task>` (classic CLI) — but never bare file mentions
+    # like `cat gradle.properties` / `gradle/libs.versions.toml`.
+    is_gradle_cli = not is_setup_script and bool(
+        re.search(r"\bgradle\b(?![\w./\\-]*\.)", lower_norm)
+    )
+    is_assemble_or_test = is_assemble_or_test or is_gradle_cli
     is_lint = not is_setup_script and "fast_kt_lint" in lower_norm
 
     if (is_assemble_or_test or is_lint) and conv != "unknown":
@@ -805,13 +846,24 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
                     )
                     if is_kit_dev:
                         break
-                    deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
+                    git_policy, _, _ = _product_policy()
+                    if git_policy == "agent-may-commit" and cleaned_tok.lower() in AGENT_ALLOWED_GIT_OPS:
+                        break
+                    if git_policy == "agent-may-commit":
+                        deny(
+                            "Denied: even with GIT_POLICY=agent-may-commit, only git add/commit are allowed; "
+                            "push, merge, rebase, reset, stash and every other git mutation stay developer-owned."
+                        )
+                    else:
+                        deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
                     return
                 break
 
+    _, allow_emulator, _ = _product_policy()
     if emulator_match(lower) and emulator_match(lower)[0] == "android_emulator":
-        deny("Denied: android emulator is forbidden. Physical device only.")
-        return
+        if not allow_emulator:
+            deny("Denied: android emulator is forbidden. Physical device only.")
+            return
 
     if re.search(r"\bandroid\s+(?:run|install)\b", lower) and "--device" not in lower:
         deny("Denied: android run/install needs --device=<physical-serial>.")
@@ -827,11 +879,12 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         if name == "monkey":
             deny("Denied: adb monkey is forbidden. Use adb -s <id> shell am start.")
             return
-        if name == "standalone_tool":
-            deny("Denied: emulator/AVD tooling is forbidden. Physical device only.")
+        if not allow_emulator:
+            if name == "standalone_tool":
+                deny("Denied: emulator/AVD tooling is forbidden. Physical device only.")
+                return
+            deny("Denied: emulator targeting is forbidden.")
             return
-        deny("Denied: emulator targeting is forbidden.")
-        return
 
     pm_messages = {
         "clear": "Denied: pm clear app data requires explicit developer approval.",
@@ -857,7 +910,7 @@ def handle_schedule(args: dict, payload: dict) -> None:
     prompt = str(args.get("Prompt") or args.get("prompt") or "").lower()
     conv = conversation_id(payload)
     if reviews_pending(conv) or any(
-        kw in prompt for kw in ("subagent", "reviewer", "review", "reviewers", "subagents", "مراجع")
+        kw in prompt for kw in ("subagent", "reviewer", "subagents")
     ):
         deny(
             "Denied: do not use schedule/timers to wait for subagents. "

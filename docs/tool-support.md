@@ -168,7 +168,7 @@ answers drift from `_product.py` or the adapters on disk.
 
 ## Tools without subagent spawn
 
-If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still requires the five leaves: open each JSON under `.agents/subagents/`, follow `system_prompt` against the same `HARNESS_REVIEW_PACKAGE`, sequential is allowed. Assemble only after `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`, each accompanied by the evidence footer `EVIDENCE pkg=<HARNESS_PACKAGE_SHA256_12> cites=<n>` (strict evidence mode).
+If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still requires the five leaves without five separate dispatch calls: open each JSON under `.agents/subagents/`, follow `system_prompt` against the same `HARNESS_REVIEW_PACKAGE`, and collect every leaf's verdict in the current turn. Assemble only after `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`, each accompanied by the evidence footer `EVIDENCE pkg=<HARNESS_PACKAGE_SHA256_12> cites=<n>` (strict evidence mode).
 
 ---
 

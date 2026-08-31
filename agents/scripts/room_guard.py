@@ -202,12 +202,15 @@ def check_room_working_tree(modified_rels: list[str] | None = None) -> tuple[boo
         return True, "No Room @Database or mapped @Entity changes in the working tree."
 
     failures: list[str] = []
+    no_baseline = False
     for path, new_decl, why in affected:
         old_text = git_head_text(new_decl.rel)
         old_decl = parse_database_source(old_text, new_decl.rel) if old_text else None
         old_ver = old_decl.version if old_decl else None
         new_ver = new_decl.version
         entity_hit = bool(new_decl.entity_names & changed_types)
+        if old_text is None:
+            no_baseline = True
 
         if new_ver is None:
             failures.append(f"{new_decl.rel}: @Database has no integer version ({why}).")
@@ -244,5 +247,10 @@ def check_room_working_tree(modified_rels: list[str] | None = None) -> tuple[boo
     if failures:
         return False, " ".join(failures)
     names = ", ".join(d.rel for _, d, _ in affected)
-    return True, f"Room migration gate passed for: {names}."
+    baseline_note = (
+        " [WARN] no git baseline available (no commits?); version/migration comparison skipped."
+        if no_baseline
+        else ""
+    )
+    return True, f"Room migration gate passed for: {names}.{baseline_note}"
 

@@ -22,6 +22,7 @@ after install, re-run the wizard (previous answers are pre-filled) — see
 | `I.19` | **Daily Flavor** | *Conditional* | Asked only when Gradle product flavors are discovered. |
 | `I.20` | **Project Tracker** | `Zoho Sprints` | Zoho, GitHub Projects, Jira, Linear, or none. Writes `PM_PROVIDER`. |
 | `I.21` | **Pre-Commit Git Gate** | `Yes` | Install the staged quality gate; use `--no-git-gate` only when managing your own hook. |
+| `I.22` | **Device Verification** | `Autonomous E2E` | Autonomous E2E smoke on device *(Recommended)* or manual step-by-step verification. |
 | `b_*` | **Greenfield Architecture** | *Conditional* | Platform, architecture, DI, navigation, UI, database, networking, and locale questions for blank projects. |
 
 The full interview protocol the installing agent executes lives in

@@ -130,9 +130,9 @@ python harness_cli.py --help
 | `android-harness init [--repo PATH] [--lang en\|ar]` | Run the setup wizard against an Android checkout; provisions the kit pinned to an exact release tag. |
 | `android-harness update [--repo PATH] [--force]` | Refresh the local kit engine to the latest release tag and print upgrade steps. |
 | `android-harness explain [--last N] [--repo PATH]` | Print recent safety-hook decisions from the append-only audit log of the checkout whose hooks ran. |
-| `android-harness verify [--repo PATH] [--verdict PATH] [--rerun-checks]` | Validate a review `verdict.json` artifact against actual repo state (package hash, per-file hashes, evidenced leaves). Exit codes: 0 PASS, 1 FAIL, 2 STALE. |
+| `android-harness verify [--repo PATH] [--verdict PATH] [--rerun-checks]` | Validate a review `verdict.json` artifact against actual repo state (package hash, per-file hashes, evidenced leaves). Exit codes: 0 PASS, 1 FAIL, 2 STALE/incomplete. |
 | `android-harness doctor [--repo PATH] [--json] [--device]` | Audit 12-dimension health at any time. |
-| `android-harness preflight [--repo PATH]` | Rapid preflight checks (strings + Room + fast lint). |
+| `android-harness preflight [--repo PATH]` | Rapid preflight checks (strings + Room + fast lint) against the target checkout (prefers the checkout's own `.agents` engine). |
 | `android-harness selftest` | Run the kit hook selftest suite in the kit checkout. |
 | `android-harness version` | Print the active kit engine version. |
 
@@ -150,7 +150,7 @@ For brand-new or blank projects, the wizard guides you through an **8-question A
 3. **Dependency Injection**: Koin vs Hilt vs Manual.
 4. **Navigation**: Voyager vs AndroidX Navigation Compose.
 5. **UI Framework**: Jetpack Compose vs XML Views.
-6. **Local Database**: Room vs SQLDelight vs Realm.
+6. **Local Database**: Room vs SQLDelight vs DataStore (or none).
 7. **Networking**: Ktor Client vs Retrofit + OkHttp.
 8. **Localization**: Bilingual Arabic (RTL) + English (LTR) vs Single Locale.
 

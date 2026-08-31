@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -316,6 +317,21 @@ def main() -> int:
         target_files = [p for p in changed_paths() if p.suffix == ".kt"]
 
     if not target_files:
+        git_head_proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if git_head_proc.returncode != 0:
+            print(
+                "[WARN] No git HEAD in this checkout (no commits?). "
+                "Changed-file lint cannot verify the tree; run --all for a full scan.",
+                file=sys.stderr,
+            )
         print("[OK] No Kotlin files to lint in the working tree (including untracked).")
         return 0
 

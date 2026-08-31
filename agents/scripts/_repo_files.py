@@ -1,11 +1,15 @@
 """Repo-relative git/adb helpers shared by harness scripts."""
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-REPO = SCRIPTS_DIR.parent.parent
+# HARNESS_REPO lets the android-harness CLI run a kit script against a client
+# checkout whose location differs from the script's own location.
+_env_repo = os.environ.get("HARNESS_REPO", "").strip()
+REPO = Path(_env_repo).resolve() if _env_repo else SCRIPTS_DIR.parent.parent
 
 _CODE_SUFFIXES = {".kt", ".java", ".kts", ".cpp", ".c", ".h", ".hpp", ".aidl", ".pro"}
 
@@ -131,8 +135,25 @@ HARNESS_LOCAL_EXCLUSIONS = [
 ]
 
 
-def ensure_local_git_privacy(target_repo: Path | None = None) -> list[str]:
-    """Ensure all harness rules are in .git/info/exclude (local to this PC) and clean shared .gitignore."""
+STRAY_CLEANUP_MARKERS = ("android-agent-harness", "android agent harness")
+
+
+def _is_kit_generated_stray(path: Path) -> bool:
+    """Only files the kit itself generated are ever cleaned up."""
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:2000].lower()
+    except OSError:
+        return False
+    return any(marker in head for marker in STRAY_CLEANUP_MARKERS)
+
+
+def ensure_local_git_privacy(target_repo: Path | None = None, *, clean_strays: bool = False) -> list[str]:
+    """Ensure all harness rules are in .git/info/exclude (local to this PC) and clean shared .gitignore.
+
+    `clean_strays` deletes legacy setup scratch scripts (script_step*.py,
+    fix_product.py, update_worker.py) — setup-time only and content-gated so
+    client files with the same names are never touched by checks.
+    """
     repo = (target_repo or REPO).resolve()
     logs: list[str] = []
 
@@ -221,19 +242,24 @@ def ensure_local_git_privacy(target_repo: Path | None = None) -> list[str]:
         except Exception:
             pass
 
-    # 4. Clean stray scratch scripts from repo root
-    for stray_file in repo.glob("script_step*.py"):
-        try:
-            stray_file.unlink()
-        except OSError:
-            pass
-    for stray_name in ("fix_product.py", "update_worker.py"):
-        stray = repo / stray_name
-        if stray.is_file():
+    # 4. Clean stray scratch scripts from repo root (setup-time only, content-gated)
+    if clean_strays:
+        for stray_file in repo.glob("script_step*.py"):
+            if not _is_kit_generated_stray(stray_file):
+                continue
             try:
-                stray.unlink()
+                stray_file.unlink()
+                logs.append(f"removed stray kit scratch {stray_file.name}")
             except OSError:
                 pass
+        for stray_name in ("fix_product.py", "update_worker.py"):
+            stray = repo / stray_name
+            if stray.is_file() and _is_kit_generated_stray(stray):
+                try:
+                    stray.unlink()
+                    logs.append(f"removed stray kit scratch {stray_name}")
+                except OSError:
+                    pass
 
     # 5. Assume unchanged for tracked adapter candidates
     for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:

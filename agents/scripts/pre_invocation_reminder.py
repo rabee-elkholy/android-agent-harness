@@ -3,16 +3,38 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_state import MAX_REVIEWS, invoke_count, reviews_pending  # noqa: E402
+from _hook_state import MAX_REVIEWS, invoke_count, latest_expired_note, reviews_pending  # noqa: E402
 
 
 def conversation_id(payload: dict) -> str:
     return str(payload.get("conversationId") or payload.get("conversation_id") or "unknown")
 
 
+def _policy_bits() -> dict:
+    """Read wizard-configured policies from _product.py (I.3/I.4/I.10 + tasks)."""
+    try:
+        import _product  # noqa: PLC0415
+    except Exception:
+        return {
+            "unit_test_task": ":app:testDebugUnitTest",
+            "assemble_task": ":app:assembleDebug",
+            "allow_emulator": True,
+            "git_policy": "never",
+            "install_confirm": "confirm",
+        }
+    return {
+        "unit_test_task": str(getattr(_product, "UNIT_TEST_TASK", ":app:testDebugUnitTest")),
+        "assemble_task": str(getattr(_product, "ASSEMBLE_TASK", ":app:assembleDebug")),
+        "allow_emulator": bool(getattr(_product, "ALLOW_EMULATOR", True)),
+        "git_policy": str(getattr(_product, "GIT_POLICY", "never") or "never"),
+        "install_confirm": str(getattr(_product, "INSTALL_CONFIRM", "confirm") or "confirm"),
+    }
+
+
 def check_update_directive() -> str:
     try:
         from check_kit_update import check_for_update
+
         info = check_for_update(force=False)
         if info.get("has_update"):
             curr = info.get("current", "")
@@ -20,10 +42,11 @@ def check_update_directive() -> str:
             return (
                 f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Agent Harness (v{latest}) is available (installed: v{curr}). "
                 f"In this opening turn, notify the developer via ask_question in their language: 'New Android Agent Harness v{latest} is available! What would you like to do?' "
-                f"Choices: 'View Changes (عرض التغييرات)' / 'Remind me tomorrow (ذكرني غداً)' / 'Update now (تحديث الآن)'. "
+                f"Choices: 'View Changes' / 'Remind me tomorrow' / 'Update now' (localize the labels to the developer's language). "
                 f"If they pick 'Remind me tomorrow': run `python .agents/scripts/check_kit_update.py --snooze 1` and proceed with their request. "
                 f"If they pick 'View Changes': run `python .agents/scripts/check_kit_update.py --show-changes` to show the changelog, then ask 'Update now' or 'Remind me tomorrow'. "
-                f"If they pick 'Update now': execute docs/install-or-update-prompt.md."
+                f"If they pick 'Update now': ask the developer to paste the install-or-update prompt for v{latest} "
+                f"(https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v{latest}/docs/install-or-update-prompt.md) in a new strong-model chat."
             )
     except Exception:
         pass
@@ -35,19 +58,37 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
         return (
             f"Harness Quality Guard: Runaway review cap reached ({used_reviews}/{MAX_REVIEWS}). "
             "This is an infinite-loop stop, not permission to skip quality. "
-            "Inspect why the same findings keep returning. Do not assemble a leftover APK."
+            "If more reviews are genuinely required, start a NEW conversation on this folder "
+            "(the cap resets per conversation). Do not assemble a leftover APK."
         )
+    bits = _policy_bits()
+    expired_note = latest_expired_note()
     pending_note = (
         " [SILENCE MANDATE]: A 5-leaf review round is in flight. If some reviewers are still running, OUTPUT EXACTLY EMPTY STRING ('') AND DO NOT CALL TOOLS. Never output 'Waiting for...', 'Reviewers completing...', or 'Running tests...'. Do not assembleDebug until all 5 reply."
         if pending
         else ""
     )
+    device_line = (
+        "Physical device only. Do not touch emulator/AVD tooling."
+        if not bits["allow_emulator"]
+        else "Physical device or emulator are both allowed (prefer physical when both are connected)."
+    )
+    git_line = (
+        "Never commit. Leave changes unstaged; the developer commits from their IDE."
+        if bits["git_policy"] != "agent-may-commit"
+        else "Git policy allows ONLY `git add` / `git commit`, and only when the developer explicitly asked in this chat. push/merge/rebase/reset/stash stay forbidden."
+    )
+    install_line = (
+        "INSTALL_CONFIRM=confirm: before running run_device.py install-start or any install, ask the developer via ask_question and wait for approval."
+        if bits["install_confirm"] != "allow"
+        else "Device install does not need a confirmation modal on this project."
+    )
     return (
-        f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{update_directive} "
+        f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{expired_note}{update_directive} "
         "PRIORITY: uncompromising quality. Never skip the 5-leaf review to save tokens. "
-        "ZERO-NOISE CHAT & BACKGROUND TASKS: Match the developer's active conversation language (Arabic/English) across all cards (Review Round, Phase Milestone, Final Delivery) and interactive modals. Never emit mechanical status updates in chat prose (e.g. 'Running tests...', 'Cleaning kapt cache...', 'Waiting for...'). When launching background commands, ALWAYS choose Option A (proceed silently or return zero chat text ''); NEVER write '# Background Task Started' in chat. Rely on IDE tool widgets for routine actions. Chat is reserved exclusively for Plan Approval, Review Round Cards (on findings), Phase Milestone Cards, and Final Delivery. "
+        "ZERO-NOISE CHAT & BACKGROUND TASKS: Match the developer's active conversation language (mirror whatever language they write in) across all cards (Review Round, Phase Milestone, Final Delivery) and interactive modals. Never emit mechanical status updates in chat prose (e.g. 'Running tests...', 'Cleaning kapt cache...', 'Waiting for...'). When launching background commands, ALWAYS choose Option A (proceed silently or return zero chat text ''); NEVER write '# Background Task Started' in chat. Rely on IDE tool widgets for routine actions. Chat is reserved exclusively for Plan Approval, Review Round Cards (on findings), Phase Milestone Cards, and Final Delivery. "
         "SHIFT-LEFT QUALITY: Before requesting reviews, proactively satisfy all review pillars (null/network resilience, MVI single-source StateFlow, no inline FQCNs, Compose contentDescription & 48dp touch targets, dual-locale en/ar previews, zero Main-thread I/O, Room migration if @Entity changes). "
-        "SHIFT-LEFT TEST & LINT PRE-GATE: Before calling review_package.py and invoke_subagent, when code or unit tests are touched, ALWAYS run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` AND `python .agents/scripts/fast_kt_lint.py` to verify compiler/signature parity and zero lint violations before dispatching subagents. "
+        f"SHIFT-LEFT TEST & LINT PRE-GATE: Before calling review_package.py and invoke_subagent, when code or unit tests are touched, ALWAYS run `python .agents/scripts/run_gradle_task.py {bits['unit_test_task']}` AND `python .agents/scripts/fast_kt_lint.py` to verify compiler/signature parity and zero lint violations before dispatching subagents. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create implementation_plan.md artifact with RequestFeedback=true and get developer approval via Proceed button BEFORE writing code. "
         "ANSWER FIRST in chat before ask_question. Match ask_question language to the developer. "
         "(Recommended) is only for engineering tradeoffs — never on Pass/Fail. "
@@ -60,8 +101,8 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS. "
         "Fix BLOCKER/MAJOR, verify with fast_kt_lint.py, regenerate the package, re-run the same 5. "
         "On-demand only (not a substitute for the 5): qa-diagnostics-agent, android-ui-expert-agent, test-quality-reviewer-agent. "
-        "Physical device only. Never commit. Assemble via python .agents/scripts/run_gradle_task.py :app:assembleDebug. "
-        "AUTONOMOUS PHASE PIPELINE & CHECKPOINT COMMITS: When Phase N finishes, run testDebugUnitTest + preflight_check.py (MUST PASS with 0 errors; if [FAIL], NEVER run assembleDebug) + assembleDebug + install-start + E2E smoke. If no device is connected, HALT and prompt the developer; NEVER silently skip device verification. Output Phase Milestone Card with drafted Phase N commit message, STOP IMMEDIATELY, and wait for the developer to commit Phase N and command start of Phase N+1. Never touch Phase N+1 files before developer commit. "
+        f"{device_line} {git_line} Assemble via python .agents/scripts/run_gradle_task.py {bits['assemble_task']}. {install_line} "
+        f"AUTONOMOUS PHASE PIPELINE & CHECKPOINT COMMITS: When Phase N finishes, run {bits['unit_test_task']} + preflight_check.py (MUST PASS with 0 errors; if [FAIL], NEVER run assembleDebug) + {bits['assemble_task']} + install-start + E2E smoke. If no device is connected, HALT and prompt the developer; NEVER silently skip device verification. Output Phase Milestone Card with drafted Phase N commit message, STOP IMMEDIATELY, and wait for the developer to commit Phase N and command start of Phase N+1. Never touch Phase N+1 files before developer commit. "
         "Zoho: never mutate unless the developer says update zoho. Arabic Zoho prose. "
         "Status In progress or Ready To ReTest only. Never Done or Solved."
     )

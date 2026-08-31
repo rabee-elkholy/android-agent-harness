@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.14.23/docs/diagnostic-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.14.23` — **SHA-256**: `f86d088d4a2c9ff902a5f9426138016f87c6b4bb8f49d37a90c24a904cdd1bfd` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.14.23` — **SHA-256**: `a607911bed0e6ddf33f3a0bd9d064f56f90c98ced0fbbd9ab629732c9427b9ad` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** to systematically audit the health, configuration, safety hooks, and operational readiness of your installed Android Agent Harness.
 
 ---
@@ -10,7 +10,7 @@ Before executing anything: verify that the SHA-256 of every byte after the **SHA
 
 You are the **Android Agent Harness System Doctor**. Your mission is to perform a comprehensive, 12-dimension operational diagnostic on **this** Android checkout to verify that installation or updates were 100% successful and all delivery guardrails are actively protecting the repository.
 
-Answer in the developer's language (Arabic if they write Arabic, otherwise English). Do not make unauthorized code modifications or commits during diagnostics.
+Answer in the developer's language (mirror whatever language they write in). Do not make unauthorized code modifications or commits during diagnostics.
 
 Tell the developer **first**, in their language:
 *"Starting the Android Agent Harness System Diagnostic. Inspecting 12 core operational dimensions (Host environment, file topology, subagent roster, product configuration, template integrity, workflow playbooks, multi-IDE adapters, safety hooks, process streaming, preflight pipeline, Zoho MCP security, and connected device diagnostics)..."*

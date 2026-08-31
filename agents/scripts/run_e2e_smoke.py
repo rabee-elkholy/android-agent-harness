@@ -287,6 +287,37 @@ class E2ERunner:
         self.target_texts = target_texts or []
         self.screenshots: list[Path] = []
         self.start_time = datetime.datetime.now(datetime.timezone.utc)
+        self._screen_wh: tuple[int, int] | None = None
+
+    def screen_size(self) -> tuple[int, int] | None:
+        """Resolve the device screen size once (adb shell wm size)."""
+        if self._screen_wh is not None:
+            return self._screen_wh
+        self._screen_wh = None
+        proc = self.run_adb(["shell", "wm", "size"], timeout=10.0)
+        output = proc.stdout or ""
+        match = re.search(r"(\d+)\s*x\s*(\d+)", output)
+        if match:
+            w, h = int(match.group(1)), int(match.group(2))
+            if w > 0 and h > 0:
+                self._screen_wh = (w, h)
+        return self._screen_wh
+
+    def _scroll(self, forward: bool) -> bool:
+        """Scroll using screen-relative coordinates. False when size is unknown."""
+        size = self.screen_size()
+        if not size:
+            live_print("[WARN] Device screen size unavailable; skipping scroll gesture.", err=True)
+            return False
+        w, h = size
+        cx = w // 2
+        y_high = int(h * 0.58)
+        y_low = int(h * 0.22)
+        if forward:
+            self.swipe(cx, y_high, cx, y_low)
+        else:
+            self.swipe(cx, y_low, cx, y_high)
+        return True
 
     def run_adb(self, args: list[str], timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
         cmd = ["adb", "-s", self.serial, *args]
@@ -386,13 +417,13 @@ class E2ERunner:
         self.run_adb(["shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)])
         time.sleep(0.8)
 
-    def scroll_down(self):
+    def scroll_down(self) -> bool:
         """Perform a standard vertical scroll down gesture."""
-        self.swipe(540, 1400, 540, 600, 400)
+        return self._scroll(forward=True)
 
-    def scroll_up(self):
+    def scroll_up(self) -> bool:
         """Perform a standard vertical scroll up gesture."""
-        self.swipe(540, 600, 540, 1400, 400)
+        return self._scroll(forward=False)
 
     def capture_screenshot(self, name: str) -> Path | None:
         SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -514,12 +545,22 @@ class E2ERunner:
         scrollables = find_nodes(nodes, class_name="RecyclerView") or find_nodes(nodes, class_name="ScrollView") or find_nodes(nodes, scrollable=True)
         if scrollables:
             live_print("  [*] Testing scroll responsiveness and frame stability...")
-            self.scroll_down()
+            down_ok = self.scroll_down()
             time.sleep(0.5)
-            self.scroll_up()
+            up_ok = self.scroll_up()
             time.sleep(0.5)
-            steps.append({"step": "Scroll Gesture Responsiveness", "status": "PASS"})
-            live_print("  [PASS] Scroll responsiveness verified without UI lockup.")
+            if down_ok and up_ok:
+                steps.append({"step": "Scroll Gesture Responsiveness", "status": "PASS"})
+                live_print("  [PASS] Scroll responsiveness verified without UI lockup.")
+            else:
+                steps.append(
+                    {
+                        "step": "Scroll Gesture Responsiveness",
+                        "status": "WARN",
+                        "reason": "device screen size unavailable; scroll skipped",
+                    }
+                )
+                live_print("  [WARN] Scroll step skipped (screen size unavailable) — never reported as PASS.", err=True)
 
         # Step 6: Real-time Logcat crash forensics
         crashes = self.check_logcat_crashes()

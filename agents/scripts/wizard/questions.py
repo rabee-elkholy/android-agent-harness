@@ -28,7 +28,7 @@ from .i18n import (
 
 def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[dict]:
     d = facts if facts is not None else discover(repo)
-    labels = TOOL_LABELS["ar" if lang == "ar" else "en"]
+    labels = TOOL_LABELS.get(lang, TOOL_LABELS["en"])
     qs = [
         {
             "id": "i0",
@@ -221,6 +221,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "options": [
                 {"id": "autonomous_e2e", "label": t(lang, "i22_e2e")},
                 {"id": "manual_only", "label": t(lang, "i22_manual")},
+                {"id": "disabled", "label": t(lang, "i22_off")},
             ],
         }
     )
@@ -356,10 +357,10 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dic
     if not isinstance(prev, dict):
         return qs
 
-    rec_prefix = "(موصى به) " if lang == "ar" else "(Recommended) "
+    rec_prefix = "(Recommended) "
 
     def strip_rec(lbl: str) -> str:
-        return re.sub(r"^\((?:Recommended|موصى به)\)\s*", "", lbl, flags=re.IGNORECASE).strip()
+        return re.sub(r"^\(Recommended\)\s*", "", lbl, flags=re.IGNORECASE).strip()
 
     def add_rec(lbl: str) -> str:
         return f"{rec_prefix}{strip_rec(lbl)}"
@@ -458,7 +459,7 @@ def prompt_choice(q: dict, lang: str, default: list[str] | None = None) -> list[
         if not raw and default_indexes:
             return [q["options"][idx]["id"] for idx in default_indexes]
         if q.get("allow_multiple"):
-            if raw.lower() in {"all", "كلهم"}:
+            if raw.lower() in {"all"}:
                 return ["all"]
             nums: list[int] = []
             ok = True
@@ -699,7 +700,7 @@ def write_answers(repo: Path, answers: dict) -> None:
     # Ensure all harness rules are isolated locally via .git/info/exclude without polluting shared .gitignore
     try:
         from .._repo_files import ensure_local_git_privacy
-        ensure_local_git_privacy(repo)
+        ensure_local_git_privacy(repo, clean_strays=True)
     except (ImportError, ValueError):
         try:
             import sys
@@ -707,7 +708,7 @@ def write_answers(repo: Path, answers: dict) -> None:
             if str(scripts_dir) not in sys.path:
                 sys.path.insert(0, str(scripts_dir))
             from _repo_files import ensure_local_git_privacy
-            ensure_local_git_privacy(repo)
+            ensure_local_git_privacy(repo, clean_strays=True)
         except Exception:
             pass
 

@@ -541,6 +541,42 @@ def read_verdict_record(pkg12: str) -> dict | None:
         return None
 
 
+def latest_expired_note() -> str:
+    """Human-readable note when the most recent verdict record is EXPIRED.
+
+    The barrier TTL clears a stuck round automatically; this note makes that
+    visible so the agent knows whether the 5 leaves actually finished.
+    """
+    try:
+        vdir = _verdicts_dir()
+        if not vdir.is_dir():
+            return ""
+        best: dict | None = None
+        best_ts = 0.0
+        for p in vdir.glob("verdict-*.json"):
+            try:
+                rec = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            try:
+                ts = float(rec.get("completed_at") or 0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            if ts > best_ts:
+                best, best_ts = rec, ts
+        if best and str(best.get("verdict") or "").upper() == "EXPIRED":
+            pkg12 = str((best.get("package") or {}).get("sha256_12") or "?")
+            return (
+                f" [WARNING] The previous review round (pkg {pkg12}) EXPIRED via the barrier TTL "
+                "— if its 5 leaves never delivered verdicts, re-dispatch the round before assembling."
+            )
+    except Exception:
+        pass
+    return ""
+
+
 SEVERITY_HARD_BLOCKER = "HARD_BLOCKER"
 SEVERITY_SOFT_FINDING = "SOFT_FINDING"
 

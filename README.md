@@ -113,17 +113,18 @@ The harness seamlessly adapts to any Android project topology from day one:
 
 ---
 
-## The 6 Quality Guardians & 8-Specialist Multi-Agent System
+## The 5 Quality Guardians & 8-Specialist Multi-Agent System
 
 Before any APK assembly or device execution, the Lead Agent coordinates with a specialized squad of AI specialists:
 
-### The 6 Parallel Quality Guardians (Mandatory Gate)
+### The 5 Parallel Quality Guardians (Mandatory Gate)
 1. **`bug-reviewer-agent`** (`BUG_PASS`): Catches race conditions, Kotlin null-safety violations across Java/Kotlin boundaries, coroutine cancellation leaks, and missing exception handling.
 2. **`convention-reviewer-agent`** (`CONVENTION_PASS`): Enforces Clean Architecture layer boundaries, MVI Single-source StateFlow, zero inline FQCNs, and Compose accessibility standards (48dp touch targets, contentDescription).
 3. **`security-reviewer-agent`** (`SECURITY_PASS`): Enforces OWASP Mobile Top 10, secures exported components/intents, eliminates Logcat secret leaks, and verifies least-privilege permissions.
 4. **`perf-anr-guardian-agent`** (`PERF_PASS`): Eliminates Application Not Responding (ANR) risks, bars Main-thread disk/network I/O, prevents Compose recomposition jank, and stops `DisposableEffect` sensor/listener memory leaks.
 5. **`regression-impact-reviewer-agent`** (`REGRESSION_PASS`): Analyzes blast radius, caller graph impacts, breaking API signatures, and shared module side effects.
-6. **`test-quality-reviewer-agent`** (`TEST_PASS`): Audits unit and UI test suites (`*Test.kt`), requiring deep state assertions, mocking integrity, and mandatory `runTest` Coroutines dispatchers.
+
+`test-quality-reviewer-agent` (`TEST_PASS`) is a **Stage 0.5 pre-gate** for test diffs: it audits unit and UI test suites (`*Test.kt`) before the 5-leaf round, requiring deep state assertions, mocking integrity, and mandatory `runTest` Coroutines dispatchers.
 
 ### The 2 Dedicated On-Demand Specialists
 7. **`qa-diagnostics-agent`**: Deep Logcat forensics, crash stack trace demangling, and ANR thread dump triage on connected physical devices.

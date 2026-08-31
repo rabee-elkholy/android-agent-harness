@@ -19,6 +19,12 @@ Usage:
     android-harness selftest [--kit PATH]
     android-harness version [--kit PATH]
 
+Exit codes (documented contract):
+    0  PASS / nothing wrong
+    1  findings, failures, or configuration errors
+    2  incomplete or stale verification (verify: verdict from another commit)
+    130 interrupted (Ctrl-C)
+
 Or without installing:
     python harness_cli.py <command> [options]
 """
@@ -259,7 +265,9 @@ def find_repo(explicit: str | None) -> Path:
     return repo
 
 
-def run_engine_script(kit: Path, script: str, args: list[str], *, capture: bool = False) -> int:
+def run_engine_script(
+    kit: Path, script: str, args: list[str], *, capture: bool = False, env: dict | None = None
+) -> int:
     target = _script_root(kit) / script
     if not target.is_file():
         raise SystemExit(f"[ERROR] Engine script missing: {target}")
@@ -270,6 +278,7 @@ def run_engine_script(kit: Path, script: str, args: list[str], *, capture: bool 
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
     )
     if capture and proc.stdout:
         sys.stdout.write(proc.stdout)
@@ -355,12 +364,42 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:
+    """Run the preflight gate against the client checkout.
+
+    Prefer the checkout's own `.agents/scripts/preflight_check.py` (its REPO
+    resolves correctly by location). Only when the checkout has no installed
+    harness, run the kit's script with HARNESS_REPO pointing at the checkout.
+    With no --repo, a kit checkout cwd runs the kit's own preflight (self-check).
+    """
     kit = ensure_kit(args.kit)
-    repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
+    if args.repo:
+        repo = find_repo(args.repo)
+    else:
+        cwd = Path.cwd().resolve()
+        is_android = (cwd / "gradlew").is_file() or (cwd / "gradlew.bat").is_file()
+        is_kit = (cwd / "agents" / "VERSION").is_file() and not (cwd / ".agents").is_dir()
+        if not (is_android or is_kit):
+            raise SystemExit(
+                f"[ERROR] {cwd} is NOT an Android project (missing gradlew/gradlew.bat) "
+                "and not a kit checkout. Pass --repo pointing to the Android/KMP checkout."
+            )
+        repo = cwd
+    client_script = repo / ".agents" / "scripts" / "preflight_check.py"
     prev_cwd = Path.cwd()
     os.chdir(repo)
     try:
-        return run_engine_script(kit, "preflight_check.py", [])
+        if client_script.is_file():
+            proc = subprocess.run(
+                [sys.executable, str(client_script)],
+                check=False,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            return proc.returncode
+        env = os.environ.copy()
+        env["HARNESS_REPO"] = str(repo)
+        return run_engine_script(kit, "preflight_check.py", [], env=env)
     finally:
         os.chdir(prev_cwd)
 
@@ -595,18 +634,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print(f"\n[FAIL] verify failed with {len(problems)} problem(s):")
         for item in problems:
             print(f"  - {item}")
-        return 1
+        return EXIT_FINDINGS
     if stale:
         print(
             "\n[STALE] Package and file hashes match the recorded verdict, but it was "
             "generated at a different commit than the current HEAD."
         )
-        return 2
+        return EXIT_INCOMPLETE_OR_STALE
     print(
         "\n[PASS] Verdict artifact verified: package hash, changed-file hashes, and "
         "5 evidenced leaves all match this checkout."
     )
-    return 0
+    return EXIT_PASS
 
 
 def build_parser() -> argparse.ArgumentParser:
