@@ -309,11 +309,18 @@ def cmd_init(args: argparse.Namespace) -> int:
     if not answers.is_file():
         print("[!] answers.json missing after wizard; rerun init.")
         return 1
+    print("[*] Applying engine port to target app...")
+    port_code = run_engine_script(
+        kit,
+        "install_or_update.py",
+        ["--repo", str(repo), "--kit", str(kit)],
+    )
+    if port_code != 0:
+        print("[!] Engine port reported failures; review doctor output above.")
+        return port_code
     print()
-    print("[NEXT] Answers recorded. Finish the structural port with your AI agent:")
-    print(f"       paste {_prompt_url(version, 'install-or-update-prompt.md')}")
-    print("       in a NEW strong-model chat opened at the Android project root.")
-    print(f"[VERIFY] afterwards: android-harness doctor --repo \"{repo}\"")
+    print("[SUCCESS] Android Agent Harness installed and verified.")
+    print(f"[VERIFY] Run anytime: android-harness doctor --repo \"{repo}\"")
     return 0
 
 
@@ -340,6 +347,18 @@ def cmd_update(args: argparse.Namespace) -> int:
         refresh_kit(kit, current)
     new_version = _read_version_file(kit)
     print(f"[i] Local kit engine now at: v{new_version}")
+    if args.repo:
+        repo = find_repo(args.repo)
+        answers = repo / ".harness-setup" / "answers.json"
+        if answers.is_file():
+            print("[*] Applying engine update directly to app checkout...")
+            run_engine_script(
+                kit,
+                "install_or_update.py",
+                ["--repo", str(repo), "--kit", str(kit)],
+            )
+            print("[SUCCESS] App checkout updated and verified.")
+            return 0
     print("[NEXT] Port the new engine into your app checkout:")
     print(f"       paste {_prompt_url(new_version, 'install-or-update-prompt.md')}")
     print("       in a NEW strong-model chat opened at the Android project root.")
