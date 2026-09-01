@@ -29,7 +29,7 @@ Copy the entire content of [`docs/install-or-update-prompt.md`](install-or-updat
 
 ```markdown
 Run the Android Agent Harness Installer or Updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/docs/install-or-update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.22.0/docs/install-or-update-prompt.md
 ```
 
 ### Option B: Standalone CLI (Terminal)
@@ -65,7 +65,7 @@ To perform a comprehensive 12-dimension health audit at any time, audit `.gitign
 
 ```markdown
 Run the Android Agent Harness Diagnostic Doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.22.0/docs/diagnostic-prompt.md
 ```
 
 Or execute directly from your terminal:
@@ -86,7 +86,7 @@ You can copy and paste any of the following prompts directly into your AI assist
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Agent Harness installer or updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/docs/install-or-update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.22.0/docs/install-or-update-prompt.md
 ```
 
 ### 3. Diagnostic Doctor Prompt (12-Dimension Health Check)
@@ -96,7 +96,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/do
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Agent Harness diagnostic doctor:
-https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/docs/diagnostic-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.22.0/docs/diagnostic-prompt.md
 ```
 
 ### 4. Rollback Prompt (Instant Backup Restoration)
@@ -106,7 +106,7 @@ https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/do
 - **Prompt URL**:
 ```markdown
 Read and execute the Android Agent Harness rollback:
-https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/docs/rollback-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.22.0/docs/rollback-prompt.md
 ```
 
 ---

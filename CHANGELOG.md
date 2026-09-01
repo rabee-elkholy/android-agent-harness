@@ -5,6 +5,25 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-09-01
+
+### Interactive In-Chat Risk Tier Approvals, Codified 4-Scenario QA Engine & Convergence Polish
+- **Interactive In-Chat Risk Tier Governance (`approve_risk.py`, `risk_tier.py`, `AGENTS.md`)**:
+  - Added `--approve` flag support to `approve_risk.py` enabling seamless interactive modal approval via `ask_question` directly in chat, strictly eliminating non-interactive terminal execution blockers.
+  - Refined risk classification: normal `AndroidManifest.xml` activity/service additions now classify as standard `MEDIUM` application changes, reserving `HIGH` tier strictly for sensitive permissions (`<uses-permission>`) and exported flags (`android:exported`).
+- **Codified 4-Scenario Autonomous Senior QA E2E Testing (`run_e2e_smoke.py`, `AGENTS.md`, `harness-rules.md`)**:
+  - Formally codified and mandated 4 explicit E2E execution scenarios across all agent guidelines:
+    - **Scenario A (New Features & User Journeys)**: Declarative Maestro-compatible YAML flows (`.agents/e2e_flows/<feature>.yaml`).
+    - **Scenario B (UI Bugfixes & Screen Refactors)**: Diff-aware auto-discovery launching modified Activities directly (`am start -n`) with assertions and scroll tests.
+    - **Scenario C (Deep Links & Navigation Routing)**: URI resolution testing via `--target-deeplink <uri>`.
+    - **Scenario D (Pure Data / Domain / Room / Worker Logic)**: Runtime boot verification confirming DI (Hilt), Room DB migrations, and background workers operate without Logcat crashes or ANRs.
+  - Enabled diff-aware auto-discovery by default in `run_e2e_smoke.py` when no explicit flow or target is specified.
+- **Review Round Cap & High-Signal Chat Polish (`_hook_state.py`, `pre_invocation_reminder.py`, `AGENTS.md`)**:
+  - Increased default review round cap to 3 for natural convergence.
+  - Mandated outputting a Review Round Summary Card on clean full PASS rounds.
+  - Standardized background waiting status messages to plain text English status lines matching user language dynamically, completely eliminating internal task IDs (`task-1004`) and robotic meta-phrases.
+  - Fixed `tree_code_fingerprint(repo=None)` signature and hardened `_hook_selftest.py` stdout banner parsing.
+
 ## [0.21.0] - 2026-09-01
 
 ### Autonomous Senior QA Engine, Declarative Maestro Flows & In-App UI Language Fingerprinting
@@ -163,7 +182,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Wizard Previous Answers Recommendation (`wizard/questions.py`, `install-or-update-prompt.md`)**: Upgraded `questions_payload` with `_reorder_with_previous_answers` to automatically pre-fill previous configuration choices from `.harness-setup/answers.json` as the recommended first option (`Index 0`) with `(Recommended) ` / `(موصى به) `.
 - **Tailored References Preservation on Update (`docs/setup-prompt.md`, `docs/install-or-update-prompt.md`)**: Mandated that update sessions restore and keep all existing tailored project references (`.agents/skills/android-harness/references/`) AS-IS without injecting generic references, with an interactive confirmation modal (`ask_question`).
 
-## [0.14.22] - 2026-08-31
+---
+
+**Included in 0.14.22 (2026-08-31):**
 
 ### Unified Release Automation, High-Signal Zero-Noise UI & Phase Checkpoint Commits
 - **One-Command Release Engine (`scripts_dev/release_version.py`)**: Built a fully automated release engine that handles version bumping, cryptographic prompt hashing, docs synchronization, selftest verification, Git tagging, and GitHub Release publication with a single command (`--patch`, `--minor`, `--dry-run`).
@@ -171,6 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phase Checkpoint Commits & Mandatory Hard Stop (`harness-rules.md`, `deliver.md`, `AGENTS.md`)**: Enforced phase-by-phase checkpoint commits. When Phase N passes all gates, the Lead Agent outputs the Phase Milestone Card with a drafted commit message and HALTS immediately, awaiting explicit developer commit and instruction before touching Phase N+1 files.
 - **Shift-Left Phase Preflight Gate (`harness-rules.md`, `deliver.md`)**: Integrated `preflight_check.py` into every phase boundary before milestone handoff, eliminating commit-time blocking on lint annotations, hardcoded strings, or Room schema issues.
 - **Dynamic Conversation Language Parity (`harness-rules.md`, `pre_invocation_reminder.py`, `AGENTS.md`)**: Mandated matching the developer's conversation language (Arabic/English) across all cards (Review Round, Phase Milestone, Final Delivery) and interactive `ask_question` modals.
+
 **Included in 0.14.21 (2026-08-31):**
 
 ### Comprehensive Edge Case Hardening Across Harness Engines & Review Gates (0.14.21)
