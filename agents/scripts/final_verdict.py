@@ -249,7 +249,12 @@ def build_verdict(
     required_devices = str(bits.get("device_mode") or "autonomous_e2e") != "disabled"
 
     checks = [
-        _normalize_check("unit_tests", read_gate_result(gate_artifact_name(bits["unit_test_task"])), head),
+        _normalize_check(
+            "unit_tests",
+            read_gate_result("unit_tests")
+            or read_gate_result(gate_artifact_name(bits["unit_test_task"])),
+            head,
+        ),
         _normalize_check("preflight", read_gate_result("preflight"), head),
         _normalize_check("assemble", read_gate_result(gate_artifact_name(bits["assemble_task"])), head),
     ]

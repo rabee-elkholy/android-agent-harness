@@ -187,6 +187,18 @@ def test_stale_artifact() -> None:
     check(stale["status"] == "STALE", "older-HEAD artifact marked STALE")
 
 
+def test_unit_tests_artifact_precedence() -> None:
+    new_env()
+    all_pass_results()
+    write_result("unit_tests", "FAIL", exit_code=1)
+    write_ledger(PKG_FULL, FP)
+    write_review("APPROVED")
+    verdict = build_verdict(task_id="T1", head_sha=HEAD, tree_fp=FP, files_override=[("a.kt", "d1")])
+    unit = [c for c in verdict["checks"] if c["name"] == "unit_tests"][0]
+    check(unit["status"] == "FAIL", "unit_tests artifact overrides the gradle artifact")
+    check(verdict["status"] == "BLOCKED", "failing unit_tests artifact blocks delivery")
+
+
 def test_device_mode_disabled() -> None:
     new_env()
     write_result("gradle-app-testdebugunittest", "PASS")
@@ -243,6 +255,7 @@ def main() -> int:
     test_expired()
     test_no_head()
     test_stale_artifact()
+    test_unit_tests_artifact_precedence()
     test_device_mode_disabled()
     test_diff_sha_determinism()
     test_write_last_verdict()

@@ -70,6 +70,16 @@ Harness scripts classify every non-zero exit into CODE (the diff is wrong) or EN
 
 ---
 
+## Baseline & Known-Failures Registry
+
+- `.agents/state/baseline.json` records unit-test failures that predate the current work. Capture it with `python .agents/scripts/baseline_capture.py`.
+- **Capture invariants**: capture/refresh is REFUSED while the working tree has code changes (`has_non_doc_code_changes()`) — a dirty tree cannot prove failures are pre-existing. Refreshing an existing baseline requires explicit developer authorization (`--approve`); the agent NEVER passes `--approve` without a developer instruction.
+- **Test gate**: `python .agents/scripts/run_tests_gate.py` runs the configured unit-test task, parses the JUnit XML reports, and classifies every failure: `BASELINE_IGNORED` (tolerated pre-existing debt) vs `NEW_REGRESSION` (blocks delivery, exit 1). Environment failures follow the exit-30 protocol unchanged.
+- **Whitelist**: the baseline silences ONLY unit-test failures. E2E crashes, Room migration violations, compile errors, and lint findings are never baseline-ignorable.
+- A baseline captured at an older commit than HEAD triggers a `BASELINE ADVISORY` (debt is still honored; refresh only on a clean tree when the developer asks). A renamed test yields a new fingerprint and is flagged as `NEW_REGRESSION` (fail-safe; refresh to reconcile).
+
+---
+
 ## Multi-Agent Roster
 
 The Lead Agent implements, runs Gradle, and talks to the developer.

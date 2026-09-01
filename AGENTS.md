@@ -33,6 +33,7 @@ After non-trivial implementation:
 9. **Exit-code protocol**: exit `1` = code failure (fix the code). Exit `30` / `[ENV-FAILURE]` marker = environment or ambiguous failure — HALT immediately, never modify code/Gradle/manifest to bypass, report the reason to the developer (details in `agents/state/env_failure.json`).
 10. **Round cap**: review rounds are counted per task (`agents/state/review_rounds.json`, reset when HEAD moves). At the cap (2) `review_package.py` prints a `REVIEW ROUND CAP` warning — output a Review Round Summary Card and ask the developer: continue / rollback / stop. Never silently loop.
 11. **Final verdict**: after all gates, run `python agents/scripts/final_verdict.py` — it aggregates every gate artifact and the 5-leaf verdict into `agents/state/last_verdict.json` (`APPROVED` required before delivery; `ENV_BLOCKED` follows the exit-30 halt protocol; `STALE` means code changed after review — regenerate the package).
+12. **Baseline-aware tests**: if `agents/state/baseline.json` exists, run `python agents/scripts/run_tests_gate.py` as the test gate — `BASELINE_IGNORED` failures are tolerated, `NEW_REGRESSION` blocks delivery. Capture baseline: `python agents/scripts/baseline_capture.py` on a clean tree only; refresh needs developer instruction + `--approve`.
 
 Antigravity `hooks.json` enforces this barrier automatically. Other tools must follow it from this file.
 
