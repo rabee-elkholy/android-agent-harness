@@ -32,6 +32,9 @@ Fix any validation errors before touching a device.
 
 ## 3. Execute on device / emulator
 
+0. **Confirm with the developer**: ask via `ask_question` (active conversation language)
+   *"Start E2E round?"* with options **`Start E2E`** / **`Skip E2E`**. On Skip, mark device
+   verification `skipped by developer` and skip the steps below.
 1. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`
 2. `python .agents/scripts/run_device.py install-start`
 3. `python .agents/scripts/run_e2e_qa.py --cases <path> --task <task> --json`

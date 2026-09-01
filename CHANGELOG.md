@@ -5,6 +5,14 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.1] - 2026-09-01
+
+### Interactive Pre-E2E Confirmation Gate & Skip Transparency
+- **Pre-E2E Interactive Confirmation Gate (`E2E_CONFIRM`, `pre_invocation_reminder.py`, `harness-rules.md`, `deliver.md`, `e2e-qa.md`, `AGENTS.md`)**:
+  - Introduced `E2E_CONFIRM = "confirm"` policy in `_product.py` and `install_or_update.py`.
+  - Mandated that the Lead Agent MUST ask the developer via `ask_question` in their active conversation language ("Start E2E round?" / "Skip E2E") before executing any E2E suite (`run_e2e_qa.py` or `run_e2e_smoke.py`).
+  - Strict honesty invariant: on developer skip, device verification is explicitly marked `skipped by developer` in the Phase Milestone Card and delivery reports; never claimed as passed.
+
 ## [0.23.0] - 2026-09-01
 
 ### Senior-QA Test-Case E2E Engine & Shared ADB Core
@@ -172,7 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added duplicate resource key detection across `<string>`, `<plurals>`, and `<string-array>` in `_parse_resources`, catching duplicate insertions before Gradle AAPT2 merger crashes during assemble.
 - **Delivery Rules & Governance Synchronized (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**: Documented the diff-scoped linting contract and unblocked unit-testing flow across all agent instructions.
 
-## [0.15.0] - 2026-08-31
+**Included in 0.15.0 (2026-08-31):**
 
 ### System Audit Report, Product-Policy Safety Hooks & Client-Facing Parameterization
 - **Kit Prose De-Arabized — Language Mirrors the Developer (`wizard/i18n.py`, `wizard/questions.py`, `harness-rules.md`, `AGENTS.md`, docs)**: Removed the wizard's Arabic table (I.18 tracker-language keys kept), Arabic update-modal labels, and the Arabic `schedule` deny keyword. Chat-language policy generalized to mirror whatever language the developer writes in. SHA-256 headers re-pinned for the edited prompt docs.

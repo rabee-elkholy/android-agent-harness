@@ -266,6 +266,7 @@ def generate_product_py(repo: Path, answers: dict, kit: Path) -> Path:
     allow_emulator = False if answers.get("device_policy") == "physical-only" else True
     git_policy = answers.get("git_policy") or "never"
     install_confirm = answers.get("install_confirm") or "confirm"
+    e2e_confirm = answers.get("e2e_confirm") or "confirm"
     pm_provider = answers.get("pm_provider") or "zoho_sprints"
     di_framework = answers.get("di_framework") or "hilt"
     ui_framework = answers.get("ui_framework") or "compose"
@@ -293,6 +294,7 @@ ZOHO_LANGUAGE = TRACKER_LANGUAGE
 ALLOW_EMULATOR = {repr(allow_emulator)}
 GIT_POLICY = {repr(git_policy)}
 INSTALL_CONFIRM = {repr(install_confirm)}
+E2E_CONFIRM = {repr(e2e_confirm)}
 PM_PROVIDER = {repr(pm_provider)}
 DI_FRAMEWORK = {repr(di_framework)}
 UI_FRAMEWORK = {repr(ui_framework)}

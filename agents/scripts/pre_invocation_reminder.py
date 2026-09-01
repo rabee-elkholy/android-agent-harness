@@ -27,6 +27,7 @@ def _policy_bits() -> dict:
             "allow_emulator": True,
             "git_policy": "never",
             "install_confirm": "confirm",
+            "e2e_confirm": "confirm",
         }
     return {
         "unit_test_task": str(getattr(_product, "UNIT_TEST_TASK", ":app:testDebugUnitTest")),
@@ -34,6 +35,7 @@ def _policy_bits() -> dict:
         "allow_emulator": bool(getattr(_product, "ALLOW_EMULATOR", True)),
         "git_policy": str(getattr(_product, "GIT_POLICY", "never") or "never"),
         "install_confirm": str(getattr(_product, "INSTALL_CONFIRM", "confirm") or "confirm"),
+        "e2e_confirm": str(getattr(_product, "E2E_CONFIRM", "confirm") or "confirm"),
     }
 
 
@@ -89,6 +91,11 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         if bits["install_confirm"] != "allow"
         else "Device install does not need a confirmation modal on this project."
     )
+    e2e_line = (
+        "E2E_CONFIRM=confirm: before running run_e2e_qa.py or run_e2e_smoke.py, ask the developer via ask_question ('Start E2E round?' / 'Skip E2E') in their language and wait for the choice. On Skip, mark device verification 'skipped by developer' in the milestone card; never pretend it passed."
+        if bits["e2e_confirm"] != "allow"
+        else "E2E execution does not need a confirmation modal on this project."
+    )
     cap_note = f" {round_note}" if round_note else ""
     return (
         f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{expired_note}{cap_note}{update_directive} "
@@ -111,7 +118,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS (+ TEST_PASS for test diffs). "
         "Fix BLOCKER/MAJOR, verify with fast_kt_lint.py, regenerate the package, re-run the same leaves. "
         "On-demand specialists (when not auto-promoted): qa-diagnostics-agent, android-ui-expert-agent. "
-        f"{device_line} {git_line} Assemble via python .agents/scripts/run_gradle_task.py {bits['assemble_task']}. {install_line} "
+        f"{device_line} {git_line} Assemble via python .agents/scripts/run_gradle_task.py {bits['assemble_task']}. {install_line} {e2e_line} "
         f"AUTONOMOUS PHASE PIPELINE & CHECKPOINT COMMITS: When Phase N finishes, run {bits['unit_test_task']} + preflight_check.py (MUST PASS with 0 errors; if [FAIL], NEVER run assembleDebug) + {bits['assemble_task']} + install-start + E2E smoke. If no device is connected, HALT and prompt the developer; NEVER silently skip device verification. Output Phase Milestone Card with drafted Phase N commit message, STOP IMMEDIATELY, and wait for the developer to commit Phase N and command start of Phase N+1. Never touch Phase N+1 files before developer commit. "
         "Zoho: never mutate unless the developer says update zoho. Arabic Zoho prose. "
         "Status In progress or Ready To ReTest only. Never Done or Solved."
