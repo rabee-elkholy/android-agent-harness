@@ -14,6 +14,19 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env_codes import (  # noqa: E402
+    CLASS_CODE,
+    CLASS_ENV,
+    EXIT_ENV,
+    FailureVerdict,
+    classify_gradle_failure,
+    emit_env_failure,
+)
+from _gate_results import (  # noqa: E402
+    current_head_sha,
+    gate_artifact_name,
+    write_gate_result,
+)
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
 from _variants import resolve_or_raise  # noqa: E402
 from gradle_error_parser import format_errors, parse_compiler_errors  # noqa: E402
@@ -93,11 +106,28 @@ def run_gradle(task_args: list[str]) -> int:
     except Exception:
         pass
     gradle_args = with_plain_console(task_args)
+    task_label = task_args[0] if task_args else "gradle"
+    artifact_name = gate_artifact_name(task_label)
+
+    def record(status: str, exit_code: int, env_class: str = "", detail: str = "") -> None:
+        write_gate_result(artifact_name, {
+            "schema_version": 1,
+            "task": task_label,
+            "status": status,
+            "exit_code": exit_code,
+            "env_class": env_class,
+            "git_sha": current_head_sha(),
+            "detail": detail,
+        })
+
     try:
         wrapper = gradle_wrapper()
     except FileNotFoundError as exc:
         live_print(f"[!] {exc}", err=True)
-        return 1
+        verdict = FailureVerdict(CLASS_ENV, str(exc))
+        record("ENV", EXIT_ENV, verdict.env_class, verdict.reason)
+        emit_env_failure(verdict, "run_gradle_task.py")
+        return EXIT_ENV
     if os.name != "nt" and wrapper.name == "gradlew":
         gradle_cmd = unix_wrapper_cmd(wrapper, gradle_args)
     else:
@@ -123,7 +153,17 @@ def run_gradle(task_args: list[str]) -> int:
             if line not in important_lines:
                 important_lines.append(line)
 
+    if code != 0:
+        verdict = classify_gradle_failure(code, raw_log)
+        if verdict.env_class != CLASS_CODE:
+            live_print(f"[!] BUILD FAILED (exit {code}) — environment problem, no code fixes allowed")
+            record("ENV", EXIT_ENV, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_gradle_task.py")
+            return EXIT_ENV
+        record("FAIL", code, verdict.env_class, verdict.reason)
+
     if code == 0:
+        record("PASS", 0)
         hint = _duration_hint(raw_log)
         if hint == "done":
             hint = f"{time.time() - started:.1f}s"

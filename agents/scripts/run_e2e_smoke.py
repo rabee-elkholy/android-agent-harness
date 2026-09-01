@@ -38,6 +38,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env_codes import (  # noqa: E402
+    CLASS_ENV,
+    EXIT_ENV,
+    FailureVerdict,
+    device_gone_reason,
+    emit_env_failure,
+    no_device_verdict,
+)
+from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print  # noqa: E402
 from _product import (  # noqa: E402
     ALLOW_EMULATOR,
@@ -50,6 +59,12 @@ from _repo_files import REPO, first_adb_serial  # noqa: E402
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 SCREENSHOTS_DIR = REPO / ".agents" / "state" / "screenshots"
 E2E_STATE_DIR = REPO / ".agents" / "state" / "e2e"
+
+
+class _DeviceGoneError(Exception):
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 @dataclasses.dataclass
@@ -324,15 +339,24 @@ class E2ERunner:
 
     def run_adb(self, args: list[str], timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
         cmd = ["adb", "-s", self.serial, *args]
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise _DeviceGoneError(
+                f"adb call timed out after {timeout:.0f}s; device may be unresponsive"
+            ) from None
+        gone = device_gone_reason((proc.stdout or "") + "\n" + (proc.stderr or ""))
+        if gone:
+            raise _DeviceGoneError(f"device unavailable during E2E smoke: {gone}")
+        return proc
 
     def wake_and_unlock(self):
         """Wake up device screen and attempt to dismiss basic keyguard."""
@@ -618,8 +642,18 @@ def main() -> int:
     allow_emu = bool(ALLOW_EMULATOR)
     serial = args.serial or first_adb_serial(allow_emulator=allow_emu)
     if not serial:
-        live_print("[ERROR] No Android device detected via ADB.", err=True)
-        return 1
+        verdict = no_device_verdict()
+        write_gate_result("e2e", {
+            "schema_version": 1,
+            "status": "ENV",
+            "exit_code": EXIT_ENV,
+            "env_class": verdict.env_class,
+            "serial": None,
+            "git_sha": current_head_sha(),
+            "detail": verdict.reason,
+        })
+        emit_env_failure(verdict, "run_e2e_smoke.py")
+        return EXIT_ENV
 
     target_act = args.target_activity
     target_dl = args.target_deeplink
@@ -652,10 +686,34 @@ def main() -> int:
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0
 
-    result = runner.run_targeted_smoke_flow()
+    try:
+        result = runner.run_targeted_smoke_flow()
+    except _DeviceGoneError as exc:
+        verdict = FailureVerdict(CLASS_ENV, exc.reason)
+        write_gate_result("e2e", {
+            "schema_version": 1,
+            "status": "ENV",
+            "exit_code": EXIT_ENV,
+            "env_class": verdict.env_class,
+            "serial": serial,
+            "git_sha": current_head_sha(),
+            "detail": verdict.reason,
+        })
+        emit_env_failure(verdict, "run_e2e_smoke.py", serial=serial)
+        return EXIT_ENV
     E2E_STATE_DIR.mkdir(parents=True, exist_ok=True)
     report_file = E2E_STATE_DIR / "last_e2e_result.json"
     report_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    passed = result["verdict"] == "PASS"
+    write_gate_result("e2e", {
+        "schema_version": 1,
+        "status": "PASS" if passed else "FAIL",
+        "exit_code": 0 if passed else 1,
+        "env_class": "",
+        "serial": serial,
+        "git_sha": current_head_sha(),
+        "detail": str(result.get("reason") or "")[:300],
+    })
 
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

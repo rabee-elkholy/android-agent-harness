@@ -3,7 +3,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_state import MAX_REVIEWS, invoke_count, latest_expired_note, reviews_pending  # noqa: E402
+from _hook_state import (  # noqa: E402
+    MAX_REVIEWS,
+    invoke_count,
+    latest_expired_note,
+    reviews_pending,
+    round_cap_warning,
+)
 
 
 def conversation_id(payload: dict) -> str:
@@ -53,7 +59,7 @@ def check_update_directive() -> str:
     return ""
 
 
-def message_for(used_reviews: int, pending: bool, update_directive: str = "") -> str:
+def message_for(used_reviews: int, pending: bool, update_directive: str = "", round_note: str = "") -> str:
     if used_reviews >= MAX_REVIEWS:
         return (
             f"Harness Quality Guard: Runaway review cap reached ({used_reviews}/{MAX_REVIEWS}). "
@@ -83,10 +89,12 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "") ->
         if bits["install_confirm"] != "allow"
         else "Device install does not need a confirmation modal on this project."
     )
+    cap_note = f" {round_note}" if round_note else ""
     return (
-        f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{expired_note}{update_directive} "
+        f"Harness Quality-First Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{expired_note}{cap_note}{update_directive} "
         "ZERO-NOISE CHAT & BACKGROUND TASKS: Match the developer's active conversation language (mirror whatever language they write in) across all cards (Review Round, Phase Milestone, Final Delivery) and interactive modals. Never emit mechanical status updates in chat prose (e.g. 'Running tests...', 'Cleaning kapt cache...', 'Waiting for...'). When launching background commands, ALWAYS choose Option A (proceed silently or return zero chat text ''); NEVER write '# Background Task Started' in chat. Rely on IDE tool widgets for routine actions. Chat is reserved exclusively for Plan Approval, Review Round Cards (on findings), Phase Milestone Cards, and Final Delivery. "
         "ANTI-HALLUCINATION & SEQUENTIAL DEPENDENCY INVARIANT: NEVER fabricate, simulate, inject, or write `<MESSAGE_RECEIVED>`, `<SYSTEM_MESSAGE>`, or assume background task completion in thoughts or prose. When a background task is a prerequisite for the next step (e.g. assembleDebug before install-start; install-start before run_e2e_smoke), STOP calling tools IMMEDIATELY and END TURN with zero chat text `\"\"`. Wait passively for the genuine platform system message (`finished with result:`) before dispatching dependent tools. "
+        "ENV-FAILURE HALT PROTOCOL: If run_device.py, run_e2e_smoke.py, or run_gradle_task.py exits with code 30 or prints [ENV-FAILURE], the problem is environmental or ambiguous. HALT IMMEDIATELY: never modify project code, Gradle files, or the manifest to bypass it; read .agents/state/env_failure.json, report the reason to the developer, and wait for instructions. "
         "SHIFT-LEFT QUALITY: Before requesting reviews, proactively satisfy all review pillars (null/network resilience, MVI single-source StateFlow, no inline FQCNs, Compose contentDescription & 48dp touch targets, dual-locale en/ar previews, zero Main-thread I/O, Room migration if @Entity changes). "
         f"SHIFT-LEFT TEST & LINT PRE-GATE: Before calling review_package.py and invoke_subagent, when code or unit tests are touched, ALWAYS run `python .agents/scripts/run_gradle_task.py {bits['unit_test_task']}` AND `python .agents/scripts/fast_kt_lint.py` to verify compiler/signature parity and zero lint violations (diff-scoped on modified lines) before dispatching subagents. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create implementation_plan.md artifact with RequestFeedback=true and get developer approval via Proceed button BEFORE writing code. "
@@ -135,8 +143,10 @@ def main():
         except (TypeError, ValueError):
             n = 0 if invocation in (0, "0", None) else -1
         update_dir = check_update_directive() if n in (0, 1) else ""
+        task_id = payload.get("taskId") or payload.get("task_id") or None
+        round_note = round_cap_warning(task_id)
         print(json.dumps({
-            "injectSteps": [{"ephemeralMessage": message_for(used_reviews, pending, update_dir)}]
+            "injectSteps": [{"ephemeralMessage": message_for(used_reviews, pending, update_dir, round_note)}]
         }))
     except Exception:
         print(json.dumps({}))

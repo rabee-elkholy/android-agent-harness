@@ -1,7 +1,7 @@
 <!-- managed-by: android-harness-kit -->
 # android-harness-kit — agent instructions
 
-**Source of truth:** `.agents/rules/harness-rules.md`. If any other file disagrees, that file wins.
+**Source of truth:** `agents/rules/harness-rules.md`. If any other file disagrees, that file wins.
 
 This checkout uses a portable Android harness. The same rules apply in Cursor, Claude Code, Codex, Copilot, Gemini, Qwen Code, Windsurf, Cline, Roo, Amazon Q, Continue, Junie, Kilo, Goose, and any other agent that reads `AGENTS.md`.
 
@@ -9,28 +9,34 @@ This checkout uses a portable Android harness. The same rules apply in Cursor, C
 
 - Android SDK: this machine only (`local.properties` `sdk.dir`). Never copy another PC’s path.
 - Python: `python` for every harness script.
-- Gradle: `python .agents/scripts/run_gradle_task.py :app:assembleDebug` (picks `gradlew` / `gradlew.bat`). Never call raw `gradlew` from the agent.
+- Gradle: `python agents/scripts/run_gradle_task.py :app:assembleDebug` (picks `gradlew` / `gradlew.bat`). Never call raw `gradlew` from the agent.
 - Device: Physical device or emulator. Resolve the serial with `adb devices`. Prefer a physical device when both are connected. Never hardcode a serial.
-- Install/launch: `python .agents/scripts/run_device.py install-start`
+- Install/launch: `python agents/scripts/run_device.py install-start`
 
 ## Delivery gate (do not skip)
 
 After non-trivial implementation:
 
-1. `python .agents/scripts/review_package.py`
-2. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `.agents/subagents/*.json`). Parallel if this product can spawn children; otherwise sequential.
+1. `python agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Shift-Left Test Pre-Gate: compiler parity and unit tests — permitted before review)
+2. `python agents/scripts/fast_kt_lint.py` (Shift-Left Lint Pre-Gate: diff-scoped fast Kotlin lint on modified lines without penalizing untouched legacy code)
+3. `python agents/scripts/review_package.py` (strictly validates lint before creating package)
+4. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `agents/subagents/*.json`). Dispatch them in **exactly one** parallel invoke when this product can spawn children.
    - `bug-reviewer-agent` → `BUG_PASS`
    - `convention-reviewer-agent` → `CONVENTION_PASS`
    - `security-reviewer-agent` → `SECURITY_PASS`
    - `perf-anr-guardian-agent` → `PERF_PASS`
    - `regression-impact-reviewer-agent` → `REGRESSION_PASS`
-3. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
-4. `python .agents/scripts/fast_kt_lint.py`
-5. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`
+5. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
+6. `python agents/scripts/preflight_check.py` (Mandatory Preflight Gate: must pass with 0 errors before assemble — never assemble if `[FAIL]`)
+7. `python agents/scripts/run_gradle_task.py :app:assembleDebug`
+8. Live device install & verification: `python agents/scripts/run_device.py install-start` + `python agents/scripts/run_e2e_smoke.py`. If no device is connected, HALT and prompt the developer; never silently skip device verification.
+9. **Exit-code protocol**: exit `1` = code failure (fix the code). Exit `30` / `[ENV-FAILURE]` marker = environment or ambiguous failure — HALT immediately, never modify code/Gradle/manifest to bypass, report the reason to the developer (details in `agents/state/env_failure.json`).
+10. **Round cap**: review rounds are counted per task (`agents/state/review_rounds.json`, reset when HEAD moves). At the cap (2) `review_package.py` prints a `REVIEW ROUND CAP` warning — output a Review Round Summary Card and ask the developer: continue / rollback / stop. Never silently loop.
+11. **Final verdict**: after all gates, run `python agents/scripts/final_verdict.py` — it aggregates every gate artifact and the 5-leaf verdict into `agents/state/last_verdict.json` (`APPROVED` required before delivery; `ENV_BLOCKED` follows the exit-30 halt protocol; `STALE` means code changed after review — regenerate the package).
 
 Antigravity `hooks.json` enforces this barrier automatically. Other tools must follow it from this file.
 
-If this product **cannot spawn named subagents**, still run the five leaves: open each `.agents/subagents/<name>.json`, follow its `system_prompt` against the same package, and stop that leaf when it emits its `*_PASS` or findings. Sequential is fine. Assemble only after all five exist.
+If this product **cannot spawn named subagents**, still run the five leaves without five separate dispatch calls: open each `agents/subagents/<name>.json`, follow its `system_prompt` against the same package, and stop that leaf when it emits its `*_PASS` or findings. Assemble only after all five exist.
 
 ## On-demand specialists
 
@@ -41,12 +47,15 @@ Dispatch when needed:
 
 ## Phase Boundaries & High-Signal Chat
 
-- **Atomic Phase Hard Barrier & Interactive Device Verification**: In multi-phase tasks, execute phase-by-phase. When Phase N finishes (review PASS, unit tests PASS, `:assembleDebug`, device installation via `run_device.py install-start`, and mandatory autonomous E2E smoke test via `run_e2e_smoke.py` when `DEVICE_VERIFICATION_MODE` is `autonomous_e2e`), **STOP IMMEDIATELY**. Output the Phase Milestone Card with E2E verification evidence and explicit, numbered manual smoke test steps for the connected physical device, and trigger an interactive modal (`ask_question`) asking the developer to verify on device and confirm `PASS` or `FAIL`. Never touch, open, or write any files for Phase N+1 until the developer explicitly confirms `PASS`.
-- **High-Signal Chat (Zero Noise & Silent Review Wait)**: The agent MUST NOT output mechanical progress spam (e.g. "reading file...", "running tests...", "waiting for reviews...", "dispatching subagents..."). On intermediate subagent arrivals where other reviewers in the round are still executing, the Lead Agent MUST remain 100% silent in chat and end turn without tool calls until all verdicts are in context. Speak only at plan approval, critical engineering tradeoffs, phase milestone cards with interactive verification, and final delivery.
+- **Autonomous Phase Pipeline & Checkpoint Commits**: In multi-phase tasks, execute strictly phase-by-phase. When Phase N finishes (5-leaf review PASS, unit tests PASS, `preflight_check.py` PASS, `:assembleDebug`, device installation via `run_device.py install-start`, and device smoke verification):
+  * The agent outputs the **Phase Milestone Card** with verification evidence and a drafted Conventional Commit message for Phase N.
+  * **MANDATORY HARD STOP**: The agent **MUST STOP and wait for the developer to commit Phase N and explicitly instruct the agent to begin Phase N+1**. Never touch, edit, or plan Phase N+1 files before the developer commits Phase N.
+- **High-Signal Chat & Round Summary Cards (Zero Noise, Zero Timers)**: The agent MUST NOT output mechanical progress spam in chat prose (e.g. "running unit tests...", "cleaning kapt cache...", "waiting for reviewers..."). Rely on IDE tool execution widgets for routine status. When launching background commands, always choose Option A (silent / zero chat text `""`); never write `# Background Task Started` in chat. NEVER fabricate, simulate, inject, or write `<MESSAGE_RECEIVED>`, `<SYSTEM_MESSAGE>`, or assume background task completion in thoughts or prose. When a background task is a prerequisite for the next step (e.g. assembleDebug before install-start; install-start before run_e2e_smoke), STOP calling tools IMMEDIATELY and END TURN with zero chat text `""`. Wait passively for the genuine platform system message (`finished with result:`) before dispatching dependent tools. NEVER use `schedule` or polling timers for subagents. On intermediate subagent arrivals where other reviewers in the round are still executing, remain 100% silent in chat (output empty string `""`) and end turn without tool calls. When a 5-leaf round finishes with findings, output a concise **Review Round Summary Card** in chat detailing the findings and corrective fixes before launching the next round (rounds must converge in <= 2 rounds). Speak only at the 4 permitted touchpoints: Plan Approval, Round Summary Cards (on findings), Phase Milestone Cards, and Final Delivery. Match the developer's active conversation language (mirror whatever language they write in) across all cards, interactive modals, and summaries.
 
 ## Git
 
-The agent must not run `git add`, `commit`, `push`, merge, rebase, stash, or reset. Leave changes unstaged. Draft a Conventional Commit message only. The developer commits.
+In client Android apps: The agent must not run `git add`, `commit`, `push`, merge, rebase, stash, or reset. Leave changes unstaged. Draft a Conventional Commit message only. The developer commits.
+In this kit repository itself (`android-harness-kit` development): The agent may run git operations (add, commit, push, tag) when instructed by the repository maintainer.
 
 ## Zoho Sprints
 

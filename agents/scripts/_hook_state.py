@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ MAX_REVIEWS = int(os.environ.get("HARNESS_MAX_REVIEWS", "20"))
 MAX_DIAGNOSTICS = int(os.environ.get("HARNESS_MAX_DIAGNOSTICS", "10"))
 MAX_UI_REVIEWS = int(os.environ.get("HARNESS_MAX_UI_REVIEWS", "10"))
 MAX_TEST_REVIEWS = int(os.environ.get("HARNESS_MAX_TEST_REVIEWS", "10"))
+MAX_REVIEW_ROUNDS = int(os.environ.get("HARNESS_MAX_REVIEW_ROUNDS", "2"))
 
 STATE_EXPIRY_SECONDS = 7 * 24 * 3600
 
@@ -316,7 +318,7 @@ def package_already_reviewed(conversation_id: str, package_hash: str) -> bool:
     return package_hash in hashes
 
 
-def record_review_round(conversation_id: str, package_hash: str) -> int:
+def record_review_round(conversation_id: str, package_hash: str, task_id: str | None = None) -> int:
     with state_lock():
         state = load_state()
         rec = state.get(conversation_id) or {}
@@ -328,6 +330,10 @@ def record_review_round(conversation_id: str, package_hash: str) -> int:
         rec["pending_reviews"] = True
         rec["re_dispatch_allowed"] = False
         rec["pending_since"] = time.time()
+        task_key = str(task_id or "").strip() or "unscoped"
+        task_rounds = dict(rec.get("task_rounds") or {})
+        task_rounds[task_key] = int(task_rounds.get(task_key) or 0) + 1
+        rec["task_rounds"] = task_rounds
         n = int(rec.get("review_invokes") or rec.get("invokes") or 0) + 1
         rec["invokes"] = n
         rec["review_invokes"] = n
@@ -335,6 +341,151 @@ def record_review_round(conversation_id: str, package_hash: str) -> int:
         state[conversation_id] = rec
         save_state(state)
         return n
+
+
+def task_rounds_used(conversation_id: str, task_id: str | None = None) -> int:
+    rec = _record(conversation_id)
+    rounds = rec.get("task_rounds") or {}
+    try:
+        return int(rounds.get(str(task_id or "").strip() or "unscoped") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def reset_task_rounds(conversation_id: str, task_id: str | None = None) -> None:
+    with state_lock():
+        state = load_state()
+        rec = state.get(conversation_id) or {}
+        if not rec:
+            return
+        task_rounds = dict(rec.get("task_rounds") or {})
+        task_rounds.pop(str(task_id or "").strip() or "unscoped", None)
+        rec["task_rounds"] = task_rounds
+        rec["_last_used"] = time.time()
+        state[conversation_id] = rec
+        save_state(state)
+
+
+def _rounds_path() -> Path:
+    return state_path().with_name("review_rounds.json")
+
+
+def _task_key(task_id: str | None) -> str:
+    return str(task_id or "").strip() or "unscoped"
+
+
+def _current_head_sha() -> str:
+    try:
+        from _repo_files import REPO
+
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(REPO),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        out = (proc.stdout or "").strip()
+        return out if re.fullmatch(r"[0-9a-f]{40}", out) else ""
+    except Exception:
+        return ""
+
+
+def _load_rounds() -> dict:
+    try:
+        path = _rounds_path()
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_rounds_unlocked(data: dict) -> None:
+    path = _rounds_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(path.parent),
+            delete=False,
+            suffix=".tmp",
+        )
+        tmp.write(json.dumps(data, indent=2))
+        tmp.flush()
+        tmp.close()
+        os.replace(tmp.name, path)
+    except Exception:
+        pass
+
+
+def rounds_used(task_id: str | None = None, *, head_sha: str | None = None) -> int:
+    data = _load_rounds()
+    rec = (data.get("tasks") or {}).get(_task_key(task_id))
+    if not rec:
+        return 0
+    head = head_sha if head_sha is not None else _current_head_sha()
+    stored = str(rec.get("head_sha") or "")
+    if head and stored and stored != head:
+        return 0
+    return len(rec.get("rounds") or [])
+
+
+def record_review_round_local(
+    task_id: str | None = None,
+    pkg12: str = "",
+    *,
+    head_sha: str | None = None,
+) -> int:
+    with state_lock():
+        data = _load_rounds()
+        tasks = dict(data.get("tasks") or {})
+        key = _task_key(task_id)
+        rec = dict(tasks.get(key) or {})
+        head = head_sha if head_sha is not None else _current_head_sha()
+        if head and rec.get("head_sha") and str(rec.get("head_sha")) != head:
+            rec = {}
+        if head:
+            rec["head_sha"] = head
+        rounds = list(rec.get("rounds") or [])
+        rounds.append({"pkg12": str(pkg12 or ""), "ts": time.time()})
+        rec["rounds"] = rounds[-40:]
+        rec["_last_used"] = time.time()
+        tasks[key] = rec
+        data["tasks"] = tasks
+        _save_rounds_unlocked(data)
+        return len(rounds)
+
+
+def round_cap_warning(
+    task_id: str | None = None,
+    cap: int | None = None,
+    *,
+    head_sha: str | None = None,
+) -> str:
+    cap_val = int(cap) if cap is not None else MAX_REVIEW_ROUNDS
+    used = rounds_used(task_id, head_sha=head_sha)
+    if used < cap_val:
+        return ""
+    return (
+        f"[!] REVIEW ROUND CAP: {used} review round(s) already dispatched for this task "
+        f"(project cap: {cap_val}; rounds must converge in <= 2). "
+        "HALT auto-fixing. Present a Review Round Summary Card and ask the developer to choose: "
+        "continue one more round / roll back the last fixes / stop the task. Do not silently loop."
+    )
+
+
+def clear_task_rounds(task_id: str | None = None) -> None:
+    with state_lock():
+        data = _load_rounds()
+        tasks = dict(data.get("tasks") or {})
+        tasks.pop(_task_key(task_id), None)
+        data["tasks"] = tasks
+        _save_rounds_unlocked(data)
 
 
 def reviews_pending(conversation_id: str) -> bool:

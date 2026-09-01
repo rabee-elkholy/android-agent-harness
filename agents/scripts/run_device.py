@@ -13,6 +13,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env_codes import (  # noqa: E402
+    CLASS_ENV,
+    EXIT_ENV,
+    FailureVerdict,
+    classify_adb_failure,
+    emit_env_failure,
+    exit_for,
+    no_device_verdict,
+)
+from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
 from _product import (  # noqa: E402
     ALLOW_EMULATOR,
@@ -27,29 +37,49 @@ from _variants import apk_relative, resolve_or_raise  # noqa: E402
 DEFAULT_ACTIVITY = LAUNCHER
 
 
+def record_device(action: str, status: str, exit_code: int, serial: str | None, env_class: str = "", detail: str = "") -> None:
+    write_gate_result("device", {
+        "schema_version": 1,
+        "action": action,
+        "status": status,
+        "exit_code": exit_code,
+        "env_class": env_class,
+        "serial": serial,
+        "git_sha": current_head_sha(),
+        "detail": detail,
+    })
+
+
 def require_serial(explicit: str | None) -> str:
     allow_emu = bool(ALLOW_EMULATOR)
     serial = explicit or first_adb_serial(allow_emulator=allow_emu)
     if not serial:
-        live_print("[ERROR] No Android device detected via ADB.", err=True)
-        sys.exit(1)
+        verdict = no_device_verdict()
+        record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+        emit_env_failure(verdict, "run_device.py")
+        sys.exit(EXIT_ENV)
     if not allow_emu and serial.startswith("emulator-"):
-        live_print("[ERROR] Emulator targeting is forbidden by project policy. Connect a physical device.", err=True)
-        sys.exit(1)
+        verdict = FailureVerdict(
+            CLASS_ENV,
+            "Emulator targeting is forbidden by project policy. Connect a physical device.",
+        )
+        record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+        emit_env_failure(verdict, "run_device.py", serial=serial)
+        sys.exit(EXIT_ENV)
     return serial
 
 
 
-def run_adb(serial: str, adb_args: list[str], label: str) -> int:
+def run_adb(serial: str, adb_args: list[str], label: str) -> tuple[int, str]:
     live_print(f"[*] adb -s {serial} {' '.join(adb_args)}")
-    code, _, _ = run_streaming(
+    code, log, _ = run_streaming(
         ["adb", "-s", serial, *adb_args],
         cwd=str(REPO),
         heartbeat_sec=10.0,
         should_echo=lambda line: bool(line.strip()),
         label=label,
     )
-    return code
+    return code, log
 
 
 def main() -> int:
@@ -81,10 +111,14 @@ def main() -> int:
 
     if args.action == "uninstall":
         live_print(f"[*] Uninstalling {args.package} from {serial}")
-        code = run_adb(serial, ["uninstall", args.package], "adb uninstall")
+        code, log = run_adb(serial, ["uninstall", args.package], "adb uninstall")
         if code != 0:
+            verdict = classify_adb_failure(code, log)
             live_print(f"[!] adb uninstall failed (exit {code})", err=True)
-            return code
+            record_device(args.action, "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_device.py", serial=serial)
+            return exit_for(verdict)
+        record_device(args.action, "PASS", 0, serial)
         live_print(f"[+] Uninstall finished for {args.package}")
         return 0
 
@@ -92,28 +126,42 @@ def main() -> int:
         if not apk.is_file():
             live_print(f"[ERROR] APK not found: {apk}", err=True)
             live_print(f"Assemble debug first: python .agents/scripts/run_gradle_task.py {ASSEMBLE_TASK}", err=True)
-            return 1
+            verdict = FailureVerdict(
+                CLASS_ENV,
+                f"APK not found: {apk} (pipeline order: assemble before install)",
+            )
+            record_device(args.action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_device.py", serial=serial)
+            return EXIT_ENV
         size_mb = apk.stat().st_size / (1024 * 1024)
         live_print(f"[*] Installing {apk.as_posix()} ({size_mb:.1f} MB)")
         install_cmd = ["install", "-r", "-d", "-g"]
         if args.user is not None:
             install_cmd.extend(["--user", str(args.user)])
         install_cmd.append(str(apk))
-        code = run_adb(serial, install_cmd, "adb install")
+        code, log = run_adb(serial, install_cmd, "adb install")
         if code != 0:
+            verdict = classify_adb_failure(code, log)
             live_print(f"[!] adb install failed (exit {code})", err=True)
-            return code
+            record_device(args.action, "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_device.py", serial=serial)
+            return exit_for(verdict)
+        record_device(args.action, "PASS", 0, serial)
         live_print("[+] Install finished")
 
     if args.action in ("start", "install-start"):
-        code = run_adb(
+        code, log = run_adb(
             serial,
             ["shell", "am", "start", "-n", args.activity],
             "am start",
         )
         if code != 0:
+            verdict = classify_adb_failure(code, log)
             live_print(f"[!] am start failed (exit {code})", err=True)
-            return code
+            record_device(args.action, "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_device.py", serial=serial)
+            return exit_for(verdict)
+        record_device(args.action, "PASS", 0, serial)
         live_print(f"[+] Launched {args.activity}")
 
     return 0

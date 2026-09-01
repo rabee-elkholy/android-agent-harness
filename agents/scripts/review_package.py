@@ -15,6 +15,8 @@ from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _hook_state import (  # noqa: E402
     file_sha256,
     record_review_ledger,
+    record_review_round_local,
+    round_cap_warning,
     tree_code_fingerprint,
     write_verdict_record,
 )
@@ -115,6 +117,9 @@ def main(argv=None) -> int:
         diff_cmd.extend(["--", *paths])
 
     task_id = (args.task or os.environ.get("HARNESS_TASK_ID") or "").strip()
+    cap_note = round_cap_warning(task_id)
+    if cap_note:
+        print(cap_note, file=sys.stderr)
     if not git_head():
         print(
             "[!] This checkout has no git HEAD (no commits yet). A review package "
@@ -223,6 +228,7 @@ def main(argv=None) -> int:
         "findings": [],
     }
     write_verdict_record(pkg12, pending)
+    record_review_round_local(task_id, pkg12)
     if skipped_count > 0:
         print(f"[!] Warning: Working tree has {total_changed} files; {skipped_count} files were skipped in review package.")
     print(f"HARNESS_REVIEW_PACKAGE={out}")

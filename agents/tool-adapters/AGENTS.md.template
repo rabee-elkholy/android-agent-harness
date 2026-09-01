@@ -29,6 +29,9 @@ After non-trivial implementation:
 6. `{{PY}} .agents/scripts/preflight_check.py` (Mandatory Preflight Gate: must pass with 0 errors before assemble — never assemble if `[FAIL]`)
 7. `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
 8. Live device install & verification: `{{PY}} .agents/scripts/run_device.py install-start` + `{{PY}} .agents/scripts/run_e2e_smoke.py`. If no device is connected, HALT and prompt the developer; never silently skip device verification.
+9. **Exit-code protocol**: exit `1` = code failure (fix the code). Exit `30` / `[ENV-FAILURE]` marker = environment or ambiguous failure — HALT immediately, never modify code/Gradle/manifest to bypass, report the reason to the developer (details in `.agents/state/env_failure.json`).
+10. **Round cap**: review rounds are counted per task (`.agents/state/review_rounds.json`, reset when HEAD moves). At the cap (2) `review_package.py` prints a `REVIEW ROUND CAP` warning — output a Review Round Summary Card and ask the developer: continue / rollback / stop. Never silently loop.
+11. **Final verdict**: after all gates, run `{{PY}} .agents/scripts/final_verdict.py` — it aggregates every gate artifact and the 5-leaf verdict into `.agents/state/last_verdict.json` (`APPROVED` required before delivery; `ENV_BLOCKED` follows the exit-30 halt protocol; `STALE` means code changed after review — regenerate the package).
 
 Antigravity `hooks.json` enforces this barrier automatically. Other tools must follow it from this file.
 

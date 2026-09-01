@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
 from _repo_files import REPO, changed_paths, ensure_local_git_privacy  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
@@ -48,6 +49,19 @@ def main() -> int:
 
     live_print("\n==================================================")
     overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0)
+    write_gate_result("preflight", {
+        "schema_version": 1,
+        "status": "PASS" if overall_pass else "FAIL",
+        "exit_code": 0 if overall_pass else 1,
+        "git_sha": current_head_sha(),
+        "steps": {
+            "hook_selftest": hook_code,
+            "string_parity": str_code,
+            "room_migrations": db_ok,
+            "fast_kt_lint": lint_code,
+        },
+        "detail": "" if overall_pass else "preflight steps failed; see step exit codes",
+    })
     if overall_pass:
         live_print("[SUCCESS] PREFLIGHT PASSED: ready for assembleDebug.")
         try:

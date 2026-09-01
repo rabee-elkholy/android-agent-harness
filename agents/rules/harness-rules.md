@@ -56,6 +56,20 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 
 ---
 
+## Environment vs Code Failures (Exit-Code Protocol)
+
+Harness scripts classify every non-zero exit into CODE (the diff is wrong) or ENVIRONMENT (the machine/device/network is wrong):
+
+- Exit `0` — success. Exit `1` — code failure: fix the code.
+- Exit `30` — **environment or ambiguous failure**. The script prints an `[ENV-FAILURE]` marker on stderr and records details in `.agents/state/env_failure.json`:
+  1. **HALT IMMEDIATELY**. NEVER edit project code, Gradle files, dependency versions, or the manifest to bypass an environment failure.
+  2. Report the recorded reason to the developer and wait for instructions (e.g. connect a device, fix PATH/adb, restore network, free storage).
+  3. Ambiguous failures (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, `Error type 3`, `INSTALL_FAILED_OLDER_SDK`, …) follow the same halt policy: zero code edits until the developer resolves the ambiguity.
+- Examples of **environment** failures: no device via adb, adb missing from PATH, device offline/unauthorized, insufficient storage, `INSTALL_FAILED_NO_MATCHING_ABIS`, network dependency fetches (`Could not GET …`, `UnknownHostException`, `Connection timed out`), Gradle wrapper missing, adb timeouts mid-E2E.
+- Examples of **code** failures: compiler errors (`e:`), APK parse failures, `INSTALL_FAILED_VERSION_DOWNGRADE`, `INSTALL_FAILED_DUPLICATE_PERMISSION`, runtime crashes in Logcat.
+
+---
+
 ## Multi-Agent Roster
 
 The Lead Agent implements, runs Gradle, and talks to the developer.
@@ -221,6 +235,13 @@ Only after the 5 leaves have finished (all 5 PASS):
    - **STRICT PREFLIGHT INVARIANT**: If `preflight_check.py` returns exit code 1 (`[FAIL]`), the agent is **STRICTLY PROHIBITED from running `:app:assembleDebug` or delivering**. The agent MUST fix all string/lint/Room issues or halt and report them to the developer.
 2. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
 3. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start`.
+4. **Final Verdict Artifact**: after every gate (unit tests, preflight, assemble, device, E2E, 5 leaves), run `python .agents/scripts/final_verdict.py`. It aggregates the per-gate result artifacts (`.agents/state/results/*.json`) and the review verdict records into `.agents/state/last_verdict.json`:
+   - `APPROVED` — every gate PASS and the 5-leaf verdict is APPROVED for the same tree fingerprint; required before delivery.
+   - `ENV_BLOCKED` — a gate failed environmentally; exit 30 halt protocol (never edit code to bypass).
+   - `STALE` — code changed after the review package was generated; regenerate the package and re-run the 5 leaves.
+   - `EXPIRED` — the review round expired via the barrier TTL; re-dispatch the 5 leaves.
+   - `BLOCKED` — a required gate FAIL/MISSING, an artifact predates the current HEAD, or the checkout has no git HEAD.
+   - CI must re-run the gates itself and never trust the local artifact file.
 
 Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/logcat_doctor.py` (optional `--device <serial>`).
 
@@ -337,6 +358,7 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
    - When addressing review findings, the agent must fix all findings across all 5 pillars comprehensively in a single pass.
    - Empirically verify with `testDebugUnitTest` and `fast_kt_lint.py` before re-dispatching.
    - Review rounds MUST converge in at most 2 rounds. High round churn (e.g. Round 5, Round 6, Round 7) is strictly prohibited.
+   - **Round tracking is programmatic**: `review_package.py` records every generated package as a round for the task (task id from `--task` / `HARNESS_TASK_ID`, ledger in `.agents/state/review_rounds.json`; counters reset when HEAD moves after the developer commits). At the round cap (2, override `HARNESS_MAX_REVIEW_ROUNDS`), package generation prints a `REVIEW ROUND CAP` warning and the reminder injects an escalation note — the agent MUST present a Review Round Summary Card and ask the developer to choose: continue one more round / roll back the last fixes / stop the task. Never silently loop.
 
 5. **Conversation Language Parity Across All Developer Touchpoints**:
    - The agent MUST dynamically match the active conversation language of the developer across ALL cards, interactive modals, and summaries:

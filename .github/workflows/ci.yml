@@ -34,6 +34,18 @@ jobs:
         run: |
           python agents/scripts/_security_selftest.py
 
+      - name: Run Environment/Code Failure Classifier Self-Tests
+        run: |
+          python agents/scripts/_env_codes_selftest.py
+
+      - name: Run Review-Round Cap Ledger Self-Tests
+        run: |
+          python agents/scripts/_round_cap_selftest.py
+
+      - name: Run Final Verdict Aggregation Self-Tests
+        run: |
+          python agents/scripts/_final_verdict_selftest.py
+
       - name: Run Preflight Sanity Verification
         run: |
           python agents/scripts/preflight_check.py
