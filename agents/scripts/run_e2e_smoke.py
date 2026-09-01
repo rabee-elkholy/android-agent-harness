@@ -1122,8 +1122,9 @@ def main() -> int:
         })
         return 1
 
-    # If --auto-diff is enabled, inspect git working tree for modified components
-    if args.auto_diff:
+    # If no explicit target/flow is specified, enable auto-diff discovery by default
+    use_auto_diff = args.auto_diff or (not args.target_activity and not args.target_deeplink and not args.flow and not args.flow_text)
+    if use_auto_diff:
         diff_info = discover_modified_targets(REPO)
         if diff_info.get("target_activity_component"):
             target_act = diff_info["target_activity_component"]
