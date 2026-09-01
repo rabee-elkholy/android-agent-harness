@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _apk_freshness import check_apk_freshness, format_freshness_error  # noqa: E402
 from _env_codes import (  # noqa: E402
     CLASS_ENV,
     EXIT_ENV,
@@ -96,6 +97,7 @@ def main() -> int:
     parser.add_argument("--activity", default=DEFAULT_ACTIVITY, help="Launch activity")
     parser.add_argument("--package", default=APPLICATION_ID, help="Package name to uninstall")
     parser.add_argument("--user", default=None, help="Target user ID for multi-user / work profile devices (e.g. 0)")
+    parser.add_argument("--force", action="store_true", help="Bypass APK freshness check (emergency manual use only)")
     args = parser.parse_args()
 
     try:
@@ -123,7 +125,22 @@ def main() -> int:
         return 0
 
     if args.action in ("install", "install-start"):
-        if not apk.is_file():
+        if not args.force:
+            freshness = check_apk_freshness(apk, REPO, active_flavor)
+            if not freshness.is_fresh:
+                live_print(format_freshness_error(freshness, apk, active_flavor), err=True)
+                if freshness.status == "MISSING_APK":
+                    verdict = FailureVerdict(
+                        CLASS_ENV,
+                        f"APK not found: {apk} (pipeline order: assemble before install)",
+                    )
+                    record_device(args.action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+                    emit_env_failure(verdict, "run_device.py", serial=serial)
+                    return EXIT_ENV
+                else:
+                    record_device(args.action, "FAIL", 1, serial, "CODE", freshness.reason)
+                    return 1
+        elif not apk.is_file():
             live_print(f"[ERROR] APK not found: {apk}", err=True)
             live_print(f"Assemble debug first: python .agents/scripts/run_gradle_task.py {ASSEMBLE_TASK}", err=True)
             verdict = FailureVerdict(

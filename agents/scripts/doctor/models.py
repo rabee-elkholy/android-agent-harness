@@ -15,6 +15,7 @@ CORE_SUBAGENTS = {
 }
 
 CORE_SCRIPTS = (
+    "_apk_freshness.py",
     "_hook_selftest.py",
     "_hook_state.py",
     "_live_process.py",

@@ -1,8 +1,8 @@
 # Install or Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.18.0/docs/install-or-update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.19.0/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.18.0` — **SHA-256**: `00a312a6e51b9c465a3fa381561701ec0a6f46f15df1d5fd1d40fce7fd6f22bb` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.19.0` — **SHA-256**: `dc351cd3407f334a30419408cac859bacdbba15793be4892b96a5c46f98322bc` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
@@ -41,15 +41,15 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
 4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, execute the deterministic engine in one command:
    `$PY <kit>/agents/scripts/install_or_update.py --repo <this-android-root> --kit <kit>`
    This single atomic command automatically creates the backup, preserves tailored reference files (.agents/skills/android-harness/references/*.md), places .agents/, generates _product.py, wires tool adapters, configures PM tracking, updates .git/info/exclude, and runs selftest/doctor with 0 failures in under 3 seconds.
-   - **Tailored References Preservation**: On update sessions, existing tailored reference files (`.agents/skills/android-harness/references/*.md`) are preserved AS-IS without adding new ones, and the developer is asked via `ask_question` modal to approve keeping them.
+   - **Tailored References Preservation**: On update sessions, existing tailored reference files (`.agents/skills/android-harness/references/*.md`) are preserved AS-IS without adding new ones. The installer MUST list them with clickable links (`[filename.md](file:///<path>)`) in the `ask_question` modal and inform the developer in their language that they can click and review each file before confirming.
 5. After setup: run `$PY .agents/scripts/harness_doctor.py` for automated 12-dimension verification. If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.
 
 Kit rules that still apply during setup:
 
 - **Strict Read-Only Kit Source**: Never modify or write files in `<kit>` (`android-agent-harness`). Port and configure strictly into `<this repo>/.agents`.
 - **Scope Isolation**: Setup configures `.agents/` only. Never edit app production files (`strings.xml`, Kotlin files) during install. Report pre-existing preflight issues in chat.
-- **No `schedule` Timers**: Never call `schedule` or create background sleep timers during install. Run commands synchronously or await reactive completion.
-- **Mandatory Step 3b Approval & Reference Preservation**: On update sessions, restore all existing tailored reference files (.agents/skills/android-harness/references/) AS-IS without adding new ones, and ask the developer via `ask_question` to approve keeping them. On first-time installs, discover domains, create custom references, and obtain approval.
+- **No `schedule` Timers & Zero-Noise Chat**: Never call `schedule` or create background sleep timers during install. Run commands synchronously or await reactive completion. Remain completely silent in chat prose during background tasks.
+- **Mandatory Step 3b Approval & Reference Preservation**: On update sessions, restore all existing tailored reference files (.agents/skills/android-harness/references/) AS-IS without adding new ones, and ask the developer via `ask_question` to approve keeping them (with clickable `file:///` links for IDE review). On first-time installs, discover domains, create custom references, and obtain approval.
 - **Previous Answers Recommendation**: When updating or re-running setup on an existing project, previous answers must be presented as `(Recommended)` at index 0.
 - Backup before overwriting `.agents` or tool adapters.
 - Structural port (package, regex, Path pieces, APK name, architecture, locales). A find-replace of the example name is not a successful install.

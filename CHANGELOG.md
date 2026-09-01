@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-09-01
+
+### APK Freshness & Stale Build Barrier, Interactive Reference Review Links & Zero-Noise Background Protocols
+- **APK Freshness & Stale Build Barrier (`_apk_freshness.py`, `_apk_freshness_selftest.py`, `run_device.py`, `run_e2e_smoke.py`)**:
+  - Built a dedicated, high-speed (<15ms) build freshness verifier checking APK creation timestamps (`mtime`) against all modified source and resource files (`.kt`, `.java`, `.xml`, `AndroidManifest.xml`, `.gradle*`, `.pro`, etc.) in the working tree.
+  - Automatically rejects installation attempts (`run_device.py install-start`) and E2E smoke tests (`run_e2e_smoke.py`) when the target APK is older than repository changes, exiting immediately with `exit 1` and a structured diagnostic banner requiring `:app:assembleDebug`.
+  - Verifies that Gradle assemble gate results (`_gate_results.py`) match the current `git_sha` and passed with status `PASS`.
+- **Interactive Tailored Reference Reviews with Clickable IDE Links (`docs/setup-prompt.md`, `docs/install-or-update-prompt.md`)**:
+  - Mandated formatting all discovered project domain reference files as clickable markdown links (`[filename.md](file:///<path>)`) within the `ask_question` approval modal during update and setup sessions.
+  - Explicitly informs developers in their active conversation language that they can click and review each reference guide directly in their IDE before confirming.
+- **Zero-Noise Chat & Background Task Silence Hardening (`docs/install-or-update-prompt.md`, `harness-rules.md`, `AGENTS.md`)**:
+  - Reinforced strict zero-noise chat invariants during long-running background tasks (e.g. Gradle compilation), requiring the agent to output empty string `""` and rely purely on native platform reactive notifications.
+
 ## [0.18.0] - 2026-09-01
 
 ### Governance Suite: Exit-Code Protocol, Review Round Cap, Structured Final Verdict, Baseline Test Gate, Risk Tiers & Impact Analysis
@@ -50,10 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Refactored `check_strings.py` to be 100% diff-scoped by default: translation parity across `values/strings.xml` and localized `values-*/strings.xml` files is strictly restricted to newly added/modified keys in the working tree (`git diff -U0 HEAD`).
   - Pre-existing untranslated legacy keys from past releases are ignored in preflight checks, preventing false-positive blocking `[FAIL]` and eliminating unexpected AI modifications to legacy XML files.
   - Added `--all` flag to `check_strings.py` for full repository audits.
-- **Robust XML Launcher Activity Discovery (`wizard/discovery.py`)**:
-  - Replaced fragile non-greedy regex parsing of `<activity>` tags with structured `xml.etree.ElementTree` parsing, correctly identifying the true exported launcher activity (`android.intent.category.LAUNCHER`) and preventing false-positive identification caused by self-closing XML sibling tags.
-- **Autonomous E2E Smoke Testing Bugfix (`run_e2e_smoke.py`)**:
-  - Added missing `scrollable: bool | None = None` parameter to `find_nodes()` signature and matching predicate, preventing `TypeError` during autonomous UI Automator smoke execution.
 - **Safety Hook Review Barrier Extended to Preflight (`pre_tool_safety.py`)**:
   - `pre_tool_safety.py` now enforces the active 5-leaf parallel review barrier against premature `preflight_check.py` execution, ensuring preflight and assemble commands cannot execute until all 5 leaf reviewer verdicts arrive.
 - **Progressive Streaming for Installer & Selftest (`install_or_update.py`)**: Added real-time step streaming with `flush=True` during installation and doctor runs.
@@ -137,26 +146,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Offline CLI Update Caching (`check_kit_update.py`)**: Cached transient network failures to eliminate command delays when offline.
 - **NDK, AIDL & Proguard Review Coverage (`_repo_files.py`, `_hook_state.py`, `pre_commit_gate.py`)**: Expanded code suffixes to include `.cpp`, `.c`, `.h`, `.hpp`, `.aidl`, and `.pro` across review gates.
 
-## [0.14.20] - 2026-08-30
-
-### Architectural Base Discovery & Mandatory Base ViewModel Inheritance
-- **Architectural Base Classes Discovery (`wizard/discovery.py`)**: Built `discover_architectural_bases()` to automatically scan and extract standardized Base ViewModel classes (e.g. `MVIViewModel<S : State, E : Event, A : Action>`, `BaseViewModel`), Domain Result wrappers (`Result<T>`, `Resource<T>`), and Base Activities/Fragments from client repositories.
-- **Mandatory Base ViewModel Inheritance Invariant (`harness-rules.md`, `convention-reviewer-agent.json`)**: Added Invariant 9 and Scope Item 10 strictly prohibiting ad-hoc reinvented `_uiState = MutableStateFlow` boilerplate when a standardized Base ViewModel exists in the project.
-- **Architecture Guidelines Tailoring (`architecture-guidelines.md`)**: Ensured all project reference documentation accurately captures the exact Base classes, package names, generic signatures, and state/event reduce/send functions.
-
-## [0.14.19] - 2026-08-30
-
-### Mandatory Architectural KDoc Standards & Proactive Domain Documentation
-- **Mandatory Architectural KDoc Invariant (`harness-rules.md`, `architecture-guidelines.md`)**: Added Invariant 8 to Shift-Left Quality Invariants strictly mandating standard, meaningful KDoc (`/** ... */`) documenting purpose, `@param`, `@return`, and `@throws` on all newly created or refactored Repository interfaces, Domain UseCases, ViewModel exposed contracts, and DataSource methods.
-- **Convention Reviewer KDoc Enforcement (`convention-reviewer-agent.json`)**: Added Scope Item 9 to `convention-reviewer-agent` enforcing proactive architectural KDoc documentation as a blocking delivery requirement.
-
 ## [0.14.18] - 2026-08-30
 
-### Diff-Aware Targeted E2E Smoke Testing & Deep Logcat Forensics
+### Diff-Aware Targeted E2E Smoke Testing, Base ViewModel Discovery & Architectural KDoc
 - **Diff-Aware Target Auto-Discovery (`agents/scripts/run_e2e_smoke.py`)**: Enhanced autonomous E2E engine with `--auto-diff` inspection, automatically detecting modified Activity components, Fragment/Compose screens, and newly added string resources from git working tree diff.
 - **Direct Component & Deep-Link Launching**: Added targeted launch capabilities (`--target-activity`, `--target-deeplink`) enabling direct Activity invocation via ADB component intents (`am start -n`) alongside automated UI Automator navigation.
 - **Deep Logcat Crash & ANR Forensics**: Upgraded runtime error interception to capture, extract, and demangle 15-line stack traces for `FATAL EXCEPTION`, `AndroidRuntime`, `ANR`, `Room` schema integrity violations, and unchecked nullability failures.
-- **Visual Target Verification**: Emits structured JSON verification reports (`last_e2e_result.json`) and timestamped screenshots targeting modified screens on physical devices.
+- **Architectural Base Classes Discovery (`wizard/discovery.py`)**: Built `discover_architectural_bases()` to automatically scan and extract standardized Base ViewModel classes (e.g. `MVIViewModel<S : State, E : Event, A : Action>`, `BaseViewModel`), Domain Result wrappers (`Result<T>`, `Resource<T>`), and Base Activities/Fragments from client repositories.
+- **Mandatory Base ViewModel Inheritance Invariant (`harness-rules.md`, `convention-reviewer-agent.json`)**: Added Invariant 9 and Scope Item 10 strictly prohibiting ad-hoc reinvented `_uiState = MutableStateFlow` boilerplate when a standardized Base ViewModel exists in the project.
+- **Mandatory Architectural KDoc Invariant (`harness-rules.md`, `architecture-guidelines.md`)**: Added Invariant 8 to Shift-Left Quality Invariants strictly mandating standard, meaningful KDoc (`/** ... */`) documenting purpose, `@param`, `@return`, and `@throws` on all newly created or refactored Repository interfaces, Domain UseCases, ViewModel exposed contracts, and DataSource methods.
 
 **Included in 0.14.17, 0.14.16 & 0.14.15 (2026-08-30):**
 

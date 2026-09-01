@@ -1498,7 +1498,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.18.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.19.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2826,6 +2826,21 @@ print(
     f"{'OK' if ok_security_suite else 'FAIL ' + sec_proc.stdout + sec_proc.stderr}"
 )
 failed += int(not ok_security_suite)
+
+# --- v0.19.0: APK Freshness & Stale Build Barrier ---
+fresh_proc = subprocess.run(
+    [sys.executable, str(SCRIPTS / "_apk_freshness_selftest.py")],
+    capture_output=True,
+    text=True,
+    check=False,
+    env=os.environ.copy(),
+)
+ok_fresh_suite = fresh_proc.returncode == 0
+print(
+    f"apk_freshness_selftest suite: "
+    f"{'OK' if ok_fresh_suite else 'FAIL ' + fresh_proc.stdout + fresh_proc.stderr}"
+)
+failed += int(not ok_fresh_suite)
 
 
 doc = HarnessDoctor(repo_root)

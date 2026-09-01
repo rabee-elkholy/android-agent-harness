@@ -1,6 +1,6 @@
 # Setup prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.18.0/docs/setup-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.19.0/docs/setup-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
 
 The installing agent **executes** this file (usually after the developer pasted [`install-or-update-prompt.md`](install-or-update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
@@ -222,9 +222,13 @@ The kit ships clean foundation references in `.agents/skills/android-harness/ref
 
 - **A. During an UPDATE Session (Existing Harness)**:
   1. **Preserve Existing References AS-IS**: Do NOT overwrite, delete, or unilaterally add generic reference files. Restore all existing project reference files from `.agents/skills/android-harness/references/*.md` (or backup) exactly as they are.
-  2. **Mandatory Approval Modal**: Ask the developer via `ask_question` in their language to confirm keeping existing references:
-     - **Question**: "Restored existing tailored architecture reference files (.agents/skills/android-harness/references/). Do you approve keeping the existing reference guides as-is, or would you like to add/update any domain guides?" (posed in the developer's language)
-     - **Options**: `(Recommended) Yes, approve and keep existing references as-is` / `I want to add or modify domain references` (localized to the developer's language)
+  2. **Mandatory Approval Modal with Clickable Links**: Ask the developer via `ask_question` in their language to confirm keeping existing references. The installer MUST list every discovered reference file as a clickable markdown link (`[filename.md](file:///<absolute-path-to-file>)`) and explicitly instruct the developer that they can click and review any file in the IDE before confirming:
+     - **Question**: "The following tailored architecture reference files were discovered in this project:
+- [filename1.md](file:///path/to/references/filename1.md)
+- [filename2.md](file:///path/to/references/filename2.md)
+...
+You can click any file above to review its contents in your IDE before deciding. Would you like to approve and keep these reference guides as-is, or reset/modify them?" (posed in the developer's language)
+     - **Options**: `(Recommended) Approve and preserve all existing tailored reference files` / `Reset reference files to default kit templates` / `I want to add or modify specific domain references` (localized to the developer's language)
   3. If the developer approves, keep all reference files unchanged. If they want changes, make the requested adjustments before proceeding.
 
 - **B. During a FIRST-TIME INSTALL**:
@@ -287,6 +291,6 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 - **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
-  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.18.0/docs/diagnostic-prompt.md`.
-  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.18.0/docs/rollback-prompt.md`.
+  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.19.0/docs/diagnostic-prompt.md`.
+  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.19.0/docs/rollback-prompt.md`.
   - Remember: Five `*_PASS` required before real feature/bug delivery.

@@ -38,6 +38,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _apk_freshness import check_apk_freshness, format_freshness_error  # noqa: E402
 from _env_codes import (  # noqa: E402
     CLASS_ENV,
     EXIT_ENV,
@@ -55,6 +56,7 @@ from _product import (  # noqa: E402
     PRODUCT_NAME,
 )
 from _repo_files import REPO, first_adb_serial  # noqa: E402
+from _variants import apk_relative  # noqa: E402
 
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 SCREENSHOTS_DIR = REPO / ".agents" / "state" / "screenshots"
@@ -661,6 +663,23 @@ def main() -> int:
 
     # If --auto-diff is enabled, inspect git working tree for modified components
     if args.auto_diff:
+        # Check APK freshness before executing smoke tests on modified diffs
+        apk_path = REPO / apk_relative()
+        freshness = check_apk_freshness(apk_path, REPO)
+        if not freshness.is_fresh and freshness.status != "MISSING_APK":
+            live_print(format_freshness_error(freshness, apk_path), err=True)
+            live_print("[ERROR] E2E Smoke test aborted: APK is stale relative to modified files.", err=True)
+            write_gate_result("e2e", {
+                "schema_version": 1,
+                "status": "FAIL",
+                "exit_code": 1,
+                "env_class": "CODE",
+                "serial": serial,
+                "git_sha": current_head_sha(),
+                "detail": f"STALE_APK: {freshness.reason}",
+            })
+            return 1
+
         diff_info = discover_modified_targets(REPO)
         if diff_info.get("target_activity_component"):
             target_act = diff_info["target_activity_component"]
