@@ -5,6 +5,31 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-09-01
+
+### Governance Suite: Exit-Code Protocol, Review Round Cap, Structured Final Verdict, Baseline Test Gate, Risk Tiers & Impact Analysis
+- **Exit-Code Protocol & Environment Failure Classification (`_env_codes.py`, `_env_codes_selftest.py`)**:
+  - Introduced standard exit code `30` (`EXIT_ENV`) for environment, network, and ambiguous ADB/Gradle failures, separating them from code failures (`exit 1`).
+  - Added deterministic regex and exit code classification (`CLASS_ENV`, `CLASS_CODE`, `CLASS_AMBIGUOUS`) across `run_device.py`, `run_e2e_smoke.py`, `run_gradle_task.py`, and `run_tests_gate.py`.
+  - Halts the agent immediately with `[ENV-FAILURE]` marker upon environment issues and atomically writes `.agents/state/env_failure.json`, strictly prohibiting the agent from modifying project code, Gradle files, or the manifest to bypass environment failures.
+- **Per-Task Review Round Cap & Anti-Loop Warning (`_hook_state.py`, `review_package.py`, `_round_cap_selftest.py`)**:
+  - Implemented an isolated, per-task review round ledger tracking review iterations per task ID and resetting upon `HEAD SHA` movement.
+  - Generates a prominent `REVIEW ROUND CAP` warning when reaching the cap (2 rounds), instructing the agent to output a Review Round Summary Card and prompt the developer (continue / rollback / stop) rather than looping silently.
+- **Machine-Readable Unified Final Verdict Aggregation (`final_verdict.py`, `_gate_results.py`, `_final_verdict_selftest.py`)**:
+  - Unified gate result artifact emission across all delivery gates into `.agents/state/results/<gate>.json`.
+  - Created `final_verdict.py` aggregating unit tests, preflight, assemble, device, E2E smoke, and 5-leaf parallel review results into an atomic, machine-readable `.agents/state/last_verdict.json` with status values (`APPROVED`, `BLOCKED`, `ENV_BLOCKED`, `STALE`, `EXPIRED`).
+  - Enforces tree fingerprint consistency, diff SHA-256 computation, and older-HEAD artifact invalidation.
+- **Known-Failures Debt Registry & Baseline-Aware Test Gate (`baseline_capture.py`, `run_tests_gate.py`, `_baseline_selftest.py`)**:
+  - Created `baseline_capture.py` to record pre-existing unit test debt into `.agents/state/baseline.json` with SHA-256 test fingerprinting, enforced clean-tree capture invariants, and required `--approve` flag for refreshing.
+  - Implemented `run_tests_gate.py` to parse JUnit XML reports and classify test failures into `BASELINE_IGNORED` (tolerated pre-existing debt) vs `NEW_REGRESSION` (blocks delivery with `exit 1`).
+- **Risk-Tiered Approval Gates & Human Intervention Barrier (`risk_tier.py`, `approve_risk.py`, `_risk_and_impact_selftest.py`)**:
+  - Implemented four-tier diff risk classification (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) with file-level floor invariants for sensitive surfaces (billing, purchases, security/crypto, proguard rules, Room database migrations, AndroidManifest permissions).
+  - Built `approve_risk.py` as an interactive-only human approval barrier requiring developer confirmation via TTY and refusing AI agent automated execution (`stdin=DEVNULL`).
+  - Added Step 4 to `preflight_check.py` to verify risk approvals and prevent assembling unapproved `HIGH`/`CRITICAL` changes.
+  - Embedded `RISK_TIER=` classification into the review package header for all 5 reviewers.
+- **Change Impact Analysis & Dependency Graph (`impact_analyzer.py`)**:
+  - Built an AST/regex-based Kotlin/Java dependency indexer calculating direct and transitive (depth 2) dependencies, mapping modified symbols to impacted unit tests and UI surfaces for focused verification.
+
 ## [0.17.2] - 2026-08-31
 
 ### Anti-Hallucination Invariant, Sequential Task Dependency Protection & Smoke Launcher Robustness
@@ -133,14 +158,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Deep Logcat Crash & ANR Forensics**: Upgraded runtime error interception to capture, extract, and demangle 15-line stack traces for `FATAL EXCEPTION`, `AndroidRuntime`, `ANR`, `Room` schema integrity violations, and unchecked nullability failures.
 - **Visual Target Verification**: Emits structured JSON verification reports (`last_e2e_result.json`) and timestamped screenshots targeting modified screens on physical devices.
 
-## [0.14.17] - 2026-08-30
+**Included in 0.14.17, 0.14.16 & 0.14.15 (2026-08-30):**
 
-### Zero Git Pollution Hardening & Legacy Advisory Elimination
+### Zero Git Pollution Hardening & Legacy Advisory Elimination (0.14.17)
 - **Zero Git Pollution Hardening (`harness_doctor.py`, `doctor/engine.py`, `setup-prompt.md`, `_repo_files.py`)**: Completely removed legacy `chore: setup android harness` git commit advisories from diagnostic reports and setup documentation. All harness manifests (`.agents/`), adapters, and transient states are 100% locally private via `.git/info/exclude`, requiring zero git commits by developers.
 - **Temporary Wizard & Scratch File Isolation (`_repo_files.py`)**: Added `*.wizard_questions.json`, `.wizard_questions.json`, `*.tmp`, `*.json.tmp`, and `scratch_*.py` to `HARNESS_LOCAL_EXCLUSIONS`, ensuring temporary question payloads and scripts never appear in Android Studio unversioned files.
 - **Reference Indexing Synchronization (`daily-scenarios.md`)**: Fully synchronized foundation and tailored domain reference indexing across all setups and updates, ensuring 100% zero-warning diagnostics across client Android applications.
-
-**Included in 0.14.16 & 0.14.15 (2026-08-30):**
 
 ### Official Slogan, 6-Leaf Review Gate, Workflows Guide & Prompt Consolidation
 - **Official Identity & Tagline (0.14.16)**: Adopted official slogan *"Deterministic Android Engineering for the AI Era"* with tagline *"Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team."* across `README.md`, `docs/architecture.md`, `docs/quickstart.md`, and `pyproject.toml`.
