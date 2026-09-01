@@ -136,6 +136,46 @@ def test_is_ascii() -> None:
     check(not DeviceSession._is_ascii("مرحبا"), "arabic detected as non-ascii")
 
 
+def test_horizontal_and_state_actions() -> None:
+    yaml = """
+- swipeLeft: "Carousel"
+- swipeRight: "Banner"
+- scrollLeft: true
+- scrollRight: true
+- assertChecked:
+    id: remember_me
+    checked: true
+- assertSelected:
+    id: tab_profile
+    selected: false
+- setNetwork: "offline"
+- network: "online"
+"""
+    flow = parse_flow_definition(yaml)
+    check(len(flow["steps"]) == 8, "8 new actions parsed")
+    check(validate_flow(flow) == [], "new actions validate clean without errors")
+    canon = canonicalize_steps(flow["steps"])
+    check(canon[2]["action"] == "swipeRight", "scrollLeft aliased to swipeRight")
+    check(canon[3]["action"] == "swipeLeft", "scrollRight aliased to swipeLeft")
+    check(canon[7]["action"] == "setNetwork", "network aliased to setNetwork")
+
+
+def test_state_assertions_node_filter() -> None:
+    xml = (
+        '<hierarchy>'
+        '<node text="Option 1" checkable="true" checked="true" selected="false" bounds="[0,0][100,50]"/>'
+        '<node text="Option 2" checkable="true" checked="false" selected="true" bounds="[0,50][100,100]"/>'
+        '</hierarchy>'
+    )
+    nodes = parse_ui_hierarchy(xml)
+    checked_nodes = find_nodes(nodes, checked=True)
+    check(len(checked_nodes) == 1 and checked_nodes[0].text == "Option 1", "checked=True filter works")
+    unchecked_nodes = find_nodes(nodes, checked=False)
+    check(len(unchecked_nodes) == 1 and unchecked_nodes[0].text == "Option 2", "checked=False filter works")
+    selected_nodes = find_nodes(nodes, selected=True)
+    check(len(selected_nodes) == 1 and selected_nodes[0].text == "Option 2", "selected=True filter works")
+
+
 def test_diff_discovery_no_git_errors() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
@@ -154,6 +194,8 @@ def main() -> int:
     test_canonicalize()
     test_component_build()
     test_is_ascii()
+    test_horizontal_and_state_actions()
+    test_state_assertions_node_filter()
     test_diff_discovery_no_git_errors()
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")

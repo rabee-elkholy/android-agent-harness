@@ -5,6 +5,24 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-09-01
+
+### Advanced E2E Gestures, Component State Assertions, Offline Simulation & Live Task Streaming
+- **Horizontal Gestures & Directional Scrolling (`_adb_core.py`, `run_e2e_qa.py`, `_adb_core_selftest.py`)**:
+  - Added native support for `swipeLeft`, `swipeRight`, `scrollLeft`, and `scrollRight` gestures in `DeviceSession` and `FlowExecutor`.
+  - Added horizontal directional scrolling to `scrollUntilVisible` (`direction: left` / `direction: right`) for navigating Jetpack Compose `LazyRow`, `ViewPager2`, and horizontal carousels.
+- **Component State Assertions (`_adb_core.py`, `find_nodes()`)**:
+  - Added `assertChecked` and `assertSelected` actions validating boolean state for Switch toggles, Checkboxes, RadioButtons, and Navigation Tabs.
+  - Added `checked` and `selected` filter parameters to `find_nodes()` for UI hierarchy queries.
+- **Offline Mode Simulation & Automatic Teardown Restoration (`_adb_core.py`)**:
+  - Added `setNetwork: offline/online` and alias `network` toggling Wi-Fi and Mobile Data via ADB shell commands.
+  - Enforced guaranteed network restoration via `FlowExecutor` `finally` block to prevent test devices from remaining offline on failure.
+- **Pre-E2E Confirmation Ordering Before Test-Case Planning (`e2e-qa.md`, `harness-rules.md`, `deliver.md`)**:
+  - Reordered the E2E verification lifecycle: developers are prompted via `ask_question` ("Start E2E round?" / "Skip E2E") before any test-case planning, scaffold generation, or `qa-e2e-planner-agent` invocation, eliminating wasted tokens and execution time on skipped test runs.
+- **Background Task Live Streaming & Non-blocking IO Fix (`ensure_hook_selftest.py`)**:
+  - Integrated `run_streaming()` with `echo=True` and `flush=True`, eliminating the "Empty log" display in IDE background task outputs.
+  - Added `_read_stdin_safe()` with thread-isolated non-blocking read and explicit `--cli` / `--hook` flags.
+
 ## [0.23.1] - 2026-09-01
 
 ### Interactive Pre-E2E Confirmation Gate & Skip Transparency
@@ -169,7 +187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unified CLI & Wizard Integration (`setup_wizard.py`, `harness_cli.py`)**: Added `apply` subcommand to `setup_wizard.py` and wired `android-harness init` and `android-harness update` to use `install_or_update.py` directly.
 - **Streamlined Setup & Update Prompts (`docs/setup-prompt.md`, `docs/install-or-update-prompt.md`)**: Replaced 300 lines of manual multi-turn porting steps with a single direct invocation of `install_or_update.py`.
 
-## [0.16.0] - 2026-08-31
+**Included in 0.16.0 (2026-08-31):**
 
 ### Diff-Scoped Fast KT Lint, Pre-Gate Deadlock Fix, Hard Review Package Gate & Precision Strings
 - **Diff-Scoped Fast Kotlin Lint (`fast_kt_lint.py`, `_hook_selftest.py`)**: Added `get_modified_lines_map` parsing `git diff -U0 HEAD` to apply line-level coding invariants (`!!`, inline FQCNs, `runBlocking`, `TODO` stubs, wildcard imports) strictly to modified/added lines in the working tree diff without penalizing untouched legacy code in the same files.

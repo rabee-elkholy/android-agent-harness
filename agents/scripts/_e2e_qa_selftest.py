@@ -98,12 +98,40 @@ def test_dump_roundtrip() -> None:
     check(d2["cases"][0]["id"] == d["cases"][0]["id"], "roundtrip preserves id")
 
 
+def test_advanced_actions() -> None:
+    yaml = """
+cases:
+  - id: TC-ADV-001
+    title: "Test gestures, state assertions, and offline mode"
+    type: edge
+    isolation: stop
+    steps:
+      - launchApp
+      - swipeLeft: "Stories"
+      - assertChecked:
+          id: toggle_switch
+          checked: true
+      - assertSelected:
+          text: "Tab 2"
+          selected: true
+      - setNetwork: "offline"
+      - assertVisible: "Offline Banner"
+      - setNetwork: "online"
+"""
+    d = parse_cases_definition(yaml)
+    check(len(d["cases"]) == 1, "advanced test case parsed")
+    check(validate_cases(d) == [], "advanced test case validates clean")
+    c = d["cases"][0]
+    check(len(c["steps"]) == 7, "seven advanced steps parsed")
+
+
 def main() -> int:
     test_parse_yaml()
     test_parse_json()
     test_validate()
     test_generate_scaffold()
     test_dump_roundtrip()
+    test_advanced_actions()
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")
         for item in FAILURES:

@@ -7,9 +7,17 @@ description: Derive test cases from a diff and execute them on device as a Senio
 Follow `.agents/rules/harness-rules.md`. This is the test-case-aware device
 verification path (use `run_e2e_smoke.py` only as the quick fallback).
 
-## 1. Derive test cases from the diff
+## 1. Confirm with the developer (Gate 0)
 
-For each plan phase (or bug fix / refactor), before executing on device:
+Before creating or planning any E2E test cases:
+1. Ask the developer via `ask_question` (in the active conversation language):
+   *"Start E2E round?"* with options **`Start E2E`** / **`Skip E2E`**, then wait for the choice.
+2. If **`Skip E2E`**: STOP immediately — do NOT author test cases or invoke `qa-e2e-planner-agent`. Mark device verification as `skipped by developer`, output the Phase Milestone Card, and proceed.
+3. If **`Start E2E`**: Proceed to Step 2 below to plan and author test cases.
+
+## 2. Derive test cases from the diff (After developer approval)
+
+For each plan phase (or bug fix / refactor), after the developer approves E2E:
 
 1. Inspect the phase diff with `git diff`, the implementation plan, and (for
    bugs) the tracker description.
@@ -21,20 +29,18 @@ For each plan phase (or bug fix / refactor), before executing on device:
    `.agents/e2e_cases/<task>/<phase>.yaml`.
 
 Cases must cover: entry-to-exit happy path, at least one negative path, and one
-edge condition. Every assertion uses `assertVisible` / `assertNotVisible` /
-`assertText` / `assertEnabled` / `assertClickable` with a concrete target.
+edge condition. Assertions use `assertVisible` / `assertNotVisible` /
+`assertText` / `assertEnabled` / `assertClickable` / `assertChecked` / `assertSelected` with a concrete target.
+Gestures support vertical and horizontal swiping (`scroll`, `swipeLeft`, `swipeRight`, `scrollUntilVisible`), and offline simulation via `setNetwork: offline/online`.
 
-## 2. Validate offline
+## 3. Validate offline
 
 `python .agents/scripts/run_e2e_qa.py --cases <path> --lint`
 
 Fix any validation errors before touching a device.
 
-## 3. Execute on device / emulator
+## 4. Execute on device / emulator
 
-0. **Confirm with the developer**: ask via `ask_question` (active conversation language)
-   *"Start E2E round?"* with options **`Start E2E`** / **`Skip E2E`**. On Skip, mark device
-   verification `skipped by developer` and skip the steps below.
 1. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`
 2. `python .agents/scripts/run_device.py install-start`
 3. `python .agents/scripts/run_e2e_qa.py --cases <path> --task <task> --json`
@@ -43,7 +49,7 @@ On any failure, read the per-case `reason` + `classification` and the evidence
 (screenshot / hierarchy) in `.agents/state/e2e/`, or dispatch
 `qa-diagnostics-agent` for crash forensics.
 
-## 4. Report
+## 5. Report
 
 - Output the **Phase Milestone Card** with the per-case PASS/FAIL table.
 - The JSON report lives in `.agents/state/e2e/reports/<task>/`.

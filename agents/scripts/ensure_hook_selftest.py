@@ -10,7 +10,18 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from _live_process import enable_line_buffered_stdio, run_streaming  # type: ignore
+except ImportError:
+    def enable_line_buffered_stdio() -> None:
+        pass
+    def run_streaming(argv, cwd=None, env=None, label="cmd", echo=True):  # type: ignore
+        proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+        return proc.returncode, proc.stdout + proc.stderr, []
 
 AGENTS = Path(__file__).resolve().parent.parent
 SCRIPTS = AGENTS / "scripts"
@@ -61,22 +72,18 @@ def cache_is_fresh(fingerprint: str) -> bool:
     return cache.get("fingerprint") == fingerprint and cache.get("ok") is True
 
 
-def run_selftest() -> tuple[bool, str]:
+def run_selftest(echo: bool = False) -> tuple[bool, str]:
     env = os.environ.copy()
     env.pop("HARNESS_HOOK_STATE", None)
     env.pop("HARNESS_TRANSCRIPT_ROOT", None)
-    proc = subprocess.run(
+    code, raw_log, _ = run_streaming(
         [sys.executable, str(SELFTEST)],
         cwd=str(AGENTS.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
         env=env,
+        label="hook-selftest",
+        echo=echo,
     )
-    output = (proc.stdout or "") + (proc.stderr or "")
-    return proc.returncode == 0, output
+    return code == 0, raw_log
 
 
 def _is_hook_payload(raw: str) -> bool:
@@ -94,26 +101,55 @@ def _is_hook_payload(raw: str) -> bool:
     )
 
 
+def _read_stdin_safe(timeout_sec: float = 0.1) -> str:
+    """Read stdin safely without hanging indefinitely when run as a background task.
+
+    - If explicit CLI flags (--cli, -c) are given, returns empty string (CLI mode).
+    - If explicit --hook flag is given, reads stdin synchronously.
+    - If stdin is a TTY, returns empty string immediately (interactive terminal CLI).
+    - If stdin is a pipe, reads in a worker thread with a brief timeout so background
+      pipes with open stdin descriptors never block execution.
+    """
+    if "--cli" in sys.argv or "-c" in sys.argv:
+        return ""
+    if "--hook" in sys.argv:
+        return sys.stdin.read()
+    if sys.stdin.isatty():
+        return ""
+
+    buf: list[str] = []
+
+    def _reader() -> None:
+        try:
+            buf.append(sys.stdin.read())
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_reader, name="harness-stdin-reader", daemon=True)
+    t.start()
+    t.join(timeout=timeout_sec)
+    return buf[0] if buf else ""
+
+
 def main() -> int:
-    raw = ""
-    if not sys.stdin.isatty():
-        raw = sys.stdin.read()
+    enable_line_buffered_stdio()
+    raw = _read_stdin_safe()
     as_hook = _is_hook_payload(raw)
 
     fingerprint = harness_fingerprint()
     if cache_is_fresh(fingerprint):
         if as_hook:
-            print("{}")
+            print("{}", flush=True)
         else:
-            print("[OK] Hook selftest cache is fresh.")
+            print("[OK] Hook selftest cache is fresh.", flush=True)
         return 0
 
-    ok, output = run_selftest()
+    ok, output = run_selftest(echo=(not as_hook))
     _write_cache(fingerprint, ok)
 
     if as_hook:
         if ok:
-            print("{}")
+            print("{}", flush=True)
             return 0
         try:
             import _product
@@ -133,15 +169,15 @@ def main() -> int:
                         }
                     ]
                 }
-            )
+            ),
+            flush=True,
         )
         return 0
 
-    print(output.strip())
     if ok:
-        print("[SUCCESS] Hook selftest passed; cache updated.")
+        print("[SUCCESS] Hook selftest passed; cache updated.", flush=True)
         return 0
-    print("[FAIL] Hook selftest failed.")
+    print("[FAIL] Hook selftest failed.", flush=True)
     return 1
 
 

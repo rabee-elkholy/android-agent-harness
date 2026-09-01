@@ -41,9 +41,11 @@ KNOWN_ACTIONS = {
     "launchApp", "tapOn", "click", "tap", "longPressOn",
     "inputText", "type", "eraseText", "clearText",
     "hideKeyboard", "dismissKeyguard",
-    "scroll", "scrollDown", "scrollUp", "swipe", "scrollUntilVisible",
+    "scroll", "scrollDown", "scrollUp", "scrollLeft", "scrollRight",
+    "swipe", "swipeLeft", "swipeRight", "scrollUntilVisible",
     "back", "pressBack", "pressKey",
     "assertVisible", "assertNotVisible", "assertText", "assertEnabled", "assertClickable",
+    "assertChecked", "assertSelected", "setNetwork", "network",
     "takeScreenshot", "screenshot", "wait", "sleep", "stopApp", "repeat",
 }
 
@@ -55,6 +57,9 @@ ACTION_ALIASES = {
     "dismissKeyguard": "hideKeyboard",
     "scrollDown": "scroll",
     "scrollUp": "scroll",
+    "scrollLeft": "swipeRight",
+    "scrollRight": "swipeLeft",
+    "network": "setNetwork",
     "pressBack": "back",
     "screenshot": "takeScreenshot",
     "sleep": "wait",
@@ -177,6 +182,8 @@ def find_nodes(
     clickable: bool | None = None,
     enabled: bool | None = None,
     scrollable: bool | None = None,
+    checked: bool | None = None,
+    selected: bool | None = None,
     exact: bool = False,
 ) -> list[UINode]:
     """Recursively search for nodes matching the query criteria.
@@ -219,6 +226,10 @@ def find_nodes(
         if enabled is not None and node.enabled != enabled:
             return False
         if scrollable is not None and node.scrollable != scrollable:
+            return False
+        if checked is not None and node.checked != checked:
+            return False
+        if selected is not None and node.selected != selected:
             return False
         return True
 
@@ -387,6 +398,25 @@ def _coerce_action(action_name: str, value) -> dict:
 
     if action_name in ("tapOn", "longPressOn", "assertVisible", "assertNotVisible", "scrollUntilVisible"):
         set_target(value)
+    elif action_name in ("assertChecked", "assertSelected"):
+        if isinstance(value, dict):
+            step.update(value)
+        elif isinstance(value, bool):
+            step["checked" if action_name == "assertChecked" else "selected"] = value
+        elif value is not None:
+            step["target"] = value
+    elif action_name in ("setNetwork", "network"):
+        if isinstance(value, dict):
+            step.update(value)
+        elif isinstance(value, bool):
+            step["online"] = value
+        elif isinstance(value, str):
+            step["status"] = value.lower()
+    elif action_name in ("swipeLeft", "swipeRight", "scrollLeft", "scrollRight"):
+        if isinstance(value, dict):
+            step.update(value)
+        elif value is not None:
+            step["target"] = value
     elif action_name in ("assertText",):
         if isinstance(value, dict):
             step.update(value)
@@ -804,6 +834,44 @@ class DeviceSession:
     def scroll_up(self) -> bool:
         return self.scroll(forward=False)
 
+    def swipe_left(self, y_pct: float = 0.5, duration_ms: int = 350) -> bool:
+        """Swipe left (drag right-to-left) to reveal elements further right."""
+        size = self.screen_size()
+        if not size:
+            return False
+        w, h = size
+        x_start = int(w * 0.85)
+        x_end = int(w * 0.15)
+        y = int(h * y_pct)
+        self.swipe(x_start, y, x_end, y, duration_ms)
+        return True
+
+    def swipe_right(self, y_pct: float = 0.5, duration_ms: int = 350) -> bool:
+        """Swipe right (drag left-to-right) to reveal elements further left."""
+        size = self.screen_size()
+        if not size:
+            return False
+        w, h = size
+        x_start = int(w * 0.15)
+        x_end = int(w * 0.85)
+        y = int(h * y_pct)
+        self.swipe(x_start, y, x_end, y, duration_ms)
+        return True
+
+    def scroll_horizontal(self, forward: bool = True) -> bool:
+        return self.swipe_left() if forward else self.swipe_right()
+
+    def set_network(self, online: bool) -> tuple[bool, str]:
+        """Toggle device Wi-Fi and mobile data. Returns (ok, reason)."""
+        state_cmd = "enable" if online else "disable"
+        try:
+            self.run_adb(["shell", "svc", "wifi", state_cmd], timeout=10.0)
+            self.run_adb(["shell", "svc", "data", state_cmd], timeout=10.0)
+            time.sleep(1.0)
+            return True, ""
+        except Exception as exc:
+            return False, f"failed to set network {state_cmd}: {exc}"
+
     # -- keyboard & text ---------------------------------------------------
     def hide_keyboard(self) -> None:
         self.run_adb(["shell", "input", "keyevent", "111"])  # KEYCODE_ESCAPE
@@ -926,11 +994,18 @@ class FlowExecutor:
 
     # -- selector resolution ----------------------------------------------
     def _resolve_selector(self, step: dict) -> tuple[str | None, str | None, str | None]:
+        target = step.get("target")
         resource_id = step.get("id") or step.get("testTag") or step.get("resourceId") or step.get("resource_id")
         content_desc = step.get("contentDesc") or step.get("content_desc")
-        text = resolve_target_text(step.get("target"), self.active_locale, self.string_index)
+        text = resolve_target_text(target, self.active_locale, self.string_index)
         if not text:
             text = step.get("text") if isinstance(step.get("text"), str) else None
+
+        if isinstance(target, dict):
+            resource_id = resource_id or target.get("id") or target.get("testTag") or target.get("resourceId")
+            content_desc = content_desc or target.get("contentDesc") or target.get("content_desc")
+            if not text:
+                text = target.get("text")
         return resource_id, content_desc, text
 
     def _find_matches(self, nodes: list[UINode], step: dict) -> list[UINode]:
@@ -962,7 +1037,6 @@ class FlowExecutor:
 
     def _scroll_until(self, step: dict, max_swipes: int = 5) -> UINode | None:
         direction = str(step.get("direction", "down")).lower()
-        forward = direction != "up"
 
         def matcher(nl: list[UINode]) -> UINode | None:
             matches = self._find_matches(nl, step)
@@ -972,7 +1046,12 @@ class FlowExecutor:
             found = matcher(self.session.dump_hierarchy())
             if found:
                 return found
-            self.session.scroll(forward)
+            if direction in ("left", "scrollleft", "swipeleft"):
+                self.session.swipe_left()
+            elif direction in ("right", "scrollright", "swiperight"):
+                self.session.swipe_right()
+            else:
+                self.session.scroll(direction != "up")
             time.sleep(0.3)
         return matcher(self.session.dump_hierarchy())
 
@@ -990,27 +1069,35 @@ class FlowExecutor:
         """Run steps, stopping at the first hard failure. Returns a result dict."""
         steps_out: list[dict] = []
         self.session.start_logcat_session()
+        self._network_modified = False
 
-        for idx, step in enumerate(steps, start=1):
-            action = step.get("action", "")
-            desc = f"Step {idx}: {action}"
+        try:
+            for idx, step in enumerate(steps, start=1):
+                action = step.get("action", "")
+                desc = f"Step {idx}: {action}"
 
-            outcome = self._run_step(idx, desc, step, steps_out)
-            if outcome.get("verdict") == "FAIL":
-                return outcome
-            # Crash scan after every step (cheap now: baseline was cleared).
-            crashes = self.session.check_logcat_crashes()
-            if crashes:
-                return self._fail(idx, desc, f"runtime crash: {crashes[0]['summary']}", self.session.dump_hierarchy(), "RUNTIME_CRASH", steps_out)
+                outcome = self._run_step(idx, desc, step, steps_out)
+                if outcome.get("verdict") == "FAIL":
+                    return outcome
+                # Crash scan after every step (cheap now: baseline was cleared).
+                crashes = self.session.check_logcat_crashes()
+                if crashes:
+                    return self._fail(idx, desc, f"runtime crash: {crashes[0]['summary']}", self.session.dump_hierarchy(), "RUNTIME_CRASH", steps_out)
 
-        final_shot = self.session.capture_screenshot("flow_final", self.screenshots_dir)
-        return {
-            "verdict": "PASS",
-            "locale": self.active_locale,
-            "steps": steps_out,
-            "crashes": [],
-            "final_screenshot": str(final_shot) if final_shot else None,
-        }
+            final_shot = self.session.capture_screenshot("flow_final", self.screenshots_dir)
+            return {
+                "verdict": "PASS",
+                "locale": self.active_locale,
+                "steps": steps_out,
+                "crashes": [],
+                "final_screenshot": str(final_shot) if final_shot else None,
+            }
+        finally:
+            if getattr(self, "_network_modified", False):
+                try:
+                    self.session.set_network(online=True)
+                except Exception:
+                    pass
 
     # -- step handlers -----------------------------------------------------
     def _run_step(self, idx: int, desc: str, step: dict, steps_out: list[dict]) -> dict:
@@ -1060,12 +1147,31 @@ class FlowExecutor:
             steps_out.append({"step": desc, "status": "PASS"})
 
         elif action == "scroll":
-            forward = str(step.get("direction", "down")).lower() != "up"
-            ok = self.session.scroll(forward)
+            direction = str(step.get("direction", "down")).lower()
+            if direction in ("left", "scrollleft", "swipeleft"):
+                ok = self.session.swipe_left()
+            elif direction in ("right", "scrollright", "swiperight"):
+                ok = self.session.swipe_right()
+            else:
+                ok = self.session.scroll(direction != "up")
             steps_out.append({"step": desc, "status": "PASS" if ok else "WARN"})
 
         elif action == "swipe":
-            ok = self.session.scroll(str(step.get("direction", "down")).lower() != "up")
+            direction = str(step.get("direction", "down")).lower()
+            if direction in ("left", "scrollleft", "swipeleft"):
+                ok = self.session.swipe_left()
+            elif direction in ("right", "scrollright", "swiperight"):
+                ok = self.session.swipe_right()
+            else:
+                ok = self.session.scroll(direction != "up")
+            steps_out.append({"step": desc, "status": "PASS" if ok else "WARN"})
+
+        elif action in ("swipeLeft", "scrollRight"):
+            ok = self.session.swipe_left()
+            steps_out.append({"step": desc, "status": "PASS" if ok else "WARN"})
+
+        elif action in ("swipeRight", "scrollLeft"):
+            ok = self.session.swipe_right()
             steps_out.append({"step": desc, "status": "PASS" if ok else "WARN"})
 
         elif action == "scrollUntilVisible":
@@ -1098,6 +1204,47 @@ class FlowExecutor:
                 if not matches or any(not n.clickable for n in matches):
                     return self._fail(idx, desc, "element not clickable", nodes, "ASSERTION_FAILED", steps_out)
             steps_out.append({"step": desc, "status": "PASS"})
+
+        elif action in ("assertChecked", "assertSelected"):
+            expected = step.get("checked" if action == "assertChecked" else "selected")
+            if expected is None:
+                expected = step.get("value", True)
+            if isinstance(expected, str):
+                expected = expected.lower() in ("true", "1", "yes")
+            expected_bool = bool(expected)
+
+            nodes = self.session.dump_hierarchy()
+            matches = self._find_matches(nodes, step)
+            if not matches:
+                return self._fail(idx, desc, "expected element not found for state assertion", nodes, "ASSERTION_FAILED", steps_out)
+            node, err = self._pick_node(matches, step)
+            if not node:
+                return self._fail(idx, desc, err or "unable to select target element", nodes, "ASSERTION_FAILED", steps_out)
+
+            actual_val = node.checked if action == "assertChecked" else node.selected
+            if actual_val != expected_bool:
+                attr_name = "checked" if action == "assertChecked" else "selected"
+                return self._fail(
+                    idx,
+                    desc,
+                    f"state assertion failed: element {attr_name} is {actual_val}, expected {expected_bool}",
+                    nodes,
+                    "ASSERTION_FAILED",
+                    steps_out,
+                )
+            steps_out.append({"step": desc, "status": "PASS", "state": f"{action}={actual_val}"})
+
+        elif action in ("setNetwork", "network"):
+            raw_status = str(step.get("status") or step.get("value") or "").lower()
+            online_val = step.get("online")
+            if online_val is None:
+                online_val = raw_status not in ("offline", "disabled", "false", "0", "off")
+            online_bool = bool(online_val)
+            ok, err = self.session.set_network(online_bool)
+            if not ok:
+                return self._fail(idx, desc, err or "network switch failed", [], "ENV_FAILURE", steps_out)
+            self._network_modified = not online_bool
+            steps_out.append({"step": f"{desc} ({'online' if online_bool else 'offline'})", "status": "PASS"})
 
         elif action == "assertText":
             _, _, expected = self._resolve_selector(step)

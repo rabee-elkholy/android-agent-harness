@@ -92,7 +92,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         else "Device install does not need a confirmation modal on this project."
     )
     e2e_line = (
-        "E2E_CONFIRM=confirm: before running run_e2e_qa.py or run_e2e_smoke.py, ask the developer via ask_question ('Start E2E round?' / 'Skip E2E') in their language and wait for the choice. On Skip, mark device verification 'skipped by developer' in the milestone card; never pretend it passed."
+        "E2E_CONFIRM=confirm: before authoring test cases or running E2E, ask the developer via ask_question ('Start E2E round?' / 'Skip E2E') in their language and wait for the choice. On Skip, do NOT author test cases, mark device verification 'skipped by developer' in the milestone card, and never pretend it passed. On Start E2E, author positive/negative/edge cases and execute."
         if bits["e2e_confirm"] != "allow"
         else "E2E execution does not need a confirmation modal on this project."
     )

@@ -145,6 +145,12 @@ def parse_cases_definition(content: str) -> dict:
     return {"appId": app_id, "cases": cases}
 
 
+CASE_ATTR_KEYS = {
+    "id", "title", "type", "description", "preconditions",
+    "expectedResult", "expected_result", "isolation", "tags", "timeout",
+}
+
+
 def _parse_case_block(block_lines: list[str]) -> dict | None:
     block_lines = [ln for ln in block_lines if ln.strip()]
     if not block_lines:
@@ -170,9 +176,10 @@ def _parse_case_block(block_lines: list[str]) -> dict | None:
             i += 1
             continue
         if stripped.startswith("steps:"):
+            steps_indent = len(line) - len(line.lstrip())
             steps_lines = []
             i += 1
-            while i < n and not _is_case_key_line(block_lines[i]):
+            while i < n and not _is_case_key_line(block_lines[i], steps_indent):
                 if block_lines[i].strip():
                     steps_lines.append(block_lines[i])
                 i += 1
@@ -190,13 +197,15 @@ def _parse_case_block(block_lines: list[str]) -> dict | None:
     return case
 
 
-def _is_case_key_line(line: str) -> bool:
+def _is_case_key_line(line: str, steps_indent: int) -> bool:
     stripped = line.strip()
     if not stripped or stripped.startswith("-"):
         return False
-    if stripped.startswith("steps:"):
-        return True
-    return ":" in stripped
+    indent = len(line) - len(line.lstrip())
+    if indent <= steps_indent and ":" in stripped:
+        key = stripped.split(":", 1)[0].strip()
+        return key in CASE_ATTR_KEYS or key.startswith("case")
+    return False
 
 
 def validate_cases(definition: dict) -> list[str]:
