@@ -80,6 +80,26 @@ Harness scripts classify every non-zero exit into CODE (the diff is wrong) or EN
 
 ---
 
+## Risk Tiers & Human Approval Gate
+
+- `python .agents/scripts/risk_tier.py` automatically classifies the working-tree diff into one of four Risk Tiers:
+  * **`CRITICAL`**: In-app billing, purchases, subscriptions, crypto/keystore security, Proguard rules (`proguard-rules.pro`, `consumer-rules.pro`).
+  * **`HIGH`**: Room Database schema/migrations (`@Database`, `@Entity`), AndroidManifest permissions (`<uses-permission`, `android:exported`), Gradle build scripts.
+  * **`MEDIUM`**: Standard application code (ViewModels, UseCases, Repositories, Activities, Fragments, Compose screens).
+  * **`LOW`**: Documentation, strings/translations (`strings.xml`), UI layout dimensions/drawables, comments-only diffs.
+- **Fail-safe floor**: High-risk surfaces have a file-level floor (e.g. comments in a billing file remain `CRITICAL`).
+- **Human approval required**: `HIGH` and `CRITICAL` risk tiers require interactive developer confirmation (`python .agents/scripts/approve_risk.py`). The AI agent cannot approve risk on its own (`stdin=DEVNULL` refusal). `preflight_check.py` fails if approval is missing or stale.
+- **Review package header**: `review_package.py` includes `RISK_TIER=` in the header so all five reviewers inspect the risk tier.
+
+---
+
+## Change Impact Analysis & Dependency Graph (Advisory)
+
+- `python .agents/scripts/impact_analyzer.py` maps class/symbol dependencies and recommends focused unit tests and UI screens based on the working-tree diff.
+- **Advisory invariant**: Impact analysis is an advisory optimization tool — it is NEVER a blocking delivery gate.
+
+---
+
 ## Multi-Agent Roster
 
 The Lead Agent implements, runs Gradle, and talks to the developer.

@@ -53,13 +53,17 @@ def git_head() -> str:
     return out if _GIT_SHA_RE.fullmatch(out) else ""
 
 
-def build_header(task_id: str, fingerprint: str) -> list[str]:
+from risk_tier import classify_working_tree_risk  # noqa: E402
+
+
+def build_header(task_id: str, fingerprint: str, risk_tier: str = "MEDIUM") -> list[str]:
     sha = git_head()
     return [
         HEADER_BEGIN,
         f"TASK_ID={task_id}",
         f"GIT_SHA={sha}",
         f"TREE_FINGERPRINT={fingerprint}",
+        f"RISK_TIER={risk_tier}",
         f"GENERATED_AT={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
     ]
 
@@ -154,11 +158,12 @@ def main(argv=None) -> int:
             return 1
 
     fingerprint = tree_code_fingerprint() or ""
+    risk_tier, _ = classify_working_tree_risk(REPO, list(changed_paths()))
     files_map, total_changed = build_files_map()
     skipped_count = max(0, total_changed - len(files_map))
     files_json = json.dumps(files_map, ensure_ascii=False, separators=(",", ":"))
     chunks = [
-        "\n".join([*build_header(task_id, fingerprint), f"FILES_SHA256={files_json}", PACKAGE_SHA_PENDING]) + "\n",
+        "\n".join([*build_header(task_id, fingerprint, risk_tier), f"FILES_SHA256={files_json}", PACKAGE_SHA_PENDING]) + "\n",
         f"# Harness review package (unstaged vs HEAD)\n# repo: {REPO}\n",
         "## git status\n",
         git(*status_cmd),

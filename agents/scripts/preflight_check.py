@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
 from _repo_files import REPO, changed_paths, ensure_local_git_privacy  # noqa: E402
+from risk_tier import check_risk_approval  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -47,8 +48,12 @@ def main() -> int:
 
     lint_code = run_step("3. Checking Kotlin Syntax & Architectural Rules (Fast Lint)...", "fast_kt_lint.py")
 
+    live_print("\n4. Checking Risk Tier & Human Approvals...")
+    risk_ok, risk_tier_name, risk_msg = check_risk_approval(REPO)
+    live_print(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
+
     live_print("\n==================================================")
-    overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0)
+    overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok
     write_gate_result("preflight", {
         "schema_version": 1,
         "status": "PASS" if overall_pass else "FAIL",
@@ -59,6 +64,7 @@ def main() -> int:
             "string_parity": str_code,
             "room_migrations": db_ok,
             "fast_kt_lint": lint_code,
+            "risk_approval": risk_ok,
         },
         "detail": "" if overall_pass else "preflight steps failed; see step exit codes",
     })
