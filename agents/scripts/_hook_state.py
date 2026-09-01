@@ -615,11 +615,12 @@ def _ledger_path() -> Path:
 _CODE_FP_SUFFIXES = {".kt", ".java", ".kts", ".cpp", ".c", ".h", ".hpp", ".aidl", ".pro"}
 
 
-def tree_code_fingerprint() -> str | None:
+def tree_code_fingerprint(repo: Path | None = None) -> str | None:
     """Stable hash over working-tree code paths that the review gate protects."""
     try:
         from _repo_files import REPO, changed_paths
 
+        r = repo or REPO
         names = []
         for path in changed_paths():
             suffix = path.suffix.lower()
@@ -627,7 +628,7 @@ def tree_code_fingerprint() -> str | None:
                 pass
             elif suffix == ".xml":
                 try:
-                    rel = f"/{path.relative_to(REPO).as_posix()}"
+                    rel = f"/{path.relative_to(r).as_posix()}"
                 except ValueError:
                     rel = f"/{path.as_posix()}"
                 lower_name = path.name.lower()
@@ -636,7 +637,7 @@ def tree_code_fingerprint() -> str | None:
             else:
                 continue
             try:
-                names.append(path.relative_to(REPO).as_posix())
+                names.append(path.relative_to(r).as_posix())
             except ValueError:
                 names.append(path.as_posix())
         if not names:
