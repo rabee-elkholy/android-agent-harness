@@ -1551,7 +1551,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.22.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.23.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2411,7 +2411,7 @@ print(
 failed += int(not ok_wizard_i21)
 
 # --- v0.14.6: Autonomous E2E Engine & Wizard I.22 ---
-from run_e2e_smoke import (
+from _adb_core import (
     parse_ui_hierarchy,
     parse_bounds,
     find_nodes,

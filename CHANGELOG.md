@@ -5,6 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-09-01
+
+### Senior-QA Test-Case E2E Engine & Shared ADB Core
+- **Shared ADB core (`_adb_core.py`)**: extracted the UI hierarchy model and matching (substring + exact + ambiguity detection), string/locale resolution, a strict declarative flow parser with action validation, and a `DeviceSession` providing polling synchronization, single-call `uiautomator dump`, pid/process-scoped crash detection with a cleared baseline, verified taps, clipboard/ADBKeyboard text input (Arabic + ASCII), and physical-device-first serial selection.
+- **`run_e2e_qa.py`**: test-case-aware Senior QA runner with a positive/negative/edge case schema, per-case isolation (`relaunch`/`stop`/`none`), per-case verdicts with failure evidence, JSON/markdown reports, offline `--lint` validation, and a diff-grounded `--generate-cases` scaffold.
+- **`qa-e2e-planner-agent`** + `e2e-qa.md` workflow: derive diff-grounded test cases from each plan phase.
+- **`run_e2e_smoke.py`** refactored onto the shared core (no behavior regressions) and the APK freshness barrier now applies to every mode.
+
+### Correctness & reliability fixes
+- Eliminated cross-app and stale-buffer crash false positives; fixed `assertNotVisible` substring collisions via exact matching; taps now verify the foreground app; fixed full-qualified component launch; unknown flow actions fail validation instead of passing silently.
+
 ## [0.22.0] - 2026-09-01
 
 ### Interactive In-Chat Risk Tier Approvals, Codified 4-Scenario QA Engine & Convergence Polish
@@ -172,7 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Robustness Fixes**: review-package paths with spaces (`PACKAGE_RE` full-line capture); fail-loud when the checkout has no git HEAD (`review_package.py`, `fast_kt_lint.py`, `room_guard.py`); barrier-TTL expiry surfaced via `latest_expired_note()`; screen-relative E2E swipes from `wm size` with WARN (never PASS) when unavailable; deny false positives narrowed (schedule keywords, run-command triggers, adb-context monkey); normalized exit codes (selftest, gradle_error_parser, documented `verify` contract); setup-only content-gated stray cleanup; `--flavor=X` grammar; `bash`→`sh`→direct gradlew fallback; MCP statuses aligned with policy; neutral product name in selftest; legacy `src/` bytecode tree removed; `docs/` upgrade references point at raw prompt URLs.
 - **Docs Aligned**: 5-leaf wording everywhere (README, workflows, architecture, SVGs, setup-prompt), single-dispatch review rule, `debug.md` gate order, quickstart DB options, setup-wizard I.22 row, porting guide updated for the new `_product.py` policy fields.
 
-## [0.14.23] - 2026-08-31
+**Included in 0.14.23 (2026-08-31):**
 
 ### Shift-Left Fast KT Lint Pre-Gate, Strict Device Verification Halt & Update Reference Preservation
 - **Shift-Left Fast Kotlin Lint Pre-Gate (`harness-rules.md`, `AGENTS.md`, `deliver.md`, `pre_invocation_reminder.py`)**: Re-sequenced the delivery pipeline to run `fast_kt_lint.py` alongside `testDebugUnitTest` *before* generating the review package, eliminating review invalidation from post-approval lint fixes (e.g. double-bang `!!` or `TODO` cleanup).

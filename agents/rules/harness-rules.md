@@ -119,6 +119,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - `qa-diagnostics-agent` — logcat / crash / ANR forensics on a physical device
 - `android-ui-expert-agent` — Compose **and** legacy XML. Never convert XML to Compose during a bugfix unless asked.
 - `test-quality-reviewer-agent` — On-demand verification of unit/UI test files (`*Test.kt`), checking assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
+- `qa-e2e-planner-agent` — Authors diff-grounded positive/negative/edge test cases in the declarative e2e-case YAML for `run_e2e_qa.py` (read-only; returns the YAML for the Lead Agent to save).
 
 ---
 
@@ -307,8 +308,9 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
   - **Mode A: `autonomous_e2e` (Autonomous Senior QA E2E Verification - Default)**:
     1. Run `python .agents/scripts/run_device.py install-start`.
     2. **MANDATORY E2E EXECUTION BY TASK TYPE**:
-       - **Scenario A (New Features & User Journeys)**: The agent **MUST write and execute a declarative Maestro-compatible YAML flow** in `.agents/e2e_flows/<feature>.yaml` covering the complete user journey (`launchApp`, `tapOn`, `inputText`, `scrollUntilVisible`, `assertVisible`), capturing screenshots for every major step.
-       - **Scenario B (UI Bugfixes & Screen Refactors)**: The agent runs `python .agents/scripts/run_e2e_smoke.py`. The diff-aware auto-discovery engine automatically launches modified Activities/Screens directly (`am start -n`), validates visible target texts, asserts clickable buttons, and stress-tests scroll gestures.
+       - **Primary engine**: `run_e2e_qa.py` is the test-case-aware Senior QA runner. For every phase, derive test cases from the diff (`.agents/workflows/e2e-qa.md`), validate with `run_e2e_qa.py --cases <path> --lint`, then execute `run_e2e_qa.py --cases .agents/e2e_cases/<task>/<phase>.yaml`. `run_e2e_smoke.py` remains a fast diff-aware fallback.
+       - **Scenario A (New Features & User Journeys)**: The agent **MUST author and execute a declarative test-case file** in `.agents/e2e_cases/<task>/<phase>.yaml` covering the complete user journey with positive/negative/edge cases (`launchApp`, `tapOn`, `inputText`, `scrollUntilVisible`, `assertVisible`, `assertText`, `assertNotVisible`), capturing screenshots for every major step.
+       - **Scenario B (UI Bugfixes & Screen Refactors)**: The agent runs `python .agents/scripts/run_e2e_qa.py` with diff-grounded cases (or `run_e2e_smoke.py` for a fast pass). The diff-aware auto-discovery engine automatically launches modified Activities/Screens directly (`am start -n`), validates visible target texts, asserts clickable buttons, and stress-tests scroll gestures.
        - **Scenario C (Deep Links & Navigation Routing)**: For deep-link or routing changes, the agent executes `python .agents/scripts/run_e2e_smoke.py --target-deeplink <uri>` to verify URI resolution and screen rendering.
        - **Scenario D (Pure Data / Domain / Room / Worker Logic)**: The agent executes standard launch verification to confirm DI (Hilt), Room database schema migrations, and background workers boot cleanly on real Android runtime without Logcat crashes or ANRs.
     3. **Declarative Maestro Flows & In-App Locale Support**: Supports YAML/JSON flows (`.agents/e2e_flows/*.yaml`) compatible with Maestro syntax. Dynamically resolves string keys against `res/values-*/strings.xml` based on in-app locale fingerprinting. Runs via `maestro` CLI if installed or native zero-dependency Python ADB engine.
@@ -432,3 +434,4 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
 - `gradle-build-optimizer` — daemon, build cache & speed optimization
 - `git-pr-automator` — commit **message** format only
 - Zoho Sprints playbook: `.agents/workflows/zoho-sprints.md` (mutate only on `update zoho`)
+- Senior-QA E2E testing: `.agents/workflows/e2e-qa.md` (derive + run test cases via `run_e2e_qa.py`)

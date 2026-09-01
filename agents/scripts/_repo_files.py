@@ -85,12 +85,19 @@ def first_adb_serial(*, allow_emulator: bool = True) -> str | None:
         )
     except Exception:
         return None
+    physical: str | None = None
     for line in (proc.stdout or "").splitlines()[1:]:
         parts = line.split()
-        if len(parts) >= 2 and parts[1] == "device":
-            if allow_emulator or not parts[0].startswith("emulator-"):
-                return parts[0]
-    return None
+        if len(parts) < 2 or parts[1] != "device":
+            continue
+        serial = parts[0]
+        if serial.startswith("emulator-"):
+            if allow_emulator and physical is None:
+                physical = serial
+            continue
+        # A physical device is always preferred over an emulator.
+        return serial
+    return physical
 
 
 def first_physical_adb_serial() -> str | None:

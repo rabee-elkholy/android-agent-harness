@@ -12,10 +12,14 @@ CORE_SUBAGENTS = {
     "qa-diagnostics-agent": "HARNESS_QA_FINGERPRINT=deep-device-diagnostics-v3",
     "android-ui-expert-agent": "HARNESS_UI_FINGERPRINT=comprehensive-android-ui-expert-v4",
     "test-quality-reviewer-agent": "HARNESS_TEST_FINGERPRINT=quality-first-test-review-v2",
+    "qa-e2e-planner-agent": "HARNESS_QA_FINGERPRINT=qa-e2e-case-planner-v1",
 }
 
 CORE_SCRIPTS = (
+    "_adb_core.py",
+    "_adb_core_selftest.py",
     "_apk_freshness.py",
+    "_e2e_qa_selftest.py",
     "_hook_selftest.py",
     "_hook_state.py",
     "_live_process.py",
@@ -49,6 +53,7 @@ CORE_SCRIPTS = (
     "review_package.py",
     "room_guard.py",
     "run_device.py",
+    "run_e2e_qa.py",
     "run_e2e_smoke.py",
     "run_gradle_task.py",
     "setup_wizard.py",
@@ -60,6 +65,7 @@ CORE_WORKFLOWS = (
     "new-feature.md",
     "commit-msg.md",
     "crash-triage.md",
+    "e2e-qa.md",
     "perf-audit.md",
     "preflight.md",
     "check-strings.md",
