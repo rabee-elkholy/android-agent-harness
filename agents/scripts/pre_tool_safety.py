@@ -363,17 +363,9 @@ def handle_invoke_subagent(payload: dict, args: dict) -> None:
     solo_perf = review_names == {"perf-anr-guardian-agent"} and names == {"perf-anr-guardian-agent"}
 
     if review_names and not solo_perf:
-        missing = REVIEW_FIVE - review_names
-        if missing or review_names != REVIEW_FIVE:
-            deny(
-                "Denied: delivery review must dispatch all 5 leaves in ONE invoke_subagent call "
-                f"(missing: {', '.join(sorted(missing)) or 'none'}). "
-                "Do not fire separate invoke_subagent calls."
-            )
-            return
         package_paths: list[Path] = []
         for sub, _name, _kind in identified:
-            if _name not in REVIEW_FIVE:
+            if _name not in (REVIEW_FIVE | {"test-quality-reviewer-agent"}):
                 continue
             path = require_review_package(sub)
             if path is None:
@@ -381,15 +373,37 @@ def handle_invoke_subagent(payload: dict, args: dict) -> None:
             package_paths.append(path)
         unique_pkgs = {str(p.resolve()) for p in package_paths}
         if len(unique_pkgs) != 1:
-            deny("Denied: all 5 review leaves must share the same HARNESS_REVIEW_PACKAGE path.")
+            deny("Denied: all review leaves must share the same HARNESS_REVIEW_PACKAGE path.")
             return
         pkg = package_paths[0]
         digest = file_sha256(pkg)
+        from _hook_state import package_contains_tests
+        has_tests = package_contains_tests(str(pkg)) or package_contains_tests(digest[:12])
+        required_leaves = REVIEW_FIVE | ({"test-quality-reviewer-agent"} if has_tests else set())
+
+        missing = required_leaves - names
+        if missing:
+            if has_tests:
+                deny(
+                    "Denied: this review package contains modified test files (*Test.kt, src/test/). "
+                    "Smart Test Promotion mandates all 6 leaves in ONE invoke_subagent call: "
+                    "bug-reviewer-agent, convention-reviewer-agent, security-reviewer-agent, "
+                    "perf-anr-guardian-agent, regression-impact-reviewer-agent, and test-quality-reviewer-agent "
+                    f"(missing: {', '.join(sorted(missing))})."
+                )
+            else:
+                deny(
+                    "Denied: delivery review must dispatch all 5 leaves in ONE invoke_subagent call "
+                    f"(missing: {', '.join(sorted(missing))}). "
+                    "Do not fire separate invoke_subagent calls."
+                )
+            return
+
         if package_already_reviewed(conv, digest):
             deny(
                 "Denied: this exact review package content was already reviewed. "
                 "Fix the findings, regenerate with `python .agents/scripts/review_package.py`, "
-                "then dispatch the 5 leaves again."
+                "then dispatch the leaves again."
             )
             return
         used = invoke_count(conv, "review")
@@ -400,7 +414,10 @@ def handle_invoke_subagent(payload: dict, args: dict) -> None:
             )
             return
         record_review_round(conv, digest)
-        allow("5-leaf parallel review accepted.")
+        if has_tests:
+            allow("Smart Test Promotion: 6-leaf parallel review (+ test-quality-reviewer-agent) accepted.")
+        else:
+            allow("5-leaf parallel review accepted.")
         return
 
     if solo_perf:
@@ -444,7 +461,9 @@ CONV_ID_RE = re.compile(
     re.IGNORECASE,
 )
 SENDER_RE = re.compile(r"sender=([0-9a-fA-F-]{8,}(?:/task-\d+)?)")
-PASS_TOKENS = ("BUG_PASS", "CONVENTION_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS")
+STANDARD_PASS_TOKENS = ("BUG_PASS", "CONVENTION_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS")
+ALL_PASS_TOKENS = ("BUG_PASS", "CONVENTION_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS", "TEST_PASS")
+PASS_TOKENS = ALL_PASS_TOKENS
 EVIDENCE_RE = re.compile(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\b")
 
 
@@ -477,9 +496,9 @@ def _record_verdict(
         leaves: dict[str, dict] = {}
         findings: list[str] = []
         for chunk in chunks or []:
-            for token in PASS_TOKENS:
+            for token in ALL_PASS_TOKENS:
                 if token in chunk:
-                    leaf = token.split("_")[0].lower()
+                    leaf = "test_quality" if token == "TEST_PASS" else token.split("_")[0].lower()
                     evidence = EVIDENCE_RE.search(chunk)
                     leaves.setdefault(
                         leaf,
@@ -514,24 +533,29 @@ def _valid_evidence_footer(text: str, active_pkg12: str) -> bool:
     return any(pkg.lower() == active_pkg12.lower() for pkg, _cites in EVIDENCE_RE.findall(text))
 
 
-def _evidenced_verdict_count(chunks: list[str], active_pkg12: str) -> int:
+def _evidenced_verdict_count(
+    chunks: list[str],
+    active_pkg12: str,
+    required_tokens: tuple[str, ...] = STANDARD_PASS_TOKENS,
+) -> int:
     """Count distinct leaves whose verdict chunk carries a valid evidence footer.
 
     A chunk satisfies one leaf when it contains the leaf's PASS token or a
     Findings marker AND at least one EVIDENCE footer whose pkg matches the
     active review package hash.
     """
+    target_count = len(required_tokens)
     satisfied_tokens: set[str] = set()
     findings_leaves = 0
     for chunk in chunks:
         footer_ok = _valid_evidence_footer(chunk, active_pkg12)
         if not footer_ok:
             continue
-        tokens = {token for token in PASS_TOKENS if token in chunk}
+        tokens = {token for token in required_tokens if token in chunk}
         satisfied_tokens |= tokens
         if not tokens and "Findings" in chunk:
             findings_leaves += 1
-    return len(satisfied_tokens) + min(findings_leaves, max(0, 5 - len(satisfied_tokens)))
+    return len(satisfied_tokens) + min(findings_leaves, max(0, target_count - len(satisfied_tokens)))
 
 
 _INVOKE_TOOL_JSON_RE = re.compile(
@@ -604,10 +628,12 @@ def _read_transcript_lines(path: Path) -> list[dict]:
     return entries
 
 
-def _tail_has_verdicts(text: str) -> bool:
-    if all(token in text for token in PASS_TOKENS):
+def _tail_has_verdicts(text: str, has_tests: bool = False) -> bool:
+    tokens = ALL_PASS_TOKENS if has_tests else STANDARD_PASS_TOKENS
+    req_count = 6 if has_tests else 5
+    if all(token in text for token in tokens):
         return True
-    return text.count("Findings") >= 5
+    return text.count("Findings") >= req_count
 
 
 def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[bool, str]:
@@ -618,17 +644,23 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
 
     evidence_mode = _evidence_mode()
     active_pkg12 = active_package_hash(conv_id)[:12]
+    from _hook_state import package_contains_tests
+    has_tests = package_contains_tests(active_pkg12)
+    expected_leaves = 6 if has_tests else 5
+    req_tokens = ALL_PASS_TOKENS if has_tests else STANDARD_PASS_TOKENS
+    round_label = "6-leaf (Smart Test Promotion)" if has_tests else "5-leaf"
+
     if evidence_mode == "strict" and not active_pkg12:
         return False, (
-            "A 5-leaf review round is pending but the active review package hash is unknown. "
-            "Regenerate with `python .agents/scripts/review_package.py` and re-dispatch the 5 leaves; "
+            f"A {round_label} review round is pending but the active review package hash is unknown. "
+            f"Regenerate with `python .agents/scripts/review_package.py` and re-dispatch the {expected_leaves} leaves; "
             "verdicts are only accepted with an EVIDENCE footer citing that package."
         )
 
     def strict_shortfall(chunks: list[str]) -> bool:
         if evidence_mode != "strict":
             return False
-        return _evidenced_verdict_count(chunks, active_pkg12) < 5
+        return _evidenced_verdict_count(chunks, active_pkg12, req_tokens) < expected_leaves
 
     try:
         barrier_ttl = float(os.environ.get("HARNESS_BARRIER_TTL", "21600"))
@@ -637,10 +669,10 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
     since = pending_since(conv_id)
     if barrier_ttl > 0 and since is not None and time.time() - since > barrier_ttl:
         clear_pending_reviews(conv_id)
-        _record_verdict(conv_id, active_pkg12, "EXPIRED", "Review round expired after the barrier TTL.")
+        _record_verdict(conv_id, active_pkg12, "EXPIRED", f"Review round expired after the barrier TTL.")
         return True, (
             f"Pending review round expired after {int(barrier_ttl)}s barrier TTL. "
-            "Re-run the 5 review leaves if the code changed."
+            f"Re-run the {expected_leaves} review leaves if the code changed."
         )
 
     log_file = resolve_transcript_path(conv_id, payload)
@@ -648,13 +680,12 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
         fallback = transcript_path(conv_id)
         if evidence_mode == "legacy":
             return False, (
-                "A 5-leaf review round is pending and the conversation transcript is not readable yet "
+                f"A {round_label} review round is pending and the conversation transcript is not readable yet "
                 f"(looked for {fallback}). "
-                "Wait until all 5 leaves deliver BUG_PASS / CONVENTION_PASS / SECURITY_PASS / "
-                "PERF_PASS / REGRESSION_PASS (or Findings). Do not assemble while they are running."
+                f"Wait until all {expected_leaves} leaves deliver PASS (or Findings). Do not assemble while they are running."
             )
         return False, (
-            "A 5-leaf review round is pending and the conversation transcript is not readable yet "
+            f"A {round_label} review round is pending and the conversation transcript is not readable yet "
             f"(looked for {fallback}). In strict evidence mode each leaf must end its reply with "
             "`EVIDENCE pkg=<sha256_12> cites=<n>` matching the dispatched package "
             f"(active package: pkg={active_pkg12}). Do not assemble while they are running."
@@ -663,8 +694,8 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
         lines = _read_transcript_lines(log_file)
     except Exception:
         return False, (
-            "A 5-leaf review round is pending and the transcript could not be parsed. "
-            "Wait for all 5 review messages before tests/assemble."
+            f"A {round_label} review round is pending and the transcript could not be parsed. "
+            f"Wait for all {expected_leaves} review messages before tests/assemble."
         )
 
     last_invoke_idx = -1
@@ -674,29 +705,29 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
 
     if last_invoke_idx == -1:
         whole = "\n".join(_entry_blob(entry) for entry in lines)
-        if _tail_has_verdicts(whole) and not strict_shortfall([whole]):
+        if _tail_has_verdicts(whole, has_tests) and not strict_shortfall([whole]):
             clear_pending_reviews(conv_id)
             _record_verdict(
                 conv_id, active_pkg12, "PASS",
                 "Review verdicts found in transcript (invoke record missing).", [whole],
             )
             return True, "Review verdicts found in transcript (invoke record missing)."
-        if evidence_mode == "strict" and _tail_has_verdicts(whole):
-            missing = _evidenced_verdict_count([whole], active_pkg12)
+        if evidence_mode == "strict" and _tail_has_verdicts(whole, has_tests):
+            missing = _evidenced_verdict_count([whole], active_pkg12, req_tokens)
             _record_verdict(
                 conv_id, active_pkg12, "FAIL",
-                f"Only {missing}/5 verdicts carried a valid EVIDENCE footer.", [whole],
+                f"Only {missing}/{expected_leaves} verdicts carried a valid EVIDENCE footer.", [whole],
             )
             return False, (
-                f"PASS/Findings tokens found for {missing}/5 leaves but EVIDENCE footers are missing "
+                f"PASS/Findings tokens found for {missing}/{expected_leaves} leaves but EVIDENCE footers are missing "
                 f"or cite the wrong package (expected pkg={active_pkg12}). "
                 "Verdicts without a valid evidence footer do not count; ask the leaves to re-reply."
             )
         return False, (
-            "A 5-leaf review round is pending but the last invoke_subagent is not in the transcript tail. "
-            "Wait for all 5 leaves to reply before tests/assemble. "
+            f"A {round_label} review round is pending but the last invoke_subagent is not in the transcript tail. "
+            f"Wait for all {expected_leaves} leaves to reply before tests/assemble. "
             "If they already replied, the log format may have changed — do not assemble until "
-            "BUG_PASS / CONVENTION_PASS / SECURITY_PASS / PERF_PASS / REGRESSION_PASS are visible."
+            f"{' / '.join(req_tokens)} are visible."
         )
 
     after_entries = lines[last_invoke_idx + 1 :]
@@ -719,14 +750,14 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
         if not pending:
             chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
             if strict_shortfall(chunks):
-                evidenced = _evidenced_verdict_count(chunks, active_pkg12)
+                evidenced = _evidenced_verdict_count(chunks, active_pkg12, req_tokens)
                 _record_verdict(
                     conv_id, active_pkg12, "FAIL",
-                    f"All subagent senders replied, but only {evidenced}/5 verdicts carried a valid EVIDENCE footer.",
+                    f"All subagent senders replied, but only {evidenced}/{expected_leaves} verdicts carried a valid EVIDENCE footer.",
                     chunks,
                 )
                 return False, (
-                    f"All subagent senders replied, but only {evidenced}/5 verdicts carry a valid "
+                    f"All subagent senders replied, but only {evidenced}/{expected_leaves} verdicts carry a valid "
                     f"EVIDENCE footer (expected pkg={active_pkg12}). "
                     "Forged, missing, or mismatched footers keep the barrier up; re-request the replies."
                 )
@@ -738,24 +769,24 @@ def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[
         )
 
     chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
-    if _tail_has_verdicts(after) and not strict_shortfall(chunks):
+    if _tail_has_verdicts(after, has_tests) and not strict_shortfall(chunks):
         clear_pending_reviews(conv_id)
         _record_verdict(conv_id, active_pkg12, "PASS", "All subagents completed.", chunks)
         return True, "All subagents completed."
-    if evidence_mode == "strict" and _tail_has_verdicts(after):
-        evidenced = _evidenced_verdict_count(chunks, active_pkg12)
+    if evidence_mode == "strict" and _tail_has_verdicts(after, has_tests):
+        evidenced = _evidenced_verdict_count(chunks, active_pkg12, req_tokens)
         _record_verdict(
             conv_id, active_pkg12, "FAIL",
-            f"A 5-leaf review round is pending: only {evidenced}/5 verdicts carried a valid EVIDENCE footer.",
+            f"A {round_label} review round is pending: only {evidenced}/{expected_leaves} verdicts carried a valid EVIDENCE footer.",
             chunks,
         )
         return False, (
-            f"A 5-leaf review round is pending: {evidenced}/5 verdicts carry a valid EVIDENCE footer "
+            f"A {round_label} review round is pending: {evidenced}/{expected_leaves} verdicts carry a valid EVIDENCE footer "
             f"(expected pkg={active_pkg12}). Tokens alone no longer clear the barrier — "
             "each leaf reply must include `EVIDENCE pkg=<sha256_12> cites=<n>`."
         )
     return False, (
-        "A 5-leaf review round is pending. Wait until all 5 leaves reply "
+        f"A {round_label} review round is pending. Wait until all {expected_leaves} leaves reply "
         "(PASS or Findings) before tests/assemble."
     )
 

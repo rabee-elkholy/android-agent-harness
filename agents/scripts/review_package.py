@@ -53,10 +53,29 @@ def git_head() -> str:
     return out if _GIT_SHA_RE.fullmatch(out) else ""
 
 
+def is_test_file(path_str: str) -> bool:
+    p = path_str.replace("\\", "/").lower()
+    return (
+        "/test/" in p
+        or "/androidtest/" in p
+        or "/sharedtest/" in p
+        or p.endswith("test.kt")
+        or p.endswith("tests.kt")
+        or p.endswith("test.java")
+        or p.endswith("tests.java")
+    )
+
+
 from risk_tier import classify_working_tree_risk  # noqa: E402
 
 
-def build_header(task_id: str, fingerprint: str, risk_tier: str = "MEDIUM") -> list[str]:
+def build_header(
+    task_id: str,
+    fingerprint: str,
+    risk_tier: str = "MEDIUM",
+    contains_tests: bool = False,
+    test_files_count: int = 0,
+) -> list[str]:
     sha = git_head()
     return [
         HEADER_BEGIN,
@@ -64,6 +83,9 @@ def build_header(task_id: str, fingerprint: str, risk_tier: str = "MEDIUM") -> l
         f"GIT_SHA={sha}",
         f"TREE_FINGERPRINT={fingerprint}",
         f"RISK_TIER={risk_tier}",
+        f"CONTAINS_TESTS={'true' if contains_tests else 'false'}",
+        f"TEST_FILES_COUNT={test_files_count}",
+        f"REQUIRED_LEAVES={'6' if contains_tests else '5'}",
         f"GENERATED_AT={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
     ]
 
@@ -161,9 +183,21 @@ def main(argv=None) -> int:
     risk_tier, _ = classify_working_tree_risk(REPO, list(changed_paths()))
     files_map, total_changed = build_files_map()
     skipped_count = max(0, total_changed - len(files_map))
+    test_files = [f for f in files_map.keys() if is_test_file(f)]
+    contains_tests = len(test_files) > 0
     files_json = json.dumps(files_map, ensure_ascii=False, separators=(",", ":"))
     chunks = [
-        "\n".join([*build_header(task_id, fingerprint, risk_tier), f"FILES_SHA256={files_json}", PACKAGE_SHA_PENDING]) + "\n",
+        "\n".join([
+            *build_header(
+                task_id,
+                fingerprint,
+                risk_tier,
+                contains_tests=contains_tests,
+                test_files_count=len(test_files),
+            ),
+            f"FILES_SHA256={files_json}",
+            PACKAGE_SHA_PENDING,
+        ]) + "\n",
         f"# Harness review package (unstaged vs HEAD)\n# repo: {REPO}\n",
         "## git status\n",
         git(*status_cmd),
@@ -191,13 +225,6 @@ def main(argv=None) -> int:
 
     out.write_text("".join(chunks), encoding="utf-8", newline="\n")
 
-    # The header's PACKAGE_SHA256 is a self-check covering every byte preceding
-    # its own line (no self-referential hash). The CANONICAL evidence id used by
-    # the review barrier, however, is the SHA-256 of the FINAL file: the engine
-    # hashes the whole file at dispatch time, so HARNESS_PACKAGE_SHA256_12 must
-    # be the whole-file digest's first 12 hex, otherwise the EVIDENCE footers
-    # reviewers are instructed to cite can never match and the barrier never
-    # clears (infinite re-dispatch).
     data = out.read_bytes()
     marker_pos = data.find(PACKAGE_SHA_MARKER.encode("utf-8"))
     if marker_pos < 0:
@@ -225,6 +252,9 @@ def main(argv=None) -> int:
         "reviewed_files": len(files_map),
         "skipped_files": skipped_count,
         "is_truncated": skipped_count > 0,
+        "contains_tests": contains_tests,
+        "test_files": test_files,
+        "required_leaves_count": 6 if contains_tests else 5,
         "dispatched_at": None,
         "completed_at": None,
         "verdict": "PENDING",
@@ -236,6 +266,13 @@ def main(argv=None) -> int:
     record_review_round_local(task_id, pkg12)
     if skipped_count > 0:
         print(f"[!] Warning: Working tree has {total_changed} files; {skipped_count} files were skipped in review package.")
+    if contains_tests:
+        print(f"[*] TEST FILES DETECTED IN DIFF ({len(test_files)} file(s)):")
+        for tf in test_files[:5]:
+            print(f"    - {tf}")
+        if len(test_files) > 5:
+            print(f"    ... and {len(test_files) - 5} more.")
+        print(f"    [!] Smart Test Promotion ACTIVE: Exactly 6 parallel subagents required (+ test-quality-reviewer-agent -> TEST_PASS).")
     print(f"HARNESS_REVIEW_PACKAGE={out}")
     print(f"HARNESS_PACKAGE_SHA256_12={pkg12}")
     return 0

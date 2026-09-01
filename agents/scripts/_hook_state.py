@@ -500,6 +500,40 @@ def active_package_hash(conversation_id: str) -> str:
     return str(rec.get("last_package_hash") or "")
 
 
+def package_contains_tests(pkg_identifier: str) -> bool:
+    """Checks whether the package diff or verdict record contains modified test files."""
+    try:
+        pkg12 = pkg_identifier[:12]
+        rec = read_verdict_record(pkg12)
+        if rec and rec.get("contains_tests") is not None:
+            return bool(rec.get("contains_tests"))
+        p = Path(pkg_identifier)
+        if not p.is_file():
+            cand = state_path().parent / "packages" / f"review-{pkg_identifier}.diff"
+            if cand.is_file():
+                p = cand
+            else:
+                for match in state_path().parent.glob("packages/*.diff"):
+                    if pkg12 in match.name or file_sha256(match)[:12] == pkg12:
+                        p = match
+                        break
+        if p.is_file():
+            text = p.read_text(encoding="utf-8", errors="replace")
+            if "CONTAINS_TESTS=true" in text:
+                return True
+            for line in text.splitlines()[:50]:
+                if line.startswith("CONTAINS_TESTS="):
+                    return line.strip() == "CONTAINS_TESTS=true"
+            for line in text.splitlines():
+                if line.startswith("diff --git") or line.startswith("## NEW FILE"):
+                    pl = line.lower()
+                    if "/test/" in pl or "/androidtest/" in pl or "/sharedtest/" in pl or pl.endswith("test.kt") or pl.endswith("test.java"):
+                        return True
+    except Exception:
+        pass
+    return False
+
+
 def pending_since(conversation_id: str) -> float | None:
     rec = _record(conversation_id)
     if not rec.get("pending_reviews"):

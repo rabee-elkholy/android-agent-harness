@@ -234,7 +234,7 @@ If the package diff contains any modified or newly created unit/UI test files (`
    - **Zero Test Stubs**: No placeholder tests or empty stubs.
 3. Advance to Stage 1 only upon receiving `TEST_PASS`. If findings are returned, fix test assertions before triggering the 5-leaf gate.
 
-### Stage 1: One tool call, five leaves (with Silent Review Wait)
+### Stage 1: One tool call, parallel leaves (with Smart Test Promotion & Silent Wait)
 
 From repo root:
 
@@ -243,17 +243,20 @@ From repo root:
    b. `python .agents/scripts/fast_kt_lint.py` (Diff-Scoped Fast Kotlin Lint: catches `!!`, `TODO` stubs, `runBlocking` in tests, inline FQCNs on modified/added lines without penalizing untouched legacy code).
    *Fix any compiler or lint issues BEFORE generating the review package. `review_package.py` strictly validates lint and will refuse package generation on lint violations.*
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
-2. Dispatch **all 5** in **exactly one** `invoke_subagent` with `Subagents: [...]`. Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
+2. **Smart Test Promotion & Parallel Dispatch**:
+   - **Non-test diff (pure production code)**: Dispatch **all 5** standard review leaves in **exactly one** `invoke_subagent` call with `Subagents: [...]`: `bug-reviewer-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, and `regression-impact-reviewer-agent`.
+   - **Test diff (touches `*Test.kt`, `src/test/`, `src/androidTest/`)**: **`test-quality-reviewer-agent` is automatically promoted to a mandatory 6th reviewer**. Dispatch **all 6** leaves together in **exactly one** `invoke_subagent` call.
+   - Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
 3. **SILENT REVIEW WAIT (Zero Chat Noise)**:
    - When subagents are running in the background, the Lead Agent **MUST REMAIN COMPLETELY SILENT in chat** upon receiving intermediate notifications (e.g. do NOT output *"Waiting for 4 remaining..."* or *"Waiting for 3 remaining..."*).
    - The IDE interface natively displays live progress cards and spinners for each subagent.
-   - Output a single, consolidated, professional summary in chat **ONLY when all 5 subagents have finished and all verdicts are in context**.
-4. Collect verdicts. BLOCKER/MAJOR → output Review Round Summary Card in chat -> fix at the producer -> verify with `fast_kt_lint.py` -> regenerate the package -> dispatch the same 5 again. Identical package content is rejected; the diff must change.
-5. Advance only when all five returned `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`.
+   - Output a single, consolidated, professional summary in chat **ONLY when all subagents have finished and all verdicts are in context**.
+4. Collect verdicts. BLOCKER/MAJOR → output Review Round Summary Card in chat -> fix at the producer -> verify with `fast_kt_lint.py` -> regenerate the package -> dispatch the same leaves again. Identical package content is rejected; the diff must change.
+5. Advance only when all required leaves return their PASS tokens: `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS` (+ `TEST_PASS` when test files are touched).
 
-Never fire five separate `invoke_subagent` calls. That burns the round counter and is denied.
+Never fire separate `invoke_subagent` calls. That burns the round counter and is denied.
 
-Optional sixth slot in the same invoke: `qa-diagnostics-agent`, `android-ui-expert-agent`, or `test-quality-reviewer-agent`.
+Optional sixth slot in non-test diffs: `qa-diagnostics-agent` or `android-ui-expert-agent`.
 
 ---
 

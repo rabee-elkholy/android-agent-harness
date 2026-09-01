@@ -5,6 +5,20 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-09-01
+
+### Smart Test-Aware Review Promotion & Integrity Barrier
+- **Automatic 6th Reviewer Promotion on Test Diffs (`review_package.py`, `pre_tool_safety.py`, `_hook_state.py`)**:
+  - Automatically detects modified or newly added test files (`*Test.kt`, `*Tests.kt`, `src/test/`, `src/androidTest/`, `src/sharedTest/`) during review package generation.
+  - Adds `CONTAINS_TESTS=true`, `TEST_FILES_COUNT=<n>`, and `REQUIRED_LEAVES=6` to package headers and review state.
+  - Automatically promotes `test-quality-reviewer-agent` to a mandatory 6th reviewer in the parallel review batch whenever test files are touched.
+  - Pre-tool safety hook strictly denies 5-leaf review invocations on test-bearing packages, requiring all 6 leaves in exactly one parallel `invoke_subagent` call to prevent agents from weakening assertions or adding shallow mocks undetected.
+- **Strict Multi-Layer Delivery Barrier for Test Quality (`pre_tool_safety.py`, `final_verdict.py`, `_hook_selftest.py`)**:
+  - Requires all 6 PASS tokens (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`, `TEST_PASS`) with valid matching `EVIDENCE pkg=<sha256_12>` footers before unlocking `:app:assembleDebug`.
+  - Blocks final delivery (`final_verdict.py`) with status `BLOCKED` and explicit `blocked_by: ["test_quality"]` if `test-quality-reviewer-agent` verdict is missing on test diffs.
+- **Rule & Reminder Alignment (`AGENTS.md`, `harness-rules.md`, `pre_invocation_reminder.py`)**:
+  - Synchronized harness instructions and pre-invocation reminder prompt across all IDE adapters to reflect the Smart Test-Aware Review Promotion invariant.
+
 ## [0.19.0] - 2026-09-01
 
 ### APK Freshness & Stale Build Barrier, Interactive Reference Review Links & Zero-Noise Background Protocols

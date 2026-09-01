@@ -422,6 +422,57 @@ ok_four = four_res["decision"] == "deny"
 print(f"four_leaf_denied: {four_res['decision']} {'OK' if ok_four else 'FAIL ' + json.dumps(four_res)}")
 failed += int(not ok_four)
 
+# --- Smart Test Promotion: diff with test files requires 6 leaves (+ test-quality-reviewer-agent) ---
+test_pkg_file = Path(tempfile.mkdtemp(prefix="harness-test-diff-")) / "pkg-tests.diff"
+test_pkg_file.write_text(
+    "# HARNESS_PACKAGE_HEADER v2\nCONTAINS_TESTS=true\nTEST_FILES_COUNT=1\nPACKAGE_SHA256=PENDING\n"
+    "diff --git a/app/src/test/HomeViewModelTest.kt b/app/src/test/HomeViewModelTest.kt\n+class HomeViewModelTest\n",
+    encoding="utf-8",
+)
+# 5 leaves on test package must deny
+five_on_tests = {
+    "conversationId": "c-test-5",
+    "toolCall": {
+        "name": "invoke_subagent",
+        "args": {
+            "Subagents": [
+                {
+                    "Workspace": "inherit",
+                    "TypeName": name,
+                    "Prompt": f"HARNESS_REVIEW_PACKAGE={test_pkg_file}\nFindings or PASS.",
+                }
+                for name in REVIEW_FIVE
+            ]
+        },
+    },
+}
+five_on_tests_res = run(five_on_tests)
+ok_test_promo_deny = five_on_tests_res["decision"] == "deny" and "Smart Test Promotion" in str(five_on_tests_res.get("reason"))
+print(f"smart_test_promotion_5_leaf_deny: {five_on_tests_res['decision']} {'OK' if ok_test_promo_deny else 'FAIL ' + json.dumps(five_on_tests_res)}")
+failed += int(not ok_test_promo_deny)
+
+# 6 leaves on test package must allow
+six_on_tests = {
+    "conversationId": "c-test-6",
+    "toolCall": {
+        "name": "invoke_subagent",
+        "args": {
+            "Subagents": [
+                {
+                    "Workspace": "inherit",
+                    "TypeName": name,
+                    "Prompt": f"HARNESS_REVIEW_PACKAGE={test_pkg_file}\nFindings or PASS.",
+                }
+                for name in [*REVIEW_FIVE, "test-quality-reviewer-agent"]
+            ]
+        },
+    },
+}
+six_on_tests_res = run(six_on_tests)
+ok_test_promo_allow = six_on_tests_res["decision"] == "allow"
+print(f"smart_test_promotion_6_leaf_allow: {six_on_tests_res['decision']} {'OK' if ok_test_promo_allow else 'FAIL ' + json.dumps(six_on_tests_res)}")
+failed += int(not ok_test_promo_allow)
+
 # Review package path traversal outside repo/temp must deny
 external_pkg = Path("C:/Windows/System32/drivers/etc/hosts" if os.name == "nt" else "/etc/hosts")
 traversal_subs = [
@@ -1498,7 +1549,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.19.0"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.20.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

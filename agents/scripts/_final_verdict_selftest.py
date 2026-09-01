@@ -221,6 +221,35 @@ def test_diff_sha_determinism() -> None:
     check(diff_sha256([]) == diff_sha256([]), "empty files list is stable")
 
 
+def test_smart_test_promotion() -> None:
+    new_env()
+    all_pass_results()
+    write_ledger(PKG_FULL, FP)
+    # Test diff with only 5 leaves (missing test_quality) must be BLOCKED
+    write_verdict_record(PKG12, {
+        "schema_version": 2,
+        "task_id": "",
+        "verdict": "APPROVED",
+        "contains_tests": True,
+        "tree_fingerprint": FP,
+        "leaves": {k: LEAF_PASS_VALUES[k] for k in LEAF_KEYS},
+    })
+    verdict = build_verdict(task_id="T1", head_sha=HEAD, tree_fp=FP, files_override=[("app/src/test/A.kt", "d1")])
+    check(verdict["status"] == "BLOCKED", "test diff without test_quality leaf -> BLOCKED")
+
+    # Test diff with all 6 leaves (+ TEST_PASS) must be APPROVED
+    write_verdict_record(PKG12, {
+        "schema_version": 2,
+        "task_id": "",
+        "verdict": "APPROVED",
+        "contains_tests": True,
+        "tree_fingerprint": FP,
+        "leaves": {**{k: LEAF_PASS_VALUES[k] for k in LEAF_KEYS}, "test_quality": "TEST_PASS"},
+    })
+    verdict2 = build_verdict(task_id="T1", head_sha=HEAD, tree_fp=FP, files_override=[("app/src/test/A.kt", "d1")])
+    check(verdict2["status"] == "APPROVED", "test diff with 6 leaves (+ TEST_PASS) -> APPROVED")
+
+
 def test_write_last_verdict() -> None:
     new_env()
     all_pass_results()
@@ -258,6 +287,7 @@ def main() -> int:
     test_unit_tests_artifact_precedence()
     test_device_mode_disabled()
     test_diff_sha_determinism()
+    test_smart_test_promotion()
     test_write_last_verdict()
     test_exit_codes()
     if FAILURES:

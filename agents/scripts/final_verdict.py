@@ -64,6 +64,7 @@ LEAF_PASS_VALUES = {
     "security_reviewer": "SECURITY_PASS",
     "perf_guardian": "PERF_PASS",
     "regression_reviewer": "REGRESSION_PASS",
+    "test_quality": "TEST_PASS",
 }
 
 LEAF_ALIASES = {
@@ -72,6 +73,7 @@ LEAF_ALIASES = {
     "security_reviewer": ("security_reviewer", "security-reviewer-agent", "security-reviewer", "security"),
     "perf_guardian": ("perf_guardian", "perf-anr-guardian-agent", "perf-anr-guardian", "perf"),
     "regression_reviewer": ("regression_reviewer", "regression-impact-reviewer-agent", "regression-impact-reviewer", "regression"),
+    "test_quality": ("test_quality", "test-quality-reviewer-agent", "test-quality-reviewer", "test_quality_reviewer", "test"),
 }
 
 
@@ -197,9 +199,14 @@ def _review_outcome(tree_fp: str | None) -> tuple[dict, dict, str, bool]:
         check["detail"] = "review round EXPIRED via the barrier TTL; re-dispatch the 5 leaves"
         return check, leaves_map, stale, expired
     raw_leaves = record.get("leaves") or {}
-    for key in LEAF_KEYS:
+    has_tests = bool(record.get("contains_tests"))
+    active_keys = list(LEAF_KEYS)
+    if has_tests:
+        active_keys.append("test_quality")
+
+    for key in active_keys:
         leaves_map[key] = _pick_leaf(raw_leaves, key)
-    missing = [key for key, value in leaves_map.items() if value != LEAF_PASS_VALUES[key]]
+    missing = [key for key in active_keys if leaves_map.get(key) != LEAF_PASS_VALUES[key]]
     if verdict != "APPROVED":
         check["status"] = "FAIL"
         check["detail"] = f"review verdict is {verdict or 'PENDING'}, not APPROVED"
@@ -208,7 +215,8 @@ def _review_outcome(tree_fp: str | None) -> tuple[dict, dict, str, bool]:
         check["detail"] = "missing leaf verdicts: " + ", ".join(missing)
     else:
         check["status"] = "PASS"
-        check["detail"] = f"5 leaves APPROVED for package {pkg12}"
+        leaf_desc = "6 leaves (Smart Test Promotion)" if has_tests else "5 leaves"
+        check["detail"] = f"{leaf_desc} APPROVED for package {pkg12}"
     fp_now = tree_fp
     if fp_now is not None:
         record_fp = record.get("tree_fingerprint")
