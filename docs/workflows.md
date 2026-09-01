@@ -53,7 +53,7 @@ flowchart TD
 
 ### Key Rules:
 * **Atomic Phase Isolation**: Multi-phase tasks execute strictly one phase at a time. The agent is forbidden from touching Phase N+1 files until Phase N passes reviews and device verification.
-* **Review Round Summary Cards**: If a review round produces findings, the agent outputs a structured card in chat detailing the issues and fixes before launching the next round.
+* **Review Round Summary Cards**: Upon conclusion of each review round, the agent outputs a structured card in chat (detailing issues and fixes on findings, or listing the clean PASS verdicts when all reviewers clear the diff).
 * **Zero Timers / Zero Polling**: The agent never calls `schedule` or sleeps in terminal; it relies 100% on reactive wakeups.
 
 ---

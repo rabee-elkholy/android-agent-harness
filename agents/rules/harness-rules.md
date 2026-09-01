@@ -391,7 +391,7 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
 3. **The 4 Permitted Conversational Touchpoints**:
    Permanent chat prose is reserved strictly for high-signal engineering milestones:
    - **Touchpoint 1: Plan Presentation & Approval**: `implementation_plan.md` artifact presentation before starting non-trivial work.
-   - **Touchpoint 2: Review Round Summary Card**: EXACTLY ONE structured table emitted when all 5 reviewers finish and findings require corrective action.
+   - **Touchpoint 2: Review Round Summary Card**: EXACTLY ONE structured card emitted when all 5 (or 6) reviewers finish (detailing findings and corrective fixes on findings, or listing the clean PASS verdicts when all reviewers clear the diff).
    - **Touchpoint 3: Phase Milestone Card**: Verification evidence, automated E2E results, and phase progression cards upon completing a milestone.
    - **Touchpoint 4: Final Task Delivery**: Final walkthrough summary, verification evidence, and Conventional Commit draft.
 
@@ -404,7 +404,7 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
 5. **Conversation Language Parity Across All Developer Touchpoints**:
    - The agent MUST dynamically match the active conversation language of the developer across ALL cards, interactive modals, and summaries:
      * **Interactive Modals (`ask_question`)**: Questions, choices, and explanations must match the developer's language (mirror whatever language they write in).
-     * **Review Round Summary Cards**: Summary of findings and corrective fixes rendered in the active conversation language.
+     * **Review Round Summary Cards**: Summary of findings and corrective fixes or clean PASS verdicts rendered in the active conversation language.
      * **Phase Milestone Cards**: Scope, verified evidence, manual smoke test steps, and waiting status rendered in the active conversation language.
      * **Final Delivery**: Task overview, file changes, and walkthrough rendered in the active conversation language (while keeping Conventional Commit format in English).
 

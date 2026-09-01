@@ -107,7 +107,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "with the same HARNESS_REVIEW_PACKAGE. "
         "Do not use code-review-guard-agent. Do not fire separate invokes. "
         "REACTIVE WAKEUP & ZERO-TIMER INVARIANT: After invoke_subagent, stop calling tools immediately. NEVER use schedule, sleep, or polling timers for subagents. When woken up while some reviewers are still running, OUTPUT ZERO CHAT TEXT, call no tools, and end turn silently. "
-        "ROUND SUMMARY CARDS: When all verdicts arrive and BLOCKER/MAJOR findings exist, output a concise Review Round Summary Card in chat detailing the findings and corrective fixes before re-dispatching the next round. Review rounds must converge in <= 2 rounds. "
+        "ROUND SUMMARY CARDS: When all verdicts arrive, output a concise Review Round Summary Card in chat (detailing the findings and corrective fixes on findings, or listing the clean PASS verdicts when all reviewers clear the diff) before proceeding or re-dispatching. Review rounds must converge in <= 2 rounds. "
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS (+ TEST_PASS for test diffs). "
         "Fix BLOCKER/MAJOR, verify with fast_kt_lint.py, regenerate the package, re-run the same leaves. "
         "On-demand specialists (when not auto-promoted): qa-diagnostics-agent, android-ui-expert-agent. "
