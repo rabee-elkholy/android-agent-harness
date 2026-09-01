@@ -31,6 +31,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -218,6 +219,163 @@ def find_nodes(
 def find_first(nodes: list[UINode], **kwargs) -> UINode | None:
     found = find_nodes(nodes, **kwargs)
     return found[0] if found else None
+
+
+def index_string_resources(repo: Path) -> dict[str, dict[str, str]]:
+    """Index string resources from res/values*/strings.xml mapped by locale."""
+    res_map: dict[str, dict[str, str]] = {"default": {}}
+    for res_dir in repo.rglob("res/values*"):
+        if not res_dir.is_dir():
+            continue
+        folder_name = res_dir.name.lower()
+        if folder_name == "values":
+            loc_key = "default"
+        elif folder_name.startswith("values-"):
+            loc_key = folder_name.replace("values-", "").split("-")[0]
+        else:
+            continue
+
+        str_file = res_dir / "strings.xml"
+        if not str_file.is_file():
+            continue
+        try:
+            content = str_file.read_text(encoding="utf-8", errors="ignore")
+            matches = re.findall(r'<string\s+name="([^"]+)"[^>]*>([^<]*)</string>', content)
+            if loc_key not in res_map:
+                res_map[loc_key] = {}
+            for k, v in matches:
+                res_map[loc_key][k] = v.strip()
+        except Exception:
+            pass
+    return res_map
+
+
+def detect_app_locale(nodes: list[UINode], string_index: dict[str, dict[str, str]]) -> str:
+    """Fingerprint visible UI text against string dictionaries to detect in-app active locale."""
+    if not string_index or len(string_index) <= 1:
+        return "default"
+
+    visible_texts: set[str] = set()
+
+    def _collect(n_list: list[UINode]):
+        for n in n_list:
+            if n.text:
+                visible_texts.add(n.text.strip().lower())
+            if n.content_desc:
+                visible_texts.add(n.content_desc.strip().lower())
+            _collect(n.children)
+
+    _collect(nodes)
+
+    scores: dict[str, int] = {}
+    for loc, d in string_index.items():
+        if loc == "default":
+            continue
+        scores[loc] = 0
+        for val in d.values():
+            if val and len(val) >= 2 and val.lower() in visible_texts:
+                scores[loc] += 1
+
+    if not scores:
+        return "default"
+    best_loc, best_score = max(scores.items(), key=lambda item: item[1])
+    return best_loc if best_score > 0 else "default"
+
+
+def resolve_target_text(target: str | dict, active_locale: str, string_index: dict[str, dict[str, str]]) -> str | None:
+    """Resolve target text dynamically from stringKey or static text."""
+    if isinstance(target, str):
+        return target
+    if not isinstance(target, dict):
+        return None
+    if "text" in target and target["text"]:
+        return str(target["text"])
+    if "stringKey" in target and target["stringKey"]:
+        key = str(target["stringKey"])
+        if active_locale in string_index and key in string_index[active_locale]:
+            return string_index[active_locale][key]
+        if "default" in string_index and key in string_index["default"]:
+            return string_index["default"][key]
+    return None
+
+
+def parse_flow_definition(content: str) -> dict:
+    """Parse declarative E2E flow from YAML or JSON without external dependencies."""
+    content = content.strip()
+    if not content:
+        return {"appId": None, "steps": []}
+
+    # Check if JSON
+    if content.startswith("{") or content.startswith("["):
+        try:
+            data = json.loads(content)
+            if isinstance(data, list):
+                return {"appId": None, "steps": data}
+            if isinstance(data, dict):
+                return {
+                    "appId": data.get("appId") or data.get("app_id"),
+                    "steps": data.get("steps") or data.get("actions") or [],
+                }
+        except Exception:
+            pass
+
+    # Pure-Python line-by-line YAML parser for Maestro flows
+    app_id = None
+    steps: list[dict] = []
+    lines = content.splitlines()
+
+    current_step: dict | None = None
+
+    for raw_line in lines:
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line or line.strip() == "---":
+            continue
+
+        stripped = line.strip()
+
+        # Check top-level appId
+        if stripped.startswith("appId:") or stripped.startswith("app_id:"):
+            app_id = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            continue
+
+        # Step item: starts with '-'
+        if stripped.startswith("-"):
+            if current_step:
+                steps.append(current_step)
+                current_step = None
+
+            cmd_body = stripped[1:].strip()
+            if not cmd_body:
+                continue
+
+            if ":" in cmd_body:
+                cmd_name, cmd_val = cmd_body.split(":", 1)
+                cmd_name = cmd_name.strip()
+                cmd_val = cmd_val.strip().strip('"').strip("'")
+                current_step = {"action": cmd_name}
+                if cmd_val:
+                    if cmd_name in ("tapOn", "click", "assertVisible", "assertNotVisible", "scrollUntilVisible"):
+                        current_step["target"] = cmd_val
+                    elif cmd_name in ("inputText", "type"):
+                        current_step["text"] = cmd_val
+                    elif cmd_name in ("takeScreenshot", "screenshot"):
+                        current_step["name"] = cmd_val
+                    elif cmd_name in ("wait", "sleep"):
+                        current_step["duration"] = float(cmd_val) if cmd_val.replace(".", "", 1).isdigit() else 1.0
+                    else:
+                        current_step["value"] = cmd_val
+            else:
+                current_step = {"action": cmd_body}
+        elif current_step and ":" in stripped:
+            k, v = stripped.split(":", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            current_step[k] = v
+
+    if current_step:
+        steps.append(current_step)
+
+    return {"appId": app_id, "steps": steps}
 
 
 def discover_modified_targets(repo: Path) -> dict:
@@ -467,6 +625,43 @@ class E2ERunner:
         """Perform a standard vertical scroll up gesture."""
         return self._scroll(forward=False)
 
+    def hide_keyboard(self):
+        """Attempt to hide soft keyboard so buttons are not obstructed."""
+        self.run_adb(["shell", "input", "keyevent", "111"])  # KEYCODE_ESCAPE
+        time.sleep(0.3)
+
+    def erase_text(self, count: int = 50):
+        """Erase text in current focused field."""
+        self.run_adb(["shell", "input", "keyevent", "123"])  # KEYCODE_MOVE_END
+        for _ in range(min(count, 50)):
+            self.run_adb(["shell", "input", "keyevent", "67"])  # KEYCODE_DEL
+        time.sleep(0.3)
+
+    def input_text_safe(self, text: str, clear_first: bool = False, hide_keyboard_after: bool = True) -> bool:
+        """Safely type text into active field with whitespace escaping and optional auto-keyboard hide."""
+        if not self.is_app_foreground():
+            return False
+        if clear_first:
+            self.erase_text()
+        escaped = text.replace(" ", "%s").replace("&", "\\&").replace("<", "\\<").replace(">", "\\>")
+        self.run_adb(["shell", "input", "text", escaped])
+        time.sleep(0.5)
+        if hide_keyboard_after:
+            self.hide_keyboard()
+        return True
+
+    def scroll_until_visible(self, matcher, max_swipes: int = 5) -> UINode | None:
+        """Scroll down incrementally until a node matching predicate is discovered."""
+        for _ in range(max_swipes):
+            nodes = self.dump_hierarchy()
+            found = matcher(nodes)
+            if found:
+                return found
+            self.scroll_down()
+            time.sleep(0.5)
+        nodes = self.dump_hierarchy()
+        return matcher(nodes)
+
     def capture_screenshot(self, name: str) -> Path | None:
         SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -488,6 +683,252 @@ class E2ERunner:
         except Exception:
             pass
         return None
+
+    def save_failure_forensics(
+        self,
+        step_idx: int,
+        step_name: str,
+        reason: str,
+        nodes: list[UINode],
+    ) -> dict:
+        """Capture failure screenshot, dump failure UI hierarchy, and extract last 50 Logcat lines."""
+        E2E_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        shot = self.capture_screenshot(f"e2e_failed_step{step_idx}")
+
+        # Dump hierarchy XML
+        try:
+            raw_dump = self.run_adb(["shell", "cat", "/data/local/tmp/harness_uidump.xml"]).stdout or ""
+            (E2E_STATE_DIR / "failed_hierarchy.xml").write_text(raw_dump, encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+        # Dump Logcat
+        logcat_out = ""
+        try:
+            proc = self.run_adb(["logcat", "-d", "-t", "50", "-v", "time"])
+            logcat_out = proc.stdout or ""
+            (E2E_STATE_DIR / "failed_logcat.txt").write_text(logcat_out, encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+        crashes = self.check_logcat_crashes()
+
+        classification = "ASSERTION_FAILED"
+        if crashes:
+            classification = "RUNTIME_CRASH"
+        elif "ANR" in logcat_out or "timed out" in reason.lower():
+            classification = "TIMEOUT_UNRESPONSIVE"
+
+        return {
+            "step_index": step_idx,
+            "step_name": step_name,
+            "failure_reason": reason,
+            "classification": classification,
+            "screenshot": str(shot) if shot else None,
+            "hierarchy_file": str(E2E_STATE_DIR / "failed_hierarchy.xml"),
+            "logcat_file": str(E2E_STATE_DIR / "failed_logcat.txt"),
+            "crashes": crashes,
+        }
+
+    def execute_flow(self, flow: dict, repo: Path) -> dict:
+        """Execute a declarative Maestro-compatible multi-step flow."""
+        steps_out: list[dict] = []
+        string_index = index_string_resources(repo)
+
+        self.wake_and_unlock()
+        self.grant_common_permissions()
+
+        live_print(f"[*] Executing Declarative E2E Flow on {self.serial} ({self.package})...")
+
+        launched = self.launch_app_or_target()
+        if not launched:
+            forensics = self.save_failure_forensics(0, "Launch", f"Failed to foreground {self.package}", [])
+            return {
+                "verdict": "FAIL",
+                "reason": f"Target application {self.package} failed to foreground.",
+                "forensics": forensics,
+                "steps": steps_out,
+            }
+
+        nodes = self.dump_hierarchy()
+        active_locale = detect_app_locale(nodes, string_index)
+        live_print(f"[*] Detected active in-app locale: '{active_locale}' (string resources indexed).")
+
+        flow_steps = flow.get("steps", [])
+        if not flow_steps:
+            live_print("[WARN] Flow definition contains no steps; executing default smoke pass.")
+            return self.run_targeted_smoke_flow()
+
+        for idx, step in enumerate(flow_steps, start=1):
+            action = step.get("action") or step.get("command") or ""
+            step_desc = f"Step {idx}: {action}"
+
+            if action in ("launchApp", "launch"):
+                launched = self.launch_app_or_target()
+                time.sleep(1.0)
+                nodes = self.dump_hierarchy()
+                steps_out.append({"step": step_desc, "status": "PASS" if launched else "FAIL"})
+                if not launched:
+                    forensics = self.save_failure_forensics(idx, step_desc, "App launch failed", nodes)
+                    return {"verdict": "FAIL", "reason": "App launch failed", "forensics": forensics, "steps": steps_out}
+                live_print(f"  [PASS] {step_desc}")
+
+            elif action in ("tapOn", "click", "tap"):
+                target_id = step.get("id") or step.get("testTag")
+                target_desc = step.get("contentDesc") or step.get("content_desc")
+                target_text = resolve_target_text(step, active_locale, string_index) or step.get("target")
+
+                nodes = self.dump_hierarchy()
+                node = None
+                if target_id:
+                    node = find_first(nodes, resource_id=target_id)
+                if not node and target_desc:
+                    node = find_first(nodes, content_desc=target_desc)
+                if not node and target_text:
+                    node = find_first(nodes, text=target_text) or find_first(nodes, content_desc=target_text)
+
+                if not node and (step.get("scroll") == "true" or step.get("auto_scroll") == "true"):
+                    def _matcher(nl):
+                        if target_id:
+                            n = find_first(nl, resource_id=target_id)
+                            if n: return n
+                        if target_desc:
+                            n = find_first(nl, content_desc=target_desc)
+                            if n: return n
+                        if target_text:
+                            n = find_first(nl, text=target_text) or find_first(nl, content_desc=target_text)
+                            if n: return n
+                        return None
+                    node = self.scroll_until_visible(_matcher)
+
+                if not node:
+                    forensics = self.save_failure_forensics(idx, step_desc, f"Element not found (id={target_id}, text={target_text})", nodes)
+                    steps_out.append({"step": step_desc, "status": "FAIL", "reason": "Target node not found"})
+                    live_print(f"  [FAIL] {step_desc} -> Element not found in hierarchy", err=True)
+                    return {"verdict": "FAIL", "reason": f"Target element not found: {step}", "forensics": forensics, "steps": steps_out}
+
+                tap_ok = self.tap(node, label=str(target_id or target_text))
+                steps_out.append({"step": step_desc, "status": "PASS" if tap_ok else "FAIL"})
+                live_print(f"  [PASS] {step_desc} (target: {target_id or target_text})")
+                time.sleep(float(step.get("wait", 0.5)))
+
+            elif action in ("inputText", "type"):
+                text_to_type = step.get("text") or step.get("value") or ""
+                clear_first = step.get("clear", False) or step.get("erase", False)
+                hide_kb = step.get("hideKeyboard", True)
+                ok = self.input_text_safe(text_to_type, clear_first=clear_first, hide_keyboard_after=hide_kb)
+                steps_out.append({"step": step_desc, "status": "PASS" if ok else "FAIL"})
+                live_print(f"  [PASS] {step_desc} (input: '{text_to_type}')")
+
+            elif action in ("eraseText", "clearText"):
+                self.erase_text()
+                steps_out.append({"step": step_desc, "status": "PASS"})
+                live_print(f"  [PASS] {step_desc}")
+
+            elif action in ("hideKeyboard", "dismissKeyguard"):
+                self.hide_keyboard()
+                steps_out.append({"step": step_desc, "status": "PASS"})
+                live_print(f"  [PASS] {step_desc}")
+
+            elif action in ("scroll", "scrollDown", "scrollUp"):
+                is_down = "up" not in action.lower() and str(step.get("direction", "down")).lower() == "down"
+                ok = self.scroll_down() if is_down else self.scroll_up()
+                steps_out.append({"step": step_desc, "status": "PASS" if ok else "WARN"})
+                live_print(f"  [PASS] {step_desc}")
+
+            elif action in ("scrollUntilVisible",):
+                target_id = step.get("id") or step.get("testTag")
+                target_text = resolve_target_text(step, active_locale, string_index) or step.get("target")
+                def _m(nl):
+                    if target_id:
+                        n = find_first(nl, resource_id=target_id)
+                        if n: return n
+                    if target_text:
+                        n = find_first(nl, text=target_text) or find_first(nl, content_desc=target_text)
+                        if n: return n
+                    return None
+                node = self.scroll_until_visible(_m, max_swipes=int(step.get("maxSwipes", 5)))
+                if not node:
+                    nodes = self.dump_hierarchy()
+                    forensics = self.save_failure_forensics(idx, step_desc, f"Element did not appear after scrolling: {target_id or target_text}", nodes)
+                    steps_out.append({"step": step_desc, "status": "FAIL"})
+                    return {"verdict": "FAIL", "reason": "Element did not appear after scrolling", "forensics": forensics, "steps": steps_out}
+                steps_out.append({"step": step_desc, "status": "PASS"})
+                live_print(f"  [PASS] {step_desc}")
+
+            elif action in ("back", "pressBack"):
+                self.run_adb(["shell", "input", "keyevent", "4"])
+                time.sleep(0.5)
+                steps_out.append({"step": step_desc, "status": "PASS"})
+                live_print(f"  [PASS] {step_desc}")
+
+            elif action in ("assertVisible",):
+                target_id = step.get("id") or step.get("testTag")
+                target_text = resolve_target_text(step, active_locale, string_index) or step.get("target")
+                nodes = self.dump_hierarchy()
+                node = None
+                if target_id:
+                    node = find_first(nodes, resource_id=target_id)
+                if not node and target_text:
+                    node = find_first(nodes, text=target_text) or find_first(nodes, content_desc=target_text)
+
+                if not node:
+                    forensics = self.save_failure_forensics(idx, step_desc, f"Assertion failed: target not visible ({target_id or target_text})", nodes)
+                    steps_out.append({"step": step_desc, "status": "FAIL"})
+                    live_print(f"  [FAIL] {step_desc} -> Expected element was not visible", err=True)
+                    return {"verdict": "FAIL", "reason": f"assertVisible failed: {target_id or target_text}", "forensics": forensics, "steps": steps_out}
+                steps_out.append({"step": step_desc, "status": "PASS"})
+                live_print(f"  [PASS] {step_desc} (found: {target_id or target_text})")
+
+            elif action in ("assertNotVisible",):
+                target_id = step.get("id") or step.get("testTag")
+                target_text = resolve_target_text(step, active_locale, string_index) or step.get("target")
+                nodes = self.dump_hierarchy()
+                node = None
+                if target_id:
+                    node = find_first(nodes, resource_id=target_id)
+                if not node and target_text:
+                    node = find_first(nodes, text=target_text) or find_first(nodes, content_desc=target_text)
+
+                if node:
+                    forensics = self.save_failure_forensics(idx, step_desc, f"Assertion failed: element should NOT be visible ({target_id or target_text})", nodes)
+                    steps_out.append({"step": step_desc, "status": "FAIL"})
+                    live_print(f"  [FAIL] {step_desc} -> Element unexpectedly visible", err=True)
+                    return {"verdict": "FAIL", "reason": f"assertNotVisible failed: {target_id or target_text}", "forensics": forensics, "steps": steps_out}
+                steps_out.append({"step": step_desc, "status": "PASS"})
+                live_print(f"  [PASS] {step_desc}")
+
+            elif action in ("takeScreenshot", "screenshot"):
+                shot_name = step.get("name") or f"flow_step_{idx}"
+                shot = self.capture_screenshot(shot_name)
+                steps_out.append({"step": step_desc, "status": "PASS", "screenshot": str(shot) if shot else None})
+                live_print(f"  [PASS] {step_desc} (saved: {shot.name if shot else 'none'})")
+
+            elif action in ("wait", "sleep"):
+                dur = float(step.get("duration", 1.0))
+                time.sleep(dur)
+                steps_out.append({"step": step_desc, "status": "PASS", "duration": dur})
+                live_print(f"  [PASS] {step_desc} ({dur}s)")
+
+            crashes = self.check_logcat_crashes()
+            if crashes:
+                first = crashes[0]
+                forensics = self.save_failure_forensics(idx, step_desc, f"Runtime crash detected: {first['summary']}", nodes)
+                return {
+                    "verdict": "FAIL",
+                    "reason": f"Runtime crash during {step_desc}: {first['summary']}",
+                    "forensics": forensics,
+                    "steps": steps_out,
+                }
+
+        final_shot = self.capture_screenshot("flow_final_verified")
+        return {
+            "verdict": "PASS",
+            "locale": active_locale,
+            "steps": steps_out,
+            "crashes": [],
+            "final_screenshot": str(final_shot) if final_shot else None,
+        }
 
     def check_logcat_crashes(self) -> list[dict]:
         """Deep Logcat forensics: Detect fatal exceptions, ANRs, and Room/Runtime crashes with stacktraces."""
@@ -637,6 +1078,9 @@ def main() -> int:
     parser.add_argument("--target-activity", default=None, help="Direct target Activity class or component name to launch")
     parser.add_argument("--target-deeplink", default=None, help="Direct deep link URI to launch")
     parser.add_argument("--target-text", action="append", default=[], help="Expected text or keyword on target screen")
+    parser.add_argument("--flow", default=None, help="Path to declarative YAML/JSON flow file to execute")
+    parser.add_argument("--flow-text", default=None, help="Inline YAML/JSON flow string to execute")
+    parser.add_argument("--force-native", action="store_true", help="Force native Python ADB runner even if Maestro CLI is installed")
     parser.add_argument("--dump-only", action="store_true", help="Dump and print current UI hierarchy JSON and exit")
     parser.add_argument("--json", action="store_true", help="Print structured JSON result")
     args = parser.parse_args()
@@ -661,25 +1105,25 @@ def main() -> int:
     target_dl = args.target_deeplink
     target_texts = list(args.target_text)
 
+    # Check APK freshness before executing smoke tests on modified diffs or flow
+    apk_path = REPO / apk_relative()
+    freshness = check_apk_freshness(apk_path, REPO)
+    if not freshness.is_fresh and freshness.status != "MISSING_APK" and (args.auto_diff or args.flow):
+        live_print(format_freshness_error(freshness, apk_path), err=True)
+        live_print("[ERROR] E2E Smoke test aborted: APK is stale relative to modified files.", err=True)
+        write_gate_result("e2e", {
+            "schema_version": 1,
+            "status": "FAIL",
+            "exit_code": 1,
+            "env_class": "CODE",
+            "serial": serial,
+            "git_sha": current_head_sha(),
+            "detail": f"STALE_APK: {freshness.reason}",
+        })
+        return 1
+
     # If --auto-diff is enabled, inspect git working tree for modified components
     if args.auto_diff:
-        # Check APK freshness before executing smoke tests on modified diffs
-        apk_path = REPO / apk_relative()
-        freshness = check_apk_freshness(apk_path, REPO)
-        if not freshness.is_fresh and freshness.status != "MISSING_APK":
-            live_print(format_freshness_error(freshness, apk_path), err=True)
-            live_print("[ERROR] E2E Smoke test aborted: APK is stale relative to modified files.", err=True)
-            write_gate_result("e2e", {
-                "schema_version": 1,
-                "status": "FAIL",
-                "exit_code": 1,
-                "env_class": "CODE",
-                "serial": serial,
-                "git_sha": current_head_sha(),
-                "detail": f"STALE_APK: {freshness.reason}",
-            })
-            return 1
-
         diff_info = discover_modified_targets(REPO)
         if diff_info.get("target_activity_component"):
             target_act = diff_info["target_activity_component"]
@@ -691,9 +1135,33 @@ def main() -> int:
             target_texts.extend(diff_info["target_strings"][:3])
             live_print(f"[*] Auto-diff discovered target string assertions: {target_texts}")
 
+    # Check if declarative flow is provided
+    flow_content = None
+    if args.flow:
+        flow_path = Path(args.flow)
+        if not flow_path.is_absolute():
+            flow_path = REPO / flow_path
+        if flow_path.is_file():
+            flow_content = flow_path.read_text(encoding="utf-8", errors="ignore")
+        else:
+            live_print(f"[ERROR] Flow file not found: {flow_path}", err=True)
+            return 1
+    elif args.flow_text:
+        flow_content = args.flow_text
+
+    flow_data = parse_flow_definition(flow_content) if flow_content else None
+    pkg = (flow_data.get("appId") if flow_data else None) or args.package
+
+    # Hybrid check: If Maestro CLI is installed and not forced native
+    if args.flow and not args.force_native and shutil.which("maestro"):
+        live_print(f"[*] Maestro CLI detected on system PATH; executing flow via Maestro...")
+        maestro_cmd = ["maestro", "--device", serial, "test", str(Path(args.flow).resolve())]
+        res = subprocess.run(maestro_cmd, cwd=str(REPO))
+        return res.returncode
+
     runner = E2ERunner(
         serial=serial,
-        package=args.package,
+        package=pkg,
         target_activity=target_act,
         target_deeplink=target_dl,
         target_texts=target_texts,
@@ -706,7 +1174,10 @@ def main() -> int:
         return 0
 
     try:
-        result = runner.run_targeted_smoke_flow()
+        if flow_data and flow_data.get("steps"):
+            result = runner.execute_flow(flow_data, REPO)
+        else:
+            result = runner.run_targeted_smoke_flow()
     except _DeviceGoneError as exc:
         verdict = FailureVerdict(CLASS_ENV, exc.reason)
         write_gate_result("e2e", {
@@ -747,6 +1218,15 @@ def main() -> int:
         live_print(f"\n[FAIL] Autonomous Targeted E2E Smoke Test FAILED: {result.get('reason')}", err=True)
         if result.get("stacktrace"):
             live_print(f"--- Stacktrace ---\n{result['stacktrace']}\n------------------", err=True)
+        if result.get("forensics"):
+            forensics = result["forensics"]
+            live_print(f"[*] Failure Classification: {forensics.get('classification')}", err=True)
+            if forensics.get("screenshot"):
+                live_print(f"[*] Failure Screenshot: {forensics['screenshot']}", err=True)
+            if forensics.get("hierarchy_file"):
+                live_print(f"[*] Failure UI Hierarchy: {forensics['hierarchy_file']}", err=True)
+            if forensics.get("logcat_file"):
+                live_print(f"[*] Failure Logcat: {forensics['logcat_file']}", err=True)
         return 1
 
 

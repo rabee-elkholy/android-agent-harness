@@ -40,6 +40,7 @@ STATE_CLASS_PATTERN = re.compile(r"data\s+class\s+[A-Za-z0-9_]*State\b")
 RUNBLOCKING_PATTERN = re.compile(r"\brunBlocking\s*(\(|{)")
 UNIMPLEMENTED_STUB_PATTERN = re.compile(r"\b(TODO\s*\(|throw\s+NotImplementedError\s*\()")
 DOUBLE_BANG_PATTERN = re.compile(r"[a-zA-Z0-9_\)\]]\s*!!")
+DIAGNOSTIC_PROBE_PATTERN = re.compile(r"(?:\[HARNESS-PROBE\]|\bHARNESS_PROBE\b)")
 CLASS_ENTRY_PATTERN = re.compile(
     r"^(?:(?:public|internal|open)\s+)?class\s+\w+[^{]*:\s*(?:BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity|ComponentActivity|FragmentActivity|DialogFragment|BottomSheetDialogFragment)\b"
 )
@@ -289,6 +290,14 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                     "type": "UNCHECKED_DOUBLE_BANG",
                     "msg": f"Unchecked double-bang (!!) found in production code: '{trimmed}'. Replace with safe call (?.) or checkNotNull()/requireNotNull() with clear message.",
                 })
+
+        if DIAGNOSTIC_PROBE_PATTERN.search(trimmed):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "STRAY_DIAGNOSTIC_PROBE",
+                "msg": f"Stray diagnostic probe detected: '{trimmed}'. Remove temporary probes before review/delivery.",
+            })
 
         current_feature = _current_feature_segment(file_path)
         if current_feature:

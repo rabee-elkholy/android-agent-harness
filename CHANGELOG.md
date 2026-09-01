@@ -5,6 +5,27 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-09-01
+
+### Autonomous Senior QA Engine, Declarative Maestro Flows & In-App UI Language Fingerprinting
+- **Declarative Maestro-Compatible E2E Flow Engine (`run_e2e_smoke.py`)**:
+  - Implemented a zero-dependency, pure-Python declarative flow parser supporting Maestro-compatible YAML and JSON formats (`.agents/e2e_flows/*.yaml`).
+  - Supports comprehensive interactive actions: `launchApp`, `tapOn`, `inputText`, `eraseText`, `hideKeyboard`, `scroll`, `scrollUntilVisible`, `back`, `assertVisible`, `assertNotVisible`, `takeScreenshot`, and `wait`.
+  - Built-in hybrid runner: automatically delegates to `maestro` CLI if installed on the host system PATH, or executes natively via ADB UI Automator with zero external pip dependencies.
+  - Added CLI flags: `--flow <path>`, `--flow-text "<inline>"`, and `--force-native`.
+- **In-App UI Language Fingerprinting & Dynamic String Resolution (`run_e2e_smoke.py`)**:
+  - Automatically indexes all string resource dictionaries across `res/values*/strings.xml` per locale (`values`, `values-ar`, `values-fr`, etc.).
+  - Fingerprints visible on-screen strings against dictionary keys to detect the active in-app locale dynamically, operating independently of the device's system language.
+  - Resolves test target string keys (`stringKey: "..."`) dynamically to active in-app locale values at runtime.
+- **Diagnostic Probing Sandbox & Zero-Leakage Barrier (`fast_kt_lint.py`, `harness-rules.md`, `AGENTS.md`)**:
+  - Introduces lightweight temporary diagnostic probing logs tagged with `// [HARNESS-PROBE]` for bug investigation without triggering 6-reviewer rounds.
+  - Enforces a zero-leakage lint barrier via `STRAY_DIAGNOSTIC_PROBE` in `fast_kt_lint.py`, strictly rejecting unstripped probes with `exit 1` before review package generation or final assemble.
+- **Deep Failure Forensics Package (`run_e2e_smoke.py`)**:
+  - Captures instant failure screenshots, dumps UI hierarchy XML to `.agents/state/e2e/failed_hierarchy.xml`, and extracts the last 50 Logcat lines to `.agents/state/e2e/failed_logcat.txt`.
+  - Classifies E2E failures into structured categories: `ASSERTION_FAILED`, `RUNTIME_CRASH`, `TIMEOUT_UNRESPONSIVE`, or `ENV_FAILURE`.
+- **Rule Alignment & Comprehensive Self-Test Suite (`_hook_selftest.py`, `AGENTS.md`, `harness-rules.md`)**:
+  - Updated delivery gate items 16 & 17 and added unit test coverage for YAML flow parsing, in-app locale fingerprinting, and probe rejection.
+
 ## [0.20.1] - 2026-09-01
 
 ### Zoho Sprints Lifecycle Governance, QA Report Separation & Silent In-Progress Transitions
@@ -171,17 +192,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Offline CLI Update Caching (`check_kit_update.py`)**: Cached transient network failures to eliminate command delays when offline.
 - **NDK, AIDL & Proguard Review Coverage (`_repo_files.py`, `_hook_state.py`, `pre_commit_gate.py`)**: Expanded code suffixes to include `.cpp`, `.c`, `.h`, `.hpp`, `.aidl`, and `.pro` across review gates.
 
-## [0.14.18] - 2026-08-30
+**Included in 0.14.18, 0.14.17, 0.14.16 & 0.14.15 (2026-08-30):**
 
-### Diff-Aware Targeted E2E Smoke Testing, Base ViewModel Discovery & Architectural KDoc
+### Diff-Aware Targeted E2E Smoke Testing, Base ViewModel Discovery & Architectural KDoc (0.14.18)
 - **Diff-Aware Target Auto-Discovery (`agents/scripts/run_e2e_smoke.py`)**: Enhanced autonomous E2E engine with `--auto-diff` inspection, automatically detecting modified Activity components, Fragment/Compose screens, and newly added string resources from git working tree diff.
 - **Direct Component & Deep-Link Launching**: Added targeted launch capabilities (`--target-activity`, `--target-deeplink`) enabling direct Activity invocation via ADB component intents (`am start -n`) alongside automated UI Automator navigation.
 - **Deep Logcat Crash & ANR Forensics**: Upgraded runtime error interception to capture, extract, and demangle 15-line stack traces for `FATAL EXCEPTION`, `AndroidRuntime`, `ANR`, `Room` schema integrity violations, and unchecked nullability failures.
 - **Architectural Base Classes Discovery (`wizard/discovery.py`)**: Built `discover_architectural_bases()` to automatically scan and extract standardized Base ViewModel classes (e.g. `MVIViewModel<S : State, E : Event, A : Action>`, `BaseViewModel`), Domain Result wrappers (`Result<T>`, `Resource<T>`), and Base Activities/Fragments from client repositories.
 - **Mandatory Base ViewModel Inheritance Invariant (`harness-rules.md`, `convention-reviewer-agent.json`)**: Added Invariant 9 and Scope Item 10 strictly prohibiting ad-hoc reinvented `_uiState = MutableStateFlow` boilerplate when a standardized Base ViewModel exists in the project.
 - **Mandatory Architectural KDoc Invariant (`harness-rules.md`, `architecture-guidelines.md`)**: Added Invariant 8 to Shift-Left Quality Invariants strictly mandating standard, meaningful KDoc (`/** ... */`) documenting purpose, `@param`, `@return`, and `@throws` on all newly created or refactored Repository interfaces, Domain UseCases, ViewModel exposed contracts, and DataSource methods.
-
-**Included in 0.14.17, 0.14.16 & 0.14.15 (2026-08-30):**
 
 ### Zero Git Pollution Hardening & Legacy Advisory Elimination (0.14.17)
 - **Zero Git Pollution Hardening (`harness_doctor.py`, `doctor/engine.py`, `setup-prompt.md`, `_repo_files.py`)**: Completely removed legacy `chore: setup android harness` git commit advisories from diagnostic reports and setup documentation. All harness manifests (`.agents/`), adapters, and transient states are 100% locally private via `.git/info/exclude`, requiring zero git commits by developers.

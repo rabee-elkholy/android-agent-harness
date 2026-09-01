@@ -306,9 +306,12 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 - **Dual Device Verification Modes**:
   - **Mode A: `autonomous_e2e` (Autonomous E2E Verification - Default)**:
     1. Run `python .agents/scripts/run_device.py install-start`.
-    2. **MANDATORY**: Run `python .agents/scripts/run_e2e_smoke.py`. The E2E engine inspects the UI hierarchy, asserts component visibility and scroll responsiveness, verifies zero fatal crashes in Logcat, and captures a verification screenshot to `.agents/state/screenshots/`.
-    3. **On E2E [SUCCESS]**: Output the **Phase Milestone Card** with E2E evidence and Phase N commit message, then stop and await developer commit and instruction to start Phase N+1.
-    4. **On E2E [FAIL] / Crash**: STOP immediately, capture Logcat via `logcat_doctor.py` or dispatch `qa-diagnostics-agent`, report findings in chat, fix at root cause, re-run tests, re-install, and re-verify.
+    2. **MANDATORY**: Run `python .agents/scripts/run_e2e_smoke.py` (with `--auto-diff` or `--flow <path/to/flow.yaml>`). The E2E engine inspects the UI hierarchy, fingerprints active in-app locale, asserts component visibility and scroll responsiveness, verifies zero fatal crashes in Logcat, and captures verification screenshots to `.agents/state/screenshots/`.
+    3. **Declarative Maestro Flows & In-App Locale Support**: Supports YAML/JSON flows (`.agents/e2e_flows/*.yaml`) compatible with Maestro syntax. Dynamically resolves string keys against `res/values-*/strings.xml` based on in-app locale fingerprinting. Runs via `maestro` CLI if installed or native zero-dependency Python ADB engine.
+    4. **Diagnostic Probing Sandbox & Zero-Leakage Barrier**: During bug investigation, temporary diagnostic logs tagged with `// [HARNESS-PROBE]` may be used to observe state flow in Logcat without invoking the 6-leaf review round. All probes MUST be removed before generating `review_package.py`. `fast_kt_lint.py` and `preflight_check.py` strictly reject stray probes with `exit 1` (`STRAY_DIAGNOSTIC_PROBE`).
+    5. **Deep Failure Forensics**: On E2E step failure, the engine captures an instant failure screenshot, dumps the UI hierarchy to `.agents/state/e2e/failed_hierarchy.xml`, and extracts the last 50 Logcat lines to `.agents/state/e2e/failed_logcat.txt` with failure classification (`ASSERTION_FAILED`, `RUNTIME_CRASH`, `TIMEOUT_UNRESPONSIVE`).
+    6. **On E2E [SUCCESS]**: Output the **Phase Milestone Card** with E2E evidence and Phase N commit message, then stop and await developer commit and instruction to start Phase N+1.
+    7. **On E2E [FAIL] / Crash**: STOP immediately, inspect forensics or dispatch `qa-diagnostics-agent`, report findings in chat, fix at root cause, re-run tests, re-install, and re-verify.
   - **Mode B: `interactive_device` / `manual_only` (Developer-in-the-Loop Manual Verification)**:
     1. Run `python .agents/scripts/run_device.py install-start`.
     2. Output the **Phase Milestone Card** with numbered manual smoke test steps and Phase N commit message.

@@ -1549,7 +1549,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.20.1"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.21.0"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -1728,13 +1728,15 @@ ok_lint_harden = (
 print(f"fast_kt_lint FQCN whitelist and ComponentActivity: {'OK' if ok_lint_harden else 'FAIL'}")
 failed += int(not ok_lint_harden)
 
-from fast_kt_lint import UNIMPLEMENTED_STUB_PATTERN, DOUBLE_BANG_PATTERN, lint_file as lint_file_diff_test
+from fast_kt_lint import UNIMPLEMENTED_STUB_PATTERN, DOUBLE_BANG_PATTERN, DIAGNOSTIC_PROBE_PATTERN, lint_file as lint_file_diff_test
 ok_lint_new_rules = (
     bool(UNIMPLEMENTED_STUB_PATTERN.search("fun doWork() = TODO()"))
     and bool(UNIMPLEMENTED_STUB_PATTERN.search("throw NotImplementedError()"))
     and bool(DOUBLE_BANG_PATTERN.search("val x = user!!.name"))
+    and bool(DIAGNOSTIC_PROBE_PATTERN.search("// [HARNESS-PROBE] logging state"))
+    and bool(DIAGNOSTIC_PROBE_PATTERN.search("Log.d(TAG, HARNESS_PROBE)"))
 )
-print(f"fast_kt_lint shift-left rules (TODO, !!, test runBlocking): {'OK' if ok_lint_new_rules else 'FAIL'}")
+print(f"fast_kt_lint shift-left rules (TODO, !!, probes, test runBlocking): {'OK' if ok_lint_new_rules else 'FAIL'}")
 failed += int(not ok_lint_new_rules)
 
 # --- v0.16.0: Diff-Scoped Fast KT Linting (ignores untouched legacy lines) ---
@@ -2407,7 +2409,15 @@ print(
 failed += int(not ok_wizard_i21)
 
 # --- v0.14.6: Autonomous E2E Engine & Wizard I.22 ---
-from run_e2e_smoke import parse_ui_hierarchy, parse_bounds, find_nodes, find_first  # noqa: E402
+from run_e2e_smoke import (
+    parse_ui_hierarchy,
+    parse_bounds,
+    find_nodes,
+    find_first,
+    parse_flow_definition,
+    detect_app_locale,
+    resolve_target_text,
+)  # noqa: E402
 
 SAMPLE_UI_XML = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
@@ -2443,6 +2453,50 @@ ok_e2e_parser = (
 )
 print(f"e2e_smoke parser & coordinate calculation: {'OK' if ok_e2e_parser else 'FAIL'}")
 failed += int(not ok_e2e_parser)
+
+# Declarative Maestro YAML Flow parsing & locale fingerprinting
+SAMPLE_FLOW_YAML = """
+appId: com.example.app
+---
+- launchApp
+- tapOn:
+    id: "login_btn"
+    wait: 1.5
+- inputText: "user@example.com"
+- hideKeyboard
+- tapOn:
+    stringKey: "submit_action"
+- assertVisible:
+    text: "الفعاليات"
+- takeScreenshot: "events_screen"
+"""
+parsed_flow = parse_flow_definition(SAMPLE_FLOW_YAML)
+ok_flow_parse = (
+    parsed_flow.get("appId") == "com.example.app"
+    and len(parsed_flow.get("steps", [])) == 7
+    and parsed_flow["steps"][1]["action"] == "tapOn"
+    and parsed_flow["steps"][1]["id"] == "login_btn"
+    and parsed_flow["steps"][2]["text"] == "user@example.com"
+    and parsed_flow["steps"][3]["action"] == "hideKeyboard"
+    and parsed_flow["steps"][4]["stringKey"] == "submit_action"
+    and parsed_flow["steps"][6]["name"] == "events_screen"
+)
+sample_str_index = {
+    "default": {"submit_action": "Submit", "events_title": "Events"},
+    "ar": {"submit_action": "إرسال", "events_title": "الفعاليات"},
+}
+detected_app_loc = detect_app_locale(e2e_nodes, sample_str_index)
+resolved_ar = resolve_target_text({"stringKey": "submit_action"}, "ar", sample_str_index)
+resolved_def = resolve_target_text({"stringKey": "submit_action"}, "default", sample_str_index)
+
+ok_e2e_declarative = (
+    ok_flow_parse
+    and detected_app_loc == "ar"
+    and resolved_ar == "إرسال"
+    and resolved_def == "Submit"
+)
+print(f"e2e declarative flow parser & in-app locale fingerprinting: {'OK' if ok_e2e_declarative else 'FAIL'}")
+failed += int(not ok_e2e_declarative)
 
 ok_i22_present = "i22" in q_ids_v8
 norm_i22_e2e = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
