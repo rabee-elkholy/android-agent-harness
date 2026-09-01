@@ -398,8 +398,8 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
 4. **Review Churn & Fast Convergence**:
    - When addressing review findings, the agent must fix all findings across all 5 pillars comprehensively in a single pass.
    - Empirically verify with `testDebugUnitTest` and `fast_kt_lint.py` before re-dispatching.
-   - Review rounds MUST converge in at most 2 rounds. High round churn (e.g. Round 5, Round 6, Round 7) is strictly prohibited.
-   - **Round tracking is programmatic**: `review_package.py` records every generated package as a round for the task (task id from `--task` / `HARNESS_TASK_ID`, ledger in `.agents/state/review_rounds.json`; counters reset when HEAD moves after the developer commits). At the round cap (2, override `HARNESS_MAX_REVIEW_ROUNDS`), package generation prints a `REVIEW ROUND CAP` warning and the reminder injects an escalation note — the agent MUST present a Review Round Summary Card and ask the developer to choose: continue one more round / roll back the last fixes / stop the task. Never silently loop.
+   - Review rounds MUST converge in at most 3 rounds. High round churn (e.g. Round 5, Round 6, Round 7) is strictly prohibited.
+   - **Round tracking is programmatic**: `review_package.py` records every generated package as a round for the task (task id from `--task` / `HARNESS_TASK_ID`, ledger in `.agents/state/review_rounds.json`; counters reset when HEAD moves after the developer commits). At the round cap (3, override `HARNESS_MAX_REVIEW_ROUNDS`), package generation prints a `REVIEW ROUND CAP` warning and the reminder injects an escalation note — the agent MUST present a Review Round Summary Card and ask the developer to choose: continue one more round / roll back the last fixes / stop the task. Never silently loop.
 
 5. **Conversation Language Parity Across All Developer Touchpoints**:
    - The agent MUST dynamically match the active conversation language of the developer across ALL cards, interactive modals, and summaries:

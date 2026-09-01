@@ -15,7 +15,7 @@ MAX_REVIEWS = int(os.environ.get("HARNESS_MAX_REVIEWS", "20"))
 MAX_DIAGNOSTICS = int(os.environ.get("HARNESS_MAX_DIAGNOSTICS", "10"))
 MAX_UI_REVIEWS = int(os.environ.get("HARNESS_MAX_UI_REVIEWS", "10"))
 MAX_TEST_REVIEWS = int(os.environ.get("HARNESS_MAX_TEST_REVIEWS", "10"))
-MAX_REVIEW_ROUNDS = int(os.environ.get("HARNESS_MAX_REVIEW_ROUNDS", "2"))
+MAX_REVIEW_ROUNDS = int(os.environ.get("HARNESS_MAX_REVIEW_ROUNDS", "3"))
 
 STATE_EXPIRY_SECONDS = 7 * 24 * 3600
 
@@ -473,7 +473,7 @@ def round_cap_warning(
         return ""
     return (
         f"[!] REVIEW ROUND CAP: {used} review round(s) already dispatched for this task "
-        f"(project cap: {cap_val}; rounds must converge in <= 2). "
+        f"(project cap: {cap_val}; rounds must converge in <= {cap_val}). "
         "HALT auto-fixing. Present a Review Round Summary Card and ask the developer to choose: "
         "continue one more round / roll back the last fixes / stop the task. Do not silently loop."
     )
