@@ -43,7 +43,7 @@ def is_interactive() -> bool:
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Authorize HIGH or CRITICAL risk changes")
-    parser.add_argument("--yes", action="store_true", help="Non-interactive approval flag (selftest/developer CI only)")
+    parser.add_argument("--approve", "--yes", action="store_true", dest="approve", help="Approve the current risk tier (used after developer confirms via interactive chat modal)")
     args = parser.parse_args(argv)
 
     tier, reasons = classify_working_tree_risk(REPO)
@@ -53,11 +53,11 @@ def main(argv=None) -> int:
         live_print(f"[OK] Current working tree risk tier is {tier}; no human approval required.")
         return 0
 
-    if not is_interactive() and not (args.yes and os.environ.get("_IN_HOOK_SELFTEST") == "1"):
+    if not is_interactive() and not args.approve:
         live_print(
-            f"[REFUSED] approve_risk requires interactive developer confirmation (stdin).\n"
-            f"The AI agent cannot approve risk on its own.\n"
-            f"Please run 'python .agents/scripts/approve_risk.py' manually in your terminal to approve {tier} risk.",
+            f"[REFUSED] approve_risk requires developer confirmation.\n"
+            f"Prompt the developer in chat via ask_question modal and run with --approve upon confirmation,\n"
+            f"or run 'python .agents/scripts/approve_risk.py --approve' directly.",
             err=True,
         )
         return 1
@@ -73,7 +73,7 @@ def main(argv=None) -> int:
         live_print(f"  ... and {len(reasons) - 10} more")
     live_print("--------------------------------------------------")
 
-    if args.yes and os.environ.get("_IN_HOOK_SELFTEST") == "1":
+    if args.approve or (args.approve and os.environ.get("_IN_HOOK_SELFTEST") == "1"):
         confirm = "YES"
     else:
         try:

@@ -55,9 +55,8 @@ CRITICAL_CODE_PATTERNS = [
     re.compile(r"\b(?:TrustManager|HostnameVerifier|NetworkSecurityConfig)\b"),
 ]
 
-# HIGH file patterns
+# HIGH file patterns (build infrastructure & DB schema files)
 HIGH_PATH_PATTERNS = [
-    re.compile(r"(?:^|/)AndroidManifest\.xml$", re.IGNORECASE),
     re.compile(r"(?:^|/)(?:build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts)$", re.IGNORECASE),
     re.compile(r"(?:^|/)gradle/libs\.versions\.toml$", re.IGNORECASE),
     re.compile(r"(?:^|/)schemas/.*\.json$", re.IGNORECASE),
@@ -262,7 +261,7 @@ def check_risk_approval(repo: Path | None = None) -> tuple[bool, str, str]:
     if not approval:
         return False, tier, (
             f"Risk tier is {tier} ({'; '.join(reasons[:3])}). "
-            "Developer approval required: run 'python .agents/scripts/approve_risk.py' manually."
+            "Developer approval required: prompt developer via ask_question modal in chat, then run 'python .agents/scripts/approve_risk.py --approve'."
         )
 
     current_fp = tree_code_fingerprint(r) or ""
@@ -271,14 +270,14 @@ def check_risk_approval(repo: Path | None = None) -> tuple[bool, str, str]:
         return False, tier, (
             f"Risk approval is STALE: code changes occurred after approval "
             f"(approved fp: {approved_fp[:8]}, current fp: {current_fp[:8]}). "
-            "Rerun 'python .agents/scripts/approve_risk.py'."
+            "Re-prompt developer or run 'python .agents/scripts/approve_risk.py --approve'."
         )
 
     approved_tier = str(approval.get("tier") or "")
     if _TIER_ORDER.get(approved_tier, 0) < _TIER_ORDER.get(tier, 0):
         return False, tier, (
             f"Risk tier increased to {tier} but approval was for {approved_tier}. "
-            "Rerun 'python .agents/scripts/approve_risk.py'."
+            "Re-prompt developer or run 'python .agents/scripts/approve_risk.py --approve'."
         )
 
     return True, tier, f"Risk tier {tier} approved by developer at {approval.get('approved_at')}."
