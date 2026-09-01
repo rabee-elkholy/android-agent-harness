@@ -59,16 +59,18 @@ def test_task_separation() -> None:
 
 def test_warning_threshold() -> None:
     record_review_round_local("W1", "pkg1", head_sha=FAKE_HEAD_A)
-    check(round_cap_warning("W1", cap=2, head_sha=FAKE_HEAD_A) == "", "no warning below cap")
+    check(round_cap_warning("W1", cap=3, head_sha=FAKE_HEAD_A) == "", "no warning below cap")
     record_review_round_local("W1", "pkg2", head_sha=FAKE_HEAD_A)
-    warning = round_cap_warning("W1", cap=2, head_sha=FAKE_HEAD_A)
+    check(round_cap_warning("W1", cap=3, head_sha=FAKE_HEAD_A) == "", "no warning at round 2 below cap 3")
+    record_review_round_local("W1", "pkg3", head_sha=FAKE_HEAD_A)
+    warning = round_cap_warning("W1", cap=3, head_sha=FAKE_HEAD_A)
     check(bool(warning), "warning emitted at cap")
     check("REVIEW ROUND CAP" in warning, "warning carries the cap marker")
     check("Summary Card" in warning, "warning requires a summary card")
-    check(round_cap_warning("W1", cap=3, head_sha=FAKE_HEAD_A) == "", "explicit larger cap silences warning")
+    check(round_cap_warning("W1", cap=4, head_sha=FAKE_HEAD_A) == "", "explicit larger cap silences warning")
     check(
-        round_cap_warning("W1", cap=2, head_sha=FAKE_HEAD_A) == round_cap_warning("W1", head_sha=FAKE_HEAD_A),
-        "default cap equals 2",
+        round_cap_warning("W1", cap=3, head_sha=FAKE_HEAD_A) == round_cap_warning("W1", head_sha=FAKE_HEAD_A),
+        "default cap equals 3",
     )
     clear_task_rounds("W1")
 
@@ -114,7 +116,7 @@ def test_hook_side_per_task() -> None:
 
 
 def test_default_cap_value() -> None:
-    check(MAX_REVIEW_ROUNDS == 2, "default project round cap is 2")
+    check(MAX_REVIEW_ROUNDS == 3, "default project round cap is 3")
 
 
 def main() -> int:
