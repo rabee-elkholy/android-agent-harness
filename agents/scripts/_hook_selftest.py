@@ -537,8 +537,11 @@ pkg_proc = subprocess.run(
     check=True,
     cwd=str(SCRIPTS.parents[1]),
 )
-ok = pkg_proc.stdout.strip().startswith("HARNESS_REVIEW_PACKAGE=")
-pkg_path = Path(pkg_proc.stdout.strip().splitlines()[0].split("=", 1)[-1].strip()) if ok else None
+pkg_lines = [l.strip() for l in pkg_proc.stdout.splitlines() if l.strip()]
+pkg_line = next((l for l in pkg_lines if l.startswith("HARNESS_REVIEW_PACKAGE=")), None)
+sha_line = next((l for l in pkg_lines if l.startswith("HARNESS_PACKAGE_SHA256_12=")), None)
+ok = pkg_line is not None
+pkg_path = Path(pkg_line.split("=", 1)[-1].strip()) if ok else None
 ok = ok and pkg_path is not None and pkg_path.is_file()
 print(f"review_package writes file: {'OK' if ok else 'FAIL ' + pkg_proc.stdout + pkg_proc.stderr}")
 failed += int(not ok)
@@ -563,10 +566,9 @@ if pkg_path is not None:
     )
     recorded = body[mpos + len(marker) : body.find(b"\n", mpos)].decode("ascii", "replace").strip()
     ok_header = ok_header and _hl.sha256(body[:mpos]).hexdigest() == recorded
-    second_line = pkg_proc.stdout.strip().splitlines()
     pkg_sha12_stdout = (
-        second_line[1].split("=", 1)[-1].strip()
-        if len(second_line) > 1 and second_line[1].startswith("HARNESS_PACKAGE_SHA256_12=")
+        sha_line.split("=", 1)[-1].strip()
+        if sha_line
         else ""
     )
 print(
