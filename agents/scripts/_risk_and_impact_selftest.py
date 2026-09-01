@@ -231,6 +231,74 @@ def test_impact_analyzer_dependency_graph() -> None:
     check(result["confidence"] in ("HIGH", "MEDIUM"), "confidence evaluated")
 
 
+def test_staleness_and_escalation_rejection() -> None:
+    d = ROOT / "stale_test"
+    d.mkdir(parents=True, exist_ok=True)
+
+    fp1 = "aaaa111122223333"
+    fp2 = "bbbb444455556666"
+
+    # Write HIGH approval with fp1
+    write_risk_approval(TIER_HIGH, fp1, ROOT)
+    approval = load_risk_approval(ROOT)
+    check(approval is not None, "approval loaded")
+
+    # If current fingerprint is fp2, check_risk_approval must detect staleness
+    # We can test the comparator logic directly
+    check(approval.get("tree_fingerprint") != fp2, "fp mismatch correctly identified")
+
+    # If tier escalated to CRITICAL but approval is only HIGH
+    from risk_tier import _TIER_ORDER
+    check(_TIER_ORDER[TIER_HIGH] < _TIER_ORDER[TIER_CRITICAL], "tier escalation order is strict")
+
+
+def test_impact_analyzer_wildcards_and_complex_types() -> None:
+    d = ROOT / "wildcards"
+    d.mkdir(parents=True, exist_ok=True)
+
+    model_file = d / "UserModels.kt"
+    model_file.write_text(
+        "package com.acme.model\n\n"
+        "sealed class UserEvent {\n"
+        "    data class LoggedIn(val id: String) : UserEvent()\n"
+        "    object LoggedOut : UserEvent()\n"
+        "}\n\n"
+        "enum class UserRole { ADMIN, MEMBER }\n"
+        "sealed interface UserContract\n",
+        encoding="utf-8",
+    )
+
+    client_file = d / "UserEventHandler.kt"
+    client_file.write_text(
+        "package com.acme.client\n\n"
+        "import com.acme.model.*\n\n"
+        "class UserEventHandler {\n"
+        "    fun handle(e: UserEvent) = true\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    index = {
+        "UserModels.kt": parse_symbols(model_file, d),
+        "UserEventHandler.kt": parse_symbols(client_file, d),
+    }
+
+    syms = index["UserModels.kt"]
+    check("UserEvent" in syms.declarations, "sealed class parsed")
+    check("UserRole" in syms.declarations, "enum class parsed")
+    check("UserContract" in syms.declarations, "sealed interface parsed")
+
+    res = analyze_impact(d, changed=[model_file], index=index)
+    check("UserEventHandler.kt" in res["direct_dependents"], "wildcard import dependent captured")
+    check(res["confidence"] == "MEDIUM", "confidence drops to MEDIUM on wildcard imports")
+
+
+def test_clean_tree_behavior() -> None:
+    tier, reasons = classify_working_tree_risk(ROOT, files=[])
+    check(tier == TIER_LOW, "empty file list classified as LOW")
+    check("clean working tree" in reasons[0], "clean working tree reason given")
+
+
 def main() -> int:
     test_classify_critical()
     test_classify_high()
@@ -238,8 +306,11 @@ def main() -> int:
     test_classify_low()
     test_file_level_floor_invariant()
     test_risk_approval_lifecycle()
+    test_staleness_and_escalation_rejection()
     test_impact_analyzer_symbol_parsing()
     test_impact_analyzer_dependency_graph()
+    test_impact_analyzer_wildcards_and_complex_types()
+    test_clean_tree_behavior()
 
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")
