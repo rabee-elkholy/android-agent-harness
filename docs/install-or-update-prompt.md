@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.21.0/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.21.0` — **SHA-256**: `dc351cd3407f334a30419408cac859bacdbba15793be4892b96a5c46f98322bc` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.21.0` — **SHA-256**: `4160f4ee102009d2ef106383ffaa70b6c49a15defaeb491999c888e044f6610b` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
@@ -40,15 +40,18 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
 4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, execute the deterministic engine in one command:
    `$PY <kit>/agents/scripts/install_or_update.py --repo <this-android-root> --kit <kit>`
-   This single atomic command automatically creates the backup, preserves tailored reference files (.agents/skills/android-harness/references/*.md), places .agents/, generates _product.py, wires tool adapters, configures PM tracking, updates .git/info/exclude, and runs selftest/doctor with 0 failures in under 3 seconds.
+   This single atomic command automatically creates the backup, preserves tailored reference files (.agents/skills/android-harness/references/*.md), places .agents/, generates _product.py, wires tool adapters, configures PM tracking, updates .git/info/exclude, and runs selftest/doctor verification with 0 failures in under 3 seconds.
    - **Tailored References Preservation**: On update sessions, existing tailored reference files (`.agents/skills/android-harness/references/*.md`) are preserved AS-IS without adding new ones. The installer MUST list them with clickable links (`[filename.md](file:///<path>)`) in the `ask_question` modal and inform the developer in their language that they can click and review each file before confirming.
-5. After setup: run `$PY .agents/scripts/harness_doctor.py` for automated 12-dimension verification. If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.
+5. **Final Completion Card (No Redundant Tasks)**:
+   - Because `install_or_update.py` ALREADY runs 12-dimension doctor verification and hook selftests internally, do **NOT** launch redundant separate `harness_doctor.py` or `preflight_check.py` background tasks after it succeeds.
+   - Output the **Harness Updated Successfully** completion card immediately.
+   - If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.
 
 Kit rules that still apply during setup:
 
 - **Strict Read-Only Kit Source**: Never modify or write files in `<kit>` (`android-agent-harness`). Port and configure strictly into `<this repo>/.agents`.
 - **Scope Isolation**: Setup configures `.agents/` only. Never edit app production files (`strings.xml`, Kotlin files) during install. Report pre-existing preflight issues in chat.
-- **No `schedule` Timers & Zero-Noise Chat**: Never call `schedule` or create background sleep timers during install. Run commands synchronously or await reactive completion. Remain completely silent in chat prose during background tasks.
+- **Zero-Noise Chat & Background Task Protocol**: Never call `schedule` or create sleep timers. When launching commands, run with sufficient `WaitMsBeforeAsync` or await reactive completion passively. **NEVER print raw `<task_notification>`, `<SYSTEM_MESSAGE>`, or JSON payloads in chat prose**. The agent must remain completely silent in chat during background tasks (output empty string `""`) and speak ONLY when asking wizard questions (`ask_question`) or outputting the final completion card.
 - **Mandatory Step 3b Approval & Reference Preservation**: On update sessions, restore all existing tailored reference files (.agents/skills/android-harness/references/) AS-IS without adding new ones, and ask the developer via `ask_question` to approve keeping them (with clickable `file:///` links for IDE review). On first-time installs, discover domains, create custom references, and obtain approval.
 - **Previous Answers Recommendation**: When updating or re-running setup on an existing project, previous answers must be presented as `(Recommended)` at index 0.
 - Backup before overwriting `.agents` or tool adapters.
