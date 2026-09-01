@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] - 2026-09-01
+
+### Zoho Sprints Lifecycle Governance, QA Report Separation & Silent In-Progress Transitions
+- **Strict Bug vs Story/Task Report Separation (`zoho-sprints.md`, `harness-rules.md`)**:
+  - Strictly mandates that for **Bug** items, QA handoff reports (`Commit: <hash>`, root cause, solution, impact area, test cases) are posted exclusively as **Comments**. Modifying the Bug Description is strictly forbidden to preserve the QA team's original reproduction steps and environment reports intact.
+  - For **Task / Story / Sub-task / Improvement** items, the handoff report is written directly to the **Description** as the permanent architecture and feature reference, accompanied by a short commit hash comment.
+- **Silent `In progress` Task Start Transition (`zoho-sprints.md`, `harness-rules.md`)**:
+  - Automatically and silently updates ticket status to `In progress` upon implementation plan approval without posting redundant comments, maintaining zero-noise communication.
+- **Local Multi-Phase Feature Lifecycle Protocol (`harness-rules.md`, `zoho-sprints.md`)**:
+  - Establishes local phase management inside `implementation_plan.md` for multi-phase tasks, updating the main parent task on Zoho Sprints upon full delivery without cluttering the project tracker with micro sub-tasks.
+- **Handoff Git Commit Verification Guardrail**:
+  - Enforces verifying a clean working tree and actual commit hash via `git log -1` before generating delivery reports, preventing placeholder or uncommitted hash submissions.
+
 ## [0.20.0] - 2026-09-01
 
 ### Smart Test-Aware Review Promotion & Integrity Barrier
@@ -137,11 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phase Checkpoint Commits & Mandatory Hard Stop (`harness-rules.md`, `deliver.md`, `AGENTS.md`)**: Enforced phase-by-phase checkpoint commits. When Phase N passes all gates, the Lead Agent outputs the Phase Milestone Card with a drafted commit message and HALTS immediately, awaiting explicit developer commit and instruction before touching Phase N+1 files.
 - **Shift-Left Phase Preflight Gate (`harness-rules.md`, `deliver.md`)**: Integrated `preflight_check.py` into every phase boundary before milestone handoff, eliminating commit-time blocking on lint annotations, hardcoded strings, or Room schema issues.
 - **Dynamic Conversation Language Parity (`harness-rules.md`, `pre_invocation_reminder.py`, `AGENTS.md`)**: Mandated matching the developer's conversation language (Arabic/English) across all cards (Review Round, Phase Milestone, Final Delivery) and interactive `ask_question` modals.
-- **Security Selftest CI Matrix Hardening (`_security_selftest.py`)**: Guaranteed `_IN_HOOK_SELFTEST="1"` simulation during automated GitHub Actions CI runs across all 12 matrix platform jobs (Python 3.10-3.13 on Ubuntu, macOS, Windows).
+**Included in 0.14.21 (2026-08-31):**
 
-## [0.14.21] - 2026-08-31
-
-### Comprehensive Edge Case Hardening Across Harness Engines & Review Gates
+### Comprehensive Edge Case Hardening Across Harness Engines & Review Gates (0.14.21)
 - **Multi-Module & Cross-Feature Import Flexibility (`fast_kt_lint.py`)**: Expanded cross-feature import regex to detect both singular `.feature.` and plural `.features.` package structures.
 - **Flavor & Case-Insensitive Linux APK Discovery (`run_gradle_task.py`)**: Upgraded APK search to be case-insensitive across subdirectories, ensuring reliable APK resolution for all product flavors on Linux/macOS filesystems.
 - **Multi-Class Room Entity & Embedded Resolution (`room_guard.py`)**: Added class declaration scanning fallback to discover `@Entity` and `@Embedded` types declared in shared model files.

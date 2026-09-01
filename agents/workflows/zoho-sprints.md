@@ -41,8 +41,9 @@ Never `Done` / `Solved`.
 
 | When | Status | What to write |
 |---|---|---|
-| Work started | `In progress` | Optional short comment. Do not mark verified. |
-| Device phases all Pass | `Ready To ReTest` | Full template in the **description**. Short **comment** with the commit hash. |
+| Work started (Plan approved) | `In progress` | Silent status transition (no comment). |
+| Device phases all Pass (`update zoho` on **Bug**) | `Ready To ReTest` | Full template in a **Comment**. **NEVER edit Bug Description** (preserves QA's original report). |
+| Device phases all Pass (`update zoho` on **Task / Story / Sub-task**) | `Ready To ReTest` | Full template written/updated in **Description**. Short **comment** with the commit hash (`Commit: <hash>`). |
 
 ### Audience & Tone Policy
 - **Primary Audience**: **QA / Testers & Product Stakeholders**.
@@ -68,7 +69,10 @@ Language is resolved from `_product.py` (configured in setup wizard I.18):
 
 ---
 
-### 1. Bug Template (Description)
+### 1. Bug Template (Comment — Do NOT modify Bug Description)
+
+> [!IMPORTANT]
+> For **Bug** items, ALWAYS post the full delivery report as a **Comment**. **NEVER modify or overwrite the Bug's Description**, preserving the original QA bug report, environment details, and reproduction steps intact.
 
 **English Structure (`all_en`):**
 ```
@@ -110,6 +114,9 @@ Commit: <hash>
 
 ### 2. Feature / Story Template (Description)
 
+> [!NOTE]
+> For **Story / Feature / Sub-task** items, write/update this template in the **Description**, and post a short comment with `Commit: <hash>`.
+
 **English Structure (`all_en`):**
 ```
 Commit: <hash>
@@ -149,6 +156,9 @@ Commit: <hash>
 ---
 
 ### 3. Task / Improvement Template (Description)
+
+> [!NOTE]
+> For **Task / Improvement** items, write/update this template in the **Description**, and post a short comment with `Commit: <hash>`.
 
 **English Structure (`all_en`):**
 ```

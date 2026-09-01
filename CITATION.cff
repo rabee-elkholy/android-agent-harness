@@ -1,10 +1,10 @@
-cff-version: 0.20.0
+cff-version: 0.20.1
 message: "If you use this software in your research or engineering workflows, please cite it as below."
 authors:
   - family-names: "Elkholy"
     given-names: "Rabee"
 title: "Android Agent Harness: Deterministic Android Engineering for the AI Era"
-version: 0.20.0
+version: 0.20.1
 date-released: 2026-09-01
 url: "https://github.com/rabee-elkholy/android-agent-harness"
 license: "MIT"

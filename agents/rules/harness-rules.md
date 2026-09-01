@@ -340,8 +340,12 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 
 Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-sprints.md`. Credentials stay in the user-level config — never copy tokens into the repo.
 
-- Never mutate Zoho unless the developer explicitly says to (for example `update zoho`).
+- Never mutate Zoho unless the developer explicitly says to (for example `update zoho` or when implementation plan is approved to move to `In progress`).
 - Allowed statuses: `In progress` when started; `Ready To ReTest` when verified. Never `Done` / `Solved`.
+- **Status Change at Work Start**: When implementation plan is approved and coding begins, transition status to `In progress` silently without posting comments.
+- **Description vs. Comment Placement Policy (`update zoho`)**:
+  - **Bug Items**: Post the full QA delivery report exclusively as a **Comment**. **NEVER modify or overwrite the Bug Description** (to strictly preserve the original QA report, environment info, and reproduction steps).
+  - **Task / Story / Sub-task / Improvement Items**: Write or update the full delivery report in the **Description** (as the permanent record of feature scope). Post a short comment with `Commit: <hash>`.
 - **Zoho Quality & Communication Policy (QA-Centric)**:
   - **Audience**: Descriptions and comments are written exclusively for **QA / Testers and Product Stakeholders**.
   - **No Technical Code Internals**: Strictly prohibit raw code artifacts (e.g. no XML layout file names like `fragment_food_plan.xml`, no Kotlin source files, no XML attributes like `clipToPadding`, no framework class names, no raw `dp`/`px` numbers unless part of product design specs). Describe issues and solutions in **clear, functional, and user-facing terms**.
