@@ -227,11 +227,54 @@ def analyze_impact(
     }
 
 
+def build_impact_graph(report: dict) -> Any:
+    """Build a visual DependencyGraph representing the blast radius of changes."""
+    from _graph_core import DependencyGraph, EntityType, GraphNode
+    g = DependencyGraph()
+
+    for sym in report.get("modified_symbols", []):
+        g.add_node(GraphNode(id=f"mod:{sym}", name=f"{sym} [MOD]", type=EntityType.COMPONENT.value))
+
+    for dep in report.get("direct_dependents", []):
+        dep_name = Path(dep).stem
+        g.add_node(GraphNode(id=f"dep:{dep_name}", name=dep_name, type=EntityType.COMPONENT.value))
+        for sym in report.get("modified_symbols", []):
+            g.add_edge(f"mod:{sym}", f"dep:{dep_name}")
+
+    for t in report.get("recommended_tests", []):
+        g.add_node(GraphNode(id=f"test:{t}", name=t, type=EntityType.TEST.value))
+        # Wire from direct dependents or modified symbols
+        if report.get("direct_dependents"):
+            for dep in report.get("direct_dependents", []):
+                dep_name = Path(dep).stem
+                g.add_edge(f"dep:{dep_name}", f"test:{t}")
+        else:
+            for sym in report.get("modified_symbols", []):
+                g.add_edge(f"mod:{sym}", f"test:{t}")
+
+    for ui in report.get("recommended_ui_surfaces", []):
+        g.add_node(GraphNode(id=f"ui:{ui}", name=ui, type=EntityType.SCREEN.value))
+        if report.get("direct_dependents"):
+            for dep in report.get("direct_dependents", []):
+                dep_name = Path(dep).stem
+                g.add_edge(f"dep:{dep_name}", f"ui:{ui}")
+        else:
+            for sym in report.get("modified_symbols", []):
+                g.add_edge(f"mod:{sym}", f"ui:{ui}")
+
+    return g
+
+
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Analyze change impact & recommended tests")
     parser.add_argument("--json", action="store_true", help="Output result in JSON format")
     parser.add_argument("--run", action="store_true", help="Run recommended unit tests via run_tests_gate")
+    parser.add_argument(
+        "--graph",
+        choices=("compact", "mermaid", "dot"),
+        help="Output blast radius graph representation",
+    )
     args = parser.parse_args(argv)
 
     target_files = changed_paths()
@@ -244,6 +287,16 @@ def main(argv=None) -> int:
 
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.graph:
+        g = build_impact_graph(report)
+        if args.graph == "compact":
+            print(g.to_compact())
+        elif args.graph == "mermaid":
+            print(g.to_mermaid(title="Change Blast Radius"))
+        elif args.graph == "dot":
+            print(g.to_dot(title="Change Blast Radius"))
         return 0
 
     live_print("==================================================")

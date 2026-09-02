@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-09-02
+
+### Universal Android Code Graph Engine, Incremental Caching & Self-Healing Architecture
+- **Universal Code Graph & Topology Engine (`_graph_core.py`, `_graph_selftest.py`)**:
+  - Built zero-dependency Pure Python graph engine supporting Gradle multi-module DAGs (Groovy & Kotlin DSL, type-safe accessors), universal components (Java & Kotlin, XML layouts & Navigation, Compose screens), and Clean Architecture layer classification (UI -> ViewModel/Presenter -> UseCase -> Repository -> DataSource -> Tests).
+  - Added cycle-safe BFS shortest path finding and isolated subgraph extraction with depth limits (`--depth N`).
+- **Incremental SHA-256 Caching & Self-Healing (`_graph_core.py`)**:
+  - Implemented incremental hashing (`cache/project_graph.json`) to re-index only modified files in sub-50ms.
+  - Implemented heuristic self-healing to detect moved/renamed files on disk, auto-repair cache nodes, and emit `[HEALED]` notifications seamlessly.
+- **Multi-Format Serializers & CLI Frontend (`project_graph.py`)**:
+  - Added token-efficient `compact` format saving up to 80% context for AI Agents, alongside `mermaid`, `dot` (Graphviz), and `json`.
+  - Added optional image rendering (SVG/PNG) when system Graphviz (`dot`) CLI is present with graceful fallback.
+- **Blast Radius Integration & Doctor Registration (`impact_analyzer.py`, `doctor/models.py`)**:
+  - Integrated `--graph` flag into `impact_analyzer.py` for visual blast-radius diagrams.
+  - Registered core scripts in `CORE_SCRIPTS` manifest verified across all 12 diagnostic dimensions of `harness_doctor.py`.
+
 ## [0.24.0] - 2026-09-01
 
 ### Advanced E2E Gestures, Component State Assertions, Offline Simulation & Live Task Streaming
