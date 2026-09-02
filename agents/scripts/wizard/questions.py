@@ -41,16 +41,6 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                 {"id": "no", "label": t(lang, "i0_no")},
             ],
         },
-        {
-            "id": "i1",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i1", name=d.get("product") or "App"),
-            "options": [
-                {"id": "discovered", "label": t(lang, "i1_use", name=d.get("product") or "App")},
-                {"id": "other", "label": t(lang, "i1_other")},
-            ],
-        },
     ]
     pythons = d.get("pythons") or []
     if len(pythons) != 1:
@@ -804,8 +794,6 @@ def interactive(repo: Path, lang: str) -> dict:
             raw[q["id"]] = chosen[0]
             if chosen[0] == "other":
                 raw[q["id"] + "_text"] = prompt_text(lang)
-            if q["id"] == "i1" and chosen[0] == "other":
-                pass
         if q["id"] == "i2" and chosen[0] == "stop":
             print(t(lang, "no_python"))
             raise SystemExit(1)

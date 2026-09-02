@@ -5,6 +5,13 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.3] - 2026-09-02
+
+### Zero-Friction Setup Wizard: Automatic Product Name Discovery
+- **Zero-Friction Project Identity (`wizard/questions.py`, `wizard/discovery.py`)**:
+  - Eliminated redundant interactive question `i1` during harness setup and update wizards.
+  - The harness now discovers the project identity automatically from `settings.gradle(.kts)` `rootProject.name` or repository directory name with zero prompt friction.
+
 ## [0.25.2] - 2026-09-02
 
 ### Universal Code Graph Engine, Resilient UI Hierarchy & Shift-Left Test Synchronization
