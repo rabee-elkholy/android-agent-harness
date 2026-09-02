@@ -5,6 +5,12 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.1] - 2026-09-02
+
+### Architecture Path Search Validation & Edge-Case Protection
+- **Paired Path CLI Arguments (`project_graph.py`)**:
+  - Added strict validation ensuring `--path-from` and `--path-to` are always provided as a pair, returning helpful guidance on unpaired queries.
+
 ## [0.25.0] - 2026-09-02
 
 ### Universal Android Code Graph Engine, Incremental Caching & Self-Healing Architecture
