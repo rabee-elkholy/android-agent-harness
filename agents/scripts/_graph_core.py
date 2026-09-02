@@ -154,20 +154,133 @@ class DependencyGraph:
         return self._rev_adj.get(node_id, set())
 
     def find_node(self, query: str) -> GraphNode | None:
-        """Find node by exact ID, or match name/symbol case-insensitively."""
+        """Find node by exact ID, or match name/symbol/filepath case-insensitively with priority."""
         if query in self.nodes:
             return self.nodes[query]
         q_lower = query.lower()
+        # 1. Exact name match
         for node in self.nodes.values():
             if node.name.lower() == q_lower:
                 return node
+        # 2. Exact declaration match
         for node in self.nodes.values():
             if any(d.lower() == q_lower for d in node.declarations):
                 return node
+        # 3. File path exact stem / filename match
+        for node in self.nodes.values():
+            if node.file_path and Path(node.file_path).stem.lower() == q_lower:
+                return node
+        # 4. Prefix / Substring match on name
         for node in self.nodes.values():
             if q_lower in node.name.lower():
                 return node
         return None
+
+    def find_nodes(self, query: str, limit: int = 60) -> list[GraphNode]:
+        """Find all nodes matching query across ID, name, declarations, or file path."""
+        q_lower = query.lower().strip()
+        exact_matches: list[GraphNode] = []
+        name_matches: list[GraphNode] = []
+        path_matches: list[GraphNode] = []
+        seen: set[str] = set()
+
+        for node in self.nodes.values():
+            if node.id in seen:
+                continue
+            if node.id == query or node.name == query or any(d == query for d in node.declarations):
+                exact_matches.append(node)
+                seen.add(node.id)
+            elif node.name.lower() == q_lower or any(d.lower() == q_lower for d in node.declarations):
+                exact_matches.append(node)
+                seen.add(node.id)
+            elif q_lower in node.name.lower():
+                name_matches.append(node)
+                seen.add(node.id)
+            elif node.file_path and q_lower in node.file_path.lower():
+                path_matches.append(node)
+                seen.add(node.id)
+
+        results = exact_matches + name_matches + path_matches
+        return results[:limit]
+
+    def extract_feature_graph(
+        self,
+        feature_name: str,
+        max_depth: int = 1,
+    ) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
+        """Finds all nodes belonging to a feature package/folder/name and extracts their connected subgraph."""
+        q_lower = feature_name.lower().strip()
+        feature_nodes: list[GraphNode] = []
+        seen: set[str] = set()
+
+        for node in self.nodes.values():
+            if node.id in seen:
+                continue
+            fp = (node.file_path or "").lower()
+            if (
+                f"/{q_lower}/" in fp
+                or f"features/{q_lower}" in fp
+                or f"/{q_lower}" in fp
+                or q_lower in node.name.lower()
+                or any(q_lower in d.lower() for d in node.declarations)
+            ):
+                feature_nodes.append(node)
+                seen.add(node.id)
+
+        start_ids = [n.id for n in feature_nodes]
+        if not start_ids:
+            matched = self.find_nodes(feature_name)
+            start_ids = [n.id for n in matched]
+
+        return self.extract_subgraph(start_ids, max_depth=max_depth, direction="both")
+
+    def to_slice_summary(self, nodes: dict[str, GraphNode] | None = None) -> str:
+        """Renders a high-signal Clean Architecture layer breakdown for a set of nodes."""
+        target_nodes = list(nodes.values()) if nodes is not None else list(self.nodes.values())
+        if not target_nodes:
+            return "[Empty Architecture Slice]"
+
+        screens = [n for n in target_nodes if n.type in (EntityType.SCREEN.value, EntityType.XML_LAYOUT.value)]
+        view_models = [n for n in target_nodes if n.type == EntityType.VIEW_MODEL.value]
+        domain = [n for n in target_nodes if n.type == EntityType.USE_CASE.value or (n.file_path and "/domain/" in n.file_path)]
+        data = [n for n in target_nodes if n.type in (EntityType.REPOSITORY.value, EntityType.DATA_SOURCE.value) or (n.file_path and "/data/" in n.file_path)]
+        tests = [n for n in target_nodes if n.type == EntityType.TEST.value or (n.file_path and ("src/test" in n.file_path or "src/androidTest" in n.file_path))]
+
+        lines = [
+            f"=== Feature Architecture Slice ({len(target_nodes)} components) ===",
+        ]
+
+        if screens:
+            lines.append(f"\n[UI Screens & Layouts] ({len(screens)}):")
+            for sc in sorted(screens, key=lambda x: x.name):
+                tag = "[COMPOSE]" if sc.metadata.get("compose") else "[XML]"
+                targets = [self.nodes[t].name for t in self.get_targets(sc.id) if t in self.nodes]
+                deps = f" -> {', '.join(targets[:4])}" if targets else ""
+                lines.append(f"  * {sc.name} {tag} ({sc.file_path or 'unknown'}){deps}")
+
+        if view_models:
+            lines.append(f"\n[ViewModels & State Holders] ({len(view_models)}):")
+            for vm in sorted(view_models, key=lambda x: x.name):
+                targets = [self.nodes[t].name for t in self.get_targets(vm.id) if t in self.nodes]
+                deps = f" -> {', '.join(targets[:4])}" if targets else ""
+                lines.append(f"  * {vm.name} ({vm.file_path or 'unknown'}){deps}")
+
+        if domain:
+            lines.append(f"\n[Domain Layer (UseCases & Contracts)] ({len(domain)}):")
+            for dm in sorted(domain, key=lambda x: x.name):
+                lines.append(f"  * {dm.name} ({dm.file_path or 'unknown'})")
+
+        if data:
+            lines.append(f"\n[Data Layer (Repositories & Sources)] ({len(data)}):")
+            for dt in sorted(data, key=lambda x: x.name):
+                lines.append(f"  * {dt.name} ({dt.file_path or 'unknown'})")
+
+        if tests:
+            lines.append(f"\n[Unit & UI Tests] ({len(tests)}):")
+            for tst in sorted(tests, key=lambda x: x.name):
+                lines.append(f"  * {tst.name} ({tst.file_path or 'unknown'})")
+
+        return "\n".join(lines)
 
     def find_shortest_path(self, from_id: str, to_id: str) -> list[str]:
         """BFS shortest path from from_id to to_id."""

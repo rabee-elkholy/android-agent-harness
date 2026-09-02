@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.9] - 2026-09-02
+
+### Feature-Level Architecture Slice Slices, Multi-Node Disambiguation & Discovery Invariant
+- **Feature-Level Architecture Slices (`project_graph.py --feature <name>`, `_graph_core.py`)**:
+  - Added dedicated `--feature <NAME>` CLI command and `DependencyGraph.extract_feature_graph()` engine method.
+  - Automatically isolates and extracts all components belonging to a feature package/module across Clean Architecture layers (UI Screens & Layouts with `[COMPOSE]` vs `[XML]` tags, ViewModels & State Holders, Domain UseCases & Contracts, Data Repositories & Sources, and Unit/UI Tests) in a single high-signal call.
+- **Multi-Node Disambiguation & Subgraph Aggregation (`project_graph.py --find`, `_graph_core.py`)**:
+  - Enhanced `--find <SYMBOL>` with `DependencyGraph.find_nodes()` to locate all matching nodes across IDs, names, declarations, and file paths.
+  - When querying broad keywords (e.g. `event`, `post`, `food`), the engine now automatically aggregates all matching feature nodes and extracts their unified connected subgraph, eliminating top-level symbol collisions with generic utility classes.
+- **Clean Architecture Slice Summarizer (`DependencyGraph.to_slice_summary()`)**:
+  - Outputs a structured, token-efficient Clean Architecture breakdown of any selected feature or subgraph directly in console/chat, eliminating the need to speculatively read multi-thousand-line source files.
+- **Graph Query Refinement & Exploration Invariant (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
+  - Enforced a strict Graph Query Refinement Invariant: when initial graph queries match broad utilities, agents must refine queries with discovered symbol names or use `--feature` rather than falling back to directory listing cascades or reading raw source files.
+- **Self-Test Suite Expansion (`_graph_selftest.py`)**:
+  - Added Test 6 validating multi-node matching, feature subgraph extraction, internal dependency retention, and Clean Architecture layer summary formatting (30 assertions passed, 0 failures).
+
 ## [0.25.8] - 2026-09-02
 
 ### Zero-Git-Pollution Clean Completion, Code Graph Pre-Warming & Graph-First Barrier
@@ -59,17 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Integrated `run_streaming()` with `echo=True` and `flush=True`, eliminating the "Empty log" display in IDE background task outputs.
   - Added `_read_stdin_safe()` with thread-isolated non-blocking read and explicit `--cli` / `--hook` flags.
 
-## [0.23.1] - 2026-09-01
+## [0.23.0] - 2026-09-01
 
-### Interactive Pre-E2E Confirmation Gate & Skip Transparency
+### Senior-QA Test-Case E2E Engine, Pre-E2E Interactive Confirmation & Shared ADB Core
 - **Pre-E2E Interactive Confirmation Gate (`E2E_CONFIRM`, `pre_invocation_reminder.py`, `harness-rules.md`, `deliver.md`, `e2e-qa.md`, `AGENTS.md`)**:
   - Introduced `E2E_CONFIRM = "confirm"` policy in `_product.py` and `install_or_update.py`.
   - Mandated that the Lead Agent MUST ask the developer via `ask_question` in their active conversation language ("Start E2E round?" / "Skip E2E") before executing any E2E suite (`run_e2e_qa.py` or `run_e2e_smoke.py`).
   - Strict honesty invariant: on developer skip, device verification is explicitly marked `skipped by developer` in the Phase Milestone Card and delivery reports; never claimed as passed.
-
-## [0.23.0] - 2026-09-01
-
-### Senior-QA Test-Case E2E Engine & Shared ADB Core
 - **Shared ADB core (`_adb_core.py`)**: extracted the UI hierarchy model and matching (substring + exact + ambiguity detection), string/locale resolution, a strict declarative flow parser with action validation, and a `DeviceSession` providing polling synchronization, single-call `uiautomator dump`, pid/process-scoped crash detection with a cleared baseline, verified taps, clipboard/ADBKeyboard text input (Arabic + ASCII), and physical-device-first serial selection.
 - **`run_e2e_qa.py`**: test-case-aware Senior QA runner with a positive/negative/edge case schema, per-case isolation (`relaunch`/`stop`/`none`), per-case verdicts with failure evidence, JSON/markdown reports, offline `--lint` validation, and a diff-grounded `--generate-cases` scaffold.
 - **`qa-e2e-planner-agent`** + `e2e-qa.md` workflow: derive diff-grounded test cases from each plan phase.

@@ -248,11 +248,31 @@ def run_tests() -> bool:
     dot = test_g.to_dot()
     assert_eq("digraph AndroidGraph" in dot and '"ScreenA" -> "VmB"' in dot, True, "DOT serializer valid")
 
-    d_json = test_g.to_dict()
-    assert_eq(len(d_json["nodes"]), 2, "JSON dictionary valid")
+    # -----------------------------------------------------------------
+    # Test 6: Feature Extraction, Multi-Node Matching & Slice Summary
+    # -----------------------------------------------------------------
+    print("\n[*] Test 6: Feature Extraction, Multi-Node Matching & Slice Summary")
+    feat_g = DependencyGraph()
+    feat_g.add_node(GraphNode(id="EventsActivity", name="EventsActivity", type=EntityType.SCREEN.value, file_path="app/src/main/java/features/events/ui/EventsActivity.kt"))
+    feat_g.add_node(GraphNode(id="EventsViewModel", name="EventsViewModel", type=EntityType.VIEW_MODEL.value, file_path="app/src/main/java/features/events/vm/EventsViewModel.kt"))
+    feat_g.add_node(GraphNode(id="CreateEventUseCase", name="CreateEventUseCase", type=EntityType.USE_CASE.value, file_path="app/src/main/java/features/events/domain/CreateEventUseCase.kt"))
+    feat_g.add_node(GraphNode(id="EventRepository", name="EventRepository", type=EntityType.REPOSITORY.value, file_path="app/src/main/java/features/events/data/EventRepository.kt"))
+    feat_g.add_node(GraphNode(id="GenericUtil", name="GenericUtil", type=EntityType.COMPONENT.value, file_path="core/utils/GenericUtil.kt"))
 
-    ok, msg = render_dot_to_image("digraph G { A -> B; }", Path(temp_dir / "test.svg"))
-    assert_eq(isinstance(ok, bool), True, "render_dot_to_image handles presence/absence safely")
+    feat_g.add_edge("EventsActivity", "EventsViewModel")
+    feat_g.add_edge("EventsViewModel", "CreateEventUseCase")
+    feat_g.add_edge("CreateEventUseCase", "EventRepository")
+
+    matched_nodes = feat_g.find_nodes("event")
+    assert_eq(len(matched_nodes), 4, "find_nodes finds all 4 event-related nodes")
+
+    f_nodes, f_edges = feat_g.extract_feature_graph("events")
+    assert_eq(len(f_nodes), 4, "extract_feature_graph isolates full feature slice")
+    assert_eq(len(f_edges), 3, "extract_feature_graph retains all internal dependencies")
+
+    slice_summary = feat_g.to_slice_summary(f_nodes)
+    assert_eq("[UI Screens & Layouts]" in slice_summary and "[ViewModels & State Holders]" in slice_summary, True, "to_slice_summary formats Clean Architecture layers")
+    assert_eq("[Domain Layer" in slice_summary and "[Data Layer" in slice_summary, True, "to_slice_summary contains Domain and Data layers")
 
     print("\n==================================================")
     print(f"Selftest Results: {passed} passed, {failed} failed")

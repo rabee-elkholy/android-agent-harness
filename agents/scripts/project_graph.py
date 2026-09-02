@@ -49,6 +49,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--modules", action="store_true", help="Display Gradle module dependency graph")
     parser.add_argument("--arch", action="store_true", help="Display full Clean Architecture layers graph")
     parser.add_argument("--screens", action="store_true", help="List UI screens/layouts and associated ViewModels")
+    parser.add_argument("--feature", metavar="NAME", help="Analyze and display complete Clean Architecture slice for a feature")
     parser.add_argument("--find", metavar="SYMBOL", help="Find symbol/class/screen and its dependencies")
     parser.add_argument("--module", metavar="NAME", help="Focus graph on a specific Gradle module (e.g. :core:data)")
     parser.add_argument("--screen", metavar="NAME", help="Focus graph on a specific screen/composable")
@@ -92,16 +93,48 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     focus_node_id: str | None = None
+    graph_to_render = engine.graph
 
-    # Handle --find query with self-healing
-    if args.find:
-        node, heal_msg = engine.heal_symbol(args.find)
-        if heal_msg:
-            live_print(f"[*] {heal_msg}")
-        if not node:
-            live_print(f"[!] Symbol '{args.find}' not found in code graph.")
+    # Handle --feature query
+    if args.feature:
+        sub_nodes, sub_edges = engine.graph.extract_feature_graph(args.feature, max_depth=args.depth)
+        if not sub_nodes:
+            live_print(f"[!] No feature components found matching '{args.feature}'.")
             return 1
-        focus_node_id = node.id
+        live_print(engine.graph.to_slice_summary(sub_nodes))
+        from _graph_core import DependencyGraph
+        sub_g = DependencyGraph()
+        for sn in sub_nodes.values():
+            sub_g.add_node(sn)
+        for se in sub_edges:
+            sub_g.add_edge(se.source, se.target, kind=se.kind)
+        graph_to_render = sub_g
+
+    # Handle --find query with self-healing and multi-match
+    elif args.find:
+        matches = engine.graph.find_nodes(args.find)
+        if not matches:
+            node, heal_msg = engine.heal_symbol(args.find)
+            if heal_msg:
+                live_print(f"[*] {heal_msg}")
+            if not node:
+                live_print(f"[!] Symbol '{args.find}' not found in code graph.")
+                return 1
+            focus_node_id = node.id
+        elif len(matches) == 1:
+            focus_node_id = matches[0].id
+        else:
+            # Multi-match query: extract unified subgraph across all matching nodes
+            start_ids = [m.id for m in matches[:15]]
+            sub_nodes, sub_edges = engine.graph.extract_subgraph(start_ids, max_depth=args.depth, direction="both")
+            live_print(engine.graph.to_slice_summary(sub_nodes))
+            from _graph_core import DependencyGraph
+            sub_g = DependencyGraph()
+            for sn in sub_nodes.values():
+                sub_g.add_node(sn)
+            for se in sub_edges:
+                sub_g.add_edge(se.source, se.target, kind=se.kind)
+            graph_to_render = sub_g
 
     # Handle --screen query
     elif args.screen:
@@ -148,8 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Filter by graph view
-    graph_to_render = engine.graph
-    if args.modules and not focus_node_id:
+    if args.modules and not focus_node_id and not args.feature and not args.find:
         # Filter to only module nodes
         mod_nodes = {nid: n for nid, n in engine.graph.nodes.items() if n.type == EntityType.MODULE.value}
         mod_edges = [e for e in engine.graph.edges if e.source in mod_nodes and e.target in mod_nodes]

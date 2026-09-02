@@ -128,10 +128,11 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - Read `android-harness/SKILL.md` and any matching domain reference before non-trivial work.
 - **GRAPH-FIRST DISCOVERY BARRIER (MANDATORY)**:
   * Before using `grep_search`, `find_by_name`, or reading multiple source files (`view_file`) to understand any screen, feature, class, or architecture layer, the Lead Agent **MUST FIRST query the Code Graph engine**:
-    `python .agents/scripts/project_graph.py --find <Symbol/Screen/Module> --depth 2`
-  * For UI screens, layouts, and ViewModels discovery: ALWAYS run `python .agents/scripts/project_graph.py --screens` or `--find <ScreenName>`.
-  * For architectural trace and dependencies: ALWAYS run `python .agents/scripts/project_graph.py --path-from <A> --path-to <B>`.
-  * **STRICT PROHIBITION**: Iterative brute-force grepping (`grep_search` cascades) and speculative multi-file reading (`view_file` > 2 files) without a preceding graph topology query are **STRICTLY FORBIDDEN**.
+    - For entire features: `python .agents/scripts/project_graph.py --feature <FeatureName>` or `--find <Symbol>` (auto-extracts full Clean Architecture slice: UI, ViewModels, UseCases, Repositories, Tests).
+    - For UI screens, layouts, and ViewModels discovery: ALWAYS run `python .agents/scripts/project_graph.py --screens` or `--find <ScreenName>`.
+    - For architectural trace and dependencies: ALWAYS run `python .agents/scripts/project_graph.py --path-from <A> --path-to <B>`.
+  * **Graph Query Refinement Invariant**: If a query matches a broad generic utility, refine with specific symbol names discovered in the graph before touching raw file tools.
+  * **STRICT PROHIBITION**: Iterative brute-force grepping (`grep_search` cascades) and speculative multi-file reading (`view_file` > 2 files during discovery/planning) without a preceding graph topology query are **STRICTLY FORBIDDEN**.
   * Use `view_file` and `replace_file_content` ONLY on targeted, precisely located files identified by the graph query. Do not guess symbols.
 - Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
 - **MANDATORY PLANNING**: Any new feature, new screen, new schema/table, or multi-file change MUST create an `implementation_plan.md` artifact (`ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`) and obtain developer approval (via the native interactive **Proceed** button or chat approval) BEFORE modifying or creating production code. Do NOT fire an `ask_question` modal for plan approval; let the native artifact Proceed action handle it. Do not start coding before plan approval.
