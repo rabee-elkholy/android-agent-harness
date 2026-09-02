@@ -201,9 +201,9 @@ def test_foreground_package_multitier_parsing() -> None:
     check(m1 is not None and m1.group(1) == "com.fixture.app", "mCurrentFocus with u0 parsed")
 
     # Test Tier 1 mFocusedApp
-    out2 = "  mFocusedApp=ActivityRecord{3ab42f1 u0 com.fitness.app/.ui.HomeActivity t123}"
+    out2 = "  mFocusedApp=ActivityRecord{3ab42f1 u0 com.fixture.module/.ui.HomeActivity t123}"
     m2 = re.search(r"mFocusedApp=.*?ActivityRecord\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out2)
-    check(m2 is not None and m2.group(1) == "com.fitness.app", "mFocusedApp with u0 parsed")
+    check(m2 is not None and m2.group(1) == "com.fixture.module", "mFocusedApp with u0 parsed")
 
     # Test Tier 2 mResumedActivity
     out3 = "  mResumedActivity: ActivityRecord{9ff1122 u0 com.target.app/com.target.app.DetailActivity t456}"
@@ -212,14 +212,14 @@ def test_foreground_package_multitier_parsing() -> None:
 
 
 def test_grant_permissions_multipackage() -> None:
-    session = DeviceSession(serial="mock", package="com.app.id", launcher="com.madarsoft.fitness/.SplashActivity")
+    session = DeviceSession(serial="mock", package="com.fixture.app", launcher="com.fixture.legacy/.SplashActivity")
     # Verify target_pkgs resolution
     target_pkgs = [session.package] if session.package else []
     if session.launcher and "/" in session.launcher:
         l_pkg = session.launcher.split("/")[0].strip()
         if l_pkg and l_pkg not in target_pkgs:
             target_pkgs.append(l_pkg)
-    check(target_pkgs == ["com.app.id", "com.madarsoft.fitness"], "multi-package targets resolved for permissions")
+    check(target_pkgs == ["com.fixture.app", "com.fixture.legacy"], "multi-package targets resolved for permissions")
 
 
 def main() -> int:
