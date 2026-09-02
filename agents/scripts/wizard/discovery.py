@@ -237,12 +237,35 @@ def discover_ui_framework(text: str, modules: list[str]) -> str:
     return "compose"
 
 
+NON_LOCALE_QUALIFIERS = {
+    "night", "notnight", "land", "port", "square", "round", "long", "notlong",
+    "ldr", "ldrtl", "ldltr", "hdpi", "mdpi", "xhdpi", "xxhdpi", "xxxhdpi", "nodpi",
+    "tvdpi", "anydpi", "small", "normal", "large", "xlarge",
+}
+NON_LOCALE_PATTERNS = [
+    re.compile(r"^v\d+$"),
+    re.compile(r"^sw\d+dp$"),
+    re.compile(r"^w\d+dp$"),
+    re.compile(r"^h\d+dp$"),
+    re.compile(r"^(?:mcc|mnc)\d+$"),
+]
+
+
+def is_language_locale_tag(tag: str) -> bool:
+    tag_lower = tag.lower().strip()
+    if tag_lower in NON_LOCALE_QUALIFIERS:
+        return False
+    if any(pat.match(tag_lower) for pat in NON_LOCALE_PATTERNS):
+        return False
+    return bool(re.match(r"^(?:b\+[a-zA-Z0-9+]+|[a-z]{2,3}(?:-r?[a-zA-Z0-9]+)?)$", tag_lower))
+
+
 def discover_clean_locales(raw_locales: list[str]) -> list[str]:
     locales: list[str] = ["en"]
     for item in raw_locales:
         if item.startswith("values-"):
             tag = item[len("values-") :].split("-")[0].lower()
-            if tag and tag not in locales:
+            if tag and is_language_locale_tag(tag) and tag not in locales:
                 locales.append(tag)
     return locales
 

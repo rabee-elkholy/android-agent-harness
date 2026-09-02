@@ -329,7 +329,8 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                     "msg": f"MVI State class '{trimmed}' is missing @Immutable or @Stable for Compose stability.",
                 })
 
-    if DI_FRAMEWORK.lower() == "hilt" and has_fragment_activity_in_diff and not has_android_entry_point and not is_test:
+    uses_hilt = DI_FRAMEWORK.lower() == "hilt" or "@Inject" in text or "hiltViewModel" in text or "hiltNavGraphViewModels" in text
+    if uses_hilt and has_fragment_activity_in_diff and not has_android_entry_point and not is_test:
         issues.append({
             "file": str(file_path),
             "line": 1,

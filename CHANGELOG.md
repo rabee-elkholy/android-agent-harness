@@ -5,12 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.3] - 2026-09-02
+## [0.25.4] - 2026-09-02
 
-### Zero-Friction Setup Wizard: Automatic Product Name Discovery
-- **Zero-Friction Project Identity (`wizard/questions.py`, `wizard/discovery.py`)**:
-  - Eliminated redundant interactive question `i1` during harness setup and update wizards.
-  - The harness now discovers the project identity automatically from `settings.gradle(.kts)` `rootProject.name` or repository directory name with zero prompt friction.
+### Strict Locale Qualification Filtering, Multi-Package ADB Permissions & Hilt Audit
+- **Strict Locale Qualification Filtering (`wizard/discovery.py`, `_hook_selftest.py`)**:
+  - Filtered out non-language Android resource qualifiers (`night`, `sw*dp`, `w*dp`, `h*dp`, `hdpi`, `v31`, `land`) from `SUPPORTED_LOCALES` in `_product.py`, preserving only true ISO language tags (`['en', 'ar']`).
+- **Multi-Package Permission Grants (`_adb_core.py`, `_adb_core_selftest.py`)**:
+  - Enhanced `grant_common_permissions()` to grant permissions across both `APPLICATION_ID` and launcher package prefix candidates when package IDs diverge.
+- **Deep Hilt Injection Entry Point Auditing (`fast_kt_lint.py`)**:
+  - Enhanced `@AndroidEntryPoint` lint check to trigger when `@Inject` or `hiltViewModel()` is present in diffs even if project-level DI is unspecified.
+- **Zero-Friction Setup Wizard (`wizard/questions.py`, `wizard/discovery.py`)**:
+  - Automatically discovers project identity from `settings.gradle(.kts)` `rootProject.name` or repository directory name with zero interactive prompt friction.
 
 ## [0.25.2] - 2026-09-02
 

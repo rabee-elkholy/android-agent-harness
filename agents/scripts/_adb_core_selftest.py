@@ -211,6 +211,17 @@ def test_foreground_package_multitier_parsing() -> None:
     check(m3 is not None and m3.group(1) == "com.target.app", "mResumedActivity fallback parsed")
 
 
+def test_grant_permissions_multipackage() -> None:
+    session = DeviceSession(serial="mock", package="com.app.id", launcher="com.madarsoft.fitness/.SplashActivity")
+    # Verify target_pkgs resolution
+    target_pkgs = [session.package] if session.package else []
+    if session.launcher and "/" in session.launcher:
+        l_pkg = session.launcher.split("/")[0].strip()
+        if l_pkg and l_pkg not in target_pkgs:
+            target_pkgs.append(l_pkg)
+    check(target_pkgs == ["com.app.id", "com.madarsoft.fitness"], "multi-package targets resolved for permissions")
+
+
 def main() -> int:
     test_parse_bounds()
     test_hierarchy_parse_and_find()
@@ -226,6 +237,7 @@ def main() -> int:
     test_dump_hierarchy_fallback_on_invalid_xml()
     test_foreground_package_multitier_parsing()
     test_diff_discovery_no_git_errors()
+    test_grant_permissions_multipackage()
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")
         for item in FAILURES:

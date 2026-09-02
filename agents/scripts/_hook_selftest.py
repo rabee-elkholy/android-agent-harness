@@ -1529,6 +1529,13 @@ ok_norm = (
 print(f"wizard records zoho_mcp and language preferences: {'OK' if ok_norm else 'FAIL'}")
 failed += int(not ok_norm)
 
+from wizard.discovery import discover_clean_locales  # noqa: E402
+raw_test_locales = ["values", "values-ar", "values-en", "values-night", "values-sw360dp", "values-v31", "values-hdpi", "values-fr", "values-land"]
+cleaned = discover_clean_locales(raw_test_locales)
+ok_clean_loc = cleaned == ["en", "ar", "fr"]
+print(f"wizard clean locale qualification filtering: {'OK' if ok_clean_loc else 'FAIL'}")
+failed += int(not ok_clean_loc)
+
 greenfield_facts = {
     "product": "NewApp",
     "pythons": ["python"],
@@ -1551,7 +1558,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.25.3"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.25.4"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

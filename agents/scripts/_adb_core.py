@@ -777,8 +777,14 @@ class DeviceSession:
             "android.permission.CAMERA",
             "android.permission.READ_MEDIA_IMAGES",
         ]
-        for perm in permissions:
-            self.run_adb(["shell", "pm", "grant", self.package, perm])
+        target_pkgs = [self.package] if self.package else []
+        if self.launcher and "/" in self.launcher:
+            l_pkg = self.launcher.split("/")[0].strip()
+            if l_pkg and l_pkg not in target_pkgs:
+                target_pkgs.append(l_pkg)
+        for pkg in target_pkgs:
+            for perm in permissions:
+                self.run_adb(["shell", "pm", "grant", pkg, perm])
 
     # -- hierarchy ---------------------------------------------------------
     def _dump_via_execout(self) -> str:
