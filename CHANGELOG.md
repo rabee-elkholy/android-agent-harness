@@ -5,12 +5,13 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.5] - 2026-09-02
+## [0.25.6] - 2026-09-02
 
-### Interactive Update Summary, Strict Locale Qualification, Multi-Package ADB & Hilt Audit
+### Graph-First Codebase Exploration Barrier, Automated Version Diff & Strict Locales
+- **Graph-First Codebase Exploration Barrier (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
+  - Mandated querying the Code Graph engine (`project_graph.py --find` / `--screens` / `--path-from/--path-to`) as the mandatory first-line discovery barrier before performing wide greps or multiple file views, preventing token waste and brute-force search cascades.
 - **Automated Version Diff Changelog Highlights (`install_or_update.py`, `docs/install-or-update-prompt.md`)**:
-  - Automatically extracts key feature highlights between the previous installed version and the new version directly from `CHANGELOG.md`.
-  - Enriched the console output, JSON payload, and final completion card with a concise **What's New (Highlights since previous version)** summary.
+  - Automatically extracts key feature highlights between the previous installed version and the new version directly from `CHANGELOG.md` for interactive update summaries.
 - **Strict Locale Qualification Filtering (`wizard/discovery.py`, `_hook_selftest.py`)**:
   - Filtered out non-language Android resource qualifiers (`night`, `sw*dp`, `w*dp`, `h*dp`, `hdpi`, `v31`, `land`) from `SUPPORTED_LOCALES` in `_product.py`, preserving only true ISO language tags (`['en', 'ar']`).
 - **Multi-Package Permission Grants (`_adb_core.py`, `_adb_core_selftest.py`)**:

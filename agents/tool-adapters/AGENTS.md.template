@@ -56,6 +56,16 @@ Dispatch when needed:
 - `test-quality-reviewer-agent`: Unit and UI test quality audits (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
 - `qa-e2e-planner-agent`: Authors diff-grounded positive/negative/edge test cases in the declarative e2e-case YAML for `run_e2e_qa.py` (read-only; returns the YAML).
 
+## Graph-First Codebase Exploration (MANDATORY)
+
+- **GRAPH-FIRST DISCOVERY BARRIER**:
+  * Before using `grep_search`, `find_by_name`, or reading multiple source files (`view_file`) to understand any screen, feature, class, or architecture layer, the Lead Agent **MUST FIRST query the Code Graph engine**:
+    `{{PY}} .agents/scripts/project_graph.py --find <Symbol/Screen/Module> --depth 2`
+  * For UI screens, layouts, and ViewModels discovery: ALWAYS run `{{PY}} .agents/scripts/project_graph.py --screens` or `--find <ScreenName>`.
+  * For architectural trace and dependencies: ALWAYS run `{{PY}} .agents/scripts/project_graph.py --path-from <A> --path-to <B>`.
+  * **STRICT PROHIBITION**: Iterative brute-force grepping (`grep_search` cascades) and speculative multi-file reading (`view_file` > 2 files) without a preceding graph topology query are **STRICTLY FORBIDDEN**.
+  * Use `view_file` and `replace_file_content` ONLY on targeted, precisely located files identified by the graph query.
+
 ## Phase Boundaries & High-Signal Chat
 
 - **Autonomous Phase Pipeline & Checkpoint Commits**: In multi-phase tasks, execute strictly phase-by-phase. When Phase N finishes (5-leaf review PASS, unit tests PASS, `preflight_check.py` PASS, `:assembleDebug`, device installation via `run_device.py install-start`, and device smoke verification):
