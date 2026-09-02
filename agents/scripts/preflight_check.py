@@ -1,4 +1,4 @@
-"""Preflight: hook selftest, string parity, Room migrations, fast Kotlin lint, Maestro E2E check.
+"""Preflight: hook selftest, string parity, Room migrations, fast Kotlin lint.
 
 Usage: python .agents/scripts/preflight_check.py
 """
@@ -10,7 +10,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
-from _maestro_core import ensure_maestro_installed, get_maestro_install_instructions  # noqa: E402
 from _repo_files import REPO, changed_paths, ensure_local_git_privacy  # noqa: E402
 from risk_tier import check_risk_approval  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
@@ -53,16 +52,6 @@ def main() -> int:
     risk_ok, risk_tier_name, risk_msg = check_risk_approval(REPO)
     live_print(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
 
-    live_print("\n5. Checking Maestro E2E Test Engine...")
-    maestro_ok, maestro_info, _ = ensure_maestro_installed()
-    if maestro_ok:
-        live_print(f"[OK] {maestro_info}")
-    else:
-        live_print(f"[WARN/ENV] {maestro_info}")
-        live_print("  Install guidance:")
-        for line in get_maestro_install_instructions().splitlines():
-            live_print(f"    {line}")
-
     live_print("\n==================================================")
     overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok
     write_gate_result("preflight", {
@@ -76,7 +65,6 @@ def main() -> int:
             "room_migrations": db_ok,
             "fast_kt_lint": lint_code,
             "risk_approval": risk_ok,
-            "maestro_ready": maestro_ok,
         },
         "detail": "" if overall_pass else "preflight steps failed; see step exit codes",
     })

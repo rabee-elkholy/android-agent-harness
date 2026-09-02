@@ -1154,7 +1154,7 @@ class GraphEngine:
 
             if scripts_dir.is_dir():
                 for sp in scripts_dir.glob("*.py"):
-                    if not sp.name.startswith("_") or sp.name in ("_maestro_core.py", "_adb_core.py"):
+                    if not sp.name.startswith("_") or sp.name in ("_adb_core.py",):
                         rel = sp.relative_to(self.repo).as_posix()
                         current_files[rel] = sp
             if workflows_dir.is_dir():

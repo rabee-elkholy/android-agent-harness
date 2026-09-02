@@ -517,6 +517,7 @@ def auto_from_facts(facts: dict) -> dict:
         "chat_language": "mirror",
         "zoho_language": "en_titles_ar_comments",
         "pm_provider": DEFAULT_PM_PROVIDER,
+        "device_verification": "manual_only",
     }
 
 

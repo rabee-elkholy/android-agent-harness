@@ -28,21 +28,21 @@ After non-trivial implementation:
 5. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
 6. `{{PY}} .agents/scripts/preflight_check.py` (Mandatory Preflight Gate: must pass with 0 errors before assemble — never assemble if `[FAIL]`)
 7. `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
-8. Pre-E2E Confirmation & Device Verification: Ask the developer via `ask_question` ("Start E2E round?" / "Skip E2E") and wait for the choice; on Skip, mark device verification `skipped by developer` (do NOT author test cases or invoke `qa-e2e-planner-agent`). On Start E2E, the agent MUST act as a true Senior QA Tester by deriving positive/negative/edge test cases from the diff (`.agents/workflows/e2e-qa.md`), validating them, and executing them on device (`{{PY}} .agents/scripts/run_device.py install-start` + `{{PY}} .agents/scripts/run_e2e_qa.py --cases .agents/e2e_cases/<task>/<phase>.yaml`); `run_e2e_smoke.py` remains a fast diff-aware fallback. If no device is connected, HALT and prompt the developer; never silently skip device verification.
+8. **Device Verification & Interactive Manual Sign-off**:
+   - `{{PY}} .agents/scripts/run_device.py install-start` (Installs and launches the target Activity/Screen on the connected device).
+   - If no device is connected, HALT and prompt the developer; never silently skip device verification.
+   - The agent writes 2-3 simple, human, numbered manual test steps in chat explaining what to check on screen.
+   - The agent triggers the interactive confirmation modal (`ask_question`): *"Please test the steps above on your device and confirm the result:"* with options `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
+   - On **PASS**: Output the Phase Milestone / Final Delivery Card with the drafted Conventional Commit message.
+   - On **FAIL**: Investigate with `{{PY}} .agents/scripts/logcat_doctor.py` and fix the defect.
 9. **Exit-code protocol**: exit `1` = code failure (fix the code). Exit `30` / `[ENV-FAILURE]` marker = environment or ambiguous failure — HALT immediately, never modify code/Gradle/manifest to bypass, report the reason to the developer (details in `.agents/state/env_failure.json`).
 10. **Round cap**: review rounds are counted per task (`.agents/state/review_rounds.json`, reset when HEAD moves). At the cap (3) `review_package.py` prints a `REVIEW ROUND CAP` warning — output a Review Round Summary Card and ask the developer: continue / rollback / stop. Never silently loop.
 11. **Final verdict**: after all gates, run `{{PY}} .agents/scripts/final_verdict.py` — it aggregates every gate artifact and the 5-leaf verdict into `.agents/state/last_verdict.json` (`APPROVED` required before delivery; `ENV_BLOCKED` follows the exit-30 halt protocol; `STALE` means code changed after review — regenerate the package).
 12. **Baseline-aware tests**: if `.agents/state/baseline.json` exists, run `{{PY}} .agents/scripts/run_tests_gate.py` as the test gate — `BASELINE_IGNORED` failures are tolerated, `NEW_REGRESSION` blocks delivery. Capture baseline: `{{PY}} .agents/scripts/baseline_capture.py` on a clean tree only; refresh needs developer instruction + `--approve`.
 13. **Risk tiers & approvals**: `risk_tier.py` classifies diffs (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). `HIGH`/`CRITICAL` changes require developer approval (prompt via `ask_question` modal in chat, then `{{PY}} .agents/scripts/approve_risk.py --approve`) before `preflight_check.py` can pass. Never instruct the developer to run `approve_risk.py` manually in terminal. `impact_analyzer.py` provides advisory test/UI impact maps.
-14. **APK Freshness Barrier**: `_apk_freshness.py` strictly prevents installing or testing stale APKs — `run_device.py`, `run_e2e_qa.py`, and `run_e2e_smoke.py` automatically reject APKs older than modified source files or built on mismatched git commits, enforcing a fresh `{{ASSEMBLE}}` compile.
+14. **APK Freshness Barrier**: `_apk_freshness.py` strictly prevents installing stale APKs — `run_device.py` automatically rejects APKs older than modified source files or built on mismatched git commits, enforcing a fresh `{{ASSEMBLE}}` compile.
 15. **Smart Test Promotion**: When test files (`*Test.kt`) are modified, `test-quality-reviewer-agent` is automatically mandated as a 6th parallel leaf to audit assertion depth, mocking integrity, and coroutine test dispatchers before build.
-16. **Autonomous Senior QA & Declarative E2E Scenarios**: `run_e2e_qa.py` is the test-case-aware Senior QA engine; `run_e2e_smoke.py` is the fast diff-aware fallback. Both share `_adb_core.py` and cover 4 explicit scenarios:
-   - **Scenario A (New Features & User Journeys)**: The agent MUST author and execute a declarative test-case file (`.agents/e2e_cases/<task>/<phase>.yaml`) with positive/negative/edge cases covering full entry-to-exit flow (`launchApp`, `tapOn`, `inputText`, `scrollUntilVisible`, `swipeLeft`, `swipeRight`, `assertVisible`, `assertText`, `assertNotVisible`, `assertChecked`, `assertSelected`, `setNetwork`).
-   - **Scenario B (UI Bugfixes & Screen Refactors)**: The agent executes diff-grounded cases (`{{PY}} .agents/scripts/run_e2e_qa.py`) or diff-aware auto-discovery (`{{PY}} .agents/scripts/run_e2e_smoke.py`), which automatically launches modified Activities/Screens directly (`am start -n`), validates visible target texts, asserts clickable buttons, and stress-tests scroll gestures.
-   - **Scenario C (Deep Links & Navigation Routing)**: For deep-link or routing changes, the agent executes `{{PY}} .agents/scripts/run_e2e_smoke.py --target-deeplink <uri>` to verify URI resolution and screen rendering.
-   - **Scenario D (Pure Data / Domain / Room / Worker Logic)**: The agent executes standard launch verification to confirm DI (Hilt), Room database schema migrations, and background workers boot cleanly on real Android runtime without Logcat crashes or ANRs.
-   - **Failure Forensics**: On any step failure, instant forensics are captured to `.agents/state/e2e/` (screenshot, UI hierarchy XML, Logcat slice) — never deliver with E2E failures.
-17. **Diagnostic Probing Sandbox & Zero-Leakage Barrier**: Temporary probing logs tagged with `// [HARNESS-PROBE]` may be used during bug investigation without invoking review rounds. `fast_kt_lint.py` and `preflight_check.py` strictly reject stray probes with `exit 1` (`STRAY_DIAGNOSTIC_PROBE`) before review or build.
+16. **Diagnostic Probing Sandbox & Zero-Leakage Barrier**: Temporary probing logs tagged with `// [HARNESS-PROBE]` may be used during bug investigation without invoking review rounds. `fast_kt_lint.py` and `preflight_check.py` strictly reject stray probes with `exit 1` (`STRAY_DIAGNOSTIC_PROBE`) before review or build.
 
 Antigravity `hooks.json` enforces this barrier automatically. Other tools must follow it from this file.
 
@@ -54,7 +54,6 @@ Dispatch when needed:
 - `qa-diagnostics-agent`: Logcat crash forensics and ANR triage.
 - `android-ui-expert-agent`: Jetpack Compose and XML UI layout / RTL guidance.
 - `test-quality-reviewer-agent`: Unit and UI test quality audits (`*Test.kt`), verifying assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
-- `qa-e2e-planner-agent`: Authors diff-grounded positive/negative/edge test cases in the declarative e2e-case YAML for `run_e2e_qa.py` (read-only; returns the YAML).
 
 ## Graph-First Codebase Exploration (MANDATORY)
 

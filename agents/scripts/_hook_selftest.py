@@ -2521,9 +2521,9 @@ ok_wizard_i22 = (
     ok_i22_present
     and norm_i22_e2e.get("device_verification") == "autonomous_e2e"
     and norm_i22_manual.get("device_verification") == "manual_only"
-    and norm_i22_default.get("device_verification") == "autonomous_e2e"
+    and norm_i22_default.get("device_verification") == "manual_only"
 )
-print(f"wizard I.22 device-verification wiring (default E2E): {'OK' if ok_wizard_i22 else 'FAIL'}")
+print(f"wizard I.22 device-verification wiring (default manual_only): {'OK' if ok_wizard_i22 else 'FAIL'}")
 failed += int(not ok_wizard_i22)
 
 # --- v0.14.7: Hierarchy-Aware Gitignore Deduplication & CLI Ergonomics ---
