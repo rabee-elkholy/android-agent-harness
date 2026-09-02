@@ -25,9 +25,6 @@ GIT_POLICY = "never"
 # Install confirmation (setup wizard I.10): "confirm" (agent must ask the developer before device install)
 # | "allow" (install without asking). Enforced via the invocation reminder; the safety hook cannot see chat.
 INSTALL_CONFIRM = "confirm"
-# E2E confirmation: "confirm" (agent must ask the developer via ask_question before E2E)
-# | "allow" (run E2E without asking). Enforced via the invocation reminder.
-E2E_CONFIRM = "confirm"
 # Project tracker (setup wizard I.20). Absent/empty = zoho_sprints (historical default).
 # Options: zoho_sprints | github_projects | jira_mcp | linear_mcp | none
 PM_PROVIDER = "zoho_sprints"
@@ -37,9 +34,8 @@ UI_FRAMEWORK = "compose"  # "compose" | "xml_views" | "hybrid"
 SUPPORTED_LOCALES = ["en", "ar"]  # List of discovered locale tags e.g. ["en", "ar", "fr"]
 PROJECT_STRUCTURE = "single_module"  # "single_module" | "multi_module" | "kmp"
 # Device verification mode (setup wizard I.22).
-# Options: autonomous_e2e (AI Agent smoke tests UI on phone + sign-off)
-#        | manual_only (Developer manual steps)
+# Options: manual_only (Developer manual steps - Default)
 #        | disabled (assemble only; developer tests outside the harness)
-DEVICE_VERIFICATION_MODE = "autonomous_e2e"
+DEVICE_VERIFICATION_MODE = "manual_only"
 
 

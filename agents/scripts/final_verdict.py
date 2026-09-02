@@ -256,7 +256,7 @@ def build_verdict(
     head = head_sha if head_sha is not None else current_head_sha()
     fp = tree_fp if tree_fp is not None else tree_code_fingerprint()
     files = working_files(files_override)
-    required_devices = str(bits.get("device_mode") or "autonomous_e2e") != "disabled"
+    required_devices = str(bits.get("device_mode") or "manual_only") != "disabled"
 
     checks = [
         _normalize_check(
@@ -270,8 +270,6 @@ def build_verdict(
     ]
     if required_devices:
         checks.append(_normalize_check("device", read_gate_result("device"), head))
-        if str(bits.get("device_mode") or "manual_only") == "autonomous_e2e":
-            checks.append(_normalize_check("e2e", read_gate_result("e2e"), head))
     review_check, leaves_map, stale_review, expired = _review_outcome(fp)
     checks.append(review_check)
 

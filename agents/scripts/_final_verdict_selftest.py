@@ -86,7 +86,6 @@ def all_pass_results() -> None:
     write_result("preflight", "PASS")
     write_result("gradle-app-assembledebug", "PASS")
     write_result("device", "PASS")
-    write_result("e2e", "PASS")
 
 
 def test_approved() -> None:
@@ -111,7 +110,7 @@ def test_missing_artifacts() -> None:
     verdict = build_verdict(task_id="T1", head_sha=HEAD, tree_fp=FP, files_override=[("a.kt", "d1")])
     check(verdict["status"] == "BLOCKED", "missing artifacts -> BLOCKED")
     names = {item.split(":")[0] for item in verdict["blocked_by"]}
-    check({"unit_tests", "preflight", "assemble", "device", "e2e"} <= names, "blocked_by lists every missing gate")
+    check({"unit_tests", "preflight", "assemble", "device"} <= names, "blocked_by lists every missing gate")
 
 
 def test_env_blocked() -> None:
@@ -209,7 +208,7 @@ def test_device_mode_disabled() -> None:
     bits = {"unit_test_task": ":app:testDebugUnitTest", "assemble_task": ":app:assembleDebug", "device_mode": "disabled"}
     verdict = build_verdict(task_id="T1", head_sha=HEAD, tree_fp=FP, files_override=[("a.kt", "d1")], bits=bits)
     names = {c["name"] for c in verdict["checks"]}
-    check("device" not in names and "e2e" not in names, "device/e2e not required in disabled mode")
+    check("device" not in names, "device not required in disabled mode")
     check(verdict["status"] == "APPROVED", "disabled mode approves without device gates")
 
 

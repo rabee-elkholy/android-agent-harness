@@ -278,13 +278,12 @@ def generate_product_py(repo: Path, answers: dict, kit: Path) -> Path:
     allow_emulator = False if answers.get("device_policy") == "physical-only" else True
     git_policy = answers.get("git_policy") or "never"
     install_confirm = answers.get("install_confirm") or "confirm"
-    e2e_confirm = answers.get("e2e_confirm") or "confirm"
     pm_provider = answers.get("pm_provider") or "zoho_sprints"
     di_framework = answers.get("di_framework") or "hilt"
     ui_framework = answers.get("ui_framework") or "compose"
     supported_locales = answers.get("supported_locales") or ["en", "ar"]
     project_structure = answers.get("project_structure") or "single_module"
-    device_verification_mode = answers.get("device_verification") or "autonomous_e2e"
+    device_verification_mode = answers.get("device_verification") or "manual_only"
 
     code = f'''"""Product identity for this checkout. Setup overwrites these from Gradle/manifests."""
 from __future__ import annotations
@@ -306,7 +305,6 @@ ZOHO_LANGUAGE = TRACKER_LANGUAGE
 ALLOW_EMULATOR = {repr(allow_emulator)}
 GIT_POLICY = {repr(git_policy)}
 INSTALL_CONFIRM = {repr(install_confirm)}
-E2E_CONFIRM = {repr(e2e_confirm)}
 PM_PROVIDER = {repr(pm_provider)}
 DI_FRAMEWORK = {repr(di_framework)}
 UI_FRAMEWORK = {repr(ui_framework)}
