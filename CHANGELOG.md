@@ -5,6 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.3] - 2026-09-02
+
+### Application ID Resolution, PM Tracker Jargon Elimination & Local Privacy
+- **Application ID & Launcher Package Discovery (`install_or_update.py`)**:
+  - Enhanced `generate_product_py()` to dynamically discover `application_id` via `wizard.discovery` and fallback to the package prefix of the resolved launcher activity, preventing incorrect `com.<product>.app` defaults in client checkouts.
+- **Zero Emojis & Zero Internal AI Jargon Governance (`AGENTS.md`, `harness-rules.md`, `pre_invocation_reminder.py`)**:
+  - Mandated strictly human and QA-centric PM tracker comments (Zoho Sprints, Jira, Linear, GitHub Projects), prohibiting emojis and internal AI tokens (`5-Leaf Review`, `مراجع الهارنيس`, `Maestro Suite (1/1 Flows Passed)`).
+  - Enforced structured, sequential testing steps for QA verification.
+- **Local Privacy for Temporary Setup JSON Files (`install_or_update.py`)**:
+  - Automatically added temporary setup dump and input files to local `.git/info/exclude` to guarantee zero working-tree pollution.
+
 ## [0.27.2] - 2026-09-02
 
 ### Anti-Dummy Maestro Gate, APK Freshness Parity & Final Verdict Hardening
@@ -21,9 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Application ID & Namespace Fallback Discovery (`wizard/discovery.py`)**:
   - Added `AndroidManifest.xml` package attribute fallback to ensure real package name is always discovered even when missing from Gradle DSL blocks.
 
-## [0.27.1] - 2026-09-02
+## [0.27.0] - 2026-09-02
 
-### Harness Infrastructure Code Graph Indexing, Anti-Guessing Barrier & Permanent Windows PATH
+### Maestro E2E Engine Integration, Harness Code Graph Indexing & Automated CLI Setup
 - **Harness Infrastructure Code Graph Indexing (`_graph_core.py`, `project_graph.py`)**:
   - Indexed all Harness scripts, workflows, and subagents into the universal Code Graph with entity types `[HARNESS_TOOL]`, `[WORKFLOW_PLAYBOOK]`, and `[SUBAGENT_ROSTER]`.
   - Added `project_graph.py --harness` and `--tools` CLI options to render an instant, comprehensive topology directory of all tools, workflows, and subagents.
@@ -34,10 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Strictly prohibited authoring custom ADB scratch Python scripts (`scratch/test_*.py`) and hardcoded device serials, enforcing declarative Maestro YAML flows in `.agents/e2e_cases/`.
 - **Permanent Windows User PATH Persistence (`_maestro_core.py`)**:
   - Added `_persist_maestro_to_path()` in `_maestro_core.py` to permanently register `%USERPROFILE%\.maestro\bin` in the Windows User Environment Registry upon installation.
-- **Expanded Code Graph Self-Test Suite (`_graph_selftest.py`)**:
-  - Added Test 8 validating Harness tool, workflow, and subagent discovery, search matching, and inventory rendering (45/45 assertions passed, 0 failures).
-
-## [0.27.0] - 2026-09-02
 
 ### Maestro E2E Engine Integration, Automated CLI Setup & Native Multi-Flow QA
 - **Maestro E2E Engine Core (`_maestro_core.py`, `run_e2e_qa.py`, `run_e2e_smoke.py`)**:
