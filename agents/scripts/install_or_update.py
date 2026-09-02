@@ -246,6 +246,18 @@ def generate_product_py(repo: Path, answers: dict, kit: Path) -> Path:
     application_id = answers.get("application_id")
     if not application_id:
         app_ids = answers.get("application_ids") or []
+        if not app_ids:
+            try:
+                from wizard.discovery import discover_application_ids
+                app_ids = discover_application_ids(repo)
+            except Exception:
+                app_ids = []
+        if not app_ids:
+            launcher_candidate = str(answers.get("launcher") or "")
+            if "/" in launcher_candidate:
+                pkg_from_launcher = launcher_candidate.split("/")[0].strip()
+                if pkg_from_launcher and "." in pkg_from_launcher:
+                    app_ids = [pkg_from_launcher]
         clean_name = re.sub(r"[^a-zA-Z0-9]", "", product_name).lower() or "app"
         application_id = app_ids[0] if app_ids else f"com.{clean_name}.app"
 
