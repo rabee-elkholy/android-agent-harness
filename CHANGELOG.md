@@ -5,6 +5,20 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-09-02
+
+### Universal Hub Defense, Comment & Keyword Filtering, and Zero-Noise Graph Slices
+- **Universal Hub Defense & Star-Topology Blast-Radius Protection (`_graph_core.py`, `project_graph.py`)**:
+  - Implemented `is_hub_or_base_symbol()` to dynamically identify framework roots (`Activity`, `Fragment`, `ViewModel`, `Context`, `Application`, `R`), generic base types (`Base*`, `*Base`, `Abstract*`), and high-fan-in symbols across any Android project.
+  - Automatically restricts subgraph traversal to direct outgoing dependencies (`direction="outgoing"`), eliminating reverse hub expansion that previously caused thousands of unrelated application classes to flood feature queries.
+- **Universal Static Code Parser Hygiene & Comment Stripping (`_graph_core.py`)**:
+  - Added `strip_comments_and_strings()` to eliminate single-line comments, multi-line blocks, and string literals before running symbol extraction regexes.
+  - Implemented language-standard `KOTLIN_RESERVED_DECLARATIONS` filter, completely preventing phantom declarations (`companion`, `val`, `var`, `for`, `is`, `the`) from polluting the code graph.
+- **Multi-Module & Directory-Scoped Feature Boundary Extraction (`_graph_core.py`)**:
+  - Enhanced `extract_feature_graph()` to match standard Android feature modules (`:feature:<name>`, `:features:<name>`), packages (`*.feature.<name>.*`), and directory structures (`/features/<name>/`, `/feature/<name>/`) across any project architecture.
+- **Expanded Self-Test Suite (`_graph_selftest.py`)**:
+  - Added Test 7 validating comment stripping, keyword filtering, and hub explosion defense with 30-screen star topology fixtures (38/38 assertions passed, 0 failures).
+
 ## [0.25.9] - 2026-09-02
 
 ### Feature-Level Architecture Slice Slices, Multi-Node Disambiguation & Discovery Invariant
@@ -195,7 +209,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Change Impact Analysis & Dependency Graph (`impact_analyzer.py`)**:
   - Built an AST/regex-based Kotlin/Java dependency indexer calculating direct and transitive (depth 2) dependencies, mapping modified symbols to impacted unit tests and UI surfaces for focused verification.
 
-## [0.17.0] - 2026-08-31
+**Included in 0.17.0 (2026-08-31):**
 
 ### One-Command Deterministic Harness Engine & Diff-Scoped Quality Guards
 - **Anti-Hallucination Invariant & Background Task Protocol (0.17.2)**:

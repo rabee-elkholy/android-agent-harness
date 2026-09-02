@@ -274,6 +274,69 @@ def run_tests() -> bool:
     assert_eq("[UI Screens & Layouts]" in slice_summary and "[ViewModels & State Holders]" in slice_summary, True, "to_slice_summary formats Clean Architecture layers")
     assert_eq("[Domain Layer" in slice_summary and "[Data Layer" in slice_summary, True, "to_slice_summary contains Domain and Data layers")
 
+    # -----------------------------------------------------------------
+    # Test 7: Universal Hub Defense, Comment Stripping & Keyword Filtering
+    # -----------------------------------------------------------------
+    print("\n[*] Test 7: Universal Hub Defense & Keyword Filtering")
+    temp_dir = Path(tempfile.mkdtemp())
+    try:
+        src_dir = temp_dir / "app" / "src" / "main" / "java" / "com" / "shop" / "features" / "orders"
+        src_dir.mkdir(parents=True)
+        complex_kt = src_dir / "OrderDetailsActivity.kt"
+        complex_kt.write_text(
+            '''
+            package com.shop.features.orders
+
+            // This is a comment: val orderId = 123 for testing
+            /* Multi-line comment
+               class PhantomInComment
+               companion object { val test = "hello" }
+            */
+            import com.shop.core.BaseActivity
+            import com.shop.features.orders.OrderViewModel
+
+            class OrderDetailsActivity : BaseActivity() {
+                companion object {
+                    const val EXTRA_ID = "the_order_id"
+                }
+                val orderName: String = "for orders"
+            }
+            ''',
+            encoding="utf-8",
+        )
+
+        nodes = parse_code_file(complex_kt, temp_dir)
+        node_names = [n.name for n in nodes]
+        assert_eq("OrderDetailsActivity" in node_names, True, "Discovered real class OrderDetailsActivity")
+        assert_eq("companion" not in node_names, True, "No phantom 'companion' node")
+        assert_eq("val" not in node_names, True, "No phantom 'val' node")
+        assert_eq("for" not in node_names, True, "No phantom 'for' node")
+        assert_eq("PhantomInComment" not in node_names, True, "Comment contents stripped")
+
+        # Test Hub explosion protection
+        hub_g = DependencyGraph()
+        hub_g.add_node(GraphNode(id="BaseActivity", name="BaseActivity", type=EntityType.SCREEN.value))
+        hub_g.add_node(GraphNode(id="OrderDetailsActivity", name="OrderDetailsActivity", type=EntityType.SCREEN.value, file_path="features/orders/OrderDetailsActivity.kt"))
+        hub_g.add_node(GraphNode(id="OrderViewModel", name="OrderViewModel", type=EntityType.VIEW_MODEL.value, file_path="features/orders/OrderViewModel.kt"))
+
+        # Add 30 other unrelated screens depending on BaseActivity
+        for i in range(30):
+            other_id = f"Screen_{i}"
+            hub_g.add_node(GraphNode(id=other_id, name=other_id, type=EntityType.SCREEN.value))
+            hub_g.add_edge(other_id, "BaseActivity")
+
+        hub_g.add_edge("OrderDetailsActivity", "BaseActivity")
+        hub_g.add_edge("OrderDetailsActivity", "OrderViewModel")
+
+        # Subgraph extraction from OrderDetailsActivity should NOT pull the 30 other screens
+        sub_n, sub_e = hub_g.extract_subgraph(["OrderDetailsActivity"], max_depth=2, direction="outgoing")
+        assert_eq("OrderDetailsActivity" in sub_n, True, "Contains focus node")
+        assert_eq("OrderViewModel" in sub_n, True, "Contains ViewModel")
+        assert_eq(len([k for k in sub_n if k.startswith("Screen_")]), 0, "Hub defense: 0 unrelated screens pulled")
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
     print("\n==================================================")
     print(f"Selftest Results: {passed} passed, {failed} failed")
     print("==================================================")

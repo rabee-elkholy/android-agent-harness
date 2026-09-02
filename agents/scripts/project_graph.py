@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # Multi-match query: extract unified subgraph across all matching nodes
             start_ids = [m.id for m in matches[:15]]
-            sub_nodes, sub_edges = engine.graph.extract_subgraph(start_ids, max_depth=args.depth, direction="both")
+            sub_nodes, sub_edges = engine.graph.extract_subgraph(start_ids, max_depth=args.depth, direction="outgoing")
             live_print(engine.graph.to_slice_summary(sub_nodes))
             from _graph_core import DependencyGraph
             sub_g = DependencyGraph()

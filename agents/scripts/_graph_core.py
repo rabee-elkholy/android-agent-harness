@@ -88,12 +88,131 @@ class GraphEdge:
         return cls(**data)
 
 
+# Standard Android Framework, Jetpack & Java/Kotlin root types across ANY Android codebase
+FRAMEWORK_ROOT_TYPES = {
+    # Android SDK & Jetpack Core
+    "Activity",
+    "Fragment",
+    "ComponentActivity",
+    "AppCompatActivity",
+    "FragmentActivity",
+    "DialogFragment",
+    "BottomSheetDialogFragment",
+    "Application",
+    "Context",
+    "ContextWrapper",
+    "Service",
+    "BroadcastReceiver",
+    "ContentProvider",
+    "View",
+    "ViewGroup",
+    "R",
+    "BuildConfig",
+    # Architecture Components
+    "ViewModel",
+    "AndroidViewModel",
+    # Java/Kotlin standard roots
+    "Object",
+    "Any",
+    "Throwable",
+    "Exception",
+    "Serializable",
+    "Parcelable",
+}
+
+
+def is_hub_or_base_symbol(name: str, fan_in_count: int = 0) -> bool:
+    """Universally detects framework roots, generic base classes (Base* / *Base / Abstract*), or high fan-in hubs."""
+    if name in FRAMEWORK_ROOT_TYPES:
+        return True
+    if name.startswith("Base") or name.endswith("Base") or name.startswith("Abstract") or name.endswith("Abstract"):
+        return True
+    # High fan-in threshold: any symbol imported/depended on by >= 25 classes is a project-level hub
+    if fan_in_count >= 25:
+        return True
+    return False
+
+
+# Kotlin & Java language specification keywords to ignore in declarations
+KOTLIN_RESERVED_DECLARATIONS = {
+    "companion",
+    "object",
+    "val",
+    "var",
+    "fun",
+    "class",
+    "interface",
+    "get",
+    "set",
+    "for",
+    "in",
+    "is",
+    "as",
+    "when",
+    "if",
+    "else",
+    "return",
+    "override",
+    "private",
+    "public",
+    "internal",
+    "protected",
+    "import",
+    "package",
+    "where",
+    "by",
+    "constructor",
+    "init",
+    "typealias",
+    "enum",
+    "sealed",
+    "data",
+    "abstract",
+    "open",
+    "final",
+    "annotation",
+    "suspend",
+    "inline",
+    "value",
+    "operator",
+    "infix",
+    "tailrec",
+    "external",
+    "const",
+    "lateinit",
+    "vararg",
+    "reified",
+    "crossinline",
+    "noinline",
+    "it",
+    "this",
+    "super",
+    "null",
+    "true",
+    "false",
+}
+
+
+def strip_comments_and_strings(text: str) -> str:
+    """Removes single-line comments, multi-line comments, and string literals for accurate symbol parsing."""
+    # Remove multi-line comments /* ... */
+    text = re.sub(r"/\*[\s\S]*?\*/", " ", text)
+    # Remove single-line comments // ...
+    text = re.sub(r"//.*$", " ", text, flags=re.MULTILINE)
+    # Remove triple-quoted strings """ ... """
+    text = re.sub(r'"""[\s\S]*?"""', '""', text)
+    # Remove standard double-quoted strings " ... " (handling escaped quotes)
+    text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+    return text
+
+
 # Regex patterns for static parsing
 PACKAGE_PATTERN = re.compile(r"^\s*package\s+([a-zA-Z0-9_.]+)", re.MULTILINE)
 IMPORT_PATTERN = re.compile(r"^\s*import\s+(?:static\s+)?([a-zA-Z0-9_.*]+)", re.MULTILINE)
 DECLARATION_PATTERN = re.compile(
-    r"\b(?:class|interface|object|enum\s+class|sealed\s+class|sealed\s+interface|data\s+class|record)\s+([a-zA-Z0-9_]+)\b"
+    r"\b(?:class|interface|enum\s+class|sealed\s+class|sealed\s+interface|data\s+class|record)\s+([a-zA-Z0-9_]+)\b"
 )
+NAMED_OBJECT_PATTERN = re.compile(r"\bobject\s+([a-zA-Z0-9_]+)\b")
 COMPOSABLE_FUNC_PATTERN = re.compile(r"@Composable\s+(?:(?:public|private|internal)\s+)?fun\s+([a-zA-Z0-9_]+)\s*\(")
 EXTENDS_PATTERN = re.compile(r"\b(?:class|interface)\s+[a-zA-Z0-9_]+\s*(?:\([^)]*\))?\s*:\s*([a-zA-Z0-9_,\s<>]+)")
 JAVA_EXTENDS_PATTERN = re.compile(r"\bclass\s+[a-zA-Z0-9_]+\s+extends\s+([a-zA-Z0-9_]+)")
@@ -208,31 +327,56 @@ class DependencyGraph:
         feature_name: str,
         max_depth: int = 1,
     ) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
-        """Finds all nodes belonging to a feature package/folder/name and extracts their connected subgraph."""
+        """Finds all nodes belonging to a feature package/module across any standard Android project layout."""
         q_lower = feature_name.lower().strip()
         feature_nodes: list[GraphNode] = []
         seen: set[str] = set()
 
+        # 1. Match standard Android module or package directory structures
         for node in self.nodes.values():
             if node.id in seen:
                 continue
             fp = (node.file_path or "").lower()
-            if (
-                f"/{q_lower}/" in fp
-                or f"features/{q_lower}" in fp
-                or f"/{q_lower}" in fp
-                or q_lower in node.name.lower()
-                or any(q_lower in d.lower() for d in node.declarations)
-            ):
+            mod = (node.module or "").lower()
+            pkg = (node.package or "").lower()
+
+            is_feature_path = (
+                f"/features/{q_lower}/" in fp
+                or f"/feature/{q_lower}/" in fp
+                or f"/feature_{q_lower}/" in fp
+                or f"/features_{q_lower}/" in fp
+                or f"/{q_lower}/" in fp
+                or fp.endswith(f"/{q_lower}.kt")
+                or fp.endswith(f"/{q_lower}.java")
+                or mod == f":feature:{q_lower}"
+                or mod == f":features:{q_lower}"
+                or mod == f":{q_lower}"
+                or f".feature.{q_lower}." in f".{pkg}."
+                or f".features.{q_lower}." in f".{pkg}."
+            )
+            if is_feature_path:
                 feature_nodes.append(node)
                 seen.add(node.id)
+
+        # 2. If no directory matched, match class names starting with or containing the feature name
+        if not feature_nodes:
+            for node in self.nodes.values():
+                if node.id in seen:
+                    continue
+                if (
+                    node.name.lower() == q_lower
+                    or node.name.lower().startswith(q_lower)
+                    or any(d.lower() == q_lower or d.lower().startswith(q_lower) for d in node.declarations)
+                ):
+                    feature_nodes.append(node)
+                    seen.add(node.id)
 
         start_ids = [n.id for n in feature_nodes]
         if not start_ids:
             matched = self.find_nodes(feature_name)
             start_ids = [n.id for n in matched]
 
-        return self.extract_subgraph(start_ids, max_depth=max_depth, direction="both")
+        return self.extract_subgraph(start_ids, max_depth=max_depth, direction="outgoing")
 
     def to_slice_summary(self, nodes: dict[str, GraphNode] | None = None) -> str:
         """Renders a high-signal Clean Architecture layer breakdown for a set of nodes."""
@@ -312,9 +456,9 @@ class DependencyGraph:
         self,
         start_ids: list[str],
         max_depth: int = 1,
-        direction: str = "both",
+        direction: str = "outgoing",
     ) -> tuple[dict[str, GraphNode], list[GraphEdge]]:
-        """Extract nodes and edges within max_depth hops around start_ids."""
+        """Extract nodes and edges within max_depth hops around start_ids with universal hub protection."""
         sub_nodes: dict[str, GraphNode] = {}
         visited: set[str] = set()
         frontier: set[str] = set()
@@ -329,17 +473,27 @@ class DependencyGraph:
         for _ in range(max_depth):
             next_frontier: set[str] = set()
             for curr in frontier:
+                curr_node = self.nodes.get(curr)
+                # Universal check: never expand out of framework roots or generic base classes
+                if curr_node and is_hub_or_base_symbol(curr_node.name, len(self.get_sources(curr))):
+                    continue
+
                 neighbors: set[str] = set()
                 if direction in ("outgoing", "both"):
                     neighbors.update(self.get_targets(curr))
                 if direction in ("incoming", "both"):
-                    neighbors.update(self.get_sources(curr))
+                    for src in self.get_sources(curr):
+                        src_node = self.nodes.get(src)
+                        if src_node and not is_hub_or_base_symbol(src_node.name, len(self.get_sources(src))):
+                            neighbors.add(src)
 
                 for nbr in neighbors:
                     if nbr not in visited and nbr in self.nodes:
                         visited.add(nbr)
                         sub_nodes[nbr] = self.nodes[nbr]
-                        next_frontier.add(nbr)
+                        nbr_node = self.nodes[nbr]
+                        if not is_hub_or_base_symbol(nbr_node.name, len(self.get_sources(nbr))):
+                            next_frontier.add(nbr)
             frontier = next_frontier
             if not frontier:
                 break
@@ -575,18 +729,39 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
     module_id = ":" + mod_parts.replace("/", ":") if mod_parts and mod_parts != "." else ":app"
 
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        raw_text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return []
 
+    # Strip comments and string literals to prevent phantom symbols and false positive regex hits
+    clean_text = strip_comments_and_strings(raw_text)
+
     pkg = ""
-    pkg_m = PACKAGE_PATTERN.search(text)
+    pkg_m = PACKAGE_PATTERN.search(clean_text)
     if pkg_m:
         pkg = pkg_m.group(1).strip()
 
-    imports: list[str] = [m.group(1).strip() for m in IMPORT_PATTERN.finditer(text)]
-    declarations: list[str] = [m.group(1).strip() for m in DECLARATION_PATTERN.finditer(text)]
-    composable_funcs: list[str] = [m.group(1).strip() for m in COMPOSABLE_FUNC_PATTERN.finditer(text)]
+    raw_imports = [m.group(1).strip() for m in IMPORT_PATTERN.finditer(clean_text)]
+    imports = [
+        imp for imp in raw_imports
+        if not imp.endswith(".*") and imp.split(".")[-1].lower() not in KOTLIN_RESERVED_DECLARATIONS
+    ]
+
+    raw_decls = [m.group(1).strip() for m in DECLARATION_PATTERN.finditer(clean_text)]
+    for m in NAMED_OBJECT_PATTERN.finditer(clean_text):
+        obj_name = m.group(1).strip()
+        if obj_name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
+            raw_decls.append(obj_name)
+
+    declarations = [
+        d for d in raw_decls
+        if d.lower() not in KOTLIN_RESERVED_DECLARATIONS and not d.startswith("_") and len(d) > 1
+    ]
+
+    composable_funcs = [
+        m.group(1).strip() for m in COMPOSABLE_FUNC_PATTERN.finditer(clean_text)
+        if m.group(1).strip().lower() not in KOTLIN_RESERVED_DECLARATIONS
+    ]
 
     nodes: list[GraphNode] = []
 
@@ -609,7 +784,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
 
     for decl in declarations:
         node_id = f"{pkg}.{decl}" if pkg else decl
-        etype = classify_entity_type(decl, rel_path, declarations, text)
+        etype = classify_entity_type(decl, rel_path, declarations, raw_text)
         nodes.append(
             GraphNode(
                 id=node_id,
@@ -625,20 +800,21 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
 
     if not nodes:
         name = path.stem
-        etype = classify_entity_type(name, rel_path, [], text)
-        node_id = f"{pkg}.{name}" if pkg else name
-        nodes.append(
-            GraphNode(
-                id=node_id,
-                name=name,
-                type=etype.value,
-                file_path=rel_path,
-                module=module_id,
-                package=pkg,
-                declarations=[name],
-                imports=imports,
+        if name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
+            etype = classify_entity_type(name, rel_path, [], raw_text)
+            node_id = f"{pkg}.{name}" if pkg else name
+            nodes.append(
+                GraphNode(
+                    id=node_id,
+                    name=name,
+                    type=etype.value,
+                    file_path=rel_path,
+                    module=module_id,
+                    package=pkg,
+                    declarations=[name],
+                    imports=imports,
+                )
             )
-        )
 
     return nodes
 
@@ -692,10 +868,10 @@ def resolve_cache_file(repo: Path) -> Path:
 
 
 class GraphEngine:
-    """Manages the lifecycle, incremental caching, self-healing, and queries of the code graph."""
+    """Manages full dependency graph caching, incremental synchronization, and self-healing."""
 
-    def __init__(self, repo: Path = REPO):
-        self.repo = repo
+    def __init__(self, repo_dir: Path | None = None):
+        self.repo = (repo_dir or REPO).resolve()
         self.cache_file = resolve_cache_file(self.repo)
         self.graph = DependencyGraph()
         self.file_hashes: dict[str, str] = {}
@@ -704,7 +880,8 @@ class GraphEngine:
 
     def compute_file_hash(self, path: Path) -> str:
         try:
-            return hashlib.sha256(path.read_bytes()).hexdigest()
+            content = path.read_bytes()
+            return hashlib.sha256(content).hexdigest()
         except Exception:
             return ""
 
@@ -735,9 +912,11 @@ class GraphEngine:
     def _rebuild_symbol_index(self) -> None:
         self.symbol_to_node_id.clear()
         for node in self.graph.nodes.values():
-            self.symbol_to_node_id[node.name] = node.id
+            if node.name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
+                self.symbol_to_node_id[node.name] = node.id
             for decl in node.declarations:
-                self.symbol_to_node_id[decl] = node.id
+                if decl.lower() not in KOTLIN_RESERVED_DECLARATIONS:
+                    self.symbol_to_node_id[decl] = node.id
 
     def sync(self, force_full: bool = False) -> dict[str, Any]:
         """Incremental synchronization: scans repo, updates dirty files, heals stale paths."""
