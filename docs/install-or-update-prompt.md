@@ -1,8 +1,8 @@
 # Install or Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.25.6/docs/install-or-update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.25.7/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.25.6` — **SHA-256**: `76320e284d2e46f28f6d7b65fde7f1858df95b4e5865fb1a8a35408bc304a5ba` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.25.7` — **SHA-256**: `cf7b15bfdae9751d1ab5a297645631e275eff51b0db62c1752a9113fcf7afb00` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
@@ -40,7 +40,7 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
 4. When `<this-repo>/.harness-setup/answers.json` exists with `"i0": true`, execute the deterministic engine in one command:
    `$PY <kit>/agents/scripts/install_or_update.py --repo <this-android-root> --kit <kit>`
-   This single atomic command automatically creates the backup, preserves tailored reference files (.agents/skills/android-harness/references/*.md), places .agents/, generates _product.py, wires tool adapters, configures PM tracking, updates .git/info/exclude, and runs selftest/doctor verification with 0 failures in under 3 seconds.
+   This single atomic command automatically creates the backup, preserves tailored reference files (.agents/skills/android-harness/references/*.md), places .agents/, generates _product.py, wires tool adapters, pre-warms and caches the universal Code Graph (.agents/cache/project_graph.json), configures PM tracking, updates .git/info/exclude, and runs selftest/doctor verification with 0 failures in under 3 seconds.
    - **Tailored References Preservation**: On update sessions, existing tailored reference files (`.agents/skills/android-harness/references/*.md`) are preserved AS-IS without adding new ones. The installer MUST list them with clickable links (`[filename.md](file:///<path>)`) in the `ask_question` modal and inform the developer in their language that they can click and review each file before confirming.
 5. **Final Completion Card (No Redundant Tasks)**:
    - Because `install_or_update.py` ALREADY runs 12-dimension doctor verification and hook selftests internally, do **NOT** launch redundant separate `harness_doctor.py` or `preflight_check.py` background tasks after it succeeds.

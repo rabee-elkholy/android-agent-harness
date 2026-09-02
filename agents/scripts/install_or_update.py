@@ -480,6 +480,35 @@ def extract_version_diff_summary(kit: Path, prev_version: str | None, current_ve
     return highlights
 
 
+def sync_code_graph(repo: Path) -> dict:
+    """Builds and caches the complete project code graph and topology during installation/update."""
+    try:
+        from _graph_core import GraphEngine, render_dot_to_image
+        engine = GraphEngine(repo)
+        stats = engine.sync(force_full=True)
+        dot_str = engine.graph.to_dot(title=f"{repo.name} Code Graph")
+        dot_file = repo / ".agents" / "cache" / "project_graph.dot"
+        dot_file.parent.mkdir(parents=True, exist_ok=True)
+        dot_file.write_text(dot_str, encoding="utf-8")
+
+        svg_file = repo / ".agents" / "cache" / "graph.svg"
+        render_ok, _ = render_dot_to_image(dot_str, svg_file, img_format="svg")
+
+        return {
+            "success": True,
+            "nodes": stats.get("total_nodes", len(engine.graph.nodes)),
+            "edges": stats.get("total_edges", len(engine.graph.edges)),
+            "indexed_files": stats.get("added", 0) + stats.get("modified", 0),
+            "dot_file": str(dot_file),
+            "svg_rendered": render_ok,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
 def execute_install_or_update(
     repo: Path,
     kit: Path,
@@ -508,31 +537,37 @@ def execute_install_or_update(
     # 1. Backup
     backup_dir = None
     if not skip_backup:
-        print("[1/5] Creating timestamped backup...", flush=True)
+        print("[1/6] Creating timestamped backup...", flush=True)
         backup_dir = create_backup(repo, answers)
         if backup_dir:
             print(f"      Backup created at: .harness-backup/{backup_dir.name}", flush=True)
 
     # 2. Preserve references
-    print("[2/5] Preserving custom domain reference guides...", flush=True)
+    print("[2/6] Preserving custom domain reference guides...", flush=True)
     preserved_refs = preserve_references(repo)
     if preserved_refs:
         print(f"      Preserved {len(preserved_refs)} reference files.", flush=True)
 
     # 3. Place engine
-    print("[3/5] Placing harness engine (.agents/)...", flush=True)
+    print("[3/6] Placing harness engine (.agents/)...", flush=True)
     place_engine(repo, kit, preserved_refs)
 
     # 4. Generate _product.py & Wire adapters
-    print("[4/5] Generating _product.py & wiring tool adapters...", flush=True)
+    print("[4/6] Generating _product.py & wiring tool adapters...", flush=True)
     generate_product_py(repo, answers, kit)
     configure_adapters_and_mcp(repo, answers)
     enforce_git_privacy(repo)
 
-    # 5. Verify
+    # 5. Pre-warm Code Graph (Zero Cold-Start)
+    print("[5/6] Building & pre-warming universal code graph...", flush=True)
+    graph_stats = sync_code_graph(repo)
+    if graph_stats.get("success"):
+        print(f"      Cached {graph_stats['nodes']} nodes & {graph_stats['edges']} edges in .agents/cache/project_graph.json", flush=True)
+
+    # 6. Verify
     verification = {}
     if not skip_doctor:
-        print("[5/5] Running operational health verification...", flush=True)
+        print("[6/6] Running operational health verification...", flush=True)
         verification = run_verification(repo)
 
     duration = (datetime.datetime.now() - start_time).total_seconds()
@@ -544,6 +579,7 @@ def execute_install_or_update(
         "version": version,
         "previous_version": prev_version,
         "changes_summary": changes_summary,
+        "graph_stats": graph_stats,
         "product": answers.get("product", repo.name),
         "duration_seconds": round(duration, 2),
         "backup_dir": str(backup_dir) if backup_dir else None,
@@ -586,6 +622,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[*] Backup Created: {result['backup_dir']}")
     if result["preserved_references_count"] > 0:
         print(f"[*] Preserved Tailored References ({result['preserved_references_count']}): {', '.join(result['preserved_references'])}")
+
+    if result.get("graph_stats", {}).get("success"):
+        g = result["graph_stats"]
+        svg_badge = " (SVG rendered)" if g.get("svg_rendered") else ""
+        print(f"[*] Code Graph: [READY] {g['nodes']} nodes, {g['edges']} edges cached{svg_badge}")
 
     if result.get("changes_summary"):
         print("\n[*] Key Changes & Improvements:")

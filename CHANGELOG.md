@@ -5,9 +5,11 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.6] - 2026-09-02
+## [0.25.7] - 2026-09-02
 
-### Graph-First Codebase Exploration Barrier, Automated Version Diff & Strict Locales
+### Zero Cold-Start Code Graph Pre-Warming, Graph-First Discovery & Version Diff
+- **Zero Cold-Start Code Graph Pre-Warming (`install_or_update.py`, `docs/install-or-update-prompt.md`)**:
+  - Automatically parses the entire codebase, builds the dependency DAG, and caches `.agents/cache/project_graph.json` directly during harness installation and update, ensuring the graph is 100% warmed up and ready on the very first chat.
 - **Graph-First Codebase Exploration Barrier (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
   - Mandated querying the Code Graph engine (`project_graph.py --find` / `--screens` / `--path-from/--path-to`) as the mandatory first-line discovery barrier before performing wide greps or multiple file views, preventing token waste and brute-force search cascades.
 - **Automated Version Diff Changelog Highlights (`install_or_update.py`, `docs/install-or-update-prompt.md`)**:
