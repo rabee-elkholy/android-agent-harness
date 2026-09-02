@@ -736,7 +736,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- I.21 Pre-commit git gate: {answers.get('git_gate', 'yes')}",
-        f"- I.22 Device verification: {answers.get('device_verification', 'autonomous_e2e')}",
+        f"- I.22 Device verification: {answers.get('device_verification', 'manual_only')}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",

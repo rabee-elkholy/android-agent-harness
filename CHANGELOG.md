@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.5] - 2026-09-02
+
+### Setup Wizard 2.0 (4-Station Cascading Flow), Diff-Grounded Testing Standard & Doctor Pre-Checks
+- **Setup Wizard 2.0 & 4-Station Flow (`wizard/questions.py`, `setup_wizard.py`)**:
+  - Re-architected setup interview into 4 strictly ordered thematic stations:
+    1. Workspace & AI Tooling (`i0`, `i14`, and conditional `i2`/`i5`/`i6`/`i19`/`b_*`)
+    2. Git Governance & Safety (`i3`, `i21`)
+    3. Project Management & Task Tracker (`i20`, and cascading `i18`, `i16`)
+    4. Device Testing & Verification (`i15`, `i22`, and cascading `i4`, `i10`)
+  - Added smart cascading logic (`depends_on`): skipping tracker language and Zoho MCP when `none` is chosen, and skipping device target policy and install confirmation when device verification is `disabled`.
+  - Reduced onboarding friction from 11 mandatory questions to 5-7 streamlined prompts for standard workflows.
+- **Diff-Grounded Manual Smoke Steps Standard (`harness-rules.md`, `deliver.md`, `AGENTS.md`)**:
+  - Enforced a rigorous standard for manual verification: agents must author 2-3 numbered testing steps in chat strictly derived from the modified diff (1. Navigation path, 2. Interaction matching diff, 3. Expected visual/functional outcome).
+- **Environment Doctor Hardening (`doctor/engine.py`, `harness_doctor.py`)**:
+  - Added proactive checks for Java JDK runtime (validating JDK 17+ requirement for AGP 8+) and ADB CLI availability in system PATH to Dimension 1.
+
 ## [0.27.4] - 2026-09-02
 
 ### Complete E2E/Maestro Machinery Purge & Interactive Manual Checklist Mode
@@ -223,7 +239,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Handoff Git Commit Verification Guardrail**:
   - Enforces verifying a clean working tree and actual commit hash via `git log -1` before generating delivery reports, preventing placeholder or uncommitted hash submissions.
 
-## [0.20.0] - 2026-09-01
+**Included in 0.20.0 (2026-09-01):**
 
 ### Smart Test-Aware Review Promotion & Integrity Barrier
 - **Automatic 6th Reviewer Promotion on Test Diffs (`review_package.py`, `pre_tool_safety.py`, `_hook_state.py`)**:
