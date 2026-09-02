@@ -65,83 +65,64 @@ Print a **proposed facts** table in chat (module, assemble task, APK path, appli
 
 Print `model_warning` then `auto_blurb` from the wizard JSON. Then ask **only** the `questions` array (section I). Do not re-ask facts already in `auto`.
 
-## I) Interview — only what the wizard JSON lists
- 
-Ask **only** `questions` from `setup_wizard.py questions`. The JSON list is the sole authority. In a normal established project it includes I.0, I.1, I.3, I.4, I.10, I.14, I.15, I.16, I.18, I.20, and I.21 (chat language dynamically mirrors the developer per `harness-rules.md`); I.2/I.5/I.6/I.19 and `b_*` are conditional.
- 
+## I) Interview — only what the wizard JSON lists. The interview is organized into **4 logical stations** with smart cascading skips:
+
+#### Station 1: Workspace & AI Tooling
+
 ### I.0 Backup? (required)
- 
 - **Modal prompt:** Setup will replace the AI helper files in this project. A backup lets you restore them if something goes wrong. Without a backup, the old files cannot be restored.
 - **Choices:** `Back up and start` (Recommended) / `Start without a backup` / `Stop setup`
- 
-### I.1 App name (required)
- 
-- **Modal prompt:** What name should the helper use for this app? I found “<discovered>”. Reviews and AGENTS.md will show that name.
-- **Choices:** `Use “<discovered>”` (Recommended) / `Other name (I will type it)`
-- **Free text** only if they pick Other.
- 
-### I.3 Git (required)
- 
-- **Modal prompt:** Who should create git commits? If you are not sure, keep commits in your own hands (you commit from the IDE).
-- **Choices:** `I commit myself` (Recommended) / `The agent may commit when I ask in chat`
- 
-### I.4 Phone or emulator? (required)
- 
-- **Modal prompt:** Will you test this app on a real phone, an emulator (AVD), or both? Pick both unless you never use an emulator. Physical only blocks emulator install and logcat.
-- **Choices:** `Phone and emulator both allowed` (Recommended) / `Physical phone only — no emulator`
-- **If both allowed:** relax “physical only” in `harness-rules.md`, `pre_tool_safety.py` (do **not** deny `emulator-` serials or `emulator`/`avdmanager`), `run_device.py`, `logcat_doctor.py`, `capture_screen.py`, adapters, and do not add emulator to the Gemini `deny` list. Keep `adb monkey` denied. Rewrite entire `if emulator` blocks (do not leave an empty `if`). Flip selftest `emu` to `allow`.
-- **If physical only:** keep the kit’s physical-only denies.
- 
-### I.10 Ask before install? (required)
- 
-- **Modal prompt:** Before the helper installs the app on the phone or emulator, should it ask you first? Asking avoids installing on the wrong device. Skipping is faster if you trust the serial.
-- **Choices:** `Ask me first` (Recommended) / `Install without asking`
-- **If ask:** `harness-rules.md` requires one confirmation before `run_device.py` / `adb install` in a session.
-- **If without asking:** do not add that confirmation. Keep `adb monkey` denied.
- 
-### I.15 Unit tests? (required)
- 
-- **Modal prompt:** After the helper finishes code and review, should it run unit tests (checks logic without opening the app)? Pick no if this project has no tests and you will not add them.
-- **Choices:** `Yes, run unit tests` (Recommended) / `No, skip unit tests`
-- **If yes:** keep a targeted `:<module>:testDebugUnitTest` step after the 5 leaves and before assemble. Use **this** module. Drop leftover payment-test paths unless they exist here. If there is no `src/test` yet, still leave the step — the agent must not invent fake tests.
-- **If no:** remove the unit-test step from `harness-rules.md` section 3, `workflows/deliver.md`, and `gradle-build-optimizer`. Do **not** skip the 5-leaf review or assemble. Do not require TDD.
- 
+
 ### I.14 Coding tools (required)
- 
 - **Modal prompt:** Which programs do you open this project in? Select every one you use. If you use Cursor, you must select Cursor so its rules get written.
 - **Choices (multi-select):** `Cursor` / `Claude Code` / `GitHub Copilot` / `Gemini / Antigravity` / `Codex` / `Qwen Code` / `Windsurf` / `Cline` / `Roo` / `Amazon Q` / `Continue` / `Junie` / `Kilo` / `Goose` / `All of them`
-- Wait. Do not default to all. Do not default to only the tool running this chat.
- 
-### I.16 Zoho Sprints (required)
- 
-- **Modal prompt:** use the wizard JSON `prompt` verbatim. Setup will not ask for tokens and will not copy them.
-- **Choices:** enable / skip. If a user-level Zoho config already exists on this PC, enable is recommended. Otherwise skip is recommended.
-- **If skip:** run `$PY .agents/scripts/install_zoho_mcp.py --repo <this-android-root> --py <I.2> --tools <I.14 ids> --disable` so a leftover `.cursor/mcp.json` Zoho entry is removed. Keep `.agents/mcp_config.json` empty.
-- **If enable:** follow the Zoho setup flow below.
-- Never write `~/.gemini/config/mcp_config.json`. Never paste tokens in chat.
- 
-### I.18 Project tracker content language (required)
- 
-- **Modal prompt:** use the wizard JSON `prompt` verbatim.
-- **Choices:** English task titles + Arabic comments/descriptions / all English / all Arabic.
-- Controls PM handoff text and comments across Zoho Sprints, Jira, Linear, and GitHub Projects. Conversational chat dynamically mirrors the developer's language per `harness-rules.md`.
 
-### I.19 Daily flavor (conditional)
+### I.2 / I.5 / I.6 / I.19 (conditional)
+- Ask only if they appear in the JSON (ambiguous Python, several app modules, several launchers, or product flavors).
 
-- Ask only when the wizard discovers Gradle product flavors.
-- The selected flavor becomes the daily assemble/install target. `default` keeps the default variant.
+#### Station 2: Git Governance & Safety
 
-### I.20 Project tracker (required)
-
-- **Modal prompt:** use the wizard JSON `prompt` verbatim.
-- **Choices:** `zoho_sprints` / `github_projects` / `jira_mcp` / `linear_mcp` / `none`.
-- Write the selected value to `_product.py` as `PM_PROVIDER`. Absent/legacy data keeps the Zoho default; never copy credentials into the repository.
+### I.3 Git (required)
+- **Modal prompt:** Who should create git commits? If you are not sure, keep commits in your own hands (you commit from the IDE).
+- **Choices:** `I commit myself` (Recommended) / `The agent may commit when I ask in chat`
 
 ### I.21 Pre-commit git gate (required)
-
 - **Modal prompt:** use the wizard JSON `prompt` verbatim.
 - **Choices:** install the staged quality gate (Recommended) / manage your own git hooks.
 - The recommended choice passes `--git-gate` to `install_tool_adapters.py` (the default). The opt-out passes `--no-git-gate` and leaves `.githooks/pre-commit` absent.
+
+#### Station 3: Project Management & Task Tracker
+
+### I.20 Project tracker (required)
+- **Modal prompt:** use the wizard JSON `prompt` verbatim.
+- **Choices:** `zoho_sprints` / `github_projects` / `jira_mcp` / `linear_mcp` / `none`.
+- Write the selected value to `_product.py` as `PM_PROVIDER`.
+
+### I.18 Project tracker content language (cascading: skipped if I.20 = none)
+- **Modal prompt:** use the wizard JSON `prompt` verbatim.
+- **Choices:** English task titles + Arabic comments/descriptions / all English / all Arabic.
+
+### I.16 Zoho Sprints (cascading: asked only if I.20 = zoho_sprints)
+- **Modal prompt:** use the wizard JSON `prompt` verbatim. Setup will not ask for tokens and will not copy them.
+- **Choices:** enable / skip. If a user-level Zoho config already exists on this PC, enable is recommended. Otherwise skip is recommended.
+
+#### Station 4: Device Testing & Verification
+
+### I.15 Unit tests? (required)
+- **Modal prompt:** After the helper finishes code and review, should it run unit tests (checks logic without opening the app)? Pick no if this project has no tests and you will not add them.
+- **Choices:** `Yes, run unit tests` (Recommended) / `No, skip unit tests`
+
+### I.22 Device verification mode (required)
+- **Modal prompt:** use the wizard JSON `prompt` verbatim.
+- **Choices:** `Interactive Manual Smoke` (Recommended) / `Disabled` (assemble only).
+
+### I.4 Phone or emulator? (cascading: skipped if I.22 = disabled)
+- **Modal prompt:** Will you test this app on a real phone, an emulator (AVD), or both? Pick both unless you never use an emulator. Physical only blocks emulator install and logcat.
+- **Choices:** `Phone and emulator both allowed` (Recommended) / `Physical phone only — no emulator`
+
+### I.10 Ask before install? (cascading: skipped if I.22 = disabled)
+- **Modal prompt:** Before the helper installs the app on the phone or emulator, should it ask you first? Asking avoids installing on the wrong device. Skipping is faster if you trust the serial.
+- **Choices:** `Ask me first` (Recommended) / `Install without asking`
 
 ### Re-running after installation
 

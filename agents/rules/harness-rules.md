@@ -316,7 +316,7 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
 - **Device Verification Mode (`manual_only` / `interactive_device` - Default)**:
   1. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start` (installs and launches the target screen on the connected phone).
   2. If no device is connected, HALT and prompt the developer; never silently skip device verification.
-  3. Output the **Phase Milestone Card** with 2-3 simple, human, numbered manual test steps explaining what to verify on screen, and the drafted Phase N commit message.
+  3. Output the **Phase Milestone Card** with 2-3 **diff-grounded** numbered manual test steps explaining what to verify on screen (strictly derived from the modified code: 1. Navigation, 2. Interaction, 3. Expected visual/functional result), and the drafted Phase N commit message.
   4. Trigger interactive confirmation via `ask_question`:
      - **Question**: "Please test the steps above on your device and confirm the result:"
      - **Options**: `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.

@@ -31,7 +31,7 @@ After non-trivial implementation:
 8. **Device Verification & Interactive Manual Sign-off**:
    - `{{PY}} .agents/scripts/run_device.py install-start` (Installs and launches the target Activity/Screen on the connected device).
    - If no device is connected, HALT and prompt the developer; never silently skip device verification.
-   - The agent writes 2-3 simple, human, numbered manual test steps in chat explaining what to check on screen.
+   - The agent writes 2-3 diff-grounded numbered manual test steps in chat explaining what to check on screen (1. Navigation, 2. Interaction matching the diff, 3. Expected visual/functional result).
    - The agent triggers the interactive confirmation modal (`ask_question`): *"Please test the steps above on your device and confirm the result:"* with options `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
    - On **PASS**: Output the Phase Milestone / Final Delivery Card with the drafted Conventional Commit message.
    - On **FAIL**: Investigate with `{{PY}} .agents/scripts/logcat_doctor.py` and fix the defect.

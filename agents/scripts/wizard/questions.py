@@ -30,8 +30,11 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
     d = facts if facts is not None else discover(repo)
     labels = TOOL_LABELS.get(lang, TOOL_LABELS["en"])
     qs = [
+        # --- Station 1: Workspace & AI Tooling ---
         {
             "id": "i0",
+            "station": 1,
+            "station_title": "Workspace & AI Tooling",
             "required": True,
             "allow_multiple": False,
             "prompt": t(lang, "i0"),
@@ -42,6 +45,19 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         },
     ]
+    tool_opts = [{"id": tid, "label": labels[tid]} for tid in TOOL_IDS]
+    tool_opts.append({"id": "all", "label": labels["all"]})
+    qs.append(
+        {
+            "id": "i14",
+            "station": 1,
+            "station_title": "Workspace & AI Tooling",
+            "required": True,
+            "allow_multiple": True,
+            "prompt": t(lang, "i14"),
+            "options": tool_opts,
+        }
+    )
     pythons = d.get("pythons") or []
     if len(pythons) != 1:
         py_opts = [{"id": p, "label": p} for p in pythons]
@@ -49,60 +65,14 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         qs.append(
             {
                 "id": "i2",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
                 "required": True,
                 "allow_multiple": False,
                 "prompt": t(lang, "i2"),
                 "options": py_opts,
             }
         )
-    qs.append(
-        {
-            "id": "i3",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i3"),
-            "options": [
-                {"id": "never", "label": t(lang, "i3_never")},
-                {"id": "agent-may-commit", "label": t(lang, "i3_may")},
-            ],
-        }
-    )
-    qs.append(
-        {
-            "id": "i4",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i4"),
-            "options": [
-                {"id": "allow", "label": t(lang, "i4_allow")},
-                {"id": "physical-only", "label": t(lang, "i4_phys")},
-            ],
-        }
-    )
-    qs.append(
-        {
-            "id": "i10",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i10"),
-            "options": [
-                {"id": "confirm", "label": t(lang, "i10_conf")},
-                {"id": "allow", "label": t(lang, "i10_allow")},
-            ],
-        }
-    )
-    qs.append(
-        {
-            "id": "i15",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i15"),
-            "options": [
-                {"id": "yes", "label": t(lang, "i15_yes")},
-                {"id": "no", "label": t(lang, "i15_no")},
-            ],
-        }
-    )
     modules = d.get("modules") or []
     if len(modules) != 1:
         mod_opts = [{"id": m, "label": m} for m in modules]
@@ -110,6 +80,8 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         qs.append(
             {
                 "id": "i5",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
                 "required": True,
                 "allow_multiple": False,
                 "prompt": t(lang, "i5"),
@@ -123,45 +95,199 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         qs.append(
             {
                 "id": "i6",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
                 "required": True,
                 "allow_multiple": False,
                 "prompt": t(lang, "i6"),
                 "options": launch_opts,
             }
         )
-    tool_opts = [{"id": tid, "label": labels[tid]} for tid in TOOL_IDS]
-    tool_opts.append({"id": "all", "label": labels["all"]})
+    flavors = d.get("flavors") or []
+    if flavors:
+        flavor_opts = [{"id": f, "label": f} for f in flavors]
+        flavor_opts.append({"id": "default", "label": t(lang, "i19_default")})
+        qs.append(
+            {
+                "id": "i19",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "i19"),
+                "options": flavor_opts,
+            }
+        )
+    is_greenfield = d.get("is_empty") or d.get("source_count", 0) < 4 or d.get("stack") in ("unknown", "unknown (confirm in chat)", "")
+    if is_greenfield:
+        qs.append(
+            {
+                "id": "b_platform",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_platform"),
+                "options": [
+                    {"id": "kmp", "label": t(lang, "b_platform_kmp")},
+                    {"id": "native", "label": t(lang, "b_platform_native")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_arch",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_arch"),
+                "options": [
+                    {"id": "mvi", "label": t(lang, "b_arch_mvi")},
+                    {"id": "mvvm", "label": t(lang, "b_arch_mvvm")},
+                    {"id": "clean", "label": t(lang, "b_arch_clean")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_di",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_di"),
+                "options": [
+                    {"id": "koin", "label": t(lang, "b_di_koin")},
+                    {"id": "hilt", "label": t(lang, "b_di_hilt")},
+                    {"id": "manual", "label": t(lang, "b_di_manual")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_nav",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_nav"),
+                "options": [
+                    {"id": "voyager", "label": t(lang, "b_nav_voyager")},
+                    {"id": "comp", "label": t(lang, "b_nav_comp")},
+                    {"id": "decompose", "label": t(lang, "b_nav_decompose")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_ui",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_ui"),
+                "options": [
+                    {"id": "compose", "label": t(lang, "b_ui_compose")},
+                    {"id": "xml", "label": t(lang, "b_ui_xml")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_db",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_db"),
+                "options": [
+                    {"id": "room", "label": t(lang, "b_db_room")},
+                    {"id": "sql", "label": t(lang, "b_db_sql")},
+                    {"id": "datastore", "label": t(lang, "b_db_datastore")},
+                    {"id": "none", "label": t(lang, "b_db_none")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_net",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_net"),
+                "options": [
+                    {"id": "ktor", "label": t(lang, "b_net_ktor")},
+                    {"id": "retrofit", "label": t(lang, "b_net_retrofit")},
+                    {"id": "none", "label": t(lang, "b_net_none")},
+                ],
+            }
+        )
+        qs.append(
+            {
+                "id": "b_locales",
+                "station": 1,
+                "station_title": "Workspace & AI Tooling",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "b_locales"),
+                "options": [
+                    {"id": "dual", "label": t(lang, "b_locales_dual")},
+                    {"id": "en", "label": t(lang, "b_locales_en")},
+                    {"id": "ar", "label": t(lang, "b_locales_ar")},
+                ],
+            }
+        )
+
+    # --- Station 2: Git Governance & Safety ---
     qs.append(
         {
-            "id": "i14",
-            "required": True,
-            "allow_multiple": True,
-            "prompt": t(lang, "i14"),
-            "options": tool_opts,
-        }
-    )
-    found = bool(d.get("zoho_config"))
-    qs.append(
-        {
-            "id": "i16",
+            "id": "i3",
+            "station": 2,
+            "station_title": "Git Governance & Safety",
             "required": True,
             "allow_multiple": False,
-            "prompt": t(lang, "i16"),
+            "prompt": t(lang, "i3"),
             "options": [
-                {
-                    "id": "enable",
-                    "label": t(lang, "i16_enable_found" if found else "i16_enable"),
-                },
-                {
-                    "id": "skip",
-                    "label": t(lang, "i16_skip" if found else "i16_skip_rec"),
-                },
+                {"id": "never", "label": t(lang, "i3_never")},
+                {"id": "agent-may-commit", "label": t(lang, "i3_may")},
             ],
         }
     )
     qs.append(
         {
+            "id": "i21",
+            "station": 2,
+            "station_title": "Git Governance & Safety",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i21"),
+            "options": [
+                {"id": "yes", "label": t(lang, "i21_yes")},
+                {"id": "no", "label": t(lang, "i21_no")},
+            ],
+        }
+    )
+
+    # --- Station 3: Project Management & Task Tracker ---
+    qs.append(
+        {
+            "id": "i20",
+            "station": 3,
+            "station_title": "Project Management & Task Tracker",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i20"),
+            "options": [{"id": pid, "label": t(lang, f"i20_{pid}")} for pid in PM_PROVIDER_IDS],
+        }
+    )
+    qs.append(
+        {
             "id": "i18",
+            "station": 3,
+            "station_title": "Project Management & Task Tracker",
+            "depends_on": {"id": "i20", "not_equals": "none"},
             "required": True,
             "allow_multiple": False,
             "prompt": t(lang, "i18"),
@@ -181,30 +307,49 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
+    found = bool(d.get("zoho_config"))
     qs.append(
         {
-            "id": "i20",
+            "id": "i16",
+            "station": 3,
+            "station_title": "Project Management & Task Tracker",
+            "depends_on": {"id": "i20", "equals": "zoho_sprints"},
             "required": True,
             "allow_multiple": False,
-            "prompt": t(lang, "i20"),
-            "options": [{"id": pid, "label": t(lang, f"i20_{pid}")} for pid in PM_PROVIDER_IDS],
+            "prompt": t(lang, "i16"),
+            "options": [
+                {
+                    "id": "enable",
+                    "label": t(lang, "i16_enable_found" if found else "i16_enable"),
+                },
+                {
+                    "id": "skip",
+                    "label": t(lang, "i16_skip" if found else "i16_skip_rec"),
+                },
+            ],
         }
     )
+
+    # --- Station 4: Device Testing & Verification ---
     qs.append(
         {
-            "id": "i21",
+            "id": "i15",
+            "station": 4,
+            "station_title": "Device Testing & Verification",
             "required": True,
             "allow_multiple": False,
-            "prompt": t(lang, "i21"),
+            "prompt": t(lang, "i15"),
             "options": [
-                {"id": "yes", "label": t(lang, "i21_yes")},
-                {"id": "no", "label": t(lang, "i21_no")},
+                {"id": "yes", "label": t(lang, "i15_yes")},
+                {"id": "no", "label": t(lang, "i15_no")},
             ],
         }
     )
     qs.append(
         {
             "id": "i22",
+            "station": 4,
+            "station_title": "Device Testing & Verification",
             "required": True,
             "allow_multiple": False,
             "prompt": t(lang, "i22"),
@@ -214,124 +359,36 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
-    flavors = d.get("flavors") or []
-    if flavors:
-        flavor_opts = [{"id": f, "label": f} for f in flavors]
-        flavor_opts.append({"id": "default", "label": t(lang, "i19_default")})
-        qs.append(
-            {
-                "id": "i19",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "i19"),
-                "options": flavor_opts,
-            }
-        )
-    is_greenfield = d.get("is_empty") or d.get("source_count", 0) < 4 or d.get("stack") in ("unknown", "unknown (confirm in chat)", "")
-    if is_greenfield:
-        qs.append(
-            {
-                "id": "b_platform",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_platform"),
-                "options": [
-                    {"id": "kmp", "label": t(lang, "b_platform_kmp")},
-                    {"id": "native", "label": t(lang, "b_platform_native")},
-                ],
-            }
-        )
-        qs.append(
-            {
-                "id": "b_arch",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_arch"),
-                "options": [
-                    {"id": "mvi", "label": t(lang, "b_arch_mvi")},
-                    {"id": "mvvm", "label": t(lang, "b_arch_mvvm")},
-                    {"id": "clean", "label": t(lang, "b_arch_clean")},
-                ],
-            }
-        )
-        qs.append(
-            {
-                "id": "b_di",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_di"),
-                "options": [
-                    {"id": "koin", "label": t(lang, "b_di_koin")},
-                    {"id": "hilt", "label": t(lang, "b_di_hilt")},
-                    {"id": "manual", "label": t(lang, "b_di_manual")},
-                ],
-            }
-        )
-        qs.append(
-            {
-                "id": "b_nav",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_nav"),
-                "options": [
-                    {"id": "voyager", "label": t(lang, "b_nav_voyager")},
-                    {"id": "comp", "label": t(lang, "b_nav_comp")},
-                    {"id": "decompose", "label": t(lang, "b_nav_decompose")},
-                ],
-            }
-        )
-        qs.append(
-            {
-                "id": "b_ui",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_ui"),
-                "options": [
-                    {"id": "compose", "label": t(lang, "b_ui_compose")},
-                    {"id": "xml", "label": t(lang, "b_ui_xml")},
-                ],
-            }
-        )
-        qs.append(
-            {
-                "id": "b_db",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_db"),
-                "options": [
-                    {"id": "room", "label": t(lang, "b_db_room")},
-                    {"id": "sql", "label": t(lang, "b_db_sql")},
-                    {"id": "datastore", "label": t(lang, "b_db_datastore")},
-                    {"id": "none", "label": t(lang, "b_db_none")},
-                ],
-            }
-        )
-        qs.append(
-            {
-                "id": "b_net",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_net"),
-                "options": [
-                    {"id": "ktor", "label": t(lang, "b_net_ktor")},
-                    {"id": "retrofit", "label": t(lang, "b_net_retrofit")},
-                    {"id": "none", "label": t(lang, "b_net_none")},
-                ],
-            }
-        )
-        qs.append(
-            {
-                "id": "b_locales",
-                "required": True,
-                "allow_multiple": False,
-                "prompt": t(lang, "b_locales"),
-                "options": [
-                    {"id": "dual", "label": t(lang, "b_locales_dual")},
-                    {"id": "en", "label": t(lang, "b_locales_en")},
-                    {"id": "ar", "label": t(lang, "b_locales_ar")},
-                ],
-            }
-        )
+    qs.append(
+        {
+            "id": "i4",
+            "station": 4,
+            "station_title": "Device Testing & Verification",
+            "depends_on": {"id": "i22", "not_equals": "disabled"},
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i4"),
+            "options": [
+                {"id": "allow", "label": t(lang, "i4_allow")},
+                {"id": "physical-only", "label": t(lang, "i4_phys")},
+            ],
+        }
+    )
+    qs.append(
+        {
+            "id": "i10",
+            "station": 4,
+            "station_title": "Device Testing & Verification",
+            "depends_on": {"id": "i22", "not_equals": "disabled"},
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "i10"),
+            "options": [
+                {"id": "confirm", "label": t(lang, "i10_conf")},
+                {"id": "allow", "label": t(lang, "i10_allow")},
+            ],
+        }
+    )
     return _reorder_with_previous_answers(qs, repo, lang, d)
 
 
@@ -556,26 +613,40 @@ def normalize(raw: dict, facts: dict) -> dict:
     tools = [x for x in tools if x in TOOL_IDS]
     if not tools:
         raise SystemExit("Pick at least one coding tool (I.14).")
-    device = raw.get("i4") or auto["device_policy"]
-    if device in {"allow-explicit", "allow", "skip"}:
-        device = "allow"
-    git_policy = raw.get("i3") or "never"
-    if git_policy not in {"never", "agent-may-commit"}:
-        git_policy = "never"
-    zoho = raw.get("i16") or "skip"
-    if zoho not in {"enable", "skip"}:
-        zoho = "skip"
-    chat_lang = raw.get("i17") or auto.get("chat_language") or "mirror"
-    if chat_lang not in {"en", "mirror", "ar"}:
-        chat_lang = "mirror"
-    zoho_lang = raw.get("i18") or auto.get("zoho_language") or "en_titles_ar_comments"
-    if zoho_lang not in {"en_titles_ar_comments", "all_en", "all_ar"}:
-        zoho_lang = "en_titles_ar_comments"
     pm_provider = str(raw.get("i20") or auto.get("pm_provider") or DEFAULT_PM_PROVIDER).strip()
     if pm_provider not in PM_PROVIDER_IDS:
         raise SystemExit(
             f"Unknown project tracker '{pm_provider}'. Known: {', '.join(PM_PROVIDER_IDS)}"
         )
+    if pm_provider == "none":
+        zoho = "skip"
+        zoho_lang = "en_titles_ar_comments"
+    else:
+        zoho = raw.get("i16") or "skip"
+        if zoho not in {"enable", "skip"}:
+            zoho = "skip"
+        zoho_lang = raw.get("i18") or auto.get("zoho_language") or "en_titles_ar_comments"
+        if zoho_lang not in {"en_titles_ar_comments", "all_en", "all_ar"}:
+            zoho_lang = "en_titles_ar_comments"
+
+    device_verif = raw.get("i22") or auto.get("device_verification", "manual_only")
+    if device_verif not in {"manual_only", "disabled"}:
+        device_verif = "manual_only"
+    if device_verif == "disabled":
+        device = "allow"
+        install_confirm = "confirm"
+    else:
+        device = raw.get("i4") or auto["device_policy"]
+        if device in {"allow-explicit", "allow", "skip"}:
+            device = "allow"
+        install_confirm = raw.get("i10") or auto["install_confirm"]
+
+    git_policy = raw.get("i3") or "never"
+    if git_policy not in {"never", "agent-may-commit"}:
+        git_policy = "never"
+    chat_lang = raw.get("i17") or auto.get("chat_language") or "mirror"
+    if chat_lang not in {"en", "mirror", "ar"}:
+        chat_lang = "mirror"
     discovered_flavors = [str(f) for f in (facts.get("flavors") or [])]
     flavor = str(raw.get("i19") or "").strip()
     if flavor in ("", "default"):
@@ -783,6 +854,13 @@ def interactive(repo: Path, lang: str) -> dict:
         print(t(lang, "defaults_note"))
     raw: dict = {}
     for q in questions_payload(repo, lang, facts):
+        dep = q.get("depends_on")
+        if dep:
+            dep_id = dep.get("id")
+            if "equals" in dep and raw.get(dep_id) != dep["equals"]:
+                continue
+            if "not_equals" in dep and raw.get(dep_id) == dep["not_equals"]:
+                continue
         chosen = prompt_choice(q, lang, default_for_question(q, defaults))
         if q["id"] == "i0" and chosen[0] == "no":
             print(t(lang, "stopped"))

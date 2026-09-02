@@ -17,7 +17,7 @@ Follow `.agents/rules/harness-rules.md` exactly. Do not commit. Do not use workt
    - **Stage 2 Mandatory Preflight Gate & Assemble**: Run `python .agents/scripts/preflight_check.py` (MUST be `[SUCCESS]`; never proceed if `[FAIL]`) and `python .agents/scripts/run_gradle_task.py :app:assembleDebug`.
    - **Stage 3 Device Verification & Checkpoint Commit**:
      * Run `python .agents/scripts/run_device.py install-start` to install and launch the target Activity/Screen on the connected device. If no device is connected, HALT and prompt developer via `ask_question`; never silently skip.
-     * Output 2-3 simple, human numbered test steps in chat explaining what to verify on screen.
+     * Output 2-3 **diff-grounded** numbered test steps in chat strictly derived from the modified code (1. Navigation: path to modified screen, 2. Interaction: specific action matching the diff, 3. Verification: expected visual/behavioral outcome).
      * Trigger interactive confirmation modal (`ask_question`): *"Please test the steps above on your device and confirm the result:"* with options `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
      * Upon **PASS**: Output the Phase Milestone Card with the drafted Conventional Commit message for Phase N.
      * **MANDATORY HARD STOP**: Stop immediately and wait for the developer to commit Phase N and explicitly instruct to begin Phase N+1. Never touch Phase N+1 files before developer commit.

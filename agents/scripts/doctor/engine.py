@@ -79,6 +79,33 @@ class HarnessDoctor:
         else:
             self.log(category, "Android SDK", "WARN", "ANDROID_HOME / ANDROID_SDK_ROOT or local.properties not detected.")
 
+        java_cmd = shutil.which("java")
+        if java_cmd:
+            try:
+                proc = subprocess.run([java_cmd, "-version"], capture_output=True, text=True, timeout=5)
+                out = (proc.stderr or proc.stdout).strip()
+                match = re.search(r'version "(\d+)(?:\.(\d+))?', out)
+                if match:
+                    major = int(match.group(1))
+                    if major == 1 and match.group(2):
+                        major = int(match.group(2))
+                    if major >= 17:
+                        self.log(category, "Java / JDK Runtime", "PASS", f"Java JDK {major} detected ({java_cmd}).")
+                    else:
+                        self.log(category, "Java / JDK Runtime", "WARN", f"Java JDK {major} detected. AGP 8+ requires JDK 17+.")
+                else:
+                    self.log(category, "Java / JDK Runtime", "PASS", f"Java runtime detected at {java_cmd}.")
+            except Exception as e:
+                self.log(category, "Java / JDK Runtime", "WARN", f"Java binary detected but query failed: {e}")
+        else:
+            self.log(category, "Java / JDK Runtime", "WARN", "Java binary ('java') not found in PATH.")
+
+        adb_cmd = shutil.which("adb")
+        if adb_cmd:
+            self.log(category, "ADB Command", "PASS", f"ADB CLI available in PATH ({adb_cmd}).")
+        else:
+            self.log(category, "ADB Command", "WARN", "ADB CLI ('adb') not found in PATH.")
+
         if (self.repo / ".git").is_dir():
             self.log(category, "Git Repository", "PASS", "Active Git repository detected.")
             ensure_local_git_privacy(self.repo)
