@@ -1043,11 +1043,16 @@ def main() -> None:
             return
         if name in ("write_to_file", "replace_file_content"):
             target = str(args.get("TargetFile") or args.get("targetFile") or "").replace("\\", "/")
-            if "/.agents/scripts/" in target or target.startswith(".agents/scripts/"):
+            if (
+                "/.agents/scripts/" in target
+                or target.startswith(".agents/scripts/")
+                or "/.agents/state/" in target
+                or target.startswith(".agents/state/")
+            ):
                 deny(
-                    "Denied: .agents/scripts/ files are managed by android-harness-kit. "
-                    "Do not modify harness scripts in client app checkouts. "
-                    "Report environment/device issues to the developer instead."
+                    "Denied: .agents/scripts/ and .agents/state/ files are protected harness infrastructure. "
+                    "Manual editing or forging of review verdicts, gate ledgers, or internal scripts is strictly prohibited. "
+                    "Run the proper review subagents or gate commands instead."
                 )
                 return
             allow("file edit permitted.")
