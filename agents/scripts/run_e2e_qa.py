@@ -162,10 +162,18 @@ def main() -> int:
     # Check APK freshness
     apk_path = apk_relative()
     if apk_path:
-        fresh_ok, fresh_err = check_apk_freshness(apk_path)
-        if not fresh_ok:
-            live_print(f"\n[FAIL] APK freshness check failed:\n{format_freshness_error(fresh_err)}")
+        fresh_verdict = check_apk_freshness(apk_path)
+        if not fresh_verdict.is_fresh:
+            live_print(f"\n[FAIL] APK freshness check failed:\n{format_freshness_error(fresh_verdict.reason)}")
             return 1
+
+    # Pre-execution validation of target flows (Anti-Dummy Gate)
+    ok_lint, lint_errs = lint_target_path(target_path)
+    if not ok_lint:
+        live_print(f"\n[FAIL] Maestro flow validation failed for {target_path}:")
+        for err in lint_errs:
+            live_print(f"  - {err}")
+        return 1
 
     # 4. Run Maestro Suite
     report = execute_maestro_suite(

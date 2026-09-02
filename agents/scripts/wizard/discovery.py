@@ -119,6 +119,15 @@ def discover_application_ids(repo: Path) -> list[str]:
         for m in re.finditer(r'namespace(?:\s*=\s*|\s+)["\']([^"\']+)["\']', text):
             if m.group(1) not in ids:
                 ids.append(m.group(1))
+    # Fallback: inspect AndroidManifest.xml package attribute
+    if not ids:
+        for path in repo.glob("**/AndroidManifest.xml"):
+            if skip_path(path, repo):
+                continue
+            text = read_text(path)
+            m = re.search(r'package\s*=\s*["\']([^"\']+)["\']', text)
+            if m and m.group(1) not in ids:
+                ids.append(m.group(1))
     return ids
 
 

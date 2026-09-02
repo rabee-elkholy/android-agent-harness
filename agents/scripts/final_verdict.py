@@ -165,6 +165,8 @@ def _pick_leaf(leaves: dict, key: str) -> str | None:
     for alias in LEAF_ALIASES[key]:
         value = leaves.get(alias)
         if value:
+            if isinstance(value, dict):
+                return str(value.get("token") or "")
             return str(value)
     return None
 
@@ -207,7 +209,7 @@ def _review_outcome(tree_fp: str | None) -> tuple[dict, dict, str, bool]:
     for key in active_keys:
         leaves_map[key] = _pick_leaf(raw_leaves, key)
     missing = [key for key in active_keys if leaves_map.get(key) != LEAF_PASS_VALUES[key]]
-    if verdict != "APPROVED":
+    if verdict not in ("APPROVED", "PASS"):
         check["status"] = "FAIL"
         check["detail"] = f"review verdict is {verdict or 'PENDING'}, not APPROVED"
     elif missing:

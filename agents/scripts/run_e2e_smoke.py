@@ -98,9 +98,9 @@ def main() -> int:
 
     apk_path = apk_relative()
     if apk_path:
-        fresh_ok, fresh_err = check_apk_freshness(apk_path)
-        if not fresh_ok:
-            live_print(f"\n[FAIL] APK freshness check failed:\n{format_freshness_error(fresh_err)}")
+        fresh_verdict = check_apk_freshness(apk_path)
+        if not fresh_verdict.is_fresh:
+            live_print(f"\n[FAIL] APK freshness check failed:\n{format_freshness_error(fresh_verdict.reason)}")
             return 1
 
     if args.flow:

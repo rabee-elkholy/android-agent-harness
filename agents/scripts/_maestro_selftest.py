@@ -65,6 +65,20 @@ def test_validation() -> None:
         assert not ok, "Expected unknown command to fail lint"
         assert any("Unknown Maestro action" in e for e in errors)
 
+        # 4. Dummy Flow (launchApp + scroll only without assertions) -> Must FAIL
+        dummy_flow = tmp_dir / "dummy_flow.yaml"
+        dummy_flow.write_text(
+            "appId: com.acme.app\n"
+            "---\n"
+            "- launchApp\n"
+            "- scroll\n"
+            "- scroll\n",
+            encoding="utf-8",
+        )
+        ok, errors = validate_maestro_flow(dummy_flow)
+        assert not ok, "Expected dummy flow without assertions/interactions to fail lint"
+        assert any("Anti-Dummy Gate" in e for e in errors)
+
     print("[PASS] test_validation")
 
 

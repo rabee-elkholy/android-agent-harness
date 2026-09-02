@@ -237,16 +237,26 @@ def validate_maestro_flow(flow_file: Path) -> tuple[bool, list[str]]:
     if not any(ln.strip().startswith("appId:") or ln.strip().startswith("app_id:") for ln in lines):
         errors.append(f"Missing required 'appId: <package>' header in {flow_file.name}")
 
-    # Check command vocabulary
+    actions: list[str] = []
     for idx, line in enumerate(lines, start=1):
         stripped = line.strip()
         if stripped.startswith("- "):
             cmd_part = stripped[2:].split(":")[0].strip()
-            # If command has parameters or is an object
-            if cmd_part and cmd_part not in MAESTRO_KNOWN_COMMANDS:
-                # ignore comments or flow metadata
-                if not cmd_part.startswith("#") and not cmd_part.startswith("-"):
-                    errors.append(f"Line {idx}: Unknown Maestro action '{cmd_part}'. Known actions: {sorted(MAESTRO_KNOWN_COMMANDS)}")
+            if cmd_part:
+                if cmd_part not in MAESTRO_KNOWN_COMMANDS:
+                    if not cmd_part.startswith("#") and not cmd_part.startswith("-"):
+                        errors.append(f"Line {idx}: Unknown Maestro action '{cmd_part}'. Known actions: {sorted(MAESTRO_KNOWN_COMMANDS)}")
+                else:
+                    actions.append(cmd_part)
+
+    # Anti-Dummy Assertion & Interaction Floor:
+    meaningful_actions = {"assertVisible", "assertNotVisible", "assertTrue", "tapOn", "inputText", "doubleTapOn", "longPressOn", "openLink", "scrollUntilVisible"}
+    if not any(act in meaningful_actions for act in actions):
+        errors.append(
+            f"Anti-Dummy Gate: Flow '{flow_file.name}' has no meaningful assertions or interactions. "
+            f"Must include at least one assertion or interaction ({', '.join(sorted(meaningful_actions))}). "
+            "Dummy flows containing only launchApp/scroll are strictly prohibited."
+        )
 
     return (len(errors) == 0), errors
 
@@ -284,6 +294,8 @@ def generate_maestro_scaffold(task: str, output_dir: Path, app_id: str, diff_tar
         f"appId: {app_id}\n"
         f"---\n"
         f"- launchApp\n"
+        f"- assertVisible:\n"
+        f"    text: \".*\"\n"
         f"# TODO (qa-e2e-planner-agent): add invalid input / negative assertions\n"
     )
     negative_file.write_text(negative_content, encoding="utf-8")
@@ -297,6 +309,8 @@ def generate_maestro_scaffold(task: str, output_dir: Path, app_id: str, diff_tar
         f"appId: {app_id}\n"
         f"---\n"
         f"- launchApp\n"
+        f"- assertVisible:\n"
+        f"    text: \".*\"\n"
         f"# TODO (qa-e2e-planner-agent): add rotation / back-press / boundary assertions\n"
     )
     edge_file.write_text(edge_content, encoding="utf-8")

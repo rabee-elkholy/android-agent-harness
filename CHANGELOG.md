@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.2] - 2026-09-02
+
+### Anti-Dummy Maestro Gate, APK Freshness Parity & Final Verdict Hardening
+- **Anti-Dummy Maestro Gate & Assertion Floor (`_maestro_core.py`, `run_e2e_qa.py`, `_maestro_selftest.py`)**:
+  - Enforced a meaningful assertion and interaction floor (`assertVisible`, `assertNotVisible`, `assertTrue`, `tapOn`, `inputText`, `doubleTapOn`, `longPressOn`, `openLink`, `scrollUntilVisible`) in `validate_maestro_flow()`.
+  - Added pre-execution validation in `run_e2e_qa.py`, immediately rejecting hollow or dummy test flows containing only `launchApp`/`scroll`.
+  - Added automated unit test in `_maestro_selftest.py` ensuring dummy flows fail linting and execution.
+- **APK Freshness & Unpacking Signature Parity (`_apk_freshness.py`, `run_e2e_qa.py`, `run_e2e_smoke.py`)**:
+  - Converted input APK paths to `Path` objects before checking `is_absolute()`, preventing string attribute errors.
+  - Updated `run_e2e_qa.py` and `run_e2e_smoke.py` to check `fresh_verdict.is_fresh` directly rather than attempting tuple unpacking.
+- **Final Verdict Status & Leaf Token Extraction (`final_verdict.py`, `_final_verdict_selftest.py`)**:
+  - Accepted `("APPROVED", "PASS")` as valid success states in review outcome evaluation.
+  - Enhanced `_pick_leaf` to extract `token` from dictionary leaf objects containing cryptographic review evidence.
+- **Application ID & Namespace Fallback Discovery (`wizard/discovery.py`)**:
+  - Added `AndroidManifest.xml` package attribute fallback to ensure real package name is always discovered even when missing from Gradle DSL blocks.
+
 ## [0.27.1] - 2026-09-02
 
 ### Harness Infrastructure Code Graph Indexing, Anti-Guessing Barrier & Permanent Windows PATH
@@ -52,9 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Expanded Self-Test Suite (`_graph_selftest.py`)**:
   - Added Test 7 validating comment stripping, keyword filtering, and hub explosion defense with 30-screen star topology fixtures (38/38 assertions passed, 0 failures).
 
-## [0.25.9] - 2026-09-02
+## [0.25.8] - 2026-09-02
 
-### Feature-Level Architecture Slice Slices, Multi-Node Disambiguation & Discovery Invariant
+### Feature-Level Architecture Slices, Multi-Node Disambiguation & Discovery Invariant
 - **Feature-Level Architecture Slices (`project_graph.py --feature <name>`, `_graph_core.py`)**:
   - Added dedicated `--feature <NAME>` CLI command and `DependencyGraph.extract_feature_graph()` engine method.
   - Automatically isolates and extracts all components belonging to a feature package/module across Clean Architecture layers (UI Screens & Layouts with `[COMPOSE]` vs `[XML]` tags, ViewModels & State Holders, Domain UseCases & Contracts, Data Repositories & Sources, and Unit/UI Tests) in a single high-signal call.
@@ -67,8 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enforced a strict Graph Query Refinement Invariant: when initial graph queries match broad utilities, agents must refine queries with discovered symbol names or use `--feature` rather than falling back to directory listing cascades or reading raw source files.
 - **Self-Test Suite Expansion (`_graph_selftest.py`)**:
   - Added Test 6 validating multi-node matching, feature subgraph extraction, internal dependency retention, and Clean Architecture layer summary formatting (30 assertions passed, 0 failures).
-
-## [0.25.8] - 2026-09-02
 
 ### Zero-Git-Pollution Clean Completion, Code Graph Pre-Warming & Graph-First Barrier
 - **Zero-Git-Pollution Clean Completion (`docs/install-or-update-prompt.md`)**:

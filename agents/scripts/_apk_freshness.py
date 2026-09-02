@@ -127,8 +127,9 @@ def check_apk_freshness(
     Returns:
         FreshnessVerdict indicating freshness, status code, and detailed diagnosis.
     """
-    repo = repo or REPO
-    apk_path = (repo / apk) if not apk.is_absolute() else apk
+    repo = Path(repo) if repo else REPO
+    apk_p = Path(apk)
+    apk_path = (repo / apk_p) if not apk_p.is_absolute() else apk_p
 
     # 1. Existence check
     if not apk_path.is_file():

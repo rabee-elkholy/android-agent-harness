@@ -1,8 +1,8 @@
 # Rollback prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.1/docs/rollback-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.2/docs/rollback-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.27.1` — **SHA-256**: `ca58a61185a2701a74a35c51faeea97ee3c3bda4ac6ed720059ff5617153a3b8` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.27.2` — **SHA-256**: `ca58a61185a2701a74a35c51faeea97ee3c3bda4ac6ed720059ff5617153a3b8` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** to the agent if you want the previous system restored.
 
 ---
