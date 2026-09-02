@@ -119,7 +119,6 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
 - `qa-diagnostics-agent` — logcat / crash / ANR forensics on a physical device
 - `android-ui-expert-agent` — Compose **and** legacy XML. Never convert XML to Compose during a bugfix unless asked.
 - `test-quality-reviewer-agent` — On-demand verification of unit/UI test files (`*Test.kt`), checking assertion depth, mocking integrity, and Coroutines `runTest` dispatchers.
-- `qa-e2e-planner-agent` — Authors diff-grounded positive/negative/edge test cases in the declarative e2e-case YAML for `run_e2e_qa.py` (read-only; returns the YAML for the Lead Agent to save).
 
 ---
 
@@ -132,8 +131,7 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
     - For UI screens, layouts, and ViewModels discovery: ALWAYS run `python .agents/scripts/project_graph.py --screens` or `--find <ScreenName>`.
     - For architectural trace and dependencies: ALWAYS run `python .agents/scripts/project_graph.py --path-from <A> --path-to <B>`.
     - For Harness infrastructure, scripts, and workflows discovery: ALWAYS run `python .agents/scripts/project_graph.py --harness` (or `--tools`) or `python .agents/scripts/project_graph.py --find <query>`. Never run `find_by_name` across `.agents/scripts`.
-  * **Anti-Guessing & Precise Symbol Discovery Invariant**: When locating any class, screen, layout, or script, ALWAYS query `project_graph.py --find <Symbol>` to obtain the exact file path and language (`[JAVA]`, `[KOTLIN]`, `[COMPOSE]`, `[XML]`, `[HARNESS_TOOL]`). NEVER guess `.kt` vs `.java` or launch speculative multi-file searches (`find_by_name *Payment*`, `find_by_name *nav*.xml`).
-  * **Declarative E2E vs Scratch Scripts Barrier**: All E2E test verification MUST be authored as declarative Maestro YAML flows inside `.agents/e2e_cases/<task>/` and executed via `python .agents/scripts/run_e2e_qa.py`. The agent is **STRICTLY FORBIDDEN from authoring custom scratch Python scripts (`scratch/test_*.py`) to simulate ADB commands or hardcoding device serials (`SERIAL = '...'`)**.
+  * **Scratch Scripts Prohibition Invariant**: The agent is **STRICTLY FORBIDDEN from authoring custom scratch Python scripts (`scratch/test_*.py`) to simulate ADB commands or hardcoding device serials (`SERIAL = '...'`)**. Use `python .agents/scripts/run_device.py install-start` directly.
   * **STRICT PROHIBITION**: Iterative brute-force grepping (`grep_search` cascades) and speculative multi-file reading (`view_file` > 2 files during discovery/planning) without a preceding graph topology query are **STRICTLY FORBIDDEN**.
   * Use `view_file` and `replace_file_content` ONLY on targeted, precisely located files identified by the graph query. Do not guess symbols.
 - Smallest change that matches **the files you opened**. Do not convert an XML screen to Compose to fix a bug unless asked.
@@ -163,8 +161,8 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
   * **Scope**: [Brief 1-line description]
   * **5-Leaf Review Gate**: `BUG_PASS` | `CONVENTION_PASS` | `SECURITY_PASS` | `PERF_PASS` | `REGRESSION_PASS`
   * **Unit Tests & Build**: `X Passed` (:module:testDebugUnitTest) + `BUILD SUCCESSFUL`
-  * **Device Verification**: [SUCCESS] `run_e2e_smoke.py` (autonomous E2E passed, zero crashes, scroll OK)
-  * **Transition**: [autonomous_e2e mode] -> Proceeding autonomously to Phase N+1.
+  * **Device Verification**: `PASS` (tested on device)
+  * **Transition**: Awaiting developer commit before starting Phase N+1.
   ```
 - Bugs: 2–3 explicit hypotheses, trace data flow, fix the producer. Consult `systematic-debugging/SKILL.md`.
 - **TEST-DRIVEN DEVELOPMENT (TDD)**: For business logic, UseCases, Repositories, ViewModels, or reproducing bug fixes, follow `test-driven-development/SKILL.md` (Red -> Prove Failure -> Green -> Refactor). Zero placeholder/empty tests.
@@ -280,8 +278,8 @@ Only after the 5 leaves have finished (all 5 PASS):
    - **STRICT PREFLIGHT INVARIANT**: If `preflight_check.py` returns exit code 1 (`[FAIL]`), the agent is **STRICTLY PROHIBITED from running `:app:assembleDebug` or delivering**. The agent MUST fix all string/lint/Room issues or halt and report them to the developer.
 2. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
 3. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start`.
-   - **APK Freshness & Stale Build Barrier**: `run_device.py` and `run_e2e_smoke.py` automatically verify that the target APK is strictly newer than all repository code/resource files and build configurations via `_apk_freshness.py`. If source files were touched after the APK was built or if git HEAD moved past the last assemble gate, installation is **immediately rejected with exit code 1**, forcing a fresh `:app:assembleDebug` compile before any bytecode reaches the device.
-4. **Final Verdict Artifact**: after every gate (unit tests, preflight, assemble, device, E2E, 5 leaves), run `python .agents/scripts/final_verdict.py`. It aggregates the per-gate result artifacts (`.agents/state/results/*.json`) and the review verdict records into `.agents/state/last_verdict.json`:
+   - **APK Freshness & Stale Build Barrier**: `run_device.py` automatically verifies that the target APK is strictly newer than all repository code/resource files and build configurations via `_apk_freshness.py`. If source files were touched after the APK was built or if git HEAD moved past the last assemble gate, installation is **immediately rejected with exit code 1**, forcing a fresh `:app:assembleDebug` compile before any bytecode reaches the device.
+4. **Final Verdict Artifact**: after every gate (unit tests, preflight, assemble, device, 5 leaves), run `python .agents/scripts/final_verdict.py`. It aggregates the per-gate result artifacts (`.agents/state/results/*.json`) and the review verdict records into `.agents/state/last_verdict.json`:
    - `APPROVED` — every gate PASS and the 5-leaf verdict is APPROVED for the same tree fingerprint; required before delivery.
    - `ENV_BLOCKED` — a gate failed environmentally; exit 30 halt protocol (never edit code to bypass).
    - `STALE` — code changed after the review package was generated; regenerate the package and re-run the 5 leaves.
@@ -301,40 +299,34 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
     1. `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest`
     2. `python .agents/scripts/preflight_check.py` (Shift-Left validation: guarantees zero lint errors, zero hardcoded string mismatches, and zero Room migration issues before handoff).
     3. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`
-    4. `python .agents/scripts/run_device.py install-start` + Device Verification (E2E smoke or manual checklist).
+    4. `python .agents/scripts/run_device.py install-start` + Device Verification (interactive manual checklist).
   - **MANDATORY PHASE CHECKPOINT COMMIT & HANDSHAKE**:
     * Upon passing all Phase N gates, output the **Phase Milestone Card** in chat containing verification evidence and a drafted Conventional Commit message for Phase N.
     * **HARD STOP**: The agent **MUST STOP IMMEDIATELY** and wait for the developer to commit Phase N.
     * **STRICT PROHIBITION**: The agent MUST NOT edit, create, open, or start any files for Phase N+1 until the developer explicitly confirms they have committed Phase N and commands the agent to proceed (e.g. *"Start Phase N+1"*).
 
 - **Strict Device Verification & No-Device Halt Policy**:
-  - Running on device (`run_device.py install-start`) and smoke testing (`run_e2e_smoke.py` or interactive manual checklist) is an **absolute delivery gate requirement**.
+  - Running on device (`run_device.py install-start`) and smoke testing (interactive manual checklist) is an **absolute delivery gate requirement**.
   - **IF NO DEVICE / EMULATOR IS CONNECTED** (when `run_device.py` or `adb devices` reports no devices):
     * The agent is **STRICTLY FORBIDDEN from silently skipping device verification, swallowing the error, or claiming verification passed**.
     * The agent **MUST HALT** and trigger an interactive modal (`ask_question` in the conversation language) or alert the developer in chat:
-      > *"No connected Android device or emulator detected. Please connect a physical device or start an emulator to proceed with installation and E2E verification."*
+      > *"No connected Android device or emulator detected. Please connect a physical device or start an emulator to proceed with installation and device verification."*
     * The agent must wait for the developer to connect a device or explicitly grant permission to proceed.
 
-- **Device Verification Modes**:
-   - **Mode A: `manual_only` / `interactive_device` (Developer-in-the-Loop Manual Verification - Default)**:
-     1. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start` (installs and launches the target screen on the connected phone).
-     2. If no device is connected, HALT and prompt the developer; never silently skip device verification.
-     3. Output the **Phase Milestone Card** with 2-3 simple, human, numbered manual test steps explaining what to verify on screen, and the drafted Phase N commit message.
-     4. Trigger interactive confirmation via `ask_question`:
-        - **Question**: "Please test the steps above on your device and confirm the result:"
-        - **Options**: `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
-     5. Upon **PASS**, wait for the developer to commit Phase N and give the green light for Phase N+1 (or deliver the commit message for single-phase tasks).
-     6. Upon **FAIL**, investigate logs with `python .agents/scripts/logcat_doctor.py` and fix the defect.
-   - **Mode B: `autonomous_e2e` (Autonomous Maestro E2E Verification - Optional)**:
-     1. **PRE-E2E CONFIRMATION (`E2E_CONFIRM=confirm`)**: Before planning or authoring flows, ask developer via `ask_question` ("Start E2E round?" / "Skip E2E").
-     2. **TEST-CASE PLANNING & AUTHORING**: Author declarative Maestro YAML flows in `.agents/e2e_cases/<task>/` and execute via `python .agents/scripts/run_e2e_qa.py --cases <path>`.
-   - **Mode C: `disabled`**:
-     1. Proceeds to Phase N Milestone Card after Unit Tests (`:app:testDebugUnitTest`) + `preflight_check.py` + `:app:assembleDebug`, then stops and awaits developer commit.
+- **Device Verification Mode (`manual_only` / `interactive_device` - Default)**:
+  1. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start` (installs and launches the target screen on the connected phone).
+  2. If no device is connected, HALT and prompt the developer; never silently skip device verification.
+  3. Output the **Phase Milestone Card** with 2-3 simple, human, numbered manual test steps explaining what to verify on screen, and the drafted Phase N commit message.
+  4. Trigger interactive confirmation via `ask_question`:
+     - **Question**: "Please test the steps above on your device and confirm the result:"
+     - **Options**: `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
+  5. Upon **PASS**, wait for the developer to commit Phase N and give the green light for Phase N+1 (or deliver the commit message for single-phase tasks).
+  6. Upon **FAIL**, investigate logs with `python .agents/scripts/logcat_doctor.py` and fix the defect.
 
 - **Phase Milestone Card Requirements**:
   1. Scope & Changes.
   2. Quality Gates (`5-Leaf Review Gate`, `Unit Tests`, `preflight_check.py` PASS, `:assembleDebug` BUILD SUCCESSFUL).
-  3. Device Verification Evidence (`Autonomous E2E Smoke Test` results or manual checklist).
+  3. Device Verification Evidence (Interactive manual checklist PASS).
   4. Drafted Conventional Commit message for Phase N.
   5. Clear message that the agent is waiting for developer commit before beginning Phase N+1.
 
@@ -422,7 +414,7 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
    - **MANDATORY HUMAN-READABLE PROTOCOL**: The agent may proceed silently (`""`) or emit a short, clean status line in plain text (e.g. `Running unit tests in background...`, `Assembling debug APK...`, `Awaiting code review verdicts...`).
    - The agent is **STRICTLY PROHIBITED** from printing raw technical task IDs (e.g. NEVER print `fd98ab26.../task-1004`) or robotic justification sentences (e.g. NEVER write *"Output text must be strictly empty"*, *"Stopped calling tools to wait..."*, or *"An intermediate reviewer has reported"*).
    - **STRICT PROHIBITION ON FAKE SYSTEM MESSAGES (`<MESSAGE_RECEIVED>`)**: The agent **MUST NEVER** fabricate, simulate, inject, or write `<MESSAGE_RECEIVED>`, `<SYSTEM_MESSAGE>`, or assume task completion in thoughts or chat prose.
-   - **SEQUENTIAL DEPENDENCY INVARIANT**: When the next step in the pipeline depends on the current background task finishing (e.g. `:assembleDebug` must complete before `run_device.py install-start`; `install-start` must complete before `run_e2e_smoke.py`), the agent **MUST STOP CALLING TOOLS IMMEDIATELY**. Never invoke dependent tools concurrently. The agent must wait passively for the genuine platform `<SYSTEM_MESSAGE>` notifying task completion (`finished with result:`) before dispatching the next dependent step.
+   - **SEQUENTIAL DEPENDENCY INVARIANT**: When the next step in the pipeline depends on the current background task finishing (e.g. `:assembleDebug` must complete before `run_device.py install-start`; `install-start` must complete before manual verification checklist), the agent **MUST STOP CALLING TOOLS IMMEDIATELY**. Never invoke dependent tools concurrently. The agent must wait passively for the genuine platform `<SYSTEM_MESSAGE>` notifying task completion (`finished with result:`) before dispatching the next dependent step.
 
 ---
 
@@ -437,4 +429,3 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
 - `gradle-build-optimizer` — daemon, build cache & speed optimization
 - `git-pr-automator` — commit **message** format only
 - Zoho Sprints playbook: `.agents/workflows/zoho-sprints.md` (mutate only on `update zoho`)
-- Senior-QA E2E testing: `.agents/workflows/e2e-qa.md` (derive + run test cases via `run_e2e_qa.py`)

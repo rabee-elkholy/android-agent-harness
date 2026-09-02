@@ -19,7 +19,7 @@ graph TB
         StateManager["_hook_state.py (State Machine & Locking)"]
         Preflight["preflight_check.py (Lint + Room + Strings)"]
         GradleStream["run_gradle_task.py (Live Heartbeat)"]
-        DeviceRunner["run_device.py & run_e2e_smoke.py"]
+        DeviceRunner["run_device.py & logcat_doctor.py"]
     end
 
     subgraph Reviewers ["Parallel 5-Leaf Quality Guardians"]

@@ -449,7 +449,7 @@ def _coerce_action(action_name: str, value) -> dict:
 
 
 def parse_flow_definition(content: str) -> dict:
-    """Parse a declarative flow (Maestro-compatible subset) from YAML or JSON.
+    """Parse a declarative flow definition from YAML or JSON.
 
     Returns ``{"appId": ..., "steps": [...]}``. No external YAML dependency.
     """

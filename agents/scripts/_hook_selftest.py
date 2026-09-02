@@ -2463,7 +2463,7 @@ ok_e2e_parser = (
 print(f"e2e_smoke parser & coordinate calculation: {'OK' if ok_e2e_parser else 'FAIL'}")
 failed += int(not ok_e2e_parser)
 
-# Declarative Maestro YAML Flow parsing & locale fingerprinting
+# Declarative YAML Flow parsing & locale fingerprinting
 SAMPLE_FLOW_YAML = """
 appId: com.example.app
 ---

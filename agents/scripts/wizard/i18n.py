@@ -197,11 +197,9 @@ T = {
         "i21_no": "No — I manage my own git hooks",
         "i22": (
             "Device Verification Mode: How should the harness verify the app on the connected device after building? "
-            "Autonomous E2E explores, clicks, and asserts UI responsiveness on the phone before asking for your sign-off. "
-            "Manual-only launches the app and presents step-by-step test instructions for you to try."
+            "Manual smoke test installs and launches the app on the phone, presenting simple steps for your sign-off."
         ),
-        "i22_manual": "Manual Smoke Test — App is launched on device; you follow simple steps and confirm (Recommended)",
-        "i22_e2e": "Autonomous E2E Smoke Test — AI Agent runs automated UI flows on device via Maestro",
+        "i22_manual": "Interactive Manual Smoke Test — App is launched on device; you follow simple steps and confirm (Recommended)",
         "i22_off": "No device verification — assemble only (I test manually outside the harness)",
         "i19": (
             "This project defines Gradle product flavors. Which flavor do you test daily? "

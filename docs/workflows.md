@@ -43,12 +43,11 @@ flowchart TD
     F -- Findings Detected --> G["Review Round Summary Card (Chat Transparency)"]
     G --> C
     F -- All PASS --> H["5. Preflight Gate & :app:assembleDebug"]
-    H --> I["6. Device Smoke Verification (run_e2e_smoke.py)"]
-    I --> J{"Mode: autonomous_e2e?"}
-    J -- Yes & E2E SUCCESS --> K["Proceed Autonomously to Phase N+1"]
-    J -- manual_only --> L["Interactive ask_question Modal"]
-    L -- PASS --> K
-    K --> M["7. Final Task Summary & Conventional Commit"]
+    H --> I["6. Live Device Install & Launch (run_device.py install-start)"]
+    I --> J["Interactive ask_question Modal (PASS / FAIL)"]
+    J -- PASS --> K["7. Phase Milestone Card & Conventional Commit"]
+    J -- FAIL --> L["Logcat Forensics & Bugfix (logcat_doctor.py)"]
+    L --> C
 ```
 
 ### Key Rules:
