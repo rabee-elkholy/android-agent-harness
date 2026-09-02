@@ -4,15 +4,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.zip
-.harness-setup/
-.harness-backup/
-.harness-backups/
 agents/state/
 agents/cache/
 agents/scripts/__pycache__/
-.agents/
-.githooks/
-*.diff
-*.patch
-*.secret
-

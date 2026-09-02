@@ -112,6 +112,48 @@ def _discover_java_bin() -> Path | None:
     return None
 
 
+def _persist_maestro_to_path(maestro_bin_dir: Path) -> None:
+    """Persist ~/.maestro/bin to user PATH in registry / shell rc if not already present."""
+    bin_str = str(maestro_bin_dir)
+    os.environ["PATH"] = bin_str + os.pathsep + os.environ.get("PATH", "")
+    if sys.platform == "win32":
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE)
+            try:
+                cur_path, val_type = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                cur_path, val_type = "", winreg.REG_EXPAND_SZ
+            parts = [p.strip() for p in cur_path.split(";") if p.strip()]
+            if bin_str not in parts and bin_str.lower() not in [p.lower() for p in parts]:
+                new_path = (cur_path.rstrip(";") + ";" + bin_str).lstrip(";")
+                winreg.SetValueEx(key, "Path", 0, val_type, new_path)
+            winreg.CloseKey(key)
+        except Exception:
+            try:
+                subprocess.run(
+                    [
+                        "powershell", "-NoProfile", "-Command",
+                        f'[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";{bin_str}", "User")',
+                    ],
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+    else:
+        home = Path.home()
+        for rc in [home / ".bashrc", home / ".zshrc", home / ".profile"]:
+            if rc.is_file():
+                try:
+                    text = rc.read_text(encoding="utf-8")
+                    if str(maestro_bin_dir) not in text and ".maestro/bin" not in text:
+                        rc.write_text(text + f'\nexport PATH="$PATH:{maestro_bin_dir}"\n', encoding="utf-8")
+                except Exception:
+                    pass
+
+
 def install_maestro_cli() -> tuple[bool, str]:
     """Automates Maestro CLI installation cross-platform via direct release download."""
     import io
@@ -146,7 +188,7 @@ def install_maestro_cli() -> tuple[bool, str]:
                         os.chmod(target_path, 0o755)
 
         if maestro_bin_dir.is_dir():
-            os.environ["PATH"] = str(maestro_bin_dir) + os.pathsep + os.environ.get("PATH", "")
+            _persist_maestro_to_path(maestro_bin_dir)
 
         ok, info, _ = ensure_maestro_installed()
         if ok:

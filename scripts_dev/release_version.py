@@ -244,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print("\n[5/5] Committing, tagging, and publishing release...")
     stage_paths = [
+        ".gitignore",
         "agents/",
         "AGENTS.md",
         "pyproject.toml",

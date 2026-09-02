@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.1] - 2026-09-02
+
+### Harness Infrastructure Code Graph Indexing, Anti-Guessing Barrier & Permanent Windows PATH
+- **Harness Infrastructure Code Graph Indexing (`_graph_core.py`, `project_graph.py`)**:
+  - Indexed all Harness scripts, workflows, and subagents into the universal Code Graph with entity types `[HARNESS_TOOL]`, `[WORKFLOW_PLAYBOOK]`, and `[SUBAGENT_ROSTER]`.
+  - Added `project_graph.py --harness` and `--tools` CLI options to render an instant, comprehensive topology directory of all tools, workflows, and subagents.
+  - Enhanced `--find <query>` to seamlessly search across both Android application classes and Harness tools/workflows with metadata-aware description and flag matching.
+- **Anti-Guessing Barrier & Explicit Language Tagging (`_graph_core.py`, `project_graph.py`, `AGENTS.md`, `harness-rules.md`)**:
+  - Symbol searches now explicitly output language tags (`[JAVA_CLASS]`, `[KOTLIN_CLASS]`, `[COMPOSE_SCREEN]`, `[XML_LAYOUT]`, `[HARNESS_TOOL]`) alongside full relative paths and module metadata.
+  - Mandated Graph-First symbol discovery before opening files, eliminating guessing cascades (`.kt` vs `.java`) and speculative multi-file searches (`find_by_name *Payment*`, `find_by_name *nav*.xml`).
+  - Strictly prohibited authoring custom ADB scratch Python scripts (`scratch/test_*.py`) and hardcoded device serials, enforcing declarative Maestro YAML flows in `.agents/e2e_cases/`.
+- **Permanent Windows User PATH Persistence (`_maestro_core.py`)**:
+  - Added `_persist_maestro_to_path()` in `_maestro_core.py` to permanently register `%USERPROFILE%\.maestro\bin` in the Windows User Environment Registry upon installation.
+- **Expanded Code Graph Self-Test Suite (`_graph_selftest.py`)**:
+  - Added Test 8 validating Harness tool, workflow, and subagent discovery, search matching, and inventory rendering (45/45 assertions passed, 0 failures).
+
 ## [0.27.0] - 2026-09-02
 
 ### Maestro E2E Engine Integration, Automated CLI Setup & Native Multi-Flow QA
@@ -161,7 +177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Rule Alignment & Comprehensive Self-Test Suite (`_hook_selftest.py`, `AGENTS.md`, `harness-rules.md`)**:
   - Updated delivery gate items 16 & 17 and added unit test coverage for YAML flow parsing, in-app locale fingerprinting, and probe rejection.
 
-## [0.20.1] - 2026-09-01
+**Included in 0.20.1 (2026-09-01):**
 
 ### Zoho Sprints Lifecycle Governance, QA Report Separation & Silent In-Progress Transitions
 - **Strict Bug vs Story/Task Report Separation (`zoho-sprints.md`, `harness-rules.md`)**:

@@ -105,6 +105,8 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "SHIFT-LEFT QUALITY: Before requesting reviews, proactively satisfy all review pillars (null/network resilience, MVI single-source StateFlow, no inline FQCNs, Compose contentDescription & 48dp touch targets, dual-locale en/ar previews, zero Main-thread I/O, Room migration if @Entity changes). "
         f"SHIFT-LEFT TEST & LINT PRE-GATE: Before calling review_package.py and invoke_subagent, when code or unit tests are touched, ALWAYS run `python .agents/scripts/run_gradle_task.py {bits['unit_test_task']}` AND `python .agents/scripts/fast_kt_lint.py` to verify compiler/signature parity and zero lint violations (diff-scoped on modified lines) before dispatching subagents. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create implementation_plan.md artifact with RequestFeedback=true and get developer approval via Proceed button BEFORE writing code. "
+        "GRAPH-FIRST & ANTI-GUESSING: ALWAYS query `python .agents/scripts/project_graph.py` (--feature / --find <Symbol> / --screens / --harness). Never guess .kt vs .java or run recursive find_by_name across source roots. "
+        "DECLARATIVE E2E INVARIANT: Author declarative Maestro YAML flows in .agents/e2e_cases/<task>/ and run via run_e2e_qa.py. NEVER author custom scratch python scripts (scratch/test_*.py) or hardcode device serials. "
         "ANSWER FIRST in chat before ask_question. Match ask_question language to the developer. "
         "(Recommended) is only for engineering tradeoffs — never on Pass/Fail. "
         "PARALLEL REVIEW: if subagents are not yet registered, call define_subagent for each from .agents/subagents/*.json. "

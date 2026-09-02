@@ -337,6 +337,58 @@ def run_tests() -> bool:
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+    # -----------------------------------------------------------------
+    # Test 8: Harness Infrastructure Indexing & Topology Discovery
+    # -----------------------------------------------------------------
+    print("\n[*] Test 8: Harness Infrastructure Indexing & Discovery")
+    temp_dir = Path(tempfile.mkdtemp())
+    try:
+        scripts_dir = temp_dir / ".agents" / "scripts"
+        workflows_dir = temp_dir / ".agents" / "workflows"
+        subagents_dir = temp_dir / ".agents" / "subagents"
+        scripts_dir.mkdir(parents=True)
+        workflows_dir.mkdir(parents=True)
+        subagents_dir.mkdir(parents=True)
+
+        tool_file = scripts_dir / "run_e2e_qa.py"
+        tool_file.write_text(
+            '''"""Senior-QA test-case-aware E2E runner for Android powered by Maestro.
+
+Usage:
+  python .agents/scripts/run_e2e_qa.py --cases <path>
+"""
+import argparse
+''',
+            encoding="utf-8",
+        )
+
+        wf_file = workflows_dir / "e2e-qa.md"
+        wf_file.write_text("# Senior-QA Maestro E2E Testing Workflow\n", encoding="utf-8")
+
+        agent_file = subagents_dir / "qa-e2e-planner-agent.json"
+        agent_file.write_text(
+            json.dumps({"role": "Senior QA Planner", "description": "Plans declarative Maestro YAML test cases."}),
+            encoding="utf-8",
+        )
+
+        engine = GraphEngine(temp_dir)
+        engine.sync(force_full=True)
+
+        e2e_matches = engine.graph.find_nodes("e2e")
+        assert_eq(len(e2e_matches) >= 3, True, "Discovered tool, workflow, and subagent for 'e2e'")
+        match_types = {m.type for m in e2e_matches}
+        assert_eq(EntityType.HARNESS_TOOL.value in match_types, True, "Includes HARNESS_TOOL")
+        assert_eq(EntityType.WORKFLOW_PLAYBOOK.value in match_types, True, "Includes WORKFLOW_PLAYBOOK")
+        assert_eq(EntityType.SUBAGENT_ROSTER.value in match_types, True, "Includes SUBAGENT_ROSTER")
+
+        inventory = engine.graph.to_harness_inventory()
+        assert_eq("run_e2e_qa.py" in inventory, True, "Inventory contains run_e2e_qa.py")
+        assert_eq("e2e-qa.md" in inventory, True, "Inventory contains e2e-qa.md")
+        assert_eq("qa-e2e-planner-agent" in inventory, True, "Inventory contains qa-e2e-planner-agent")
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
     print("\n==================================================")
     print(f"Selftest Results: {passed} passed, {failed} failed")
     print("==================================================")

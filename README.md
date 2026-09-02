@@ -27,7 +27,7 @@
 Open a **new chat session** in your AI assistant (Antigravity, Claude Code, Cursor, Copilot, Windsurf) at your project root and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.0/docs/install-or-update-prompt.md and follow all its instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.1/docs/install-or-update-prompt.md and follow all its instructions.
 ```
 
 The installer autonomously inspects your project topology (Gradle modules, DI, UI framework, Room, Locales), creates target adapters, and executes self-diagnostic checks.
@@ -113,7 +113,7 @@ The harness seamlessly adapts to any Android project topology from day one:
 
 ---
 
-## The 5 Quality Guardians & 8-Specialist Multi-Agent System
+## The 5 Quality Guardians & Specialized Multi-Agent Squad
 
 Before any APK assembly or device execution, the Lead Agent coordinates with a specialized squad of AI specialists:
 
@@ -126,9 +126,10 @@ Before any APK assembly or device execution, the Lead Agent coordinates with a s
 
 `test-quality-reviewer-agent` (`TEST_PASS`) is a **Stage 0.5 pre-gate** for test diffs: it audits unit and UI test suites (`*Test.kt`) before the 5-leaf round, requiring deep state assertions, mocking integrity, and mandatory `runTest` Coroutines dispatchers.
 
-### The 2 Dedicated On-Demand Specialists
-7. **`qa-diagnostics-agent`**: Deep Logcat forensics, crash stack trace demangling, and ANR thread dump triage on connected physical devices.
-8. **`android-ui-expert-agent`**: Jetpack Compose and XML layout guidance, RTL/Arabic typography, accessibility modifiers, and multi-screen responsiveness.
+### The 3 Dedicated On-Demand Specialists
+7. **`qa-e2e-planner-agent`**: Senior QA test-case authoring declarative positive/negative/edge Maestro YAML flows for device verification.
+8. **`qa-diagnostics-agent`**: Deep Logcat forensics, crash stack trace demangling, and ANR thread dump triage on connected physical devices.
+9. **`android-ui-expert-agent`**: Jetpack Compose and XML layout guidance, RTL/Arabic typography, accessibility modifiers, and multi-screen responsiveness.
 
 Every review round produces a machine-readable verdict record at `.agents/state/verdicts/verdict-<pkg12>.json`. Validate any verdict record using `android-harness verify`.
 
@@ -152,9 +153,9 @@ Pinned lifecycle prompts with cryptographic tamper-evident headers:
 
 | Operation | Prompt URL | Purpose |
 | :--- | :--- | :--- |
-| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.0/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
-| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.0/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
-| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.0/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
+| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.1/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
+| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.1/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
+| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.1/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
 
 ---
 

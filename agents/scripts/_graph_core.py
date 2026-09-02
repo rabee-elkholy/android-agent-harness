@@ -41,6 +41,9 @@ class EntityType(str, Enum):
     XML_LAYOUT = "XML_LAYOUT"
     NAV_GRAPH = "NAV_GRAPH"
     COMPONENT = "COMPONENT"
+    HARNESS_TOOL = "HARNESS_TOOL"
+    WORKFLOW_PLAYBOOK = "WORKFLOW_PLAYBOOK"
+    SUBAGENT_ROSTER = "SUBAGENT_ROSTER"
     UNKNOWN = "UNKNOWN"
 
 
@@ -296,7 +299,7 @@ class DependencyGraph:
         return None
 
     def find_nodes(self, query: str, limit: int = 60) -> list[GraphNode]:
-        """Find all nodes matching query across ID, name, declarations, or file path."""
+        """Find all nodes matching query across ID, name, declarations, file path, or metadata."""
         q_lower = query.lower().strip()
         exact_matches: list[GraphNode] = []
         name_matches: list[GraphNode] = []
@@ -306,6 +309,11 @@ class DependencyGraph:
         for node in self.nodes.values():
             if node.id in seen:
                 continue
+            meta = node.metadata or {}
+            meta_desc = str(meta.get("description") or meta.get("title") or meta.get("role") or "").lower()
+            meta_usage = str(meta.get("usage") or "").lower()
+            flags = [str(f).lower() for f in meta.get("flags", [])]
+
             if node.id == query or node.name == query or any(d == query for d in node.declarations):
                 exact_matches.append(node)
                 seen.add(node.id)
@@ -318,9 +326,100 @@ class DependencyGraph:
             elif node.file_path and q_lower in node.file_path.lower():
                 path_matches.append(node)
                 seen.add(node.id)
+            elif q_lower in meta_desc or q_lower in meta_usage or any(q_lower in f for f in flags):
+                path_matches.append(node)
+                seen.add(node.id)
 
         results = exact_matches + name_matches + path_matches
         return results[:limit]
+
+    def format_symbol_match(self, node: GraphNode) -> str:
+        """Formats a single matching node with explicit language, path, and layer."""
+        lines = []
+        lang = node.metadata.get("language", "")
+        composable = node.metadata.get("composable", False)
+
+        if node.type == EntityType.HARNESS_TOOL.value:
+            lines.append(f"  * {node.name} [HARNESS_TOOL]")
+            lines.append(f"    Path: {node.file_path}")
+            if node.metadata.get("description"):
+                lines.append(f"    Description: {node.metadata.get('description')}")
+            if node.metadata.get("usage"):
+                lines.append(f"    Usage: {node.metadata.get('usage')}")
+        elif node.type == EntityType.WORKFLOW_PLAYBOOK.value:
+            lines.append(f"  * {node.name} [WORKFLOW_PLAYBOOK]")
+            lines.append(f"    Path: {node.file_path}")
+            if node.metadata.get("title"):
+                lines.append(f"    Title: {node.metadata.get('title')}")
+        elif node.type == EntityType.SUBAGENT_ROSTER.value:
+            lines.append(f"  * {node.name} [SUBAGENT]")
+            lines.append(f"    Path: {node.file_path}")
+            if node.metadata.get("role"):
+                lines.append(f"    Role: {node.metadata.get('role')}")
+            if node.metadata.get("description"):
+                lines.append(f"    Description: {node.metadata.get('description')}")
+        elif node.type in (EntityType.XML_LAYOUT.value, EntityType.NAV_GRAPH.value):
+            lines.append(f"  * {node.name} [{node.type}]")
+            lines.append(f"    Path: {node.file_path}")
+            lines.append(f"    Module: {node.module}")
+        else:
+            tag = f"[{lang.upper()}_{node.type}]" if lang else f"[{node.type}]"
+            if composable:
+                tag = f"[COMPOSE_{node.type}]"
+            lines.append(f"  * {node.name} {tag}")
+            lines.append(f"    Path: {node.file_path}")
+            if node.module:
+                lines.append(f"    Module: {node.module}")
+            if node.package:
+                lines.append(f"    Package: {node.package}")
+            targets = [self.nodes[t].name for t in self.get_targets(node.id) if t in self.nodes]
+            if targets:
+                lines.append(f"    Dependencies: {', '.join(targets[:6])}")
+        return "\n".join(lines)
+
+    def to_harness_inventory(self) -> str:
+        """Renders an organized directory of all Harness CLI tools, workflows, and subagents."""
+        tools = [n for n in self.nodes.values() if n.type == EntityType.HARNESS_TOOL.value]
+        workflows = [n for n in self.nodes.values() if n.type == EntityType.WORKFLOW_PLAYBOOK.value]
+        subagents = [n for n in self.nodes.values() if n.type == EntityType.SUBAGENT_ROSTER.value]
+
+        lines = [
+            "=" * 78,
+            f"  Android AI Harness Infrastructure Topology ({len(tools)} tools, {len(workflows)} workflows, {len(subagents)} subagents)",
+            "=" * 78,
+        ]
+
+        if tools:
+            lines.append(f"\n[*] Core Harness CLI & Automation Tools ({len(tools)}):")
+            for t in sorted(tools, key=lambda x: x.name):
+                desc = t.metadata.get("description", "")
+                usage = t.metadata.get("usage", "")
+                lines.append(f"  - {t.name} [HARNESS_TOOL] ({t.file_path})")
+                if desc and desc != t.name:
+                    lines.append(f"    -> {desc}")
+                if usage:
+                    first_usage = usage.splitlines()[0] if usage else ""
+                    lines.append(f"    -> Usage: {first_usage}")
+
+        if workflows:
+            lines.append(f"\n[*] Workflows & Governance Playbooks ({len(workflows)}):")
+            for w in sorted(workflows, key=lambda x: x.name):
+                title = w.metadata.get("title", w.name)
+                lines.append(f"  - {w.name} [WORKFLOW_PLAYBOOK] ({w.file_path})")
+                if title and title != w.name:
+                    lines.append(f"    -> {title}")
+
+        if subagents:
+            lines.append(f"\n[*] Specialized Subagent Roster ({len(subagents)}):")
+            for a in sorted(subagents, key=lambda x: x.name):
+                role = a.metadata.get("role", a.name)
+                desc = a.metadata.get("description", "")
+                lines.append(f"  - {a.name} [SUBAGENT] ({a.file_path})")
+                lines.append(f"    -> Role: {role}")
+                if desc:
+                    lines.append(f"    -> {desc}")
+
+        return "\n".join(lines)
 
     def extract_feature_graph(
         self,
@@ -765,6 +864,9 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
 
     nodes: list[GraphNode] = []
 
+    is_java = path.suffix.lower() == ".java"
+    lang = "Java" if is_java else "Kotlin"
+
     for fn in composable_funcs:
         if fn.endswith("Screen") or fn.endswith("View") or fn.endswith("Dialog") or fn.endswith("BottomSheet"):
             node_id = f"{pkg}.{fn}" if pkg else fn
@@ -778,7 +880,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                     package=pkg,
                     declarations=[fn],
                     imports=imports,
-                    metadata={"composable": True},
+                    metadata={"composable": True, "language": lang},
                 )
             )
 
@@ -795,6 +897,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                 package=pkg,
                 declarations=declarations,
                 imports=imports,
+                metadata={"language": lang},
             )
         )
 
@@ -813,6 +916,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                     package=pkg,
                     declarations=[name],
                     imports=imports,
+                    metadata={"language": lang},
                 )
             )
 
@@ -851,9 +955,112 @@ def parse_xml_file(path: Path, repo: Path) -> list[tuple[GraphNode, list[str]]]:
         file_path=rel_path,
         module=module_id,
         declarations=[name],
-        metadata={"xml": True, "is_nav": is_nav},
+        metadata={"xml": True, "is_nav": is_nav, "language": "XML"},
     )
     return [(node, referenced_symbols)]
+
+
+def parse_harness_script(path: Path, repo: Path) -> GraphNode | None:
+    """Extract metadata and CLI usage from a Harness Python tool script."""
+    try:
+        rel_path = path.relative_to(repo).as_posix()
+    except ValueError:
+        rel_path = path.as_posix()
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        import ast
+        tree = ast.parse(text)
+        doc = ast.get_docstring(tree) or ""
+        doc_lines = [l.strip() for l in doc.splitlines() if l.strip()]
+        title = doc_lines[0] if doc_lines else path.name
+        usage_lines = [l for l in doc_lines if "python " in l or l.startswith("Usage:")]
+        usage = "\n".join(usage_lines) if usage_lines else f"python {rel_path}"
+        flags = re.findall(r"(--[a-zA-Z0-9_\-]+)", text)
+    except Exception:
+        title = path.name
+        usage = f"python {rel_path}"
+        flags = []
+
+    return GraphNode(
+        id=f"harness:{path.name}",
+        name=path.name,
+        type=EntityType.HARNESS_TOOL.value,
+        file_path=rel_path,
+        module=":harness",
+        declarations=[path.stem, path.name],
+        metadata={
+            "description": title,
+            "usage": usage,
+            "flags": sorted(set(flags)),
+            "harness": True,
+            "language": "Python",
+        },
+    )
+
+
+def parse_workflow_file(path: Path, repo: Path) -> GraphNode | None:
+    """Extract metadata from a Harness workflow guide."""
+    try:
+        rel_path = path.relative_to(repo).as_posix()
+    except ValueError:
+        rel_path = path.as_posix()
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        title = path.stem
+        for line in text.splitlines():
+            line_s = line.strip()
+            if line_s.startswith("# "):
+                title = line_s.lstrip("# ").strip()
+                break
+    except Exception:
+        title = path.stem
+
+    return GraphNode(
+        id=f"workflow:{path.name}",
+        name=path.name,
+        type=EntityType.WORKFLOW_PLAYBOOK.value,
+        file_path=rel_path,
+        module=":harness",
+        declarations=[path.stem, path.name],
+        metadata={
+            "title": title,
+            "harness": True,
+            "language": "Markdown",
+        },
+    )
+
+
+def parse_subagent_file(path: Path, repo: Path) -> GraphNode | None:
+    """Extract metadata from a Harness subagent spec JSON."""
+    try:
+        rel_path = path.relative_to(repo).as_posix()
+    except ValueError:
+        rel_path = path.as_posix()
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        role = data.get("role", path.stem)
+        desc = data.get("description", "")
+    except Exception:
+        role = path.stem
+        desc = ""
+
+    return GraphNode(
+        id=f"subagent:{path.stem}",
+        name=path.stem,
+        type=EntityType.SUBAGENT_ROSTER.value,
+        file_path=rel_path,
+        module=":harness",
+        declarations=[path.stem],
+        metadata={
+            "role": role,
+            "description": desc,
+            "harness": True,
+            "language": "JSON",
+        },
+    )
 
 
 # =========================================================================
@@ -933,6 +1140,32 @@ class GraphEngine:
                     continue
                 current_files[rel] = p
 
+        # Discover Harness infrastructure (.agents in target project or agents in kit repo)
+        harness_roots: list[Path] = []
+        if (self.repo / ".agents" / "scripts").is_dir():
+            harness_roots.append(self.repo / ".agents")
+        if (self.repo / "agents" / "scripts").is_dir() and (self.repo / "agents" / "VERSION").is_file():
+            harness_roots.append(self.repo / "agents")
+
+        for hroot in harness_roots:
+            scripts_dir = hroot / "scripts"
+            workflows_dir = hroot / "workflows"
+            subagents_dir = hroot / "subagents"
+
+            if scripts_dir.is_dir():
+                for sp in scripts_dir.glob("*.py"):
+                    if not sp.name.startswith("_") or sp.name in ("_maestro_core.py", "_adb_core.py"):
+                        rel = sp.relative_to(self.repo).as_posix()
+                        current_files[rel] = sp
+            if workflows_dir.is_dir():
+                for wp in workflows_dir.glob("*.md"):
+                    rel = wp.relative_to(self.repo).as_posix()
+                    current_files[rel] = wp
+            if subagents_dir.is_dir():
+                for ap in subagents_dir.glob("*.json"):
+                    rel = ap.relative_to(self.repo).as_posix()
+                    current_files[rel] = ap
+
         added: list[str] = []
         modified: list[str] = []
         deleted: list[str] = [rel for rel in self.file_hashes if rel not in current_files]
@@ -978,6 +1211,18 @@ class GraphEngine:
                     for n, refs in xml_items:
                         self.graph.add_node(n)
                         xml_connections.append((n, refs))
+                elif p.suffix.lower() == ".py" and ("/scripts/" in rel or rel.startswith("agents/scripts") or rel.startswith(".agents/scripts")):
+                    hn = parse_harness_script(p, self.repo)
+                    if hn:
+                        self.graph.add_node(hn)
+                elif p.suffix.lower() == ".md" and ("/workflows/" in rel or rel.startswith("agents/workflows") or rel.startswith(".agents/workflows")):
+                    wn = parse_workflow_file(p, self.repo)
+                    if wn:
+                        self.graph.add_node(wn)
+                elif p.suffix.lower() == ".json" and ("/subagents/" in rel or rel.startswith("agents/subagents") or rel.startswith(".agents/subagents")):
+                    an = parse_subagent_file(p, self.repo)
+                    if an:
+                        self.graph.add_node(an)
 
             self._rebuild_symbol_index()
 

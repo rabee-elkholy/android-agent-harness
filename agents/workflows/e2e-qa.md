@@ -7,6 +7,8 @@ description: Derive Maestro test cases from a diff and execute them on device as
 Follow `.agents/rules/harness-rules.md`. This is the test-case-aware device
 verification path powered by **Maestro** (use `run_e2e_smoke.py` only as the quick fallback).
 
+> **Strict Runner Invariant**: ALWAYS execute E2E testing via `python .agents/scripts/run_e2e_qa.py --cases ...` (or `run_e2e_smoke.py`). NEVER invoke raw `maestro` commands directly in shell, NEVER author custom scratch python scripts (`scratch/test_*.py`) to simulate ADB interactions, and NEVER hardcode device serials (`SERIAL = '...'`).
+
 ## 1. Confirm with the developer (Gate 0)
 
 Before creating or planning any E2E test cases:
