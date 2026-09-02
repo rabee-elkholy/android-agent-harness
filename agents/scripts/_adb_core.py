@@ -663,22 +663,45 @@ class DeviceSession:
 
     # -- app state ---------------------------------------------------------
     def foreground_package(self) -> str | None:
-        proc = self.run_adb(["shell", "dumpsys", "window", "windows"], timeout=10.0)
+        # Tier 1: dumpsys window (mCurrentFocus / mFocusedApp / mFocusedWindow)
+        proc = self.run_adb(["shell", "dumpsys", "window"], timeout=10.0)
         out = proc.stdout or ""
-        m = re.search(r"mCurrentFocus=.*?Window\{[^}]*?\s([\w.]+)/", out)
+        m = re.search(r"mCurrentFocus=.*?Window\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out)
         if m:
             return m.group(1)
-        m = re.search(r"mFocusedApp=.*?ActivityRecord\{[^}]*?\s([\w.]+)/", out)
-        return m.group(1) if m else None
+        m = re.search(r"mFocusedApp=.*?ActivityRecord\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out)
+        if m:
+            return m.group(1)
+        m = re.search(r"mFocusedWindow=.*?Window\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out)
+        if m:
+            return m.group(1)
+
+        # Tier 2: dumpsys activity activities (fallback for Android 12-15)
+        proc_act = self.run_adb(["shell", "dumpsys", "activity", "activities"], timeout=10.0)
+        act_out = proc_act.stdout or ""
+        m_act = re.search(r"(?:mResumedActivity|topResumedActivity|mFocusedActivity):.*?ActivityRecord\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", act_out)
+        if m_act:
+            return m_act.group(1)
+
+        return None
 
     def current_activity(self) -> str | None:
-        proc = self.run_adb(["shell", "dumpsys", "window", "windows"], timeout=10.0)
+        proc = self.run_adb(["shell", "dumpsys", "window"], timeout=10.0)
         out = proc.stdout or ""
-        m = re.search(r"mCurrentFocus=.*?Window\{[^}]*?\s([\w.]+/[\w.$.]+)\}", out)
+        m = re.search(r"mCurrentFocus=.*?Window\{[^}]*?\s(?:u\d+\s+)?([\w.]+/[\w.$.]+)\}", out)
         if m:
             return m.group(1)
         m = re.search(r"mCurrentFocus=.*?([\w.]+/[\w.$.]+)", out)
-        return m.group(1) if m else None
+        if m:
+            return m.group(1)
+
+        proc_act = self.run_adb(["shell", "dumpsys", "activity", "activities"], timeout=10.0)
+        act_out = proc_act.stdout or ""
+        m_act = re.search(r"(?:mResumedActivity|topResumedActivity|mFocusedActivity):.*?ActivityRecord\{[^}]*?\s(?:u\d+\s+)?([\w.]+/[\w.$.]+)", act_out)
+        if m_act:
+            return m_act.group(1)
+
+        return None
 
     def is_app_foreground(self) -> bool:
         candidates = {self.package}
@@ -763,16 +786,21 @@ class DeviceSession:
         return proc.stdout or ""
 
     def _dump_via_file(self) -> str:
-        dump = self.run_adb(["shell", "uiautomator", "dump", "/data/local/tmp/harness_uidump.xml"], timeout=20.0)
-        if dump.returncode != 0:
-            return ""
-        cat = self.run_adb(["shell", "cat", "/data/local/tmp/harness_uidump.xml"], timeout=20.0)
-        return cat.stdout or ""
+        candidates = ["/data/local/tmp/harness_uidump.xml", "/sdcard/harness_uidump.xml"]
+        for target_path in candidates:
+            dump = self.run_adb(["shell", "uiautomator", "dump", target_path], timeout=20.0)
+            if dump.returncode == 0 or "dumped to" in (dump.stdout or "").lower():
+                cat = self.run_adb(["shell", "cat", target_path], timeout=20.0)
+                out = cat.stdout or ""
+                self.run_adb(["shell", "rm", "-f", target_path], timeout=5.0)
+                if "<hierarchy" in out:
+                    return out
+        return ""
 
     def dump_hierarchy(self, retries: int = 3) -> list[UINode]:
         for attempt in range(retries):
             raw = self._dump_via_execout()
-            if not raw.strip():
+            if not raw.strip() or "<hierarchy" not in raw:
                 raw = self._dump_via_file()
             nodes = parse_ui_hierarchy(raw)
             if nodes:

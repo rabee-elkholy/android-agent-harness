@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.2] - 2026-09-02
+
+### Resilient Physical Device UI Hierarchy Dumps, Multi-Tier Foreground Resolution & Shift-Left Test Sync
+- **OEM-Resilient UI Hierarchy Dumps (`_adb_core.py`, `_adb_core_selftest.py`)**:
+  - Enhanced `dump_hierarchy()` to check for true root `<hierarchy` XML tags, automatically falling back to `_dump_via_file()` when OEM ROMs (Oppo, Realme, Xiaomi, Samsung) return non-empty informational text messages on `exec-out /dev/tty`.
+  - Added multi-path fallback (`/data/local/tmp/` & `/sdcard/`) with automatic temporary file cleanup.
+- **Multi-Tier Foreground Package & Activity Discovery (`_adb_core.py`)**:
+  - Implemented multi-tier resolution across Android 12, 13, 14, 15: Tier 1 (`dumpsys window` with `u0` user ID and modern window token matching) and Tier 2 (`dumpsys activity activities` with `mResumedActivity` / `topResumedActivity`).
+- **Harness Engine Mutation Protection in Client Apps (`pre_tool_safety.py`, `_security_selftest.py`)**:
+  - Added safety guard denying AI agents from making ad-hoc modifications to `.agents/scripts/` files in client app checkouts.
+- **Shift-Left Test & Mock Synchronization Pre-Gate (`harness-rules.md`, `AGENTS.md`)**:
+  - Enforced mandatory unit test and mock synchronization alongside production code changes to guarantee first-pass review approvals and eliminate review round flapping.
+
 ## [0.25.1] - 2026-09-02
 
 ### Architecture Path Search Validation & Edge-Case Protection

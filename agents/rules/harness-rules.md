@@ -183,18 +183,21 @@ Before writing or modifying any code, the Lead Agent must proactively verify com
    - Every `Image`, `Icon`, and `IconButton` MUST specify a meaningful `contentDescription` (or explicit `null` only if decorative).
    - Clickable UI components must have a minimum touch target size of 48dp (`Modifier.minimumInteractiveComponentSize()` or `>= 48.dp`).
    - Every new or modified Compose component MUST have dedicated dual-locale `@Preview` (Arabic RTL `locale = "ar"` & English LTR `locale = "en"`) wrapped in the app theme. Screens also require Loading, Empty, and Error previews.
-5. **Performance, Battery & Sensor Life**:
+5. **Shift-Left Test & Mock Synchronization Pre-Gate (Zero-Rejection Invariant)**:
+   - When creating or modifying production code (DTOs, Repositories, UseCases, ViewModels), the Lead Agent MUST synchronize and update all corresponding unit tests (`*Test.kt`), MockK/Mockito mock behaviors, and assertions in the same step.
+   - Run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` and verify 100% PASS **BEFORE** calling `python .agents/scripts/review_package.py`. Never dispatch review subagents on outdated or failing unit tests.
+6. **Performance, Battery & Sensor Life**:
    - Strictly zero disk I/O, database access, or JSON parsing on `Dispatchers.Main`.
    - Any `SensorEventListener` (pedometer, accelerometer, GPS) MUST be unregistered in `onPause()`, `onStop()`, or `DisposableEffect.onDispose`.
    - Android 14+ Foreground Services must specify valid `foregroundServiceType` in the Manifest and handle start restrictions gracefully.
-6. **Room Database & Migrations**:
+7. **Room Database & Migrations**:
    - Any modification to an `@Entity` class or `@Database` schema MUST increment the database `version` and supply an explicit `Migration(from, to)` registered via `addMigrations(...)`.
-7. **Blast Radius & Contract Integrity**:
+8. **Blast Radius & Contract Integrity**:
    - Check all usages across the codebase before altering public function signatures, ViewModel contracts, or navigation arguments.
-8. **Mandatory Architectural KDoc Documentation**:
+9. **Mandatory Architectural KDoc Documentation**:
    - Every newly created or refactored Repository interface method, UseCase class & `invoke()`, ViewModel public state/events contract, and DataSource method MUST proactively include standard, meaningful KDoc (`/** ... */`) documenting its architectural purpose, `@param` parameters, `@return` value, and `@throws` exceptions (if any).
    - KDoc must document business intent and contract boundaries clearly (never generate bare uncommented domain/data layers).
-9. **Mandatory Base ViewModel Inheritance**:
+10. **Mandatory Base ViewModel Inheritance**:
    - When the project defines a standardized Base ViewModel (e.g. `MVIViewModel<S, E, A>` or `BaseViewModel` documented in `architecture-guidelines.md`), all new and refactored feature ViewModels MUST inherit directly from that Base Class.
    - Strictly prohibit creating ad-hoc, reinvented state/event pipelines (`_uiState = MutableStateFlow`, custom Channel emitters) from scratch when a central base class exists.
 

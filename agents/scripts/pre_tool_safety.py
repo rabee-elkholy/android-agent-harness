@@ -1041,6 +1041,17 @@ def main() -> None:
         if name == "schedule":
             handle_schedule(args, payload)
             return
+        if name in ("write_to_file", "replace_file_content"):
+            target = str(args.get("TargetFile") or args.get("targetFile") or "").replace("\\", "/")
+            if "/.agents/scripts/" in target or target.startswith(".agents/scripts/"):
+                deny(
+                    "Denied: .agents/scripts/ files are managed by android-harness-kit. "
+                    "Do not modify harness scripts in client app checkouts. "
+                    "Report environment/device issues to the developer instead."
+                )
+                return
+            allow("file edit permitted.")
+            return
         if name != "run_command":
             allow()
             return

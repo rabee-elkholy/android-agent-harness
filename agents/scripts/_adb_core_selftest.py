@@ -1,6 +1,7 @@
 """Self-test for _adb_core.py pure logic. Stdlib only, no device, no network."""
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -184,6 +185,32 @@ def test_diff_discovery_no_git_errors() -> None:
         check(isinstance(res, dict) and "activities" in res, "discover returns shape on empty/non-git dir")
 
 
+def test_dump_hierarchy_fallback_on_invalid_xml() -> None:
+    session = DeviceSession("mock_serial", package="com.acme.app")
+    # Simulate OEM device returning non-empty text message instead of XML stream
+    session._dump_via_execout = lambda: "UI hierchary dumped to: /sdcard/window_dump.xml\n"
+    session._dump_via_file = lambda: '<hierarchy rotation="0"><node text="Welcome" bounds="[0,0][100,100]"/></hierarchy>'
+    nodes = session.dump_hierarchy()
+    check(len(nodes) == 1 and nodes[0].text == "Welcome", "dump_hierarchy falls back to _dump_via_file on non-XML output")
+
+
+def test_foreground_package_multitier_parsing() -> None:
+    # Test Tier 1 mCurrentFocus with user ID
+    out1 = "  mCurrentFocus=Window{8d10ac5 u0 com.example.app/com.example.app.MainActivity}"
+    m1 = re.search(r"mCurrentFocus=.*?Window\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out1)
+    check(m1 is not None and m1.group(1) == "com.example.app", "mCurrentFocus with u0 parsed")
+
+    # Test Tier 1 mFocusedApp
+    out2 = "  mFocusedApp=ActivityRecord{3ab42f1 u0 com.fitness.app/.ui.HomeActivity t123}"
+    m2 = re.search(r"mFocusedApp=.*?ActivityRecord\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out2)
+    check(m2 is not None and m2.group(1) == "com.fitness.app", "mFocusedApp with u0 parsed")
+
+    # Test Tier 2 mResumedActivity
+    out3 = "  mResumedActivity: ActivityRecord{9ff1122 u0 com.target.app/com.target.app.DetailActivity t456}"
+    m3 = re.search(r"(?:mResumedActivity|topResumedActivity|mFocusedActivity):.*?ActivityRecord\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out3)
+    check(m3 is not None and m3.group(1) == "com.target.app", "mResumedActivity fallback parsed")
+
+
 def main() -> int:
     test_parse_bounds()
     test_hierarchy_parse_and_find()
@@ -196,6 +223,8 @@ def main() -> int:
     test_is_ascii()
     test_horizontal_and_state_actions()
     test_state_assertions_node_filter()
+    test_dump_hierarchy_fallback_on_invalid_xml()
+    test_foreground_package_multitier_parsing()
     test_diff_discovery_no_git_errors()
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")

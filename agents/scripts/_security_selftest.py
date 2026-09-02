@@ -251,6 +251,25 @@ def main() -> int:
         oversized_denied = False
     failed += _case("oversized_stdin_payload", oversized_denied)
 
+    # --- harness script mutation protection in client repos ---
+    harness_edit_payload = json.dumps(
+        {"toolCall": {"name": "replace_file_content", "args": {"TargetFile": "E:/AndroidProjects/MyApp/.agents/scripts/_adb_core.py"}}}
+    )
+    proc_edit = subprocess.run(
+        [sys.executable, str(ENGINE)],
+        input=harness_edit_payload,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=os.environ.copy(),
+        timeout=30,
+    )
+    try:
+        edit_denied = json.loads(proc_edit.stdout or "{}").get("decision") == "deny"
+    except json.JSONDecodeError:
+        edit_denied = False
+    failed += _case("security_harness_script_edit_denied", edit_denied)
+
     # --- malformed Claude Code bridge fuzz: fail closed, exit code always 0 ---
     def _cc_fuzz(raw: str, expect_deny: bool) -> bool:
         proc = subprocess.run(
