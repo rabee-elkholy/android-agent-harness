@@ -2,9 +2,9 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.0/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.27.0` — **SHA-256**: `9a42ed3f767608cfb8d294ee41b9d5b9a3018f9e3b0ec8cc5fdea9e706355bd8` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.27.0` — **SHA-256**: `8c93a673a652021912342f8dbc53cd60a8a0cd5bea67cc61724a0a76acb290ad` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
-Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
+Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value (Python: `import hashlib, urllib.request; data = urllib.request.urlopen('<Raw Prompt URL>').read(); payload = b''.join(data.splitlines(keepends=True)[5:]); assert hashlib.sha256(payload).hexdigest() == '<SHA-256>'`). If it does not match, STOP and tell the developer the file was tampered with.
 
 You are installing or updating the portable **Android AI harness** into **this** checkout. This folder is the Android product. It is not `android-agent-harness`.
 
@@ -24,9 +24,10 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
      - If this is a **brand-new / blank project**, the wizard will automatically guide you through the **Greenfield Bootstrap Questionnaire** (Platform, MVI/MVVM, Koin/Hilt, Voyager/ComposeNav, Room/SQLDelight, Ktor/Retrofit) to establish the architectural blueprint and governance rules from day one.
 2. **Get the Kit (Remote & Local Support)**:
     - Preferred: run `android-harness init --repo <this-android-root>`. The CLI resolves a release tag, provisions the kit at detached `v<version>`, and verifies that `agents/VERSION` matches the tag. It never provisions from `main`.
-    - For a manual kit clone, fetch and check out an exact release tag before copying anything:
+    - For a manual kit clone, fetch and check out an exact release tag before copying anything (clean and reset first so checkout never aborts):
       ```bash
-      git clone --no-checkout https://github.com/rabee-elkholy/android-agent-harness.git
+      git -C android-agent-harness reset --hard HEAD 2>/dev/null || git clone --no-checkout https://github.com/rabee-elkholy/android-agent-harness.git
+      git -C android-agent-harness clean -fd
       git -C android-agent-harness fetch origin --tags --prune
       git -C android-agent-harness checkout --detach v<requested-version>
       ```
@@ -34,7 +35,7 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
 3. **Answers first (do not invent short questions).** The wizard is English-first; when asking in chat, pose each question in the developer's language.
    - Preferred: they run this in **their** terminal, then tell you when it finishes:
      `$PY <kit>/agents/scripts/setup_wizard.py --repo <this-android-root>`
-    - If they want you to ask in chat: `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root>`.
+    - If they want you to ask in chat: run `$PY <kit>/agents/scripts/setup_wizard.py questions --repo <this-android-root>` **ONCE** into a single JSON object. Extract `model_warning`, `auto_blurb`, and the `questions` array directly from that single object. **DO NOT** run `setup_wizard.py questions` multiple times.
       *(Note: When updating or re-running on an existing project, the wizard automatically reads previous answers from `.harness-setup/answers.json` and marks each previous choice as `(Recommended)` at index 0).*
       Print `model_warning` in chat first (developer language), then `auto_blurb`. Then `ask_question` using each JSON `questions[].prompt` **verbatim**. Ask **only** that list; the JSON payload is the sole interview authority. Then write a JSON file of ids → values and `$PY <kit>/agents/scripts/setup_wizard.py write --repo <this-android-root> --answers-json <that-file>`.
    - Stop if I.0 is no / wizard exit 1. Do not copy `.agents`.
@@ -51,7 +52,11 @@ Kit rules that still apply during setup:
 
 - **Strict Read-Only Kit Source**: Never modify or write files in `<kit>` (`android-agent-harness`). Port and configure strictly into `<this repo>/.agents`.
 - **Scope Isolation**: Setup configures `.agents/` only. Never edit app production files (`strings.xml`, Kotlin files) during install. Report pre-existing preflight issues in chat.
-- **Zero-Noise Chat & Background Task Protocol**: Never call `schedule` or create sleep timers. When launching commands, run with sufficient `WaitMsBeforeAsync` or await reactive completion passively. **NEVER print raw `<task_notification>`, `<SYSTEM_MESSAGE>`, or JSON payloads in chat prose**. The agent must remain completely silent in chat during background tasks (output empty string `""`) and speak ONLY when asking wizard questions (`ask_question`) or outputting the final completion card.
+- **Zero-Noise Chat & Strict Anti-Polling Protocol**:
+  - Always run terminal/python commands with `WaitMsBeforeAsync: 30000` (or 60000) so commands complete synchronously without backgrounding.
+  - **STRICT PROHIBITION**: NEVER call `manage_task(Action='status')` in a loop.
+  - If a command is sent to the background as a task, the agent MUST STOP CALLING TOOLS IMMEDIATELY and END TURN with zero chat text `""` (do not print `# Background Task Started` or any progress message in chat). Wait passively for the genuine platform system message (`finished with result:`) before dispatching dependent tools.
+  - NEVER call `schedule` or create sleep timers.
 - **Mandatory Step 3b Approval & Reference Preservation**: On update sessions, restore all existing tailored reference files (.agents/skills/android-harness/references/) AS-IS without adding new ones, and ask the developer via `ask_question` to approve keeping them (with clickable `file:///` links for IDE review). On first-time installs, discover domains, create custom references, and obtain approval.
 - **Previous Answers Recommendation**: When updating or re-running setup on an existing project, previous answers must be presented as `(Recommended)` at index 0.
 - Backup before overwriting `.agents` or tool adapters.
