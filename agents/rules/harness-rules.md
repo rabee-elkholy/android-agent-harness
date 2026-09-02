@@ -315,31 +315,21 @@ Helpers: `python .agents/scripts/capture_screen.py` and `python .agents/scripts/
       > *"No connected Android device or emulator detected. Please connect a physical device or start an emulator to proceed with installation and E2E verification."*
     * The agent must wait for the developer to connect a device or explicitly grant permission to proceed.
 
-- **Dual Device Verification Modes**:
-   - **Mode A: `autonomous_e2e` (Autonomous Senior QA E2E Verification - Default)**:
-     1. **PRE-E2E CONFIRMATION (`E2E_CONFIRM=confirm`)**: Before planning, authoring test cases, or touching the device, the agent **MUST** ask the developer via `ask_question` (in the active conversation language): *"Start E2E round?"* with options **`Start E2E`** / **`Skip E2E`**, then wait for the choice. If **Skip E2E**, proceed directly to the Phase Milestone Card and mark device verification explicitly as `skipped by developer` (do NOT author test cases, do NOT invoke `qa-e2e-planner-agent`, and never claim verification passed). If **Start E2E**, continue to step 2.
-     2. **TEST-CASE PLANNING & AUTHORING (Only After Approval)**: Derive test cases from the diff (`.agents/workflows/e2e-qa.md`), generate the scaffold, dispatch `qa-e2e-planner-agent` to author positive/negative/edge cases in `.agents/e2e_cases/<task>/<phase>.yaml`, and validate with `python .agents/scripts/run_e2e_qa.py --cases <path> --lint`.
-     3. **INSTALL & EXECUTE E2E BY TASK TYPE**:
-        - Run `python .agents/scripts/run_device.py install-start`.
-        - **Primary engine**: `run_e2e_qa.py` is the test-case-aware Senior QA runner. Execute `python .agents/scripts/run_e2e_qa.py --cases .agents/e2e_cases/<task>/<phase>.yaml`. `run_e2e_smoke.py` remains a fast diff-aware fallback.
-        - **Scenario A (New Features & User Journeys)**: The agent **MUST author and execute a declarative test-case file** in `.agents/e2e_cases/<task>/<phase>.yaml` covering the complete user journey with positive/negative/edge cases (`launchApp`, `tapOn`, `inputText`, `scrollUntilVisible`, `swipeLeft`, `swipeRight`, `assertVisible`, `assertText`, `assertNotVisible`, `assertChecked`, `assertSelected`, `setNetwork`), capturing screenshots for every major step.
-        - **Scenario B (UI Bugfixes & Screen Refactors)**: The agent runs `python .agents/scripts/run_e2e_qa.py` with diff-grounded cases (or `run_e2e_smoke.py` for a fast pass). The diff-aware auto-discovery engine automatically launches modified Activities/Screens directly (`am start -n`), validates visible target texts, asserts clickable buttons, and stress-tests scroll gestures.
-        - **Scenario C (Deep Links & Navigation Routing)**: For deep-link or routing changes, the agent executes `python .agents/scripts/run_e2e_smoke.py --target-deeplink <uri>` to verify URI resolution and screen rendering.
-        - **Scenario D (Pure Data / Domain / Room / Worker Logic)**: The agent executes standard launch verification to confirm DI (Hilt), Room database schema migrations, and background workers boot cleanly on real Android runtime without Logcat crashes or ANRs.
-     4. **Declarative Maestro Flows & In-App Locale Support**: Supports YAML/JSON flows (`.agents/e2e_flows/*.yaml`) compatible with Maestro syntax. Dynamically resolves string keys against `res/values-*/strings.xml` based on in-app locale fingerprinting. Runs via `maestro` CLI if installed or native zero-dependency Python ADB engine.
-     5. **Diagnostic Probing Sandbox & Zero-Leakage Barrier**: During bug investigation, temporary diagnostic logs tagged with `// [HARNESS-PROBE]` may be used to observe state flow in Logcat without invoking the 6-leaf review round. All probes MUST be removed before generating `review_package.py`. `fast_kt_lint.py` and `preflight_check.py` strictly reject stray probes with `exit 1` (`STRAY_DIAGNOSTIC_PROBE`).
-     6. **Deep Failure Forensics**: On E2E step failure, the engine captures an instant failure screenshot, dumps the UI hierarchy to `.agents/state/e2e/failed_hierarchy.xml`, and extracts the last 50 Logcat lines to `.agents/state/e2e/failed_logcat.txt` with failure classification (`ASSERTION_FAILED`, `RUNTIME_CRASH`, `TIMEOUT_UNRESPONSIVE`).
-     7. **On E2E [SUCCESS]**: Output the **Phase Milestone Card** with E2E evidence and Phase N commit message, then stop and await developer commit and instruction to start Phase N+1.
-     8. **On E2E [FAIL] / Crash**: STOP immediately, inspect forensics or dispatch `qa-diagnostics-agent`, report findings in chat, fix at root cause, re-run tests, re-install, and re-verify.
-  - **Mode B: `interactive_device` / `manual_only` (Developer-in-the-Loop Manual Verification)**:
-    1. Run `python .agents/scripts/run_device.py install-start`.
-    2. Output the **Phase Milestone Card** with numbered manual smoke test steps and Phase N commit message.
-    3. Trigger interactive verification via `ask_question`:
-       - **Question**: "Please test the steps above on your device and confirm the result:"
-       - **Options**: `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
-    4. Upon PASS, wait for the developer to commit Phase N and give the green light for Phase N+1.
-  - **Mode C: `disabled`**:
-    1. Proceeds to Phase N Milestone Card after Unit Tests (`:app:testDebugUnitTest`) + `preflight_check.py` + `:app:assembleDebug`, then stops and awaits developer commit.
+- **Device Verification Modes**:
+   - **Mode A: `manual_only` / `interactive_device` (Developer-in-the-Loop Manual Verification - Default)**:
+     1. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start` (installs and launches the target screen on the connected phone).
+     2. If no device is connected, HALT and prompt the developer; never silently skip device verification.
+     3. Output the **Phase Milestone Card** with 2-3 simple, human, numbered manual test steps explaining what to verify on screen, and the drafted Phase N commit message.
+     4. Trigger interactive confirmation via `ask_question`:
+        - **Question**: "Please test the steps above on your device and confirm the result:"
+        - **Options**: `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
+     5. Upon **PASS**, wait for the developer to commit Phase N and give the green light for Phase N+1 (or deliver the commit message for single-phase tasks).
+     6. Upon **FAIL**, investigate logs with `python .agents/scripts/logcat_doctor.py` and fix the defect.
+   - **Mode B: `autonomous_e2e` (Autonomous Maestro E2E Verification - Optional)**:
+     1. **PRE-E2E CONFIRMATION (`E2E_CONFIRM=confirm`)**: Before planning or authoring flows, ask developer via `ask_question` ("Start E2E round?" / "Skip E2E").
+     2. **TEST-CASE PLANNING & AUTHORING**: Author declarative Maestro YAML flows in `.agents/e2e_cases/<task>/` and execute via `python .agents/scripts/run_e2e_qa.py --cases <path>`.
+   - **Mode C: `disabled`**:
+     1. Proceeds to Phase N Milestone Card after Unit Tests (`:app:testDebugUnitTest`) + `preflight_check.py` + `:app:assembleDebug`, then stops and awaits developer commit.
 
 - **Phase Milestone Card Requirements**:
   1. Scope & Changes.

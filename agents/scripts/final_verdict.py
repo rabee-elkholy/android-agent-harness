@@ -270,7 +270,8 @@ def build_verdict(
     ]
     if required_devices:
         checks.append(_normalize_check("device", read_gate_result("device"), head))
-        checks.append(_normalize_check("e2e", read_gate_result("e2e"), head))
+        if str(bits.get("device_mode") or "manual_only") == "autonomous_e2e":
+            checks.append(_normalize_check("e2e", read_gate_result("e2e"), head))
     review_check, leaves_map, stale_review, expired = _review_outcome(fp)
     checks.append(review_check)
 

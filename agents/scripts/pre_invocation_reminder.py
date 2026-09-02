@@ -91,10 +91,8 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         if bits["install_confirm"] != "allow"
         else "Device install does not need a confirmation modal on this project."
     )
-    e2e_line = (
-        "E2E_CONFIRM=confirm: before authoring test cases or running E2E, ask the developer via ask_question ('Start E2E round?' / 'Skip E2E') in their language and wait for the choice. On Skip, do NOT author test cases, mark device verification 'skipped by developer' in the milestone card, and never pretend it passed. On Start E2E, author positive/negative/edge cases and execute."
-        if bits["e2e_confirm"] != "allow"
-        else "E2E execution does not need a confirmation modal on this project."
+    device_verif_line = (
+        "DEVICE VERIFICATION: Default mode is interactive manual checklist. Run `run_device.py install-start`, write 2-3 simple test steps in chat, trigger `ask_question` confirmation ('PASS / FAIL'), and upon PASS deliver the drafted Conventional Commit message."
     )
     cap_note = f" {round_note}" if round_note else ""
     return (
@@ -106,7 +104,6 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         f"SHIFT-LEFT TEST & LINT PRE-GATE: Before calling review_package.py and invoke_subagent, when code or unit tests are touched, ALWAYS run `python .agents/scripts/run_gradle_task.py {bits['unit_test_task']}` AND `python .agents/scripts/fast_kt_lint.py` to verify compiler/signature parity and zero lint violations (diff-scoped on modified lines) before dispatching subagents. "
         "PLAN FIRST: New features, screens, or multi-file changes MUST create implementation_plan.md artifact with RequestFeedback=true and get developer approval via Proceed button BEFORE writing code. "
         "GRAPH-FIRST & ANTI-GUESSING: ALWAYS query `python .agents/scripts/project_graph.py` (--feature / --find <Symbol> / --screens / --harness). Never guess .kt vs .java or run recursive find_by_name across source roots. "
-        "DECLARATIVE E2E INVARIANT: Author declarative Maestro YAML flows in .agents/e2e_cases/<task>/ and run via run_e2e_qa.py. NEVER author custom scratch python scripts (scratch/test_*.py) or hardcode device serials. "
         "ANSWER FIRST in chat before ask_question. Match ask_question language to the developer. "
         "(Recommended) is only for engineering tradeoffs — never on Pass/Fail. "
         "PARALLEL REVIEW: if subagents are not yet registered, call define_subagent for each from .agents/subagents/*.json. "
@@ -120,8 +117,8 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "Wait for BUG_PASS, CONVENTION_PASS, SECURITY_PASS, PERF_PASS, REGRESSION_PASS (+ TEST_PASS for test diffs). "
         "Fix BLOCKER/MAJOR, verify with fast_kt_lint.py, regenerate the package, re-run the same leaves. "
         "On-demand specialists (when not auto-promoted): qa-diagnostics-agent, android-ui-expert-agent. "
-        f"{device_line} {git_line} Assemble via python .agents/scripts/run_gradle_task.py {bits['assemble_task']}. {install_line} {e2e_line} "
-        f"AUTONOMOUS PHASE PIPELINE & CHECKPOINT COMMITS: When Phase N finishes, run {bits['unit_test_task']} + preflight_check.py (MUST PASS with 0 errors; if [FAIL], NEVER run assembleDebug) + {bits['assemble_task']} + install-start + E2E smoke. If no device is connected, HALT and prompt the developer; NEVER silently skip device verification. Output Phase Milestone Card with drafted Phase N commit message, STOP IMMEDIATELY, and wait for the developer to commit Phase N and command start of Phase N+1. Never touch Phase N+1 files before developer commit. "
+        f"{device_line} {git_line} Assemble via python .agents/scripts/run_gradle_task.py {bits['assemble_task']}. {install_line} {device_verif_line} "
+        f"AUTONOMOUS PHASE PIPELINE & CHECKPOINT COMMITS: When Phase N finishes, run {bits['unit_test_task']} + preflight_check.py (MUST PASS with 0 errors; if [FAIL], NEVER run assembleDebug) + {bits['assemble_task']} + install-start + manual checklist. If no device is connected, HALT and prompt the developer; NEVER silently skip device verification. Output Phase Milestone Card with drafted Phase N commit message, STOP IMMEDIATELY, and wait for the developer to commit Phase N and command start of Phase N+1. Never touch Phase N+1 files before developer commit. "
         "PM & ZOHO GOVERNANCE: Never mutate unless developer says 'update zoho'. Status 'In progress' or 'Ready To ReTest' only (never Done/Solved). Comments are strictly QA-centric (Zero Emojis, Zero Harness/AI Jargon: NEVER mention '5-Leaf Review', 'مراجع الهارنيس', or internal engine tokens in tracker comments; write functional root cause, solution, blast radius, and numbered QA test steps only)."
     )
 

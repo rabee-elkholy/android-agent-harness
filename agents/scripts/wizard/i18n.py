@@ -200,8 +200,8 @@ T = {
             "Autonomous E2E explores, clicks, and asserts UI responsiveness on the phone before asking for your sign-off. "
             "Manual-only launches the app and presents step-by-step test instructions for you to try."
         ),
-        "i22_e2e": "Autonomous E2E Smoke Test — AI Agent inspects & exercises UI on device + Sign-Off (Recommended)",
-        "i22_manual": "Manual Smoke Test — App is launched; you follow step-by-step verification on device",
+        "i22_manual": "Manual Smoke Test — App is launched on device; you follow simple steps and confirm (Recommended)",
+        "i22_e2e": "Autonomous E2E Smoke Test — AI Agent runs automated UI flows on device via Maestro",
         "i22_off": "No device verification — assemble only (I test manually outside the harness)",
         "i19": (
             "This project defines Gradle product flavors. Which flavor do you test daily? "

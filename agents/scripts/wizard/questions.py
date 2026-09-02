@@ -209,8 +209,8 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "allow_multiple": False,
             "prompt": t(lang, "i22"),
             "options": [
-                {"id": "autonomous_e2e", "label": t(lang, "i22_e2e")},
                 {"id": "manual_only", "label": t(lang, "i22_manual")},
+                {"id": "autonomous_e2e", "label": t(lang, "i22_e2e")},
                 {"id": "disabled", "label": t(lang, "i22_off")},
             ],
         }
