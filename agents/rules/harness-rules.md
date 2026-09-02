@@ -368,20 +368,20 @@ Same Sprints workflow as the original engine. Playbook: `.agents/workflows/zoho-
 - **Description vs. Comment Placement Policy (`update zoho`)**:
   - **Bug Items**: Post the full QA delivery report exclusively as a **Comment**. **NEVER modify or overwrite the Bug Description** (to strictly preserve the original QA report, environment info, and reproduction steps).
   - **Task / Story / Sub-task / Improvement Items**: Write or update the full delivery report in the **Description** (as the permanent record of feature scope). Post a short comment with `Commit: <hash>`.
-- **Zoho Quality & Communication Policy (QA-Centric)**:
+- **Zoho Quality & Communication Policy (QA-Centric, Zero Emojis, Zero Jargon)**:
   - **Audience**: Descriptions and comments are written exclusively for **QA / Testers and Product Stakeholders**.
-  - **No Technical Code Internals**: Strictly prohibit raw code artifacts (e.g. no XML layout file names like `fragment_food_plan.xml`, no Kotlin source files, no XML attributes like `clipToPadding`, no framework class names, no raw `dp`/`px` numbers unless part of product design specs). Describe issues and solutions in **clear, functional, and user-facing terms**.
+  - **Zero Emojis & Zero Internal Jargon**: Strictly prohibit emojis, raw code artifacts (e.g. no XML layout file names like `fragment_food_plan.xml`, no Kotlin source files, no XML attributes like `clipToPadding`, no framework class names, no raw `dp`/`px` numbers unless part of product design specs), and internal AI/harness tokens (NEVER write '5-Leaf Review', 'مراجع الهارنيس', 'Harness references', 'Maestro Suite (1/1 Flows Passed)', or internal engine tokens in tracker comments). Describe issues, solutions, and testing steps in **clear, human, functional, and user-facing terms**.
   - **Mandatory Commit Hash**: The first line MUST always be `Commit: <hash>` (retrieved via `git log -1 --format=%h` or provided by developer).
   - **Mandatory Sections for ALL Zoho items** (Bugs, Features, Tasks, Stories, Improvements):
     1. `Commit: <hash>`
     2. **سبب المشكلة / الهدف من المهمة** (Functional root cause or business goal).
-    3. **الحل / ما تم تنفيذه** (Functional solution and UI behavior changes).
+    3. **ما تم تنفيذه / الحل** (Functional solution and UI behavior changes).
     4. **نطاق التأثير** (`Impact Area / Blast Radius` — list screens, related features, and flows QA must verify for regression).
-    5. **خطوات الفحص وحالات الاختبار** (`Test Cases & Verification Steps` — explicit positive, negative, and edge scenarios).
+    5. **خطوات الفحص وحالات الاختبار للـ QA** (`Test Cases & Verification Steps` — explicit positive, negative, and edge scenarios with standard sequential numbers 1, 2, 3).
 - **Zoho Language Policy**:
   - Per `_product.py` (`ZOHO_LANGUAGE = "en_titles_ar_comments"` by default):
     - **Task Titles**: MUST be in **English** (e.g. `Ras-I725: Fix Scroll in Food Plan Screen`). Never put developer or assignee names in titles.
-    - **Task Descriptions & Comments**: Written in **Arabic** (human tone, QA-centric, no emoji, no internal engine tokens), starting with the commit hash `Commit: <hash>`.
+    - **Task Descriptions & Comments**: Written in **Arabic** (human tone, QA-centric, zero emoji, zero internal engine tokens), starting with the commit hash `Commit: <hash>`.
     - If `ZOHO_LANGUAGE = "all_en"`, use English for titles, descriptions, and comments. If `all_ar`, use Arabic for all.
 - Assignment: the default user from MCP workflow defaults. No name in titles. New items use the default Sprints assignee (overridable in the user config).
 - **If Zoho MCP tools are not available in this session**, do not invent ticket fields. Ask the developer to paste the ticket or enable Zoho. Continue local implementation using what they provide.

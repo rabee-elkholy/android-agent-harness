@@ -122,8 +122,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "On-demand specialists (when not auto-promoted): qa-diagnostics-agent, android-ui-expert-agent. "
         f"{device_line} {git_line} Assemble via python .agents/scripts/run_gradle_task.py {bits['assemble_task']}. {install_line} {e2e_line} "
         f"AUTONOMOUS PHASE PIPELINE & CHECKPOINT COMMITS: When Phase N finishes, run {bits['unit_test_task']} + preflight_check.py (MUST PASS with 0 errors; if [FAIL], NEVER run assembleDebug) + {bits['assemble_task']} + install-start + E2E smoke. If no device is connected, HALT and prompt the developer; NEVER silently skip device verification. Output Phase Milestone Card with drafted Phase N commit message, STOP IMMEDIATELY, and wait for the developer to commit Phase N and command start of Phase N+1. Never touch Phase N+1 files before developer commit. "
-        "Zoho: never mutate unless the developer says update zoho. Arabic Zoho prose. "
-        "Status In progress or Ready To ReTest only. Never Done or Solved."
+        "PM & ZOHO GOVERNANCE: Never mutate unless developer says 'update zoho'. Status 'In progress' or 'Ready To ReTest' only (never Done/Solved). Comments are strictly QA-centric (Zero Emojis, Zero Harness/AI Jargon: NEVER mention '5-Leaf Review', 'مراجع الهارنيس', or internal engine tokens in tracker comments; write functional root cause, solution, blast radius, and numbered QA test steps only)."
     )
 
 
