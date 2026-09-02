@@ -123,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         focus_node_id = node.id
 
     # Handle --path-from / --path-to
+    if bool(args.path_from) != bool(args.path_to):
+        live_print("[!] Both --path-from and --path-to must be specified together for path search.")
+        return 1
+
     if args.path_from and args.path_to:
         path = engine.graph.find_shortest_path(args.path_from, args.path_to)
         if not path:
