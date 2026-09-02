@@ -88,11 +88,9 @@ flowchart TD
         P3["Bilingual String Parity"]
     end
 
-    Preflight --> Device["7. Device Smoke Verification"]
-    Device --> E2E{"Mode: autonomous_e2e?"}
-    E2E -- Yes & E2E Pass --> NextPhase(["Proceed Autonomously to Next Phase"])
-    E2E -- manual_only --> ManualModal["Interactive Developer Sign-Off"]
-    ManualModal -- PASS --> NextPhase
+    Preflight --> Device["7. Live Device Install & Launch (run_device.py install-start)"]
+    Device --> ManualModal["8. Interactive Developer Sign-Off (ask_question PASS/FAIL)"]
+    ManualModal -- PASS --> NextPhase(["Phase Milestone Card & Conventional Commit"])
 ```
 
 ---
