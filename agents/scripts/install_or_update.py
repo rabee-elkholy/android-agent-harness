@@ -444,6 +444,42 @@ def run_verification(repo: Path) -> dict:
     }
 
 
+def extract_version_diff_summary(kit: Path, prev_version: str | None, current_version: str) -> list[str]:
+    """Extracts concise changelog highlights between prev_version and current_version from CHANGELOG.md."""
+    changelog_file = kit / "CHANGELOG.md"
+    if not changelog_file.is_file():
+        return []
+
+    try:
+        text = changelog_file.read_text(encoding="utf-8")
+    except Exception:
+        return []
+
+    sections = re.split(r"(?m)^## \[(\d+\.\d+\.\d+)\]", text)
+    if len(sections) < 3:
+        return []
+
+    highlights: list[str] = []
+    clean_prev = prev_version.strip().lstrip("v") if prev_version else None
+
+    for i in range(1, len(sections), 2):
+        v = sections[i]
+        body = sections[i + 1] if i + 1 < len(sections) else ""
+        if clean_prev and v == clean_prev:
+            break
+
+        for item in re.findall(r"-\s+\*\*([^*]+)\*\*", body)[:3]:
+            clean_item = re.sub(r"\s*\([^)]*\)", "", item).strip()
+            clean_item = clean_item.rstrip("`:")
+            if clean_item and f"[{v}] {clean_item}" not in highlights:
+                highlights.append(f"[{v}] {clean_item}")
+
+        if len(highlights) >= 6:
+            break
+
+    return highlights
+
+
 def execute_install_or_update(
     repo: Path,
     kit: Path,
@@ -457,6 +493,15 @@ def execute_install_or_update(
     answers = load_answers(repo, answers_path)
     is_update = (repo / ".agents").is_dir()
     mode = "update" if is_update else "install"
+
+    prev_version = None
+    if is_update and (repo / ".agents" / "VERSION").is_file():
+        try:
+            prev_version = (repo / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
+        except Exception:
+            prev_version = None
+
+    changes_summary = extract_version_diff_summary(kit, prev_version, version)
 
     print(f"[*] Starting Android AI Harness {mode.capitalize()} (v{version})...", flush=True)
 
@@ -497,6 +542,8 @@ def execute_install_or_update(
         "success": verification.get("selftest_pass", True) and verification.get("doctor_pass", True),
         "mode": mode,
         "version": version,
+        "previous_version": prev_version,
+        "changes_summary": changes_summary,
         "product": answers.get("product", repo.name),
         "duration_seconds": round(duration, 2),
         "backup_dir": str(backup_dir) if backup_dir else None,
@@ -530,17 +577,26 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Android AI Harness: {mode_title} Complete (v{result['version']})")
     print("==================================================")
     print(f"[*] Product: {result['product']}")
+    if result["mode"] == "update" and result.get("previous_version"):
+        print(f"[*] Version: v{result['previous_version']} -> v{result['version']}")
+    else:
+        print(f"[*] Version: v{result['version']}")
     print(f"[*] Duration: {result['duration_seconds']}s")
     if result["backup_dir"]:
         print(f"[*] Backup Created: {result['backup_dir']}")
     if result["preserved_references_count"] > 0:
         print(f"[*] Preserved Tailored References ({result['preserved_references_count']}): {', '.join(result['preserved_references'])}")
 
+    if result.get("changes_summary"):
+        print("\n[*] Key Changes & Improvements:")
+        for chg in result["changes_summary"]:
+            print(f"  - {chg}")
+
     verif = result.get("verification", {})
     if verif:
         selftest_status = "[PASS]" if verif.get("selftest_pass") else "[FAIL]"
         doctor_status = "[PASS]" if verif.get("doctor_pass") else "[FAIL]"
-        print(f"[*] Hook Selftest: {selftest_status}")
+        print(f"\n[*] Hook Selftest: {selftest_status}")
         print(f"[*] 12-Dimension Doctor: {doctor_status}")
 
     if result["success"]:
@@ -553,7 +609,6 @@ def main(argv: list[str] | None = None) -> int:
             print(verif.get("selftest_output"))
         if not verif.get("doctor_pass"):
             print("--- Doctor Output ---")
-            print(verif.get("doctor_output"))
         return 1
 
 
