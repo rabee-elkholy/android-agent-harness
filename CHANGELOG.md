@@ -5,6 +5,23 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-09-02
+
+### Maestro E2E Engine Integration, Automated CLI Setup & Native Multi-Flow QA
+- **Maestro E2E Engine Core (`_maestro_core.py`, `run_e2e_qa.py`, `run_e2e_smoke.py`)**:
+  - Replaced legacy python-only ADB execution engine with Maestro (`maestro test`), providing sub-second UI hierarchy inspection, native Jetpack Compose semantics, and resilient test execution.
+  - Implemented cross-platform native Python zip-based installer (`install_maestro_cli()`), downloading and installing Maestro CLI with zero external dependencies.
+  - Added JUnit XML report parser, automatic failure screenshot capture, and logcat crash buffer forensics integrated into Phase Milestone Cards and `final_verdict.py`.
+- **Native Multi-Flow Test Authoring (`qa-e2e-planner-agent.json`, `run_e2e_qa.py`)**:
+  - Updated `qa-e2e-planner-agent` to author native Maestro YAML flows per case (`TC01_positive_flow.yaml`, `TC02_negative_flow.yaml`, `TC03_edge_flow.yaml`) in `.agents/e2e_cases/<task>/`.
+  - Added `--generate-cases` scaffold generator and `--lint` offline flow validator.
+- **Smart Setup & Automated Maestro Installation (`setup_wizard.py`, `install_or_update.py`)**:
+  - Interactive setup wizard detects missing Maestro CLI when `autonomous_e2e` is selected, requests developer approval, and installs it automatically during setup.
+  - `install_or_update.py` verifies and provisions Maestro CLI during harness install/update.
+- **Strict Preflight Verification (`preflight_check.py`, `_maestro_selftest.py`)**:
+  - Added Maestro CLI version check in preflight gate, issuing clean `[ENV-FAILURE]` (exit code 30) with installation guidance if missing.
+  - Added `_maestro_selftest.py` unit test suite covering validation, scaffolding, JUnit parsing, and installation.
+
 ## [0.26.0] - 2026-09-02
 
 ### Universal Hub Defense, Comment & Keyword Filtering, and Zero-Noise Graph Slices
@@ -184,7 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero-Noise Chat & Background Task Silence Hardening (`docs/install-or-update-prompt.md`, `harness-rules.md`, `AGENTS.md`)**:
   - Reinforced strict zero-noise chat invariants during long-running background tasks (e.g. Gradle compilation), requiring the agent to output empty string `""` and rely purely on native platform reactive notifications.
 
-## [0.18.0] - 2026-09-01
+**Included in 0.18.0 (2026-09-01):**
 
 ### Governance Suite: Exit-Code Protocol, Review Round Cap, Structured Final Verdict, Baseline Test Gate, Risk Tiers & Impact Analysis
 - **Exit-Code Protocol & Environment Failure Classification (`_env_codes.py`, `_env_codes_selftest.py`)**:

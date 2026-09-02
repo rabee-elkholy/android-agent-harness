@@ -558,6 +558,20 @@ def execute_install_or_update(
     configure_adapters_and_mcp(repo, answers)
     enforce_git_privacy(repo)
 
+    # 4b. Ensure Maestro is ready if Autonomous E2E is active
+    if answers.get("device_verification", "autonomous_e2e") == "autonomous_e2e":
+        try:
+            from _maestro_core import ensure_maestro_installed, install_maestro_cli
+            m_ok, m_info, _ = ensure_maestro_installed()
+            if m_ok:
+                print(f"      -> Maestro E2E engine verified: {m_info}", flush=True)
+            else:
+                print("      -> Installing Maestro CLI for Autonomous E2E...", flush=True)
+                inst_ok, inst_msg = install_maestro_cli()
+                print(f"      -> Maestro setup: {'[PASS]' if inst_ok else '[WARN]'} {inst_msg}", flush=True)
+        except Exception:
+            pass
+
     # 5. Pre-warm Code Graph (Zero Cold-Start)
     print("[5/6] Building & pre-warming universal code graph...", flush=True)
     graph_stats = sync_code_graph(repo)

@@ -797,4 +797,19 @@ def interactive(repo: Path, lang: str) -> dict:
         if q["id"] == "i2" and chosen[0] == "stop":
             print(t(lang, "no_python"))
             raise SystemExit(1)
+        if q["id"] == "i22" and chosen[0] == "autonomous_e2e":
+            try:
+                from _maestro_core import ensure_maestro_installed, install_maestro_cli
+                m_ok, m_info, _ = ensure_maestro_installed()
+                if not m_ok:
+                    print()
+                    print("[*] Maestro CLI is required for Autonomous E2E testing on Android.")
+                    prompt_msg = "    هل ترغب في تثبيت Maestro الآن تلقائياً؟ (Y/n): " if lang == "ar" else "    Would you like to install Maestro automatically now? (Y/n): "
+                    user_ans = input(prompt_msg).strip().lower()
+                    if user_ans in ("", "y", "yes", "نعم"):
+                        print("    [*] Installing Maestro CLI...", flush=True)
+                        inst_ok, inst_msg = install_maestro_cli()
+                        print(f"    [{'OK' if inst_ok else 'WARN'}] {inst_msg}", flush=True)
+            except Exception:
+                pass
     return normalize(raw, facts)

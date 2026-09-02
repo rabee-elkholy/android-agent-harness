@@ -12,19 +12,20 @@ CORE_SUBAGENTS = {
     "qa-diagnostics-agent": "HARNESS_QA_FINGERPRINT=deep-device-diagnostics-v3",
     "android-ui-expert-agent": "HARNESS_UI_FINGERPRINT=comprehensive-android-ui-expert-v4",
     "test-quality-reviewer-agent": "HARNESS_TEST_FINGERPRINT=quality-first-test-review-v2",
-    "qa-e2e-planner-agent": "HARNESS_QA_FINGERPRINT=qa-e2e-case-planner-v1",
+    "qa-e2e-planner-agent": "HARNESS_QA_FINGERPRINT=qa-e2e-maestro-planner-v2",
 }
 
 CORE_SCRIPTS = (
     "_adb_core.py",
     "_adb_core_selftest.py",
     "_apk_freshness.py",
-    "_e2e_qa_selftest.py",
     "_graph_core.py",
     "_graph_selftest.py",
     "_hook_selftest.py",
     "_hook_state.py",
     "_live_process.py",
+    "_maestro_core.py",
+    "_maestro_selftest.py",
     "_modules.py",
     "_product.py",
     "_repo_files.py",

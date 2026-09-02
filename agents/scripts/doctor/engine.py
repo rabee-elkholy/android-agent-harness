@@ -33,8 +33,8 @@ class HarnessDoctor:
         self.live_stream = live_stream
         self.current_cat = ""
         self.results: list[CheckResult] = []
-        self.is_raw_kit = (self.repo / "agents" / "VERSION").is_file() and not (self.repo / ".agents").is_dir()
-        self.agents_dir = self.repo / ".agents" if not self.is_raw_kit else self.repo / "agents"
+        self.is_raw_kit = (self.repo / "agents" / "VERSION").is_file() and (self.repo / "agents" / "rules" / "harness-rules.md").is_file()
+        self.agents_dir = self.repo / "agents" if self.is_raw_kit else self.repo / ".agents"
         if not self.agents_dir.is_dir():
             self.agents_dir = AGENTS_DIR
 
