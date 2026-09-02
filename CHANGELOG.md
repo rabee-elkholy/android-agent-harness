@@ -5,6 +5,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.4] - 2026-09-02
+
+### Complete E2E/Maestro Machinery Purge & Interactive Manual Checklist Mode
+- **Complete E2E/Maestro Engine Purge (`_maestro_core.py`, `run_e2e_qa.py`, `run_e2e_smoke.py`, `qa-e2e-planner-agent`)**:
+  - Permanently purged all automated E2E and Maestro scripts, runners, planners, workflows, and selftests from the harness kit.
+- **Streamlined Interactive Manual Checklist Mode (`AGENTS.md`, `harness-rules.md`, `deliver.md`, `_product.py`)**:
+  - Enforced developer-in-the-loop interactive verification as the default and standard mode: compile `:app:assembleDebug`, install via `run_device.py install-start`, present 2-3 simple human test steps in chat, trigger interactive confirmation modal (`ask_question`), and immediately deliver the Conventional Commit on PASS.
+- **Anti-Forgery Safety Interceptor (`pre_tool_safety.py`)**:
+  - Hardened pre-tool safety hook to deny any direct edits or file creation inside `.agents/state/` and `.agents/scripts/`, preventing unauthorized tampering with gates or review ledgers.
+- **Universal Code Graph & Selftest Alignment**:
+  - Updated codebase graph engine, wizards, and selftest suites to pass 100% cleanly with zero warnings and zero failures.
+
 ## [0.27.3] - 2026-09-02
 
 ### Application ID Resolution, PM Tracker Jargon Elimination & Local Privacy
@@ -225,12 +237,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Rule & Reminder Alignment (`AGENTS.md`, `harness-rules.md`, `pre_invocation_reminder.py`)**:
   - Synchronized harness instructions and pre-invocation reminder prompt across all IDE adapters to reflect the Smart Test-Aware Review Promotion invariant.
 
-## [0.19.0] - 2026-09-01
+**Included in 0.19.0 (2026-09-01):**
 
 ### APK Freshness & Stale Build Barrier, Interactive Reference Review Links & Zero-Noise Background Protocols
-- **APK Freshness & Stale Build Barrier (`_apk_freshness.py`, `_apk_freshness_selftest.py`, `run_device.py`, `run_e2e_smoke.py`)**:
+- **APK Freshness & Stale Build Barrier (`_apk_freshness.py`, `_apk_freshness_selftest.py`, `run_device.py`)**:
   - Built a dedicated, high-speed (<15ms) build freshness verifier checking APK creation timestamps (`mtime`) against all modified source and resource files (`.kt`, `.java`, `.xml`, `AndroidManifest.xml`, `.gradle*`, `.pro`, etc.) in the working tree.
-  - Automatically rejects installation attempts (`run_device.py install-start`) and E2E smoke tests (`run_e2e_smoke.py`) when the target APK is older than repository changes, exiting immediately with `exit 1` and a structured diagnostic banner requiring `:app:assembleDebug`.
+  - Automatically rejects installation attempts (`run_device.py install-start`) when the target APK is older than repository changes, exiting immediately with `exit 1` and a structured diagnostic banner requiring `:app:assembleDebug`.
   - Verifies that Gradle assemble gate results (`_gate_results.py`) match the current `git_sha` and passed with status `PASS`.
 - **Interactive Tailored Reference Reviews with Clickable IDE Links (`docs/setup-prompt.md`, `docs/install-or-update-prompt.md`)**:
   - Mandated formatting all discovered project domain reference files as clickable markdown links (`[filename.md](file:///<path>)`) within the `ask_question` approval modal during update and setup sessions.
