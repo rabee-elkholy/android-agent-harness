@@ -70,9 +70,9 @@ android-harness init
     (Bug, Security, Convention, Perf/ANR, Regression, Test Quality)
     |
     v
-[6] AUTONOMOUS DEVICE E2E SMOKE
-    Builds :app:assembleDebug -> Installs on physical device via ADB
-    -> Runs live UI smoke test & audits Logcat for runtime exceptions
+[6] LIVE DEVICE INSTALL & INTERACTIVE MANUAL SIGN-OFF
+    Builds :app:assembleDebug -> Installs on device via run_device.py install-start
+    -> Emits 2-3 diff-grounded verification steps & collects developer sign-off via interactive modal
     |
     v
 [7] PM TRACKER SYNC & HUMAN GIT SIGN-OFF
@@ -93,7 +93,7 @@ The **Android Agent Harness** places **deterministic, cryptographic, and OS-leve
 | **Bug Reproduction** | Model guesses fixes without verifying; misses edge cases. | **Shift-Left TDD**: Requires writing failing unit tests first (`RED`), then confirming surgical fix (`GREEN`). |
 | **Code Review & Verification** | Model judges its own work ("LGTM!"). | **Cryptographic Barrier**: Assembly (`:assembleDebug`) is physically locked until 6 parallel subagents emit matching SHA-256 evidence. |
 | **Execution Safety** | Model can execute destructive shell commands (`git commit`, `push --force`, `pm clear`). | **OS Interceptor**: Python `PreToolUse` hook hard-denies destructive commands, bare ADB, and unauthorized mutations before reaching the shell. |
-| **Device & Runtime QA** | Blind to actual runtime; developer manually builds, deploys, and debugs crashes. | **Autonomous Device Runner**: Builds APK, installs on connected USB device/emulator, runs smoke tests, and triages Logcat. |
+| **Device & Runtime QA** | Blind to actual runtime; developer manually builds, deploys, and debugs crashes. | **Interactive Device Verification**: Builds APK, installs & launches target screen via ADB, guides developer with 2-3 diff-grounded test steps, and triages Logcat. |
 | **Attention & Reliability** | Attention fades as conversation expands (token decay / lost in the middle). | **Zero Token Decay**: Fixed external Python engine enforces rules identically on turn 1 or turn 1,000. |
 | **Git Governance** | Model pollutes git history or pushes unreviewed code to remote. | **Strict Human Git Authority**: Zero autonomous commits/pushes; emits verified, clean Conventional Commits for developer sign-off. |
 | **Environment Health** | Blind to Android SDK paths, ADB serials, and system health. | **12-Dimension Doctor**: Audits 30 diagnostic checks with live process streaming heartbeats during Gradle operations. |
