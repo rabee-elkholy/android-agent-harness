@@ -7,37 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.25.2] - 2026-09-02
 
-### Resilient Physical Device UI Hierarchy Dumps, Multi-Tier Foreground Resolution & Shift-Left Test Sync
-- **OEM-Resilient UI Hierarchy Dumps (`_adb_core.py`, `_adb_core_selftest.py`)**:
-  - Enhanced `dump_hierarchy()` to check for true root `<hierarchy` XML tags, automatically falling back to `_dump_via_file()` when OEM ROMs (Oppo, Realme, Xiaomi, Samsung) return non-empty informational text messages on `exec-out /dev/tty`.
-  - Added multi-path fallback (`/data/local/tmp/` & `/sdcard/`) with automatic temporary file cleanup.
-- **Multi-Tier Foreground Package & Activity Discovery (`_adb_core.py`)**:
-  - Implemented multi-tier resolution across Android 12, 13, 14, 15: Tier 1 (`dumpsys window` with `u0` user ID and modern window token matching) and Tier 2 (`dumpsys activity activities` with `mResumedActivity` / `topResumedActivity`).
+### Universal Code Graph Engine, Resilient UI Hierarchy & Shift-Left Test Synchronization
+- **Universal Code Graph & Topology Engine (`_graph_core.py`, `project_graph.py`, `_graph_selftest.py`)**:
+  - Built zero-dependency Pure Python graph engine supporting Gradle multi-module DAGs (Groovy & Kotlin DSL, type-safe accessors), universal components (Java & Kotlin, XML layouts & Navigation, Compose screens), and Clean Architecture layer classification (UI -> ViewModel/Presenter -> UseCase -> Repository -> DataSource -> Tests).
+  - Added cycle-safe BFS shortest path finding and isolated subgraph extraction with depth limits (`--depth N`), paired path validation (`--path-from` / `--path-to`), and token-efficient `compact` serialization saving up to 80% context.
+  - Implemented incremental SHA-256 caching (`cache/project_graph.json`, sub-50ms) and heuristic self-healing for moved/renamed files with `[HEALED]` auto-repairs.
+- **OEM-Resilient UI Hierarchy Dumps & Multi-Tier Foreground Resolution (`_adb_core.py`, `_adb_core_selftest.py`)**:
+  - Enhanced `dump_hierarchy()` to validate true root `<hierarchy` XML tags, automatically falling back to `_dump_via_file()` when OEM ROMs (Oppo, Realme, Xiaomi, Samsung) return non-empty informational text messages on `exec-out /dev/tty`.
+  - Implemented multi-tier foreground resolution across Android 12, 13, 14, 15: Tier 1 (`dumpsys window` with `u0` user ID and modern window token matching) and Tier 2 (`dumpsys activity activities` with `mResumedActivity` / `topResumedActivity`).
 - **Harness Engine Mutation Protection in Client Apps (`pre_tool_safety.py`, `_security_selftest.py`)**:
   - Added safety guard denying AI agents from making ad-hoc modifications to `.agents/scripts/` files in client app checkouts.
 - **Shift-Left Test & Mock Synchronization Pre-Gate (`harness-rules.md`, `AGENTS.md`)**:
   - Enforced mandatory unit test and mock synchronization alongside production code changes to guarantee first-pass review approvals and eliminate review round flapping.
-
-## [0.25.1] - 2026-09-02
-
-### Architecture Path Search Validation & Edge-Case Protection
-- **Paired Path CLI Arguments (`project_graph.py`)**:
-  - Added strict validation ensuring `--path-from` and `--path-to` are always provided as a pair, returning helpful guidance on unpaired queries.
-
-## [0.25.0] - 2026-09-02
-
-### Universal Android Code Graph Engine, Incremental Caching & Self-Healing Architecture
-- **Universal Code Graph & Topology Engine (`_graph_core.py`, `_graph_selftest.py`)**:
-  - Built zero-dependency Pure Python graph engine supporting Gradle multi-module DAGs (Groovy & Kotlin DSL, type-safe accessors), universal components (Java & Kotlin, XML layouts & Navigation, Compose screens), and Clean Architecture layer classification (UI -> ViewModel/Presenter -> UseCase -> Repository -> DataSource -> Tests).
-  - Added cycle-safe BFS shortest path finding and isolated subgraph extraction with depth limits (`--depth N`).
-- **Incremental SHA-256 Caching & Self-Healing (`_graph_core.py`)**:
-  - Implemented incremental hashing (`cache/project_graph.json`) to re-index only modified files in sub-50ms.
-  - Implemented heuristic self-healing to detect moved/renamed files on disk, auto-repair cache nodes, and emit `[HEALED]` notifications seamlessly.
-- **Multi-Format Serializers & CLI Frontend (`project_graph.py`)**:
-  - Added token-efficient `compact` format saving up to 80% context for AI Agents, alongside `mermaid`, `dot` (Graphviz), and `json`.
-  - Added optional image rendering (SVG/PNG) when system Graphviz (`dot`) CLI is present with graceful fallback.
-- **Blast Radius Integration & Doctor Registration (`impact_analyzer.py`, `doctor/models.py`)**:
-  - Integrated `--graph` flag into `impact_analyzer.py` for visual blast-radius diagrams.
   - Registered core scripts in `CORE_SCRIPTS` manifest verified across all 12 diagnostic dimensions of `harness_doctor.py`.
 
 ## [0.24.0] - 2026-09-01
@@ -182,31 +163,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Change Impact Analysis & Dependency Graph (`impact_analyzer.py`)**:
   - Built an AST/regex-based Kotlin/Java dependency indexer calculating direct and transitive (depth 2) dependencies, mapping modified symbols to impacted unit tests and UI surfaces for focused verification.
 
-## [0.17.2] - 2026-08-31
-
-### Anti-Hallucination Invariant, Sequential Task Dependency Protection & Smoke Launcher Robustness
-- **Anti-Hallucination & Fake System Message Prohibition (`harness-rules.md`, `pre_invocation_reminder.py`, `AGENTS.md.template`, `AGENTS.md`)**:
-  - Explicitly prohibited fabricating, injecting, simulating, or writing fake `<MESSAGE_RECEIVED>` or `<SYSTEM_MESSAGE>` completion tags in agent thoughts or chat prose.
-  - Eliminated ambiguity in the "Option A" background task protocol: when launching background tasks whose completion is a prerequisite for downstream steps (e.g. `:assembleDebug` before `run_device.py install-start`; `install-start` before `run_e2e_smoke.py`), the agent MUST STOP calling tools immediately and end turn silently with empty string `""` to allow genuine platform reactive wakeup.
-- **Robust Component Launching & Multi-Package Foreground Detection (`run_e2e_smoke.py`)**:
-  - Added support for full component paths (`<package>/<activity>`) in `run_e2e_smoke.py` when `LAUNCHER` contains package prefix differing from `APPLICATION_ID`.
-  - Updated `is_app_foreground()` to dynamically check both `APPLICATION_ID` and manifest package prefix candidates across `dumpsys window windows` and `dumpsys activity top`.
-
-## [0.17.1] - 2026-08-31
-
-### Diff-Scoped Pre-Commit Quality Gate, String Parity Guard & Engine Hardening
-- **Diff-Scoped Pre-Commit Gate (`pre_commit_gate.py`, `fast_kt_lint.py`, `check_strings.py`)**:
-  - Refactored `pre_commit_gate.py` to be 100% diff-scoped on staged changes (`git diff -U0 --cached HEAD`).
-  - Line-level coding rules (unchecked double-bang `!!`, inline FQCNs, `TODO` stubs, wildcard imports, and hardcoded UI literals) are strictly evaluated against newly added or modified lines in staged files, completely ignoring untouched legacy code in the same files.
-- **Diff-Scoped String Parity Guard (`check_strings.py`, `_hook_selftest.py`)**:
-  - Refactored `check_strings.py` to be 100% diff-scoped by default: translation parity across `values/strings.xml` and localized `values-*/strings.xml` files is strictly restricted to newly added/modified keys in the working tree (`git diff -U0 HEAD`).
-  - Pre-existing untranslated legacy keys from past releases are ignored in preflight checks, preventing false-positive blocking `[FAIL]` and eliminating unexpected AI modifications to legacy XML files.
-  - Added `--all` flag to `check_strings.py` for full repository audits.
-- **Safety Hook Review Barrier Extended to Preflight (`pre_tool_safety.py`)**:
-  - `pre_tool_safety.py` now enforces the active 5-leaf parallel review barrier against premature `preflight_check.py` execution, ensuring preflight and assemble commands cannot execute until all 5 leaf reviewer verdicts arrive.
-- **Progressive Streaming for Installer & Selftest (`install_or_update.py`)**: Added real-time step streaming with `flush=True` during installation and doctor runs.
-
 ## [0.17.0] - 2026-08-31
+
+### One-Command Deterministic Harness Engine & Diff-Scoped Quality Guards
+- **Anti-Hallucination Invariant & Background Task Protocol (0.17.2)**:
+  - Explicitly prohibited fabricating, injecting, or simulating fake `<MESSAGE_RECEIVED>` completion tags in agent thoughts or chat prose.
+  - Required the agent to stop calling tools and end turn silently with empty string `""` on prerequisite background tasks to allow genuine reactive wakeup.
+  - Enhanced component launching and multi-package foreground detection in `run_e2e_smoke.py`.
+- **Diff-Scoped Pre-Commit Gate & String Parity Guard (0.17.1)**:
+  - Refactored `pre_commit_gate.py` and `check_strings.py` to be 100% diff-scoped on modified lines, completely ignoring untouched legacy code and untranslated pre-existing strings.
+  - Extended the safety hook review barrier to `preflight_check.py`.
+- **One-Command Deterministic Harness Engine (`install_or_update.py`)**:
+  - Built standalone, zero-dependency Python engine that executes complete harness installation and updates atomically in under 3 seconds with automated timestamped backup and reference preservation.
 
 ### One-Command Deterministic Harness Engine, Upstream Bug Fixes & Instant Porting Pipeline
 - **One-Command Deterministic Harness Engine (`install_or_update.py`)**: Built a dedicated, standalone, zero-dependency Python engine that executes complete harness installation and updates atomically in under 3 seconds:

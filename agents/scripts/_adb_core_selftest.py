@@ -196,9 +196,9 @@ def test_dump_hierarchy_fallback_on_invalid_xml() -> None:
 
 def test_foreground_package_multitier_parsing() -> None:
     # Test Tier 1 mCurrentFocus with user ID
-    out1 = "  mCurrentFocus=Window{8d10ac5 u0 com.example.app/com.example.app.MainActivity}"
+    out1 = "  mCurrentFocus=Window{8d10ac5 u0 com.fixture.app/com.fixture.app.MainActivity}"
     m1 = re.search(r"mCurrentFocus=.*?Window\{[^}]*?\s(?:u\d+\s+)?([\w.]+)/", out1)
-    check(m1 is not None and m1.group(1) == "com.example.app", "mCurrentFocus with u0 parsed")
+    check(m1 is not None and m1.group(1) == "com.fixture.app", "mCurrentFocus with u0 parsed")
 
     # Test Tier 1 mFocusedApp
     out2 = "  mFocusedApp=ActivityRecord{3ab42f1 u0 com.fitness.app/.ui.HomeActivity t123}"
