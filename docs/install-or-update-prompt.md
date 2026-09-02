@@ -1,8 +1,8 @@
 # Install or Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.25.7/docs/install-or-update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.25.8/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.25.7` — **SHA-256**: `cf7b15bfdae9751d1ab5a297645631e275eff51b0db62c1752a9113fcf7afb00` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.25.8` — **SHA-256**: `9a42ed3f767608cfb8d294ee41b9d5b9a3018f9e3b0ec8cc5fdea9e706355bd8` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
@@ -45,7 +45,7 @@ Then tell them: the wizard asks only the questions it returns (backup, app name,
 5. **Final Completion Card (No Redundant Tasks)**:
    - Because `install_or_update.py` ALREADY runs 12-dimension doctor verification and hook selftests internally, do **NOT** launch redundant separate `harness_doctor.py` or `preflight_check.py` background tasks after it succeeds.
    - Output the **Harness Updated Successfully** completion card immediately, including the **Update Summary** table and a concise **What's New in v<version> (Highlights since v<previous-version>)** bulleted list extracted from the installer output.
-   - If uncommitted changes exist, instruct the developer in their language to commit their changes. Then tell them to start a **new chat** on this Android folder before real work.
+   - Tell them to start a **new chat** on this Android folder before starting daily work.
 
 Kit rules that still apply during setup:
 

@@ -5,9 +5,11 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.7] - 2026-09-02
+## [0.25.8] - 2026-09-02
 
-### Zero Cold-Start Code Graph Pre-Warming, Graph-First Discovery & Version Diff
+### Zero-Git-Pollution Clean Completion, Code Graph Pre-Warming & Graph-First Barrier
+- **Zero-Git-Pollution Clean Completion (`docs/install-or-update-prompt.md`)**:
+  - Removed outdated configuration commit instructions from the update completion card, clarifying that harness files are automatically excluded locally via `.git/info/exclude` without requiring working-tree commits.
 - **Zero Cold-Start Code Graph Pre-Warming (`install_or_update.py`, `docs/install-or-update-prompt.md`)**:
   - Automatically parses the entire codebase, builds the dependency DAG, and caches `.agents/cache/project_graph.json` directly during harness installation and update, ensuring the graph is 100% warmed up and ready on the very first chat.
 - **Graph-First Codebase Exploration Barrier (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
