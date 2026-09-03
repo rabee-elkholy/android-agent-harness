@@ -185,6 +185,7 @@ def main(argv=None) -> int:
     skipped_count = max(0, total_changed - len(files_map))
     test_files = [f for f in files_map.keys() if is_test_file(f)]
     contains_tests = len(test_files) > 0
+    print(f"[*] Packaging review diff for {len(files_map)} file(s) (risk tier: {risk_tier})...", flush=True)
     files_json = json.dumps(files_map, ensure_ascii=False, separators=(",", ":"))
     chunks = [
         "\n".join([

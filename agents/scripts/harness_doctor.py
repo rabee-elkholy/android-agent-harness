@@ -89,11 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=str(REPO), help="Path to Android project root")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON report")
     parser.add_argument("--device", action="store_true", help="Include connected ADB device diagnostics")
+    parser.add_argument("--no-selftest", action="store_true", help="Skip re-running full hook selftest suite")
     args = parser.parse_args(argv)
 
     repo_path = Path(args.repo).resolve()
     live_stream = not args.json
-    doctor = HarnessDoctor(repo_path, check_device=args.device, live_stream=live_stream)
+    doctor = HarnessDoctor(repo_path, check_device=args.device, run_selftest=not args.no_selftest, live_stream=live_stream)
     results = doctor.run_all()
 
     if args.json:

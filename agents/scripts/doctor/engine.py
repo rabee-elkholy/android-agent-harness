@@ -638,6 +638,8 @@ class HarnessDoctor:
 
         selftest_script = self.agents_dir / "scripts" / "_hook_selftest.py"
         if selftest_script.is_file():
+            if self.live_stream:
+                print("         -> Executing 180+ hook selftest assertions in background...", flush=True)
             proc = subprocess.run(
                 [sys.executable, str(selftest_script)],
                 capture_output=True,
@@ -671,6 +673,8 @@ class HarnessDoctor:
 
         preflight_script = self.agents_dir / "scripts" / "preflight_check.py"
         if preflight_script.is_file():
+            if self.live_stream:
+                print("         -> Executing preflight sanity checks (strings, room, lint)...", flush=True)
             proc = subprocess.run(
                 [sys.executable, str(preflight_script)],
                 capture_output=True,

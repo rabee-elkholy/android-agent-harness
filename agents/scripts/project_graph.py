@@ -75,7 +75,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     engine = GraphEngine(REPO)
+    if args.sync:
+        live_print("[*] Rebuilding complete universal code graph from disk...", err=False)
     sync_res = engine.sync(force_full=args.sync)
+    if sync_res.get("added") or sync_res.get("modified") or sync_res.get("deleted"):
+        live_print(
+            f"[*] Incremental code graph sync: +{sync_res['added']} added, ~{sync_res['modified']} modified, -{sync_res['deleted']} deleted files.",
+            err=False,
+        )
 
     if args.stats:
         live_print("==================================================")

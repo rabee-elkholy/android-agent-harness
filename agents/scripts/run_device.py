@@ -172,6 +172,7 @@ def main() -> int:
             target_activity = (
                 f"{APPLICATION_ID}/{target_activity if target_activity.startswith('.') else '.' + target_activity}"
             )
+        live_print(f"[*] Launching target Activity: {target_activity}")
         code, log = run_adb(
             serial,
             ["shell", "am", "start", "-n", target_activity],

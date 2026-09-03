@@ -406,25 +406,60 @@ def enforce_git_privacy(repo: Path) -> None:
         exclude_file.write_text(content, encoding="utf-8")
 
 
+def _run_streaming_command(cmd: list[str], cwd: Path, indent: str = "         ") -> tuple[int, str]:
+    """Executes a command and streams high-signal output lines live to stdout."""
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        bufsize=1,
+    )
+    lines: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        lines.append(line)
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Show real-time progress for checks, dimensions, and test markers
+        if (
+            stripped.startswith("[*] ")
+            or "[PASS]" in stripped
+            or "[WARN]" in stripped
+            or "[FAIL]" in stripped
+            or stripped.startswith("-> ")
+            or ": OK" in stripped
+            or stripped.startswith("Total test")
+            or "Diagnostic Summary" in stripped
+        ):
+            print(f"{indent}{stripped}", flush=True)
+    proc.wait()
+    return proc.returncode, "".join(lines)
+
+
 def run_verification(repo: Path) -> dict:
-    """Executes _hook_selftest.py and harness_doctor.py to assert 100% operational health."""
+    """Executes _hook_selftest.py and harness_doctor.py to assert 100% operational health with real-time streaming."""
     scripts_dir = repo / ".agents" / "scripts"
 
     # 1. Run hook selftest
-    print("      -> Executing hook selftest suite...", flush=True)
+    print("      -> Executing hook selftest suite (180+ tests)...", flush=True)
     selftest_script = scripts_dir / "_hook_selftest.py"
     selftest_code = 1
     selftest_out = ""
     if selftest_script.is_file():
-        res = subprocess.run(
+        selftest_code, selftest_out = _run_streaming_command(
             [sys.executable, str(selftest_script)],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            check=False,
+            cwd=repo,
+            indent="         ",
         )
-        selftest_code = res.returncode
-        selftest_out = res.stdout + res.stderr
         print(f"      -> Hook selftest result: {'[PASS]' if selftest_code == 0 else '[FAIL]'}", flush=True)
 
     # 2. Run harness doctor
@@ -433,15 +468,11 @@ def run_verification(repo: Path) -> dict:
     doctor_code = 1
     doctor_out = ""
     if doctor_script.is_file():
-        res = subprocess.run(
-            [sys.executable, str(doctor_script)],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            check=False,
+        doctor_code, doctor_out = _run_streaming_command(
+            [sys.executable, str(doctor_script), "--no-selftest"],
+            cwd=repo,
+            indent="         ",
         )
-        doctor_code = res.returncode
-        doctor_out = res.stdout + res.stderr
         print(f"      -> Doctor diagnostic result: {'[PASS]' if doctor_code == 0 else '[FAIL]'}", flush=True)
 
     return {
@@ -494,14 +525,18 @@ def sync_code_graph(repo: Path) -> dict:
     """Builds and caches the complete project code graph and topology during installation/update."""
     try:
         from _graph_core import GraphEngine, render_dot_to_image
+        print("      -> Scanning Kotlin, Java, XML layouts, and Gradle files...", flush=True)
         engine = GraphEngine(repo)
+        print("      -> Parsing AST symbols and extracting Clean Architecture layers...", flush=True)
         stats = engine.sync(force_full=True)
+        print("      -> Pre-warming topological dependency cache...", flush=True)
         dot_str = engine.graph.to_dot(title=f"{repo.name} Code Graph")
         dot_file = repo / ".agents" / "cache" / "project_graph.dot"
         dot_file.parent.mkdir(parents=True, exist_ok=True)
         dot_file.write_text(dot_str, encoding="utf-8")
 
         svg_file = repo / ".agents" / "cache" / "graph.svg"
+        print("      -> Rendering visual graph artifact (DOT/SVG)...", flush=True)
         render_ok, _ = render_dot_to_image(dot_str, svg_file, img_format="svg")
 
         return {
@@ -561,12 +596,14 @@ def execute_install_or_update(
     # 3. Place engine
     print("[3/6] Placing harness engine (.agents/)...", flush=True)
     place_engine(repo, kit, preserved_refs)
+    print("      -> Core engine, rules, subagents, and workflows placed.", flush=True)
 
     # 4. Generate _product.py & Wire adapters
     print("[4/6] Generating _product.py & wiring tool adapters...", flush=True)
     generate_product_py(repo, answers, kit)
     configure_adapters_and_mcp(repo, answers)
     enforce_git_privacy(repo)
+    print("      -> Generated _product.py, configured IDE adapters, and enforced git privacy.", flush=True)
 
     # 5. Pre-warm Code Graph (Zero Cold-Start)
     print("[5/6] Building & pre-warming universal code graph...", flush=True)
