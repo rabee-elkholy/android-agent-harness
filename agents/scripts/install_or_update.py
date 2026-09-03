@@ -32,6 +32,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 
+enable_line_buffered_stdio()
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Deterministic Android Harness Installer & Updater.")
@@ -424,7 +426,10 @@ def _run_streaming_command(cmd: list[str], cwd: Path, indent: str = "         ")
     )
     lines: list[str] = []
     assert proc.stdout is not None
-    for line in proc.stdout:
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            break
         lines.append(line)
         stripped = line.strip()
         if not stripped:
@@ -456,7 +461,7 @@ def run_verification(repo: Path) -> dict:
     selftest_out = ""
     if selftest_script.is_file():
         selftest_code, selftest_out = _run_streaming_command(
-            [sys.executable, str(selftest_script)],
+            [sys.executable, "-u", str(selftest_script)],
             cwd=repo,
             indent="         ",
         )
@@ -469,7 +474,7 @@ def run_verification(repo: Path) -> dict:
     doctor_out = ""
     if doctor_script.is_file():
         doctor_code, doctor_out = _run_streaming_command(
-            [sys.executable, str(doctor_script), "--no-selftest"],
+            [sys.executable, "-u", str(doctor_script), "--no-selftest"],
             cwd=repo,
             indent="         ",
         )
