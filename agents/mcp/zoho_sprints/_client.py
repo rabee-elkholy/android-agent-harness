@@ -238,7 +238,10 @@ class ZohoSprintsAPI:
                         return sid, raw_input
                 except Exception:
                     continue
-        search_sprints = [sprint_id] if sprint_id else sprint_ids
+        if sprint_id:
+            search_sprints = [sprint_id] + [s for s in sprint_ids if s != sprint_id]
+        else:
+            search_sprints = sprint_ids
         prefix = self.item_prefix
         for sid in search_sprints:
             items_data = self.list_items(sid)
