@@ -1,8 +1,8 @@
 # Diagnostic prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.8/docs/diagnostic-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.9/docs/diagnostic-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.27.8` — **SHA-256**: `4e124a8782df25edff94b5b552784edd21fece6c193162172370887c47774a8a` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.27.9` — **SHA-256**: `e4a284763fddbde2a9ad161af76c8c0a86eea6cc90c53eaeea88411788a60f5b` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** to systematically audit the health, configuration, safety hooks, and operational readiness of your installed Android Agent Harness.
 
 ---
@@ -20,7 +20,7 @@ Tell the developer **first**, in their language:
 1. **Target Verification (Fail-Fast)**:
    - Verify that this directory has `gradlew` or `gradlew.bat` **and** `.agents/`.
    - If `.agents/` is missing, stop immediately and tell the developer in their language that `.agents/` is missing, and instruct them to install the harness first by pasting:
-     `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.8/docs/install-or-update-prompt.md`
+     `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.9/docs/install-or-update-prompt.md`
 
 2. **Automated Diagnostic Execution**:
    - Determine python executable (`python`, `python3`, or `$PY`).

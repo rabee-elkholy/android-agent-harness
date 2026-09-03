@@ -5,6 +5,20 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.9] - 2026-09-03
+
+### Mandatory Interactive Modal Invariant, Universal Code Graph README Showcase & Smart MCP Fallback
+- **Mandatory Interactive Modal Invariant (`ask_question`) & Platform Planning Mode Override (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**:
+  - Eliminated conversational chat prose and "Open Questions" sections in `implementation_plan.md` for missing requirements or edge cases.
+  - Mandated that the Lead Agent immediately trigger the interactive `ask_question` modal with structured, clickable choices before authoring implementation plans.
+  - Enforced explicit rule precedence overriding platform planning mode defaults that discourage calling `ask_question` during planning.
+- **Universal Code Graph Showcase in README (`README.md`)**:
+  - Expanded the project README with an in-depth section on the Universal Code Graph Engine (`project_graph.py`).
+  - Documented Clean Architecture feature slicing, dependency path finding, UI screen mapping, and 80%+ token savings with ASCII architectural flow diagrams.
+- **Smart Sprint Fallback in Zoho Sprints MCP Client (`agents/mcp/zoho_sprints/_client.py`, `zoho_get_task_details.json`)**:
+  - Resolved task lookup across all sprints and the backlog even when an explicit mismatched `sprint_id` is supplied by the caller.
+  - Updated `zoho_get_task_details` schema to make `sprint_id` optional.
+
 ## [0.27.8] - 2026-09-03
 
 ### Zero-Assumption Interactive Interview, Native Backlog Support & Host Sandbox Security
@@ -205,7 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enforced mandatory unit test and mock synchronization alongside production code changes to guarantee first-pass review approvals and eliminate review round flapping.
   - Registered core scripts in `CORE_SCRIPTS` manifest verified across all 12 diagnostic dimensions of `harness_doctor.py`.
 
-## [0.24.0] - 2026-09-01
+### 0.24.0 - 2026-09-01
 
 ### Advanced E2E Gestures, Component State Assertions, Offline Simulation & Live Task Streaming
 - **Horizontal Gestures & Directional Scrolling (`_adb_core.py`, `run_e2e_qa.py`, `_adb_core_selftest.py`)**:
