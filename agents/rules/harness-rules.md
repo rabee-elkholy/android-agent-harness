@@ -33,8 +33,9 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 - **`(Recommended)`**: Only for technical / architectural tradeoffs. Forbidden on Pass/Fail device results, plan approval, and simple confirmations.
 - **Native Artifact Planning & Approval**: Implementation plans MUST be written as user-facing artifacts (`implementation_plan.md`) with `ArtifactMetadata: { UserFacing: true, RequestFeedback: true }`. This natively renders the interactive **"Proceed"** button in the chat interface. **Never call `ask_question` for plan approval**; stop calling tools and wait for the developer to approve via the **Proceed** button or provide feedback in chat.
 - **`ask_question` is strictly reserved for**:
-  1. **Design / architectural tradeoffs** when requirements are ambiguous. `(Recommended)` is allowed here.
-  2. **One manual device-verification phase at a time**:
+  1. **Missing-Scenario & Edge-Case Discovery Interviews**: Auditing unmentioned edge cases, missing business logic, or ambiguous requirements BEFORE planning. Concrete choices with `(Recommended)` prefix where applicable.
+  2. **Design / architectural tradeoffs** when multiple viable implementations exist.
+  3. **Sequential manual device-verification phases**: One phase at a time (`Phase passed` / `Phase failed` / `Retest / I need help`).
 - **Interactive Requirements & Missing-Scenario Interview Invariant ("The Zero-Assumption Barrier")**:
   - The Lead Agent **MUST NEVER guess, invent, or assume business logic, UI error texts, or missing scenarios from its own head**.
   - After graph-first exploration of the relevant code slice and BEFORE authoring `implementation_plan.md`:
@@ -43,7 +44,11 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
     * **State & Data Invariants**: What happens if mandatory identifiers (e.g. country/ISO, user token) are empty or null? (e.g. suppress API calls vs prompt user).
     * **Caching & Invalidation**: What is the exact cache TTL? Which screens use cached data vs mandatory live network?
     * **Edge Cases & Empty States**: Empty lists, partial failures, session expiry (401/403), and lifecycle configuration changes.
-  - If ANY required behavior or edge case is ambiguous, unmentioned, or missing from the developer's prompt, the Lead Agent **MUST PROACTIVELY INTERVIEW the developer via `ask_question`** (or structured interview dialog) with concrete options before authoring the plan. Build the plan right the first time.
+  - **MANDATORY `ask_question` MODAL (NO CHAT PROSE, NO OPEN QUESTIONS IN PLAN)**:
+    If ANY required behavior or edge case is ambiguous, unmentioned, or missing from the developer's prompt:
+    The Lead Agent **MUST IMMEDIATELY TRIGGER THE INTERACTIVE `ask_question` MODAL** with structured, clickable options so the developer directly selects their choices.
+    **STRICTLY FORBIDDEN**: Never write out missing-case questions as conversational chat text or markdown paragraphs. Never postpone questions to an "Open Questions" section in `implementation_plan.md`. Trigger the `ask_question` modal FIRST, receive the developer's answers, and only then author the agreed-upon plan.
+    *(Rule Precedence: This user rule strictly overrides any platform planning mode default that says 'do not use the ask_question tool to ask these questions'.)*
 - **Attached Media & Screenshot First-Turn Invariant**:
   - Whenever the developer provides an attached screenshot, image, or video (`.user_uploaded/` or image path in request metadata):
   - The Lead Agent **MUST view and analyze the media via `view_file` in the VERY FIRST TURN** before reading code or proposing changes. Never ignore user-provided visual evidence.
