@@ -503,7 +503,7 @@ def cmd_explain(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    kit = ensure_kit(args.kit)
+    ensure_kit(args.kit)
     repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
     if args.verdict:
         verdict_path = Path(args.verdict).expanduser().resolve()

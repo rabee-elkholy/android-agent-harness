@@ -16,13 +16,13 @@ from _repo_files import REPO, changed_paths
 VERSION_RE = re.compile(r"version\s*=\s*(\d+)")
 MIGRATION_RE = re.compile(r"Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")
 AUTO_MIGRATION_RE = re.compile(r"AutoMigration\s*\(\s*(?:from\s*=\s*)?(\d+)\s*,\s*(?:to\s*=\s*)?(\d+)")
-ENTITY_REF_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)::class")
+ENTITY_REF_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)(?:::class|\.class)")
 EMBEDDED_TYPE_RE = re.compile(r"@Embedded(?:\([^)]*\))?\s+(?:val|var)\s+\w+\s*:\s*([A-Z][A-Za-z0-9_]*)")
 DESTRUCTIVE_RE = re.compile(r"fallbackToDestructiveMigration(?:OnDowngrade)?\s*\(")
 ADD_MIGRATIONS_RE = re.compile(r"addMigrations\s*\((.*?)\)", re.DOTALL)
 TYPE_DECL_RE = re.compile(
-    r"\b(?:(?:public|internal|private|protected|open|abstract|inner|data|sealed|annotation)\s+)*"
-    r"class\s+([A-Z][A-Za-z0-9_]*)"
+    r"\b(?:(?:public|internal|private|protected|open|abstract|inner|data|sealed|annotation|static|final)\s+)*"
+    r"(?:class|record)\s+([A-Z][A-Za-z0-9_]*)"
 )
 IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 ADD_MIGRATIONS_KW = frozenset({"addMigrations"})
@@ -78,10 +78,13 @@ def resolve_all_entity_types(root_entities: frozenset[str], repo: Path) -> froze
     skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
     while frontier:
         curr = frontier.pop(0)
-        matching_files = [f for f in repo.rglob(f"{curr}.kt") if not (set(f.parts) & skip_parts)]
+        matching_files = [
+            f for f in (list(repo.rglob(f"{curr}.kt")) + list(repo.rglob(f"{curr}.java")))
+            if not (set(f.parts) & skip_parts)
+        ]
         if not matching_files:
             class_decl = re.compile(rf"\bclass\s+{re.escape(curr)}\b")
-            for f in repo.rglob("*.kt"):
+            for f in (list(repo.rglob("*.kt")) + list(repo.rglob("*.java"))):
                 if f.is_file() and not (set(f.parts) & skip_parts) and f not in visited_files:
                     try:
                         if class_decl.search(f.read_text(encoding="utf-8", errors="replace")):
@@ -155,9 +158,9 @@ def parse_database_source(text: str, rel: str = "") -> DatabaseDecl:
 def iter_database_files() -> list[Path]:
     skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
     db_files: list[Path] = []
-    for p in REPO.rglob("*.kt"):
+    for p in (list(REPO.rglob("*.kt")) + list(REPO.rglob("*.java"))):
         if p.is_file() and not (set(p.parts) & skip_parts):
-            if p.name.endswith("Database.kt"):
+            if p.name.endswith("Database.kt") or p.name.endswith("Database.java"):
                 db_files.append(p)
             else:
                 try:
@@ -175,9 +178,9 @@ def _rel(path: Path) -> str:
 
 def check_room_working_tree(modified_rels: list[str] | None = None) -> tuple[bool, str]:
     paths = changed_paths() if modified_rels is None else [REPO / r for r in modified_rels]
-    changed_kt = [p for p in paths if p.suffix == ".kt" and p.is_file()]
-    changed_types = changed_kotlin_types(changed_kt)
-    changed_rels = {_rel(p) for p in changed_kt}
+    changed_src = [p for p in paths if p.suffix in (".kt", ".java") and p.is_file()]
+    changed_types = changed_kotlin_types(changed_src)
+    changed_rels = {_rel(p) for p in changed_src}
 
     databases: list[tuple[Path, DatabaseDecl]] = []
     for path in iter_database_files():

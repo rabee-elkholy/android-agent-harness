@@ -55,7 +55,18 @@ EXCLUDED_DIR_PARTS = {
     ".idea",
     ".harness-backup",
     ".harness-setup",
+    ".harness-backups",
     ".cxx",
+    ".cursor",
+    ".claude",
+    ".codex",
+    ".github",
+    ".windsurf",
+    ".amazonq",
+    ".continue",
+    ".junie",
+    ".kilocode",
+    ".roo",
 }
 
 

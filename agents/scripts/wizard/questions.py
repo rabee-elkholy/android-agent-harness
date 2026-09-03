@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from pathlib import Path
 
 from .discovery import (
@@ -13,7 +12,6 @@ from .discovery import (
     auto_from_facts,
     discover,
     markdown_path,
-    read_text,
     setup_dir,
 )
 from .i18n import (
@@ -688,7 +686,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "supported_locales": auto.get("supported_locales", ["en", "ar"]),
         "locales": locales,
         "scaffold": "disable",
-        "install_confirm": raw.get("i10") or auto["install_confirm"],
+        "install_confirm": install_confirm,
         "agents_git": "gitignore",
         "gemini_config": gemini,
         "assemble_now": raw.get("i13") or auto["assemble_now"],

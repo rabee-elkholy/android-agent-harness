@@ -167,9 +167,14 @@ def main() -> int:
         live_print("[+] Install finished")
 
     if args.action in ("start", "install-start"):
+        target_activity = args.activity
+        if "/" not in target_activity:
+            target_activity = (
+                f"{APPLICATION_ID}/{target_activity if target_activity.startswith('.') else '.' + target_activity}"
+            )
         code, log = run_adb(
             serial,
-            ["shell", "am", "start", "-n", args.activity],
+            ["shell", "am", "start", "-n", target_activity],
             "am start",
         )
         if code != 0:
@@ -179,7 +184,7 @@ def main() -> int:
             emit_env_failure(verdict, "run_device.py", serial=serial)
             return exit_for(verdict)
         record_device(args.action, "PASS", 0, serial)
-        live_print(f"[+] Launched {args.activity}")
+        live_print(f"[+] Launched {target_activity}")
 
     return 0
 

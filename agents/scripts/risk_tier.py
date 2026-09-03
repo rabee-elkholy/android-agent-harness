@@ -47,7 +47,10 @@ CRITICAL_PATH_PATTERNS = [
     re.compile(r"[a-zA-Z0-9_-]*(?:billing|purchase|subscription|checkout|payment)[a-zA-Z0-9_-]*\.(?:kt|java)$", re.IGNORECASE),
     re.compile(r"[a-zA-Z0-9_-]*(?:crypto|keystore|security)[a-zA-Z0-9_-]*\.(?:kt|java)$", re.IGNORECASE),
     re.compile(r"(?:proguard-rules\.pro|consumer-rules\.pro|proguard\.cfg)$", re.IGNORECASE),
-    re.compile(r"(?:^|/)(?:google-services\.json|[a-zA-Z0-9_.-]*\.(?:keystore|jks|key))$", re.IGNORECASE),
+    re.compile(
+        r"(?:^|/)(?:google-services\.json|agconnect-services\.json|\.env[a-zA-Z0-9_.-]*|[a-zA-Z0-9_.-]*\.(?:keystore|jks|key|p12|pem|pk8))$",
+        re.IGNORECASE,
+    ),
 ]
 
 CRITICAL_CODE_PATTERNS = [
@@ -83,7 +86,10 @@ def max_tier(t1: str, t2: str) -> str:
 def _is_doc_or_metadata_file(rel_path: str) -> bool:
     path = Path(rel_path)
     lower_name = path.name.lower()
-    if lower_name in ("google-services.json", "secrets.json", "credentials.json"):
+    if (
+        lower_name in ("google-services.json", "agconnect-services.json", "secrets.json", "credentials.json")
+        or lower_name.startswith(".env")
+    ):
         return False
     if lower_name in ("license", "notice", "version"):
         return True
