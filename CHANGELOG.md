@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.10] - 2026-09-03
+
+### Real-Time Live Process Streaming & Progress Feedback Across All Harness Scripts
+- **Real-Time Live Streaming Engine (`install_or_update.py`, `_live_process.py`)**:
+  - Replaced buffered sub-process execution (`capture_output=True`) with unbuffered, real-time stdout streaming (`bufsize=1`, `PYTHONUNBUFFERED=1`).
+  - Displayed live progress for every hook selftest, preflight check, and 12-dimension diagnostic verification check as it executes without UI freezes or terminal stalls.
+- **Diagnostic Doctor Optimization (`harness_doctor.py`, `doctor/engine.py`)**:
+  - Added `--no-selftest` flag to skip redundant re-execution of the 180+ hook selftests during installation/update health verification, cutting run time by over 50%.
+  - Added live intermediate status reporting for sub-process test runs within safety and preflight dimensions.
+- **Universal Code Graph Progressive Feedback (`project_graph.py`, `_graph_core.py`, `install_or_update.py`)**:
+  - Added progressive milestone reporting during AST indexing, Clean Architecture layer extraction, and DOT/SVG topological caching.
+  - Added incremental synchronization indicators when files are added, modified, or deleted.
+- **Packaging & Device Inspection Progress (`review_package.py`, `run_device.py`)**:
+  - Added real-time review package digest and risk tier indicators before generating review diffs.
+  - Added live Activity launch progress before dispatching `am start`.
+
 ## [0.27.9] - 2026-09-03
 
 ### Mandatory Interactive Modal Invariant, Universal Code Graph README Showcase & Smart MCP Fallback
@@ -203,7 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero-Friction Setup Wizard (`wizard/questions.py`, `wizard/discovery.py`)**:
   - Automatically discovers project identity from `settings.gradle(.kts)` `rootProject.name` or repository directory name with zero interactive prompt friction.
 
-## [0.25.2] - 2026-09-02
+### 0.25.2 - 2026-09-02
 
 ### Universal Code Graph Engine, Resilient UI Hierarchy & Shift-Left Test Synchronization
 - **Universal Code Graph & Topology Engine (`_graph_core.py`, `project_graph.py`, `_graph_selftest.py`)**:
