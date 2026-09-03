@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.7] - 2026-09-03
+
+### Official PyPI Publication, Evergreen Installer Links & Pre-Release Packaging Integrity
+- **Official PyPI Publication (`android-agent-harness`)**:
+  - Published official distribution packages (`.whl` and `.tar.gz`) to PyPI.
+  - Enabled standard one-command global installation: `pip install android-agent-harness` or `pipx install android-agent-harness`.
+  - Added official PyPI version badge to repository header.
+- **Evergreen Prompt Installer (`README.md`, `docs/quickstart.md`, `pin_prompt_docs.py`)**:
+  - Adopted static, permanent prompt URL pointing to `main` (`https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/install-or-update-prompt.md`).
+  - Eliminated stale link rot across external blogs, tutorials, and chat bookmarks.
+  - Excluded entry-point documentation from release version pinning scripts to preserve the permanent evergreen URL.
+- **Automated PyPI Publishing CI & Pre-Release Packaging Verification (`publish-pypi.yml`, `release_version.py`)**:
+  - Created automated GitHub Actions workflow (`.github/workflows/publish-pypi.yml`) utilizing OIDC Trusted Publishing on new GitHub releases.
+  - Hardened release automation script (`release_version.py`) with pre-release distribution packaging build (`python -m build`) and metadata verification (`twine check`) before git tag and push.
+  - Added `.github/` workflows directory to automatic release staging paths.
+
 ## [0.27.6] - 2026-09-03
 
 ### Architectural Caging, Room Java Support, Subtle Logic Bug Fixes & High-Impact Documentation
@@ -206,7 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Correctness & reliability fixes
 - Eliminated cross-app and stale-buffer crash false positives; fixed `assertNotVisible` substring collisions via exact matching; taps now verify the foreground app; fixed full-qualified component launch; unknown flow actions fail validation instead of passing silently.
 
-## [0.22.0] - 2026-09-01
+### 0.22.0 - 2026-09-01
 
 ### Interactive In-Chat Risk Tier Approvals, Codified 4-Scenario QA Engine & Convergence Polish
 - **Interactive In-Chat Risk Tier Governance (`approve_risk.py`, `risk_tier.py`, `AGENTS.md`)**:
