@@ -5,6 +5,26 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.6] - 2026-09-03
+
+### Architectural Caging, Room Java Support, Subtle Logic Bug Fixes & High-Impact Documentation
+- **Room Migration Java & Kotlin Guard (`room_guard.py`)**:
+  - Expanded entity and database scanning to inspect both Java (`.java`) and Kotlin (`*.kt`) files, preventing missed migrations in mixed or legacy Java codebases.
+  - Broadened entity reference regexes to match `FooEntity.class` alongside `FooEntity::class`.
+- **String Parity Precision for String Arrays (`check_strings.py`)**:
+  - Added placeholder extraction (`%s`, `%d`) for `<string-array>` items to ensure translation parity and prevent runtime format crashes across locales.
+- **Wizard Setup & Script Edge Cases (`wizard/questions.py`, `harness_cli.py`)**:
+  - Fixed `install_confirm` variable override in answers dictionary generation.
+  - Cleaned unused assignments and dead imports in `harness_cli.py` and `questions.py`.
+- **APK Staleness Exclusion for AI Tool Adapters (`_apk_freshness.py`)**:
+  - Excluded `.cursor`, `.claude`, `.codex`, `.github`, `.windsurf`, `.amazonq`, and other AI tool directories from staleness checks, eliminating false `STALE_SOURCE` re-builds.
+- **Pre-Commit Gate Isolation (`pre_commit_gate.py`)**:
+  - Isolated Room database checks strictly to staged relative paths (`staged_rels`), preventing un-staged working-tree experiments from blocking commits.
+- **ADB Component Normalization (`run_device.py`)**:
+  - Normalized target Activity identifiers before `am start -n` to prevent syntax crashes when slash `/` is omitted.
+- **High-Impact Architecture & Streamlined Documentation (`README.md`, `docs/architecture.md`)**:
+  - Refactored `README.md` to a concise 118-line high-impact manifesto showcasing live OS interceptions, the 6 Quality Guardians, Smart Test Promotion, and the Zero Legacy Debt advantage.
+
 ## [0.27.5] - 2026-09-02
 
 ### Setup Wizard 2.0 (4-Station Cascading Flow), Diff-Grounded Testing Standard & Doctor Pre-Checks
@@ -205,7 +225,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Standardized background waiting status messages to plain text English status lines matching user language dynamically, completely eliminating internal task IDs (`task-1004`) and robotic meta-phrases.
   - Fixed `tree_code_fingerprint(repo=None)` signature and hardened `_hook_selftest.py` stdout banner parsing.
 
-## [0.21.0] - 2026-09-01
+### 0.21.0 (2026-09-01)
 
 ### Autonomous Senior QA Engine, Declarative Maestro Flows & In-App UI Language Fingerprinting
 - **Declarative Maestro-Compatible E2E Flow Engine (`run_e2e_smoke.py`)**:

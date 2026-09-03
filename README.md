@@ -84,7 +84,7 @@ Software that compiles is not necessarily software that works on mobile. The har
 Open a new chat session in your AI assistant (Antigravity, Claude Code, Cursor, Copilot, Windsurf) at your project root and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.5/docs/install-or-update-prompt.md and follow all its instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.6/docs/install-or-update-prompt.md and follow all its instructions.
 ```
 
 ### Option B: Via Terminal CLI
