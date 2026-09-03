@@ -6,6 +6,7 @@
 **Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team.**
 
 [![CI Build](https://img.shields.io/github/actions/workflow/status/rabee-elkholy/android-agent-harness/ci.yml?branch=main&style=flat-square&label=CI%20Build)](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml)
+[![PyPI Version](https://img.shields.io/pypi/v/android-agent-harness?color=blue&style=flat-square&label=PyPI)](https://pypi.org/project/android-agent-harness/)
 [![Latest Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?color=2ea44f&style=flat-square&label=Release)](https://github.com/rabee-elkholy/android-agent-harness/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20KMP-3DDC84?style=flat-square)](https://android.com)
@@ -89,7 +90,9 @@ Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27
 
 ### Option B: Via Terminal CLI
 ```bash
-pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git
+pip install android-agent-harness
+# or via pipx for an isolated global command:
+pipx install android-agent-harness
 android-harness init
 ```
 
