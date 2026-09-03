@@ -230,6 +230,26 @@ def main(argv: list[str] | None = None) -> int:
             print(res.stderr[-1500:])
             return 1
         print("  [SUCCESS] All hook self-tests passed (0 failures).")
+
+        # Verify PyPI build & metadata
+        try:
+            import build as _
+            import twine as _
+            print("  + Verifying distribution packaging build and twine check...")
+            res_build = subprocess.run([sys.executable, "-m", "build"], cwd=ROOT, capture_output=True, text=True)
+            if res_build.returncode != 0:
+                print(f"[FAIL] Package build failed:\n{res_build.stderr}")
+                return 1
+            res_twine = subprocess.run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=ROOT, capture_output=True, text=True)
+            if res_twine.returncode != 0 or "FAILED" in res_twine.stdout:
+                print(f"[FAIL] Twine check failed:\n{res_twine.stdout}\n{res_twine.stderr}")
+                return 1
+            print("  [SUCCESS] Distribution package builds cleanly and passes twine check.")
+        except ImportError:
+            print("  [i] 'build' or 'twine' not installed; skipping local packaging verification.")
+        finally:
+            for d in ["dist", "build", "android_agent_harness.egg-info"]:
+                shutil.rmtree(ROOT / d, ignore_errors=True)
     else:
         print("\n[3/5] Skipping tests (--skip-tests).")
 
@@ -245,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     print("\n[5/5] Committing, tagging, and publishing release...")
     stage_paths = [
         ".gitignore",
+        ".github/",
         "agents/",
         "AGENTS.md",
         "pyproject.toml",
