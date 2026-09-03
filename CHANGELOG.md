@@ -5,6 +5,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.8] - 2026-09-03
+
+### Zero-Assumption Interactive Interview, Native Backlog Support & Host Sandbox Security
+- **Zero-Assumption & Missing-Scenario Interview Invariant (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**:
+  - Strictly prohibited AI agents from guessing, assuming, or inventing business logic, UI error texts, or missing scenarios from their own heads.
+  - Mandated that agents audit for unaddressed network states (offline, timeout), state invariants (empty country/ISO), caching TTL, and error handling after graph exploration.
+  - Required proactive developer interviews via `ask_question` with structured choices before authoring `implementation_plan.md`, ensuring plans are agreed upon and correct from the first attempt.
+- **Attached Media First-Turn Inspection Invariant (`harness-rules.md`, `AGENTS.md`, `new-feature.md`)**:
+  - Enforced that whenever the developer provides attached screenshots, images, or screen recordings, the Lead Agent MUST view and inspect the media via `view_file` in the very first turn before searching code or authoring plans.
+- **Native Zoho Sprints Backlog Resolution (`agents/mcp/zoho_sprints/_client.py`)**:
+  - Added native `get_backlog_id()` via `/?action=getbacklog` API query and unified backlog caching.
+  - Expanded `resolve_item()` to automatically search both active/future sprints and the project backlog, enabling sub-second resolution of backlog items (e.g. `I769`, `I770`) without ID mismatches.
+- **Host OS Traversal & Anti-Scraping Sandbox Guard (`pre_tool_safety.py`)**:
+  - Implemented fail-closed interception denying shell commands that attempt to scan host user home directories (`C:\Users\...`, `/home/...`, `~`, `%USERPROFILE%`).
+  - Added strict Fail-Fast Tracker Policy: maximum 1 attempt for issue lookup; hard deny on reverse-engineering, Google searches for internal APIs, or scratch scrapers.
+
 ## [0.27.7] - 2026-09-03
 
 ### Official PyPI Publication, Evergreen Installer Links & Pre-Release Packaging Integrity
@@ -207,7 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Integrated `run_streaming()` with `echo=True` and `flush=True`, eliminating the "Empty log" display in IDE background task outputs.
   - Added `_read_stdin_safe()` with thread-isolated non-blocking read and explicit `--cli` / `--hook` flags.
 
-## [0.23.0] - 2026-09-01
+### 0.23.0 - 2026-09-01
 
 ### Senior-QA Test-Case E2E Engine, Pre-E2E Interactive Confirmation & Shared ADB Core
 - **Pre-E2E Interactive Confirmation Gate (`E2E_CONFIRM`, `pre_invocation_reminder.py`, `harness-rules.md`, `deliver.md`, `e2e-qa.md`, `AGENTS.md`)**:

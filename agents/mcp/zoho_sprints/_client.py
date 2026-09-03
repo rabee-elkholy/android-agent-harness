@@ -203,6 +203,17 @@ class ZohoSprintsAPI:
             params={"action": "data"},
         )
 
+    def get_backlog_id(self) -> str:
+        try:
+            res = self._cached_request(
+                "backlog_id",
+                f"/team/{self.team_id}/projects/{self.project_id}/",
+                params={"action": "getbacklog"},
+            )
+            return str(res.get("backlogId") or "").strip()
+        except Exception:
+            return ""
+
     def list_items(self, sprint_id: str) -> dict:
         return self._request(
             f"/team/{self.team_id}/projects/{self.project_id}/sprints/{sprint_id}/item/",
@@ -213,7 +224,10 @@ class ZohoSprintsAPI:
         raw_input = str(item_input).strip()
         match = re.search(r"(\d+)", raw_input)
         target_num = match.group(1) if match else raw_input
-        sprint_ids = self.get_sprints().get("sprintIds") or []
+        sprint_ids = list(self.get_sprints().get("sprintIds") or [])
+        bid = self.get_backlog_id()
+        if bid and bid not in sprint_ids:
+            sprint_ids.append(bid)
         if len(raw_input) >= 15 and raw_input.isdigit():
             if sprint_id:
                 return sprint_id, raw_input

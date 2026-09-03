@@ -107,7 +107,8 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "4. On-demand specialists: qa-diagnostics-agent, android-ui-expert-agent. "
         f"5. Build & Device: preflight_check.py (must pass with 0 errors) -> `{bits['assemble_task']}` -> `run_device.py install-start`. {device_line} {git_line} {install_line} {device_verif_line} "
         "6. AUTONOMOUS PHASE PIPELINE: Multi-phase tasks stop after device test + ask_question for developer commit before next phase. "
-        "7. Project Trackers: Mutate only on 'update zoho' (zero emojis/jargon in QA comments)."
+        "7. Project Trackers: Mutate only on 'update zoho' (zero emojis/jargon in QA comments). "
+        "8. INTERACTIVE DISCOVERY & ATTACHED MEDIA: Inspect attached screenshots/media via view_file in Turn 1. If any edge cases, offline states, empty country/ISO, or missing scenarios are underspecified, PROACTIVELY INTERVIEW the developer via ask_question before authoring implementation_plan.md. Never invent business logic or fallbacks. ZERO-SCRAPING: never search host PC or scrape web for failed tracker tickets; fallback to prompt immediately."
     )
 
 

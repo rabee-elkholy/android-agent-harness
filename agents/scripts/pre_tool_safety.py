@@ -915,6 +915,20 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
         deny("Denied: android run/install needs --device=<physical-serial>.")
         return
 
+    # Guard against host directory traversal & external scraping
+    # Prohibit commands that scan the developer's home/user directories
+    host_scan_pat = re.compile(
+        r'(?:get-childitem|gci|dir|find|findstr|grep|ls|locate)\b.*?'
+        r'(?:[c-z]:[/\\]users|/home/|~[/\\]|\$home|\$env:userprofile|%userprofile%)',
+        re.IGNORECASE,
+    )
+    if host_scan_pat.search(lower):
+        deny(
+            "Denied: scanning host user directories outside the repository is strictly prohibited. "
+            "Confine all file discovery and shell commands to the active workspace repository."
+        )
+        return
+
     if "adb" not in lower and "emulator" not in lower and "avdmanager" not in lower:
         allow()
         return

@@ -252,6 +252,8 @@ cases = [
     ("sched_review_word_only", sched("Remind me to do the code review later today"), "allow"),
     ("android_run_bare", cmd("android run"), "deny"),
     ("android_run_device", cmd("android run --device DEV"), "allow"),
+    ("host_scan_deny", cmd('Get-ChildItem -Path "C:\\Users\\rabee\\" -Filter "*zoho*" -Recurse'), "deny"),
+    ("host_home_deny", cmd("dir C:/Users/someone/secrets"), "deny"),
     ("adb_install_bare", cmd("adb install -r app.apk"), "deny"),
     ("adb_install_s", cmd("adb -s DEV install -r -d app.apk"), "allow"),
     (
@@ -1558,7 +1560,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.27.7"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.27.8"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

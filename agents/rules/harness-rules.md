@@ -35,7 +35,23 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
 - **`ask_question` is strictly reserved for**:
   1. **Design / architectural tradeoffs** when requirements are ambiguous. `(Recommended)` is allowed here.
   2. **One manual device-verification phase at a time**:
-     - `Phase passed` / `Phase failed` / `Retest / I need help`
+- **Interactive Requirements & Missing-Scenario Interview Invariant ("The Zero-Assumption Barrier")**:
+  - The Lead Agent **MUST NEVER guess, invent, or assume business logic, UI error texts, or missing scenarios from its own head**.
+  - After graph-first exploration of the relevant code slice and BEFORE authoring `implementation_plan.md`:
+    The Lead Agent MUST systematically audit for underspecified edge cases:
+    * **Network & Offline States**: What should display when offline? How does retry work? How are raw exceptions mapped to user-facing Arabic/English messages?
+    * **State & Data Invariants**: What happens if mandatory identifiers (e.g. country/ISO, user token) are empty or null? (e.g. suppress API calls vs prompt user).
+    * **Caching & Invalidation**: What is the exact cache TTL? Which screens use cached data vs mandatory live network?
+    * **Edge Cases & Empty States**: Empty lists, partial failures, session expiry (401/403), and lifecycle configuration changes.
+  - If ANY required behavior or edge case is ambiguous, unmentioned, or missing from the developer's prompt, the Lead Agent **MUST PROACTIVELY INTERVIEW the developer via `ask_question`** (or structured interview dialog) with concrete options before authoring the plan. Build the plan right the first time.
+- **Attached Media & Screenshot First-Turn Invariant**:
+  - Whenever the developer provides an attached screenshot, image, or video (`.user_uploaded/` or image path in request metadata):
+  - The Lead Agent **MUST view and analyze the media via `view_file` in the VERY FIRST TURN** before reading code or proposing changes. Never ignore user-provided visual evidence.
+- **Fail-Fast Tracker & Auxiliary Tool Invariant**:
+  - Project management and issue tracker tools (Zoho Sprints, Jira, GitHub Issues) are advisory conveniences.
+  - When fetching issue details fails after at most 1 fallback (e.g. backlog lookup):
+    The Lead Agent **MUST FAIL FAST in 0 seconds**.
+    **STRICTLY FORBIDDEN**: The agent must NEVER search the developer's host PC or home directories (`C:\Users\...`, `/home/...`), never search Google for vendor APIs, never scrape external documentation, and never author custom scratch reverse-engineering scripts. Fallback 100% to the developer's prompt description and ask clarifying questions directly in chat if needed.
 - **Quality over tokens**: Uncompromising code quality always wins. Never skip, serialize, or drop the 5 review leaves to save tokens.
 - **Bugs**: Trace data to the producer. No empty `try-catch`, no swallowing `CancellationException`, no dummy business fallbacks (`null` / `0` as fake success). Framework recovery (for example DataStore `emit(emptyPreferences())` on a corrupt file) is not a dummy business fallback.
 - **Colors**: Use this app's theme tokens (or `MaterialTheme`). Prefer `MaterialTheme.colorScheme` / `MaterialTheme.typography`. `colorResource(R.color…)` is allowed when matching existing XML colors. No raw hex and no hardcoded fonts.
