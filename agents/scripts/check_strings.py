@@ -350,7 +350,13 @@ def check_hardcoded_strings(files: list[Path], lines_map: dict[Path, set[int] | 
                 if SKIP_KT_LINE.search(code_line):
                     continue
                 clean_line = RESOURCE_CALL.sub('""', code_line)
-                if any(pat.search(clean_line) for pat in HARDCODED_KT):
+                is_hardcoded = any(pat.search(clean_line) for pat in HARDCODED_KT)
+                if not is_hardcoded and i > 1:
+                    prev_stripped = _cut_line_comment(content.splitlines()[i - 2]).strip()
+                    if re.search(r'\b(?:Text|Button|TextButton|OutlinedButton|ElevatedButton)\s*\(\s*$', prev_stripped):
+                        if re.search(r'^\s*(?:text\s*=\s*)?"[^"]{2,}"', clean_line):
+                            is_hardcoded = True
+                if is_hardcoded:
                     findings.append(f"{rel}:{i} -> Hardcoded Kotlin UI text: {stripped[:120]}")
             elif path.suffix == ".xml":
                 for match in HARDCODED_XML_TEXT.finditer(line):

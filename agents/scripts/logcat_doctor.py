@@ -47,15 +47,16 @@ def filter_forensics(raw_logs: str) -> dict:
         r"Fatal signal\s+\d+",
         r"DEBUG\s*:\s*\*\*\*",
     ]
-    sensor_patterns = [
-        r"SensorManager",
-        r"StepCounter",
-        r"ActivityRecognition",
-        r"Pedometer",
+    warning_patterns = [
+        r"Choreographer.*Skipped \d+ frames",
+        r"OutOfMemoryError",
+        r"SQLiteException",
+        r"NetworkOnMainThreadException",
+        r"StrictMode",
     ]
 
     fatal_blocks = []
-    sensor_logs = []
+    warning_logs = []
     app_logs = []
 
     lines = raw_logs.splitlines()
@@ -76,8 +77,8 @@ def filter_forensics(raw_logs: str) -> dict:
                 current_fatal = []
                 in_fatal = False
 
-        if any(re.search(p, line, re.IGNORECASE) for p in sensor_patterns):
-            sensor_logs.append(line)
+        if any(re.search(p, line, re.IGNORECASE) for p in warning_patterns):
+            warning_logs.append(line)
 
         if APPLICATION_ID in line:
             app_logs.append(line)
@@ -87,7 +88,7 @@ def filter_forensics(raw_logs: str) -> dict:
 
     return {
         "fatals": fatal_blocks,
-        "sensor_logs": sensor_logs[-20:],
+        "warning_logs": warning_logs[-20:],
         "app_logs_count": len(app_logs),
     }
 
@@ -132,9 +133,9 @@ def main() -> int:
     else:
         print("\n[OK] No Fatal Exceptions detected in recent logs.")
 
-    if forensics["sensor_logs"]:
-        print(f"\n[*] Recent Sensor & Pedometer Events ({len(forensics['sensor_logs'])}):")
-        for item in forensics["sensor_logs"]:
+    if forensics["warning_logs"]:
+        print(f"\n[*] Recent ANR & StrictMode Diagnostics ({len(forensics['warning_logs'])}):")
+        for item in forensics["warning_logs"]:
             print(f"   {item}")
 
     print(f"\n[*] Total {PRODUCT_NAME} app log entries: {forensics['app_logs_count']}")

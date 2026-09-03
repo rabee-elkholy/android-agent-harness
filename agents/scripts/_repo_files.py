@@ -91,7 +91,12 @@ def first_adb_serial(*, allow_emulator: bool = True) -> str | None:
         if len(parts) < 2 or parts[1] != "device":
             continue
         serial = parts[0]
-        if serial.startswith("emulator-"):
+        is_emu = (
+            serial.startswith("emulator-")
+            or serial.startswith("localhost:")
+            or serial.startswith("127.0.0.1:")
+        )
+        if is_emu:
             if allow_emulator and physical is None:
                 physical = serial
             continue
@@ -213,7 +218,10 @@ def ensure_local_git_privacy(target_repo: Path | None = None, *, clean_strays: b
             pass
 
     # 3. Clean .gitignore: prune any harness rules from shared .gitignore so it remains clean
-    is_raw_kit = (repo / "agents" / "VERSION").is_file() and not (repo / ".agents").is_dir()
+    is_raw_kit = (
+        ((repo / "harness_cli.py").is_file() and (repo / "scripts_dev" / "release_version.py").is_file())
+        or ((repo / "agents" / "VERSION").is_file() and not (repo / ".agents").is_dir())
+    )
     gi = repo / ".gitignore"
     if not is_raw_kit and (repo / ".git").is_dir() and gi.is_file():
         try:
@@ -268,15 +276,16 @@ def ensure_local_git_privacy(target_repo: Path | None = None, *, clean_strays: b
                 except OSError:
                     pass
 
-    # 5. Assume unchanged for tracked adapter candidates
-    for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
-        if (repo / tracked_cand).is_file():
-            subprocess.run(
-                ["git", "update-index", "--assume-unchanged", tracked_cand],
-                cwd=str(repo),
-                capture_output=True,
-                text=True,
-            )
+    # 5. Assume unchanged for tracked adapter candidates in client apps only
+    if not is_raw_kit:
+        for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
+            if (repo / tracked_cand).is_file():
+                subprocess.run(
+                    ["git", "update-index", "--assume-unchanged", tracked_cand],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                )
 
     return logs
 

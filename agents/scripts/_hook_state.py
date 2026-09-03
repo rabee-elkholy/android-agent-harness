@@ -388,7 +388,7 @@ def _current_head_sha() -> str:
             check=False,
         )
         out = (proc.stdout or "").strip()
-        return out if re.fullmatch(r"[0-9a-f]{40}", out) else ""
+        return out if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", out) else ""
     except Exception:
         return ""
 
@@ -526,8 +526,16 @@ def package_contains_tests(pkg_identifier: str) -> bool:
                     return line.strip() == "CONTAINS_TESTS=true"
             for line in text.splitlines():
                 if line.startswith("diff --git") or line.startswith("## NEW FILE"):
-                    pl = line.lower()
-                    if "/test/" in pl or "/androidtest/" in pl or "/sharedtest/" in pl or pl.endswith("test.kt") or pl.endswith("test.java"):
+                    pl = line.replace("\\", "/").lower()
+                    if (
+                        "/test/" in pl
+                        or "/androidtest/" in pl
+                        or "/sharedtest/" in pl
+                        or pl.endswith("test.kt")
+                        or pl.endswith("tests.kt")
+                        or pl.endswith("test.java")
+                        or pl.endswith("tests.java")
+                    ):
                         return True
     except Exception:
         pass

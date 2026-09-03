@@ -117,12 +117,12 @@ def write_audit(decision: str, reason: str) -> None:
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         if path.stat().st_size > 0:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                lines = handle.readlines()
-            if len(lines) > AUDIT_MAX_RECORDS:
-                from _hook_state import state_lock
+            from _hook_state import state_lock
 
-                with state_lock():
+            with state_lock():
+                with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                    lines = handle.readlines()
+                if len(lines) > AUDIT_MAX_RECORDS:
                     kept = lines[-AUDIT_MAX_RECORDS:]
                     temp_file = tempfile.NamedTemporaryFile(
                         mode="w",
@@ -886,6 +886,7 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
                         os.environ.get("_IN_HOOK_SELFTEST") != "1"
                         and (
                             os.environ.get("HARNESS_KIT_DEV_GIT") == "1"
+                            or ((REPO / "harness_cli.py").is_file() and (REPO / "scripts_dev" / "release_version.py").is_file())
                             or ((REPO / "agents" / "VERSION").is_file() and not (REPO / ".agents").is_dir())
                         )
                     )
@@ -1043,11 +1044,12 @@ def main() -> None:
             return
         if name in ("write_to_file", "replace_file_content"):
             target = str(args.get("TargetFile") or args.get("targetFile") or "").replace("\\", "/")
+            norm_target = "/" + target.lstrip("/")
             if (
-                "/.agents/scripts/" in target
-                or target.startswith(".agents/scripts/")
-                or "/.agents/state/" in target
-                or target.startswith(".agents/state/")
+                "/.agents/scripts/" in norm_target
+                or "/agents/scripts/" in norm_target
+                or "/.agents/state/" in norm_target
+                or "/agents/state/" in norm_target
             ):
                 deny(
                     "Denied: .agents/scripts/ and .agents/state/ files are protected harness infrastructure. "

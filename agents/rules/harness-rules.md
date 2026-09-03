@@ -232,18 +232,6 @@ Skip the **5 review leaves** only when the working tree is strictly:
 
 This skip is not a token optimization. Code changes never skip reviews.
 
-### Stage 0.5: Pre-Review Test Quality Gate (Mandatory for test diffs)
-
-If the package diff contains any modified or newly created unit/UI test files (`*Test.kt` or `src/test/`):
-
-1. Dispatch `test-quality-reviewer-agent` in a dedicated pre-review invocation.
-2. The reviewer audits:
-   - **Assertion Depth**: $\ge 2$ meaningful assertions per `@Test` (no `assertTrue(true)` or empty checks).
-   - **Coroutines Concurrency**: Use of `StandardTestDispatcher` with `advanceUntilIdle()` or `Turbine` for Flow assertion.
-   - **Mock Isolation**: Pure Fakes or explicit `coEvery` definitions with `@After` teardown.
-   - **Zero Test Stubs**: No placeholder tests or empty stubs.
-3. Advance to Stage 1 only upon receiving `TEST_PASS`. If findings are returned, fix test assertions before triggering the 5-leaf gate.
-
 ### Stage 1: One tool call, parallel leaves (with Smart Test Promotion & Silent Wait)
 
 From repo root:
@@ -255,7 +243,7 @@ From repo root:
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. **Smart Test Promotion & Parallel Dispatch**:
    - **Non-test diff (pure production code)**: Dispatch **all 5** standard review leaves in **exactly one** `invoke_subagent` call with `Subagents: [...]`: `bug-reviewer-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, and `regression-impact-reviewer-agent`.
-   - **Test diff (touches `*Test.kt`, `src/test/`, `src/androidTest/`)**: **`test-quality-reviewer-agent` is automatically promoted to a mandatory 6th reviewer**. Dispatch **all 6** leaves together in **exactly one** `invoke_subagent` call.
+   - **Test diff (touches `*Test.kt`, `src/test/`, `src/androidTest/`)**: **`test-quality-reviewer-agent` is automatically promoted to a mandatory 6th reviewer**. Dispatch **all 6** leaves together in **exactly one** `invoke_subagent` call. The test reviewer audits assertion depth ($\ge 2$ meaningful assertions per `@Test`), Coroutines concurrency (`StandardTestDispatcher` with `advanceUntilIdle()` or Turbine), mock isolation, and zero test stubs.
    - Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
 3. **SILENT REVIEW WAIT (Zero Chat Noise)**:
    - When subagents are running in the background, the Lead Agent **MUST REMAIN COMPLETELY SILENT in chat** upon receiving intermediate notifications (e.g. do NOT output *"Waiting for 4 remaining..."* or *"Waiting for 3 remaining..."*).

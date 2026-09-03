@@ -128,7 +128,14 @@ def run_gradle(task_args: list[str]) -> int:
         record("ENV", EXIT_ENV, verdict.env_class, verdict.reason)
         emit_env_failure(verdict, "run_gradle_task.py")
         return EXIT_ENV
-    if os.name != "nt" and wrapper.name == "gradlew":
+    if wrapper.name == "gradlew":
+        if os.name == "nt" and not shutil.which("bash") and not shutil.which("sh"):
+            msg = "gradlew.bat is missing on Windows and neither bash nor sh was found in PATH to execute gradlew. Please restore gradlew.bat or install Git Bash."
+            live_print(f"[!] {msg}", err=True)
+            verdict = FailureVerdict(CLASS_ENV, msg)
+            record("ENV", EXIT_ENV, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_gradle_task.py")
+            return EXIT_ENV
         gradle_cmd = unix_wrapper_cmd(wrapper, gradle_args)
     else:
         gradle_cmd = [str(wrapper), *gradle_args]

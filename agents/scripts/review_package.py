@@ -44,7 +44,7 @@ def git(*args: str) -> str:
     return (proc.stdout or "") + (proc.stderr or "")
 
 
-_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 
 
 def git_head() -> str:
@@ -209,14 +209,34 @@ def main(argv=None) -> int:
 
     untracked = git("ls-files", "--others", "--exclude-standard", *(["--", *paths] if paths else []))
     extra = []
+    binary_extensions = {
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".ico",
+        ".apk", ".aab", ".jar", ".aar", ".so", ".dylib", ".dll",
+        ".zip", ".tar", ".gz", ".7z", ".keystore", ".jks",
+        ".mp3", ".mp4", ".wav", ".ogg", ".pdf", ".class",
+    }
+    max_untracked_bytes = 256 * 1024
+
     for line in untracked.splitlines():
         rel = line.strip()
         if not rel:
             continue
         file_path = REPO / rel
         extra.append(f"\n## NEW FILE {rel}\n")
+        suffix = Path(rel).suffix.lower()
+        if suffix in binary_extensions:
+            extra.append(f"[Binary file excluded: {rel}]\n")
+            continue
         try:
-            extra.append(file_path.read_text(encoding="utf-8", errors="replace"))
+            st = file_path.stat()
+            if st.st_size > max_untracked_bytes:
+                extra.append(f"[Large file excluded ({st.st_size / 1024:.1f} KB > 256 KB): {rel}]\n")
+                continue
+            content_bytes = file_path.read_bytes()
+            if b"\0" in content_bytes[:8192]:
+                extra.append(f"[Binary content excluded: {rel}]\n")
+                continue
+            extra.append(content_bytes.decode("utf-8", errors="replace"))
         except Exception as exc:
             extra.append(f"(could not read: {exc})\n")
     if extra:

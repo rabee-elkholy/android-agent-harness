@@ -80,6 +80,6 @@ def current_head_sha() -> str:
             check=False,
         )
         out = (proc.stdout or "").strip()
-        return out if re.fullmatch(r"[0-9a-f]{40}", out) else ""
+        return out if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", out) else ""
     except Exception:
         return ""

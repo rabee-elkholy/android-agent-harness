@@ -45,10 +45,10 @@ CLASS_ENTRY_PATTERN = re.compile(
     r"^(?:(?:public|internal|open)\s+)?class\s+\w+[^{]*:\s*(?:BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity|ComponentActivity|FragmentActivity|DialogFragment|BottomSheetDialogFragment)\b"
 )
 PREVIEW_AR = re.compile(
-    r"@Preview\b[\s\S]{0,500}?(?:locale\s*=\s*\"ar\"|LayoutDirection\.Rtl|ArabicPreview|\bArPreview\b|//\s*locale\s*=\s*\"ar\")"
+    r"(?:@Preview\b[\s\S]{0,500}?(?:locale\s*=\s*\"ar\"|LayoutDirection\.Rtl|ArabicPreview|\bArPreview\b|//\s*locale\s*=\s*\"ar\")|@(?:DualLocale|Arabic|Rtl|MultiLocale)Previews?\b)"
 )
 PREVIEW_EN = re.compile(
-    r"@Preview\b[\s\S]{0,500}?(?:locale\s*=\s*\"en\"|LayoutDirection\.Ltr|EnglishPreview|\bEnPreview\b|//\s*locale\s*=\s*\"en\")"
+    r"(?:@Preview\b[\s\S]{0,500}?(?:locale\s*=\s*\"en\"|LayoutDirection\.Ltr|EnglishPreview|\bEnPreview\b|//\s*locale\s*=\s*\"en\")|@(?:DualLocale|English|Ltr|MultiLocale|PreviewLightDark)Previews?\b)"
 )
 PREVIEW_SURFACE_SUFFIXES = (
     "Screen.kt",
@@ -315,13 +315,23 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                 })
 
         if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function_in_diff):
-            lookback_idx = idx - 2
-            annotations = []
-            while lookback_idx >= 0 and lines[lookback_idx].strip().startswith("@"):
-                annotations.append(lines[lookback_idx].strip())
-                lookback_idx -= 1
-            ann_block = " ".join(annotations)
-            if "@Immutable" not in ann_block and "@Stable" not in ann_block:
+            has_ann = "@Immutable" in trimmed or "@Stable" in trimmed
+            if not has_ann:
+                lookback_idx = idx - 2
+                annotations = []
+                while lookback_idx >= 0:
+                    prev_line = lines[lookback_idx].strip()
+                    if prev_line.startswith("@"):
+                        annotations.append(prev_line)
+                        lookback_idx -= 1
+                    elif not prev_line or prev_line.startswith("//") or prev_line.startswith("/*") or prev_line.startswith("*"):
+                        lookback_idx -= 1
+                    else:
+                        break
+                ann_block = " ".join(annotations)
+                has_ann = "@Immutable" in ann_block or "@Stable" in ann_block
+
+            if not has_ann:
                 issues.append({
                     "file": str(file_path),
                     "line": idx,

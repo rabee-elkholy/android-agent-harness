@@ -65,9 +65,6 @@ def fill(template: str, mapping: dict[str, str]) -> str:
 CONTRACT = """package __PACKAGE__
 
 import androidx.compose.runtime.Immutable
-import com.yourapp.core.common.bases.Action as CoreAction
-import com.yourapp.core.common.bases.Event as CoreEvent
-import com.yourapp.core.common.bases.State as CoreState
 
 class __PASCAL__Contract {
 
@@ -77,15 +74,15 @@ class __PASCAL__Contract {
         val isEmpty: Boolean = false,
         val errorMessage: String? = null,
         val isSuccess: Boolean = false
-    ) : CoreState
+    )
 
-    sealed interface Action : CoreAction {
+    sealed interface Action {
         data object OnRefresh : Action
         data class OnItemClicked(val id: String) : Action
         data object OnBackClicked : Action
     }
 
-    sealed interface Event : CoreEvent {
+    sealed interface Event {
         data object NavigateBack : Event
     }
 }
@@ -93,37 +90,47 @@ class __PASCAL__Contract {
 
 VIEWMODEL = """package __PACKAGE__
 
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.yourapp.core.common.bases.MVIViewModel
-import com.yourapp.core.common.utils.applicationExceptionHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class __PASCAL__ViewModel @Inject constructor(
-    // Inject UseCases returning ResultStates here before review.
-) : MVIViewModel<__PASCAL__Contract.State, __PASCAL__Contract.Event, __PASCAL__Contract.Action>() {
+    // Inject UseCases / Repositories here before review.
+) : ViewModel() {
 
-    override fun initialState(): __PASCAL__Contract.State = __PASCAL__Contract.State()
+    private val _state = MutableStateFlow(__PASCAL__Contract.State())
+    val state: StateFlow<__PASCAL__Contract.State> = _state.asStateFlow()
 
-    override fun onAction(action: __PASCAL__Contract.Action) {
+    private val _event = MutableSharedFlow<__PASCAL__Contract.Event>()
+    val event: SharedFlow<__PASCAL__Contract.Event> = _event.asSharedFlow()
+
+    fun onAction(action: __PASCAL__Contract.Action) {
         when (action) {
             is __PASCAL__Contract.Action.OnRefresh -> loadData()
             is __PASCAL__Contract.Action.OnItemClicked -> handleItemClick(action.id)
             is __PASCAL__Contract.Action.OnBackClicked -> {
-                viewModelScope.launch(applicationExceptionHandler) {
-                    sendEvent(__PASCAL__Contract.Event.NavigateBack)
+                viewModelScope.launch {
+                    _event.emit(__PASCAL__Contract.Event.NavigateBack)
                 }
             }
         }
     }
 
     private fun loadData() {
-        setState { copy(isLoading = true, errorMessage = null) }
-        viewModelScope.launch(applicationExceptionHandler) {
-            // Collect UseCase ResultStates.Success / Error / Loading. Do not swallow errors.
-            setState { copy(isLoading = false) }
+        _state.update { it.copy(isLoading = true, errorMessage = null) }
+        viewModelScope.launch {
+            // Load domain data and update state. Do not swallow errors.
+            _state.update { it.copy(isLoading = false) }
         }
     }
 
@@ -151,8 +158,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import __PACKAGE__.__PASCAL__Contract
-import com.yourapp.core.ui.themes.MyAppTheme
-import com.yourapp.app.R
 
 @Composable
 fun __PASCAL__Screen(
@@ -179,7 +184,7 @@ fun __PASCAL__Screen(
             }
             state.isEmpty -> {
                 Text(
-                    text = stringResource(id = R.string.__SNAKE___empty),
+                    text = "No items found",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.align(Alignment.Center)
@@ -192,7 +197,7 @@ fun __PASCAL__Screen(
                         .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp)
                 ) {
                     Text(
-                        text = stringResource(id = R.string.__SNAKE___title),
+                        text = "__PASCAL__",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onBackground
                     )
@@ -205,7 +210,7 @@ fun __PASCAL__Screen(
 @Preview(name = "Arabic RTL - Content", locale = "ar", showBackground = true)
 @Composable
 private fun __PASCAL__ScreenArabicPreview() {
-    MyAppTheme {
+    MaterialTheme {
         __PASCAL__Screen(
             state = __PASCAL__Contract.State(isLoading = false, isSuccess = true),
             onAction = {}
@@ -216,7 +221,7 @@ private fun __PASCAL__ScreenArabicPreview() {
 @Preview(name = "English LTR - Content", locale = "en", showBackground = true)
 @Composable
 private fun __PASCAL__ScreenEnglishPreview() {
-    MyAppTheme {
+    MaterialTheme {
         __PASCAL__Screen(
             state = __PASCAL__Contract.State(isLoading = false, isSuccess = true),
             onAction = {}
@@ -227,7 +232,7 @@ private fun __PASCAL__ScreenEnglishPreview() {
 @Preview(name = "Loading State", locale = "ar", showBackground = true)
 @Composable
 private fun __PASCAL__ScreenLoadingPreview() {
-    MyAppTheme {
+    MaterialTheme {
         __PASCAL__Screen(
             state = __PASCAL__Contract.State(isLoading = true),
             onAction = {}
@@ -238,7 +243,7 @@ private fun __PASCAL__ScreenLoadingPreview() {
 @Preview(name = "Empty State", locale = "ar", showBackground = true)
 @Composable
 private fun __PASCAL__ScreenEmptyPreview() {
-    MyAppTheme {
+    MaterialTheme {
         __PASCAL__Screen(
             state = __PASCAL__Contract.State(isLoading = false, isEmpty = true),
             onAction = {}
@@ -249,7 +254,7 @@ private fun __PASCAL__ScreenEmptyPreview() {
 @Preview(name = "Error State", locale = "ar", showBackground = true)
 @Composable
 private fun __PASCAL__ScreenErrorPreview() {
-    MyAppTheme {
+    MaterialTheme {
         __PASCAL__Screen(
             state = __PASCAL__Contract.State(isLoading = false, errorMessage = "preview"),
             onAction = {}
@@ -261,37 +266,42 @@ private fun __PASCAL__ScreenErrorPreview() {
 FRAGMENT = """package __PACKAGE__
 
 import android.os.Bundle
+import android.view.LayoutInflater
 import android.view.View
-import androidx.compose.runtime.Composable
+import android.view.ViewGroup
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.yourapp.core.common.bases.BaseComposeFragment
 import __PACKAGE__.ui.__PASCAL__Screen
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
-class __PASCAL__Fragment : BaseComposeFragment() {
+class __PASCAL__Fragment : Fragment() {
 
     private val viewModel: __PASCAL__ViewModel by viewModels()
 
-    override val uxcamScreenTag: String = "__PASCAL__"
-
-    override fun trackOpenScreen() {
-        // Screen open tracking
-    }
-
-    @Composable
-    override fun ComposeContent() {
-        val state by viewModel.state.collectAsStateWithLifecycle()
-        __PASCAL__Screen(
-            state = state,
-            onAction = viewModel::onAction
-        )
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                val state by viewModel.state.collectAsStateWithLifecycle()
+                __PASCAL__Screen(
+                    state = state,
+                    onAction = viewModel::onAction
+                )
+            }
+        }
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {

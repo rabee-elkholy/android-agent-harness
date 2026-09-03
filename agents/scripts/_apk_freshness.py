@@ -49,6 +49,7 @@ APP_SOURCE_EXTENSIONS = {
 EXCLUDED_DIR_PARTS = {
     ".git",
     ".agents",
+    "agents",
     "build",
     ".gradle",
     ".idea",
