@@ -78,7 +78,13 @@ def main() -> int:
                     rel = str(path)
                 failures.append(f"[LINT] {rel}:{iss['line']} {iss['type']} -> {iss['msg']}")
 
-    db_ok, db_msg = check_room_working_tree()
+    staged_rels: list[str] = []
+    for p in paths:
+        try:
+            staged_rels.append(p.relative_to(REPO).as_posix())
+        except ValueError:
+            staged_rels.append(str(p))
+    db_ok, db_msg = check_room_working_tree(staged_rels)
     live_print(f"[{'OK' if db_ok else 'FAIL'}] Room migration gate: {db_msg[:300]}")
     if not db_ok:
         failures.append(f"[ROOM] {db_msg}")

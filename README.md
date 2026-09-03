@@ -21,161 +21,95 @@
 
 ---
 
-## Quickstart: Get Started in 60 Seconds
+## Why the Harness? Prompts are Polite Requests. The Harness is an OS-Level Cage.
 
-### Path A: Via AI Chat (Recommended)
-Open a **new chat session** in your AI assistant (Antigravity, Claude Code, Cursor, Copilot, Windsurf) at your project root and paste:
+Prompts, `.cursorrules`, and `SKILL.md` files decay as conversation context expands. AI coding assistants eventually hallucinate success, break Room migrations, ignore RTL layouts, and push unreviewed code.
+
+The **Android Agent Harness** enforces deterministic, cryptographic, and OS-level execution barriers outside the model brain:
+
+| Android Failure Mode | Bare AI Assistant | Android Agent Harness |
+| :--- | :--- | :--- |
+| **Room Migrations** | Modifies `@Entity` without migration -> app crashes on user upgrade. | **Room Guard (`room_guard.py`)**: Hard-blocks un-migrated Kotlin & Java entities. |
+| **Localization & RTL** | Hardcodes strings, drops Arabic (`values-ar`), scrambles placeholders. | **Adaptive String Guard (`check_strings.py`)**: Sub-second diff-scoped parity check. |
+| **ANR & Main-Thread I/O** | Runs disk/network I/O on `Dispatchers.Main`; leaks sensor listeners. | **Perf & ANR Guardian**: Enforces 60/120 FPS fluidity and lifecycle unregistration. |
+| **Review Verification** | Model declares "LGTM!" and assumes its own fix works. | **Cryptographic Barrier**: Assembly (`:assembleDebug`) locked until 6 guardians emit SHA-256 tokens. |
+| **Rogue Git Commits** | Runs `git commit` or `git push --force` to hide compilation mistakes. | **OS Interceptor (`pre_tool_safety.py`)**: Hard-denies unauthorized Git and ADB mutations. |
+| **Legacy Codebases** | Linters output 4,000 legacy errors, stalling delivery. | **Zero Legacy Penalty**: Diff-scoped AST lint (`fast_kt_lint.py`) inspects modified lines in <1s. |
+
+---
+
+### The Cage in Action: Real-Time Interceptions
+
+```text
+[MODEL ATTEMPTS] > git push --force origin main
+[HARNESS CAGE]   [DENIED] Autonomous git push is strictly blocked. Human developer authority is absolute.
+
+[MODEL ATTEMPTS] > python agents/scripts/run_gradle_task.py :app:assembleDebug
+[HARNESS CAGE]   [LOCKED] Cryptographic Review Barrier active. Missing pass tokens: [BUG_PASS, PERF_PASS].
+
+[PREFLIGHT GATE] python agents/scripts/room_guard.py
+[HARNESS CAGE]   [FAIL] Room database AppDatabase.kt version was NOT incremented. Destructive fallback banned.
+```
+
+---
+
+## The 6 Parallel Quality Guardians
+
+Before `:app:assembleDebug` or device deployment, 6 specialized subagents review the immutable snapshot in parallel:
+
+1. **`bug-reviewer-agent`** (`BUG_PASS`): Logic bugs, Kotlin null-safety across Java boundaries, and coroutine cancellation leaks.
+2. **`convention-reviewer-agent`** (`CONVENTION_PASS`): Clean Architecture, MVI StateFlow immutability, zero inline FQCNs.
+3. **`security-reviewer-agent`** (`SECURITY_PASS`): OWASP Mobile Top 10, unexported components, and credential isolation.
+4. **`perf-anr-guardian-agent`** (`PERF_PASS`): ANR elimination, Main-thread I/O prevention, and Compose recomposition fluidity.
+5. **`regression-impact-reviewer-agent`** (`REGRESSION_PASS`): Blast radius analysis, caller graph impacts, and API signature changes.
+6. **`test-quality-reviewer-agent`** (`TEST_PASS`): **Smart Test Promotion** — automatically promoted on test/mock diffs to verify assertion depth and `runTest` dispatchers.
+
+*On-demand specialists:* `qa-diagnostics-agent` (Logcat crash forensics) & `android-ui-expert-agent` (Compose & RTL layouts).
+
+---
+
+## Physical Device Verification & Interactive Sign-off
+
+Software that compiles is not necessarily software that works on mobile. The harness:
+1. Resolves connected physical devices via ADB (prioritizing physical devices over emulators).
+2. Builds and installs via `run_device.py install-start`, launching the target Activity directly.
+3. Generates **2 to 3 diff-grounded manual test steps** and triggers an interactive confirmation modal (`ask_question`):
+   `PASS -- Device testing passed successfully` vs `FAIL -- Issue or crash encountered`.
+
+---
+
+## Quickstart in 60 Seconds
+
+### Option A: Via AI Chat Prompt (Recommended)
+Open a new chat session in your AI assistant (Antigravity, Claude Code, Cursor, Copilot, Windsurf) at your project root and paste:
 
 ```text
 Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.5/docs/install-or-update-prompt.md and follow all its instructions.
 ```
 
-The installer autonomously inspects your project topology (Gradle modules, DI, UI framework, Room, Locales), creates target adapters, and executes self-diagnostic checks.
-
-### Path B: Via Terminal CLI
+### Option B: Via Terminal CLI
 ```bash
-cd /path/to/your/android-project
 pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git
 android-harness init
 ```
 
 ---
 
-## The Daily Developer Loop: From Task to Verified Device Delivery
+## Supported AI Environments (14 Tools, 3 Tiers)
 
-<div align="center">
-  <img src="docs/assets/architecture-pipeline.svg" alt="Deterministic Android Engineering Execution Pipeline" width="100%" />
-</div>
-
-```text
-[1] INGESTION & IMPACT ANALYSIS
-    Reads ticket / prompt -> Analyzes multi-module dependencies & caller graph
-    |
-    v
-[2] IMPLEMENTATION PLAN & DEVELOPER ALIGNMENT
-    Drafts architectural plan (implementation_plan.md) with open questions
-    -> Developer reviews & approves before a single line of code changes
-    |
-    v
-[3] SHIFT-LEFT TDD (RED -> GREEN)
-    Writes failing unit test -> Applies surgical fix -> Empirically verifies pass
-    |
-    v
-[4] ANDROID PREFLIGHT TRIO (<5s Fast Checks)
-    Validates Room schema migrations, Bilingual string parity (values-ar), & Lint
-    |
-    v
-[5] SIX-GUARDIAN PARALLEL REVIEW GATE
-    6 specialized AI reviewers audit the diff simultaneously with cryptographic evidence:
-    (Bug, Security, Convention, Perf/ANR, Regression, Test Quality)
-    |
-    v
-[6] LIVE DEVICE INSTALL & INTERACTIVE MANUAL SIGN-OFF
-    Builds :app:assembleDebug -> Installs on device via run_device.py install-start
-    -> Emits 2-3 diff-grounded verification steps & collects developer sign-off via interactive modal
-    |
-    v
-[7] PM TRACKER SYNC & HUMAN GIT SIGN-OFF
-    Updates Zoho Sprints / Jira -> Drafts verified Conventional Commit
-    -> Leaves final commit & push to developer authority
-```
-
----
-
-## The Core Revelation: Prompts are Polite Requests. The Harness is an Engineering Cage.
-
-Every developer using AI coding assistants eventually discovers the same painful truth: **A prompt, `.cursorrules`, or `SKILL.md` file is just soft advice inside the model's brain. When context grows, the model ignores the advice, declares fake success, and breaks production.**
-
-The **Android Agent Harness** places **deterministic, cryptographic, and OS-level execution barriers outside the model**:
-
-| Dimension | Standard AI Coding Assistant<br>*(Soft In-Context Advice)* | Android Agent Harness<br>*(Deterministic OS & Cryptographic Gate)* |
-| :--- | :--- | :--- |
-| **Bug Reproduction** | Model guesses fixes without verifying; misses edge cases. | **Shift-Left TDD**: Requires writing failing unit tests first (`RED`), then confirming surgical fix (`GREEN`). |
-| **Code Review & Verification** | Model judges its own work ("LGTM!"). | **Cryptographic Barrier**: Assembly (`:assembleDebug`) is physically locked until 6 parallel subagents emit matching SHA-256 evidence. |
-| **Execution Safety** | Model can execute destructive shell commands (`git commit`, `push --force`, `pm clear`). | **OS Interceptor**: Python `PreToolUse` hook hard-denies destructive commands, bare ADB, and unauthorized mutations before reaching the shell. |
-| **Device & Runtime QA** | Blind to actual runtime; developer manually builds, deploys, and debugs crashes. | **Interactive Device Verification**: Builds APK, installs & launches target screen via ADB, guides developer with 2-3 diff-grounded test steps, and triages Logcat. |
-| **Attention & Reliability** | Attention fades as conversation expands (token decay / lost in the middle). | **Zero Token Decay**: Fixed external Python engine enforces rules identically on turn 1 or turn 1,000. |
-| **Git Governance** | Model pollutes git history or pushes unreviewed code to remote. | **Strict Human Git Authority**: Zero autonomous commits/pushes; emits verified, clean Conventional Commits for developer sign-off. |
-| **Environment Health** | Blind to Android SDK paths, ADB serials, and system health. | **12-Dimension Doctor**: Audits 30 diagnostic checks with live process streaming heartbeats during Gradle operations. |
-
----
-
-## Universal Android Engineering: Built for ALL Stacks & Architectures
-
-The harness seamlessly adapts to any Android project topology from day one:
-
-* **Architectural Paradigms**: Clean Architecture, MVI (Unidirectional Data Flow), MVVM (StateFlow/SharedFlow), MVP, Multi-Module Layers.
-* **Modern & Legacy UI**: Jetpack Compose, XML Views, ViewBinding, DataBinding, Material 3/2 Theming, Dual-Locale RTL (English/Arabic).
-* **Persistence & State**: Room Database (automated migration verification), SQLite, DataStore Preferences/Proto, EncryptedSharedPreferences.
-* **Concurrency & Async**: Kotlin Coroutines (`runTest`, `StateFlow.update { }`, Main-thread I/O elimination), Flow, RxJava, Java Interop.
-* **Dependency Injection & Networking**: Dagger Hilt, Koin, Ktor, Retrofit, OkHttp.
-* **Kotlin Multiplatform (KMP)**: Shared domain/data business logic, Compose Multiplatform UI, platform actuals.
-
----
-
-## The 5 Quality Guardians & Specialized Multi-Agent Squad
-
-Before any APK assembly or device execution, the Lead Agent coordinates with a specialized squad of AI specialists:
-
-### The 5 Parallel Quality Guardians (Mandatory Gate)
-1. **`bug-reviewer-agent`** (`BUG_PASS`): Catches race conditions, Kotlin null-safety violations across Java/Kotlin boundaries, coroutine cancellation leaks, and missing exception handling.
-2. **`convention-reviewer-agent`** (`CONVENTION_PASS`): Enforces Clean Architecture layer boundaries, MVI Single-source StateFlow, zero inline FQCNs, and Compose accessibility standards (48dp touch targets, contentDescription).
-3. **`security-reviewer-agent`** (`SECURITY_PASS`): Enforces OWASP Mobile Top 10, secures exported components/intents, eliminates Logcat secret leaks, and verifies least-privilege permissions.
-4. **`perf-anr-guardian-agent`** (`PERF_PASS`): Eliminates Application Not Responding (ANR) risks, bars Main-thread disk/network I/O, prevents Compose recomposition jank, and stops `DisposableEffect` sensor/listener memory leaks.
-5. **`regression-impact-reviewer-agent`** (`REGRESSION_PASS`): Analyzes blast radius, caller graph impacts, breaking API signatures, and shared module side effects.
-
-`test-quality-reviewer-agent` (`TEST_PASS`) is a **Stage 0.5 pre-gate** for test diffs: it audits unit and UI test suites (`*Test.kt`) before the 5-leaf round, requiring deep state assertions, mocking integrity, and mandatory `runTest` Coroutines dispatchers.
-
-### The 2 Dedicated On-Demand Specialists
-1. **`qa-diagnostics-agent`**: Deep Logcat forensics, crash stack trace demangling, and ANR thread dump triage on connected physical devices.
-2. **`android-ui-expert-agent`**: Jetpack Compose and XML layout guidance, RTL/Arabic typography, accessibility modifiers, and multi-screen responsiveness.
-
-Every review round produces a machine-readable verdict record at `.agents/state/verdicts/verdict-<pkg12>.json`. Validate any verdict record using `android-harness verify`.
-
----
-
-## Multi-IDE AI Tool Support (14 Tools, 3 Tiers)
-
-The harness provides 3 tiers of enforcement across 14 AI coding environments:
-
-| Enforcement Tier | Protection Mechanisms | Supported AI Tools |
-| :--- | :--- | :--- |
-| **Hook-Enforced** | Deterministic Python pre-tool interceptors, native IDE hook bridges, universal pre-commit gate. | Antigravity, Claude Code, GitHub Copilot (with repository hooks). |
-| **Rule-Driven** | Managed IDE configuration rules (`.cursor/rules/`, `.windsurf/`, `.roo/`), slash command packs. | Cursor, Windsurf, Cline, Roo Code, Amazon Q, Continue, Junie, Kilo, Goose, Qwen, Codex. |
-| **Prompt-Only** | Standardized `AGENTS.md` repository manifest. | Aider, Zed, Devin, Amp, Factory, Jules, Warp, OpenCode. |
-
----
-
-## One-Click Prompt Library
-
-Pinned lifecycle prompts with cryptographic tamper-evident headers:
-
-| Operation | Prompt URL | Purpose |
-| :--- | :--- | :--- |
-| **Install & Update** | [`docs/install-or-update-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.5/docs/install-or-update-prompt.md) | Guided installation, module discovery, adapter generation, and version upgrades. |
-| **Doctor** | [`docs/diagnostic-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.5/docs/diagnostic-prompt.md) | 12-dimension comprehensive system health diagnostics. |
-| **Rollback** | [`docs/rollback-prompt.md`](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.5/docs/rollback-prompt.md) | Instant restoration from timestamped backups. |
+* **Hook-Enforced**: Google Antigravity, Claude Code, GitHub Copilot (deterministic Python OS-level interceptors).
+* **Rule-Driven**: Cursor, Windsurf, Cline, Roo Code, Amazon Q, Continue, Junie, Kilo, Goose, Qwen, Codex.
+* **Prompt-Only**: Aider, Zed, Devin, Amp, Factory, Jules, Warp, OpenCode (`AGENTS.md` standard).
 
 ---
 
 ## Documentation & Deep-Dives
 
 * **[Architecture Guide](docs/architecture.md)**: 7-stage delivery lifecycle, safety interceptor mechanics, and preflight pipeline.
-* **[Developer Workflows & Playbooks](docs/workflows.md)**: 10 structured engineering workflows (TDD, forensic triage, ANR audit, preflight, PM sync).
-* **[Quickstart & CLI Reference](docs/quickstart.md)**: Complete CLI command matrix and environment setup.
-* **[Tool Support Matrix](docs/tool-support.md)**: Adapter templates, slash command packs, and configuration changing.
-* **[Threat Model & Security](docs/threat-model.md)**: Detailed analysis of 7 threat vectors and mitigation layers.
+* **[Developer Workflows](docs/workflows.md)**: 10 structured engineering playbooks (TDD, forensic triage, ANR audit, preflight).
+* **[Quickstart & CLI](docs/quickstart.md)**: Complete CLI command matrix and environment setup.
+* **[Threat Model & Security](docs/threat-model.md)**: Analysis of 7 threat vectors and mitigation layers.
 * **[Architecture Decision Records (ADRs)](docs/adr/)**: Formal ADRs (001-006) covering review gates, human git authority, and conflict adjudication.
-* **[Contributor Recipes](docs/recipes/)**: Step-by-step guides for adding reviewers, policy rules, and tool adapters.
-* **[Project Tracker Governance](docs/workflows/pm-integrations.md)**: Zoho Sprints, Jira, Linear, and GitHub Projects integrations.
-
----
-
-## Contributing & Community
-
-* **Report Bugs**: [GitHub Issue Tracker](https://github.com/rabee-elkholy/android-agent-harness/issues)
-* **Contributions**: Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-* **Security Advisories**: See [SECURITY.md](SECURITY.md)
 
 ---
 

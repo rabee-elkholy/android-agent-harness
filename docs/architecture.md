@@ -69,12 +69,13 @@ flowchart TD
     PreTest -- Test Compile Fail --> Code
     PreTest -- Tests Pass --> ReviewGate["5. Parallel Review Gate (Single Invoke)"]
     
-    subgraph ReviewGate ["Parallel Quality Guardians"]
-        R1["Bug Reviewer"]
-        R2["Architecture & Convention"]
-        R3["Security Reviewer"]
-        R4["Perf & ANR Guardian"]
-        R5["Regression Blast Radius"]
+    subgraph ReviewGate ["Parallel Quality Guardians (5 or 6 Leaves)"]
+        R1["1. Bug & Logic Reviewer"]
+        R2["2. Architecture & Convention"]
+        R3["3. Security & OWASP Reviewer"]
+        R4["4. Perf & ANR Guardian"]
+        R5["5. Regression Blast Radius"]
+        R6["6. Test Quality Reviewer (Smart Test Promotion)"]
     end
 
     ReviewGate --> Verdict{"All Leaves PASS?"}
@@ -107,8 +108,8 @@ The Harness enforces proactive quality standards before any code is written, ens
 
 ---
 
-### 2. The Five-Leaf Review Gate
-Before any Gradle build or device installation can proceed, the AI assistant must dispatch **5 specialized reviewer subagents** in parallel (exactly one `invoke_subagent`). Every subagent inspects the exact package diff and outputs a structured pass token plus a mandatory evidence footer (`EVIDENCE pkg=<sha256_12> cites=<n>` matching the dispatched package hash — forged or missing footers keep the barrier up):
+### 2. The Six-Guardian Parallel Review Gate & Smart Test Promotion
+Before any Gradle build or device installation can proceed, the AI assistant must dispatch the specialized reviewer subagents in parallel (in exactly one `invoke_subagent` call). Every subagent inspects the exact package diff and outputs a structured pass token plus a mandatory evidence footer (`EVIDENCE pkg=<sha256_12> cites=<n>` matching the dispatched package hash — forged, missing, or mismatched footers keep the barrier locked):
 
 ```
 [BUG_PASS]         -- Verified by Bug & Network Resiliency Reviewer
@@ -116,7 +117,10 @@ Before any Gradle build or device installation can proceed, the AI assistant mus
 [SECURITY_PASS]    -- Verified by Security & Privacy Reviewer
 [PERF_PASS]        -- Verified by Performance, Battery & ANR Guardian
 [REGRESSION_PASS]  -- Verified by Regression Blast Radius Reviewer
+[TEST_PASS]        -- Verified by Test Quality Reviewer (Mandatory 6th Leaf on test/mock diffs)
 ```
+
+**Smart Test Promotion**: Whenever the review package diff touches test files (`*Test.kt`, `*Spec.kt`, UI test flows, or test fixtures/mocks), `test-quality-reviewer-agent` is automatically promoted to the mandatory 6th guardian in the round. If test files are touched and `TEST_PASS` is missing, `:app:assembleDebug` is hard-denied by the safety hook.
 
 1. **Bug & Network Resiliency Reviewer (`bug-reviewer-agent`)**
    - **Focus**: Logical correctness, null safety, lifecycle, and network error recovery.

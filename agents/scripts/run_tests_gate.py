@@ -107,7 +107,7 @@ def main(argv=None) -> int:
     if new_regressions:
         live_print(f"[FAIL] NEW_REGRESSION: {len(new_regressions)} test(s) failed that are absent from the baseline:", err=True)
         for item in new_regressions[:30]:
-            live_print(f"  - {item['test_name']}  ({item.get('message')[:120]})", err=True)
+            live_print(f"  - {item['test_name']}  ({str(item.get('message') or '')[:120]})", err=True)
         if len(new_regressions) > 30:
             live_print(f"  ... and {len(new_regressions) - 30} more", err=True)
         write_gate_result("unit_tests", {
