@@ -28,11 +28,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 URL_FILES = (
-    "README.md",
     "docs/install-or-update-prompt.md",
     "docs/diagnostic-prompt.md",
     "docs/rollback-prompt.md",
-    "docs/quickstart.md",
     "docs/setup-prompt.md",
     "docs/tool-support.md",
 )

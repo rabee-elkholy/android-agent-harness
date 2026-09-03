@@ -29,13 +29,15 @@ Copy the entire content of [`docs/install-or-update-prompt.md`](install-or-updat
 
 ```markdown
 Run the Android Agent Harness Installer or Updater:
-https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.6/docs/install-or-update-prompt.md
+https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/install-or-update-prompt.md
 ```
 
 ### Option B: Standalone CLI (Terminal)
 
 ```bash
-pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git
+pip install android-agent-harness
+# or via pipx for an isolated global command:
+pipx install android-agent-harness
 android-harness init
 ```
 
