@@ -13,6 +13,7 @@ Exit code is always 0; the JSON decision carries the verdict.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -55,7 +56,16 @@ def main() -> int:
         emit("allow", "Not a shell command; nothing for the harness gate to inspect.")
         return 0
 
-    inner = {"toolCall": {"name": "run_command", "args": {"CommandLine": command}}}
+    session_id = str(
+        payload_in.get("session_id")
+        or payload_in.get("sessionId")
+        or os.environ.get("CLAUDE_SESSION_ID")
+        or "claude-session"
+    )
+    inner = {
+        "conversationId": session_id,
+        "toolCall": {"name": "run_command", "args": {"CommandLine": command}},
+    }
     try:
         proc = subprocess.run(
             [sys.executable, str(ENGINE)],

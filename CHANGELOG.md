@@ -5,6 +5,28 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.12] - 2026-09-05
+
+### Environment-Adaptive Architecture, Self-Healing Commands & Zero-Bloat Preference Codification
+- **Runtime Environment & Surface Sensor (`_environment.py`, `_environment_selftest.py`)**:
+  - Automatically identifies runtime assistant environment (Google Antigravity, Claude Code, Cursor, OpenAI Codex, GitHub Copilot) and surface type (Desktop 2.0, IDE, CLI).
+  - Supplies capability flags (`supports_stop_hook`, `supports_overwrite`, `supports_generative_ui`, `supports_interactive_modals`) across the harness pipeline with 15 dedicated selftest validations.
+- **Self-Healing Gradle Command Execution (`pre_tool_safety.py`)**:
+  - Automatically rewrites raw Gradle invocations (`./gradlew ...`, `gradlew.bat ...`) to `python agents/scripts/run_gradle_task.py ...` via Antigravity `PreToolUse` hook argument `overwrite`.
+  - Enforces instructional fail-closed denials for raw gradlew commands across non-Antigravity CLI assistants (Codex, Claude Code).
+- **Delivery Stop Lifecycle Hook & Diff-Aware Loop Breaker (`pre_tool_safety.py`, `hooks.json`)**:
+  - Intercepts Antigravity `Stop` events (`delivery-stop-guard`) to prevent premature session termination when unreviewed code modifications exist in the working tree.
+  - Implements an automated Loop Breaker yielding after 2 consecutive identical diff blocks to eliminate token drain loops, and safely unblocks on `env_failure.json` (exit 30 protocol) or `APPROVED` final verdict.
+- **Cross-Platform Review Recording Bridge (`record_review.py`)**:
+  - Provides a universal CLI bridge to record 5-leaf review verdicts (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`) directly on checkouts lacking native Antigravity transcript logs.
+- **Generative UI Review Widgets with Markdown Fallback (`render_ui.py`)**:
+  - Generates Tailwind CSS `<agent-embed>` review cards and architecture visualizations in Antigravity GUI surfaces.
+  - Generates clean, CP1252-safe ASCII Markdown tables in CLI and non-Antigravity environments.
+- **Interactive Preference Codification & Ref-Sync Protocol (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
+  - Codifies project preferences directly into `.agents/skills/android-harness/references/` with progressive disclosure (zero token bloat and zero global memory pollution).
+  - Leverages `/grill-me` with structured `ask_question` modals in Antigravity, and standard numbered discovery interviews in portable CLI assistants.
+  - Completely eliminates unconstrained global learning tools from proactive recommendations.
+
 ## [0.27.11] - 2026-09-05
 
 ### Antigravity Rules Token Optimization, Progressive Disclosure & Clean Adapter Merge
@@ -183,7 +205,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added Maestro CLI version check in preflight gate, issuing clean `[ENV-FAILURE]` (exit code 30) with installation guidance if missing.
   - Added `_maestro_selftest.py` unit test suite covering validation, scaffolding, JUnit parsing, and installation.
 
-## [0.26.0] - 2026-09-02
+### 0.26.0 - 2026-09-02
 
 ### Universal Hub Defense, Comment & Keyword Filtering, and Zero-Noise Graph Slices
 - **Universal Hub Defense & Star-Topology Blast-Radius Protection (`_graph_core.py`, `project_graph.py`)**:

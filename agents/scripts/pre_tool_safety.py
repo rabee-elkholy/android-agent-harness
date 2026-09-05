@@ -7,8 +7,10 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _environment import is_antigravity, supports_overwrite, supports_stop_hook  # noqa: E402
 from _hook_state import (  # noqa: E402
     MAX_DIAGNOSTICS,
     MAX_REVIEWS,
@@ -144,9 +146,17 @@ def deny(reason: str) -> None:
     print(json.dumps({"decision": "deny", "reason": reason}))
 
 
-def allow(reason: str = "Not blocked by the harness safety hook.") -> None:
+def allow(reason: str = "Not blocked by the harness safety hook.", overwrite: dict | None = None) -> None:
     write_audit("allow", reason)
-    print(json.dumps({"decision": "allow", "reason": reason}))
+    res: dict[str, Any] = {"decision": "allow", "reason": reason}
+    if overwrite:
+        res["overwrite"] = overwrite
+    print(json.dumps(res))
+
+
+def force_continue(reason: str) -> None:
+    write_audit("continue", reason)
+    print(json.dumps({"decision": "continue", "reason": reason}))
 
 
 def is_true(value) -> bool:
@@ -156,7 +166,17 @@ def is_true(value) -> bool:
 
 
 def conversation_id(payload: dict) -> str:
-    return str(payload.get("conversationId") or payload.get("conversation_id") or "unknown")
+    raw = payload.get("conversationId") or payload.get("conversation_id")
+    if raw:
+        return str(raw)
+    try:
+        from _environment import get_session_id
+        sess = get_session_id()
+        if sess and sess != "generic-session":
+            return sess
+    except Exception:
+        pass
+    return "unknown"
 
 
 PACKAGE_RE = re.compile(r"HARNESS_REVIEW_PACKAGE=([^\r\n]+)")
@@ -848,6 +868,29 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
             )
             return
 
+    raw_gradle_pat = re.compile(
+        r"^\s*(?:\./|[\w.-]*[/\\])?(?:gradlew(?:\.bat)?|gradle)(?:\.exe)?(?:\s+(.*))?$",
+        re.IGNORECASE,
+    )
+    m_gradle = raw_gradle_pat.match(command.strip())
+    if m_gradle and not is_setup_script:
+        script_rel = (
+            "agents/scripts/run_gradle_task.py"
+            if (REPO / "agents" / "scripts" / "run_gradle_task.py").is_file()
+            else ".agents/scripts/run_gradle_task.py"
+        )
+        task_args = m_gradle.group(1).strip() if m_gradle.group(1) else ""
+        rewritten_cmd = f"python {script_rel} {task_args}".strip()
+        if is_antigravity(payload):
+            allow(
+                f"Self-healing: Rewriting raw gradlew command to '{rewritten_cmd}' for environment portability.",
+                overwrite={"CommandLine": rewritten_cmd},
+            )
+            return
+        else:
+            deny(f"Denied: raw gradlew is forbidden. Use: {rewritten_cmd}")
+            return
+
     git_mutation_pat = re.compile(
         r'(?:^|[;&|`\s\'"]|(?:\b(?:cmd|powershell|pwsh|bash|sh|zsh|env)\b[^\n\r]*?))'
         r'(?:[a-zA-Z0-9_./\\:-]*[/\\])?git(?:\.exe)?[\'"]?\s+(.+)$',
@@ -1012,6 +1055,129 @@ def handle_manage_subagents(args: dict, payload: dict) -> None:
     allow("manage_subagents permitted.")
 
 
+def _state_dir() -> Path:
+    override = os.environ.get("HARNESS_HOOK_STATE")
+    if override:
+        return Path(override).resolve().parent
+    p = REPO / "agents" / "state"
+    if p.is_dir():
+        return p
+    p2 = REPO / ".agents" / "state"
+    if p2.is_dir():
+        return p2
+    return Path(__file__).resolve().parent.parent / "state"
+
+
+def _has_unreviewed_code_changes() -> bool:
+    test_override = os.environ.get("HARNESS_TEST_FORCE_CODE_CHANGES")
+    if test_override is not None:
+        return test_override.strip() in ("1", "true", "yes")
+    return has_non_doc_code_changes()
+
+
+def handle_stop(payload: dict) -> None:
+    """Antigravity Stop lifecycle hook handler with Loop Breaker.
+
+    Enforces that unreviewed code changes do not silently terminate the session
+    without a 5-leaf review round and preflight check.
+    If the diff is unchanged and blocked twice consecutively, or if an environment
+    failure (exit 30 protocol) or APPROVED verdict is reached, it allows termination.
+    """
+    termination_reason = str(
+        payload.get("terminationReason") or payload.get("termination_reason") or "model_stop"
+    )
+    if termination_reason != "model_stop":
+        allow(f"Stop hook allowed: termination reason is '{termination_reason}'.")
+        return
+
+    # 1. If no non-doc code changes in working tree, safe to stop.
+    if not _has_unreviewed_code_changes():
+        allow("Stop hook allowed: no uncommitted code changes in repository.")
+        return
+
+    # 2. Check if environment failure is active (exit 30 protocol: developer unblocked)
+    state_dir = _state_dir()
+    env_failure_file = state_dir / "env_failure.json"
+    if env_failure_file.is_file():
+        allow("Stop hook allowed: active environment failure (exit 30 protocol).")
+        return
+
+    # 3. Check if last_verdict.json has APPROVED or ENV_BLOCKED
+    verdict_file = state_dir / "last_verdict.json"
+    if verdict_file.is_file():
+        try:
+            with open(verdict_file, "r", encoding="utf-8") as vf:
+                v_data = json.load(vf)
+            status = v_data.get("status")
+            if status == "APPROVED":
+                allow("Stop hook allowed: final delivery verdict is APPROVED.")
+                return
+            if status == "ENV_BLOCKED":
+                allow("Stop hook allowed: final delivery verdict is ENV_BLOCKED.")
+                return
+        except Exception:
+            pass
+
+    # 4. Check Loop Breaker to prevent infinite token drain
+    diff_sig = os.environ.get("HARNESS_TEST_DIFF_SIG")
+    if not diff_sig:
+        import subprocess
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(REPO),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            diff_sig = hashlib.sha256(proc.stdout.encode("utf-8", errors="replace")).hexdigest()[:16]
+        except Exception:
+            diff_sig = "diff-unknown"
+
+    stop_state_file = state_dir / "stop_guard_state.json"
+    guard_state = {}
+    if stop_state_file.is_file():
+        try:
+            with open(stop_state_file, "r", encoding="utf-8") as sf:
+                guard_state = json.load(sf)
+        except Exception:
+            guard_state = {}
+
+    last_sig = guard_state.get("last_diff_sig", "")
+    consecutive_blocks = int(guard_state.get("consecutive_blocks", 0))
+
+    if diff_sig == last_sig and diff_sig != "diff-unknown":
+        consecutive_blocks += 1
+    else:
+        last_sig = diff_sig
+        consecutive_blocks = 1
+
+    guard_state["last_diff_sig"] = last_sig
+    guard_state["consecutive_blocks"] = consecutive_blocks
+    guard_state["last_ts"] = time.time()
+
+    try:
+        stop_state_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(stop_state_file, "w", encoding="utf-8") as sf:
+            json.dump(guard_state, sf, indent=2)
+    except Exception:
+        pass
+
+    # Loop Breaker threshold: after 2 consecutive blocks on identical diff, yield to user
+    if consecutive_blocks > 2:
+        allow(
+            "Stop hook loop breaker triggered: identical unreviewed diff blocked 2 times. "
+            "Allowing stop to prevent infinite loop; developer intervention requested."
+        )
+        return
+
+    force_continue(
+        "Harness Delivery Stop Guard: Unreviewed code changes detected in repository. "
+        "Before finishing, you MUST run the 5-leaf review round (or python agents/scripts/record_review.py), "
+        "and pass preflight_check.py."
+    )
+
+
 MAX_STDIN_BYTES = 5 * 1024 * 1024
 
 
@@ -1034,6 +1200,15 @@ def main() -> None:
             return
 
         payload = json.loads(raw)
+        if (
+            "terminationReason" in payload
+            or "termination_reason" in payload
+            or payload.get("event") == "Stop"
+            or payload.get("hook") == "Stop"
+        ):
+            handle_stop(payload)
+            return
+
         tool_call = payload.get("toolCall") or {}
         name = str(tool_call.get("name") or "").lower()
         args = tool_call.get("args") or {}

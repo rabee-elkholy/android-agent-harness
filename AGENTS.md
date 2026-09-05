@@ -46,6 +46,22 @@ Antigravity `hooks.json` enforces this barrier automatically. Other tools must f
 
 If this product **cannot spawn named subagents**, still run the five leaves without five separate dispatch calls: open each `agents/subagents/<name>.json`, follow its `system_prompt` against the same package, and stop that leaf when it emits its `*_PASS` or findings. Assemble only after all five exist.
 
+## Environment Adaptability (Antigravity vs Codex vs Claude Code vs Cursor)
+
+- **Google Antigravity Superpowers**:
+  * **Self-Healing Commands**: PreToolUse hook automatically rewrites raw gradlew commands (`./gradlew ...`, `gradlew.bat ...`) to `python agents/scripts/run_gradle_task.py ...` via argument `overwrite`.
+  * **Delivery Stop Guard**: Stop lifecycle hook (`delivery-stop-guard`) physically blocks session termination if unreviewed code changes exist without a 5-leaf pass, with an automatic Loop Breaker (yielding after 2 unchanged blocks).
+  * **Generative UI Widgets**: Rich Tailwind CSS cards (`<agent-embed>`) for review summaries and architecture visualization via `render_ui.py`.
+  * **Interactive Modals (`ask_question`)**: Proactively use structured interactive modals for missing-scenario interviews and device testing sign-offs.
+  * **Proactive Slash Commands**: Recommend `/grill-me` for design and edge-case alignment and `/goal` for comprehensive execution.
+- **OpenAI Codex / Claude Code / Cursor Parity**:
+  * **Cross-Platform Review Recording**: Run `python agents/scripts/record_review.py --approve-all --pkg <hash>` or `--leaf <name> --verdict <PASS>` to record review verdicts directly without Antigravity transcripts.
+  * **Zero-Degradation Guardrails**: Fail-closed pre-tool security, clean Markdown fallback cards (`render_ui.py`), and 100% test & lint gate enforcement.
+- **Interactive Preference Codification & Ref-Sync Protocol (Grill-Me vs Standard Interview)**:
+  * When the developer introduces or requests a new architectural, design, or project-specific preference/rule:
+    - **In Google Antigravity**: Leverage `/grill-me` and `ask_question`: Ask via interactive modal if the developer wants to persist this rule permanently in `.agents/skills/android-harness/references/`. If confirmed, conduct a rapid `/grill-me` alignment interview to clarify scope and edge cases, then persist it directly into the relevant `references/*.md` file (`architecture-guidelines.md`, `daily-scenarios.md`, `ui-layout-and-theming.md`). Never use generic global learning tools (which risk global rule pollution and token bloat).
+    - **In Codex / Claude Code / Cursor / CLI**: Fall back to the system's standard Missing-Scenario Discovery Interview: Proactively ask structured numbered questions in chat with direct choices matching the user's conversation language, and upon confirmation update the target `references/*.md` file directly.
+
 ## On-demand specialists
 
 Dispatch when needed:

@@ -164,10 +164,26 @@ android-harness init
 
 ---
 
+---
+
+## Environment Adaptability: Native Superpowers with Zero-Degradation Parity
+
+The harness automatically detects the host assistant environment at runtime (`_environment.py`) and seamlessly leverages platform-specific superpowers while preserving 100% verification rigor across portable CLI assistants:
+
+| Capability | Google Antigravity | OpenAI Codex / Claude Code / Cursor |
+| :--- | :--- | :--- |
+| **Command Execution** | **Self-Healing Rewrite**: PreToolUse hook automatically rewrites `./gradlew ...` to `run_gradle_task.py` via `overwrite`. | **Fail-Closed Guidance**: Intercepts raw gradlew and outputs portable script replacement. |
+| **Delivery Barrier** | **Physical Stop Hook**: `delivery-stop-guard` intercepts termination if unreviewed code exists; includes diff-aware loop breaker. | **Cross-Platform Bridge (`record_review.py`)**: Direct verdict artifact generation with strict gate parity. |
+| **Review Summaries** | **Generative UI Widgets**: Inline `<agent-embed>` Tailwind CSS cards with collapsible review accordions (`render_ui.py`). | **High-Signal Markdown**: Clean ASCII tables with zero emojis and sub-second rendering. |
+| **Missing Scenarios** | **Interactive Modals (`ask_question`)**: Clickable radio options for edge-case alignment and device sign-off. | **Structured Chat Handshakes**: Structured prompts with explicit choices matching user conversation language. |
+| **Design Alignment** | **Proactive Slash Commands**: Recommends `/grill-me` for design alignment and `/goal` for tasks. | **Standard Interactive Prompts**: Direct step-by-step TDD interviews. |
+
+---
+
 ## Supported AI Environments (14 Tools, 3 Tiers)
 
-* **Hook-Enforced**: Google Antigravity, Claude Code, GitHub Copilot (deterministic Python OS-level interceptors).
-* **Rule-Driven**: Cursor, Windsurf, Cline, Roo Code, Amazon Q, Continue, Junie, Kilo, Goose, Qwen, Codex.
+* **Hook-Enforced & Adaptive**: Google Antigravity (PreToolUse self-healing overwrite, Stop lifecycle hook, Generative UI), Claude Code, GitHub Copilot.
+* **Rule-Driven with Parity Bridge**: OpenAI Codex, Cursor, Windsurf, Cline, Roo Code, Amazon Q, Continue, Junie, Kilo, Goose, Qwen (`record_review.py` 100% parity).
 * **Prompt-Only**: Aider, Zed, Devin, Amp, Factory, Jules, Warp, OpenCode (`AGENTS.md` standard).
 
 ---
