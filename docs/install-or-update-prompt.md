@@ -1,8 +1,8 @@
 # Install or Update prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.10/docs/install-or-update-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.11/docs/install-or-update-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.27.10` — **SHA-256**: `8c93a673a652021912342f8dbc53cd60a8a0cd5bea67cc61724a0a76acb290ad` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.27.11` — **SHA-256**: `8c93a673a652021912342f8dbc53cd60a8a0cd5bea67cc61724a0a76acb290ad` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value (Python: `import hashlib, urllib.request; data = urllib.request.urlopen('<Raw Prompt URL>').read(); payload = b''.join(data.splitlines(keepends=True)[5:]); assert hashlib.sha256(payload).hexdigest() == '<SHA-256>'`). If it does not match, STOP and tell the developer the file was tampered with.
 

@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: Comprehensive Android Harness Quality-First Delivery Rules, architectural guidelines, and delivery protocols. Single source of truth.
 ---
 
 # this Android app — Quality-First Multi-Agent Delivery Rules

@@ -231,7 +231,12 @@ def merge_managed_content(existing_text: str, new_body: str) -> str:
         if suffix:
             combined += "\n" + suffix
         return combined
-    if MANAGED.strip() in existing_text:
+    legacy_markers = (
+        MANAGED.strip(),
+        "<!-- managed-by: android-harness-kit -->",
+        "<!-- managed-by: android-agent-harness -->",
+    )
+    if any(marker in existing_text for marker in legacy_markers):
         return with_managed_marker(new_body)
     clean_existing = existing_text.rstrip()
     return f"{clean_existing}\n\n{harness_block}" if clean_existing else with_managed_marker(new_body)

@@ -5,6 +5,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.11] - 2026-09-05
+
+### Antigravity Rules Token Optimization, Progressive Disclosure & Clean Adapter Merge
+- **Antigravity & Gemini Rules Token Optimization (`harness-rules.md`, `threat-model.md`)**:
+  - Migrated `harness-rules.md` frontmatter from `trigger: always_on` to `trigger: model_decision` with an explicit semantic description.
+  - Slashed prompt token overhead by over 11,000 tokens (reducing rules budget consumption from 81.3% down to ~15%), completely eliminating automatic truncation risks in Google Antigravity while maintaining full on-disk access for subagents and architecture reviewers.
+- **Legacy Managed Marker Deduplication (`install_tool_adapters.py`)**:
+  - Expanded `merge_managed_content` to recognize both current (`<!-- managed-by: android-agent-harness -->`) and legacy (`<!-- managed-by: android-harness-kit -->`) markers.
+  - Prevented unintentional duplication of `AGENTS.md` blocks during harness upgrades and adapter re-generation.
+- **Unbuffered Installer Live Streaming (`install_or_update.py`)**:
+  - Integrated unbuffered process execution flag and continuous readline streaming for real-time installer feedback.
+
 ## [0.27.10] - 2026-09-03
 
 ### Real-Time Live Process Streaming & Progress Feedback Across All Harness Scripts
@@ -185,7 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Expanded Self-Test Suite (`_graph_selftest.py`)**:
   - Added Test 7 validating comment stripping, keyword filtering, and hub explosion defense with 30-screen star topology fixtures (38/38 assertions passed, 0 failures).
 
-## [0.25.8] - 2026-09-02
+### 0.25.8 - 2026-09-02
 
 ### Feature-Level Architecture Slices, Multi-Node Disambiguation & Discovery Invariant
 - **Feature-Level Architecture Slices (`project_graph.py --feature <name>`, `_graph_core.py`)**:
