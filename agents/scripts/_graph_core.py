@@ -13,6 +13,7 @@ Supports:
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -44,6 +45,7 @@ class EntityType(str, Enum):
     HARNESS_TOOL = "HARNESS_TOOL"
     WORKFLOW_PLAYBOOK = "WORKFLOW_PLAYBOOK"
     SUBAGENT_ROSTER = "SUBAGENT_ROSTER"
+    STRING_RESOURCE = "STRING_RESOURCE"
     UNKNOWN = "UNKNOWN"
 
 
@@ -543,6 +545,74 @@ class DependencyGraph:
             for tst in sorted(tests, key=lambda x: x.name):
                 lines.append(f"  * {tst.name} ({tst.file_path or 'unknown'})")
 
+        return "\n".join(lines)
+
+    def list_all_features(self) -> dict[str, dict[str, int]]:
+        """Scans all nodes and extracts discovered features with component breakdown."""
+        features: dict[str, dict[str, int]] = {}
+
+        feature_patterns = [
+            re.compile(r"/(?:features|feature)/([a-zA-Z0-9_]+)/", re.IGNORECASE),
+            re.compile(r"\.(?:features|feature)\.([a-zA-Z0-9_]+)\.", re.IGNORECASE),
+            re.compile(r"^:features?:([a-zA-Z0-9_]+)", re.IGNORECASE),
+        ]
+
+        for node in self.nodes.values():
+            fp = node.file_path or ""
+            pkg = node.package or ""
+            mod = node.module or ""
+
+            feat_name: str | None = None
+            for pat in feature_patterns:
+                m = pat.search(fp) or pat.search(f".{pkg}.") or pat.search(mod)
+                if m:
+                    candidate = m.group(1).lower().strip()
+                    if candidate not in ("base", "common", "core", "model", "models", "util", "utils", "di", "app"):
+                        feat_name = candidate
+                        break
+
+            if feat_name:
+                if feat_name not in features:
+                    features[feat_name] = {"screens": 0, "view_models": 0, "domain": 0, "data": 0, "total": 0}
+
+                features[feat_name]["total"] += 1
+                if node.type in (EntityType.SCREEN.value, EntityType.XML_LAYOUT.value):
+                    features[feat_name]["screens"] += 1
+                elif node.type == EntityType.VIEW_MODEL.value:
+                    features[feat_name]["view_models"] += 1
+                elif node.type == EntityType.USE_CASE.value or (fp and "/domain/" in fp):
+                    features[feat_name]["domain"] += 1
+                elif node.type in (EntityType.REPOSITORY.value, EntityType.DATA_SOURCE.value) or (fp and "/data/" in fp):
+                    features[feat_name]["data"] += 1
+
+        return features
+
+    def to_features_summary(self) -> str:
+        """Renders an aggregated summary of all detected project features."""
+        features = self.list_all_features()
+        if not features:
+            return "[-] No modular or package-based features detected in project structure."
+
+        lines = [
+            f"[*] Discovered Project Features ({len(features)}):",
+            "--------------------------------------------------",
+        ]
+        for name in sorted(features.keys()):
+            counts = features[name]
+            parts = []
+            if counts["screens"]:
+                parts.append(f"{counts['screens']} screen(s)")
+            if counts["view_models"]:
+                parts.append(f"{counts['view_models']} vm(s)")
+            if counts["domain"]:
+                parts.append(f"{counts['domain']} domain")
+            if counts["data"]:
+                parts.append(f"{counts['data']} data")
+            comp_str = f" ({', '.join(parts)})" if parts else ""
+            lines.append(f"  - {name} [{counts['total']} components]{comp_str}")
+
+        lines.append("--------------------------------------------------")
+        lines.append("Run 'python agents/scripts/project_graph.py --feature <name>' for Clean Architecture slice.")
         return "\n".join(lines)
 
     def find_shortest_path(self, from_id: str, to_id: str) -> list[str]:
@@ -1332,6 +1402,251 @@ class GraphEngine:
                 return node, heal_msg
 
         return node, None
+
+    def dereference_string(self, query: str) -> str:
+        """Finds UI string resources matching query and traces associated screens and layouts."""
+        return dereference_string_to_card(self.repo, query, nodes=self.graph.nodes)
+
+
+# =========================================================================
+# UI String Resource Dereferencing & Localization Matching Engine
+# =========================================================================
+
+STRING_TAG_PATTERN = re.compile(
+    r'<string\s+name=["\']([a-zA-Z0-9_]+)["\'][^>]*>(.*?)</string>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def normalize_arabic(text: str) -> str:
+    """Normalizes Arabic text for tolerant matching across spelling variations."""
+    t = re.sub(r"[إأآا]", "ا", text)
+    t = re.sub(r"ة", "ه", t)
+    t = re.sub(r"[ىي]", "ي", t)
+    t = re.sub(r"[\u064B-\u0652\u0670]", "", t)
+    return t.lower().strip()
+
+
+def unescape_xml_string(raw: str) -> str:
+    """Removes CDATA and unescapes standard XML/HTML entities and string escape sequences."""
+    text = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", raw, flags=re.DOTALL)
+    text = html.unescape(text)
+    text = text.replace(r'\"', '"').replace(r"\'", "'").replace(r"\n", " ").replace(r"\t", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def extract_locale_from_dir(dir_name: str) -> str:
+    """Extracts locale code from directory name (values -> default, values-ar -> ar)."""
+    if dir_name == "values":
+        return "default"
+    if dir_name.startswith("values-"):
+        return dir_name[7:]
+    return dir_name
+
+
+def find_string_resources(repo: Path, query: str) -> list[dict[str, Any]]:
+    """Scans all res/values*/strings*.xml in repo and matches against query (value or key)."""
+    q_raw = query.strip()
+    q_norm = normalize_arabic(q_raw)
+    q_lower = q_raw.lower()
+
+    matches: list[dict[str, Any]] = []
+    ignored_dir_names = {".git", "build", ".gradle", ".agents", ".harness-backup", "node_modules", ".idea", ".gemini", "cache"}
+
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in ignored_dir_names]
+        rel_root = Path(root)
+        if "res" in rel_root.parts and rel_root.name.startswith("values"):
+            locale = extract_locale_from_dir(rel_root.name)
+            for f in files:
+                if f.endswith(".xml") and ("string" in f.lower() or f == "donottranslate.xml"):
+                    xml_path = rel_root / f
+                    try:
+                        rel_path = xml_path.relative_to(repo).as_posix()
+                    except ValueError:
+                        rel_path = xml_path.as_posix()
+
+                    try:
+                        content = xml_path.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+
+                    for m in STRING_TAG_PATTERN.finditer(content):
+                        key = m.group(1).strip()
+                        raw_val = m.group(2)
+                        val = unescape_xml_string(raw_val)
+                        val_norm = normalize_arabic(val)
+
+                        score = 0
+                        if q_norm and q_norm == val_norm:
+                            score = 100
+                        elif q_lower and q_lower == key.lower():
+                            score = 90
+                        elif q_norm and q_norm in val_norm:
+                            score = 80
+                        elif q_lower and q_lower in val.lower():
+                            score = 70
+                        elif q_lower and q_lower in key.lower():
+                            score = 60
+
+                        if score > 0:
+                            line_num = content.count("\n", 0, m.start()) + 1
+                            matches.append({
+                                "key": key,
+                                "value": val,
+                                "locale": locale,
+                                "file_path": rel_path,
+                                "line_number": line_num,
+                                "score": score,
+                            })
+
+    matches.sort(key=lambda x: (-x["score"], x["key"], x["locale"]))
+    return matches
+
+
+def find_string_usages(
+    repo: Path,
+    key: str,
+    nodes: dict[str, GraphNode] | None = None,
+    max_usages: int = 10,
+) -> list[dict[str, Any]]:
+    """Finds code components (Screens, ViewModels, Layouts) referencing R.string.<key> or @string/<key>."""
+    usages: list[dict[str, Any]] = []
+
+    file_to_node: dict[str, GraphNode] = {}
+    if nodes:
+        for node in nodes.values():
+            if node.file_path:
+                norm_fp = Path(node.file_path).as_posix().lower()
+                file_to_node[norm_fp] = node
+
+    usage_pat = re.compile(
+        rf"(?:R\.string\.{re.escape(key)}\b|@string/{re.escape(key)}\b)",
+        re.IGNORECASE,
+    )
+
+    ignored_dirs = {".git", "build", ".gradle", ".agents", ".harness-backup", "node_modules", ".idea", ".gemini", "cache"}
+    valid_exts = {".kt", ".java", ".xml"}
+
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in ignored_dirs]
+        rel_root = Path(root)
+
+        if "res" in rel_root.parts and rel_root.name.startswith("values"):
+            continue
+
+        for f in files:
+            ext = Path(f).suffix.lower()
+            if ext not in valid_exts:
+                continue
+
+            if f.endswith(".xml") and "string" in f.lower():
+                continue
+
+            file_path = rel_root / f
+            try:
+                rel_posix = file_path.relative_to(repo).as_posix()
+            except ValueError:
+                rel_posix = file_path.as_posix()
+
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+
+            if key not in content:
+                continue
+
+            lines = content.splitlines()
+            for line_idx, line in enumerate(lines, start=1):
+                if usage_pat.search(line):
+                    norm_key = rel_posix.lower()
+                    matched_node = file_to_node.get(norm_key)
+                    comp_name = matched_node.name if matched_node else Path(f).stem
+                    comp_type = matched_node.type if matched_node else ("XML_LAYOUT" if ext == ".xml" else "CODE")
+
+                    usages.append({
+                        "component_name": comp_name,
+                        "component_type": comp_type,
+                        "file_path": rel_posix,
+                        "line_number": line_idx,
+                        "line_content": line.strip()[:100],
+                    })
+                    if len(usages) >= max_usages:
+                        return usages
+
+    return usages
+
+
+def dereference_string_to_card(
+    repo: Path,
+    query: str,
+    nodes: dict[str, GraphNode] | None = None,
+) -> str:
+    """End-to-end string dereferencing engine: matches UI string to resource and finds all code usages."""
+    matches = find_string_resources(repo, query)
+    if not matches:
+        return (
+            f"[-] No string resources found matching '{query}' in res/values*/strings*.xml.\n"
+            "Tips:\n"
+            f"  - If searching for an English symbol or class: python agents/scripts/project_graph.py --find {query}\n"
+            "  - To list all detected features: python agents/scripts/project_graph.py --features"
+        )
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for m in matches:
+        k = m["key"]
+        if k not in grouped:
+            grouped[k] = {
+                "key": k,
+                "values": [],
+                "score": m["score"],
+            }
+        grouped[k]["values"].append((m["locale"], m["value"], m["file_path"], m["line_number"]))
+
+    sorted_keys = sorted(grouped.keys(), key=lambda k: -grouped[k]["score"])
+
+    lines = [
+        f"[*] UI String Dereference for '{query}' ({len(sorted_keys)} key(s) matched):",
+        "================================================================================",
+    ]
+
+    for k in sorted_keys[:5]:
+        data = grouped[k]
+        lines.append(f"[STRING RESOURCE] R.string.{k}")
+        lines.append("  Translations:")
+        for loc, val, fp, ln in data["values"][:4]:
+            val_display = f'"{val}"' if len(val) <= 60 else f'"{val[:57]}..."'
+            lines.append(f"    * [{loc}] {val_display} ({fp}:{ln})")
+
+        usages = find_string_usages(repo, k, nodes=nodes, max_usages=6)
+        if usages:
+            lines.append(f"  Referenced in {len(usages)} component(s):")
+            for u in usages:
+                lines.append(
+                    f"    * {u['component_name']} [{u['component_type']}] -> {u['file_path']}:{u['line_number']}"
+                )
+
+            suggested_features = set()
+            for u in usages:
+                fp_lower = u["file_path"].lower()
+                m_feat = re.search(r"/(?:features|feature)/([a-zA-Z0-9_]+)/", fp_lower)
+                if m_feat:
+                    suggested_features.add(m_feat.group(1))
+
+            lines.append("  Suggested Next Exploration:")
+            for sf in sorted(suggested_features):
+                lines.append(f"    python agents/scripts/project_graph.py --feature {sf}")
+            top_comp = usages[0]["component_name"]
+            lines.append(f"    python agents/scripts/project_graph.py --find {top_comp}")
+        else:
+            lines.append("  [-] No direct static references found in layouts or Kotlin/Java source files.")
+            lines.append(f"  Suggested Action: python agents/scripts/project_graph.py --find {k}")
+
+        lines.append("--------------------------------------------------------------------------------")
+
+    return "\n".join(lines)
 
 
 def render_dot_to_image(dot_content: str, output_path: Path, img_format: str = "svg") -> tuple[bool, str]:

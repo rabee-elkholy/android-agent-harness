@@ -7,6 +7,9 @@ Commands & Filters:
     --modules               Analyze and display Gradle module dependency DAG
     --arch                  Analyze and display Clean Architecture layers (UI->VM->Domain->Data)
     --screens               List UI screens, layouts, and their associated ViewModels
+    --features              List all detected feature modules and packages with component counts
+    --feature <name>        Analyze and display complete Clean Architecture slice for a feature
+    --string <text>         Find UI string in strings.xml (values-*/) and trace associated screens
     --find <symbol>         Find specific class, screen, or symbol with its layer dependencies
     --module <name>         Filter graph around a specific module (e.g. :feature:auth)
     --screen <name>         Filter graph around a specific screen (e.g. LoginScreen)
@@ -49,6 +52,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--modules", action="store_true", help="Display Gradle module dependency graph")
     parser.add_argument("--arch", action="store_true", help="Display full Clean Architecture layers graph")
     parser.add_argument("--screens", action="store_true", help="List UI screens/layouts and associated ViewModels")
+    parser.add_argument("--features", action="store_true", help="List all detected feature modules and packages with component counts")
+    parser.add_argument("--string", "--ui-text", dest="string_query", metavar="TEXT", help="Find UI string resource in strings.xml and trace associated screens and layouts")
     parser.add_argument("--harness", "--tools", dest="harness", action="store_true", help="Display Harness tools, scripts, workflows, and subagents directory")
     parser.add_argument("--feature", metavar="NAME", help="Analyze and display complete Clean Architecture slice for a feature")
     parser.add_argument("--find", metavar="SYMBOL", help="Find symbol/class/screen/tool and its dependencies")
@@ -102,6 +107,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.harness:
         live_print(engine.graph.to_harness_inventory())
+        return 0
+
+    if args.features:
+        live_print(engine.graph.to_features_summary())
+        return 0
+
+    if args.string_query:
+        output = engine.dereference_string(args.string_query)
+        live_print(output)
         return 0
 
     focus_node_id: str | None = None

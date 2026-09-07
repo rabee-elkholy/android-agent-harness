@@ -5,6 +5,23 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.18] - 2026-09-07
+
+### Universal UI String Dereferencing & Graph-First Localization Grounding
+- **UI String Dereferencing Engine (`_graph_core.py`, `project_graph.py`)**:
+  - Implemented high-performance scanner for `res/values*/strings*.xml` across all project modules, supporting Arabic (`values-ar`), default (`values`), English (`values-en`), and all locale variants.
+  - Added Arabic normalization engine (`normalize_arabic`) providing tolerant matching across Alef variants (`أ/إ/آ/ا`), Taa Marbuta and Haa (`ة -> ه`), Yaa and Alef Maksura (`ى/ي`), and stripping Tashkeel diacritics.
+  - Implemented static usage tracer (`find_string_usages`) linking string keys to UI screens (Jetpack Compose / XML Layouts) and ViewModels via `R.string.<key>` and `@string/<key>`.
+  - Added CLI flag `--string <TEXT>` (and `--ui-text <TEXT>`) to directly dereference localized UI text to code symbols in a single step with suggested next exploration commands.
+- **Project Feature Directory Listing (`project_graph.py --features`)**:
+  - Added `--features` CLI flag to discover and list all feature modules and packages with component counts (screens, viewmodels, domain, data), resolving previous CLI argument mismatch.
+- **Rule & Guardrail Alignment (`AGENTS.md`, `harness-rules.md`, `AGENTS.md.template`, `pre_invocation_reminder.py`)**:
+  - Codified `UI String Dereferencing Exception (Localization Bypass)` explicitly authorizing agents to run `project_graph.py --string "<label>"` or targeted grep on `res/values-ar/strings.xml`.
+  - Strictly banned speculative English translation guessing (`--find charity`, `--find Khair`) when given localized Arabic UI terms.
+  - Injected UI-Text dereferencing instructions into Turn 1 active pipeline reminders.
+- **Comprehensive Selftest Suite Expansion (`_graph_selftest.py`)**:
+  - Added Test 9 (UI String Dereferencing, Arabic normalization, tolerant matching, usage linking, card generation) and Test 10 (Multi-Feature Directory Listing), expanding test suite to 61 passed tests (100% pass).
+
 ## [0.27.17] - 2026-09-07
 
 ### Truly Human-Bound Risk Approval & Challenge-Nonce Security Barrier
@@ -176,7 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Hardened release automation script (`release_version.py`) with pre-release distribution packaging build (`python -m build`) and metadata verification (`twine check`) before git tag and push.
   - Added `.github/` workflows directory to automatic release staging paths.
 
-## [0.27.6] - 2026-09-03
+### 0.27.6 - 2026-09-03
 
 ### Architectural Caging, Room Java Support, Subtle Logic Bug Fixes & High-Impact Documentation
 - **Room Migration Java & Kotlin Guard (`room_guard.py`)**:

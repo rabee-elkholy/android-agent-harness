@@ -29,14 +29,20 @@ from _graph_core import (  # noqa: E402
     GraphEdge,
     GraphEngine,
     GraphNode,
+    dereference_string_to_card,
+    find_string_resources,
+    find_string_usages,
+    normalize_arabic,
     parse_code_file,
     parse_gradle_modules,
     parse_xml_file,
     render_dot_to_image,
 )
+from _live_process import enable_line_buffered_stdio  # noqa: E402
 
 
 def run_tests() -> bool:
+    enable_line_buffered_stdio()
     print("==================================================")
     print("  Running Universal Android Graph Engine Selftests")
     print("==================================================")
@@ -385,6 +391,105 @@ import argparse
         assert_eq("logcat_doctor.py" in inventory, True, "Inventory contains logcat_doctor.py")
         assert_eq("crash-triage.md" in inventory, True, "Inventory contains crash-triage.md")
         assert_eq("qa-diagnostics-agent" in inventory, True, "Inventory contains qa-diagnostics-agent")
+
+        # -----------------------------------------------------------------
+        # Test 9: UI String Dereferencing & Arabic Localization Matching
+        # -----------------------------------------------------------------
+        print("\n[*] Test 9: UI String Dereferencing & Arabic Localization Matching")
+
+        # Verify Arabic normalization
+        assert_eq(normalize_arabic("سله الخير"), "سله الخير", "normalize_arabic keeps normalized base")
+        assert_eq(normalize_arabic("سلة الخير"), "سله الخير", "normalize_arabic unifies Taa Marbuta to Haa")
+        assert_eq(normalize_arabic("أخبار"), "اخبار", "normalize_arabic unifies Alef forms")
+
+        # Set up strings.xml and values-ar/strings.xml
+        res_values = temp_dir / "app" / "src" / "main" / "res" / "values"
+        res_values_ar = temp_dir / "app" / "src" / "main" / "res" / "values-ar"
+        res_values.mkdir(parents=True, exist_ok=True)
+        res_values_ar.mkdir(parents=True, exist_ok=True)
+
+        (res_values / "strings.xml").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<resources>\n'
+            '    <string name="txt_salet_kheir">Goodness Basket</string>\n'
+            '    <string name="btn_login">Login</string>\n'
+            '</resources>\n',
+            encoding="utf-8",
+        )
+        (res_values_ar / "strings.xml").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<resources>\n'
+            '    <string name="txt_salet_kheir">سلة الخير</string>\n'
+            '    <string name="btn_login">تسجيل الدخول</string>\n'
+            '</resources>\n',
+            encoding="utf-8",
+        )
+
+        # Set up a Kotlin Compose screen referencing the string
+        camp_dir = temp_dir / "app" / "src" / "main" / "java" / "com" / "test" / "features" / "campaigns"
+        camp_dir.mkdir(parents=True, exist_ok=True)
+        (camp_dir / "CampaignsScreen.kt").write_text(
+            'package com.test.features.campaigns\n\n'
+            'import androidx.compose.runtime.Composable\n'
+            'import androidx.compose.ui.res.stringResource\n'
+            'import com.test.R\n\n'
+            '@Composable\n'
+            'fun CampaignsScreen() {\n'
+            '    val title = stringResource(R.string.txt_salet_kheir)\n'
+            '}\n',
+            encoding="utf-8",
+        )
+
+        # Set up an XML layout referencing the string
+        layout_dir = temp_dir / "app" / "src" / "main" / "res" / "layout"
+        layout_dir.mkdir(parents=True, exist_ok=True)
+        (layout_dir / "fragment_campaigns.xml").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"\n'
+            '    android:layout_width="match_parent"\n'
+            '    android:layout_height="match_parent">\n'
+            '    <TextView\n'
+            '        android:layout_width="wrap_content"\n'
+            '        android:layout_height="wrap_content"\n'
+            '        android:text="@string/txt_salet_kheir" />\n'
+            '</LinearLayout>\n',
+            encoding="utf-8",
+        )
+
+        # Re-sync engine to index the new files
+        engine.sync(force_full=True)
+
+        # Test exact Arabic lookup
+        ar_matches = find_string_resources(temp_dir, "سلة الخير")
+        assert_eq(len(ar_matches) >= 1, True, "Found string resource for 'سلة الخير'")
+        assert_eq(ar_matches[0]["key"], "txt_salet_kheir", "Matched key is txt_salet_kheir")
+        assert_eq(ar_matches[0]["locale"], "ar", "Matched locale is 'ar'")
+
+        # Test tolerant Arabic spelling (with Haa instead of Taa Marbuta)
+        ar_spelling_matches = find_string_resources(temp_dir, "سله الخير")
+        assert_eq(len(ar_spelling_matches) >= 1, True, "Tolerant matching handles 'سله الخير' with Haa")
+        assert_eq(ar_spelling_matches[0]["key"], "txt_salet_kheir", "Resolved same key with tolerant spelling")
+
+        # Test usage finding
+        usages = find_string_usages(temp_dir, "txt_salet_kheir", nodes=engine.graph.nodes)
+        assert_eq(len(usages) >= 2, True, "Found >= 2 usages of txt_salet_kheir")
+        usage_files = [u["file_path"] for u in usages]
+        assert_eq(any("CampaignsScreen.kt" in uf for uf in usage_files), True, "Usage found in CampaignsScreen.kt")
+        assert_eq(any("fragment_campaigns.xml" in uf for uf in usage_files), True, "Usage found in fragment_campaigns.xml")
+
+        # Test end-to-end dereference card
+        card = dereference_string_to_card(temp_dir, "سلة الخير", nodes=engine.graph.nodes)
+        assert_eq("R.string.txt_salet_kheir" in card, True, "Card contains R.string.txt_salet_kheir")
+        assert_eq("CampaignsScreen" in card, True, "Card highlights CampaignsScreen component")
+        assert_eq("project_graph.py --feature campaigns" in card, True, "Card suggests --feature campaigns exploration")
+
+        # -----------------------------------------------------------------
+        # Test 10: Multi-Feature Directory Listing & Summary
+        # -----------------------------------------------------------------
+        print("\n[*] Test 10: Multi-Feature Directory Listing & Summary")
+        features_summary = engine.graph.to_features_summary()
+        assert_eq("campaigns" in features_summary, True, "Features summary lists 'campaigns' feature")
+        assert_eq("screen(s)" in features_summary, True, "Features summary breaks down screens")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
