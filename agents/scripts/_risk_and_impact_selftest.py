@@ -28,7 +28,10 @@ from risk_tier import (  # noqa: E402
     check_risk_approval,
     classify_file_risk,
     classify_working_tree_risk,
+    consume_risk_challenge,
+    create_risk_challenge,
     load_risk_approval,
+    risk_challenge_path,
     write_risk_approval,
 )
 
@@ -299,6 +302,96 @@ def test_clean_tree_behavior() -> None:
     check("clean working tree" in reasons[0], "clean working tree reason given")
 
 
+def test_risk_challenge_nonce_and_redemption() -> None:
+    # Clean up previous challenge if any
+    ch_file = risk_challenge_path(ROOT)
+    if ch_file.is_file():
+        ch_file.unlink()
+
+    token, target_path, tier, reasons = create_risk_challenge(ROOT)
+    check(token.startswith("AUTH-") and len(token) >= 10, "challenge nonce starts with AUTH- and has proper length")
+    check(target_path.is_file(), "pending_risk_challenge.json exists after create_risk_challenge")
+
+    # Incorrect token attempt should fail and keep challenge intact
+    ok_wrong, _, msg_wrong = consume_risk_challenge("AUTH-WRONG123", ROOT)
+    check(not ok_wrong, "invalid token rejected by consume_risk_challenge")
+    check("mismatch" in msg_wrong.lower(), "mismatch detail in error message")
+    check(target_path.is_file(), "challenge file preserved on token typo")
+
+    # Correct token consumption
+    ok_correct, res_tier, msg_correct = consume_risk_challenge(token, ROOT)
+    check(ok_correct, "valid challenge token accepted and redeemed")
+    check(not target_path.is_file(), "challenge file unlinked upon successful redemption (single-use)")
+
+    approval = load_risk_approval(ROOT)
+    check(approval is not None, "risk approval successfully written")
+    check(approval.get("nonce") == token, "token recorded in approval payload")
+    check(str(approval.get("approved_by", "")).startswith("human_token:AUTH-"), "approval marked as human_token")
+
+    # Replay attempt with the same token must fail
+    ok_replay, _, msg_replay = consume_risk_challenge(token, ROOT)
+    check(not ok_replay, "replay attempt rejected because challenge was already consumed")
+
+
+def test_risk_challenge_expiration_and_fingerprint_mismatch() -> None:
+    # 1. Test expiration
+    token_exp, path_exp, _, _ = create_risk_challenge(ROOT, ttl_seconds=-10)
+    ok_exp, _, msg_exp = consume_risk_challenge(token_exp, ROOT)
+    check(not ok_exp, "expired challenge token rejected")
+    check("expired" in msg_exp.lower(), "expiration message returned")
+    check(not path_exp.is_file(), "expired challenge file cleaned up")
+
+    # 2. Test fingerprint mismatch (tampering/code changed)
+    token_tamper, path_tamper, _, _ = create_risk_challenge(ROOT, ttl_seconds=600)
+    check(path_tamper.is_file(), "tamper test challenge created")
+    # Mutate stored fingerprint in challenge file
+    import json
+    data = json.loads(path_tamper.read_text(encoding="utf-8"))
+    data["tree_fingerprint"] = "tampered_fake_fingerprint_9999"
+    path_tamper.write_text(json.dumps(data), encoding="utf-8")
+
+    ok_tamper, _, msg_tamper = consume_risk_challenge(token_tamper, ROOT)
+    check(not ok_tamper, "tampered fingerprint rejected")
+    check("changed" in msg_tamper.lower(), "fingerprint change message returned")
+    check(not path_tamper.is_file(), "invalidated challenge file cleaned up")
+
+
+def test_approve_risk_cli_barrier() -> None:
+    import subprocess
+    approve_script = SCRIPTS / "approve_risk.py"
+
+    # Test bare --approve refusal outside selftest when risk is HIGH
+    clean_env = os.environ.copy()
+    clean_env.pop("_IN_HOOK_SELFTEST", None)
+
+    test_code = (
+        f"import sys, os; "
+        f"sys.path.insert(0, r'{SCRIPTS}'); "
+        f"import risk_tier; "
+        f"risk_tier.classify_working_tree_risk = lambda repo=None: ('HIGH', ['high risk simulated']); "
+        f"import approve_risk; "
+        f"sys.exit(approve_risk.main(['--approve']))"
+    )
+    proc_refused = subprocess.run(
+        [sys.executable, "-c", test_code],
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    )
+    check(proc_refused.returncode != 0, "bare --approve exits with error when risk is HIGH outside selftest")
+    check("Bare --approve flag is disabled for security" in proc_refused.stderr, "security refusal message printed")
+
+    # Test invalid token refusal
+    proc_noninteractive = subprocess.run(
+        [sys.executable, str(approve_script), "--token", "AUTH-NONEXISTENT"],
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    )
+    check(proc_noninteractive.returncode != 0, "invalid token exits with non-zero code")
+    check("REFUSED" in proc_noninteractive.stderr or "No pending" in proc_noninteractive.stderr, "token failure message in stderr")
+
+
 def main() -> int:
     test_classify_critical()
     test_classify_high()
@@ -311,6 +404,9 @@ def main() -> int:
     test_impact_analyzer_dependency_graph()
     test_impact_analyzer_wildcards_and_complex_types()
     test_clean_tree_behavior()
+    test_risk_challenge_nonce_and_redemption()
+    test_risk_challenge_expiration_and_fingerprint_mismatch()
+    test_approve_risk_cli_barrier()
 
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")

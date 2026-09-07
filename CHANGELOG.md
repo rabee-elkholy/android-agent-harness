@@ -5,6 +5,21 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.17] - 2026-09-07
+
+### Truly Human-Bound Risk Approval & Challenge-Nonce Security Barrier
+- **Challenge-Nonce Risk Protocol (`risk_tier.py`, `approve_risk.py`)**:
+  - Implemented single-use challenge token mechanism (`AUTH-XXXXXXXX`) bound cryptographically to the exact `tree_code_fingerprint` and risk tier with 15-minute TTL.
+  - Eliminated the unverified bare `--approve` flag in production commands, completely preventing AI agents or subagents from self-approving `HIGH` or `CRITICAL` risk tiers (Billing, Payment Gateways, Room Database Migrations, AndroidManifest Security).
+  - Enforced single-use consumption (`consume_risk_challenge` unlinks challenge file), strictly preventing replay attacks.
+  - Mandated interactive modal presentation (`ask_question`) in chat where human developer explicitly reviews risk factors and confirms approval token before preflight can proceed.
+  - Added strict fingerprint staleness detection: any working-tree code changes after challenge generation immediately invalidate the challenge and require a fresh token.
+  - Preserved full interactive terminal confirmation (`sys.stdin.isatty()` with `input("Type 'YES'...")`) for developers working directly in CLI without an AI intermediary.
+- **Comprehensive Selftest Suite & CLI Hardening (`_risk_and_impact_selftest.py`)**:
+  - Expanded test suite to 49 assertions covering token generation, format validation, replay refusal, code tampering/fingerprint mismatch rejection, TTL expiry cleanup, and CLI barrier enforcement.
+- **Governance Rules Alignment (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
+  - Synchronized Rule 13 across all canonical rules and multi-IDE agent adapters to mandate the `--challenge` and `--token <TOKEN>` protocol.
+
 ## [0.27.16] - 2026-09-07
 
 ### Anti-Thrashing Navigation, One-Shot File Viewing & Reviewer Optimization

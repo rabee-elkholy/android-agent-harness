@@ -134,7 +134,7 @@ Harness scripts classify every non-zero exit into CODE (the diff is wrong) or EN
   * **`MEDIUM`**: Standard application code (ViewModels, UseCases, Repositories, Activities, Fragments, Compose screens).
   * **`LOW`**: Documentation, strings/translations (`strings.xml`), UI layout dimensions/drawables, comments-only diffs.
 - **Fail-safe floor**: High-risk surfaces have a file-level floor (e.g. comments in a billing file remain `CRITICAL`).
-- **Human approval required**: `HIGH` and `CRITICAL` risk tiers require interactive developer confirmation (`python .agents/scripts/approve_risk.py`). The AI agent cannot approve risk on its own (`stdin=DEVNULL` refusal). `preflight_check.py` fails if approval is missing or stale.
+- **Human approval required**: `HIGH` and `CRITICAL` risk tiers require interactive developer confirmation via single-use challenge tokens (`python .agents/scripts/approve_risk.py --challenge`, ask developer via `ask_question` modal in chat with token, then redeem with `python .agents/scripts/approve_risk.py --token <TOKEN>`). The AI agent cannot approve risk on its own (bare `--approve` is refused, tokens are cryptographically bound to the tree code fingerprint, expire in 15m, and are single-use). `preflight_check.py` fails if approval is missing or stale.
 - **Review package header**: `review_package.py` includes `RISK_TIER=` in the header so all five reviewers inspect the risk tier.
 
 ---

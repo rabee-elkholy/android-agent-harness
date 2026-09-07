@@ -12,7 +12,7 @@ Classifies the current working-tree diff into one of four Risk Tiers:
 Fail-safe rules:
 - High-risk file types have a file-level floor: comments-only changes in a billing file remain CRITICAL.
 - Unknown or ambiguous changes default to MEDIUM.
-- HIGH and CRITICAL risk tiers require explicit human approval via approve_risk.py before preflight can pass.
+- HIGH and CRITICAL risk tiers require explicit human approval via approve_risk.py challenge tokens before preflight can pass.
 """
 from __future__ import annotations
 
@@ -20,8 +20,9 @@ import argparse
 import json
 import os
 import re
+import secrets
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -243,7 +244,135 @@ def classify_working_tree_risk(
 
 
 def risk_approval_path(repo: Path | None = None) -> Path:
+    if os.environ.get("HARNESS_HOOK_STATE"):
+        return state_path().with_name("risk_approval.json")
+    if repo:
+        for state_dir in (repo / ".agents" / "state", repo / "agents" / "state"):
+            if state_dir.is_dir():
+                return state_dir / "risk_approval.json"
     return state_path().with_name("risk_approval.json")
+
+
+def risk_challenge_path(repo: Path | None = None) -> Path:
+    if os.environ.get("HARNESS_HOOK_STATE"):
+        return state_path().with_name("pending_risk_challenge.json")
+    if repo:
+        for state_dir in (repo / ".agents" / "state", repo / "agents" / "state"):
+            if state_dir.is_dir():
+                return state_dir / "pending_risk_challenge.json"
+    return state_path().with_name("pending_risk_challenge.json")
+
+
+def create_risk_challenge(
+    repo: Path | None = None,
+    ttl_seconds: int = 900,
+) -> tuple[str, Path, str, list[str]]:
+    """Create a single-use risk challenge bound to the current working tree.
+
+    Returns:
+      (nonce_token, challenge_path, tier, reasons)
+    """
+    r = repo or REPO
+    tier, reasons = classify_working_tree_risk(r)
+    fp = tree_code_fingerprint(r) or ""
+
+    token = f"AUTH-{secrets.token_hex(4).upper()}"
+    target = risk_challenge_path(r)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=ttl_seconds)
+
+    payload = {
+        "schema_version": 1,
+        "nonce": token,
+        "tier": tier,
+        "reasons": reasons[:10],
+        "tree_fingerprint": fp,
+        "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
+    return token, target, tier, reasons
+
+
+def consume_risk_challenge(token: str, repo: Path | None = None) -> tuple[bool, str, str]:
+    """Validate and consume a risk challenge nonce, writing risk_approval upon success.
+
+    Returns:
+      (is_success, tier, message)
+    """
+    r = repo or REPO
+    target = risk_challenge_path(r)
+    if not target.is_file():
+        return False, "", "No pending risk challenge found. Run 'python .agents/scripts/approve_risk.py --challenge' first."
+
+    try:
+        challenge = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(challenge, dict):
+            target.unlink(missing_ok=True)
+            return False, "", "Pending risk challenge format invalid. Run 'python .agents/scripts/approve_risk.py --challenge' again."
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        return False, "", f"Failed to read pending risk challenge ({exc}). Generate a new challenge."
+
+    challenge_tier = str(challenge.get("tier") or "")
+    stored_nonce = str(challenge.get("nonce") or "").strip().upper()
+    provided_token = token.strip().upper()
+
+    if provided_token != stored_nonce:
+        return False, challenge_tier, f"Challenge token mismatch: provided '{provided_token}', expected '{stored_nonce}'."
+
+    # Check TTL expiration
+    expires_str = challenge.get("expires_at")
+    if expires_str:
+        try:
+            exp_clean = expires_str.replace("Z", "+00:00")
+            exp_dt = datetime.fromisoformat(exp_clean)
+            if datetime.now(timezone.utc) > exp_dt:
+                target.unlink(missing_ok=True)
+                return False, challenge_tier, "Challenge token has expired (TTL 15m). Generate a new challenge with --challenge."
+        except Exception:
+            pass
+
+    # Check fingerprint binding
+    current_fp = tree_code_fingerprint(r) or ""
+    stored_fp = str(challenge.get("tree_fingerprint") or "")
+    if current_fp != stored_fp:
+        target.unlink(missing_ok=True)
+        return False, challenge_tier, (
+            f"Working tree code changed after challenge was generated "
+            f"(challenge fp: {stored_fp[:8]}, current fp: {current_fp[:8]}). "
+            "Approval invalidated. Re-generate challenge with 'python .agents/scripts/approve_risk.py --challenge'."
+        )
+
+    # Check tier escalation
+    current_tier, _ = classify_working_tree_risk(r)
+    if _TIER_ORDER.get(current_tier, 0) > _TIER_ORDER.get(challenge_tier, 0):
+        target.unlink(missing_ok=True)
+        return False, current_tier, (
+            f"Risk tier escalated to {current_tier} from challenge tier {challenge_tier}. "
+            "Approval invalidated. Re-generate challenge with 'python .agents/scripts/approve_risk.py --challenge'."
+        )
+
+    # Single-use consumption: remove challenge file to prevent replay
+    target.unlink(missing_ok=True)
+
+    # Write permanent approval
+    final_tier = max_tier(challenge_tier, current_tier)
+    written = write_risk_approval(
+        final_tier,
+        current_fp,
+        repo=r,
+        approved_by=f"human_token:{stored_nonce}",
+        nonce=stored_nonce,
+    )
+    if not written:
+        return False, final_tier, "Failed to write risk approval file."
+
+    return True, final_tier, f"Risk tier {final_tier} successfully authorized with token {stored_nonce}."
 
 
 def load_risk_approval(repo: Path | None = None) -> dict | None:
@@ -272,7 +401,8 @@ def check_risk_approval(repo: Path | None = None) -> tuple[bool, str, str]:
     if not approval:
         return False, tier, (
             f"Risk tier is {tier} ({'; '.join(reasons[:3])}). "
-            "Developer approval required: prompt developer via ask_question modal in chat, then run 'python .agents/scripts/approve_risk.py --approve'."
+            "Developer approval required: run 'python .agents/scripts/approve_risk.py --challenge', "
+            "prompt developer in chat via ask_question modal with the token, then redeem with 'python .agents/scripts/approve_risk.py --token <TOKEN>'."
         )
 
     current_fp = tree_code_fingerprint(r) or ""
@@ -281,14 +411,14 @@ def check_risk_approval(repo: Path | None = None) -> tuple[bool, str, str]:
         return False, tier, (
             f"Risk approval is STALE: code changes occurred after approval "
             f"(approved fp: {approved_fp[:8]}, current fp: {current_fp[:8]}). "
-            "Re-prompt developer or run 'python .agents/scripts/approve_risk.py --approve'."
+            "Re-generate challenge via 'python .agents/scripts/approve_risk.py --challenge' and prompt developer."
         )
 
     approved_tier = str(approval.get("tier") or "")
     if _TIER_ORDER.get(approved_tier, 0) < _TIER_ORDER.get(tier, 0):
         return False, tier, (
             f"Risk tier increased to {tier} but approval was for {approved_tier}. "
-            "Re-prompt developer or run 'python .agents/scripts/approve_risk.py --approve'."
+            "Re-generate challenge via 'python .agents/scripts/approve_risk.py --challenge' and prompt developer."
         )
 
     return True, tier, f"Risk tier {tier} approved by developer at {approval.get('approved_at')}."
@@ -299,6 +429,7 @@ def write_risk_approval(
     fingerprint: str,
     repo: Path | None = None,
     approved_by: str = "developer",
+    nonce: str | None = None,
 ) -> Path | None:
     target = risk_approval_path(repo)
     try:
@@ -310,6 +441,8 @@ def write_risk_approval(
             "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "approved_by": approved_by,
         }
+        if nonce:
+            data["nonce"] = nonce
         tmp = target.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         os.replace(tmp, target)
