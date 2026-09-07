@@ -71,6 +71,21 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
   - **Bug Localization Cap**: For bug investigations, limit exploratory file inspection to **a maximum of 3-4 files** directly related to the defect slice before drafting `implementation_plan.md`.
   - **Strict Ban on Git Archaeology**: The agent is **STRICTLY FORBIDDEN from running `git log` or searching old commits to guess developer intent during bug investigation**, unless specifically requested by the developer.
   - **Ban on Cross-Subsystem Dives**: Do NOT trace secondary utility managers (file storage, analytics, bitmap encoders, sound pools) unless explicitly referenced in a runtime stack trace or logcat error.
+- **Zero Live-Network Requests Invariant**:
+  - The agent is **STRICTLY FORBIDDEN from executing outbound network requests (HTTP/HTTPS/WebSocket via Python urllib, requests, aiohttp, curl, wget, Invoke-WebRequest, iwr, or custom scratch scripts)** to external APIs, app backends, staging, or production servers during triage or inspection.
+  - All data contract verification must rely strictly on local source code, unit test fixtures, and mocks.
+  - Partitioned exceptions: Authorized project management tracker tools (Zoho Sprints MCP) and harness kit version checks (`check_kit_update.py`) are strictly partitioned.
+- **UI & String Formatting Defect Boundary**:
+  - For defects involving UI text duplication, string formatting, intent extras, or share sheets, investigation is strictly limited to the UI layer (Composables/XML), Formatters/Helpers, and immediate ViewModels.
+  - The agent is **STRICTLY FORBIDDEN from descending into Data Sources, Repositories, Retrofit Interfaces, Network Modules, or attempting to discover Base URLs**.
+- **Runtime Data Contract Ambiguity & Local Fixtures First Barrier**:
+  - During bug triage, if the defect hinges on runtime payload behavior, external API contracts, or uncertain backend data (e.g. "Does the API already format the URL into the description?"):
+    * **Local Fixtures First Checklist**: The agent MUST first inspect local unit tests, mock JSON fixtures, and fake repositories (`src/test/`, `test/resources/`, `Fake*Repository`, `*TestData*`).
+    * **Single-Shot Clarification Barrier**: If and only if local fixtures do not resolve the contract and the 3-4 file exploration cap is reached, the agent MUST HALT immediately and present **exactly ONE focused interactive modal (`ask_question`)** detailing the contract conflict and proposing concrete architectural/business options with a recommended choice `(Recommended)`.
+    * **Anti-Question Spam & Question Fatigue Guard**:
+      - The agent MUST NEVER ask questions about deterministic code facts discoverable via `project_graph.py` or source inspection (symbol locations, resource keys, callers, types).
+      - The agent MUST NEVER ask permission to perform routine investigation steps ("Should I open X?", "Should I fix Y?").
+      - Purely technical decisions (null safety, Kotlin idioms, Compose optimization, unit tests) must be executed autonomously without questioning the developer.
 - **5-Leaf Review Demystification**:
   - The 5-leaf review is a **post-implementation delivery gate** that inspects the *actual unified diff (`HARNESS_REVIEW_PACKAGE`)*, unit test results, and lint.
   - It is **NOT an excuse for pre-implementation analysis paralysis**. Reviewers evaluate diffs, not intentions; a concise 5-line fix backed by unit tests passes the 5-leaf gate rapidly (Round 1 PASS).
@@ -475,9 +490,15 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
 6. **Background Tasks, Sequential Dependencies & Anti-Hallucination Invariant**:
    - When launching asynchronous background commands (`run_command`, Gradle tasks, preflight checks, device install, E2E smoke):
    - **MANDATORY HUMAN-READABLE PROTOCOL**: The agent may proceed silently (`""`) or emit a short, clean status line in plain text (e.g. `Running unit tests in background...`, `Assembling debug APK...`, `Awaiting code review verdicts...`).
-   - The agent is **STRICTLY PROHIBITED** from printing raw technical task IDs (e.g. NEVER print `fd98ab26.../task-1004`) or robotic justification sentences (e.g. NEVER write *"Output text must be strictly empty"*, *"Stopped calling tools to wait..."*, or *"An intermediate reviewer has reported"*).
+   - The agent is **STRICTLY PROHIBITED** from printing raw technical task IDs (e.g. NEVER print `fd98ab26.../task-1004`) or robotic justification sentences (e.g. NEVER write *"Output text must be strictly empty"`, *"Stopped calling tools to wait..."*, or *"An intermediate reviewer has reported"*).
    - **STRICT PROHIBITION ON FAKE SYSTEM MESSAGES (`<MESSAGE_RECEIVED>`)**: The agent **MUST NEVER** fabricate, simulate, inject, or write `<MESSAGE_RECEIVED>`, `<SYSTEM_MESSAGE>`, or assume task completion in thoughts or chat prose.
    - **SEQUENTIAL DEPENDENCY INVARIANT**: When the next step in the pipeline depends on the current background task finishing (e.g. `:assembleDebug` must complete before `run_device.py install-start`; `install-start` must complete before manual verification checklist), the agent **MUST STOP CALLING TOOLS IMMEDIATELY**. Never invoke dependent tools concurrently. The agent must wait passively for the genuine platform `<SYSTEM_MESSAGE>` notifying task completion (`finished with result:`) before dispatching the next dependent step.
+
+7. **Immediate User Interruption & Conversational Precedence Barrier**:
+   - When the developer's chat message contains a halt command, interruption, or behavioral question (e.g. "وقف", "رد عليا", "بتعمل ايه", "انت كل ده بتدور"):
+     * The agent is **STRICTLY FORBIDDEN from invoking any tools in that turn** (0 tool calls).
+     * The agent MUST yield tool execution immediately and respond 100% in conversational prose to address the developer's question and outline concrete options to resume.
+     * **Contextual Disambiguation Guard**: This rule applies strictly to meta-instructions targeting the agent's actions during the active session; it does NOT apply to business logic terms describing application features (e.g. "pause audio playback", "when server responds").
 
 ---
 

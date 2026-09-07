@@ -5,6 +5,25 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.19] - 2026-09-07
+
+### Fortified Invariants: Zero Live-Network Probing, Local Fixtures First & Conversational Precedence
+- **Zero Live-Network Probing Invariant & Hook Enforcement (`policy_vocab.py`, `pre_tool_safety.py`, `harness-rules.md`, `AGENTS.md`)**:
+  - Implemented fail-closed security hook pattern scanning against ad-hoc network tools (`curl`, `wget`, `Invoke-WebRequest`, `iwr`) and scripting probes (`urllib.request`, `requests`, `aiohttp`, `httpx`).
+  - Added scratch script inspection: intercepting Python execution of temporary scratch scripts to detect and block outbound HTTP requests to external APIs.
+  - Codified strict prohibition in canonical rules against executing outbound network calls to app backends, staging, or production servers during code investigation and triage.
+- **Runtime Data Contract Ambiguity & Local Fixtures First Barrier (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`, `pre_invocation_reminder.py`)**:
+  - Established the "Local Fixtures First" checklist: agents must first inspect unit tests, mock JSON fixtures, and fake repositories (`src/test/`, `test/resources/`, `Fake*Repository`) before declaring runtime payload behavior ambiguous.
+  - Codified single-shot interactive clarification (`ask_question`) if and only if local fixtures do not resolve the contract and the 3-4 file exploration cap is reached, presenting concrete architectural/business choices.
+  - Added strict Anti-Question Spam & Question Fatigue Guard: prohibited questioning developers about deterministic code facts or begging permission for routine tasks.
+- **Immediate User Interruption & Conversational Precedence Barrier (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`, `pre_invocation_reminder.py`)**:
+  - Enforced 0 tool calls when developer inputs session interruptions or behavioral questions ("وقف", "رد عليا", "بتعمل ايه", "انت كل ده بتدور"), requiring immediate conversational response in prose.
+  - Added contextual disambiguation guard strictly distinguishing session interruptions from application business logic.
+- **UI & String Formatting Defect Boundary (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
+  - Bound defect exploration for UI text, formatting, and share sheets strictly to UI Composables/XML, Formatters/Helpers, and ViewModels, preventing deep architectural dives into Retrofit interfaces or Base URLs.
+- **Adversarial Security Selftest Suite Expansion (`_security_selftest.py`)**:
+  - Added deterministic test assertions verifying fail-closed deny on curl, wget, PowerShell iwr, inline urllib/requests, and scratch network scripts using generic test domains (`api.example.com`).
+
 ## [0.27.18] - 2026-09-07
 
 ### Universal UI String Dereferencing & Graph-First Localization Grounding
@@ -177,7 +196,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented fail-closed interception denying shell commands that attempt to scan host user home directories (`C:\Users\...`, `/home/...`, `~`, `%USERPROFILE%`).
   - Added strict Fail-Fast Tracker Policy: maximum 1 attempt for issue lookup; hard deny on reverse-engineering, Google searches for internal APIs, or scratch scrapers.
 
-## [0.27.7] - 2026-09-03
+### 0.27.7 - 2026-09-03
 
 ### Official PyPI Publication, Evergreen Installer Links & Pre-Release Packaging Integrity
 - **Official PyPI Publication (`android-agent-harness`)**:

@@ -93,6 +93,15 @@ SHELL_INDIRECTION_PATTERNS = (
     r"\bbase64\s+(?:--decode|-d)\b",
 )
 
+# Ad-hoc network commands and scripting patterns that attempt to probe live external
+# APIs or app endpoints during triage or code inspection.
+DENIED_NETWORK_PATTERNS = (
+    r"\b(?:curl|wget)(?:\.exe)?\b[^\n\r]*?https?://",
+    r"\b(?:Invoke-WebRequest|iwr|Invoke-RestMethod|irm)\b[^\n\r]*?https?://",
+    r"\b(?:urllib\.request|requests\.(?:get|post|put|delete|patch|head)|aiohttp|httpx)\b[^\n\r]*?https?://",
+)
+
+
 # Homoglyph fold map applied before git scanning so 'gıt' / 'git.exe' lookalike
 # variants cannot launder a mutation past the scanner (B1 adversarial suite).
 CONFUSABLES_MAP = {
@@ -162,6 +171,7 @@ REASON_CODES = {
     "SCHEDULE_DENIED": "Timers must not be used to wait for subagents.",
     "GIT_MUTATION_DENIED": "git mutations are developer-owned; inspection only.",
     "SHELL_INDIRECTION_DENIED": "Encoded/piped shell indirection is fail-closed denied.",
+    "LIVE_NETWORK_PROBING_DENIED": "Probing live app backend or external APIs via network tools is strictly prohibited.",
     "ADB_ALLOW": "adb command passed every device-safety rule.",
     "DEFAULT_ALLOW": "Tool call not covered by any harness deny rule.",
     "SUBAGENT_TOOLS_OFF": "Subagents must keep write and nested-subagent tools off.",
@@ -172,6 +182,7 @@ REASON_CODES = {
 
 _CLASSIFIERS: tuple[tuple[str, str], ...] = (
     ("GIT_MUTATION_DENIED", r"git mutation"),
+    ("LIVE_NETWORK_PROBING_DENIED", r"live app backend|probing live|external APIs|network probing|outbound network"),
     ("REVIEW_PACKAGE_REQUIRED", r"generate a review package first"),
     ("PACKAGE_MISSING", r"package file does not exist"),
     ("PACKAGE_PATH_ESCAPE", r"must reside inside the repository"),

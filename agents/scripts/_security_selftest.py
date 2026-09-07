@@ -135,6 +135,36 @@ def main() -> int:
         _engine_verdict(_cmd("adb -s DEV shell cmd package clear com.selftest.app"))["decision"] == "deny",
     )
 
+    # --- live network / app backend probing: all must deny ---
+    failed += _case(
+        "curl_api_probe_denied",
+        _engine_verdict(_cmd("curl -X POST https://api.example.com/api/v1/endpoint"))["decision"] == "deny",
+    )
+    failed += _case(
+        "wget_api_probe_denied",
+        _engine_verdict(_cmd("wget https://api.example.com/api/v1/endpoint"))["decision"] == "deny",
+    )
+    failed += _case(
+        "powershell_iwr_probe_denied",
+        _engine_verdict(_cmd("powershell -c \"Invoke-WebRequest https://api.example.com/api\""))["decision"] == "deny",
+    )
+    failed += _case(
+        "python_urllib_inline_probe_denied",
+        _engine_verdict(_cmd("python -c \"import urllib.request; urllib.request.urlopen('https://api.example.com')\""))["decision"] == "deny",
+    )
+    failed += _case(
+        "python_requests_inline_probe_denied",
+        _engine_verdict(_cmd("python -c \"import requests; requests.get('https://api.example.com')\""))["decision"] == "deny",
+    )
+    scratch_dir = Path(tempfile.mkdtemp()) / "scratch"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    scratch_probe = scratch_dir / "probe.py"
+    scratch_probe.write_text("import urllib.request\nurllib.request.urlopen('https://api.example.com/api')\n", encoding="utf-8")
+    failed += _case(
+        "scratch_script_network_probe_denied",
+        _engine_verdict(_cmd(f"python {scratch_probe}"))["decision"] == "deny",
+    )
+
     # --- review package path traversal: all must deny ---
     pkg = _pkg_file()
     encoded_traversal = _engine_verdict(

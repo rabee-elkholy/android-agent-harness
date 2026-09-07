@@ -39,6 +39,7 @@ from _hook_state import (  # noqa: E402
 from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
 from policy_vocab import (  # noqa: E402
     DEVICE_BOUND_ADB,
+    DENIED_NETWORK_PATTERNS,
     DENIED_PM_OPS,
     GIT_MUTATIONS,
     SHELL_INDIRECTION_PATTERNS,
@@ -977,6 +978,37 @@ def handle_run_command(command: str, payload: dict | None = None) -> None:
             "Confine all file discovery and shell commands to the active workspace repository."
         )
         return
+
+    # Guard against live app backend / external API probing via ad-hoc network commands
+    network_res = tuple(re.compile(p, re.IGNORECASE) for p in DENIED_NETWORK_PATTERNS)
+    for pat in network_res:
+        if pat.search(command):
+            deny(
+                "Denied: outbound network probing to live app backend or external APIs is strictly prohibited. "
+                "All verification must rely strictly on local source code, tests, and mock fixtures."
+            )
+            return
+
+    # If running a scratch python script, inspect its content for live network calls
+    scratch_match = re.search(
+        r'\bpython(?:\.exe)?\s+["\']?([^"\']+[\\/]scratch[\\/][^"\']+\.py)["\']?',
+        command,
+        re.IGNORECASE,
+    )
+    if scratch_match:
+        scratch_file = Path(scratch_match.group(1))
+        if scratch_file.is_file():
+            try:
+                content = scratch_file.read_text(encoding="utf-8", errors="ignore")
+                for pat in network_res:
+                    if pat.search(content):
+                        deny(
+                            "Denied: scratch script attempts outbound network probing to live app backend or external APIs. "
+                            "All verification must rely strictly on local source code, tests, and mock fixtures."
+                        )
+                        return
+            except Exception:
+                pass
 
     if "adb" not in lower and "emulator" not in lower and "avdmanager" not in lower:
         allow()
