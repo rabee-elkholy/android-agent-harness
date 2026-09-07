@@ -36,6 +36,8 @@ PACKAGE.write_text("diff --git a/x b/x\n", encoding="utf-8")
 os.environ["HARNESS_HOOK_STATE"] = str(STATE)
 os.environ["HARNESS_MAX_REVIEWS"] = "20"
 os.environ["_IN_HOOK_SELFTEST"] = "1"
+os.environ["ANTIGRAVITY_AGENT"] = "1"
+os.environ["ANTIGRAVITY_CONVERSATION_ID"] = "selftest-conv-001"
 # Existing barrier groups exercise legacy token semantics; v0.9.0 evidence
 # groups below flip HARNESS_EVIDENCE_MODE explicitly per scenario.
 os.environ.setdefault("HARNESS_EVIDENCE_MODE", "legacy")
@@ -1560,7 +1562,8 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.27.16"
+expected_ver = (SCRIPTS.parent / "VERSION").read_text(encoding="utf-8").strip()
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == expected_ver
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 

@@ -196,7 +196,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **High-Impact Architecture & Streamlined Documentation (`README.md`, `docs/architecture.md`)**:
   - Refactored `README.md` to a concise 118-line high-impact manifesto showcasing live OS interceptions, the 6 Quality Guardians, Smart Test Promotion, and the Zero Legacy Debt advantage.
 
-## [0.27.5] - 2026-09-02
+### 0.27.5 - 2026-09-02
 
 ### Setup Wizard 2.0 (4-Station Cascading Flow), Diff-Grounded Testing Standard & Doctor Pre-Checks
 - **Setup Wizard 2.0 & 4-Station Flow (`wizard/questions.py`, `setup_wizard.py`)**:
