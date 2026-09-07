@@ -57,10 +57,16 @@ Every subagent must use `model="inherit"`. Never pin `flash`/`pro` to a differen
     * **REALITY-CHECK TRIGGER**: If the target fix (e.g. `dismiss()`, `try/catch`, `completeWaterStreak()`, or null checks) is already written in the working tree, the agent is **STRICTLY FORBIDDEN from inventing complex OS race conditions, Coroutine hangs, Compose sheet state anomalies, or dialog queue loops**.
     * The agent **MUST IMMEDIATELY HALT SPECULATIVE EXPLORATION** and trigger `ask_question`:
       *"The suspect fix (`...`) already exists in the local code. Was this code already tested on device and failed, or is this an uncommitted/untested local change?"*
-- **Targeted Grep & Anti-Grep Cascade Invariant**:
-  - **Strict Ban on Root Grepping**: The Lead Agent is **STRICTLY FORBIDDEN from launching broad, cascading `grep_search` calls across the entire project root (`SearchPath: root`)** for symbols, function names, or generic keywords (e.g. searching for `dismiss`, `onShare`, `StreakUtils`).
-  - **Graph-First Symbol & Function Discovery**: To locate classes, screens, ViewModels, or functions, ALWAYS query `project_graph.py --find <Symbol>` or `--feature <Name>`.
+- **One-Shot File & Block Viewing Invariant**:
+  - When inspecting any source file, ViewModel, Repository, or class that is <= 400 lines, or reading a cohesive class slice, the agent MUST view the target section or entire file in a single comprehensive `view_file` call (e.g. `StartLine: 1, EndLine: 400`). `view_file` natively supports up to 800 lines.
+  - **Strict Ban on Micro-Slicing**: The agent is **STRICTLY FORBIDDEN from micro-slicing a single file into 3-4 consecutive incremental chunks** (e.g. reading lines 50-160, then 170-240, then 240-270). If more context is needed, expand the range in a single definitive call.
+- **Targeted Grep, Anti-Grep Cascade & Symbol Grounding Invariant**:
+  - **Strict Ban on Root Grepping & Grep Flooding**: The Lead Agent is **STRICTLY FORBIDDEN from launching broad, cascading `grep_search` calls across the entire project root (`SearchPath: root`)** for symbols, properties, function names, or generic keywords (e.g. searching for `isFreeTier`, `dismiss`, `onShare`) that return >= 10 speculative matches.
+  - **Graph-First Symbol & Function Discovery**: To locate classes, screens, ViewModels, or functions, ALWAYS query `project_graph.py --find <Symbol>` or `--feature <Name>` first to ground the exact declaring file and component type in a single step.
   - **Targeted Grep Scope**: `grep_search` is permitted ONLY when scoped to a specific target file (`SearchPath: <file>`) or within a specific feature directory (`SearchPath: app/src/main/java/.../<feature>`) after the relevant component is located via the graph.
+- **Anti-Thrashing Navigation Sequence**:
+  - When investigating or reviewing code, the agent MUST complete analysis of the primary source/contract file first before inspecting callers.
+  - **Strict Ban on Ping-Pong File Hopping**: The agent is **STRICTLY FORBIDDEN from alternating back and forth between two or more files across consecutive turns** (e.g. `PaymentRepo` -> `BaseViewModel` -> `PaymentRepo` -> `BaseViewModel`).
 - **Bug Exploration Circuit Breaker & Anti-Archaeology**:
   - **Bug Localization Cap**: For bug investigations, limit exploratory file inspection to **a maximum of 3-4 files** directly related to the defect slice before drafting `implementation_plan.md`.
   - **Strict Ban on Git Archaeology**: The agent is **STRICTLY FORBIDDEN from running `git log` or searching old commits to guess developer intent during bug investigation**, unless specifically requested by the developer.
@@ -171,6 +177,9 @@ The Lead Agent implements, runs Gradle, and talks to the developer.
     - For UI screens, layouts, and ViewModels discovery: ALWAYS run `python .agents/scripts/project_graph.py --screens` or `--find <ScreenName>`.
     - For architectural trace and dependencies: ALWAYS run `python .agents/scripts/project_graph.py --path-from <A> --path-to <B>`.
     - For Harness infrastructure, scripts, and workflows discovery: ALWAYS run `python .agents/scripts/project_graph.py --harness` (or `--tools`) or `python .agents/scripts/project_graph.py --find <query>`. Never run `find_by_name` across `.agents/scripts`.
+  * **One-Shot File & Block Viewing Invariant**: When inspecting any source file or class that is <= 400 lines, or reading a cohesive class slice, the agent MUST view the target section or entire file in a single comprehensive `view_file` call (e.g. `StartLine: 1, EndLine: 400`). `view_file` natively supports up to 800 lines. The agent is **STRICTLY FORBIDDEN from micro-slicing a single file into 3-4 consecutive incremental chunks** (e.g. L50-160, then L170-240, then L240-270). If more context is needed, expand the range in a single definitive call.
+  * **Anti-Grep Cascade & Symbol Grounding Invariant**: Broad root-level grepping (`grep_search` across the whole repository/feature) for symbols, properties, or functions that returns >= 10 results is **STRICTLY FORBIDDEN**. The agent MUST FIRST query `project_graph.py --find <Symbol>` to ground the exact declaring file and component type in a single step, or target `grep_search` strictly to the known target file (`SearchPath: path/to/File.kt`).
+  * **Anti-Thrashing Navigation Sequence**: When investigating or reviewing, the agent MUST complete analysis of the primary source/contract file first before inspecting callers. The agent is **STRICTLY FORBIDDEN from ping-pong file hopping** (alternating back and forth between two or more files across consecutive turns).
   * **Scratch Scripts Prohibition Invariant**: The agent is **STRICTLY FORBIDDEN from authoring custom scratch Python scripts (`scratch/test_*.py`) to simulate ADB commands or hardcoding device serials (`SERIAL = '...'`)**. Use `python .agents/scripts/run_device.py install-start` directly.
   * **STRICT PROHIBITION**: Iterative brute-force grepping (`grep_search` cascades) and speculative multi-file reading (`view_file` > 2 files during discovery/planning) without a preceding graph topology query are **STRICTLY FORBIDDEN**.
   * Use `view_file` and `replace_file_content` ONLY on targeted, precisely located files identified by the graph query. Do not guess symbols.
@@ -285,11 +294,12 @@ From repo root:
    - **Non-test diff (pure production code)**: Dispatch **all 5** standard review leaves in **exactly one** `invoke_subagent` call with `Subagents: [...]`: `bug-reviewer-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, and `regression-impact-reviewer-agent`.
    - **Test diff (touches `*Test.kt`, `src/test/`, `src/androidTest/`)**: **`test-quality-reviewer-agent` is automatically promoted to a mandatory 6th reviewer**. Dispatch **all 6** leaves together in **exactly one** `invoke_subagent` call. The test reviewer audits assertion depth ($\ge 2$ meaningful assertions per `@Test`), Coroutines concurrency (`StandardTestDispatcher` with `advanceUntilIdle()` or Turbine), mock isolation, and zero test stubs.
    - Same package path in every Prompt. `Workspace="inherit"`. Write tools off.
-3. **SILENT REVIEW WAIT (Zero Chat Noise)**:
-   - When subagents are running in the background, the Lead Agent **MUST REMAIN COMPLETELY SILENT in chat** upon receiving intermediate notifications (e.g. do NOT output *"Waiting for 4 remaining..."* or *"Waiting for 3 remaining..."*).
-   - The IDE interface natively displays live progress cards and spinners for each subagent.
+3. **SILENT REVIEW WAIT & QUORUM PATIENCE (Zero Chat Noise)**:
+   - When subagents are running in the background, the Lead Agent **MUST REMAIN COMPLETELY SILENT in chat** upon receiving intermediate notifications (output exactly `""` with 0 tool calls, yielding 0.1s turn turnaround).
+   - **Quorum & Full-Patience Invariant**: The Lead Agent MUST NEVER announce completion, declare reviews passed, or emit chat summaries before the exact quorum of reviewers (5 leaves, or 6 leaves when tests are modified) report with valid EVIDENCE footers. Premature completion declarations while subagents are running are strictly prohibited.
+   - **Circuit Breaker**: If a subagent encounters an unrecoverable crash or error, do NOT wait infinitely; trigger `ask_question` prompting the developer whether to retry the specific reviewer or proceed.
    - Output a single, consolidated, professional summary in chat **ONLY when all subagents have finished and all verdicts are in context**.
-4. Collect verdicts. BLOCKER/MAJOR → output Review Round Summary Card in chat -> fix at the producer -> verify with `fast_kt_lint.py` -> regenerate the package -> dispatch the same leaves again. Identical package content is rejected; the diff must change.
+4. Collect verdicts. BLOCKER/MAJOR -> output Review Round Summary Card in chat -> fix at the producer -> verify with `fast_kt_lint.py` -> regenerate the package -> dispatch the same leaves again. Identical package content is rejected; the diff must change.
 5. Advance only when all required leaves return their PASS tokens: `BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS` (+ `TEST_PASS` when test files are touched).
 
 Never fire separate `invoke_subagent` calls. That burns the round counter and is denied.
@@ -428,10 +438,12 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
    - Command runs (`run_gradle_task.py`, `fast_kt_lint.py`, `review_package.py`) and file operations are rendered by the IDE as collapsible badges (`Worked for 15s >`, `Ran command >`).
    - The agent MUST NOT narrate routine tool executions in permanent chat prose (e.g. NEVER write *"Running all unit tests to ensure complete stability..."*, *"Cleaning stale kapt cache..."*, *"Re-running tests with fresh task execution..."*, *"Reading file..."*).
 
-2. **Silent Intermediate Review Wait (Zero Chat Noise)**:
+2. **Silent Intermediate Review Wait & Quorum Patience (Zero Chat Noise)**:
    - When a 5-leaf review round or background tasks are in-flight, the agent receives intermediate reactive notifications as individual subagents finish.
-   - On EVERY intermediate wakeup where not all 5 verdicts are present, the agent **MUST OUTPUT AN EMPTY STRING (`""`) AND CALL NO TOOLS**, ending the turn instantly and silently.
+   - On EVERY intermediate wakeup where not all 5 (or 6) verdicts are present, the agent **MUST OUTPUT AN EMPTY STRING (`""`) AND CALL NO TOOLS**, ending the turn instantly and silently (0.1s turnaround).
+   - **Quorum Invariant**: NEVER declare review completion, announce pass, or output conclusions while reviewers are running.
    - NEVER output status countdowns or waiting narrations (e.g. NEVER write *"Waiting for Bug Reviewer to finalize its verdict..."*, *"Reviewers are completing their final evaluations..."*, *"Waiting for remaining reviewers to complete their evaluations..."*).
+   - **Circuit Breaker**: If a subagent encounters an unrecoverable crash or error, do NOT wait infinitely; trigger `ask_question` prompting the developer whether to retry the specific reviewer or proceed.
 
 3. **The 4 Permitted Conversational Touchpoints**:
    Permanent chat prose is reserved strictly for high-signal engineering milestones:
@@ -440,10 +452,11 @@ To preserve a clean, professional, and readable IDE chat interface, the agent mu
    - **Touchpoint 3: Phase Milestone Card**: Verification evidence, automated E2E results, and phase progression cards upon completing a milestone.
    - **Touchpoint 4: Final Task Delivery**: Final walkthrough summary, verification evidence, and Conventional Commit draft.
 
-4. **Review Churn & Fast Convergence**:
-   - When addressing review findings, the agent must fix all findings across all 5 pillars comprehensively in a single pass.
+4. **Review Churn, Shift-Left Pre-Audit & Fast Convergence**:
+   - **Shift-Left Pre-Audit Invariant**: Before generating `review_package.py`, the agent must self-audit the diff against the 5 reviewer criteria (zero inline FQCNs, Compose dual-locale Previews, RTL/strings parity, and unit test pass) to achieve clean 1st-round PASS and avoid conversation context compaction.
+   - When addressing review findings, the agent must fix all findings across all pillars comprehensively in a single pass.
    - Empirically verify with `testDebugUnitTest` and `fast_kt_lint.py` before re-dispatching.
-   - Review rounds MUST converge in at most 3 rounds. High round churn (e.g. Round 5, Round 6, Round 7) is strictly prohibited.
+   - Review rounds MUST converge in at most 2 rounds (hard cap at 3). High round churn is strictly prohibited.
    - **Round tracking is programmatic**: `review_package.py` records every generated package as a round for the task (task id from `--task` / `HARNESS_TASK_ID`, ledger in `.agents/state/review_rounds.json`; counters reset when HEAD moves after the developer commits). At the round cap (3, override `HARNESS_MAX_REVIEW_ROUNDS`), package generation prints a `REVIEW ROUND CAP` warning and the reminder injects an escalation note — the agent MUST present a Review Round Summary Card and ask the developer to choose: continue one more round / roll back the last fixes / stop the task. Never silently loop.
 
 5. **Conversation Language Parity Across All Developer Touchpoints**:

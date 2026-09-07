@@ -513,25 +513,31 @@ def _record_verdict(
         record["verdict"] = verdict
         record["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         record["completed_reason"] = reason[:400]
-        leaves: dict[str, dict] = {}
-        findings: list[str] = []
+        leaves: dict[str, dict] = dict(record.get("leaves") or {})
+        findings: list[str] = list(record.get("findings") or [])
         for chunk in chunks or []:
+            # Ignore ephemeral harness reminders, pipeline instructions, and system banners
+            if any(k in chunk for k in ("ACTIVE PIPELINE REMINDER", "Harness Quality Guard:", "QUORUM & PATIENCE MANDATE", "[QUORUM & PATIENCE")):
+                continue
             for token in ALL_PASS_TOKENS:
                 if token in chunk:
                     leaf = "test_quality" if token == "TEST_PASS" else token.split("_")[0].lower()
                     evidence = EVIDENCE_RE.search(chunk)
-                    leaves.setdefault(
-                        leaf,
-                        {
-                            "token": token,
-                            "evidence": {
-                                "pkg": evidence.group(1) if evidence else "",
-                                "cites": int(evidence.group(2)) if evidence else 0,
-                                "valid": bool(evidence)
-                                and evidence.group(1).lower() == active_pkg12.lower(),
-                            },
+                    is_valid = bool(evidence) and evidence.group(1).lower() == active_pkg12.lower()
+                    ev_data = {
+                        "token": token,
+                        "verdict": token,
+                        "evidence": {
+                            "pkg": evidence.group(1) if evidence else "",
+                            "cites": int(evidence.group(2)) if evidence else 0,
+                            "valid": is_valid,
                         },
-                    )
+                    }
+                    if leaf not in leaves:
+                        leaves[leaf] = ev_data
+                    elif is_valid and not leaves[leaf].get("evidence", {}).get("valid"):
+                        # Upgrade previous un-evidenced or invalid entry with genuine verified evidence
+                        leaves[leaf] = ev_data
             if "Findings" in chunk:
                 findings.append(chunk[:2000])
         record["leaves"] = leaves

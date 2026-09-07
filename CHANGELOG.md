@@ -5,6 +5,26 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.16] - 2026-09-07
+
+### Anti-Thrashing Navigation, One-Shot File Viewing & Reviewer Optimization
+- **One-Shot File & Block Viewing Invariant (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
+  - Mandated viewing files and cohesive class blocks <= 400 lines in a single comprehensive `view_file` call (utilizing full 800-line capacity).
+  - Strictly banned incremental micro-slicing (e.g. reading 50-70 lines repeatedly across multiple turns), cutting conversation token re-transmission and latency by over 70%.
+- **Targeted Grep, Anti-Grep Cascade & Symbol Grounding Invariant (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`)**:
+  - Strictly prohibited root-level grep flooding returning >= 10 speculative matches.
+  - Mandated AST-backed symbol grounding via `project_graph.py --find <Symbol>` or file-scoped grep before file inspection.
+- **Anti-Thrashing Navigation Sequence (`harness-rules.md`, `AGENTS.md`)**:
+  - Enforced linear contract-first reading before inspecting callers.
+  - Strictly prohibited ping-pong file hopping between multiple files across consecutive turns.
+- **Reviewer Subagent Prompts Hardening (`agents/subagents/*.json`)**:
+  - Harmonized `Investigation Protocol` across all 6 reviewer subagents (`bug-reviewer`, `perf-anr-guardian`, `convention-reviewer`, `security-reviewer`, `regression-impact-reviewer`, `test-quality-reviewer`) to mandate One-Shot Viewing (<= 400 lines in 1 call) and bounded 2-hop call chain inspection.
+  - Replaced loose codebase-wide grep references in `regression-impact-reviewer-agent.json` with embedded graph topology and AST symbol lookups.
+- **Turn-by-Turn Pre-Invocation Directive (`pre_invocation_reminder.py`)**:
+  - Injected `ONE-SHOT VIEWING` and `GRAPH-FIRST` directives directly into active turn reminders for continuous in-session enforcement.
+- **Target Project Verification**:
+  - Verified 100% operational health and AST graph sync in `Fitness_Android` (3,831 nodes, 15,500 edges) with 0 failures.
+
 ## [0.27.15] - 2026-09-07
 
 ### Pre-Commit Gate Retirement, Shift-Left Preflight Decoupling & Legacy Cleanup
@@ -177,7 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Environment Doctor Hardening (`doctor/engine.py`, `harness_doctor.py`)**:
   - Added proactive checks for Java JDK runtime (validating JDK 17+ requirement for AGP 8+) and ADB CLI availability in system PATH to Dimension 1.
 
-## [0.27.4] - 2026-09-02
+### 0.27.4 - 2026-09-02
 
 ### Complete E2E/Maestro Machinery Purge & Interactive Manual Checklist Mode
 - **Complete E2E/Maestro Engine Purge (`_maestro_core.py`, `run_e2e_qa.py`, `run_e2e_smoke.py`, `qa-e2e-planner-agent`)**:

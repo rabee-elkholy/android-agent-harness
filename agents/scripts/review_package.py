@@ -123,6 +123,36 @@ def build_files_map(max_files: int | None = None) -> tuple[dict[str, str], int]:
 
 
 
+def build_graph_topology_summary() -> str:
+    try:
+        from impact_analyzer import analyze_impact, build_repo_index
+        target_files = list(changed_paths())
+        if not target_files:
+            return ""
+        index = build_repo_index(REPO)
+        report = analyze_impact(REPO, target_files, index)
+        lines = [
+            "\n## ARCHITECTURAL GRAPH TOPOLOGY & BLAST RADIUS",
+            f"# Confidence: {report.get('confidence', 'MEDIUM')}",
+        ]
+        syms = report.get("modified_symbols", [])
+        if syms:
+            lines.append(f"- Impacted Declarations ({len(syms)}): " + ", ".join(syms[:15]))
+        deps = report.get("direct_dependents", [])
+        if deps:
+            lines.append(f"- Direct Dependents / Callers ({len(deps)}): " + ", ".join(deps[:15]))
+        uis = report.get("recommended_ui_surfaces", [])
+        if uis:
+            lines.append(f"- Impacted UI Surfaces ({len(uis)}): " + ", ".join(uis[:10]))
+        tests = report.get("recommended_tests", [])
+        if tests:
+            lines.append(f"- Recommended Unit Tests ({len(tests)}): " + ", ".join(tests[:10]))
+        lines.append("")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Write working-tree diff package for the 5 review leaves")
     parser.add_argument("paths", nargs="*", help="Optional paths to include (default: all unstaged)")
@@ -187,6 +217,7 @@ def main(argv=None) -> int:
     contains_tests = len(test_files) > 0
     print(f"[*] Packaging review diff for {len(files_map)} file(s) (risk tier: {risk_tier})...", flush=True)
     files_json = json.dumps(files_map, ensure_ascii=False, separators=(",", ":"))
+    graph_topology = build_graph_topology_summary()
     chunks = [
         "\n".join([
             *build_header(
@@ -204,6 +235,7 @@ def main(argv=None) -> int:
         git(*status_cmd),
         "\n## git diff --stat\n",
         git(*diff_stat_cmd),
+        *(["\n" + graph_topology] if graph_topology else []),
         "\n## git diff -U10\n",
         git(*diff_cmd),
     ]

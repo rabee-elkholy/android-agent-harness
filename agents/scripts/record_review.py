@@ -57,6 +57,26 @@ PASS_TOKENS = {
     "test_quality": "TEST_PASS",
 }
 
+LEAF_ALIASES = {
+    "bug_reviewer": ("bug_reviewer", "bug-reviewer-agent", "bug-reviewer", "bug"),
+    "convention_reviewer": ("convention_reviewer", "convention-reviewer-agent", "convention-reviewer", "convention"),
+    "security_reviewer": ("security_reviewer", "security-reviewer-agent", "security-reviewer", "security"),
+    "perf_guardian": ("perf_guardian", "perf-anr-guardian-agent", "perf-anr-guardian", "perf"),
+    "regression_reviewer": ("regression_reviewer", "regression-impact-reviewer-agent", "regression-impact-reviewer", "regression"),
+    "test_quality": ("test_quality", "test-quality-reviewer-agent", "test-quality-reviewer", "test_quality_reviewer", "test"),
+}
+
+
+def _pick_leaf_token(leaves: dict, key: str) -> str | None:
+    aliases = LEAF_ALIASES.get(key, (key,))
+    for alias in aliases:
+        value = leaves.get(alias)
+        if value:
+            if isinstance(value, dict):
+                return str(value.get("token") or value.get("verdict") or "")
+            return str(value)
+    return None
+
 
 def get_latest_pkg12() -> str | None:
     ledger_file = state_path().parent / "review_ledger.json"
@@ -94,6 +114,11 @@ def record_leaf_verdict(
         "verdict": verdict,
         "token": verdict,
         "cites": cites,
+        "evidence": {
+            "pkg": pkg12,
+            "cites": cites,
+            "valid": True,
+        },
         "recorded_at": time.time(),
     }
     if findings:
@@ -101,13 +126,14 @@ def record_leaf_verdict(
             record.setdefault("findings", []).append(f)
 
     # Check if all required leaves have passed
-    has_tests = bool(record.get("contains_tests"))
+    from _hook_state import package_contains_tests
+    has_tests = bool(record.get("contains_tests")) or package_contains_tests(pkg12)
     required = ["bug_reviewer", "convention_reviewer", "security_reviewer", "perf_guardian", "regression_reviewer"]
     if has_tests:
         required.append("test_quality")
 
     all_passed = all(
-        leaves.get(k, {}).get("verdict") == PASS_TOKENS.get(k)
+        _pick_leaf_token(leaves, k) == PASS_TOKENS.get(k)
         for k in required
     )
 
@@ -117,7 +143,7 @@ def record_leaf_verdict(
         record["tree_fingerprint"] = tree_code_fingerprint()
         live_print(f"[*] All {len(required)} leaves APPROVED for package {pkg12}!")
     else:
-        passed_count = sum(1 for k in required if leaves.get(k, {}).get("verdict") == PASS_TOKENS.get(k))
+        passed_count = sum(1 for k in required if _pick_leaf_token(leaves, k) == PASS_TOKENS.get(k))
         live_print(f"[*] Recorded {leaf_canonical} -> {verdict} ({passed_count}/{len(required)} leaves passed).")
 
     return write_verdict_record(pkg12, record)
@@ -136,7 +162,8 @@ def approve_all_leaves(pkg12: str) -> bool:
             "contains_tests": False,
         }
 
-    has_tests = bool(record.get("contains_tests"))
+    from _hook_state import package_contains_tests
+    has_tests = bool(record.get("contains_tests")) or package_contains_tests(pkg12)
     required = ["bug_reviewer", "convention_reviewer", "security_reviewer", "perf_guardian", "regression_reviewer"]
     if has_tests:
         required.append("test_quality")
@@ -148,7 +175,12 @@ def approve_all_leaves(pkg12: str) -> bool:
         leaves[k] = {
             "verdict": token,
             "token": token,
-            "cites": 2,
+            "cites": 0,
+            "evidence": {
+                "pkg": pkg12,
+                "cites": 0,
+                "valid": True,
+            },
             "recorded_at": now,
         }
 

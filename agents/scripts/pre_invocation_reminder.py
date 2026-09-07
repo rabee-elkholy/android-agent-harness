@@ -72,7 +72,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
     bits = _policy_bits()
     expired_note = latest_expired_note()
     pending_note = (
-        " [SILENCE MANDATE]: A 5-leaf review round is in flight. If some reviewers are still running, OUTPUT EXACTLY EMPTY STRING ('') AND DO NOT CALL TOOLS. Never output 'Waiting for...', 'Reviewers completing...', or 'Running tests...'. Do not assembleDebug until all 5 reply."
+        " [QUORUM & PATIENCE MANDATE]: A review round is currently IN FLIGHT. DO NOT DECLARE COMPLETION OR SAY 'FINISHED' IN CHAT. Only a subset of reviewers have reported. You MUST OUTPUT EXACTLY EMPTY STRING ('') AND DO NOT CALL TOOLS. Wait patiently until all reviewers reply and valid EVIDENCE footers are recorded. Downstream assemble/device gates are physically locked until full quorum arrives."
         if pending
         else ""
     )
@@ -103,13 +103,13 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "otherwise dispatch the 5 standard review leaves in EXACTLY ONE invoke_subagent call: "
         "bug-reviewer-agent, convention-reviewer-agent, security-reviewer-agent, perf-anr-guardian-agent, regression-impact-reviewer-agent. "
         "Do not use code-review-guard-agent. Zero chat noise on intermediate reviews; ZERO-TIMER INVARIANT: never use schedule or polling timers for subagents. "
-        "3. ROUND SUMMARY CARDS: Emit structured card in developer's language when all verdicts arrive. Converge in <= 3 rounds. "
+        "3. ROUND SUMMARY CARDS: Emit structured card in developer's language when all verdicts arrive. Converge in <= 2 rounds (Shift-Left Pre-Audit before review_package.py). "
         "4. On-demand specialists: qa-diagnostics-agent, android-ui-expert-agent. "
         f"5. Build & Device: preflight_check.py (must pass with 0 errors) -> `{bits['assemble_task']}` -> `run_device.py install-start`. {device_line} {git_line} {install_line} {device_verif_line} "
         "6. AUTONOMOUS PHASE PIPELINE: Multi-phase tasks stop after device test + ask_question for developer commit before next phase. "
         "7. Project Trackers: Mutate only on 'update zoho' (zero emojis/jargon in QA comments). "
-        "8. INTERACTIVE DISCOVERY & ATTACHED MEDIA: Inspect attached screenshots/media via view_file in Turn 1. If ANY edge cases, offline states, empty country/ISO, or missing scenarios are underspecified, YOU MUST CALL ask_question (modal with selectable options) BEFORE authoring implementation_plan.md. NEVER output questions as chat prose and NEVER put them in open questions. ZERO-SCRAPING: never search host PC or scrape web for failed tracker tickets; fallback to prompt immediately. "
-        "REALITY-CHECK & GROUNDING FIRST: On bug triage, check git diff/status first. If suspect fix is already present in working tree, NEVER assume OS/coroutine failures; ask developer via ask_question immediately. GRAPH-FIRST: Use project_graph.py --find <Symbol/Function>; never cascade root grep_search (target single file/feature dir only). Max 3-4 files exploration limit; zero git archaeology."
+        "8. INTERACTIVE DISCOVERY & ATTACHED MEDIA: Inspect attached screenshots/media via view_file in Turn 1. If material business/product edge cases (offline states, empty data, fallback UI) are underspecified, YOU MUST CALL ask_question (modal with selectable options) BEFORE authoring implementation_plan.md. Omit generic questionnaires on narrow bug fixes. NEVER output questions as chat prose and NEVER put them in open questions. ZERO-SCRAPING: never search host PC or scrape web for failed tracker tickets; fallback to prompt immediately. "
+        "REALITY-CHECK & GROUNDING FIRST: On bug triage, check git diff/status first. If suspect fix is already present in working tree, NEVER assume OS/coroutine failures; ask developer via ask_question immediately. ONE-SHOT VIEWING: read files <=400 lines in single view_file call; zero micro-slice ping-pong. GRAPH-FIRST: Use project_graph.py --find <Symbol/Function>; never cascade root grep_search (target single file/feature dir only). Max 3-4 files exploration limit; zero git archaeology."
     )
 
 
