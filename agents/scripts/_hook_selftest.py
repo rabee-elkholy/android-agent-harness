@@ -1560,7 +1560,7 @@ failed += int(not ok_g_q)
 
 from check_kit_update import parse_semver, get_current_version  # noqa: E402
 
-ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.27.14"
+ok_semver = parse_semver("v0.1.0") == (0, 1, 0) and parse_semver("0.10.8") > (0, 10, 7) and get_current_version() == "0.27.15"
 print(f"check_kit_update semver and version: {'OK' if ok_semver else 'FAIL'}")
 failed += int(not ok_semver)
 
@@ -2090,7 +2090,6 @@ prefill_answers = {
     "zoho_language": "all_ar",
     "flavor": "staging",
     "pm_provider": "github_projects",
-    "git_gate": "no",
 }
 write_answers(prefill_repo, prefill_answers)
 prefill_defaults = existing_defaults(prefill_repo)
@@ -2102,7 +2101,6 @@ ok_prefill = (
     and prefill_defaults.get("i14") == ["cursor", "gemini"]
     and prefill_defaults.get("i18") == "all_ar"
     and prefill_defaults.get("i20") == "github_projects"
-    and prefill_defaults.get("i21") == "no"
 )
 i3_q = {"id": "i3", "options": [{"id": "never"}, {"id": "agent-may-commit"}]}
 ok_prefill = (
@@ -2395,27 +2393,20 @@ print(
 )
 failed += int(not ok_wizard_i20)
 
-# --- v0.10.0: wizard I.21 git-gate confirmation (default ON) ---
+# --- v0.10.0: wizard I.21 git-gate retirement (verified removed) ---
 from setup_wizard import flags_from_answers  # noqa: E402
 
-ok_i21_present = "i21" in q_ids_v8
-norm_i21_yes = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
-                             "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
-                             "i18": "all_en", "i20": "zoho_sprints", "i21": "no"},
-                          }, facts_v8)
-norm_i21_absent = normalize({"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
-                              "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
-                              "i18": "all_en", "i20": "zoho_sprints"}, facts_v8)
-ok_i21_norm = (
-    norm_i21_yes.get("git_gate") == "no"
-    and norm_i21_absent.get("git_gate") == "yes"
-)
-flags_yes = flags_from_answers({**norm_i21_absent, "git_gate": "yes"})
-flags_no = flags_from_answers({**norm_i21_absent, "git_gate": "no"})
-ok_i21_flags = "--git-gate" in flags_yes and "--no-git-gate" in flags_no
-ok_wizard_i21 = ok_i21_present and ok_i21_norm and ok_i21_flags
+ok_i21_absent = "i21" not in q_ids_v8
+norm_i21_retired = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
+                                 "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
+                                 "i18": "all_en", "i20": "zoho_sprints"},
+                             }, facts_v8)
+ok_i21_norm = norm_i21_retired.get("git_gate") == "no"
+flags_out = flags_from_answers(norm_i21_retired)
+ok_i21_flags = "--git-gate" not in flags_out and "--no-git-gate" not in flags_out
+ok_wizard_i21 = ok_i21_absent and ok_i21_norm and ok_i21_flags
 print(
-    f"wizard I.21 git-gate confirmation (default ON): {'OK' if ok_wizard_i21 else 'FAIL ' + str([ok_i21_present, ok_i21_norm, ok_i21_flags])}"
+    f"wizard I.21 git-gate retirement (verified removed): {'OK' if ok_wizard_i21 else 'FAIL ' + str([ok_i21_absent, ok_i21_norm, ok_i21_flags])}"
 )
 failed += int(not ok_wizard_i21)
 
@@ -2512,13 +2503,13 @@ failed += int(not ok_e2e_declarative)
 ok_i22_present = "i22" in q_ids_v8
 norm_i22_e2e = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
                              "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
-                             "i18": "all_en", "i20": "zoho_sprints", "i21": "yes", "i22": "autonomous_e2e"}}, facts_v8)
+                             "i18": "all_en", "i20": "zoho_sprints", "i22": "autonomous_e2e"}}, facts_v8)
 norm_i22_manual = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
                                 "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
-                                "i18": "all_en", "i20": "zoho_sprints", "i21": "yes", "i22": "manual_only"}}, facts_v8)
+                                "i18": "all_en", "i20": "zoho_sprints", "i22": "manual_only"}}, facts_v8)
 norm_i22_default = normalize({**{"i0": "yes", "i1": "discovered", "i3": "never", "i4": "allow",
                                  "i10": "confirm", "i15": "yes", "i14": ["cursor"], "i16": "skip",
-                                 "i18": "all_en", "i20": "zoho_sprints", "i21": "yes"}}, facts_v8)
+                                 "i18": "all_en", "i20": "zoho_sprints"}}, facts_v8)
 ok_wizard_i22 = (
     ok_i22_present
     and norm_i22_e2e.get("device_verification") == "autonomous_e2e"
@@ -2686,11 +2677,17 @@ try:
         "--cc-hooks",
         "--copilot-hooks",
     ])
+    # Simulate legacy .githooks existing to test automatic cleanup
+    legacy_hook = tmp_adapt_dir / ".githooks" / "pre-commit"
+    legacy_hook.parent.mkdir(parents=True, exist_ok=True)
+    legacy_hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    subprocess.run(["git", "config", "core.hooksPath", ".githooks"], cwd=str(tmp_adapt_dir), capture_output=True)
+
     install_adapters(adapt_args)
     ok_claude_pack = (tmp_adapt_dir / ".claude" / "commands" / "deliver.md").is_file()
     ok_copilot_pack = (tmp_adapt_dir / ".github" / "prompts" / "deliver.prompt.md").is_file()
     ok_codex_pack = (tmp_adapt_dir / ".codex" / "prompts" / "deliver.md").is_file()
-    ok_git_gate_hook = (tmp_adapt_dir / ".githooks" / "pre-commit").is_file()
+    ok_git_gate_hook = not (tmp_adapt_dir / ".githooks").exists()
     exclude_file = tmp_adapt_dir / ".git" / "info" / "exclude"
     ok_git_exclude = exclude_file.is_file() and ".githooks/" in exclude_file.read_text(encoding="utf-8")
     ok_cc_settings = (tmp_adapt_dir / ".claude" / "settings.json").is_file()
@@ -2726,7 +2723,7 @@ try:
     ok_prune_copilot_hooks = not copilot_hooks_file.is_file()
     ok_keep_claude = (tmp_adapt_dir / ".claude" / "commands" / "deliver.md").is_file()
 
-    # Explicit opt-out: --no-git-gate must leave no hook behind
+    # Default: leaves no hook behind
     no_gate_dir = Path(tempfile.mkdtemp())
     adapt_args_no_gate = parse_args([
         "--repo", str(no_gate_dir),
@@ -2734,10 +2731,9 @@ try:
         "--py", "python",
         "--assemble", ":app:assembleDebug",
         "--tools", "claude",
-        "--no-git-gate",
     ])
     install_adapters(adapt_args_no_gate)
-    ok_no_gate = not (no_gate_dir / ".githooks" / "pre-commit").is_file()
+    ok_no_gate = not (no_gate_dir / ".githooks").exists()
 
     ok_adapter_lifecycle = (
         ok_cp_tmpls
@@ -2755,22 +2751,18 @@ try:
         and ok_keep_claude
         and ok_no_gate
     )
-    print(f"install_tool_adapters command_packs, git_gate(default ON) & hook bridges: {'OK' if ok_adapter_lifecycle else 'FAIL'}")
+    print(f"install_tool_adapters command_packs, legacy git_gate cleanup & hook bridges: {'OK' if ok_adapter_lifecycle else 'FAIL'}")
     failed += int(not ok_adapter_lifecycle)
 finally:
     import shutil
     shutil.rmtree(tmp_adapt_dir, ignore_errors=True)
     shutil.rmtree(no_gate_dir, ignore_errors=True)
 
-# --- v0.6.0: Pre-Commit Quality Gate Smoke ---
+# --- v0.6.0: Pre-Commit Quality Gate Retirement Verification ---
 pre_commit_script = SCRIPTS / "pre_commit_gate.py"
-if pre_commit_script.is_file():
-    proc_gate = subprocess.run([sys.executable, str(pre_commit_script)], capture_output=True, text=True)
-    ok_gate = proc_gate.returncode == 0
-    print(f"pre_commit_gate staged sanity: {'OK' if ok_gate else 'FAIL'}")
-    failed += int(not ok_gate)
-else:
-    print("pre_commit_gate staged sanity: OK (skipped — script not present)")
+ok_gate_retired = not pre_commit_script.is_file()
+print(f"pre_commit_gate retirement (script absent): {'OK' if ok_gate_retired else 'FAIL'}")
+failed += int(not ok_gate_retired)
 
 # --- v0.6.0: Harness CLI Dispatcher ---
 cli_file = repo_root / "harness_cli.py"
@@ -2882,7 +2874,7 @@ if install_update_script.is_file() and KIT_LAYOUT:
             "tools": ["gemini"],
             "zoho_mcp": "skip",
             "pm_provider": "none",
-            "git_gate": "yes",
+            "git_gate": "no",
         }
         (setup_dir / "answers.json").write_text(json.dumps(fixture_answers), encoding="utf-8")
 

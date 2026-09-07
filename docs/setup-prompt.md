@@ -1,6 +1,6 @@
 # Setup prompt
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.14/docs/setup-prompt.md`  
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.15/docs/setup-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
 
 The installing agent **executes** this file (usually after the developer pasted [`install-or-update-prompt.md`](install-or-update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
@@ -28,9 +28,9 @@ If `<repo>/.harness-setup/answers.json` exists and `"i0": true`, **execute the d
 `$PY <kit>/agents/scripts/install_or_update.py --repo <this-android-root> --kit <kit>`
 This performs sections 0 to 6 automatically in under 3 seconds.
 
-Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-or-update-prompt.md`](install-or-update-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions`; the JSON list is the sole authority and can include I.18-I.21 plus conditional I.2/I.5/I.6/I.19/bootstrap questions. Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
+Otherwise run `<kit>/agents/scripts/setup_wizard.py` (see [`install-or-update-prompt.md`](install-or-update-prompt.md)). Print the wizard JSON `model_warning` first, then `auto_blurb`. Ask **only** the objects in `questions`; the JSON list is the sole authority and can include I.18-I.20, I.22 plus conditional I.2/I.5/I.6/I.19/bootstrap questions. Use each JSON `prompt` **verbatim**. Do **not** invent extra I.* questions. Do **not** invent five-word titles.
 
-**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. On a re-run, previous answers are marked `(current)` and Enter keeps them; only deliberate changes need a new choice. Do not guess which tools they use (I.14), Zoho (I.16), tracker (I.20), git gate (I.21), or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until the required questions returned by the wizard are answered.
+**Interview format:** The developer reads the **choice UI**. One form per JSON question. Options in the **same language** as the developer. Wait for required answers. On a re-run, previous answers are marked `(current)` and Enter keeps them; only deliberate changes need a new choice. Do not guess which tools they use (I.14), Zoho (I.16), tracker (I.20), or phone vs emulator (I.4). Do not rewrite `harness-rules.md` until the required questions returned by the wizard are answered.
 
 Python, module, launcher, APK, architecture, and locales come from disk (`auto` in the wizard JSON). Defaults you must **not** ask: scaffold disabled (I.9), Gemini = merge script grants only if `~/.gemini` exists else skip (I.12 — never write a global Gemini rule during setup), tests only at the end (I.13). The wizard adds I.2 / I.5 / I.6 **only** when Python, module, or launcher is missing or ambiguous.
 
@@ -85,11 +85,6 @@ Print `model_warning` then `auto_blurb` from the wizard JSON. Then ask **only** 
 ### I.3 Git (required)
 - **Modal prompt:** Who should create git commits? If you are not sure, keep commits in your own hands (you commit from the IDE).
 - **Choices:** `I commit myself` (Recommended) / `The agent may commit when I ask in chat`
-
-### I.21 Pre-commit git gate (required)
-- **Modal prompt:** use the wizard JSON `prompt` verbatim.
-- **Choices:** install the staged quality gate (Recommended) / manage your own git hooks.
-- The recommended choice passes `--git-gate` to `install_tool_adapters.py` (the default). The opt-out passes `--no-git-gate` and leaves `.githooks/pre-commit` absent.
 
 #### Station 3: Project Management & Task Tracker
 
@@ -269,9 +264,8 @@ Follow **I.12** from answers: merge script grants only when `gemini_config` is `
 ## 7) Tell the developer
 
 - **Zero Git Pollution**: All harness files (`.agents/`), adapters (`AGENTS.md`, `GEMINI.md`, `.cursorrules`), and transient state are 100% private and excluded locally via `.git/info/exclude`. No harness commit is needed; your repository working tree remains clean for your team.
-- **Local Hooks Privacy**: Note that `.githooks/` is automatically registered in `.git/info/exclude` to keep pre-commit gates local to this developer without dirtying shared team repositories.
 - **New Session**: Tell them to start a **new chat** on this Android folder before starting daily work.
 - **Diagnostics & Rollback**:
-  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.14/docs/diagnostic-prompt.md`.
-  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.14/docs/rollback-prompt.md`.
+  - To run system diagnostics at any time: Run `python .agents/scripts/harness_doctor.py` or execute `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.15/docs/diagnostic-prompt.md`.
+  - For rollback: Execute `.harness-backup/<timestamp>/rollback-prompt.md` or `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.15/docs/rollback-prompt.md`.
   - Remember: Five `*_PASS` required before real feature/bug delivery.

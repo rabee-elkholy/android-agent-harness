@@ -5,6 +5,21 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.15] - 2026-09-07
+
+### Pre-Commit Gate Retirement, Shift-Left Preflight Decoupling & Legacy Cleanup
+- **Complete Pre-Commit Gate Retirement (`pre_commit_gate.py`, `install_tool_adapters.py`, `install_or_update.py`)**:
+  - Permanently deleted `agents/scripts/pre_commit_gate.py` and unhooked it from `CORE_SCRIPTS` (reduced to 45 core scripts).
+  - Shifted all quality, lint, and Room migration validations entirely left into `preflight_check.py` and delivery gates, leaving developers in full, unhindered control of their Git commit authority.
+  - Implemented `cleanup_legacy_git_gate()` in `install_tool_adapters.py` to automatically unset `core.hooksPath` and safely remove legacy `.githooks/` directories on fresh install and update cycles in client apps.
+  - Retired `--git-gate` and `--no-git-gate` CLI flags with backward-compatible parsing.
+- **Wizard I.21 Retirement (`setup_wizard.py`, `questions.py`, `i18n.py`)**:
+  - Completely removed question `I.21` from the interactive setup wizard while cleanly normalizing `git_gate` to `"no"`.
+  - Cleaned up localization dictionaries across English and Arabic strings.
+- **Documentation & Cross-Platform Alignment**:
+  - Aligned architecture guides, setup prompt, compatibility matrix, and tool support specifications with the retired git-gate invariant.
+  - Verified 180+ hook selftests and 12-dimension doctor diagnostic suite passing with 0 failures.
+
 ## [0.27.14] - 2026-09-06
 
 ### Code Graph Function Indexing, Reality-Check Protocol & Anti-Paralysis Exploration Barriers
@@ -174,7 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Universal Code Graph & Selftest Alignment**:
   - Updated codebase graph engine, wizards, and selftest suites to pass 100% cleanly with zero warnings and zero failures.
 
-## [0.27.3] - 2026-09-02
+### 0.27.3 - 2026-09-02
 
 ### Application ID Resolution, PM Tracker Jargon Elimination & Local Privacy
 - **Application ID & Launcher Package Discovery (`install_or_update.py`)**:

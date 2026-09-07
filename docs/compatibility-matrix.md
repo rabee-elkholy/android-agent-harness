@@ -33,9 +33,9 @@ Full per-tool template mapping: [Tool Support](tool-support.md#tool--template--e
 
 ## Universal (all tools)
 
-The staged pre-commit quality gate (`.githooks/pre-commit`, default ON,
-`--no-git-gate` opt-out) fires for commits made by ANY agent or human,
-independent of which assistant produced the change.
+Preflight quality checks (`preflight_check.py`, `fast_kt_lint.py`, `check_strings.py`, `room_guard.py`)
+run consistently across all tools as shift-left delivery gates before assemble and 5-leaf review,
+leaving git hooks untouched and repository history under sole human control.
 
 ## Engine integrations
 

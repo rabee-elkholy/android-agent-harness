@@ -23,7 +23,6 @@ after install, re-run the wizard (previous answers are pre-filled) — see
 | Parameter | Name | Default | Options / Description |
 | :--- | :--- | :--- | :--- |
 | `I.3` | **Git Commit Policy** | `Manual in IDE` | Developer commits manually *(Recommended)* or agent commits only on explicit request. |
-| `I.21` | **Pre-Commit Git Gate** | `Yes` | Install the staged quality gate; use `--no-git-gate` only when managing your own hook. |
 
 ### Station 3: Project Management & Task Tracker
 

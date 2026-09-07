@@ -37,7 +37,7 @@ graph TB
 
     subgraph Integrations ["Ecosystem & PM Bridges"]
         ZohoMCP["Zoho Sprints & PM Integrations"]
-        GitGuard["Git Mutation Interceptor & Pre-Commit Gate"]
+        GitGuard["Git Mutation Interceptor & Safety Hooks"]
     end
 
     IDE --> SafetyHooks
@@ -167,11 +167,7 @@ The harness incorporates a Python-driven safety interception layer (`pre_tool_sa
 
 Developers retain sole authority over repository history.
 
-**Deterministic Staged Pre-Commit Quality Gate** — a standalone, stdlib-only Git hook (`.githooks/pre-commit`, installed by default; `--no-git-gate` opts out) running against staged files in <5 seconds:
-- Bilingual string parity and hardcoded UI string detection.
-- Fast Kotlin syntax and import lint.
-- Room database working-tree schema and migration invariant checks.
-- Blocks commits containing regressions without interfering with the developer's commit authority. Universal across all tools via Git.
+**Deterministic Shift-Left Delivery & Preflight Gates** — All quality checks (bilingual string parity, Room database migrations, and fast Kotlin lint) run deterministically as part of `preflight_check.py` and delivery gates before code assembly and review, keeping git hooks completely untouched and developers in full control of their git workflow.
 
 **Claude Code PreToolUse Safety Bridge** (`agents/scripts/cc_pre_tool_safety.py`, installed via `--cc-hooks`) — bridges Claude Code's native `PreToolUse` hook protocol in `.claude/settings.json` to the harness safety engine; denies forbidden Git mutations and unauthorized ADB actions with a deterministic `permissionDecision: "deny"`.
 
@@ -287,7 +283,7 @@ python .agents/scripts/harness_doctor.py --device --json
 ### 8. CLI Dispatcher & Cross-Tool Hard Enforcement
 - **Standalone CLI Dispatcher (`harness_cli.py`)**: Zero-dependency executable (`android-harness` via `pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git`, or direct `python harness_cli.py`) providing unified `init`, `update`, `explain`, `doctor`, `preflight`, `selftest`, and `version` subcommands with automatic kit discovery and pin-to-tag remote provisioning (never `main`).
 - **11 Native Slash Command Packs (`agents/command-packs/`)**: Standardized command packs generating native slash shortcuts for Claude Code (`.claude/commands/`), GitHub Copilot (`.github/prompts/*.prompt.md`), and OpenAI Codex (`.codex/prompts/`) with automatic pruning.
-- **Staged Pre-Commit Quality Gate (`pre_commit_gate.py`, on by default; `--no-git-gate` opts out)**: Deterministic, stdlib-only Git hook (`.githooks/pre-commit`) running bilingual string parity, Room database migrations, and fast Kotlin lint against staged changes in <5s before commit.
+- **Mandatory Preflight Quality Gate (`preflight_check.py`)**: Deterministic gate executing bilingual string parity, Room database migrations, and fast Kotlin lint before code assembly and review, without polluting Git hooks.
 - **Claude Code PreToolUse Safety Bridge (`cc_pre_tool_safety.py`, `--cc-hooks`)**: Intercepts terminal tool execution in Claude Code sessions via `.claude/settings.json` `PreToolUse` hook, enforcing strict Git mutation and ADB safety boundaries outside Antigravity.
 - **GitHub Copilot preToolUse Safety Bridge (`copilot_pre_tool_safety.py`, `--copilot-hooks`)**: Registers `.github/hooks/android-harness-pre-tool-use.json` and maps Copilot's documented camelCase or VS Code-compatible snake_case payload into the same safety engine.
 

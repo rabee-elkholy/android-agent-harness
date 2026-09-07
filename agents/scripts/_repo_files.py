@@ -278,7 +278,7 @@ def ensure_local_git_privacy(target_repo: Path | None = None, *, clean_strays: b
 
     # 5. Assume unchanged for tracked adapter candidates in client apps only
     if not is_raw_kit:
-        for tracked_cand in [".githooks/pre-commit", "AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
+        for tracked_cand in ["AGENTS.md", "GEMINI.md", "CLAUDE.md"]:
             if (repo / tracked_cand).is_file():
                 subprocess.run(
                     ["git", "update-index", "--assume-unchanged", tracked_cand],

@@ -331,7 +331,6 @@ def configure_adapters_and_mcp(repo: Path, answers: dict) -> None:
     tracker_lang = answers.get("zoho_language") or "en_titles_ar_comments"
     tools_list = answers.get("tools") or ["gemini"]
     tools_arg = ",".join(tools_list) if isinstance(tools_list, list) else str(tools_list)
-    git_gate_flag = "--git-gate" if answers.get("git_gate", "yes") in ("yes", True) else "--no-git-gate"
 
     adapter_script = scripts_dir / "install_tool_adapters.py"
     if adapter_script.is_file():
@@ -347,7 +346,6 @@ def configure_adapters_and_mcp(repo: Path, answers: dict) -> None:
             "--pm-provider", pm_provider,
             "--tracker-language", tracker_lang,
             "--tools", tools_arg,
-            git_gate_flag,
         ]
         subprocess.run(cmd, check=True, capture_output=True, text=True)
 

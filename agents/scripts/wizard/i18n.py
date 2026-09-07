@@ -188,13 +188,6 @@ T = {
         "i20_jira_mcp": "Jira — official upstream MCP server (registration guide)",
         "i20_linear_mcp": "Linear — official upstream MCP server (registration guide)",
         "i20_none": "None — local-only delivery, no tracker",
-        "i21": (
-            "Should the helper install a staged-changes quality gate before every git commit? "
-            "It adds .githooks/pre-commit (string parity, Room migrations, Kotlin lint) and runs in "
-            "under 5 seconds. Choose no only if you already run your own git hooks."
-        ),
-        "i21_yes": "Yes — install the pre-commit quality gate (Recommended)",
-        "i21_no": "No — I manage my own git hooks",
         "i22": (
             "Device Verification Mode: How should the harness verify the app on the connected device after building? "
             "Manual smoke test installs and launches the app on the phone, presenting simple steps for your sign-off."

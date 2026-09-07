@@ -15,7 +15,7 @@ Installer: `$PY .agents/scripts/install_tool_adapters.py`.
 | Live Gradle + heartbeat + staleness advisory | `.agents/scripts/run_gradle_task.py` | Same Python on every tool |
 | Device install/launch | `.agents/scripts/run_device.py` | Same Python on every tool |
 | Assemble barrier (5 `*_PASS` + matching evidence) | `.agents/hooks.json` + `pre_tool_safety.py` | **Antigravity** (runtime hook), **Claude Code** (`PreToolUse` bridge), and **GitHub Copilot** when `--copilot-hooks` is installed. Others: follow `AGENTS.md` |
-| Staged Pre-Commit Quality Gate | `.agents/scripts/pre_commit_gate.py` (`.githooks/`) | Universal across all tools via Git |
+| Mandatory Preflight Quality Gate | `.agents/scripts/preflight_check.py` | Universal across all tools before assemble |
 | 11 Native Slash Command Packs | `.claude/commands/`, `.github/prompts/`, `.codex/prompts/` | Claude Code, GitHub Copilot, OpenAI Codex |
 | Reviewer & Specialist prompts | `.agents/subagents/*.json` | Claude Code also gets `.claude/agents/*.md` |
 
@@ -69,9 +69,9 @@ templates**; eight additional agents are covered by `AGENTS.md` alone.
 Agents covered by `AGENTS.md` alone (no dedicated template, prompt-only):
 Aider, Zed, Amp, Devin, Factory, Jules, Warp, OpenCode.
 
-Universal across every tool regardless of tier: the staged pre-commit quality
-gate (`.githooks/pre-commit`, default ON) fires on commits made by any agent
-or human.
+Universal across every tool regardless of tier: the preflight quality
+gate (`preflight_check.py`) and fast Kotlin lint (`fast_kt_lint.py`)
+enforce quality standards before assemble and review without polluting git hooks.
 
 ## Integration features by assistant
 
@@ -175,6 +175,6 @@ If the product cannot launch `bug-reviewer-agent` as a child, `AGENTS.md` still 
 ## One-Click Lifecycle Prompt URLs
 
 For any supported AI assistant, use the following raw GitHub URLs:
-- **Install & Update**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.14/docs/install-or-update-prompt.md`
-- **Diagnostic Doctor**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.14/docs/diagnostic-prompt.md`
-- **Rollback**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.14/docs/rollback-prompt.md`
+- **Install & Update**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.15/docs/install-or-update-prompt.md`
+- **Diagnostic Doctor**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.15/docs/diagnostic-prompt.md`
+- **Rollback**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.15/docs/rollback-prompt.md`

@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -518,8 +519,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--git-gate",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Write .githooks/pre-commit staged-changes quality gate and set core.hooksPath (default ON; --no-git-gate to opt out).",
+        default=False,
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--cc-hooks",
@@ -586,20 +587,43 @@ def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
     }
 
 
-GIT_GATE_HOOK = """#!/usr/bin/env python
-import os
-import subprocess
-import sys
+def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
+    """Cleans up legacy .githooks and unsets core.hooksPath if pointing to .githooks."""
+    logs: list[str] = []
+    proc = subprocess.run(
+        ["git", "config", "--get", "core.hooksPath"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode == 0 and proc.stdout.strip() in (".githooks", ".githooks/"):
+        if dry_run:
+            logs.append("dry-run git config --unset core.hooksPath")
+        else:
+            subprocess.run(
+                ["git", "config", "--unset", "core.hooksPath"],
+                cwd=str(repo),
+                capture_output=True,
+                check=False,
+            )
+            logs.append("unset git core.hooksPath")
 
-top = subprocess.run(
-    ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
-).stdout.strip()
-gate = os.path.join(top, ".agents", "scripts", "pre_commit_gate.py")
-if not os.path.isfile(gate):
-    sys.exit(0)
-res = subprocess.run([sys.executable, gate], cwd=top)
-sys.exit(res.returncode)
-"""
+    githooks_dir = repo / ".githooks"
+    if githooks_dir.exists():
+        if dry_run:
+            logs.append(f"dry-run remove {rel_of(githooks_dir, repo)}")
+        else:
+            try:
+                shutil.rmtree(githooks_dir)
+                logs.append(f"removed legacy {rel_of(githooks_dir, repo)}")
+            except Exception as e:
+                logs.append(f"warning: could not remove {githooks_dir}: {e}")
+
+    privacy_logs = ensure_local_git_privacy(repo)
+    logs.extend(privacy_logs)
+    return logs
+
 
 CC_HOOK_COMMAND = "{py} .agents/scripts/cc_pre_tool_safety.py"
 
@@ -621,34 +645,6 @@ def copilot_hooks_payload(py: str) -> dict:
             ]
         },
     }
-
-
-def install_git_gate(repo: Path, *, dry_run: bool) -> list[str]:
-    logs: list[str] = []
-    hook_path = repo / ".githooks" / "pre-commit"
-    if dry_run:
-        logs.append(f"dry-run write {rel_of(hook_path, repo)}")
-        logs.append("dry-run git config core.hooksPath .githooks")
-        logs.append("dry-run exclude .githooks/ in .git/info/exclude")
-        return logs
-    hook_path.parent.mkdir(parents=True, exist_ok=True)
-    hook_path.write_text(GIT_GATE_HOOK, encoding="utf-8", newline="\n")
-    logs.append(f"wrote {rel_of(hook_path, repo)}")
-    proc = subprocess.run(
-        ["git", "config", "core.hooksPath", ".githooks"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode == 0:
-        logs.append("git core.hooksPath -> .githooks")
-    else:
-        logs.append("WARNING: could not set core.hooksPath; run: git config core.hooksPath .githooks")
-
-    privacy_logs = ensure_local_git_privacy(repo)
-    logs.extend(privacy_logs)
-    return logs
 
 
 def ensure_cc_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
@@ -769,8 +765,7 @@ def install(args: argparse.Namespace) -> list[str]:
             logs.extend(generate_command_packs(repo, tool, mapping, dry_run=args.dry_run))
     if "claude" in selected and not args.skip_claude_agents:
         logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
-    if getattr(args, "git_gate", True):
-        logs.extend(install_git_gate(repo, dry_run=args.dry_run))
+    logs.extend(cleanup_legacy_git_gate(repo, dry_run=args.dry_run))
     if getattr(args, "cc_hooks", False) and "claude" in selected:
         logs.extend(ensure_cc_hooks(repo, mapping["PY"], dry_run=args.dry_run))
     if getattr(args, "copilot_hooks", False) and "copilot" in selected:

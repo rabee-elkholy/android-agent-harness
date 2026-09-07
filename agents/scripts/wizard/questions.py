@@ -253,20 +253,6 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
-    qs.append(
-        {
-            "id": "i21",
-            "station": 2,
-            "station_title": "Git Governance & Safety",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i21"),
-            "options": [
-                {"id": "yes", "label": t(lang, "i21_yes")},
-                {"id": "no", "label": t(lang, "i21_no")},
-            ],
-        }
-    )
 
     # --- Station 3: Project Management & Task Tracker ---
     qs.append(
@@ -422,7 +408,6 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dic
         "i16": prev.get("zoho_mcp"),
         "i18": prev.get("zoho_language"),
         "i20": prev.get("pm_provider"),
-        "i21": prev.get("git_gate"),
         "i22": prev.get("device_verification"),
         "i19": prev.get("flavor") or "default",
     }
@@ -696,7 +681,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "zoho_language": zoho_lang,
         "pm_provider": pm_provider,
         "tools": tools,
-        "git_gate": "no" if (raw.get("i21") or auto.get("git_gate", "yes")) == "no" else "yes",
+        "git_gate": "no",
         "device_verification": raw.get("i22") or auto.get("device_verification", "manual_only"),
         "asked": asked,
     }
@@ -733,7 +718,6 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.18 Tracker Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
-        f"- I.21 Pre-commit git gate: {answers.get('git_gate', 'yes')}",
         f"- I.22 Device verification: {answers.get('device_verification', 'manual_only')}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
@@ -773,11 +757,10 @@ def write_answers(repo: Path, answers: dict) -> None:
 
 def flags_from_answers(answers: dict) -> str:
     tools = ",".join(answers.get("tools") or [])
-    gate_flag = "--git-gate" if (answers.get("git_gate") or "yes") != "no" else "--no-git-gate"
     return (
         f"--product {answers['product']} --py {answers['py']} "
         f"--assemble {answers['assemble']} --device-policy {answers['device_policy']} "
-        f"--git-policy {answers['git_policy']} --tools {tools} {gate_flag}"
+        f"--git-policy {answers['git_policy']} --tools {tools}"
     )
 
 
@@ -830,7 +813,6 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         ("i18", "zoho_language"),
         ("i19", "flavor"),
         ("i20", "pm_provider"),
-        ("i21", "git_gate"),
         ("i22", "device_verification"),
     ):
         value = answers.get(field)
