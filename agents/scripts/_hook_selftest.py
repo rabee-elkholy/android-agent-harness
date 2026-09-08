@@ -2800,6 +2800,11 @@ cli_file = repo_root / "harness_cli.py"
 if cli_file.is_file():
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
+    import contextlib
+    import io
+    from types import SimpleNamespace
+
+    import harness_cli as cli_module
     from harness_cli import build_parser as cli_build_parser, resolve_kit as cli_resolve_kit
     cli_p = cli_build_parser()
     cli_cmds = set(next(a.choices for a in cli_p._actions if a.dest == "command").keys())
@@ -2811,14 +2816,101 @@ if cli_file.is_file():
     print(f"harness_cli dispatch & subcommands: {'OK' if ok_cli else 'FAIL'}")
     failed += int(not ok_cli)
 
+    update_repo = make_fixture("classic")
+    update_answers = update_repo / ".harness-setup" / "answers.json"
+    update_answers.parent.mkdir(parents=True, exist_ok=True)
+    update_answers.write_text("{}\n", encoding="utf-8")
+    import check_kit_update as update_module
+
+    original_refresh_kit = cli_module.refresh_kit
+    original_run_engine_script = cli_module.run_engine_script
+    original_check_for_update = update_module.check_for_update
+    try:
+        cli_module.refresh_kit = lambda kit, version: None
+        update_module.check_for_update = lambda force=False: {
+            "latest": (repo_root / "agents" / "VERSION").read_text(
+                encoding="utf-8"
+            ).strip()
+        }
+        update_args = SimpleNamespace(
+            kit=str(repo_root),
+            force=False,
+            repo=str(update_repo),
+        )
+
+        cli_module.run_engine_script = lambda *args, **kwargs: 7
+        failed_update_stdout = io.StringIO()
+        with contextlib.redirect_stdout(failed_update_stdout):
+            failed_update_code = cli_module.cmd_update(update_args)
+        ok_update_failure = (
+            failed_update_code == 7
+            and "[SUCCESS] App checkout updated and verified."
+            not in failed_update_stdout.getvalue()
+        )
+
+        cli_module.run_engine_script = lambda *args, **kwargs: 0
+        successful_update_stdout = io.StringIO()
+        with contextlib.redirect_stdout(successful_update_stdout):
+            successful_update_code = cli_module.cmd_update(update_args)
+        ok_update_success = (
+            successful_update_code == 0
+            and "[SUCCESS] App checkout updated and verified."
+            in successful_update_stdout.getvalue()
+        )
+    finally:
+        cli_module.refresh_kit = original_refresh_kit
+        cli_module.run_engine_script = original_run_engine_script
+        update_module.check_for_update = original_check_for_update
+        shutil.rmtree(update_repo, ignore_errors=True)
+
+    ok_cli_update = ok_update_failure and ok_update_success
+    print(
+        "harness_cli update result propagation: "
+        f"{'OK' if ok_cli_update else 'FAIL ' + str([ok_update_failure, ok_update_success])}"
+    )
+    failed += int(not ok_cli_update)
+
 # --- v0.10.x: android-harness verify round trip ---
 if cli_file.is_file():
     verify_repo = make_fixture("classic")
     try:
+        subprocess.run(
+            ["git", "init", "-q"],
+            cwd=str(verify_repo),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=str(verify_repo),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=selftest@harness.local",
+                "-c",
+                "user.name=selftest",
+                "commit",
+                "-q",
+                "-m",
+                "fixture",
+            ],
+            cwd=str(verify_repo),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         vstate = verify_repo / ".agents" / "state" / "verdicts"
         vstate.mkdir(parents=True, exist_ok=True)
         fake_pkg = vstate / "pkg.diff"
         fake_pkg.write_text("diff --git a/x b/x\n", encoding="utf-8")
+        fake_pkg_sha = hashlib.sha256(fake_pkg.read_bytes()).hexdigest()
+        fake_pkg12 = fake_pkg_sha[:12]
         target_rel = "app/src/main/java/A.kt"
         target_abs = verify_repo / "app" / "src" / "main" / "java" / "A.kt"
         record_v = {
@@ -2827,8 +2919,8 @@ if cli_file.is_file():
             "git_sha": "",
             "package": {
                 "path": str(fake_pkg),
-                "sha256": hashlib.sha256(fake_pkg.read_bytes()).hexdigest(),
-                "sha256_12": hashlib.sha256(fake_pkg.read_bytes()).hexdigest()[:12],
+                "sha256": fake_pkg_sha,
+                "sha256_12": fake_pkg12,
             },
             "tree_fingerprint": None,
             "files": {target_rel: hashlib.sha256(target_abs.read_bytes()).hexdigest()},
@@ -2849,15 +2941,115 @@ if cli_file.is_file():
             "checks": [],
             "findings": [],
         }
-        verdict_file = vstate / "verdict-0123456789ab.json"
-        verdict_file.write_text(json.dumps(record_v), encoding="utf-8")
-        proc_v_ok = subprocess.run(
+        verdict_file = vstate / f"verdict-{fake_pkg12}.json"
+
+        def _run_verify(record: dict) -> subprocess.CompletedProcess:
+            verdict_file.write_text(json.dumps(record), encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(cli_file), "verify", "--repo", str(verify_repo)],
+                capture_output=True,
+                text=True,
+                env=os.environ.copy(),
+            )
+
+        proc_v_legacy = _run_verify(record_v)
+        ok_verify_legacy = (
+            proc_v_legacy.returncode == 0 and "[PASS]" in proc_v_legacy.stdout
+        )
+
+        recorder_env = os.environ.copy()
+        recorder_env["HARNESS_HOOK_STATE"] = str(
+            verify_repo / ".agents" / "state" / "review-invokes.json"
+        )
+        recorder_base = {
+            **record_v,
+            "verdict": "PENDING",
+            "contains_tests": False,
+            "leaves": {},
+        }
+        verdict_file.write_text(json.dumps(recorder_base), encoding="utf-8")
+        recorder_proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "record_review.py"),
+                "--pkg",
+                str(fake_pkg),
+                "--approve-all",
+            ],
+            capture_output=True,
+            text=True,
+            env=recorder_env,
+        )
+        proc_v_approved = subprocess.run(
             [sys.executable, str(cli_file), "verify", "--repo", str(verify_repo)],
             capture_output=True,
             text=True,
             env=os.environ.copy(),
         )
-        ok_verify_pass = proc_v_ok.returncode == 0 and "[PASS]" in proc_v_ok.stdout
+        ok_verify_approved = (
+            recorder_proc.returncode == 0
+            and proc_v_approved.returncode == 0
+            and "[PASS]" in proc_v_approved.stdout
+        )
+
+        test_rel = "app/src/test/java/ATest.kt"
+        test_abs = verify_repo / test_rel
+        test_abs.parent.mkdir(parents=True, exist_ok=True)
+        test_abs.write_text("class ATest\n", encoding="utf-8")
+        test_record_base = {
+            **record_v,
+            "verdict": "PENDING",
+            "contains_tests": True,
+            "files": {
+                target_rel: hashlib.sha256(target_abs.read_bytes()).hexdigest(),
+                test_rel: hashlib.sha256(test_abs.read_bytes()).hexdigest(),
+            },
+            "leaves": {},
+        }
+        verdict_file.write_text(json.dumps(test_record_base), encoding="utf-8")
+        recorder_test_proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "record_review.py"),
+                "--pkg",
+                str(fake_pkg),
+                "--approve-all",
+            ],
+            capture_output=True,
+            text=True,
+            env=recorder_env,
+        )
+        six_leaf_record = json.loads(verdict_file.read_text(encoding="utf-8"))
+        proc_v_six = _run_verify(six_leaf_record)
+        ok_verify_six = (
+            recorder_test_proc.returncode == 0
+            and len(six_leaf_record.get("leaves") or {}) == 6
+            and proc_v_six.returncode == 0
+            and "[PASS]" in proc_v_six.stdout
+        )
+
+        missing_test_record = json.loads(json.dumps(six_leaf_record))
+        missing_test_record["leaves"].pop("test_quality", None)
+        proc_v_missing_test = _run_verify(missing_test_record)
+        ok_verify_missing_test = proc_v_missing_test.returncode == 1
+
+        duplicate_alias_record = json.loads(json.dumps(record_v))
+        duplicate_alias_record["leaves"]["bug-reviewer-agent"] = {
+            "token": "BUG_PASS",
+            "evidence": {"pkg": fake_pkg12, "cites": 1, "valid": True},
+        }
+        proc_v_duplicate = _run_verify(duplicate_alias_record)
+        ok_verify_duplicate = proc_v_duplicate.returncode == 1
+
+        stale_record = json.loads(json.dumps(six_leaf_record))
+        stale_record["git_sha"] = "0" * 40
+        proc_v_stale = _run_verify(stale_record)
+        ok_verify_stale = (
+            proc_v_stale.returncode == 2 and "[STALE]" in proc_v_stale.stdout
+        )
+
+        legacy_for_file_change = json.loads(json.dumps(record_v))
+        verdict_file.write_text(json.dumps(legacy_for_file_change), encoding="utf-8")
         target_abs.write_text("class A changed\n", encoding="utf-8")
         proc_v_fail = subprocess.run(
             [sys.executable, str(cli_file), "verify", "--repo", str(verify_repo)],
@@ -2866,9 +3058,20 @@ if cli_file.is_file():
             env=os.environ.copy(),
         )
         ok_verify_fail = proc_v_fail.returncode == 1 and "[FAIL]" in proc_v_fail.stdout
-        ok_verify = ok_verify_pass and ok_verify_fail
+        ok_verify = all(
+            (
+                ok_verify_legacy,
+                ok_verify_approved,
+                ok_verify_six,
+                ok_verify_missing_test,
+                ok_verify_duplicate,
+                ok_verify_stale,
+                ok_verify_fail,
+            )
+        )
         print(
-            f"harness_cli verify round trip: {'OK' if ok_verify else 'FAIL ' + proc_v_ok.stdout + proc_v_fail.stdout}"
+            "harness_cli verify round trip: "
+            f"{'OK' if ok_verify else 'FAIL ' + str([ok_verify_legacy, ok_verify_approved, ok_verify_six, ok_verify_missing_test, ok_verify_duplicate, ok_verify_stale, ok_verify_fail])}"
         )
         failed += int(not ok_verify)
     finally:

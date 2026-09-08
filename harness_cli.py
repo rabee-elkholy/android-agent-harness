@@ -138,7 +138,7 @@ EXIT_PASS = 0
 EXIT_FINDINGS = 1
 EXIT_CONFIG_ERROR = 2
 EXIT_INFRA_ERROR = 3
-EXIT_INCOMPLETE_OR_STALE = 4
+EXIT_INCOMPLETE_OR_STALE = 2
 
 
 def resolve_kit(explicit: str | None) -> Path:
@@ -352,11 +352,17 @@ def cmd_update(args: argparse.Namespace) -> int:
         answers = repo / ".harness-setup" / "answers.json"
         if answers.is_file():
             print("[*] Applying engine update directly to app checkout...")
-            run_engine_script(
+            port_code = run_engine_script(
                 kit,
                 "install_or_update.py",
                 ["--repo", str(repo), "--kit", str(kit)],
             )
+            if port_code != 0:
+                print(
+                    f"[FAIL] App checkout update failed with exit code {port_code}; "
+                    "success was not recorded."
+                )
+                return port_code
             print("[SUCCESS] App checkout updated and verified.")
             return 0
     print("[NEXT] Port the new engine into your app checkout:")
@@ -530,8 +536,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     problems: list[str] = []
 
-    if record.get("verdict") != "PASS":
-        problems.append(f"verdict is {record.get('verdict')!r}, expected PASS")
+    verdict = str(record.get("verdict") or "").upper()
+    accepted_verdicts = {"PASS", "APPROVED"}
+    if verdict not in accepted_verdicts:
+        problems.append(
+            f"verdict is {record.get('verdict')!r}, expected PASS or APPROVED"
+        )
 
     package = record.get("package") or {}
     raw_pkg_path = str(package.get("path") or "").strip()
@@ -583,27 +593,131 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if len(changed) > 10:
         problems.append(f"... and {len(changed) - 10} more changed files")
 
-    CANONICAL_LEAVES = {
-        "bug",
-        "convention",
-        "conv",
-        "security",
-        "perf",
-        "regression",
-        "bug-reviewer-agent",
-        "convention-reviewer-agent",
-        "security-reviewer-agent",
-        "perf-anr-guardian-agent",
-        "regression-impact-reviewer-agent",
+    leaf_aliases = {
+        "bug_reviewer": {
+            "bug_reviewer",
+            "bug-reviewer-agent",
+            "bug-reviewer",
+            "bug",
+        },
+        "convention_reviewer": {
+            "convention_reviewer",
+            "convention-reviewer-agent",
+            "convention-reviewer",
+            "convention",
+            "conv",
+        },
+        "security_reviewer": {
+            "security_reviewer",
+            "security-reviewer-agent",
+            "security-reviewer",
+            "security",
+        },
+        "perf_guardian": {
+            "perf_guardian",
+            "perf-anr-guardian-agent",
+            "perf-anr-guardian",
+            "perf",
+        },
+        "regression_reviewer": {
+            "regression_reviewer",
+            "regression-impact-reviewer-agent",
+            "regression-impact-reviewer",
+            "regression",
+        },
+        "test_quality": {
+            "test_quality",
+            "test-quality-reviewer-agent",
+            "test-quality-reviewer",
+            "test_quality_reviewer",
+            "test",
+        },
     }
+    expected_tokens = {
+        "bug_reviewer": "BUG_PASS",
+        "convention_reviewer": "CONVENTION_PASS",
+        "security_reviewer": "SECURITY_PASS",
+        "perf_guardian": "PERF_PASS",
+        "regression_reviewer": "REGRESSION_PASS",
+        "test_quality": "TEST_PASS",
+    }
+    alias_to_canonical = {
+        alias: canonical
+        for canonical, aliases in leaf_aliases.items()
+        for alias in aliases
+    }
+
+    def _is_test_path(path: str) -> bool:
+        normalized = str(path).replace("\\", "/").lower()
+        return (
+            "/test/" in f"/{normalized}"
+            or "/androidtest/" in f"/{normalized}"
+            or "/sharedtest/" in f"/{normalized}"
+            or normalized.endswith("test.kt")
+            or normalized.endswith("tests.kt")
+            or normalized.endswith("test.java")
+            or normalized.endswith("tests.java")
+        )
+
     leaves = record.get("leaves") or {}
-    if record.get("verdict") == "PASS":
-        if len(leaves) != 5:
-            problems.append(f"{len(leaves)}/5 leaf verdicts recorded")
-        else:
-            unknown_leaves = set(leaves.keys()) - CANONICAL_LEAVES
-            if unknown_leaves:
-                problems.append(f"unknown leaf names in verdict: {sorted(unknown_leaves)}")
+    if not isinstance(leaves, dict):
+        problems.append("review leaves must be a JSON object")
+        leaves = {}
+    if verdict in accepted_verdicts:
+        contains_tests = bool(record.get("contains_tests")) or any(
+            _is_test_path(str(path)) for path in files
+        )
+        required_leaves = [
+            "bug_reviewer",
+            "convention_reviewer",
+            "security_reviewer",
+            "perf_guardian",
+            "regression_reviewer",
+        ]
+        if contains_tests:
+            required_leaves.append("test_quality")
+
+        normalized_leaves: dict[str, tuple[str, object]] = {}
+        unknown_leaves: list[str] = []
+        duplicate_leaves: list[str] = []
+        for raw_name, leaf_data in leaves.items():
+            raw_key = str(raw_name)
+            canonical = alias_to_canonical.get(raw_key)
+            if canonical is None:
+                unknown_leaves.append(raw_key)
+                continue
+            if canonical in normalized_leaves:
+                duplicate_leaves.append(canonical)
+                continue
+            normalized_leaves[canonical] = (raw_key, leaf_data)
+
+        if unknown_leaves:
+            problems.append(
+                f"unknown leaf names in verdict: {sorted(unknown_leaves)}"
+            )
+        if duplicate_leaves:
+            problems.append(
+                "duplicate aliases recorded for leaf roles: "
+                f"{sorted(set(duplicate_leaves))}"
+            )
+
+        for canonical in required_leaves:
+            normalized = normalized_leaves.get(canonical)
+            if normalized is None:
+                problems.append(f"missing required review leaf: {canonical}")
+                continue
+            _, leaf_data = normalized
+            if isinstance(leaf_data, dict):
+                token = str(
+                    leaf_data.get("token") or leaf_data.get("verdict") or ""
+                )
+            else:
+                token = str(leaf_data)
+            expected = expected_tokens[canonical]
+            if token != expected:
+                problems.append(
+                    f"review leaf {canonical} has token {token!r}, expected {expected}"
+                )
 
     stale = False
     git_sha = str(record.get("git_sha") or "")
