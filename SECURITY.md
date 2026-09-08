@@ -6,8 +6,8 @@ We actively maintain and provide security patches for the latest minor release l
 
 | Version Line | Supported |
 | :--- | :--- |
-| **v0.14.x** | Yes |
-| < v0.14.0 | No |
+| **v0.27.x** | Yes |
+| < v0.27.0 | No |
 
 ---
 

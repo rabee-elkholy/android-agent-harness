@@ -18,6 +18,7 @@ graph TB
         SafetyHooks["pre_tool_safety.py & hooks.json"]
         StateManager["_hook_state.py (State Machine & Locking)"]
         Preflight["preflight_check.py (Lint + Room + Strings)"]
+        ReviewPackage["review_package.py (Immutable Diff Package)"]
         GradleStream["run_gradle_task.py (Live Heartbeat)"]
         DeviceRunner["run_device.py & logcat_doctor.py"]
     end
@@ -43,20 +44,21 @@ graph TB
     IDE --> SafetyHooks
     SafetyHooks --> StateManager
     SafetyHooks --> GitGuard
-    SafetyHooks --> Reviewers
+    SafetyHooks --> Preflight
     SafetyHooks --> Specialists
-    Reviewers --> Preflight
     Specialists --> Preflight
-    Preflight --> GradleStream
+    Preflight --> ReviewPackage
+    ReviewPackage --> Reviewers
+    Reviewers --> GradleStream
     GradleStream --> DeviceRunner
     DeviceRunner --> ZohoMCP
 ```
 
 ---
 
-## Delivery Workflow (Seven Deterministic Stages)
+## Deterministic Delivery Workflow
 
-The harness enforces a deterministic, 7-stage quality delivery lifecycle:
+The harness enforces an ordered quality delivery lifecycle:
 
 ```mermaid
 flowchart TD
@@ -67,9 +69,12 @@ flowchart TD
 
     Code --> PreTest["4. Shift-Left Test Pre-Gate (:app:testDebugUnitTest)"]
     PreTest -- Test Compile Fail --> Code
-    PreTest -- Tests Pass --> ReviewGate["5. Parallel Review Gate (Single Invoke)"]
+    PreTest -- Tests Pass --> Preflight["5. Preflight Gate"]
+    Preflight -- Violations --> Code
+    Preflight -- PASS --> ReviewPackage["6. Review Package"]
+    ReviewPackage --> ReviewGate["7. Parallel Review Gate (Single Invoke)"]
     
-    subgraph ReviewGate ["Parallel Quality Guardians (5 or 6 Leaves)"]
+    subgraph Guardians ["Parallel Quality Guardians (5 or 6 Leaves)"]
         R1["1. Bug & Logic Reviewer"]
         R2["2. Architecture & Convention"]
         R3["3. Security & OWASP Reviewer"]
@@ -81,16 +86,9 @@ flowchart TD
     ReviewGate --> Verdict{"All Leaves PASS?"}
     Verdict -- Findings Detected --> Card["Review Round Summary Card (Chat Transparency)"]
     Card --> Code
-    Verdict -- All PASS --> Preflight["6. Preflight Gate & :app:assembleDebug"]
-
-    subgraph Preflight ["Automated Preflight Suite"]
-        P1["Fast Kotlin Lint (<1s)"]
-        P2["Room DB Schema Migrations"]
-        P3["Bilingual String Parity"]
-    end
-
-    Preflight --> Device["7. Live Device Install & Launch (run_device.py install-start)"]
-    Device --> ManualModal["8. Interactive Developer Sign-Off (ask_question PASS/FAIL)"]
+    Verdict -- All PASS --> Assemble["8. :app:assembleDebug"]
+    Assemble --> Device["9. Live Device Install & Launch (run_device.py install-start)"]
+    Device --> ManualModal["10. Interactive Developer Sign-Off (ask_question PASS/FAIL)"]
     ManualModal -- PASS --> NextPhase(["Phase Milestone Card & Conventional Commit"])
 ```
 
@@ -167,7 +165,7 @@ The harness incorporates a Python-driven safety interception layer (`pre_tool_sa
 
 Developers retain sole authority over repository history.
 
-**Deterministic Shift-Left Delivery & Preflight Gates** — All quality checks (bilingual string parity, Room database migrations, and fast Kotlin lint) run deterministically as part of `preflight_check.py` and delivery gates before code assembly and review, keeping git hooks completely untouched and developers in full control of their git workflow.
+**Deterministic Shift-Left Delivery & Preflight Gates** — All quality checks (bilingual string parity, Room database migrations, and fast Kotlin lint) run deterministically as part of `preflight_check.py` before review packaging and code assembly, keeping git hooks completely untouched and developers in full control of their git workflow.
 
 **Claude Code PreToolUse Safety Bridge** (`agents/scripts/cc_pre_tool_safety.py`, installed via `--cc-hooks`) — bridges Claude Code's native `PreToolUse` hook protocol in `.claude/settings.json` to the harness safety engine; denies forbidden Git mutations and unauthorized ADB actions with a deterministic `permissionDecision: "deny"`.
 
@@ -209,7 +207,7 @@ python .agents/scripts/run_device.py install-start --package com.example.app --a
 
 ### 5c. Preflight Verification Pipeline
 
-Before compiling the application with Gradle, `preflight_check.py` runs three rapid static verification checks in under 2 seconds:
+Before review packaging and Gradle compilation, `preflight_check.py` runs three rapid static verification checks in under 2 seconds:
 
 **Fast Kotlin Lint (`fast_kt_lint.py`)**
 - Verifies package declarations, import hygiene, and Kotlin syntax.
@@ -258,7 +256,7 @@ The built-in Zoho implementation provides:
 ### 7. 12-Dimension System Doctor (`harness_doctor.py`)
 Provides deterministic, end-to-end verification of repository health across 12 operational dimensions (automatically executed after install/update):
 - Host & environment (Python runtime, Gradle wrapper, Android SDK path, Git status, **`.gitignore` security & transient state audit**, **Git working tree status & commit reminders**).
-- File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, 34 core scripts).
+- File topology & version alignment (`.agents/VERSION`, `harness-rules.md`, and the canonical core-script inventory).
 - Complete subagent roster (all 8 subagents with active security fingerprints).
 - Product configuration (`_product.py`, package prefix, application ID, source root, assemble task, and install-answers consistency: device policy, assemble task, flavor, git gate, and selected adapter presence).
 - Template leakage check (verifying zero un-replaced `{{...}}` tokens in `.agents/`).
@@ -283,7 +281,7 @@ python .agents/scripts/harness_doctor.py --device --json
 ### 8. CLI Dispatcher & Cross-Tool Hard Enforcement
 - **Standalone CLI Dispatcher (`harness_cli.py`)**: Zero-dependency executable (`android-harness` via `pipx install git+https://github.com/rabee-elkholy/android-agent-harness.git`, or direct `python harness_cli.py`) providing unified `init`, `update`, `explain`, `doctor`, `preflight`, `selftest`, and `version` subcommands with automatic kit discovery and pin-to-tag remote provisioning (never `main`).
 - **11 Native Slash Command Packs (`agents/command-packs/`)**: Standardized command packs generating native slash shortcuts for Claude Code (`.claude/commands/`), GitHub Copilot (`.github/prompts/*.prompt.md`), and OpenAI Codex (`.codex/prompts/`) with automatic pruning.
-- **Mandatory Preflight Quality Gate (`preflight_check.py`)**: Deterministic gate executing bilingual string parity, Room database migrations, and fast Kotlin lint before code assembly and review, without polluting Git hooks.
+- **Mandatory Preflight Quality Gate (`preflight_check.py`)**: Deterministic gate executing bilingual string parity, Room database migrations, and fast Kotlin lint before review packaging and code assembly, without polluting Git hooks.
 - **Claude Code PreToolUse Safety Bridge (`cc_pre_tool_safety.py`, `--cc-hooks`)**: Intercepts terminal tool execution in Claude Code sessions via `.claude/settings.json` `PreToolUse` hook, enforcing strict Git mutation and ADB safety boundaries outside Antigravity.
 - **GitHub Copilot preToolUse Safety Bridge (`copilot_pre_tool_safety.py`, `--copilot-hooks`)**: Registers `.github/hooks/android-harness-pre-tool-use.json` and maps Copilot's documented camelCase or VS Code-compatible snake_case payload into the same safety engine.
 

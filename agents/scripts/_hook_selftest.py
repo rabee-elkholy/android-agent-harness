@@ -1694,6 +1694,36 @@ else:
 print(f"packaging metadata version alignment: {'OK' if ok_packaging_version else 'FAIL'}")
 failed += int(not ok_packaging_version)
 
+if KIT_LAYOUT:
+    scripts_dev_dir = _repo_root / "scripts_dev"
+    sys.path.insert(0, str(scripts_dev_dir))
+    import pin_prompt_docs as prompt_pinner  # noqa: E402
+    import validate_release as release_validator  # noqa: E402
+
+    url_errors = getattr(release_validator, "pinned_url_errors", None)
+    checksum_error = getattr(release_validator, "checksum_doc_error", None)
+    workflow_errors = getattr(release_validator, "publish_workflow_errors", None)
+    checksum_path = _repo_root / "docs" / "diagnostic-prompt.md"
+    checksum_bytes = checksum_path.read_bytes()
+    release_helper_checks = [
+        "README.md" in prompt_pinner.URL_FILES,
+        "docs/quickstart.md" in prompt_pinner.URL_FILES,
+        "docs/setup-prompt.md" in prompt_pinner.CHECKSUM_DOCS,
+        callable(url_errors)
+        and bool(url_errors("https://example/android-agent-harness/v0.1.0/docs/x.md", expected_ver, "fixture")),
+        callable(checksum_error)
+        and checksum_error(checksum_bytes, expected_ver, "diagnostic") is None,
+        callable(checksum_error)
+        and checksum_error(checksum_bytes + b"changed", expected_ver, "diagnostic") is not None,
+        callable(workflow_errors)
+        and bool(workflow_errors("uses: pypa/gh-action-pypi-publish@release/v1\npip install build twine\n")),
+    ]
+    ok_release_helpers = all(release_helper_checks)
+    print(f"release drift validation helpers: {'OK' if ok_release_helpers else 'FAIL ' + str(release_helper_checks)}")
+    failed += int(not ok_release_helpers)
+else:
+    print("release drift validation helpers: OK (skipped — installed checkout)")
+
 # Release quality invariants: zero emojis, zero literal escapes, and milestone release consolidation
 import re
 

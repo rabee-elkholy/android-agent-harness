@@ -15,7 +15,7 @@ The **Android Agent Harness** equips your AI assistant with deterministic, speci
 
 | # | Playbook | Slash Command / Trigger | Primary Goal | Specialist Subagent |
 |---|---|---|---|---|
-| 1 | **Feature Delivery Lifecycle** | `/deliver` | Atomic planning, TDD, 5-leaf review, assemble, and device verification | 5 Quality Guardians |
+| 1 | **Feature Delivery Lifecycle** | `/deliver` | Atomic planning, TDD, preflight, 5-leaf review, assemble, and device verification | 5 Quality Guardians |
 | 2 | **New Feature Planning** | `/new-feature` | Multi-phase architecture breakdown, boundary isolation, and Proceed approval | Lead Agent |
 | 3 | **Systematic Debugging** | `/debug` | 3-hypothesis root-cause tracing, producer fix, and regression proof | Lead Agent |
 | 4 | **Forensic Crash & ANR Triage** | `/crash-triage` | Live Logcat capture, stacktrace demangling, and ANR thread dump triage | `qa-diagnostics-agent` |
@@ -38,16 +38,18 @@ flowchart TD
     B -- Revisions Needed --> A
     B -- Approved --> C["2. Implementation & TDD (Red -> Green -> Refactor)"]
     C --> D["3. Shift-Left Test Pre-Gate (:app:testDebugUnitTest)"]
-    D --> E["4. Parallel 5-Leaf Review Gate (Single Invoke)"]
-    E --> F{"All Reviewers PASS?"}
-    F -- Findings Detected --> G["Review Round Summary Card (Chat Transparency)"]
-    G --> C
-    F -- All PASS --> H["5. Preflight Gate & :app:assembleDebug"]
-    H --> I["6. Live Device Install & Launch (run_device.py install-start)"]
-    I --> J["Interactive ask_question Modal (PASS / FAIL)"]
-    J -- PASS --> K["7. Phase Milestone Card & Conventional Commit"]
-    J -- FAIL --> L["Logcat Forensics & Bugfix (logcat_doctor.py)"]
-    L --> C
+    D -- Tests Pass --> E["4. Preflight Gate"]
+    E -- PASS --> F["5. Review Package"]
+    F --> G["6. Parallel 5-Leaf Review Gate (Single Invoke)"]
+    G --> H{"All Reviewers PASS?"}
+    H -- Findings Detected --> I["Review Round Summary Card (Chat Transparency)"]
+    I --> C
+    H -- All PASS --> J["7. :app:assembleDebug"]
+    J --> K["8. Live Device Install & Launch (run_device.py install-start)"]
+    K --> L["Interactive ask_question Modal (PASS / FAIL)"]
+    L -- PASS --> M["9. Phase Milestone Card & Conventional Commit"]
+    L -- FAIL --> N["Logcat Forensics & Bugfix (logcat_doctor.py)"]
+    N --> C
 ```
 
 ### Key Rules:
@@ -121,7 +123,7 @@ Guarantees full translation parity across all supported locales (e.g. English `v
 
 ## 7. Deterministic Preflight Gate (`/preflight`)
 
-The triple pre-build gate executed automatically before `:assembleDebug` and during git pre-commit:
+The triple pre-build gate executed after unit tests and before review packaging and `:assembleDebug`:
 
 ```bash
 python .agents/scripts/preflight_check.py

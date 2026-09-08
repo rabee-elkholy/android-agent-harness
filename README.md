@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20KMP-3DDC84?style=flat-square)](https://android.com)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square)](https://python.org)
-[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-6--Leaf%20Pass-success?style=flat-square)](docs/architecture.md)
+[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-5%2F6--Leaf%20Pass-success?style=flat-square)](docs/architecture.md)
 [![AI Tools](https://img.shields.io/badge/AI%20Tools-14%20IDs%20%7C%2011%20Templates-8A2BE2?style=flat-square)](docs/tool-support.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
@@ -34,7 +34,7 @@ The **Android Agent Harness** enforces deterministic, cryptographic, and OS-leve
 | **Room Migrations** | Modifies `@Entity` without migration -> app crashes on user upgrade. | **Room Guard (`room_guard.py`)**: Hard-blocks un-migrated Kotlin & Java entities. |
 | **Localization & RTL** | Hardcodes strings, drops Arabic (`values-ar`), scrambles placeholders. | **Adaptive String Guard (`check_strings.py`)**: Sub-second diff-scoped parity check. |
 | **ANR & Main-Thread I/O** | Runs disk/network I/O on `Dispatchers.Main`; leaks sensor listeners. | **Perf & ANR Guardian**: Enforces 60/120 FPS fluidity and lifecycle unregistration. |
-| **Review Verification** | Model declares "LGTM!" and assumes its own fix works. | **Cryptographic Barrier**: Assembly (`:assembleDebug`) locked until 6 guardians emit SHA-256 tokens. |
+| **Review Verification** | Model declares "LGTM!" and assumes its own fix works. | **Cryptographic Barrier**: Assembly (`:assembleDebug`) stays locked until all 5 required guardians, plus test quality when promoted, emit SHA-256 tokens. |
 | **Rogue Git Commits** | Runs `git commit` or `git push --force` to hide compilation mistakes. | **OS Interceptor (`pre_tool_safety.py`)**: Hard-denies unauthorized Git and ADB mutations. |
 | **Host Scrapes & Loops** | Scans developer home directories (`C:\Users\...`) when third-party tools fail. | **Host Sandbox Guard**: Intercepts host filesystem traversals; enforces fail-fast tracker exit. |
 | **Legacy Codebases** | Linters output 4,000 legacy errors, stalling delivery. | **Zero Legacy Penalty**: Diff-scoped AST lint (`fast_kt_lint.py`) inspects modified lines in <1s. |
@@ -98,9 +98,9 @@ The **Android Agent Harness** solves this with an integrated, pre-warmed **Unive
 
 ---
 
-## The 6 Parallel Quality Guardians
+## Five Core Quality Guardians with Smart Test Promotion
 
-Before `:app:assembleDebug` or device deployment, 6 specialized subagents review the immutable snapshot in parallel:
+Before `:app:assembleDebug` or device deployment, five core subagents review the immutable snapshot in parallel. A sixth test-quality reviewer is required only when the diff touches tests or mocks:
 
 ```text
                             +---> [bug-reviewer-agent]              ---> BUG_PASS
@@ -151,7 +151,7 @@ Software that compiles is not necessarily software that works on mobile. The har
 Open a new chat session in your AI assistant (Antigravity, Claude Code, Cursor, Copilot, Windsurf) at your project root and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/install-or-update-prompt.md and follow all its instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.23/docs/install-or-update-prompt.md and follow all its instructions.
 ```
 
 ### Option B: Via Terminal CLI

@@ -2,10 +2,12 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.23/docs/setup-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
+> **Kit version**: `v0.27.23` — **SHA-256**: `cc11e44e942845cdd5299a8595456891182b25cedd7aad68afd4de44874ac413` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 The installing agent **executes** this file (usually after the developer pasted [`install-or-update-prompt.md`](install-or-update-prompt.md) in a new chat on the Android app). Do not summarize it. Replacing the example app name alone is **not** a successful install.
 
 ---
+Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
 You are installing a portable **Android AI harness** into THIS checkout. The kit is a checkout of an exact release tag from `android-agent-harness` (sibling, temp, or a path the developer gave). Copy from that detached tag’s `agents/` folder only after verifying `agents/VERSION` matches the requested tag. Never copy from `main`.
 

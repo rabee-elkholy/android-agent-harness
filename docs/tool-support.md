@@ -92,7 +92,7 @@ When installed with Claude Code, GitHub Copilot, or Codex, the harness automatic
 
 | Command / Prompt | Purpose |
 | :--- | :--- |
-| `/deliver [request]` | Full 7-stage delivery lifecycle: plan artifact, implement, 5-leaf review gate, preflight, assemble, device testing. |
+| `/deliver [request]` | Full delivery lifecycle: plan, implement, test, preflight, review package, 5-leaf review gate, assemble, and device testing. |
 | `/debug [symptoms]` | Hypothesis-driven debugging with root cause isolation, 5-leaf review, and physical device validation. |
 | `/new-feature [spec]` | Implement new feature with interactive planning artifact and five-leaf delivery gate. |
 | `/preflight` | Rapid preflight sanity suite: string parity, Room migrations, and fast Kotlin lint. |

@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v0.27.23/docs/diagnostic-prompt.md`  
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v0.27.23` — **SHA-256**: `97dcd359260d86ec118da36d04e8288c23c99ea43a74bb3352f0e7ae0001db8c` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v0.27.23` — **SHA-256**: `0b93fbf9bc7f706b3eec5359c5ba4308d4bc6241023e6c72ce5d190d6ddd3596` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 Paste **this entire file** as the first message in a **new chat on your Android app** to systematically audit the health, configuration, safety hooks, and operational readiness of your installed Android Agent Harness.
 
 ---
@@ -40,7 +40,7 @@ Tell the developer **first**, in their language:
    | # | Dimension | Status | Verified Subsystem |
    |---|---|:---:|---|
    | 1 | **Environment & Host** | `PASS / FAIL` | Python >= 3.10, OS platform, Gradle wrapper, Android SDK path, `.gitignore` audit, Git working tree status |
-   | 2 | **File Structure & Version** | `PASS / FAIL` | `.agents/VERSION`, `harness-rules.md`, 34 core scripts, `hooks.json` |
+   | 2 | **File Structure & Version** | `PASS / FAIL` | `.agents/VERSION`, `harness-rules.md`, canonical core-script inventory, `hooks.json` |
    | 3 | **Subagent Roster** | `PASS / FAIL` | All 8 subagents verified with active fingerprints |
    | 4 | **Product Configuration** | `PASS / FAIL` | `_product.py`, package prefix, application ID, source root, assemble task, and recorded answers consistency (device policy, adapters) |
    | 5 | **Template Leakage** | `PASS / FAIL` | Zero un-replaced template placeholders (`{{...}}`) in `.agents/` |

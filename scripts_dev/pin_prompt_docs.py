@@ -28,10 +28,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 URL_FILES = (
+    "README.md",
     "docs/install-or-update-prompt.md",
     "docs/diagnostic-prompt.md",
     "docs/rollback-prompt.md",
     "docs/setup-prompt.md",
+    "docs/quickstart.md",
     "docs/tool-support.md",
 )
 
@@ -39,6 +41,7 @@ CHECKSUM_DOCS = (
     "docs/install-or-update-prompt.md",
     "docs/diagnostic-prompt.md",
     "docs/rollback-prompt.md",
+    "docs/setup-prompt.md",
 )
 
 URL_RE = re.compile(r"(android-agent-harness/)(?:main|v\d+\.\d+\.\d+)(/docs/)")
