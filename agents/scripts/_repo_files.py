@@ -183,6 +183,38 @@ def changed_paths(*, include_untracked: bool = True, include_deleted: bool = Fal
     return list(seen.values())
 
 
+def working_tree_fingerprint(repo: Path | None = None) -> str | None:
+    """Hash every staged, unstaged, and untracked working-tree change.
+
+    The fingerprint includes status, path, rename source, and current content.
+    None is returned when Git or file hashing cannot be trusted so callers
+    fail closed instead of reusing a stale gate result.
+    """
+    r = repo or REPO
+    try:
+        status_proc = subprocess.run(
+            ["git", "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all"],
+            cwd=r,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return None
+    if status_proc.returncode != 0:
+        return None
+
+    items: list[str] = []
+    for changed in changed_files(r, include_untracked=True):
+        if changed.exists and not changed.content_sha256:
+            return None
+        content_marker = changed.content_sha256 or "deleted"
+        old_marker = changed.old_rel_posix or ""
+        items.append(
+            f"{changed.status}\0{changed.rel_posix}\0{old_marker}\0{content_marker}"
+        )
+    return hashlib.sha256("\n".join(sorted(items)).encode("utf-8")).hexdigest()
+
+
 def has_non_doc_code_changes() -> bool:
     """True when the working tree has Kotlin/Java/Gradle or non-string XML edits."""
     for cf in changed_files(include_untracked=True):

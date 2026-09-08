@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -550,6 +551,102 @@ pkg_path = Path(pkg_line.split("=", 1)[-1].strip()) if ok else None
 ok = ok and pkg_path is not None and pkg_path.is_file()
 print(f"review_package writes file: {'OK' if ok else 'FAIL ' + pkg_proc.stdout + pkg_proc.stderr}")
 failed += int(not ok)
+
+# A successful preflight artifact is reusable only for the exact same HEAD and
+# working-tree content. The explicit override must always execute preflight.
+from _gate_results import current_head_sha, read_gate_result  # noqa: E402
+import review_package as review_package_module  # noqa: E402
+
+preflight_record = read_gate_result("preflight")
+cache_validator = getattr(review_package_module, "preflight_cache_is_valid", None)
+recorded_fingerprint = (
+    preflight_record.get("working_tree_fingerprint")
+    if isinstance(preflight_record, dict)
+    else None
+)
+ok_preflight_artifact = bool(
+    callable(cache_validator)
+    and recorded_fingerprint
+    and cache_validator(
+        preflight_record,
+        git_sha=current_head_sha(),
+        working_tree_fingerprint=recorded_fingerprint,
+    )
+    and not cache_validator(
+        preflight_record,
+        git_sha=current_head_sha(),
+        working_tree_fingerprint="changed-tree",
+    )
+    and not cache_validator(
+        {**preflight_record, "status": "FAIL"},
+        git_sha=current_head_sha(),
+        working_tree_fingerprint=recorded_fingerprint,
+    )
+    and not cache_validator(
+        {"schema_version": 2, "status": "PASS"},
+        git_sha=current_head_sha(),
+        working_tree_fingerprint=recorded_fingerprint,
+    )
+    and not cache_validator(
+        {**preflight_record, "schema_version": 3},
+        git_sha=current_head_sha(),
+        working_tree_fingerprint=recorded_fingerprint,
+    )
+)
+print(f"preflight artifact fingerprint contract: {'OK' if ok_preflight_artifact else 'FAIL'}")
+failed += int(not ok_preflight_artifact)
+
+from _repo_files import working_tree_fingerprint  # noqa: E402
+
+fingerprint_repo = Path(tempfile.mkdtemp(prefix="ahk-preflight-fp-"))
+subprocess.run(["git", "init", "-q"], cwd=fingerprint_repo, check=True)
+subprocess.run(["git", "config", "user.email", "selftest@example.invalid"], cwd=fingerprint_repo, check=True)
+subprocess.run(["git", "config", "user.name", "Harness Selftest"], cwd=fingerprint_repo, check=True)
+fingerprint_file = fingerprint_repo / "Example.kt"
+fingerprint_file.write_text("class Example\n", encoding="utf-8")
+subprocess.run(["git", "add", "Example.kt"], cwd=fingerprint_repo, check=True)
+subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=fingerprint_repo, check=True)
+clean_fingerprint = working_tree_fingerprint(fingerprint_repo)
+fingerprint_file.write_text("class ExampleOne\n", encoding="utf-8")
+first_fingerprint = working_tree_fingerprint(fingerprint_repo)
+fingerprint_file.write_text("class ExampleTwo\n", encoding="utf-8")
+second_fingerprint = working_tree_fingerprint(fingerprint_repo)
+shutil.rmtree(fingerprint_repo, ignore_errors=True)
+ok_fingerprint_content = (
+    bool(clean_fingerprint)
+    and len({clean_fingerprint, first_fingerprint, second_fingerprint}) == 3
+)
+print(f"working-tree fingerprint tracks same-path content changes: {'OK' if ok_fingerprint_content else 'FAIL'}")
+failed += int(not ok_fingerprint_content)
+
+cached_pkg_proc = subprocess.run(
+    [sys.executable, str(SCRIPTS / "review_package.py")],
+    text=True,
+    capture_output=True,
+    check=False,
+    cwd=str(SCRIPTS.parents[1]),
+)
+ok_preflight_reuse = (
+    cached_pkg_proc.returncode == 0
+    and "Reusing cached preflight PASS" in cached_pkg_proc.stdout
+)
+print(f"review_package reuses matching preflight: {'OK' if ok_preflight_reuse else 'FAIL ' + cached_pkg_proc.stdout + cached_pkg_proc.stderr}")
+failed += int(not ok_preflight_reuse)
+
+forced_pkg_proc = subprocess.run(
+    [sys.executable, str(SCRIPTS / "review_package.py"), "--force-preflight"],
+    text=True,
+    capture_output=True,
+    check=False,
+    cwd=str(SCRIPTS.parents[1]),
+)
+ok_preflight_force = (
+    forced_pkg_proc.returncode == 0
+    and "Running preflight verification" in forced_pkg_proc.stdout
+    and "Reusing cached preflight PASS" not in forced_pkg_proc.stdout
+)
+print(f"review_package force-preflight override: {'OK' if ok_preflight_force else 'FAIL ' + forced_pkg_proc.stdout + forced_pkg_proc.stderr}")
+failed += int(not ok_preflight_force)
 
 # v0.9.0: structured header block (TASK_ID, GIT_SHA, TREE_FINGERPRINT,
 # GENERATED_AT, PACKAGE_SHA256 computed post-write) + sha256_12 on stdout.
@@ -1855,6 +1952,64 @@ failed += int(not ok_groovy)
 
 os.environ["_IN_HOOK_SELFTEST"] = "1"
 from harness_doctor import HarnessDoctor
+
+# --- Device diagnostics: read-only adb parsing and failure handling ---
+import doctor.engine as doctor_engine  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+_orig_doctor_which = doctor_engine.shutil.which
+_orig_doctor_run = doctor_engine.subprocess.run
+doctor_calls: list[list[str]] = []
+
+
+def _doctor_device_case(stdout: str = "", returncode: int = 0, error: Exception | None = None):
+    doctor_calls.clear()
+    doctor_engine.shutil.which = lambda name: "adb" if name == "adb" else _orig_doctor_which(name)
+
+    def _fake_run(args, **kwargs):
+        doctor_calls.append(list(args))
+        if error is not None:
+            raise error
+        return SimpleNamespace(stdout=stdout, stderr="adb failure", returncode=returncode)
+
+    doctor_engine.subprocess.run = _fake_run
+    probe = HarnessDoctor(repo_root, check_device=True, run_selftest=False)
+    probe.check_connected_devices()
+    return probe.results
+
+
+try:
+    physical_results = _doctor_device_case("List of devices attached\nR58M123\tdevice\n")
+    emulator_results = _doctor_device_case("List of devices attached\nemulator-5554\tdevice\n")
+    multiple_results = _doctor_device_case(
+        "List of devices attached\nR58M123\tdevice\nemulator-5554\tdevice\n"
+    )
+    no_device_results = _doctor_device_case("List of devices attached\n\n")
+    nonzero_results = _doctor_device_case("", returncode=7)
+    timeout_results = _doctor_device_case(error=subprocess.TimeoutExpired(["adb", "devices"], 5.0))
+
+    doctor_engine.shutil.which = lambda name: None if name == "adb" else _orig_doctor_which(name)
+    missing_probe = HarnessDoctor(repo_root, check_device=True, run_selftest=False)
+    missing_probe.check_connected_devices()
+    missing_results = missing_probe.results
+
+    doctor_device_checks = [
+        physical_results[-1].status == "PASS" and "R58M123" in physical_results[-1].message,
+        emulator_results[-1].status == "PASS" and "emulator-5554" in emulator_results[-1].message,
+        multiple_results[-1].status == "PASS" and "2 active" in multiple_results[-1].message,
+        no_device_results[-1].status == "WARN" and "No active" in no_device_results[-1].message,
+        nonzero_results[-1].status == "WARN" and "exit code 7" in nonzero_results[-1].message,
+        timeout_results[-1].status == "WARN" and "timed out" in timeout_results[-1].message,
+        len(missing_results) == 1 and missing_results[0].name == "ADB Executable" and missing_results[0].status == "WARN",
+        doctor_calls == [["adb", "devices"]],
+    ]
+    ok_doctor_devices = all(doctor_device_checks)
+finally:
+    doctor_engine.shutil.which = _orig_doctor_which
+    doctor_engine.subprocess.run = _orig_doctor_run
+
+print(f"doctor connected-device matrix: {'OK' if ok_doctor_devices else 'FAIL ' + str(doctor_device_checks)}")
+failed += int(not ok_doctor_devices)
 
 # --- v0.7.0: Build Variants (flavors) ---
 import _variants  # noqa: E402

@@ -21,7 +21,8 @@ from _hook_state import (  # noqa: E402
     tree_code_fingerprint,
     write_verdict_record,
 )
-from _repo_files import changed_paths  # noqa: E402
+from _gate_results import read_gate_result  # noqa: E402
+from _repo_files import changed_paths, working_tree_fingerprint  # noqa: E402
 
 enable_line_buffered_stdio()
 
@@ -31,6 +32,40 @@ OUT_DIR = Path(__file__).resolve().parents[1] / "state" / "packages"
 HEADER_BEGIN = "# HARNESS_PACKAGE_HEADER v2"
 PACKAGE_SHA_MARKER = "PACKAGE_SHA256="
 PACKAGE_SHA_PENDING = "PACKAGE_SHA256=PENDING"
+PREFLIGHT_ARTIFACT_SCHEMA = 2
+
+
+def preflight_cache_is_valid(
+    record: dict | None,
+    *,
+    git_sha: str,
+    working_tree_fingerprint: str,
+) -> bool:
+    """Return true only for a complete PASS bound to this exact tree state."""
+    if not isinstance(record, dict):
+        return False
+    if record.get("schema_version") != PREFLIGHT_ARTIFACT_SCHEMA:
+        return False
+    if record.get("status") != "PASS" or record.get("exit_code") != 0:
+        return False
+    if not git_sha or record.get("git_sha") != git_sha:
+        return False
+    if not working_tree_fingerprint or record.get("working_tree_fingerprint") != working_tree_fingerprint:
+        return False
+
+    steps = record.get("steps")
+    if not isinstance(steps, dict):
+        return False
+    return (
+        type(steps.get("hook_selftest")) is int
+        and steps.get("hook_selftest") == 0
+        and type(steps.get("string_parity")) is int
+        and steps.get("string_parity") == 0
+        and steps.get("room_migrations") is True
+        and type(steps.get("fast_kt_lint")) is int
+        and steps.get("fast_kt_lint") == 0
+        and steps.get("risk_approval") is True
+    )
 
 
 def git(*args: str) -> str:
@@ -164,6 +199,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Write working-tree diff package for the 5 review leaves")
     parser.add_argument("paths", nargs="*", help="Optional paths to include (default: all unstaged)")
     parser.add_argument("--task", default=None, help="Task id recorded in the package header (default: $HARNESS_TASK_ID).")
+    parser.add_argument(
+        "--force-preflight",
+        action="store_true",
+        help="Run preflight even when an exact matching PASS artifact exists.",
+    )
     args = parser.parse_args(argv)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -192,9 +232,22 @@ def main(argv=None) -> int:
         )
         return 1
 
-    # Hard Pre-Gate: run preflight_check before generating the review package
+    # Hard Pre-Gate: reuse only a complete PASS bound to this exact HEAD and tree.
     preflight_script = Path(__file__).resolve().parent / "preflight_check.py"
-    if preflight_script.is_file():
+    current_fingerprint = working_tree_fingerprint(REPO)
+    cached_preflight = read_gate_result("preflight")
+    reuse_preflight = (
+        not args.force_preflight
+        and preflight_cache_is_valid(
+            cached_preflight,
+            git_sha=git_head(),
+            working_tree_fingerprint=current_fingerprint or "",
+        )
+    )
+    if reuse_preflight:
+        print("[*] Reusing cached preflight PASS for unchanged HEAD and working tree.", flush=True)
+    elif preflight_script.is_file():
+        print("[*] Running preflight verification...", flush=True)
         preflight_proc = subprocess.run(
             [sys.executable, str(preflight_script), "--skip-hook-selftest"],
             cwd=REPO,
@@ -218,6 +271,12 @@ def main(argv=None) -> int:
                 file=sys.stderr,
             )
             return 1
+    else:
+        print(
+            "[FAIL] Cannot generate review package: preflight_check.py is missing.",
+            file=sys.stderr,
+        )
+        return 1
 
     fingerprint = tree_code_fingerprint() or ""
     snapshot = semantic_code_snapshot() or ""

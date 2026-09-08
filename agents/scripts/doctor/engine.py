@@ -799,9 +799,19 @@ class HarnessDoctor:
 
         self.log(category, "ADB Executable", "PASS", f"adb available at {adb_path}")
         try:
-            proc = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=5.0)
+            proc = subprocess.run([adb_path, "devices"], capture_output=True, text=True, timeout=5.0)
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip()
+                suffix = f": {detail}" if detail else ""
+                self.log(
+                    category,
+                    "Connected Devices",
+                    "WARN",
+                    f"adb devices failed with exit code {proc.returncode}{suffix}",
+                )
+                return
             devices = []
-            for l in lines:
+            for l in (proc.stdout or "").splitlines()[1:]:
                 parts = l.split()
                 if len(parts) >= 2 and parts[1] == "device":
                     devices.append(parts[0])
@@ -809,6 +819,8 @@ class HarnessDoctor:
                 self.log(category, "Connected Devices", "PASS", f"Detected {len(devices)} active device(s): {', '.join(devices)}")
             else:
                 self.log(category, "Connected Devices", "WARN", "No active devices/emulators connected via ADB.")
+        except subprocess.TimeoutExpired:
+            self.log(category, "Connected Devices", "WARN", "adb devices timed out after 5 seconds.")
         except Exception as exc:
             self.log(category, "Connected Devices", "WARN", f"Failed querying adb devices: {exc}")
 
