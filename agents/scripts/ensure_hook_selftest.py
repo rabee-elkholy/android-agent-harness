@@ -73,7 +73,10 @@ def cache_is_fresh(fingerprint: str) -> bool:
 
 
 def run_selftest(echo: bool = False) -> tuple[bool, str]:
+    if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
+        return True, "already running inside selftest"
     env = os.environ.copy()
+    env["HARNESS_HOOK_SELFTEST_ACTIVE"] = "1"
     env.pop("HARNESS_HOOK_STATE", None)
     env.pop("HARNESS_TRANSCRIPT_ROOT", None)
     code, raw_log, _ = run_streaming(
@@ -133,6 +136,9 @@ def _read_stdin_safe(timeout_sec: float = 0.1) -> str:
 
 def main() -> int:
     enable_line_buffered_stdio()
+    if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
+        print("[OK] Hook selftest already running (recursion guard).", flush=True)
+        return 0
     raw = _read_stdin_safe()
     as_hook = _is_hook_payload(raw)
 

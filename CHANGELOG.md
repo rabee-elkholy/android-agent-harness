@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.23] - 2026-09-08
+
+### Shift-Left Preflight Gating & Zero-Invalidation Delivery Order
+- **Shift-Left Preflight Gate & Zero-Invalidation Invariant (`harness-rules.md`, `deliver.md`, `AGENTS.md`, `AGENTS.md.template`, `pre_invocation_reminder.py`, `review_package.py`)**:
+  - Promoted `preflight_check.py` from a post-review assemble requirement to a mandatory Shift-Left Pre-Gate in Stage 0 alongside unit tests.
+  - Required all string parity (`check_strings.py`), Room database migration (`room_guard.py`), fast Kotlin lint (`fast_kt_lint.py`), and risk tier checks to pass 100% before review packages can be generated.
+  - Wired `review_package.py` to strictly validate `preflight_check.py` as a hard prerequisite before packaging, immediately preventing post-review fixes from modifying code, invalidating fingerprints (`STALE`), and exhausting review round caps.
+  - Refined Stage 2 / Step 6 to focus on `:assembleDebug`, treating preflight here as an idempotent sanity assertion.
+  - Added recursive selftest guard (`HARNESS_HOOK_SELFTEST_ACTIVE`, `--skip-hook-selftest`) to ensure hook selftest cycles never deadlock during automated preflight execution.
+
 ## [0.27.22] - 2026-09-08
 
 ### Non-Blocking Autonomous Review Fix Invariant & Touchpoint Clarification
@@ -179,7 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Leverages `/grill-me` with structured `ask_question` modals in Antigravity, and standard numbered discovery interviews in portable CLI assistants.
   - Completely eliminates unconstrained global learning tools from proactive recommendations.
 
-## [0.27.11] - 2026-09-05
+### 0.27.11 - 2026-09-05
 
 ### Antigravity Rules Token Optimization, Progressive Disclosure & Clean Adapter Merge
 - **Antigravity & Gemini Rules Token Optimization (`harness-rules.md`, `threat-model.md`)**:

@@ -18,8 +18,8 @@ This checkout uses a portable Android harness. The same rules apply in Cursor, C
 After non-trivial implementation:
 
 1. `python agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Shift-Left Test & Mock Synchronization Pre-Gate: update unit tests/mocks alongside production code; tests must pass 100% before review)
-2. `python agents/scripts/fast_kt_lint.py` (Shift-Left Lint Pre-Gate: diff-scoped fast Kotlin lint on modified lines without penalizing untouched legacy code)
-3. `python agents/scripts/review_package.py` (strictly validates lint before creating package)
+2. `python agents/scripts/preflight_check.py` (Mandatory Shift-Left Preflight Gate: verifies string parity via `check_strings.py`, Room database migrations via `room_guard.py`, Kotlin syntax/rules via `fast_kt_lint.py`, and risk tier before review)
+3. `python agents/scripts/review_package.py` (strictly validates preflight before creating package)
 4. Run **all five** reviewers against the same `HARNESS_REVIEW_PACKAGE=` path (prompts in `agents/subagents/*.json`). Dispatch them in **exactly one** parallel invoke when this product can spawn children.
    - `bug-reviewer-agent` → `BUG_PASS`
    - `convention-reviewer-agent` → `CONVENTION_PASS`
@@ -27,8 +27,7 @@ After non-trivial implementation:
    - `perf-anr-guardian-agent` → `PERF_PASS`
    - `regression-impact-reviewer-agent` → `REGRESSION_PASS`
 5. Do **not** treat a single self-review as the gate. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
-6. `python agents/scripts/preflight_check.py` (Mandatory Preflight Gate: must pass with 0 errors before assemble — never assemble if `[FAIL]`)
-7. `python agents/scripts/run_gradle_task.py :app:assembleDebug`
+6. `python agents/scripts/run_gradle_task.py :app:assembleDebug` (Preflight was already validated in Stage 0 before review; running `python agents/scripts/preflight_check.py` here before assemble is permitted as a fast idempotent sanity assertion)
 8. **Device Verification & Interactive Manual Sign-off**:
    - `python agents/scripts/run_device.py install-start` (Installs and launches the target Activity/Screen on the connected device).
    - If no device is connected, HALT and prompt the developer; never silently skip device verification.

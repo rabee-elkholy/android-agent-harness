@@ -192,11 +192,11 @@ def main(argv=None) -> int:
         )
         return 1
 
-    # Hard Pre-Gate: run diff-scoped fast_kt_lint before generating the review package
-    fast_lint_script = Path(__file__).resolve().parent / "fast_kt_lint.py"
-    if fast_lint_script.is_file():
-        lint_proc = subprocess.run(
-            [sys.executable, str(fast_lint_script)],
+    # Hard Pre-Gate: run preflight_check before generating the review package
+    preflight_script = Path(__file__).resolve().parent / "preflight_check.py"
+    if preflight_script.is_file():
+        preflight_proc = subprocess.run(
+            [sys.executable, str(preflight_script), "--skip-hook-selftest"],
             cwd=REPO,
             capture_output=True,
             text=True,
@@ -204,16 +204,19 @@ def main(argv=None) -> int:
             errors="replace",
             check=False,
         )
-        if lint_proc.returncode != 0:
+        if preflight_proc.returncode != 0:
             print(
-                "[FAIL] Cannot generate review package: Fast Kotlin Lint detected violations on modified lines:",
+                "[FAIL] Cannot generate review package: Preflight verification detected violations:",
                 file=sys.stderr,
             )
-            if lint_proc.stdout.strip():
-                print(lint_proc.stdout.strip(), file=sys.stderr)
-            if lint_proc.stderr.strip():
-                print(lint_proc.stderr.strip(), file=sys.stderr)
-            print("\n[!] Fix all lint violations above before generating a review package.", file=sys.stderr)
+            if preflight_proc.stdout.strip():
+                print(preflight_proc.stdout.strip(), file=sys.stderr)
+            if preflight_proc.stderr.strip():
+                print(preflight_proc.stderr.strip(), file=sys.stderr)
+            print(
+                "\n[!] Fix all preflight issues (strings, Room migrations, lint, risk approvals) before generating a review package.",
+                file=sys.stderr,
+            )
             return 1
 
     fingerprint = tree_code_fingerprint() or ""

@@ -4,6 +4,7 @@ Usage: python .agents/scripts/preflight_check.py
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -39,7 +40,8 @@ def main() -> int:
     modified = [p.relative_to(REPO).as_posix() for p in changed_paths()]
     live_print(f"[*] Working-tree files (including untracked): {len(modified)}")
 
-    hook_code = run_step("0. Checking harness hook selftest (cached)...", "ensure_hook_selftest.py")
+    skip_hook = "--skip-hook-selftest" in sys.argv or os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1"
+    hook_code = 0 if skip_hook else run_step("0. Checking harness hook selftest (cached)...", "ensure_hook_selftest.py")
     str_code = run_step("1. Checking String Parity...", "check_strings.py")
 
     live_print("\n2. Checking Room Database Migrations...")

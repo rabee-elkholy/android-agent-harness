@@ -313,10 +313,10 @@ This skip is not a token optimization. Code changes never skip reviews.
 
 From repo root:
 
-0. **Shift-Left Test & Lint Pre-Gate**: When code or unit tests are touched, ALWAYS run BOTH before requesting review packages:
+0. **Shift-Left Test & Preflight Pre-Gate (MANDATORY BEFORE REVIEW)**: When code or unit tests are touched, ALWAYS run BOTH before requesting review packages:
    a. `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` (Compiler, signature parity & unit tests — permitted before review as a pre-gate).
-   b. `python .agents/scripts/fast_kt_lint.py` (Diff-Scoped Fast Kotlin Lint: catches `!!`, `TODO` stubs, `runBlocking` in tests, inline FQCNs on modified/added lines without penalizing untouched legacy code).
-   *Fix any compiler or lint issues BEFORE generating the review package. `review_package.py` strictly validates lint and will refuse package generation on lint violations.*
+   b. `python .agents/scripts/preflight_check.py` (Mandatory Shift-Left Preflight Gate: verifies string parity via `check_strings.py`, Room database migrations via `room_guard.py`, Kotlin syntax/rules via `fast_kt_lint.py`, and risk tier).
+   *Fix all string issues, missing translations, Room migration errors, and lint violations BEFORE generating the review package. `review_package.py` strictly validates preflight and will refuse package generation on preflight violations. Running preflight before review guarantees that no post-review string extractions or migration fixes can invalidate review packages or burn review rounds.*
 1. `python .agents/scripts/review_package.py` (optional paths). Use the printed `HARNESS_REVIEW_PACKAGE=`.
 2. **Smart Test Promotion & Parallel Dispatch**:
    - **Non-test diff (pure production code)**: Dispatch **all 5** standard review leaves in **exactly one** `invoke_subagent` call with `Subagents: [...]`: `bug-reviewer-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, and `regression-impact-reviewer-agent`.
@@ -352,13 +352,11 @@ Optional sixth slot in non-test diffs: `qa-diagnostics-agent` or `android-ui-exp
 
 ---
 
-## 3) Preflight Gate, Build, Install, Launch
+## 3) Build, Install, Launch
 
 Only after the 5 leaves have finished (all 5 PASS):
 
-1. `python .agents/scripts/preflight_check.py` — **Mandatory Preflight Quality Gate** (verifies string parity, Room migrations, and fast Kotlin lint).
-   - **STRICT PREFLIGHT INVARIANT**: If `preflight_check.py` returns exit code 1 (`[FAIL]`), the agent is **STRICTLY PROHIBITED from running `:app:assembleDebug` or delivering**. The agent MUST fix all string/lint/Room issues or halt and report them to the developer.
-2. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
+1. `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. Wait for `BUILD SUCCESSFUL` from **this** command. (Preflight was already validated in Stage 0 before review; running `python .agents/scripts/preflight_check.py` here before assemble is permitted as a fast idempotent sanity assertion). Daily work is **debug**. Do not install a leftover APK. Do **not** run raw `gradlew.bat` from the agent — the Python runner streams executing tasks and a 10s heartbeat so the task log is not empty during compile.
 3. Live Device Install & Launch: `python .agents/scripts/run_device.py install-start`.
    - **APK Freshness & Stale Build Barrier**: `run_device.py` automatically verifies that the target APK is strictly newer than all repository code/resource files and build configurations via `_apk_freshness.py`. If source files were touched after the APK was built or if git HEAD moved past the last assemble gate, installation is **immediately rejected with exit code 1**, forcing a fresh `:app:assembleDebug` compile before any bytecode reaches the device.
 4. **Final Verdict Artifact**: after every gate (unit tests, preflight, assemble, device, 5 leaves), run `python .agents/scripts/final_verdict.py`. It aggregates the per-gate result artifacts (`.agents/state/results/*.json`) and the review verdict records into `.agents/state/last_verdict.json`:

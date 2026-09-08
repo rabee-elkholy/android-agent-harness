@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+os.environ["HARNESS_HOOK_SELFTEST_ACTIVE"] = "1"
 sys.path.insert(0, str(SCRIPTS))
 try:
     from _product import ALLOW_EMULATOR
