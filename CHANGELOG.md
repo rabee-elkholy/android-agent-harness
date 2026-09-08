@@ -5,6 +5,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.24] - 2026-09-08
+
+### Harness Reliability and Release Integrity
+- **Deterministic Cross-Runtime Gates**:
+  - Made environment and hook selftests hermetic, preserved raw Gradle denial, and added ADB-core and graph coverage to CI.
+- **CLI Verification Correctness**:
+  - Added compatible `PASS` and `APPROVED` verdict handling, exact five/six-leaf validation, documented stale exit code `2`, and update failure propagation.
+- **Preflight and Device Diagnostics**:
+  - Repaired read-only ADB device parsing and added fail-closed preflight reuse bound to the exact Git HEAD and working-tree content.
+- **Release Drift Prevention**:
+  - Validated pinned prompt URLs and checksums, current security support, delivery-order documentation, immutable PyPI publishing actions, and pinned build dependencies.
+
 ## [0.27.23] - 2026-09-08
 
 ### Shift-Left Preflight Gating & Zero-Invalidation Delivery Order
@@ -167,7 +179,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `_IN_HOOK_SELFTEST` bypass to assemble and device delivery gates in `pre_tool_safety.py`.
   - Guarantees that internal hook selftests (such as `run_device_uninstall`) execute cleanly during client repository installations even when uncommitted application code changes exist in the working tree.
 
-## [0.27.12] - 2026-09-05
+### 0.27.12 - 2026-09-05
 
 ### Environment-Adaptive Architecture, Self-Healing Commands & Zero-Bloat Preference Codification
 - **Runtime Environment & Surface Sensor (`_environment.py`, `_environment_selftest.py`)**:
