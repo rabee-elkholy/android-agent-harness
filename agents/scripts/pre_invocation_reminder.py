@@ -113,7 +113,9 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "ZERO-LIVE-NETWORK: Strictly forbidden from making outbound HTTP/API requests or probing app endpoints/production servers via Python/curl/scratch scripts; rely strictly on local code and test mocks. "
         "LOCAL-FIXTURES-FIRST: Always inspect local mocks/test fixtures (src/test/, test/resources/, Fake*Repository) before declaring backend data ambiguous; if still ambiguous, halt at 3-4 files and ask developer via ask_question with business options (never spam trivial questions on deterministic code facts). "
         "INTERRUPT-PRECEDENCE: When user message contains a halt/interruption or behavioral question (\"وقف\", \"رد عليا\", \"بتعمل ايه\"), yield 0 tool calls immediately and respond 100% in conversational text. "
-        "UI-DEFECT-BOUNDARY: Text duplication, formatting, and share sheet defects are strictly limited to UI/Formatters/ViewModels; never descend into Retrofit interfaces or search for Base URLs."
+        "UI-DEFECT-BOUNDARY: Text duplication, formatting, and share sheet defects are strictly limited to UI/Formatters/ViewModels; never descend into Retrofit interfaces or search for Base URLs. "
+        "MISSING-LEGACY-CODE: When restoring deleted code or requested to check git ('check git'), limit to 1 targeted git query (git log -n 5 or git log -S <symbol> -n 3). If not found in immediate history, STOP git archaeology immediately and call ask_question to ask developer for reference project path or commit. NEVER loop in iterative git log/diff. "
+        "PURE-ENGLISH-SYSTEM: All rules, prompts, git commit messages, and internal engine files must remain 100% in English with zero emojis."
     )
 
 

@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.21] - 2026-09-08
+
+### Missing Legacy Code Invariant & Pure English System Mandate
+- **Missing Legacy Code & One-Shot Git Invariant (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`, `pre_invocation_reminder.py`)**:
+  - Bound legacy code restoration and historical git inspections (e.g. "check git", "restore deleted feature") to a maximum of 1 targeted code graph query or 1 scoped git query (`git log -n 5` / `git log -S <symbol> -n 3`).
+  - Enforced immediate halt upon absence: strictly prohibited speculative recursive git excavations, multi-commit diff digging (`git log -G`, `git log --all`), or scanning unrelated history when requested code does not exist in the local project.
+  - Mandated immediate interactive clarification (`ask_question`) asking the developer for an external reference path, commit hash, or fresh implementation, preventing runaway exploration loops.
+- **Pure English System Invariant (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`, `pre_invocation_reminder.py`)**:
+  - Enforced that all internal harness files, canonical rules, templates, prompts, git commit messages, and script strings remain 100% in English with zero emojis and zero Arabic text in system files (reserving Arabic exclusively for user-facing chat responses and interactive modal options when interacting with an Arabic-speaking developer).
+
 ## [0.27.20] - 2026-09-08
 
 ### Production-Readiness Integrity Hardening & Semantic Snapshot Gate
@@ -187,7 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added real-time review package digest and risk tier indicators before generating review diffs.
   - Added live Activity launch progress before dispatching `am start`.
 
-## [0.27.9] - 2026-09-03
+### 0.27.9 - 2026-09-03
 
 ### Mandatory Interactive Modal Invariant, Universal Code Graph README Showcase & Smart MCP Fallback
 - **Mandatory Interactive Modal Invariant (`ask_question`) & Platform Planning Mode Override (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**:
