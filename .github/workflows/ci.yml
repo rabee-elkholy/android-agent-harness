@@ -34,6 +34,14 @@ jobs:
         run: |
           python agents/scripts/_security_selftest.py
 
+      - name: Run ADB Core Self-Tests
+        run: |
+          python agents/scripts/_adb_core_selftest.py
+
+      - name: Run Code Graph Self-Tests
+        run: |
+          python agents/scripts/_graph_selftest.py
+
       - name: Run Environment/Code Failure Classifier Self-Tests
         run: |
           python agents/scripts/_env_codes_selftest.py

@@ -26,6 +26,20 @@ from _environment import AssistantEnv, AntigravitySurface  # noqa: E402
 SAFETY_ENGINE = SCRIPTS / "pre_tool_safety.py"
 RECORD_REVIEW = SCRIPTS / "record_review.py"
 RENDER_UI = SCRIPTS / "render_ui.py"
+DETECTION_PREFIXES = ("ANTIGRAVITY", "CLAUDE", "CODEX", "CURSOR")
+DETECTION_KEYS = {"VSCODE_GIT_ASKPASS_NODE"}
+
+
+def _is_detection_var(key: str) -> bool:
+    return key.startswith(DETECTION_PREFIXES) or key in DETECTION_KEYS
+
+
+def _clean_detection_env(source: dict[str, str]) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in source.items()
+        if not _is_detection_var(key)
+    }
 
 
 def _case(name: str, ok: bool, detail: str = "") -> int:
@@ -44,8 +58,20 @@ def test_environment_detection() -> int:
     failed += _case("detection_test_override", p_cur.env == AssistantEnv.CURSOR)
 
     # 2. Antigravity via payload
+    original_env = os.environ.copy()
+    polluted_env = original_env.copy()
+    polluted_env["CODEX_SESSION_ID"] = "ambient-codex-session"
+    polluted_env["VSCODE_GIT_ASKPASS_NODE"] = "C:/Cursor/resources/app/git-askpass.js"
+    os.environ.clear()
+    os.environ.update(_clean_detection_env(polluted_env))
     env_mod._CACHED_PROFILE = None
-    p_ag = env_mod.detect_runtime_profile({"transcriptPath": "C:/fake/transcript.jsonl"})
+    try:
+        p_ag = env_mod.detect_runtime_profile(
+            {"transcriptPath": "C:/fake/transcript.jsonl"}
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
     failed += _case(
         "detection_antigravity_payload",
         p_ag.env == AssistantEnv.ANTIGRAVITY
@@ -60,10 +86,11 @@ def test_environment_detection() -> int:
     failed += _case("detection_claude_code_payload", p_cc.env == AssistantEnv.CLAUDE_CODE)
 
     # 4. Codex CLI via environment
-    env_clean = os.environ.copy()
-    for k in list(env_clean.keys()):
-        if k.startswith("ANTIGRAVITY"):
-            del env_clean[k]
+    polluted_codex_env = os.environ.copy()
+    polluted_codex_env["ANTIGRAVITY_AGENT"] = "1"
+    polluted_codex_env["CLAUDE_CODE"] = "1"
+    polluted_codex_env["VSCODE_GIT_ASKPASS_NODE"] = "C:/Cursor/git-askpass.js"
+    env_clean = _clean_detection_env(polluted_codex_env)
     env_clean["CODEX_CLI"] = "1"
     proc_codex = subprocess.run(
         [sys.executable, "-c", "import _environment, sys; sys.stdout.write(_environment.detect_runtime_profile().env.value)"],
@@ -257,14 +284,16 @@ def test_generative_ui_and_markdown() -> int:
     failed = 0
 
     # 1. Antigravity UI mode
-    env_ag = os.environ.copy()
-    env_ag["HARNESS_TEST_ENV"] = "antigravity"
-    proc_ag = subprocess.run(
-        [sys.executable, str(RENDER_UI), "--demo"],
-        capture_output=True,
-        text=True,
-        env=env_ag,
-    )
+    with tempfile.TemporaryDirectory() as artifact_dir:
+        env_ag = os.environ.copy()
+        env_ag["HARNESS_TEST_ENV"] = "antigravity"
+        env_ag["ANTIGRAVITY_ARTIFACT_DIR"] = artifact_dir
+        proc_ag = subprocess.run(
+            [sys.executable, str(RENDER_UI), "--demo"],
+            capture_output=True,
+            text=True,
+            env=env_ag,
+        )
     ok_ag = "<agent-embed" in proc_ag.stdout
     failed += _case("render_ui_antigravity_embed", ok_ag)
 

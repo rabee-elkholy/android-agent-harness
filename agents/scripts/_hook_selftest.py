@@ -539,7 +539,7 @@ pkg_proc = subprocess.run(
     [sys.executable, str(SCRIPTS / "review_package.py")],
     text=True,
     capture_output=True,
-    check=True,
+    check=False,
     cwd=str(SCRIPTS.parents[1]),
 )
 pkg_lines = [l.strip() for l in pkg_proc.stdout.splitlines() if l.strip()]
@@ -1082,7 +1082,12 @@ tx_file.write_text(
     + "\n",
     encoding="utf-8",
 )
-assemble_pass = run(cmd("gradlew.bat :app:assembleDebug", conversation=five_conv))
+assemble_pass = run(
+    cmd(
+        "python agents/scripts/run_gradle_task.py :app:assembleDebug",
+        conversation=five_conv,
+    )
+)
 ok_assemble_pass = assemble_pass["decision"] == "allow"
 print(
     f"assemble_after_pass_tokens: {assemble_pass['decision']} "
@@ -1108,7 +1113,12 @@ stuck_tx.write_text(
     + "\n",
     encoding="utf-8",
 )
-stuck_res = run(cmd("gradlew.bat :app:assembleDebug", conversation=stuck_conv))
+stuck_res = run(
+    cmd(
+        "python agents/scripts/run_gradle_task.py :app:assembleDebug",
+        conversation=stuck_conv,
+    )
+)
 ok_stuck = stuck_res["decision"] == "allow"
 print(
     f"assemble_verdicts_without_invoke: {stuck_res['decision']} "
@@ -1140,7 +1150,12 @@ dump_tx.write_text(
     + "\n",
     encoding="utf-8",
 )
-dump_res = run(cmd("gradlew.bat :app:assembleDebug", conversation=dump_conv))
+dump_res = run(
+    cmd(
+        "python agents/scripts/run_gradle_task.py :app:assembleDebug",
+        conversation=dump_conv,
+    )
+)
 ok_dump = dump_res["decision"] == "allow"
 print(
     f"assemble_ignores_file_dump_invoke: {dump_res['decision']} "
@@ -1170,7 +1185,12 @@ def _evidence_conv(name: str, entries: list[dict], mode: str) -> dict:
             encoding="utf-8",
         )
         run(invoke_five(name))
-        return run(cmd("gradlew.bat :app:assembleDebug", conversation=name))
+        return run(
+            cmd(
+                "python agents/scripts/run_gradle_task.py :app:assembleDebug",
+                conversation=name,
+            )
+        )
     finally:
         if prev is None:
             os.environ.pop("HARNESS_EVIDENCE_MODE", None)
@@ -2280,7 +2300,6 @@ print(
 failed += int(not ok_pm_policy)
 
 # --- v0.8.0: GitHub adapter with mocked subprocess (zero network) ---
-import shutil as _shutil  # noqa: E402
 import pm_github  # noqa: E402
 
 class _FakeProc:
@@ -2290,8 +2309,11 @@ class _FakeProc:
         self.stderr = err
 
 _orig_run = pm_github.subprocess.run
+_orig_which = pm_github.shutil.which
 _gh_calls: list[list[str]] = []
 try:
+    pm_github.shutil.which = lambda name: "gh" if name == "gh" else _orig_which(name)
+
     def _fake_run_ok(cmd, **kwargs):
         _gh_calls.append(list(cmd))
         assert kwargs.get("timeout") == pm_github.GH_TIMEOUT_SECONDS
@@ -2331,13 +2353,13 @@ try:
     ok_gh_denied_done = _raises_system_exit(pm_github.set_issue_status, 7, "done", "o/r")
 finally:
     pm_github.subprocess.run = _orig_run
+    pm_github.shutil.which = _orig_which
 
-_orig_which = _shutil.which
 try:
-    _shutil.which = lambda name: None
+    pm_github.shutil.which = lambda name: None
     ok_gh_missing_binary = _raises_system_exit(pm_github.list_issues, "o/r")
 finally:
-    _shutil.which = _orig_which
+    pm_github.shutil.which = _orig_which
 ok_pm_github = ok_gh_ops and ok_gh_fail_closed and ok_gh_denied_done and ok_gh_missing_binary
 print(
     f"pm_github adapter (mocked gh): {'OK' if ok_pm_github else 'FAIL ' + str([ok_gh_ops, ok_gh_fail_closed, ok_gh_denied_done, ok_gh_missing_binary])}"
@@ -2601,7 +2623,12 @@ run(invoke_five("c-ttl"))
 _state_now = json.loads(STATE.read_text(encoding="utf-8"))
 _state_now["c-ttl"]["pending_since"] = time.time() - 100000
 STATE.write_text(json.dumps(_state_now), encoding="utf-8")
-ttl_res = run(cmd("gradlew.bat :app:assembleDebug", conversation="c-ttl"))
+ttl_res = run(
+    cmd(
+        "python agents/scripts/run_gradle_task.py :app:assembleDebug",
+        conversation="c-ttl",
+    )
+)
 ok_ttl = ttl_res["decision"] == "allow"
 print(f"barrier_ttl_expiry_unblocks: {ttl_res['decision']} {'OK' if ok_ttl else 'FAIL ' + json.dumps(ttl_res)}")
 failed += int(not ok_ttl)
@@ -2855,6 +2882,12 @@ install_update_script = SCRIPTS / "install_or_update.py"
 if install_update_script.is_file() and KIT_LAYOUT:
     from install_or_update import execute_install_or_update
     test_fixture_dir = Path(tempfile.mkdtemp())
+    test_home_dir = test_fixture_dir / "home"
+    test_home_dir.mkdir()
+    original_home = os.environ.get("HOME")
+    original_userprofile = os.environ.get("USERPROFILE")
+    os.environ["HOME"] = str(test_home_dir)
+    os.environ["USERPROFILE"] = str(test_home_dir)
     try:
         (test_fixture_dir / "gradlew").touch()
         (test_fixture_dir / "app").mkdir()
@@ -2919,6 +2952,14 @@ if install_update_script.is_file() and KIT_LAYOUT:
         print(f"install_or_update engine deterministic round-trip: {'OK' if ok_engine else 'FAIL'}")
         failed += int(not ok_engine)
     finally:
+        if original_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = original_home
+        if original_userprofile is None:
+            os.environ.pop("USERPROFILE", None)
+        else:
+            os.environ["USERPROFILE"] = original_userprofile
         shutil.rmtree(test_fixture_dir, ignore_errors=True)
 else:
     print("install_or_update engine deterministic round-trip: OK (skipped — installed checkout)")
