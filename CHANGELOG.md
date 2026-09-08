@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.22] - 2026-09-08
+
+### Non-Blocking Autonomous Review Fix Invariant & Touchpoint Clarification
+- **Non-Blocking Autonomous Fix Invariant (`harness-rules.md`, `AGENTS.md`, `AGENTS.md.template`, `deliver.md`, `pre_invocation_reminder.py`)**:
+  - Bound Review Round Summary Cards in Rounds 1 and 2 to strictly informational, non-blocking touchpoints.
+  - Explicitly prohibited agents from yielding the turn, halting, or waiting for developer approval after emitting review cards with findings.
+  - Mandated immediate, autonomous continuation to fix defect producers, run `fast_kt_lint.py` and unit tests, and re-dispatch Round N+1 in the same active loop.
+  - Codified an anti-rationalization invariant forbidding agents from falsely claiming that the harness requires stopping for developer card review before the Round 3 Cap.
+  - Injected non-blocking directive into the active pre-invocation reminder to eliminate hesitation and premature turn boundaries across all AI models.
+
 ## [0.27.21] - 2026-09-08
 
 ### Missing Legacy Code Invariant & Pure English System Mandate
@@ -181,7 +191,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unbuffered Installer Live Streaming (`install_or_update.py`)**:
   - Integrated unbuffered process execution flag and continuous readline streaming for real-time installer feedback.
 
-## [0.27.10] - 2026-09-03
+### 0.27.10 - 2026-09-03
 
 ### Real-Time Live Process Streaming & Progress Feedback Across All Harness Scripts
 - **Real-Time Live Streaming Engine (`install_or_update.py`, `_live_process.py`)**:

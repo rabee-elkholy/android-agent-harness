@@ -103,7 +103,7 @@ def message_for(used_reviews: int, pending: bool, update_directive: str = "", ro
         "otherwise dispatch the 5 standard review leaves in EXACTLY ONE invoke_subagent call: "
         "bug-reviewer-agent, convention-reviewer-agent, security-reviewer-agent, perf-anr-guardian-agent, regression-impact-reviewer-agent. "
         "Do not use code-review-guard-agent. Zero chat noise on intermediate reviews; ZERO-TIMER INVARIANT: never use schedule or polling timers for subagents. "
-        "3. ROUND SUMMARY CARDS: Emit structured card in developer's language when all verdicts arrive. Converge in <= 2 rounds (Shift-Left Pre-Audit before review_package.py). "
+        "3. ROUND SUMMARY CARDS: Emit structured card in developer's language when all verdicts arrive. NON-BLOCKING INVARIANT: in rounds 1-2, card is informational; never halt or wait for developer approval after card; autonomously fix, lint, and re-dispatch round N+1 immediately (pause only at Round 3 Cap). Converge in <= 2 rounds (Shift-Left Pre-Audit before review_package.py). "
         "4. On-demand specialists: qa-diagnostics-agent, android-ui-expert-agent. "
         f"5. Build & Device: preflight_check.py (must pass with 0 errors) -> `{bits['assemble_task']}` -> `run_device.py install-start`. {device_line} {git_line} {install_line} {device_verif_line} "
         "6. AUTONOMOUS PHASE PIPELINE: Multi-phase tasks stop after device test + ask_question for developer commit before next phase. "
