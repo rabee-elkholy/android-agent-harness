@@ -240,6 +240,12 @@ def check_room_working_tree(modified_rels: list[str] | None = None) -> tuple[boo
                 failures.append(
                     f"{new_decl.rel}: {expected_name} exists but is not passed to addMigrations(...)."
                 )
+            var_matches = re.findall(rf"(?:val|var)\s+([A-Za-z0-9_]+)\s*(?::\s*Migration)?\s*=\s*(?:object\s*:\s*)?Migration\s*\(\s*{old_ver}\s*,\s*{new_ver}\s*\)", body)
+            for var_name in var_matches:
+                if var_name not in new_decl.registered and var_name not in failures:
+                    failures.append(
+                        f"{new_decl.rel}: migration variable '{var_name}' ({old_ver} -> {new_ver}) is defined but not registered in addMigrations(...)."
+                    )
 
         if entity_hit and new_decl.destructive:
             failures.append(

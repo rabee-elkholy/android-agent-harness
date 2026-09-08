@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -26,47 +28,170 @@ def _unquote_git_path(raw: str) -> str:
     return raw
 
 
-def changed_paths(*, include_untracked: bool = True) -> list[Path]:
-    """Working-tree files vs HEAD: staged, unstaged, and untracked."""
-    proc = subprocess.run(
-        ["git", "status", "--porcelain", "-u", "--untracked-files=all"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+@dataclass(frozen=True)
+class ChangedFile:
+    path: Path
+    rel_posix: str
+    status: str  # e.g., "M", "A", "D", "R", "??"
+    old_path: Path | None = None
+    old_rel_posix: str | None = None
+    exists: bool = True
+    is_untracked: bool = False
+    content_sha256: str | None = None
+
+
+def changed_files(repo: Path | None = None, *, include_untracked: bool = True) -> list[ChangedFile]:
+    """Parse git status --porcelain=v2 -z to discover working-tree changes precisely."""
+    r = repo or REPO
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all"],
+            cwd=r,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    raw = proc.stdout or b""
+    entries = raw.split(b"\x00")
+    results: list[ChangedFile] = []
+    idx = 0
+    while idx < len(entries):
+        chunk = entries[idx]
+        idx += 1
+        if not chunk:
+            continue
+        try:
+            line = chunk.decode("utf-8", errors="replace")
+        except Exception:
+            continue
+
+        if line.startswith("1 "):
+            # 1 <xy> <sub> <mH> <mI> <mW> <hH> <hI> <path>
+            parts = line.split(" ", 8)
+            if len(parts) < 9:
+                continue
+            xy = parts[1]
+            rel_path = parts[8]
+            full_path = r / rel_path
+            exists = full_path.is_file()
+            c_sha = None
+            if exists:
+                try:
+                    c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                except Exception:
+                    pass
+            status = "D" if "D" in xy else ("A" if "A" in xy else "M")
+            results.append(
+                ChangedFile(
+                    path=full_path,
+                    rel_posix=rel_path.replace("\\", "/"),
+                    status=status,
+                    exists=exists,
+                    is_untracked=False,
+                    content_sha256=c_sha,
+                )
+            )
+        elif line.startswith("2 "):
+            # 2 <xy> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path> -> next chunk is origPath
+            parts = line.split(" ", 8)
+            if len(parts) < 9:
+                continue
+            rel_path = parts[8]
+            orig_rel_path = ""
+            if idx < len(entries):
+                orig_rel_path = entries[idx].decode("utf-8", errors="replace")
+                idx += 1
+            full_path = r / rel_path
+            old_path = (r / orig_rel_path) if orig_rel_path else None
+            exists = full_path.is_file()
+            c_sha = None
+            if exists:
+                try:
+                    c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                except Exception:
+                    pass
+            results.append(
+                ChangedFile(
+                    path=full_path,
+                    rel_posix=rel_path.replace("\\", "/"),
+                    status="R",
+                    old_path=old_path,
+                    old_rel_posix=orig_rel_path.replace("\\", "/") if orig_rel_path else None,
+                    exists=exists,
+                    is_untracked=False,
+                    content_sha256=c_sha,
+                )
+            )
+        elif line.startswith("? "):
+            if not include_untracked:
+                continue
+            rel_path = line[2:]
+            full_path = r / rel_path
+            exists = full_path.is_file()
+            c_sha = None
+            if exists:
+                try:
+                    c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                except Exception:
+                    pass
+            results.append(
+                ChangedFile(
+                    path=full_path,
+                    rel_posix=rel_path.replace("\\", "/"),
+                    status="??",
+                    exists=exists,
+                    is_untracked=True,
+                    content_sha256=c_sha,
+                )
+            )
+        elif line.startswith("u "):
+            parts = line.split(" ", 10)
+            if len(parts) >= 11:
+                rel_path = parts[10]
+                full_path = r / rel_path
+                exists = full_path.is_file()
+                c_sha = None
+                if exists:
+                    try:
+                        c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                    except Exception:
+                        pass
+                results.append(
+                    ChangedFile(
+                        path=full_path,
+                        rel_posix=rel_path.replace("\\", "/"),
+                        status="U",
+                        exists=exists,
+                        is_untracked=False,
+                        content_sha256=c_sha,
+                    )
+                )
+    return results
+
+
+def changed_paths(*, include_untracked: bool = True, include_deleted: bool = False) -> list[Path]:
+    """Working-tree files vs HEAD: staged, unstaged, and untracked (backward compatible)."""
+    cfs = changed_files(include_untracked=include_untracked)
     seen: dict[str, Path] = {}
-    for line in (proc.stdout or "").splitlines():
-        if len(line) < 4:
+    for cf in cfs:
+        if not include_deleted and not cf.exists:
             continue
-        xy = line[:2]
-        path_str = line[3:].strip()
-        if " -> " in path_str:
-            path_str = path_str.split(" -> ", 1)[1].strip()
-        path_str = _unquote_git_path(path_str)
-        if not include_untracked and xy == "??":
-            continue
-        path = REPO / path_str
-        if path.is_file():
-            key = path_str.replace("\\", "/")
-            seen[key] = path
+        key = cf.rel_posix
+        seen[key] = cf.path
     return list(seen.values())
 
 
 def has_non_doc_code_changes() -> bool:
     """True when the working tree has Kotlin/Java/Gradle or non-string XML edits."""
-    for path in changed_paths():
-        try:
-            rel = path.relative_to(REPO).as_posix()
-        except ValueError:
-            rel = str(path).replace("\\", "/")
-        suffix = path.suffix.lower()
+    for cf in changed_files(include_untracked=True):
+        rel = cf.rel_posix
+        suffix = cf.path.suffix.lower()
         if suffix in _CODE_SUFFIXES:
             return True
         if suffix == ".xml":
-            lower_name = path.name.lower()
+            lower_name = cf.path.name.lower()
             if lower_name in ("strings.xml", "plurals.xml") or "/values" in f"/{rel}":
                 continue
             return True

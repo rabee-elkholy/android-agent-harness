@@ -71,17 +71,16 @@ def main(argv=None) -> int:
     task = args.task or _unit_test_task()
     live_print(f"[*] Unit-test gate: {task}")
     code = run_gradle([task])
-    if code != 0:
-        status = "ENV" if code == EXIT_ENV else "FAIL"
+    if code == EXIT_ENV:
         write_gate_result("unit_tests", {
             "schema_version": 1,
-            "status": status,
+            "status": "ENV",
             "exit_code": code,
-            "env_class": "ENV" if code == EXIT_ENV else "",
+            "env_class": "ENV",
             "git_sha": current_head_sha(),
-            "detail": "unit-test Gradle run failed; see gradle log",
+            "detail": "unit-test Gradle run failed environmentally; see gradle log",
         })
-        live_print(f"[FAIL] Unit-test gate blocked: gradle exited {code} ({status}).", err=True)
+        live_print(f"[FAIL] Unit-test gate blocked: gradle exited {code} (ENV).", err=True)
         return code
 
     head = current_head_sha()
@@ -91,6 +90,18 @@ def main(argv=None) -> int:
         live_print(advisory, err=True)
 
     failed = collect_failures(REPO)
+    if code != 0 and not failed:
+        write_gate_result("unit_tests", {
+            "schema_version": 1,
+            "status": "FAIL",
+            "exit_code": code,
+            "env_class": "",
+            "git_sha": head,
+            "detail": "unit-test Gradle build failed before test execution; see gradle log",
+        })
+        live_print(f"[FAIL] Unit-test gate blocked: gradle exited {code} (build/compilation failure).", err=True)
+        return code
+
     if not failed and not baseline:
         write_gate_result("unit_tests", {
             "schema_version": 1,

@@ -38,9 +38,17 @@ from _variants import apk_relative, resolve_or_raise  # noqa: E402
 DEFAULT_ACTIVITY = LAUNCHER
 
 
-def record_device(action: str, status: str, exit_code: int, serial: str | None, env_class: str = "", detail: str = "") -> None:
-    write_gate_result("device", {
-        "schema_version": 1,
+def record_device(
+    action: str,
+    status: str,
+    exit_code: int,
+    serial: str | None,
+    env_class: str = "",
+    detail: str = "",
+    apk_sha: str = "",
+) -> None:
+    payload = {
+        "schema_version": 2,
         "action": action,
         "status": status,
         "exit_code": exit_code,
@@ -48,7 +56,10 @@ def record_device(action: str, status: str, exit_code: int, serial: str | None, 
         "serial": serial,
         "git_sha": current_head_sha(),
         "detail": detail,
-    })
+    }
+    if apk_sha:
+        payload["apk_sha256"] = apk_sha
+    write_gate_result("device", payload)
 
 
 def require_serial(explicit: str | None) -> str:
@@ -124,21 +135,29 @@ def main() -> int:
         live_print(f"[+] Uninstall finished for {args.package}")
         return 0
 
+    apk_sha = ""
+    if apk.is_file():
+        try:
+            import hashlib
+            apk_sha = hashlib.sha256(apk.read_bytes()).hexdigest()
+        except Exception:
+            pass
+
     if args.action in ("install", "install-start"):
         if not args.force:
-            freshness = check_apk_freshness(apk, REPO, active_flavor)
+            freshness = check_apk_freshness(apk, REPO, active_flavor, require_assemble_evidence=True)
             if not freshness.is_fresh:
                 live_print(format_freshness_error(freshness, apk, active_flavor), err=True)
-                if freshness.status == "MISSING_APK":
+                if freshness.status in ("MISSING_APK", "MISSING_ASSEMBLE_EVIDENCE"):
                     verdict = FailureVerdict(
                         CLASS_ENV,
-                        f"APK not found: {apk} (pipeline order: assemble before install)",
+                        f"APK not ready: {freshness.reason} (pipeline order: assemble before install)",
                     )
-                    record_device(args.action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+                    record_device(args.action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason, apk_sha=apk_sha)
                     emit_env_failure(verdict, "run_device.py", serial=serial)
                     return EXIT_ENV
                 else:
-                    record_device(args.action, "FAIL", 1, serial, "CODE", freshness.reason)
+                    record_device(args.action, "FAIL", 1, serial, "CODE", freshness.reason, apk_sha=apk_sha)
                     return 1
         elif not apk.is_file():
             live_print(f"[ERROR] APK not found: {apk}", err=True)
@@ -147,7 +166,7 @@ def main() -> int:
                 CLASS_ENV,
                 f"APK not found: {apk} (pipeline order: assemble before install)",
             )
-            record_device(args.action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+            record_device(args.action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason, apk_sha=apk_sha)
             emit_env_failure(verdict, "run_device.py", serial=serial)
             return EXIT_ENV
         size_mb = apk.stat().st_size / (1024 * 1024)
@@ -160,10 +179,10 @@ def main() -> int:
         if code != 0:
             verdict = classify_adb_failure(code, log)
             live_print(f"[!] adb install failed (exit {code})", err=True)
-            record_device(args.action, "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason)
+            record_device(args.action, "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason, apk_sha=apk_sha)
             emit_env_failure(verdict, "run_device.py", serial=serial)
             return exit_for(verdict)
-        record_device(args.action, "PASS", 0, serial)
+        record_device(args.action, "PASS", 0, serial, apk_sha=apk_sha)
         live_print("[+] Install finished")
 
     if args.action in ("start", "install-start"):
@@ -181,10 +200,10 @@ def main() -> int:
         if code != 0:
             verdict = classify_adb_failure(code, log)
             live_print(f"[!] am start failed (exit {code})", err=True)
-            record_device(args.action, "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason)
+            record_device(args.action, "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason, apk_sha=apk_sha)
             emit_env_failure(verdict, "run_device.py", serial=serial)
             return exit_for(verdict)
-        record_device(args.action, "PASS", 0, serial)
+        record_device(args.action, "PASS", 0, serial, apk_sha=apk_sha)
         live_print(f"[+] Launched {target_activity}")
 
     return 0

@@ -150,6 +150,7 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
                 placeholders = []
                 for it in items:
                     placeholders.extend(_extract_placeholders(it))
+                res[name] = {"tag": tag, "items": items, "placeholders": sorted(set(placeholders))}
             elif tag == "string-array":
                 items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
                 placeholders = []

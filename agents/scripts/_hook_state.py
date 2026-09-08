@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import random
 import re
 import subprocess
 import tempfile
@@ -20,8 +21,19 @@ MAX_REVIEW_ROUNDS = int(os.environ.get("HARNESS_MAX_REVIEW_ROUNDS", "3"))
 STATE_EXPIRY_SECONDS = 7 * 24 * 3600
 
 
+def _is_pid_alive(pid: int) -> bool:
+    """Check if process with given PID exists on the system."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 @contextlib.contextmanager
-def state_lock(timeout: float = 5.0):
+def state_lock(timeout: float = 15.0):
     lock_file = state_path().with_suffix(".lock")
     try:
         lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -30,20 +42,51 @@ def state_lock(timeout: float = 5.0):
     start = time.time()
     acquired = False
     fd = None
+    attempt = 0
+    my_pid = os.getpid()
+
     while time.time() - start < timeout:
+        attempt += 1
         try:
             fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            try:
+                payload = json.dumps({"pid": my_pid, "created_at": time.time()}).encode("utf-8")
+                os.write(fd, payload)
+            except Exception:
+                pass
             acquired = True
             break
         except FileExistsError:
             try:
-                if lock_file.is_file() and (time.time() - lock_file.stat().st_mtime > 10.0):
-                    lock_file.unlink(missing_ok=True)
+                if lock_file.is_file():
+                    mtime = lock_file.stat().st_mtime
+                    age = time.time() - mtime
+                    stale = False
+                    if age > 10.0:
+                        stale = True
+                    else:
+                        try:
+                            content = lock_file.read_bytes()
+                            lock_info = json.loads(content.decode("utf-8"))
+                            lock_pid = lock_info.get("pid")
+                            if lock_pid and not _is_pid_alive(int(lock_pid)):
+                                stale = True
+                        except Exception:
+                            if age > 5.0:
+                                stale = True
+                    if stale:
+                        lock_file.unlink(missing_ok=True)
             except Exception:
                 pass
-            time.sleep(0.02)
+            jitter = 0.01 + (random.random() * 0.03)
+            delay = min(0.2, (0.02 * (1.2 ** min(attempt, 8))) + jitter)
+            time.sleep(delay)
         except Exception:
             break
+
+    if not acquired:
+        raise TimeoutError(f"Could not acquire state_lock within {timeout:.1f}s on {lock_file}")
+
     try:
         yield
     finally:
@@ -623,6 +666,35 @@ def _ledger_path() -> Path:
 _CODE_FP_SUFFIXES = {".kt", ".java", ".kts", ".cpp", ".c", ".h", ".hpp", ".aidl", ".pro"}
 
 
+def semantic_code_snapshot(repo: Path | None = None) -> str | None:
+    """Deterministic hash over working-tree code changes (bound to content and status)."""
+    try:
+        from _repo_files import REPO, changed_files
+
+        r = repo or REPO
+        items = []
+        for cf in changed_files(r, include_untracked=True):
+            suffix = cf.path.suffix.lower()
+            rel = cf.rel_posix
+            if suffix in _CODE_FP_SUFFIXES or suffix in (".gradle", ".toml"):
+                pass
+            elif suffix == ".json" and ("schemas/" in rel or "schema/" in rel):
+                pass
+            elif suffix == ".xml":
+                lower_name = cf.path.name.lower()
+                if lower_name in ("strings.xml", "plurals.xml") or "/values" in f"/{rel}":
+                    continue
+            else:
+                continue
+            sha_part = cf.content_sha256 or ("deleted" if cf.status == "D" else "none")
+            items.append(f"{cf.status} {cf.rel_posix} {sha_part}")
+        if not items:
+            return None
+        return hashlib.sha256("\n".join(sorted(items)).encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
+
 def tree_code_fingerprint(repo: Path | None = None) -> str | None:
     """Stable hash over working-tree code paths that the review gate protects."""
     try:
@@ -656,11 +728,14 @@ def tree_code_fingerprint(repo: Path | None = None) -> str | None:
 
 
 def record_review_ledger(package_path: Path, git_sha: str | None = None) -> None:
-    """Persist the tree fingerprint a review package was generated against."""
+    """Persist the tree fingerprint and snapshot a review package was generated against."""
+    fp = tree_code_fingerprint()
+    snap = semantic_code_snapshot()
     payload = {
         "package": str(package_path),
         "sha256": file_sha256(Path(package_path)),
-        "tree_fingerprint": tree_code_fingerprint(),
+        "tree_fingerprint": fp,
+        "workspace_snapshot_sha256": snap,
         "git_sha": git_sha or "",
         "time": time.time(),
     }

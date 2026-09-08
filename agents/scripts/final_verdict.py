@@ -44,6 +44,7 @@ from _hook_state import (  # noqa: E402
     file_sha256,
     read_verdict_record,
     rounds_used,
+    semantic_code_snapshot,
     state_path,
     tree_code_fingerprint,
 )
@@ -227,6 +228,14 @@ def _review_outcome(tree_fp: str | None) -> tuple[dict, dict, str, bool]:
             stale = "code changed after the review package was generated (verdict fingerprint mismatch)"
         elif ledger_fp and ledger_fp != fp_now:
             stale = "code changed after the review package was generated (ledger fingerprint mismatch)"
+    snap_now = semantic_code_snapshot()
+    if snap_now is not None and not stale:
+        record_snap = record.get("workspace_snapshot")
+        ledger_snap = ledger.get("workspace_snapshot_sha256")
+        if record_snap and record_snap != snap_now:
+            stale = "code content changed after the review package was generated (verdict snapshot mismatch)"
+        elif ledger_snap and ledger_snap != snap_now:
+            stale = "code content changed after the review package was generated (ledger snapshot mismatch)"
     return check, leaves_map, stale, expired
 
 

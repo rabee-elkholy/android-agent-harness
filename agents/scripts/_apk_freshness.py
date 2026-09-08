@@ -127,6 +127,7 @@ def check_apk_freshness(
     flavor: str | None = None,
     *,
     timestamp_margin_sec: float = 0.5,
+    require_assemble_evidence: bool = False,
 ) -> FreshnessVerdict:
     """Evaluate whether the specified APK is fresh relative to working tree and git state.
 
@@ -236,6 +237,13 @@ def check_apk_freshness(
                 ),
                 apk_mtime=apk_mtime,
             )
+    elif require_assemble_evidence:
+        return FreshnessVerdict(
+            is_fresh=False,
+            status="MISSING_ASSEMBLE_EVIDENCE",
+            reason=f"Assemble evidence missing for '{task_name}'. Rebuild required: python .agents/scripts/run_gradle_task.py {task_name}",
+            apk_mtime=apk_mtime,
+        )
 
     return FreshnessVerdict(
         is_fresh=True,

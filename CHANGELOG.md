@@ -5,6 +5,27 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.20] - 2026-09-08
+
+### Production-Readiness Integrity Hardening & Semantic Snapshot Gate
+- **Semantic Code Snapshotting & Anti-Drift Verification (`_hook_state.py`, `review_package.py`, `final_verdict.py`)**:
+  - Added `semantic_code_snapshot()` computing a deterministic content-bound SHA-256 over code and build files (`.kt`, `.java`, `.kts`, `.xml`, `.gradle`, `.toml`, `schemas/*.json`), strictly ignoring documentation and state files to prevent false-invalidation loops.
+  - Bound snapshot into review package headers (`WORKSPACE_SNAPSHOT`) and verdict records, detecting content-level code changes made after review packages are generated.
+- **Windows Safe File Locking & PID Liveness Detection (`_hook_state.py`)**:
+  - Upgraded `state_lock` with a 15-second timeout, exponential backoff, and randomized jitter to eliminate file lock contention under heavy concurrency on Windows.
+  - Linked active locks to system process identifiers (`PID`) with OS-level alive checks (`os.kill(pid, 0)`), automatically evicting dead locks and failing closed on timeouts.
+- **Porcelain v2 Git Status Parser with Full Rename/Delete Tracking (`_repo_files.py`)**:
+  - Upgraded working-tree change discovery to `git status --porcelain=v2 -z` via `ChangedFile` dataclass, accurately resolving untracked, modified, deleted, and renamed files with old paths.
+  - Preserved `_unquote_git_path` for complete backward compatibility across all diagnostic and selftest suites.
+- **Resurrected Baseline-Aware Unit Test Gating (`run_tests_gate.py`)**:
+  - Prevented premature aborts on non-zero Gradle exits; parsed JUnit XML reports to distinguish known baseline failures (`BASELINE_IGNORED`) from true regressions (`NEW_REGRESSION`) and compilation errors.
+- **Plurals Placeholder Parsing Guard (`check_strings.py`)**:
+  - Fixed plurals XML resource parsing to persist items and extracted placeholder tokens into checked resource dictionaries.
+- **Strict Room Custom Migration Wiring Verification (`room_guard.py`)**:
+  - Added AST inspection ensuring custom `Migration(old_ver, new_ver)` definitions are actively registered in `addMigrations(...)` calls on the database builder.
+- **Assemble Build Evidence Gate for Device Installation (`_apk_freshness.py`, `run_device.py`)**:
+  - Added `require_assemble_evidence` to fail closed if `run_device.py` is called without fresh assemble verification, recording `apk_sha256` in device gate artifacts.
+
 ## [0.27.19] - 2026-09-07
 
 ### Fortified Invariants: Zero Live-Network Probing, Local Fixtures First & Conversational Precedence
@@ -180,7 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Resolved task lookup across all sprints and the backlog even when an explicit mismatched `sprint_id` is supplied by the caller.
   - Updated `zoho_get_task_details` schema to make `sprint_id` optional.
 
-## [0.27.8] - 2026-09-03
+### 0.27.8 - 2026-09-03
 
 ### Zero-Assumption Interactive Interview, Native Backlog Support & Host Sandbox Security
 - **Zero-Assumption & Missing-Scenario Interview Invariant (`harness-rules.md`, `AGENTS.md`, `pre_invocation_reminder.py`)**:

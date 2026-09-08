@@ -17,6 +17,7 @@ from _hook_state import (  # noqa: E402
     record_review_ledger,
     record_review_round_local,
     round_cap_warning,
+    semantic_code_snapshot,
     tree_code_fingerprint,
     write_verdict_record,
 )
@@ -75,19 +76,25 @@ def build_header(
     risk_tier: str = "MEDIUM",
     contains_tests: bool = False,
     test_files_count: int = 0,
+    snapshot: str | None = None,
 ) -> list[str]:
     sha = git_head()
-    return [
+    hdr = [
         HEADER_BEGIN,
         f"TASK_ID={task_id}",
         f"GIT_SHA={sha}",
         f"TREE_FINGERPRINT={fingerprint}",
+    ]
+    if snapshot:
+        hdr.append(f"WORKSPACE_SNAPSHOT={snapshot}")
+    hdr.extend([
         f"RISK_TIER={risk_tier}",
         f"CONTAINS_TESTS={'true' if contains_tests else 'false'}",
         f"TEST_FILES_COUNT={test_files_count}",
         f"REQUIRED_LEAVES={'6' if contains_tests else '5'}",
         f"GENERATED_AT={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
-    ]
+    ])
+    return hdr
 
 
 DEFAULT_MAX_REVIEW_FILES = 500
@@ -210,6 +217,7 @@ def main(argv=None) -> int:
             return 1
 
     fingerprint = tree_code_fingerprint() or ""
+    snapshot = semantic_code_snapshot() or ""
     risk_tier, _ = classify_working_tree_risk(REPO, list(changed_paths()))
     files_map, total_changed = build_files_map()
     skipped_count = max(0, total_changed - len(files_map))
@@ -226,6 +234,7 @@ def main(argv=None) -> int:
                 risk_tier,
                 contains_tests=contains_tests,
                 test_files_count=len(test_files),
+                snapshot=snapshot,
             ),
             f"FILES_SHA256={files_json}",
             PACKAGE_SHA_PENDING,
@@ -301,6 +310,7 @@ def main(argv=None) -> int:
         "git_sha": git_sha,
         "package": {"path": str(out.resolve()), "sha256": file_digest, "sha256_12": pkg12},
         "tree_fingerprint": fingerprint or None,
+        "workspace_snapshot": snapshot or None,
         "files": files_map,
         "reviewed_files": len(files_map),
         "skipped_files": skipped_count,
