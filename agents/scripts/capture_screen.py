@@ -15,7 +15,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _product import ALLOW_EMULATOR  # noqa: E402
-from _repo_files import REPO, first_adb_serial  # noqa: E402
+try:
+    from _product import DEVICE_TARGET_POLICY  # type: ignore[attr-defined]  # noqa: E402
+except ImportError:
+    DEVICE_TARGET_POLICY = "allow" if ALLOW_EMULATOR else "physical-only"
+from _repo_files import REPO, adb_serial_is_emulator, first_adb_serial  # noqa: E402
 
 enable_line_buffered_stdio()
 
@@ -78,13 +82,17 @@ def main() -> int:
     parser.add_argument("-n", "--name", default="screen", help="Prefix name for screenshot")
     args = parser.parse_args()
 
-    allow_emu = bool(ALLOW_EMULATOR)
-    device_id = args.device or first_adb_serial(allow_emulator=allow_emu)
+    policy = str(DEVICE_TARGET_POLICY)
+    device_id = args.device or first_adb_serial(policy=policy)
     if not device_id:
         print("[ERROR] No Android device detected via ADB.", file=sys.stderr)
         return 1
-    if not allow_emu and device_id.startswith("emulator-"):
+    is_emulator = adb_serial_is_emulator(device_id)
+    if policy == "physical-only" and is_emulator:
         print("[ERROR] Emulator targeting is forbidden by project policy. Connect a physical device.", file=sys.stderr)
+        return 1
+    if policy == "emulator-only" and not is_emulator:
+        print("[ERROR] Physical-device targeting is forbidden by project policy. Start an emulator.", file=sys.stderr)
         return 1
 
     print(f"[*] Capturing screenshot from device: {device_id}...")

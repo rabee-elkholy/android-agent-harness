@@ -80,7 +80,7 @@ class HarnessDoctor:
         else:
             self.log(category, "Android SDK", "WARN", "ANDROID_HOME / ANDROID_SDK_ROOT or local.properties not detected.")
 
-        java_cmd = shutil.which("java")
+        java_cmd, java_source = self._effective_java()
         if java_cmd:
             try:
                 proc = subprocess.run([java_cmd, "-version"], capture_output=True, text=True, timeout=5)
@@ -91,9 +91,9 @@ class HarnessDoctor:
                     if major == 1 and match.group(2):
                         major = int(match.group(2))
                     if major >= 17:
-                        self.log(category, "Java / JDK Runtime", "PASS", f"Java JDK {major} detected ({java_cmd}).")
+                        self.log(category, "Java / JDK Runtime", "PASS", f"Java JDK {major} detected via {java_source} ({java_cmd}).")
                     else:
-                        self.log(category, "Java / JDK Runtime", "WARN", f"Java JDK {major} detected. AGP 8+ requires JDK 17+.")
+                        self.log(category, "Java / JDK Runtime", "WARN", f"Java JDK {major} detected via {java_source}. AGP 8+ requires JDK 17+.")
                 else:
                     self.log(category, "Java / JDK Runtime", "PASS", f"Java runtime detected at {java_cmd}.")
             except Exception as e:
@@ -113,6 +113,30 @@ class HarnessDoctor:
             self._check_git_status(category)
         else:
             self.log(category, "Git Repository", "WARN", "Not a Git repository. Version tracking and review diffs disabled.")
+
+    def _effective_java(self) -> tuple[str | None, str]:
+        properties = self.repo / "gradle.properties"
+        if properties.is_file():
+            for line in properties.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.strip().startswith("org.gradle.java.home="):
+                    home = line.split("=", 1)[1].strip().replace("\\:", ":").replace("\\\\", "\\")
+                    candidate = Path(home) / "bin" / ("java.exe" if os.name == "nt" else "java")
+                    if candidate.is_file():
+                        return str(candidate), "org.gradle.java.home"
+        java_home = os.environ.get("JAVA_HOME", "").strip()
+        if java_home:
+            candidate = Path(java_home) / "bin" / ("java.exe" if os.name == "nt" else "java")
+            if candidate.is_file():
+                return str(candidate), "JAVA_HOME"
+        if os.name == "nt":
+            roots = [
+                Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Android/Android Studio/jbr/bin/java.exe",
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Android Studio/jbr/bin/java.exe",
+            ]
+            for candidate in roots:
+                if candidate.is_file():
+                    return str(candidate), "Android Studio JBR"
+        return shutil.which("java"), "PATH"
 
     def _check_gitignore(self, category: str) -> None:
         ignore_files = []
@@ -295,6 +319,7 @@ class HarnessDoctor:
             pkg_prefix = getattr(_product, "PACKAGE_PREFIX", "")
             assemble_task = getattr(_product, "ASSEMBLE_TASK", ":app:assembleDebug")
             allow_emu = getattr(_product, "ALLOW_EMULATOR", True)
+            target_policy = getattr(_product, "DEVICE_TARGET_POLICY", "allow" if allow_emu else "physical-only")
             android_src = getattr(_product, "ANDROID_SRC", ("app", "src", "main"))
 
             self.log(category, "Product Identity", "PASS", f"Product: '{product_name}', AppID: '{app_id}', PkgPrefix: '{pkg_prefix}'")
@@ -309,7 +334,7 @@ class HarnessDoctor:
                     self.log(category, "Source Root", "FAIL", f"Configured ANDROID_SRC not found on disk: {src_path}")
 
             self.log(category, "Assemble Task", "PASS", f"Configured assemble task: {assemble_task}")
-            self.log(category, "Device Policy", "PASS", f"ALLOW_EMULATOR = {allow_emu}")
+            self.log(category, "Device Policy", "PASS", f"DEVICE_TARGET_POLICY = {target_policy}")
             verification_mode = getattr(_product, "DEVICE_VERIFICATION_MODE", "autonomous_e2e")
             self.log(category, "Device Verification", "PASS", f"DEVICE_VERIFICATION_MODE = {verification_mode}")
             configured_hosts = list((getattr(_product, "ENFORCEMENT_BY_HOST", {}) or {}).keys())
@@ -353,6 +378,7 @@ class HarnessDoctor:
 
         device_policy = str(answers.get("device_policy") or "").strip()
         allow_emu = bool(getattr(_product, "ALLOW_EMULATOR", True))
+        target_policy = str(getattr(_product, "DEVICE_TARGET_POLICY", "allow" if allow_emu else "physical-only"))
         if device_policy == "physical-only" and allow_emu:
             drift.append(
                 "device policy mismatch: answers.json says physical-only but "
@@ -362,6 +388,11 @@ class HarnessDoctor:
             drift.append(
                 "device policy mismatch: answers.json says both allowed but "
                 "_product.py ALLOW_EMULATOR = False."
+            )
+        if device_policy and target_policy != device_policy:
+            drift.append(
+                f"device policy mismatch: answers.json '{device_policy}' vs "
+                f"_product.py DEVICE_TARGET_POLICY '{target_policy}'."
             )
 
         answers_assemble = str(answers.get("assemble") or "").strip()
@@ -860,4 +891,12 @@ class HarnessDoctor:
         self.check_zoho_mcp()
         if self.check_device:
             self.check_connected_devices()
+        return self.results
+
+    def run_install_check(self) -> list[CheckResult]:
+        """Fast post-install structural check suitable for short-lived chat tools."""
+        self.check_file_structure()
+        self.check_product_config()
+        self.check_template_leaks()
+        self.check_tool_adapters()
         return self.results

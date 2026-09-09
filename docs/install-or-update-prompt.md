@@ -1,133 +1,66 @@
-# Install or update Android Agent Harness
-
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.1/docs/install-or-update-prompt.md`
+# Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.1` — **SHA-256**: `d1db3443b8d178dc4a93a3ee9e1d5ad18bcf2ee73f18e118d70be8da40475a47` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.2` — **SHA-256**: `aa6ae4e7a7d8f61fd09b8016226f87499d82f5d848f47f23e2d64b2002501981` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
+If truncated, STOP. Never bypass a hook, switch clients after a denial, or write in the app to fetch this file.
 
-You are operating inside the Android project root checkout (`<app-root>`). Keep all conversational discussion in the developer's preferred language (e.g. Arabic or English) and all repository code artifacts strictly in English.
+You are in `<app-root>`. Speak the developer's language; keep files in English. Never use floating `main`.
 
-> **Pre-release Note**: Before `v1.0.1` is published and tagged on GitHub, manual testing uses an immutable exact commit URL (`https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/<EXACT_COMMIT>/docs/install-or-update-prompt.md`). The only authorized kit source is the immutable tag `v1.0.1` (or exact commit) from `https://github.com/rabee-elkholy/android-agent-harness.git`. Never use, clone, pull, or resolve the floating `main` branch.
+## Phase 1: Read-only discovery
+Do not mutate, download, build, install, or remove.
 
----
+1. Require root `gradlew` or `gradlew.bat`; otherwise STOP.
+2. Select one lifecycle:
+   - **Clean Install**: no `.agents` and no v1 ownership.
+   - **Same-Major Update**: `.harness-setup/ownership-v1.json` has architecture major 1.
+   - **Legacy Replacement**: `.agents` exists without v1 ownership.
+3. `<kit-dir>` is `%USERPROFILE%\.android-harness\kit` (Windows) or `~/.android-harness/kit`. Reuse only at detached `v1.0.2` with matching version and checksum `files`.
 
-### Phase 1: Read-Only Project Discovery
+## Phase 2: Kit bootstrap approval
+If cache is invalid, show expanded staging, kit, rollback paths and commands:
 
-Perform read-only inspection first. **STRICT RULE**: Do NOT edit files, do NOT run Gradle builds, and do NOT download the kit in this phase.
+```text
+git clone --depth 1 --branch v1.0.2 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
+git -C <staging-dir> describe --tags --exact-match
+python <staging-dir>/harness_cli.py version --kit <staging-dir>
+```
 
-1. **Gradle Wrapper Verification (Fail-Fast)**:
-   Confirm the current directory has a root `gradlew` or `gradlew.bat`. If missing, STOP immediately and explain in the developer's language:
-   `[ERROR] Target directory is NOT an Android project (missing gradlew/gradlew.bat).`
-2. **Lifecycle State Detection**:
-   Inspect existing harness markers in `<app-root>`:
-   - **Clean install**: `.harness-setup/ownership-v1.json` does NOT exist and no `.agents` or `.agent` directory exists.
-   - **Same-major update**: `.harness-setup/ownership-v1.json` exists and its installed architecture major is `1`.
-   - **Legacy replacement**: pre-v1 `.agents` or `.agent` exists without `.harness-setup/ownership-v1.json`. It must be previewed and removed via ownership-safe legacy cleanup, followed by a clean v1 install; never migrate in place.
-3. **Android Configuration Discovery**:
-   - Inspect `settings.gradle` / `settings.gradle.kts` to identify application modules (e.g. `:app`, `:composeApp`) and library modules.
-   - Inspect application module `build.gradle` / `build.gradle.kts` to detect `applicationId`, build variants / flavors, and UI toolkit (Jetpack Compose vs XML views).
-   - Inspect `AndroidManifest.xml` to discover launcher activity name.
-   - Inspect repository root for existing AI tool adapters (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, etc.).
+Verified staging atomically replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
 
----
+**STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.** This permits only displayed cache operations, not app installation/removal. After approval verify tag, version, checksum `files`, symlinks, and path boundaries before importing code; promote with rollback. Never improvise a downloader.
 
-### Phase 2: Approved Kit Bootstrap & Chat Interview
+## Phase 3: Authoritative interview
+Run once:
 
-The setup wizard payload is the sole interview authority. Do not invent static questions or assume modules that do not exist.
+```text
+python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>
+```
 
-1. **Inspect the Kit Cache Read-Only**:
-   Use `<kit-dir>` (`~/.android-harness/kit` on Linux/macOS, `%USERPROFILE%\.android-harness\kit` on Windows). Without importing or executing kit code, verify with Python standard-library operations that the cache is a regular, boundary-safe checkout of `v1.0.1`, `agents/VERSION` is `1.0.1`, and every entry in `agents/release_checksums.json` matches. If it is valid, reuse it.
-2. **Bootstrap Approval Gate (Only If the Cache Is Missing or Invalid)**:
-   Present the exact clone, verification, staging, promotion, replacement, and rollback commands before running them. State every user-cache path that may be created, replaced, or removed.
+The setup wizard payload is the sole interview authority. Show `auto_blurb`. Ask **only** the questions returned. Respect dependencies/options and `recommended`/`previous`; show one recommendation per single-choice question. Do not repeat discovery.
 
-   > [!CAUTION]
-   > **STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.**
-   > Do not download, clone, create, replace, rename, or remove any kit-cache file before the developer explicitly approves this bootstrap plan. This approval authorizes only the stated user-cache bootstrap; it does not authorize installing, updating, or removing anything in `<app-root>`.
+## Phase 4: Lifecycle approval and execution
+Show lifecycle, immutable tag, cache/target paths, adapters, preserved references/defaults, and the one exact expanded command below. State that the CLI snapshots all non-harness app files and rolls back if any changes.
 
-   After bootstrap approval, fetch into a temporary staging folder (`<staging-dir>`):
-   ```bash
-   git clone --depth 1 --branch v1.0.1 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
-   git -C <staging-dir> describe --tags --exact-match
-   ```
-   Before importing or running kit scripts, use a standard-library-only verifier to confirm `agents/VERSION`, every checksum, and the absence of symlinks or out-of-boundary paths. If verification fails, remove only `<staging-dir>` and STOP. If it passes, promote it atomically: rename an existing `<kit-dir>` to `<kit-dir>.previous`, move `<staging-dir>` to `<kit-dir>`, revalidate, then remove `<kit-dir>.previous`. Restore `<kit-dir>.previous` if promotion or revalidation fails.
-3. **Execute Wizard Discovery**:
-   Run the read-only discovery command once into a single JSON object:
-   ```bash
-   python "<kit-dir>/agents/scripts/setup_wizard.py" questions --repo "<app-root>"
-   ```
-   Extract `auto_blurb` and the `questions` array. Print `auto_blurb` in chat to summarize discovered facts.
-4. **Ask Dynamic Questions**:
-   Ask **only** the questions returned in the `questions` array. When asking in chat, use the developer's conversation language, with recommended choices marked **(Recommended)** (the wizard automatically positions previous/detected choices as option 1).
-   Respect each returned question's `required`, `allow_multiple`, `options`, and `depends_on` fields exactly. Do not use a separately maintained question list or offer an option that is absent from the payload.
-5. **Hold Answers In Memory**:
-   Keep the collected answers in memory. Do not write `<temp-answers>.json` or any other file yet.
+**STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.** Bootstrap approval is not lifecycle approval. Before approval, do not create answers, install, update, or remove anything.
 
----
+After approval, create `<temp-answers>.json` in the OS temp directory, outside `<app-root>`, then run one path:
 
-### Phase 3: References & Tailored Knowledge Preservation
+```text
+Clean Install: python <kit-dir>/harness_cli.py init --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json
+Same-Major Update: python <kit-dir>/harness_cli.py update --no-refresh --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json
+Legacy Replacement: python <kit-dir>/harness_cli.py init --replace-legacy --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json
+```
 
-- **On Updates**: Scan `.agents/skills/android-harness/references/` and list all existing tailored markdown references with clickable `file:///` links. Guarantee they are preserved verbatim.
-- **Zoho & MCP Defaults**: Guarantee `.agents/mcp/zoho_sprints/workflow_defaults.json` and user-level credentials are never overwritten or mutated during setup.
+Legacy replacement is one atomic process; never uninstall legacy separately. It preserves project-specific reference Markdown and Zoho `workflow_defaults.json`. The CLI removes temporary answers.
 
----
+## Phase 5: Verification
+Run in foreground without timers:
 
-### Phase 4: Exact Plan & Explicit Approval Gate
+```text
+python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json
+python <kit-dir>/harness_cli.py version --kit <kit-dir>
+```
 
-Present a comprehensive installation plan in chat detailing:
-- **Detected Lifecycle Path**: Clean Install, Same-Major Update, or Legacy Replacement.
-- **Kit Source**: Immutable release tag `v1.0.1` (never floating `main`).
-- **User-Level Cache**: `~/.android-harness/kit`.
-- **Target App Files**: List files to be created (`.agents/`, `.harness-setup/answers.json`, `.harness-setup/ownership-v1.json`, configured adapters).
-- **Executable Non-Interference Guarantee**: A cryptographic pre-install snapshot of all Android product files (`src/`, `build.gradle*`, `gradlew*`) will be recorded. A post-install snapshot comparison ensures zero unauthorized file modifications, triggering automated rollback if violated.
-- **Exact Shell Commands**: Present all exact commands to be executed.
-
-> [!CAUTION]
-> **STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.**
-> Pasting this prompt and approving the kit bootstrap do not authorize an app-root mutation. Do not write the answers file, install, update, remove, or alter `<app-root>` until the developer explicitly approves this exact lifecycle plan (e.g. "Approve clean install").
-
----
-
-### Phase 5: Post-Approval Preparation
-
-Only after the explicit lifecycle approval from Phase 4:
-
-1. Revalidate the already prepared `<kit-dir>` without modifying it. If its tag, version, boundary checks, or checksums changed since the interview, STOP and request a new bootstrap plan and approval.
-2. Create `<temp-answers>.json` in the operating system's temporary directory, outside `<app-root>`, using the exact in-memory answers collected from the wizard payload.
-3. Record the pre-install application snapshot immediately before the approved lifecycle command.
-
----
-
-### Phase 6: Official Execution
-
-Write the collected answers to a temporary JSON file `<temp-answers>.json`, then execute the official lifecycle path non-interactively:
-
-- **Clean Install**:
-  ```bash
-  python "<kit-dir>/harness_cli.py" init --repo "<app-root>" --kit "<kit-dir>" --answers-json "<temp-answers>.json"
-  ```
-- **Same-Major Update**:
-  ```bash
-  python "<kit-dir>/harness_cli.py" update --repo "<app-root>" --kit "<kit-dir>"
-  ```
-- **Legacy Replacement** (in approved order):
-  ```bash
-  python "<kit-dir>/harness_cli.py" uninstall --repo "<app-root>" --legacy
-  python "<kit-dir>/harness_cli.py" uninstall --repo "<app-root>" --legacy --apply
-  python "<kit-dir>/harness_cli.py" init --repo "<app-root>" --kit "<kit-dir>" --answers-json "<temp-answers>.json"
-  ```
-
-*(The CLI automatically removes `<temp-answers>.json` after processing).*
-
----
-
-### Phase 7: Doctor & Verification
-
-1. Run the diagnostic engine:
-   ```bash
-   python "<kit-dir>/harness_cli.py" doctor --repo "<app-root>" --kit "<kit-dir>" --json
-   ```
-2. Report diagnostic status honestly. Confirm that the application non-interference snapshot verified 0 modified app files.
-3. Display the installation summary card and advise the developer:
-   **"Android Agent Harness is successfully configured. Please open a NEW chat session at the project root to begin daily development."**
+On failure report recovery. On success show version, lifecycle, checks, preserved files, and `0` changed app files; then say: “Android Agent Harness is successfully configured. Open a NEW chat at the project root.”

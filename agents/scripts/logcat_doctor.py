@@ -15,7 +15,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _product import ALLOW_EMULATOR, APPLICATION_ID, PACKAGE_PREFIX, PRODUCT_NAME  # noqa: E402
-from _repo_files import first_adb_serial  # noqa: E402
+try:
+    from _product import DEVICE_TARGET_POLICY  # type: ignore[attr-defined]  # noqa: E402
+except ImportError:
+    DEVICE_TARGET_POLICY = "allow" if ALLOW_EMULATOR else "physical-only"
+from _repo_files import adb_serial_is_emulator, first_adb_serial  # noqa: E402
 
 enable_line_buffered_stdio()
 
@@ -98,13 +102,17 @@ def main() -> int:
     parser.add_argument("--lines", type=int, default=1000, help="Number of logcat lines to fetch")
     args = parser.parse_args()
 
-    allow_emu = bool(ALLOW_EMULATOR)
-    serial = args.device or first_adb_serial(allow_emulator=allow_emu)
+    policy = str(DEVICE_TARGET_POLICY)
+    serial = args.device or first_adb_serial(policy=policy)
     if not serial:
         print("[!] No Android device connected via ADB.")
         return 1
-    if not allow_emu and serial.startswith("emulator-"):
+    is_emulator = adb_serial_is_emulator(serial)
+    if policy == "physical-only" and is_emulator:
         print("[!] Emulator targeting is forbidden by project policy. Connect a physical device.")
+        return 1
+    if policy == "emulator-only" and not is_emulator:
+        print("[!] Physical-device targeting is forbidden by project policy. Start an emulator.")
         return 1
 
     print(f"[*] Connected Device: {serial}")

@@ -258,9 +258,12 @@ def resolve_kit(explicit: str | None) -> Path:
 
 def ensure_kit(explicit: str | None) -> Path:
     try:
-        return resolve_kit(explicit)
+        kit = resolve_kit(explicit)
     except SystemExit:
         pass
+    else:
+        _verify_kit_checksums(kit)
+        return kit
     if explicit:
         raise SystemExit(f"[ERROR] --kit path has no harness engine: {explicit}")
     requested = os.environ.get("HARNESS_KIT_REF", "").strip().lstrip("v") or _latest_release_tag()
@@ -417,10 +420,11 @@ def cmd_init(args: argparse.Namespace) -> int:
             print("[!] answers.json missing after wizard; rerun init.")
             return 1
         print("[*] Installing the vNext engine into the target app...")
+        lifecycle_action = "replace-legacy" if getattr(args, "replace_legacy", False) else "install"
         port_code = run_engine_script(
             kit,
             "lifecycle.py",
-            ["install", "--repo", str(repo), "--kit", str(kit)],
+            [lifecycle_action, "--repo", str(repo), "--kit", str(kit)],
         )
         if port_code != 0:
             print("[!] Engine port reported failures; review doctor output above.")
@@ -438,31 +442,50 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_update(args: argparse.Namespace) -> int:
-    kit = ensure_kit(args.kit)
+    no_refresh = bool(getattr(args, "no_refresh", False))
+    kit = resolve_kit(args.kit) if no_refresh else ensure_kit(args.kit)
     current = _read_version_file(kit)
-    sys.path.insert(0, str(_script_root(kit)))
-    try:
-        from check_kit_update import check_for_update
-
-        info = check_for_update(force=args.force)
-        latest = info.get("latest") or current
-    except Exception as exc:
+    if no_refresh:
+        _verify_kit_checksums(kit)
         latest = current
-        print(f"[i] Update check skipped ({exc}).")
+    else:
+        sys.path.insert(0, str(_script_root(kit)))
+        try:
+            from check_kit_update import check_for_update
+
+            info = check_for_update(force=args.force)
+            latest = info.get("latest") or current
+        except Exception as exc:
+            latest = current
+            print(f"[i] Update check skipped ({exc}).")
     print(f"[i] Installed kit engine: v{current} | latest release: v{latest}")
     if args.repo:
         repo = find_repo(args.repo)
         print(f"[*] Target app checkout: {repo}")
-    if _semver_tuple(latest) > _semver_tuple(current):
-        refresh_kit(kit, latest)
-    else:
-        # No upgrade (or offline): re-assert the pin on the current release tag.
-        refresh_kit(kit, current)
+    if not no_refresh:
+        if _semver_tuple(latest) > _semver_tuple(current):
+            refresh_kit(kit, latest)
+        else:
+            # No upgrade (or offline): re-assert the pin on the current release tag.
+            refresh_kit(kit, current)
     new_version = _read_version_file(kit)
     print(f"[i] Local kit engine now at: v{new_version}")
     if args.repo:
         repo = find_repo(args.repo)
         answers = repo / ".harness-setup" / "answers.json"
+        answers_arg = getattr(args, "answers_json", None)
+        temp_answers = Path(answers_arg).resolve() if answers_arg else None
+        old_answers = answers.read_bytes() if answers.is_file() else None
+        if temp_answers:
+            if temp_answers.is_symlink() or not temp_answers.is_file():
+                raise SystemExit(f"[ERROR] --answers-json path is missing or a symlink: {answers_arg}")
+            wizard_code = run_engine_script(
+                kit, "setup_wizard.py",
+                ["write", "--repo", str(repo), "--answers-json", str(temp_answers)],
+            )
+            if wizard_code != 0:
+                temp_answers.unlink(missing_ok=True)
+                return wizard_code
         if answers.is_file():
             print("[*] Applying a compatible vNext engine update to the app checkout...")
             port_code = run_engine_script(
@@ -471,11 +494,19 @@ def cmd_update(args: argparse.Namespace) -> int:
                 ["update", "--repo", str(repo), "--kit", str(kit)],
             )
             if port_code != 0:
+                if temp_answers:
+                    if old_answers is None:
+                        answers.unlink(missing_ok=True)
+                    else:
+                        answers.write_bytes(old_answers)
+                    temp_answers.unlink(missing_ok=True)
                 print(
                     f"[FAIL] App checkout update failed with exit code {port_code}; "
                     "success was not recorded."
                 )
                 return port_code
+            if temp_answers:
+                temp_answers.unlink(missing_ok=True)
             print("[SUCCESS] App checkout updated and verified.")
             return 0
     print("[NEXT] Port the new engine into your app checkout:")
@@ -520,6 +551,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         cli_args.append("--json")
     if args.device:
         cli_args.append("--device")
+    if getattr(args, "install_check", False):
+        cli_args.append("--install-check")
     env_marker = os.environ.get("_IN_HOOK_SELFTEST")
     if env_marker != "1":
         os.environ["_IN_HOOK_SELFTEST"] = "0"
@@ -679,12 +712,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--lang", choices=("en", "ar"), default=None, help="Wizard language.")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
     sp.add_argument("--answers-json", help="Path to validated answers JSON for non-interactive setup.")
+    sp.add_argument("--replace-legacy", action="store_true", help="Atomically replace a pre-v1 .agents installation.")
     sp.set_defaults(func=cmd_init)
 
     sp = sub.add_parser("update", help="Refresh the local kit engine and print upgrade steps.")
     sp.add_argument("--repo", help="Android checkout that consumes the engine.")
     sp.add_argument("--kit", help="Kit checkout to refresh (default: auto-discover or clone).")
     sp.add_argument("--force", action="store_true", help="Force remote release check.")
+    sp.add_argument("--no-refresh", action="store_true", help="Use the already verified pinned kit without network refresh.")
+    sp.add_argument("--answers-json", help="Optional new wizard answers collected by chat.")
     sp.set_defaults(func=cmd_update)
 
     sp = sub.add_parser("uninstall", help="Preview or apply an ownership-safe harness removal.")
@@ -703,6 +739,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--json", action="store_true", help="Machine-readable JSON report.")
     sp.add_argument("--device", action="store_true", help="Include ADB device diagnostics.")
+    sp.add_argument("--install-check", action="store_true", help="Fast post-install structural validation.")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.set_defaults(func=cmd_doctor)
 

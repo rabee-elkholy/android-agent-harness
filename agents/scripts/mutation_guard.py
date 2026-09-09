@@ -13,9 +13,11 @@ READ_ONLY_COMMANDS = (
     re.compile(r"^\s*git\s+(?:status|diff|log|show|ls-files|rev-parse|symbolic-ref|check-ignore)\b", re.I),
     re.compile(r"^\s*(?:rg|grep|sed|head|tail|ls|pwd|wc)\b", re.I),
     re.compile(r"^\s*python(?:\d+(?:\.\d+)?)?\s+[^\s]*(?:project_graph|harness_doctor|change_classifier|review_policy|delivery_manifest)\.py\b(?!.*--output)", re.I),
+    re.compile(r"^\s*python(?:\d+(?:\.\d+)?)?\s+[^\s]*harness_cli\.py\s+(?:version|doctor|explain)\b", re.I),
+    re.compile(r"^\s*python(?:\d+(?:\.\d+)?)?\s+[^\s]*harness_cli\.py(?:\s+\w+)?\s+--help\s*$", re.I),
 )
 VERIFY_COMMANDS = re.compile(
-    r"(?:run_gradle_task|run_tests_gate|preflight_check|review_package|final_verifier|check_strings|room_guard|fast_kt_lint|run_device)\.py|workflow\.py\s+(?:verify|complete)\b",
+    r"(?:run_gradle_task|run_tests_gate|preflight_check|review_package|final_verifier|check_strings|room_guard|fast_kt_lint|run_device)\.py|workflow\.py\s+(?:verify|complete)\b|harness_cli\.py\s+verify\b",
     re.I,
 )
 BOOTSTRAP_WORKFLOW = re.compile(

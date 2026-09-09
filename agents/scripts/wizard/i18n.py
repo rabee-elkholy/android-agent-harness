@@ -87,11 +87,12 @@ T = {
         "i3_may": "The agent may commit when I ask in chat",
         "i4": (
             "Will you test this app on a real phone, an emulator (AVD), or both? "
-            "Pick both unless you never use an emulator. Physical only blocks emulator install and logcat."
+            "The selected policy controls install, launch, screenshots, and logcat."
         ),
         "i4_skip": "Phone and emulator both allowed (Recommended)",
         "i4_allow": "Phone and emulator both allowed (Recommended)",
         "i4_phys": "Physical phone only — no emulator",
+        "i4_emu": "Emulator only — no physical phone",
         "i5": "Which Gradle module is the Android app that builds the APK?",
         "i5_other": "Other module (I will type it)",
         "i6": "Which screen opens when the app launches?",

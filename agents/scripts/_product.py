@@ -21,6 +21,7 @@ CHAT_LANGUAGE = "mirror"  # "mirror" (Mirror developer language in chat: Arabic 
 TRACKER_LANGUAGE = "en_titles_ar_comments"  # "en_titles_ar_comments", "all_en", "all_ar" (Zoho / Jira / Linear / GitHub)
 ZOHO_LANGUAGE = TRACKER_LANGUAGE  # Alias for backward compatibility
 ALLOW_EMULATOR = True  # True (both physical and emulator allowed), False (physical device only)
+DEVICE_TARGET_POLICY = "allow"  # allow, physical-only, or emulator-only
 # Git history and index remain developer-owned. Host hooks deny agent-driven Git mutations.
 GIT_POLICY = "never"
 # Install confirmation (setup wizard I.10): "confirm" (agent must ask the developer before device install)

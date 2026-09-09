@@ -224,6 +224,19 @@ def _restore_preserved(repo: Path, recovery: Path, preserved: list[str]) -> None
         shutil.copy2(source, target)
 
 
+def _legacy_preserved_paths(kit: Path, preserved: list[str]) -> list[str]:
+    """Keep project-specific legacy references without replacing current kit files."""
+    result: list[str] = []
+    for rel in preserved:
+        if rel == ".agents/mcp/zoho_sprints/workflow_defaults.json":
+            result.append(rel)
+            continue
+        kit_rel = Path(rel).relative_to(".agents")
+        if not (kit / "agents" / kit_rel).exists():
+            result.append(rel)
+    return result
+
+
 def _write_ownership(
     repo: Path,
     *,
@@ -437,6 +450,47 @@ def update(repo: Path, kit: Path) -> dict:
     return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup), "app_snapshot_verified": True}
 
 
+def replace_legacy(repo: Path, kit: Path) -> dict:
+    """Atomically replace a pre-v1 engine in one process with rollback."""
+    repo = _validate_repo(repo)
+    kit, target_version = _validate_kit(kit)
+    if not (repo / ".agents").is_dir():
+        raise ValidationError("legacy replacement requires an existing .agents directory")
+    if (repo / OWNERSHIP_RELATIVE).exists():
+        raise ValidationError("managed v1 installations must use same-major update, not legacy replacement")
+    answers = _load_answers(repo)
+    app_before = _snapshot_app_files(repo)
+    adapters = _candidate_adapter_paths(repo)
+    before = _snapshot_files(repo, adapters)
+    backup = _backup(repo, None, "replace-legacy", adapters)
+    preserve_root = repo / ".harness-recovery" / f"legacy-preserve-{uuid.uuid4().hex}"
+    preserved = _legacy_preserved_paths(kit, _copy_preserved(repo, preserve_root))
+    old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
+    try:
+        os.replace(repo / ".agents", old_agents)
+        _install_engine(repo, kit, answers)
+        _restore_preserved(repo, preserve_root, preserved)
+        allowed_adapters = {p.relative_to(repo).as_posix() for p in adapters}
+        _verify_app_snapshot(repo, app_before, allowed_adapters)
+        ownership = _write_ownership(repo, version=target_version, before=before, backup=backup)
+        shutil.rmtree(old_agents, ignore_errors=True)
+    except Exception:
+        shutil.rmtree(repo / ".agents", ignore_errors=True)
+        if old_agents.exists():
+            os.replace(old_agents, repo / ".agents")
+        _rollback_adapters(repo, backup, before)
+        _managed_exclude(repo, remove=True)
+        (repo / OWNERSHIP_RELATIVE).unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(preserve_root, ignore_errors=True)
+    return {
+        "status": "PASS", "action": "replace-legacy", "version": target_version,
+        "ownership": ownership, "backup": str(backup), "preserved": preserved,
+        "app_snapshot_verified": True,
+    }
+
+
 def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
     repo = _validate_repo(repo)
     ownership = None
@@ -507,7 +561,7 @@ def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("install", "update"):
+    for name in ("install", "update", "replace-legacy"):
         command = sub.add_parser(name)
         command.add_argument("--repo", required=True)
         command.add_argument("--kit", required=True)
@@ -522,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
             result = install(Path(args.repo), Path(args.kit))
         elif args.action == "update":
             result = update(Path(args.repo), Path(args.kit))
+        elif args.action == "replace-legacy":
+            result = replace_legacy(Path(args.repo), Path(args.kit))
         else:
             result = uninstall(Path(args.repo), apply=args.apply, legacy=args.legacy)
         print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else f"[{result['status']}] {result['action']}")

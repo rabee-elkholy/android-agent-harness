@@ -230,7 +230,28 @@ def has_non_doc_code_changes() -> bool:
     return False
 
 
-def first_adb_serial(*, allow_emulator: bool = True) -> str | None:
+def adb_serial_is_emulator(serial: str) -> bool:
+    if serial.startswith("emulator-"):
+        return True
+    try:
+        probe = subprocess.run(
+            ["adb", "-s", serial, "shell", "getprop", "ro.kernel.qemu"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=5,
+        )
+        return probe.returncode == 0 and (probe.stdout or "").strip() == "1"
+    except (OSError, subprocess.TimeoutExpired):
+        return serial.startswith(("localhost:", "127.0.0.1:"))
+
+
+def first_adb_serial(*, allow_emulator: bool = True, policy: str | None = None) -> str | None:
+    target_policy = policy or ("allow" if allow_emulator else "physical-only")
+    if target_policy not in {"allow", "physical-only", "emulator-only"}:
+        return None
     try:
         proc = subprocess.run(
             ["adb", "devices"],
@@ -243,23 +264,22 @@ def first_adb_serial(*, allow_emulator: bool = True) -> str | None:
     except Exception:
         return None
     physical: str | None = None
+    emulator: str | None = None
     for line in (proc.stdout or "").splitlines()[1:]:
         parts = line.split()
         if len(parts) < 2 or parts[1] != "device":
             continue
         serial = parts[0]
-        is_emu = (
-            serial.startswith("emulator-")
-            or serial.startswith("localhost:")
-            or serial.startswith("127.0.0.1:")
-        )
+        is_emu = adb_serial_is_emulator(serial)
         if is_emu:
-            if allow_emulator and physical is None:
-                physical = serial
+            emulator = emulator or serial
             continue
-        # A physical device is always preferred over an emulator.
-        return serial
-    return physical
+        physical = physical or serial
+    if target_policy == "physical-only":
+        return physical
+    if target_policy == "emulator-only":
+        return emulator
+    return physical or emulator
 
 
 def first_physical_adb_serial() -> str | None:

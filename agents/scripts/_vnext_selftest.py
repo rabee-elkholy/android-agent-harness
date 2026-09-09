@@ -26,7 +26,7 @@ from delivery_manifest import build_manifest  # noqa: E402
 from evidence_store import EvidenceStore, StateLock, _pid_alive  # noqa: E402
 from final_verifier import verify  # noqa: E402
 from install_tool_adapters import sync_hooks_json  # noqa: E402
-from lifecycle import OWNERSHIP_RELATIVE, _validate_kit, install, uninstall, update  # noqa: E402
+from lifecycle import OWNERSHIP_RELATIVE, _validate_kit, install, replace_legacy, uninstall, update  # noqa: E402
 import lifecycle as lifecycle_module  # noqa: E402
 from plan_authority import approve, begin, changed_modules, check_material_drift, create_plan, save_plan  # noqa: E402
 from review_policy import decide, decide_later_round  # noqa: E402
@@ -34,8 +34,10 @@ from run_device import adb_result_ok  # noqa: E402
 from review_package import build_package  # noqa: E402
 from record_review import ingest  # noqa: E402
 from skill_router import route  # noqa: E402
-from wizard.discovery import discover, discover_android_source_root, discover_launchers, discover_module_application_ids  # noqa: E402
-from wizard.questions import normalize  # noqa: E402
+from mutation_guard import command_allowed  # noqa: E402
+from _repo_files import first_adb_serial  # noqa: E402
+from wizard.discovery import discover, discover_android_source_root, discover_di_framework, discover_launchers, discover_module_application_ids  # noqa: E402
+from wizard.questions import normalize, questions_payload  # noqa: E402
 from workflow import begin_task, complete, draft, prepare_verification, record_approval, record_sensitive_approval, state_root  # noqa: E402
 
 
@@ -94,7 +96,8 @@ class ChatInstallationDocsTests(unittest.TestCase):
         tag = f"v{self.version}"
         self.assertIn(f"--branch {tag} --single-branch", self.prompt)
         self.assertIn("describe --tags --exact-match", self.prompt)
-        self.assertIn("(Recommended)", self.prompt)
+        self.assertIn("recommended", self.prompt)
+        self.assertLessEqual(len(self.prompt.encode("utf-8")), 4054)
         self.assertNotIn("android-agent-harness/main/", self.prompt)
         self.assertNotIn("releases/latest", self.prompt)
 
@@ -103,15 +106,14 @@ class ChatInstallationDocsTests(unittest.TestCase):
             "Clean Install",
             "Same-Major Update",
             "Legacy Replacement",
-            "harness_cli.py\" init --repo",
-            "harness_cli.py\" update --repo",
-            "harness_cli.py\" uninstall --repo",
+            "harness_cli.py init --repo",
+            "harness_cli.py update --no-refresh --repo",
+            "init --replace-legacy",
             "STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL",
-            "Phase 1: Read-Only Project Discovery",
-            "Phase 2: Approved Kit Bootstrap & Chat Interview",
-            "Phase 4: Exact Plan & Explicit Approval Gate",
-            "Phase 5: Post-Approval Preparation",
-            "Phase 7: Doctor & Verification",
+            "Phase 1: Read-only discovery",
+            "Phase 2: Kit bootstrap approval",
+            "Phase 4: Lifecycle approval and execution",
+            "Phase 5: Verification",
         ):
             self.assertIn(marker, self.prompt)
 
@@ -143,6 +145,25 @@ class ChatInstallationLifecycleTests(RepoCase):
         self.assertTrue((self.repo / ".agents").is_dir())
         self.assertTrue((self.repo / ".harness-setup" / "answers.json").is_file())
         self.assertFalse(temp_answers.exists())
+
+    def test_chat_same_major_update_applies_new_answers_without_refresh(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "tools": ["codex"],
+            "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        temp_answers = self.repo / "update_answers.json"
+        write(temp_answers, json.dumps({"i4": "emulator-only", "i14": ["codex"], "i20": "none"}))
+        code = harness_cli.cmd_update(Namespace(
+            repo=str(self.repo), kit=str(KIT), force=False, no_refresh=True,
+            answers_json=str(temp_answers),
+        ))
+        self.assertEqual(0, code)
+        self.assertFalse(temp_answers.exists())
+        answers = json.loads((self.repo / ".harness-setup/answers.json").read_text(encoding="utf-8"))
+        self.assertEqual("emulator-only", answers["device_policy"])
 
     def test_setup_wizard_schema_validation_rejects_unknown_keys_and_symlinks(self) -> None:
         bad_answers = self.repo / "bad_answers.json"
@@ -223,9 +244,8 @@ class ChatInstallationLifecycleTests(RepoCase):
         prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
         self.assertIn("setup wizard payload is the sole interview authority", prompt_text)
         self.assertIn("Ask **only** the questions returned", prompt_text)
-        self.assertIn("Respect each returned question's `required`, `allow_multiple`, `options`, and `depends_on`", prompt_text)
         self.assertNotIn("Canonical Questions Reference", prompt_text)
-        self.assertIn("(Recommended)", prompt_text)
+        self.assertIn("recommended", prompt_text)
         self.assertIn("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL", prompt_text)
 
     def test_chat_installation_has_separate_bootstrap_and_lifecycle_approvals(self) -> None:
@@ -233,11 +253,11 @@ class ChatInstallationLifecycleTests(RepoCase):
         bootstrap_gate = prompt_text.index("STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL")
         clone = prompt_text.index("git clone --depth 1")
         lifecycle_gate = prompt_text.index("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL")
-        answers_write = prompt_text.index("Create `<temp-answers>.json`")
-        self.assertLess(bootstrap_gate, clone)
-        self.assertLess(clone, lifecycle_gate)
+        answers_write = prompt_text.index("create `<temp-answers>.json`")
+        self.assertLess(clone, bootstrap_gate)
+        self.assertLess(bootstrap_gate, lifecycle_gate)
         self.assertLess(lifecycle_gate, answers_write)
-        self.assertIn("does not authorize installing, updating, or removing anything in `<app-root>`", prompt_text)
+        self.assertIn("not app installation/removal", prompt_text)
         self.assertIn("outside `<app-root>`", prompt_text)
 
     def test_chat_installation_with_existing_project_agents_md(self) -> None:
@@ -318,6 +338,34 @@ class ManifestTests(RepoCase):
 
 
 class DiscoveryTests(RepoCase):
+    def test_emulator_only_selects_emulator_when_phone_is_also_connected(self) -> None:
+        devices = subprocess.CompletedProcess([], 0, "List of devices attached\nPHONE\tdevice\nemulator-5554\tdevice\n", "")
+        physical_probe = subprocess.CompletedProcess([], 0, "0\n", "")
+        emulator_probe = subprocess.CompletedProcess([], 0, "1\n", "")
+        with mock.patch("_repo_files.subprocess.run", side_effect=[devices, physical_probe, emulator_probe]):
+            self.assertEqual("emulator-5554", first_adb_serial(policy="emulator-only"))
+
+    def test_hilt_summary_detection_is_case_insensitive(self) -> None:
+        self.assertEqual("hilt", discover_di_framework("Hilt + Room + Jetpack Compose"))
+
+    def test_single_choice_recommendation_is_unique_and_previous_is_separate(self) -> None:
+        payload = questions_payload(self.repo, "en", discover(self.repo))
+        for question in payload:
+            if question.get("allow_multiple"):
+                continue
+            self.assertEqual(1, sum(bool(o.get("recommended")) for o in question["options"]))
+            self.assertFalse(any(bool(o.get("previous")) for o in question["options"]))
+        write(self.repo / ".harness-setup/answers.json", json.dumps({"device_policy": "physical-only"}))
+        device = next(q for q in questions_payload(self.repo, "en", discover(self.repo)) if q["id"] == "i4")
+        self.assertTrue(device["options"][0]["previous"])
+        self.assertEqual("physical-only", device["options"][0]["id"])
+        self.assertEqual(1, sum(bool(o["recommended"]) for o in device["options"]))
+
+    def test_emulator_only_is_a_real_answer(self) -> None:
+        facts = discover(self.repo)
+        answers = normalize({"i4": "emulator-only", "i14": ["codex"], "i20": "none"}, facts)
+        self.assertEqual("emulator-only", answers["device_policy"])
+
     def test_each_application_launcher_uses_its_own_package(self) -> None:
         write(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\nandroid { namespace = "com.one"; defaultConfig { applicationId = "com.one" } }\n')
         write(self.repo / "admin/build.gradle", "plugins { id 'com.android.application' }\nandroid { namespace 'com.two'; defaultConfig { applicationId 'com.two' } }\n")
@@ -599,6 +647,14 @@ class ArtifactAndVerifierTests(RepoCase):
 
 
 class LifecycleTests(RepoCase):
+    def test_safe_harness_cli_inspection_commands_need_no_active_plan(self) -> None:
+        for command in (
+            "python C:/kit/harness_cli.py version",
+            "python C:/kit/harness_cli.py doctor --repo .",
+            "python C:/kit/harness_cli.py --help",
+        ):
+            self.assertTrue(command_allowed(self.repo, command)[0], command)
+
     def test_windows_python_path_is_literal_in_hook_commands(self) -> None:
         hooks = self.repo / ".agents/hooks.json"
         write(hooks, json.dumps({"hooks": [{"command": "python agents/scripts/preflight_check.py"}]}))
@@ -683,6 +739,29 @@ class LifecycleTests(RepoCase):
         write(self.repo / ".agents/VERSION", "0.27.24\n")
         with self.assertRaises(ValidationError):
             install(self.repo, KIT)
+
+    def test_atomic_legacy_replacement_preserves_project_references(self) -> None:
+        self._answers()
+        write(self.repo / ".agents/VERSION", "0.27.24\n")
+        custom = self.repo / ".agents/skills/android-harness/references/ads-project-policy.md"
+        write(custom, "Project-specific ads policy.\n")
+        defaults = self.repo / ".agents/mcp/zoho_sprints/workflow_defaults.json"
+        write(defaults, '{"project":"fixture"}\n')
+        result = replace_legacy(self.repo, KIT)
+        self.assertEqual("PASS", result["status"])
+        self.assertEqual("Project-specific ads policy.\n", custom.read_text(encoding="utf-8"))
+        self.assertEqual('{"project":"fixture"}\n', defaults.read_text(encoding="utf-8"))
+        self.assertTrue((self.repo / OWNERSHIP_RELATIVE).is_file())
+
+    def test_emulator_only_is_generated_into_product_policy(self) -> None:
+        self._answers()
+        answers_path = self.repo / ".harness-setup/answers.json"
+        answers = json.loads(answers_path.read_text(encoding="utf-8"))
+        answers["device_policy"] = "emulator-only"
+        write(answers_path, json.dumps(answers))
+        install(self.repo, KIT)
+        product = (self.repo / ".agents/scripts/_product.py").read_text(encoding="utf-8")
+        self.assertIn("DEVICE_TARGET_POLICY = 'emulator-only'", product)
 
     def test_unrelated_host_config_is_not_claimed_or_removed(self) -> None:
         self._answers()

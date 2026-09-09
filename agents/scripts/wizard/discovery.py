@@ -274,11 +274,12 @@ def discover_locales(repo: Path) -> list[str]:
 
 
 def discover_di_framework(text: str) -> str:
-    if "org.koin" in text or "koin-android" in text or "startKoin" in text or "koin-compose" in text:
+    lower = text.casefold()
+    if "org.koin" in lower or "koin-android" in lower or "startkoin" in lower or "koin-compose" in lower:
         return "koin"
-    if "dagger.hilt" in text or "@HiltViewModel" in text or "hilt-android" in text or "@HiltAndroidApp" in text:
+    if "dagger.hilt" in lower or "@hiltviewmodel" in lower or "hilt-android" in lower or "@hiltandroidapp" in lower or "hilt" in lower:
         return "hilt"
-    if "dagger." in text or "javax.inject" in text or "jakarta.inject" in text:
+    if "dagger." in lower or "javax.inject" in lower or "jakarta.inject" in lower:
         return "dagger"
     return "none"
 

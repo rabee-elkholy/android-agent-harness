@@ -32,7 +32,11 @@ from _product import (  # noqa: E402
     LAUNCHER,
     PRODUCT_NAME,
 )
-from _repo_files import REPO, first_adb_serial  # noqa: E402
+try:
+    from _product import DEVICE_TARGET_POLICY  # type: ignore[attr-defined]  # noqa: E402
+except ImportError:  # Backward compatibility with pre-v1.0.2 installations.
+    DEVICE_TARGET_POLICY = "allow" if ALLOW_EMULATOR else "physical-only"
+from _repo_files import REPO, adb_serial_is_emulator, first_adb_serial  # noqa: E402
 from _variants import apk_relative, resolve_or_raise  # noqa: E402
 from artifact_set import build_artifact_set, verify_artifact_set  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
@@ -89,28 +93,24 @@ def record_device(
 
 
 def require_serial(explicit: str | None) -> str:
-    allow_emu = bool(ALLOW_EMULATOR)
-    serial = explicit or first_adb_serial(allow_emulator=allow_emu)
+    policy = str(DEVICE_TARGET_POLICY or ("allow" if ALLOW_EMULATOR else "physical-only"))
+    serial = explicit or first_adb_serial(policy=policy)
     if not serial:
         verdict = no_device_verdict()
         record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
         emit_env_failure(verdict, "run_device.py")
         sys.exit(EXIT_ENV)
-    is_emulator = serial.startswith("emulator-") or serial.startswith("localhost:") or serial.startswith("127.0.0.1:")
-    if not is_emulator:
-        try:
-            probe = subprocess.run(
-                ["adb", "-s", serial, "shell", "getprop", "ro.kernel.qemu"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=5,
-            )
-            is_emulator = probe.returncode == 0 and (probe.stdout or "").strip() == "1"
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    if not allow_emu and is_emulator:
+    is_emulator = adb_serial_is_emulator(serial)
+    if policy == "physical-only" and is_emulator:
         verdict = FailureVerdict(
             CLASS_ENV,
             "Emulator targeting is forbidden by project policy. Connect a physical device.",
         )
+        record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+        emit_env_failure(verdict, "run_device.py", serial=serial)
+        sys.exit(EXIT_ENV)
+    if policy == "emulator-only" and not is_emulator:
+        verdict = FailureVerdict(CLASS_ENV, "Physical-device targeting is forbidden by project policy. Start an emulator.")
         record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
         emit_env_failure(verdict, "run_device.py", serial=serial)
         sys.exit(EXIT_ENV)

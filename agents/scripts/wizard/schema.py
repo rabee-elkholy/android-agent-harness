@@ -170,8 +170,8 @@ def validate_raw_answers(payload: Any) -> list[str]:
     # Validate i4 (Device testing policy)
     if "i4" in payload:
         val = payload["i4"]
-        if val not in ("allow", "physical-only", "skip"):
-            errors.append("i4 (device_policy) must be 'allow', 'physical-only', or 'skip'")
+        if val not in ("allow", "physical-only", "emulator-only", "skip"):
+            errors.append("i4 (device_policy) must be 'allow', 'physical-only', 'emulator-only', or 'skip'")
 
     # Validate i17 (Chat language)
     if "i17" in payload:

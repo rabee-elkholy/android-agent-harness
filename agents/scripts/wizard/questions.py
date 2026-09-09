@@ -345,6 +345,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "options": [
                 {"id": "allow", "label": t(lang, "i4_allow")},
                 {"id": "physical-only", "label": t(lang, "i4_phys")},
+                {"id": "emulator-only", "label": t(lang, "i4_emu")},
             ],
         }
     )
@@ -368,22 +369,33 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
 
 def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dict) -> list[dict]:
     ans_file = answers_path(repo)
-    if not ans_file.is_file():
-        return qs
-    try:
-        prev = json.loads(ans_file.read_text(encoding="utf-8"))
-    except Exception:
-        return qs
-    if not isinstance(prev, dict):
-        return qs
-
-    rec_prefix = "(Recommended) "
+    prev: dict = {}
+    if ans_file.is_file():
+        try:
+            loaded = json.loads(ans_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                prev = loaded
+        except Exception:
+            pass
 
     def strip_rec(lbl: str) -> str:
-        return re.sub(r"^\(Recommended\)\s*", "", lbl, flags=re.IGNORECASE).strip()
+        return re.sub(r"\s*\(Recommended\)\s*", " ", lbl, flags=re.IGNORECASE).strip()
 
-    def add_rec(lbl: str) -> str:
-        return f"{rec_prefix}{strip_rec(lbl)}"
+    # Labels are presentation only. Expose recommendation and prior selection as
+    # separate machine-readable facts so chat clients cannot create two
+    # contradictory "Recommended" choices while reordering an update interview.
+    for q in qs:
+        options = q.get("options") or []
+        recommended_found = False
+        for index, opt in enumerate(options):
+            label = str(opt.get("label") or "")
+            is_recommended = "(recommended)" in label.casefold()
+            opt["label"] = strip_rec(label)
+            opt["recommended"] = bool(is_recommended and not recommended_found)
+            recommended_found = recommended_found or is_recommended
+            opt["previous"] = False
+        if options and not recommended_found:
+            options[0]["recommended"] = True
 
     prev_map = {
         "i0": "yes" if prev.get("backup", True) else "skip",
@@ -400,7 +412,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dic
         "i20": prev.get("pm_provider"),
         "i22": prev.get("device_verification"),
         "i19": prev.get("flavor") or "default",
-    }
+    } if prev else {}
     b_details = prev.get("bootstrap_details") or {}
     if isinstance(b_details, dict):
         prev_map.update({
@@ -426,10 +438,8 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dic
                 match_idx = idx
                 break
         if match_idx != -1:
-            for opt in options:
-                opt["label"] = strip_rec(opt["label"])
             matched_opt = options.pop(match_idx)
-            matched_opt["label"] = add_rec(matched_opt["label"])
+            matched_opt["previous"] = True
             options.insert(0, matched_opt)
             q["options"] = options
 
@@ -618,6 +628,8 @@ def normalize(raw: dict, facts: dict) -> dict:
         device = raw.get("i4") or auto["device_policy"]
         if device in {"allow-explicit", "allow", "skip"}:
             device = "allow"
+        if device not in {"allow", "physical-only", "emulator-only"}:
+            raise SystemExit("Device policy must be allow, physical-only, or emulator-only.")
         install_confirm = raw.get("i10") or auto["install_confirm"]
 
     git_policy = "never"

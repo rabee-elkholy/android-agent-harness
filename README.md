@@ -20,7 +20,7 @@ A local, zero-dependency development harness for Android projects. It is designe
 Open the Android project root in your coding agent, then paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.1/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.2/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The AI agent will:
@@ -31,26 +31,22 @@ The AI agent will:
 5. Provision the pinned kit into `~/.android-harness/kit`, verify integrity, and perform an atomic clean install or update.
 6. Run `doctor` verification and verify zero application files were altered.
 
-*(Note: In pre-release testing before the GitHub release tag `v1.0.1` is published, point to the exact commit URL instead).*
-
 ### Terminal installation (alternative)
 
 Use a clean Android Git checkout with its Gradle Wrapper and a kit checkout
 pinned to the same immutable release tag:
 
 ```bash
-git clone --depth 1 --branch v1.0.1 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git /path/to/android-agent-harness
+git clone --depth 1 --branch v1.0.2 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git /path/to/android-agent-harness
 python /path/to/android-agent-harness/harness_cli.py init --repo /path/to/android-project --kit /path/to/android-agent-harness
 ```
 
 The wizard writes local answers, then the lifecycle engine stages and validates `.agents`, creates only selected host adapters, records ownership, and keeps all harness files out of the shared Git index through `.git/info/exclude`.
 
-Legacy pre-v1 installs are intentionally not migrated in place. Preview and remove the old installation, then install v1 cleanly:
+Legacy pre-v1 installs are replaced atomically in one process so active coding-agent hooks are not broken:
 
 ```bash
-python harness_cli.py uninstall --repo /path/to/android-project --legacy
-python harness_cli.py uninstall --repo /path/to/android-project --legacy --apply
-python harness_cli.py init --repo /path/to/android-project --kit .
+python harness_cli.py init --replace-legacy --repo /path/to/android-project --kit .
 ```
 
 ## Task lifecycle

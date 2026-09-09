@@ -45,6 +45,10 @@ DEVICE_TEXT = {
         "Physical device only. Do not use an emulator serial. "
         "Resolve the serial with `adb devices`. Never hardcode a serial."
     ),
+    "emulator-only": (
+        "Emulator only. Do not use a physical-device serial. "
+        "Resolve the serial with `adb devices`. Never hardcode a serial."
+    ),
 }
 
 GIT_TEXT = {

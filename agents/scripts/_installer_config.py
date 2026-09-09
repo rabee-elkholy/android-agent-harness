@@ -62,6 +62,7 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
         "TRACKER_LANGUAGE": tracker_language,
         "ZOHO_LANGUAGE": tracker_language,
         "ALLOW_EMULATOR": answers.get("device_policy") != "physical-only",
+        "DEVICE_TARGET_POLICY": answers.get("device_policy") or "allow",
         "GIT_POLICY": answers.get("git_policy") or "never",
         "INSTALL_CONFIRM": answers.get("install_confirm") or "confirm",
         "PM_PROVIDER": answers.get("pm_provider") or "zoho_sprints",
