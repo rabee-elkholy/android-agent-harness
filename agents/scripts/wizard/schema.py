@@ -95,14 +95,16 @@ ALLOWED_NORMALIZED_KEYS = {
 
 CANONICAL_PROMPT_KEYS = (
     "i0",
+    "i14",
     "i1",
     "i5",
     "i19",
+    "i3",
+    "i20",
+    "i18",
+    "i16",
     "i15",
     "i4",
-    "i14",
-    "i20",
-    "i17",
 )
 
 
@@ -150,11 +152,29 @@ def validate_raw_answers(payload: Any) -> list[str]:
             if not isinstance(t_item, str) or t_item not in valid_tools:
                 errors.append(f"invalid tool id '{t_item}' in i14; valid tools: {', '.join(TOOL_IDS)}")
 
+    # Validate i3 (Git commit policy)
+    if "i3" in payload:
+        val = payload["i3"]
+        if val not in ("never", "agent-may-commit"):
+            errors.append("i3 (git_policy) must be 'never' or 'agent-may-commit'")
+
     # Validate i20 (PM provider)
     if "i20" in payload:
         pm_val = str(payload["i20"]).strip()
         if pm_val not in PM_PROVIDER_IDS:
             errors.append(f"invalid pm_provider '{pm_val}' in i20; valid: {', '.join(PM_PROVIDER_IDS)}")
+
+    # Validate i18 (Zoho / Tracker language)
+    if "i18" in payload:
+        val = payload["i18"]
+        if val not in ("en_titles_ar_comments", "all_en", "all_ar"):
+            errors.append("i18 (zoho_language) must be 'en_titles_ar_comments', 'all_en', or 'all_ar'")
+
+    # Validate i16 (Zoho MCP)
+    if "i16" in payload:
+        val = payload["i16"]
+        if val not in ("enable", "skip", True, False):
+            errors.append("i16 (zoho_mcp) must be 'enable' or 'skip'")
 
     # Validate i15 (Unit tests)
     if "i15" in payload:
@@ -162,17 +182,17 @@ def validate_raw_answers(payload: Any) -> list[str]:
         if val not in ("yes", "no", True, False):
             errors.append("i15 (unit_tests) must be 'yes' or 'no'")
 
+    # Validate i4 (Device testing policy)
+    if "i4" in payload:
+        val = payload["i4"]
+        if val not in ("allow", "physical-only", "skip"):
+            errors.append("i4 (device_policy) must be 'allow', 'physical-only', or 'skip'")
+
     # Validate i17 (Chat language)
     if "i17" in payload:
         val = payload["i17"]
         if val not in ("mirror", "en", "ar"):
             errors.append("i17 (chat_language) must be 'mirror', 'en', or 'ar'")
-
-    # Validate i18 (Zoho language)
-    if "i18" in payload:
-        val = payload["i18"]
-        if val not in ("en_titles_ar_comments", "all_en", "all_ar"):
-            errors.append("i18 (zoho_language) must be 'en_titles_ar_comments', 'all_en', or 'all_ar'")
 
     # Validate i22 (Device verification)
     if "i22" in payload:

@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.0/docs/install-or-update-prompt.md`
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.0` — **SHA-256**: `f64a69fac00884be09e61a82e3a25f7a4b62c95339205639606914db97aeccdc` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.0` — **SHA-256**: `4f585d435b2745ff63ddd6bcb41c7078df6980149ec8225b6a6fd527516dd6a7` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
@@ -35,43 +35,39 @@ Perform read-only inspection first. **STRICT RULE**: Do NOT edit files, do NOT r
 
 ### Phase 2: Chat Interview (Setup Questions)
 
-Ask the developer the following setup questions in chat using the canonical answer keys. Pre-fill discovered facts and clearly mark the suggested choice with **«أفضل»** (or `(Recommended)`):
+The setup wizard payload is the sole interview authority. Do not invent static questions or assume modules that do not exist.
 
-1. **`i1` Product Name**:
-   - 1) Discovered product name (e.g. `MyApplication`) — **«أفضل»**
-   - 2) Other (specify custom name)
-2. **`i5` Application Module**:
-   - 1) Discovered primary module (e.g. `:app`) — **«أفضل»**
-   - 2) Other module (specify)
-3. **`i19` Build Variant / Flavor**:
-   - 1) Default debug variant (e.g. `debug`) — **«أفضل»**
-   - 2) Discovered flavor (specify)
-4. **`i15` Unit Tests Policy**:
-   - 1) `yes` (Run unit tests in validation gates) — **«أفضل»**
-   - 2) `no` (Skip automated test gates)
-5. **`i4` Device Testing Policy**:
-   - 1) `allow` (Allow physical device or emulator verification) — **«أفضل»**
-   - 2) `skip` (Bypass adb device testing)
-6. **`i14` AI Tool Adapters**:
-   - 1) `gemini` (Gemini CLI / Antigravity) — **«أفضل»**
-   - 2) `claude` (Claude Code)
-   - 3) `codex` (Codex CLI)
-   - 4) `cursor` (Cursor IDE)
-   - 5) `copilot` (GitHub Copilot)
-   - 6) `all` (All supported AI tools)
-7. **`i20` Project Tracker & PM**:
-   - 1) `zoho_sprints` (Zoho Sprints with MCP) — **«أفضل»**
-   - 2) `github_projects` (GitHub Projects)
-   - 3) `jira_mcp` (Jira MCP)
-   - 4) `linear_mcp` (Linear MCP)
-   - 5) `none` (No tracker integration)
-8. **`i17` Chat Language**:
-   - 1) `mirror` (Mirror developer's conversation language) — **«أفضل»**
-   - 2) `en` (English only)
-   - 3) `ar` (Arabic only)
-9. **`i0` Install & Backup Confirmation**:
-   - 1) `yes` (Create backup and install) — **«أفضل»**
-   - 2) `skip` (Install without creating backup)
+1. **Prepare Kit for Dynamic Discovery**:
+   Use the user-level cache `<kit-dir>` (`~/.android-harness/kit` on Linux/macOS, `%USERPROFILE%\.android-harness\kit` on Windows). If `<kit-dir>` is already prepared at `v1.0.0` with valid checksums, reuse it. Otherwise, fetch and verify into user cache as detailed in Phase 5.
+2. **Execute Wizard Discovery**:
+   Run the read-only discovery command once into a single JSON object:
+   ```bash
+   python "<kit-dir>/agents/scripts/setup_wizard.py" questions --repo "<app-root>"
+   ```
+   Extract `auto_blurb` and the `questions` array. Print `auto_blurb` in chat to summarize discovered facts.
+3. **Ask Dynamic Questions**:
+   Ask **only** the questions returned in the `questions` array. When asking in chat, use the developer's conversation language, with recommended choices marked **(Recommended)** (the wizard automatically positions previous/detected choices as option 1).
+
+   **Canonical Questions Reference**:
+   - `i0`: Install & Backup Confirmation (`yes` [Recommended], `skip`, `no`)
+   - `i14`: AI Tool Adapters (`gemini` [Recommended], `claude`, `codex`, `cursor`, `copilot`, `all`)
+   - `i1`: Product Name (discovered application name)
+   - `i5`: Application Module (only asked if multiple application modules exist; skipped if only one module is detected)
+   - `i19`: Build Variant / Flavor (only asked if custom product flavors exist; skipped for standard debug)
+   - `i3`: Git Commit Policy (`never` [Recommended] — agent never commits, `agent-may-commit`)
+   - `i20`: Project Management & Task Tracker (`zoho_sprints` [Recommended], `github_projects`, `jira_mcp`, `linear_mcp`, `none`)
+   - `i18`: Task Tracker Language Policy (only asked when `i20` is not `none`):
+     - 1) `en_titles_ar_comments` (English task titles, Arabic descriptions/comments) — **(Recommended)**
+     - 2) `all_en` (All English)
+     - 3) `all_ar` (All Arabic)
+   - `i16`: Zoho Sprints MCP Integration (only asked when `i20` is `zoho_sprints`):
+     - 1) `skip` (Skip local token configuration) — **(Recommended)**
+     - 2) `enable` (Configure Zoho Sprints MCP)
+   - `i15`: Unit Tests Policy (`yes` [Recommended], `no`)
+   - `i4`: Device Testing Policy (`allow` [Recommended], `physical-only`, `skip`)
+
+4. **Persist Answers**:
+   Write the collected answers to a temporary JSON file `<temp-answers>.json`.
 
 ---
 

@@ -93,7 +93,7 @@ class ChatInstallationDocsTests(unittest.TestCase):
         tag = f"v{self.version}"
         self.assertIn(f"--branch {tag} --single-branch", self.prompt)
         self.assertIn("describe --tags --exact-match", self.prompt)
-        self.assertIn("«أفضل»", self.prompt)
+        self.assertIn("(Recommended)", self.prompt)
         self.assertNotIn("android-agent-harness/main/", self.prompt)
         self.assertNotIn("releases/latest", self.prompt)
 
@@ -223,7 +223,7 @@ class ChatInstallationLifecycleTests(RepoCase):
         from wizard.schema import CANONICAL_PROMPT_KEYS
         for key in CANONICAL_PROMPT_KEYS:
             self.assertIn(f"`{key}`", prompt_text)
-        self.assertIn("«أفضل»", prompt_text)
+        self.assertIn("(Recommended)", prompt_text)
         self.assertIn("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL", prompt_text)
 
     def test_chat_installation_with_existing_project_agents_md(self) -> None:
