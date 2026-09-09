@@ -20,7 +20,7 @@ from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, 
 from artifact_set import build_artifact_set, resolve_artifacts, verify_artifact_set  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
-from evidence_store import EvidenceStore, StateLock  # noqa: E402
+from evidence_store import EvidenceStore, StateLock, _pid_alive  # noqa: E402
 from final_verifier import verify  # noqa: E402
 from install_tool_adapters import sync_hooks_json  # noqa: E402
 from lifecycle import OWNERSHIP_RELATIVE, _validate_kit, install, uninstall, update  # noqa: E402
@@ -245,6 +245,9 @@ productFlavors { create("free") { dimension = "tier" }; create("eu") { dimension
 
 
 class AuthorityAndEvidenceTests(RepoCase):
+    def test_live_pid_probe_is_non_destructive(self) -> None:
+        self.assertTrue(_pid_alive(os.getpid()))
+
     def test_approval_is_bound_and_single_use(self) -> None:
         plan = create_plan(self.repo, task_id="task-one", requested_outcome="Change A", expected_surfaces=["BUSINESS_LOGIC"])
         plan = approve(plan, source="conversation", proof_reference="message-1", enforcement_tier="RULE_ENFORCED")
