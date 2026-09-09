@@ -254,6 +254,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             if (final_source, final_tier) not in {
                 ("host_native", "HARD_ENFORCED"),
                 ("developer_terminal", "RULE_ENFORCED"),
+                ("conversation", "RULE_ENFORCED"),
             }:
                 reasons.append("sensitive approval provenance is invalid")
             if len(final_proof) != 64 or any(char not in "0123456789abcdef" for char in final_proof.lower()):

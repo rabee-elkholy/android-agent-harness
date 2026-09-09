@@ -180,12 +180,12 @@ def record_sensitive_approval(args: argparse.Namespace) -> dict:
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "VERIFYING":
         raise ValidationError("sensitive final approval requires a VERIFYING task")
-    if args.source == "conversation":
-        raise ValidationError("sensitive final approval requires developer_terminal or host_native proof")
+    if args.source not in ("conversation", "developer_terminal", "host_native"):
+        raise ValidationError("sensitive final approval source must be conversation, developer_terminal, or host_native")
     if args.source == "host_native" and args.enforcement_tier != "HARD_ENFORCED":
         raise ValidationError("host-native sensitive approval must use HARD_ENFORCED proof")
-    if args.source == "developer_terminal" and args.enforcement_tier != "RULE_ENFORCED":
-        raise ValidationError("developer-terminal sensitive approval is RULE_ENFORCED")
+    if args.source in ("conversation", "developer_terminal") and args.enforcement_tier != "RULE_ENFORCED":
+        raise ValidationError(f"{args.source} sensitive approval is RULE_ENFORCED")
     if not str(args.proof_reference).strip():
         raise ValidationError("sensitive approval proof reference must not be empty")
     current = read_json(task_dir(repo, args.task_id) / "current-run.json")
@@ -298,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
     command.set_defaults(handler=record_approval)
     command = sub.add_parser("approve-sensitive", parents=[common])
-    command.add_argument("--source", choices=("host_native", "developer_terminal"), required=True)
+    command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
     command.add_argument("--proof-reference", required=True)
     command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
     command.set_defaults(handler=record_sensitive_approval)

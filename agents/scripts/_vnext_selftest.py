@@ -403,6 +403,57 @@ class PolicyTests(RepoCase):
         self.assertIn("SECURITY", result["surfaces"])
         self.assertEqual("CRITICAL", result["severity"])
 
+    def test_untouched_billing_in_modified_file_does_not_trigger_billing_surface(self) -> None:
+        write(
+            self.repo / "app/src/main/kotlin/A.kt",
+            "class FoodPlanFragment {\n"
+            "    val client = BillingClient.newBuilder(context)\n"
+            "    fun datePicker() {\n"
+            "        val x = 1\n"
+            "    }\n"
+            "}\n",
+        )
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "legacy billing fixture")
+        write(
+            self.repo / "app/src/main/kotlin/A.kt",
+            "class FoodPlanFragment {\n"
+            "    val client = BillingClient.newBuilder(context)\n"
+            "    fun datePicker() {\n"
+            "        val x = 2\n"
+            "    }\n"
+            "}\n",
+        )
+        result = classify(self.repo)
+        self.assertNotIn("BILLING", result["surfaces"])
+        self.assertNotIn("AUTH", result["surfaces"])
+        self.assertIn("BUSINESS_LOGIC", result["surfaces"])
+        self.assertEqual("MEDIUM", result["severity"])
+
+    def test_added_or_deleted_billing_in_diff_triggers_billing_surface(self) -> None:
+        write(
+            self.repo / "app/src/main/kotlin/A.kt",
+            "class FoodPlanFragment {\n"
+            "    fun datePicker() {\n"
+            "        val x = 1\n"
+            "    }\n"
+            "}\n",
+        )
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "clean fixture")
+        write(
+            self.repo / "app/src/main/kotlin/A.kt",
+            "class FoodPlanFragment {\n"
+            "    val client = BillingClient.newBuilder(context)\n"
+            "    fun datePicker() {\n"
+            "        val x = 1\n"
+            "    }\n"
+            "}\n",
+        )
+        result = classify(self.repo)
+        self.assertIn("BILLING", result["surfaces"])
+        self.assertEqual("CRITICAL", result["severity"])
+
     def test_persistence_routes_tests_and_android_knowledge(self) -> None:
         write(self.repo / "app/src/main/kotlin/A.kt", "internal val settingsDataStore = context.dataStore\n")
         classification = classify(self.repo)
@@ -867,16 +918,26 @@ class EndToEndWorkflowTests(RepoCase):
             store.read(current["delivery_snapshot_sha256"], current["run_id"], "sensitive_approval")
         with self.assertRaises(ValidationError):
             record_sensitive_approval(Namespace(
-                **common, source="conversation", proof_reference="agent-text",
+                **common, source="invalid_source", proof_reference="agent-text",
                 enforcement_tier="RULE_ENFORCED",
             ))
+        with self.assertRaises(ValidationError):
+            record_sensitive_approval(Namespace(
+                **common, source="conversation", proof_reference="   ",
+                enforcement_tier="RULE_ENFORCED",
+            ))
+        with self.assertRaises(ValidationError):
+            record_sensitive_approval(Namespace(
+                **common, source="conversation", proof_reference="agent-text",
+                enforcement_tier="HARD_ENFORCED",
+            ))
         result = record_sensitive_approval(Namespace(
-            **common, source="developer_terminal", proof_reference="terminal-confirmation",
+            **common, source="conversation", proof_reference="chat-confirmation",
             enforcement_tier="RULE_ENFORCED",
         ))
         self.assertEqual("PASS", result["status"])
         record = store.read(current["delivery_snapshot_sha256"], current["run_id"], "sensitive_approval")
-        self.assertEqual("developer_terminal", record["evidence"]["approval_source"])
+        self.assertEqual("conversation", record["evidence"]["approval_source"])
 
     def test_approved_change_reaches_delivery_only_with_exact_evidence(self) -> None:
         write(self.repo / ".harness-setup/answers.json", json.dumps({
@@ -925,6 +986,58 @@ class EndToEndWorkflowTests(RepoCase):
         store.write(**evidence_common, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
         store.write(**evidence_common, name="preflight", producer="preflight_check", evidence={})
         store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+        ready = complete(Namespace(**common))
+        self.assertEqual("READY_FOR_DELIVERY", ready["status"])
+        self.assertEqual(current["delivery_snapshot_sha256"], ready["ready_delivery_snapshot_sha256"])
+
+    def test_sensitive_approval_via_conversation_passes_verifier(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "sensitive-convo-e2e"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Harden Security", expected_surfaces="SECURITY,BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore source", external_write=[],
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/A.kt", "internal val verifier: HostnameVerifier? = null\n")
+        current = prepare_verification(Namespace(**common))
+        package, _ = build_package(self.repo, task_id)
+        package_sha = sha256_file(package)
+        directory = self.repo / ".harness-setup/reviewer-fixtures"
+        policy = json.loads(Path(current["policy"]).read_text(encoding="utf-8"))
+        reports: list[Path] = []
+        for reviewer in policy["reviewers"]:
+            report = directory / f"{reviewer}.json"
+            write(report, json.dumps({
+                "schema_version": 1, "reviewer": reviewer, "package_sha256": package_sha,
+                "delivery_snapshot_sha256": current["delivery_snapshot_sha256"],
+                "change_set_sha256": current["change_set_sha256"], "verdict": "PASS", "findings": [],
+            }))
+            reports.append(report)
+        ingest(self.repo, task_id, reports)
+        store = EvidenceStore(state_root(self.repo))
+        evidence_common = dict(
+            snapshot=current["delivery_snapshot_sha256"], run_id=current["run_id"],
+            harness_version=HARNESS_VERSION, change_set=current["change_set_sha256"], status="PASS",
+        )
+        store.write(**evidence_common, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
+        store.write(**evidence_common, name="preflight", producer="preflight_check", evidence={})
+        store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+        record_sensitive_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-confirmed",
+            enforcement_tier="RULE_ENFORCED",
+        ))
         ready = complete(Namespace(**common))
         self.assertEqual("READY_FOR_DELIVERY", ready["status"])
         self.assertEqual(current["delivery_snapshot_sha256"], ready["ready_delivery_snapshot_sha256"])

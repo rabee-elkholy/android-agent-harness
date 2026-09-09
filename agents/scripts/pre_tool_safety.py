@@ -40,10 +40,10 @@ PROTECTED_ROOTS = (
 # development boundary or make recovery materially harder.
 DANGEROUS = (
     ("developer_authority", re.compile(
-        r"(?:workflow\.py\b.*\b(?:approve-sensitive|cancel)\b|"
-        r"workflow\.py\b.*\bapprove\b(?!.*\s--source\s+conversation\b)|"
-        r"(?:android-harness|harness_cli\.py)\s+task\b.*\b(?:approve-sensitive|cancel)\b|"
-        r"(?:android-harness|harness_cli\.py)\s+task\b.*\bapprove\b(?!.*\s--source\s+conversation\b))",
+        r"(?:workflow\.py\b.*\bcancel\b|"
+        r"workflow\.py\b.*\b(?:approve|approve-sensitive)\b(?!.*\s--source\s+conversation\b)|"
+        r"(?:android-harness|harness_cli\.py)\s+task\b.*\bcancel\b|"
+        r"(?:android-harness|harness_cli\.py)\s+task\b.*\b(?:approve|approve-sensitive)\b(?!.*\s--source\s+conversation\b))",
         re.I,
     )),
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)\b", re.I)),

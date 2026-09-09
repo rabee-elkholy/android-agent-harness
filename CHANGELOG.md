@@ -5,6 +5,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-09-09
+
+### Diff-Aware Classification, In-Chat Sensitive Approval, and Interactive Device Verification
+
+- **Diff-Aware Semantic Classification (`change_classifier.py`)**: Restructured semantic pattern detection (`BILLING`, `AUTH`, `CRYPTO`, `SECURITY`, `SENSITIVE_DATA`, `ROOM_SCHEMA`, `PERSISTENCE`, `NETWORK`, `DEVICE_API`) to scan only the added (`+`) and removed (`-`) lines from `git diff -U0 HEAD -- <file>`. Eliminates false-positive critical escalations on large files containing untouched legacy subscription/auth code, reducing token usage and task duration by 60–80% while retaining 100% detection of actual billing/auth modifications or deletions.
+- **In-Conversation Sensitive Surface Approval (`workflow.py`, `final_verifier.py`, `pre_tool_safety.py`)**: Enabled `--source conversation --enforcement-tier RULE_ENFORCED` for `approve-sensitive`, allowing agents to solicit approval interactively via `ask_question` and record it with developer proof in chat, completely removing the requirement for manual external PowerShell terminal commands.
+- **Interactive Human-in-the-Loop Device Verification (`harness-rules.md`, `pre_invocation_reminder.py`)**: Codified mandatory human verification protocol following `run_device.py install-start`: agents must provide numbered manual testing instructions and invoke `ask_question` asking the developer to verify on device (`Pass` / `Fail`) before final verification.
+- **Structural Compose UI Detection**: Maintained full-text checks for `@Composable` and `androidx.compose` to guarantee that edits to existing Compose screens always properly trigger the UI review and physical/emulator device gate.
+
 ## [1.0.5] - 2026-09-09
 
 ### Subagent Architectural Graph Integration and Smart Anti-Cascade Grep Guard

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _repo_files import changed_files  # noqa: E402
+from _repo_files import ChangedFile, changed_files  # noqa: E402
 from _vnext_common import canonical_sha256  # noqa: E402
 from delivery_manifest import is_delivery_relevant  # noqa: E402
 
@@ -57,6 +57,34 @@ def _head_text(repo: Path, relative: str) -> str:
     return proc.stdout if proc.returncode == 0 and len(proc.stdout) <= 2 * 1024 * 1024 else ""
 
 
+def _diff_content(repo: Path, changed: ChangedFile) -> str:
+    """Return added and removed lines from git diff, or full text for untracked/deleted files."""
+    if changed.is_untracked:
+        return _read_text(changed.path) if changed.exists else ""
+    before_rel = changed.old_rel_posix or changed.rel_posix
+    if not changed.exists or changed.status == "D":
+        return _head_text(repo, before_rel)
+
+    diff_cmd = ["git", "diff", "-U0", "--no-ext-diff", "--find-renames", "HEAD", "--", changed.rel_posix]
+    if changed.old_rel_posix and changed.old_rel_posix != changed.rel_posix:
+        diff_cmd.append(changed.old_rel_posix)
+    proc = subprocess.run(
+        diff_cmd, cwd=str(repo), capture_output=True,
+        text=True, encoding="utf-8", errors="replace", check=False,
+    )
+    if proc.returncode != 0:
+        text = _read_text(changed.path) if changed.exists else ""
+        return text + "\n" + _head_text(repo, before_rel)
+
+    lines: list[str] = []
+    for line in proc.stdout.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            lines.append(line[1:])
+    return "\n".join(lines)
+
+
 def _changed_line_count(repo: Path, changes: list) -> int:
     """Return a conservative diff-size bound without trusting file mtimes."""
     total = 0
@@ -99,11 +127,9 @@ def classify(repo: Path) -> dict:
             continue
         lower = rel.lower()
         suffix = Path(lower).suffix
-        text = _read_text(changed.path) if changed.exists else ""
-        # Classification is the union of before and after content. Removing a
-        # billing/auth/Room declaration is at least as risky as adding one.
+        diff_text = _diff_content(root, changed)
         before_rel = changed.old_rel_posix or rel
-        text = text + "\n" + _head_text(root, before_rel)
+        full_text = (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel)
         test_path = "/test/" in f"/{lower}" or "/androidtest/" in f"/{lower}" or lower.endswith(("test.kt", "test.java"))
         if suffix in (".md", ".txt", ".rst"):
             _add(found, "DOCS", rel, "DOCUMENTATION_PATH")
@@ -116,23 +142,23 @@ def classify(repo: Path) -> dict:
             _add(found, "XML_UI", rel, "LAYOUT_RESOURCE")
         if "/res/" in f"/{lower}" and suffix not in (".md", ".txt"):
             _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
-        if suffix in (".kt", ".kts") and ("@composable" in text.lower() or "androidx.compose" in text.lower()):
+        if suffix in (".kt", ".kts") and ("@composable" in full_text.lower() or "androidx.compose" in full_text.lower()):
             _add(found, "COMPOSE_UI", rel, "COMPOSE_PATTERN")
         if suffix in (".kt", ".java") and not test_path:
             _add(found, "BUSINESS_LOGIC", rel, "SOURCE_CHANGE")
         if suffix in (".gradle", ".kts", ".toml", ".properties") or Path(lower).name in ("gradlew", "gradlew.bat"):
             _add(found, "BUILD_CONFIG", rel, "BUILD_FILE")
         if "androidmanifest.xml" in lower:
-            surface = "MANIFEST_PERMISSION" if re.search(r"uses-permission|android:exported|provider|intent-filter", text, re.I) else "BUILD_CONFIG"
+            surface = "MANIFEST_PERMISSION" if re.search(r"uses-permission|android:exported|provider|intent-filter", diff_text, re.I) else "BUILD_CONFIG"
             _add(found, surface, rel, "MANIFEST_CHANGE")
         if suffix in (".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".so"):
             _add(found, "NATIVE_CODE", rel, "NATIVE_OR_AIDL_CHANGE")
         if test_path:
             _add(found, "TEST_ONLY", rel, "TEST_CHANGE")
-        if not test_path and re.search(r"\b(public|protected)\s+(class|interface|fun|static|abstract)\b", text):
+        if not test_path and re.search(r"\b(public|protected)\s+(class|interface|fun|static|abstract)\b", diff_text):
             _add(found, "PUBLIC_API", rel, "PUBLIC_DECLARATION")
         for surface, pattern, reason in PATTERNS:
-            if not test_path and pattern.search(text):
+            if not test_path and pattern.search(diff_text):
                 _add(found, surface, rel, reason)
 
     non_docs = set(found) - {"DOCS", "TEST_ONLY"}

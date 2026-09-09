@@ -20,7 +20,7 @@ A local, zero-dependency development harness for Android projects. It is designe
 Open the Android project root in your coding agent, then paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.5/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.6/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The AI agent will:
@@ -60,11 +60,15 @@ python .agents/scripts/workflow.py begin --repo . --task-id TASK-1
 python .agents/scripts/workflow.py prepare-verification --repo . --task-id TASK-1
 ```
 
-The developer—not the AI agent—runs the `approve` command. For a sensitive
-final snapshot, the developer must also run `approve-sensitive` from their
-terminal (or use non-synthesizable host-native approval) after reviewing it:
+The developer—not the AI agent—approves the plan. For a sensitive
+final snapshot, the developer separately approves it (solicited interactively
+in chat via `ask_question`, or executed directly from their terminal):
 
 ```bash
+# In chat: the agent prompts via ask_question and records with --source conversation
+python .agents/scripts/workflow.py approve-sensitive --repo . --task-id TASK-1 --source conversation --proof-reference DEVELOPER-CONFIRMATION --enforcement-tier RULE_ENFORCED
+
+# In terminal: the developer may also run directly
 python .agents/scripts/workflow.py approve-sensitive --repo . --task-id TASK-1 --source developer_terminal --proof-reference LOCAL-CONFIRMATION --enforcement-tier RULE_ENFORCED
 ```
 

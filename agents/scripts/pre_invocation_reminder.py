@@ -26,7 +26,7 @@ def _message() -> str:
     elif status == "IMPLEMENTING":
         next_step = "Implement approved scope. Do NOT poll background tasks with manage_task status; wait for background notification."
     elif status == "VERIFYING":
-        next_step = "Run only gates/reviewers in current-run policy. Record reviewer verdicts with `record_review.py --task <id> --reviewer <name> --verdict PASS`. If code fixes needed, run workflow.py resume."
+        next_step = "Run only gates/reviewers in current-run policy. Record reviewer verdicts with `record_review.py --task <id> --reviewer <name> --verdict PASS`. If device gate is required, execute manual check via ask_question before verify. If code fixes needed, run workflow.py resume."
     elif status == "BLOCKED":
         next_step = "Fix recorded findings with workflow.py resume, or request developer decision at the round cap."
     elif status == "READY_FOR_DELIVERY":

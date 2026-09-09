@@ -21,10 +21,10 @@ All workflows use the central lifecycle in `.agents/scripts/workflow.py`.
 5. Freeze the delivery manifest and adaptive policy.
 6. Run only selected gates and reviewers.
 7. For sensitive surfaces, the developer separately approves the frozen final
-   snapshot from their terminal or a non-synthesizable host-native control.
+   snapshot interactively in chat (via `ask_question`), from their terminal, or via host-native control.
 8. Read-only final verification.
 9. Mark the unchanged snapshot ready and hand it off.
 
 A blocking finding returns the task to `BLOCKED`. `resume` reopens implementation under the same approved scope; a material scope change requires a new approval. Three failed review rounds require developer direction.
-The AI hook denies `approve`, `approve-sensitive`, and `cancel`; those
-developer-authority transitions must come from outside the agent tool stream.
+The AI hook denies `approve` and `approve-sensitive` without `--source conversation`, and denies `cancel`; those
+developer-authority transitions must come from explicit developer approval.

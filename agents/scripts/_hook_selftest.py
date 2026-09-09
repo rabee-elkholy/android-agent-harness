@@ -105,6 +105,14 @@ class HookTests(unittest.TestCase):
         cmd = "python .agents/scripts/workflow.py approve --repo . --task-id t --source developer_terminal --proof-reference ok --enforcement-tier RULE_ENFORCED"
         self.assertEqual("deny", self.call("run_command", {"CommandLine": cmd})["decision"])
 
+    def test_conversation_sensitive_approval_is_allowed(self):
+        cmd = "python .agents/scripts/workflow.py approve-sensitive --repo . --task-id t --source conversation --proof-reference ok --enforcement-tier RULE_ENFORCED"
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": cmd})["decision"])
+
+    def test_developer_terminal_sensitive_approval_by_agent_is_denied(self):
+        cmd = "python .agents/scripts/workflow.py approve-sensitive --repo . --task-id t --source developer_terminal --proof-reference ok --enforcement-tier RULE_ENFORCED"
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": cmd})["decision"])
+
     def test_help_command_is_read_only_allowed(self):
         self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/workflow.py --help"})["decision"])
         self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/workflow.py draft -h"})["decision"])

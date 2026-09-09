@@ -18,7 +18,7 @@ This file is the always-loaded safety and delivery kernel. It is intentionally s
   and immediately proceeds with `python .agents/scripts/workflow.py begin --repo . --task-id <id>`.
 - Other developer decisions, sign-offs, and clarifications (engineering tradeoffs, review round cap or budget exhaustion, sensitive final delivery, device test sign-off, or material ambiguity) MUST use the interactive `ask_question` tool with structured, clickable choices in the developer's conversation language. Never drop to raw text or demand manual terminal execution for approvals. Reviewer execution itself is fully automatic and requires no permission.
 - One approval covers the stated plan. Request reapproval only for material behavior, surface, module, contract, sensitive-data, permission, build-system, destructive, external-write, or blast-radius expansion.
-- Never create, infer, or simulate developer approval or reviewer evidence. The agent must never invoke `approve-sensitive` itself, and must never invoke `approve` without explicit developer approval in the conversation.
+- Never create, infer, or simulate developer approval or reviewer evidence. The agent must never invoke `approve` or `approve-sensitive` without explicit developer approval in the conversation.
 - Commit, push, release, tracker mutation, package uninstall, downgrade, and data clearing are never implicit.
 
 Task lifecycle:
@@ -69,8 +69,9 @@ The central `review_policy.py` is the only gate/reviewer router. Adapters and pr
 - Critical/broad changes use the full reviewer set. Test changes add Test Quality review.
 - Reviewer execution is fully automatic: launching the routed reviewers (subagents) during the `VERIFYING` phase is covered by the initial task plan approval. The agent must launch the required reviewers immediately and automatically in a single parallel `invoke_subagent` call; never pause, ask, or wait for developer permission to run reviewers. As reviewer evaluations return, record each verdict using `python .agents/scripts/record_review.py --task <id> --reviewer <name> --verdict PASS --evidence-pkg <sha12>` (or pass all verdicts at once: `python .agents/scripts/record_review.py --task <id> --verdict <name1>=PASS --verdict <name2>=PASS ...`). Review evidence is automatically ingested once all required reviewers are recorded.
 - Sensitive final delivery requires a second explicit developer approval bound
-  to the frozen snapshot, solicited interactively via `ask_question`; the agent
-  must never invoke `approve-sensitive` itself.
+  to the frozen snapshot, solicited interactively via `ask_question`. Upon developer confirmation, the agent records the approval using:
+  `python .agents/scripts/workflow.py approve-sensitive --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED`.
+  Manual terminal execution is never required. The agent must never invoke `approve-sensitive` without explicit developer approval in the conversation.
 - Limit review to three rounds. Unresolved blocking findings after round three return `BLOCKED`.
 - Do not silently escalate to a more expensive model. Use the configured budget or prompt the developer via `ask_question`.
 - Required reviewer timeout, malformed output, or quota failure is `ENV_BLOCKED`, never PASS.
@@ -91,7 +92,7 @@ The central `review_policy.py` is the only gate/reviewer router. Adapters and pr
 - Use the Gradle Wrapper through `.agents/scripts/run_gradle_task.py` and ADB only through the harness device scripts; never change Gradle/app code to bypass environment failure.
 - Exit `30` or `[ENV-FAILURE]` means stop the affected pipeline and report the environment blocker.
 - Resolve module, variant, application id, launcher, locales, and test task from project configuration. Never assume `:app`.
-- Device verification is required only when policy selects it.
+- Device verification is required only when policy selects it. When required, after running `python .agents/scripts/run_device.py install-start`, the agent MUST output a concise, numbered list of test steps to verify the change on the device, then immediately invoke `ask_question` asking: *"Did the manual verification on the device pass as expected?"* with choices `(Recommended) Pass - The feature works correctly on the device` and `Fail - An issue was found on the device (specify details below)`. Only upon receiving `Pass` may the agent proceed to `workflow.py verify`. If `Fail`, the agent must run `workflow.py resume` and fix the code.
 - Resolve the ADB target; do not hardcode a serial. USB and Wireless ADB share the same pipeline.
 - Never pair Wireless ADB, start reconnect loops, perform a real purchase, uninstall an app, clear data, or force a downgrade automatically.
 - Do not grant all runtime permissions during install unless the approved task explicitly needs it and the developer requested the flag.
