@@ -106,9 +106,7 @@ def install(
     if not server.is_file():
         raise SystemExit(f"Zoho Sprints server missing: {server}")
     config_path = resolve_config_path()
-    example = None
-    if config_path is None and not dry_run:
-        example = write_example_if_missing(agents)
+    example = agents / "mcp" / "zoho_sprints" / EXAMPLE_NAME
     entry = mcp_entry(py, server.resolve(), config_path)
     if dry_run:
         logs.append(f"would write {mcp_path}")
@@ -129,8 +127,6 @@ def install(
         if config_path and text_contains_secret_values(cursor_mcp.read_text(encoding="utf-8"), config_path):
             merge_server(cursor_mcp, None)
             raise SystemExit("Aborted: Cursor MCP config would have contained Zoho token values.")
-        gi = repo / ".gitignore"
-        _ensure_gitignore(gi, [".cursor/mcp.json"])
     logs.append(f"wired {SERVER_NAME} -> {server}")
     if config_path:
         logs.append(f"credentials path (not copied): {config_path}")

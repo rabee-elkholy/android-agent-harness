@@ -1,5 +1,8 @@
 # ADR-002: Hooks-first enforcement with prompt-level fallback
 
+> Historical record, superseded by the v1 compact kernel, plan authority, and
+> capability-specific enforcement reporting. References below are non-operative.
+
 ## Context
 
 Antigravity provides runtime PreToolUse hooks (`agents/hooks.json`). Other

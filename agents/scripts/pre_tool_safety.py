@@ -1,1304 +1,267 @@
+"""Small fail-closed host hook for the vNext plan and safety boundary.
+
+The hook does not implement review policy. It protects infrastructure, blocks
+irreversible or external command classes, and delegates task authority to
+``mutation_guard.py``. Adaptive reviewers and gates come only from run policy.
+"""
+from __future__ import annotations
+
 import hashlib
 import json
 import os
 import re
 import sys
 import tempfile
-import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _environment import is_antigravity, supports_overwrite, supports_stop_hook  # noqa: E402
-from _hook_state import (  # noqa: E402
-    MAX_DIAGNOSTICS,
-    MAX_REVIEWS,
-    MAX_TEST_REVIEWS,
-    MAX_UI_REVIEWS,
-    active_package_hash,
-    adjudicate_review_findings,
-    bump_invoke,
-    canonical_subagent_name,
-    clear_pending_reviews,
-    file_sha256,
-    invoke_count,
-    package_already_reviewed,
-    pending_since,
-    prompts_match,
-    read_verdict_record,
-    record_review_round,
-    record_subagent_defined,
-    record_subagents_poll,
-    record_task_poll,
-    resolve_transcript_path,
-    reviews_pending,
-    transcript_path,
-    write_verdict_record,
-)
-from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
-from policy_vocab import (  # noqa: E402
-    DEVICE_BOUND_ADB,
-    DENIED_NETWORK_PATTERNS,
-    DENIED_PM_OPS,
-    GIT_MUTATIONS,
-    SHELL_INDIRECTION_PATTERNS,
-    classify_reason,
-    emulator_match,
-    normalize_command,
-    reason_short,
-)
+from _repo_files import REPO  # noqa: E402
+from mutation_guard import active_plan, command_allowed, file_mutation_allowed  # noqa: E402
+from _vnext_common import read_json  # noqa: E402
 
 
-_CONTEXT = {"tool": "", "command": ""}
-
+MAX_STDIN_BYTES = 5 * 1024 * 1024
 AUDIT_MAX_RECORDS = 1000
+WRITE_TOOLS = {
+    "write_to_file", "replace_file_content", "apply_patch", "edit", "multiedit",
+    "create_file", "delete_file", "move_file", "rename_file",
+}
+SUBAGENT_TOOLS = {"define_subagent", "invoke_subagent", "manage_subagents", "manage_task", "schedule"}
+ZOHO_MUTATION_TOOLS = {
+    "zoho_create_task", "zoho_update_task_status", "zoho_add_comment",
+    "zoho_update_task_description",
+}
+PROTECTED_ROOTS = (
+    ".agents", "agents/scripts", "agents/state", ".harness-setup/ownership-v1.json",
+)
 
-# Git ops the agent may run only when _product.GIT_POLICY == "agent-may-commit".
-# push/merge/rebase/reset/stash and every other mutation stay forbidden forever.
-AGENT_ALLOWED_GIT_OPS = frozenset({"add", "commit"})
-
-
-def _product_policy() -> tuple[str, bool, str]:
-    """(git_policy, allow_emulator, install_confirm) read from _product.py.
-
-    Safe defaults: never / False / confirm. Installers rewrite _product.py
-    from the wizard answers (I.3, I.4, I.10). Selftest-only env knobs let the
-    suite exercise both policies without rewriting _product.py.
-    """
-    if os.environ.get("_IN_HOOK_SELFTEST") == "1":
-        test_emu = os.environ.get("HARNESS_TEST_ALLOW_EMULATOR", "").strip().lower()
-        test_git = os.environ.get("HARNESS_TEST_GIT_POLICY", "").strip()
-        if test_emu or test_git:
-            allow_emu = True if test_emu in ("true", "1", "yes") else False
-            return test_git or "never", allow_emu, "confirm"
-    try:
-        import _product  # noqa: PLC0415
-    except Exception:
-        return "never", False, "confirm"
-    git_policy = str(getattr(_product, "GIT_POLICY", "never") or "never").strip()
-    allow_emulator = bool(getattr(_product, "ALLOW_EMULATOR", False))
-    install_confirm = str(getattr(_product, "INSTALL_CONFIRM", "confirm") or "confirm").strip()
-    return git_policy, allow_emulator, install_confirm
+# These stay denied even during approved implementation: they cross the local
+# development boundary or make recovery materially harder.
+DANGEROUS = (
+    ("developer_authority", re.compile(
+        r"(?:workflow\.py\b.*\b(?:approve(?:-sensitive)?|cancel)\b|"
+        r"(?:android-harness|harness_cli\.py)\s+task\b.*\b(?:approve(?:-sensitive)?|cancel)\b)",
+        re.I,
+    )),
+    ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)\b", re.I)),
+    ("shell_indirection", re.compile(r"\b(?:base64\s+(?:-d|--decode)|frombase64string|invoke-expression|iex|eval)\b", re.I)),
+    ("adb_destructive", re.compile(r"\badb(?:\.exe)?\b.*\b(?:root|remount|backup|restore|disable-verity|enable-verity|uninstall|clear)\b", re.I | re.S)),
+    ("package_destructive", re.compile(r"\badb(?:\.exe)?\b.*\b(?:pm|cmd\s+package)\s+(?:clear|uninstall|disable|suspend|install-existing)\b", re.I | re.S)),
+    ("raw_adb", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*adb(?:\.exe)?\b", re.I)),
+    ("harness_device_emergency", re.compile(r"run_device\.py\b(?:(?=.*\s--force\b)|(?=.*\s--grant-runtime-permissions\b)|\s+uninstall\b)", re.I)),
+    ("live_network", re.compile(r"\b(?:curl|wget|invoke-webrequest|invoke-restmethod)\b|urllib\.request|requests\.(?:get|post|put|patch|delete)\s*\(", re.I)),
+    ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
+)
+RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?gradlew(?:\.bat)?\s+", re.I)
+ALLOWED_GRADLE_WRAPPER = re.compile(r"(?:run_gradle_task|run_tests_gate)\.py\b", re.I)
 
 
 def _audit_path() -> Path:
     override = os.environ.get("HARNESS_HOOK_STATE")
-    base = (
-        Path(override)
-        if override
-        else Path(__file__).resolve().parent.parent / "state" / "review-invokes.json"
-    )
+    base = Path(override) if override else Path(__file__).resolve().parent.parent / "state" / "hook-state.json"
     return base.with_name("audit_log.jsonl")
 
 
-def _cmd_sha256_12(command: str) -> str:
-    if not command:
-        return ""
-    return hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()[:12]
-
-
-def write_audit(decision: str, reason: str) -> None:
-    """Append one sanitized decision record to the JSONL audit log.
-
-    Never writes raw commands or payload content: only a 12-hex command digest,
-    a truncated conversation hint, and the classified reason.
-    """
+def _audit(decision: str, reason: str, tool: str, command: str) -> None:
     try:
-        conv = conversation_id(_CONTEXT.get("payload") or {})
-        record = {
-            "ts": round(time.time(), 3),
-            "decision": decision,
-            "tool": _CONTEXT.get("tool") or "run_command",
-            "reason_code": classify_reason(reason),
-            "reason_short": reason_short(reason),
-            "cmd_sha256_12": _cmd_sha256_12(_CONTEXT.get("command") or ""),
-            "conv_hint": (conv if conv and conv != "unknown" else "")[:16],
-        }
         path = _audit_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-        if path.stat().st_size > 0:
-            from _hook_state import state_lock
-
-            with state_lock():
-                with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                    lines = handle.readlines()
-                if len(lines) > AUDIT_MAX_RECORDS:
-                    kept = lines[-AUDIT_MAX_RECORDS:]
-                    temp_file = tempfile.NamedTemporaryFile(
-                        mode="w",
-                        encoding="utf-8",
-                        dir=str(path.parent),
-                        delete=False,
-                        suffix=".tmp",
-                    )
-                    temp_file.writelines(kept)
-                    temp_file.flush()
-                    temp_file.close()
-                    os.replace(temp_file.name, path)
-    except Exception:
-        pass  # Auditing must never alter a safety decision.
-
-
-def deny(reason: str) -> None:
-    write_audit("deny", reason)
-    print(json.dumps({"decision": "deny", "reason": reason}))
-
-
-def allow(reason: str = "Not blocked by the harness safety hook.", overwrite: dict | None = None) -> None:
-    write_audit("allow", reason)
-    res: dict[str, Any] = {"decision": "allow", "reason": reason}
-    if overwrite:
-        res["overwrite"] = overwrite
-    print(json.dumps(res))
-
-
-def force_continue(reason: str) -> None:
-    write_audit("continue", reason)
-    print(json.dumps({"decision": "continue", "reason": reason}))
-
-
-def is_true(value) -> bool:
-    if value is True:
-        return True
-    return str(value).strip().lower() in ("true", "1", "yes")
-
-
-def conversation_id(payload: dict) -> str:
-    raw = payload.get("conversationId") or payload.get("conversation_id")
-    if raw:
-        return str(raw)
-    try:
-        from _environment import get_session_id
-        sess = get_session_id()
-        if sess and sess != "generic-session":
-            return sess
-    except Exception:
-        pass
-    return "unknown"
-
-
-PACKAGE_RE = re.compile(r"HARNESS_REVIEW_PACKAGE=([^\r\n]+)")
-
-REVIEW_FIVE = frozenset(
-    {
-        "bug-reviewer-agent",
-        "convention-reviewer-agent",
-        "security-reviewer-agent",
-        "perf-anr-guardian-agent",
-        "regression-impact-reviewer-agent",
-    }
-)
-
-GUARD_NAMES = frozenset({"code-review-guard", "code-review-guard-agent"})
-
-ALLOWED_KINDS = {
-    "bug-reviewer-agent": "review",
-    "convention-reviewer-agent": "review",
-    "security-reviewer-agent": "review",
-    "regression-impact-reviewer-agent": "review",
-    "perf-anr-guardian-agent": "review",
-    "qa-diagnostics-agent": "diagnostics",
-    "android-ui-expert-agent": "ui",
-    "test-quality-reviewer-agent": "test",
-    "code-review-guard-agent": "guard",
-}
-
-
-def require_review_package(sub: dict) -> Path | None:
-    prompt = str(sub.get("Prompt") or sub.get("prompt") or "")
-    match = PACKAGE_RE.search(prompt)
-    if not match:
-        deny(
-            "Denied: generate a review package first "
-            "(`python .agents/scripts/review_package.py`) and put "
-            "HARNESS_REVIEW_PACKAGE=<path> in every reviewer Prompt."
-        )
-        return None
-    raw_path = match.group(1).strip().strip('"').strip("'")
-    candidate = Path(raw_path)
-    if not candidate.is_file() and not raw_path.startswith('"'):
-        # Old-style prompts put prose after the path on the same line; fall back
-        # to the first whitespace-delimited token (spaced paths work only when
-        # the marker is alone on its line, as review_package.py prints it).
-        first_token = raw_path.split(None, 1)[0].strip().strip('"').strip("'")
-        if first_token and Path(first_token).is_file():
-            raw_path = first_token
-    path = Path(raw_path)
-    if not path.is_file():
-        deny(f"Denied: review package file does not exist: {path}")
-        return None
-    _WARNED_LEGACY: set[str] = getattr(require_review_package, "_warned", set())
-    try:
-        head = path.read_text(encoding="utf-8", errors="replace")[:2000]
-    except Exception:
-        head = ""
-    if "HARNESS_PACKAGE_HEADER v2" not in head and str(path) not in _WARNED_LEGACY:
-        _WARNED_LEGACY.add(str(path))
-        setattr(require_review_package, "_warned", _WARNED_LEGACY)
-        print(
-            f"[WARN] review package {path.name} predates the v2 evidence header "
-            "(no PACKAGE_SHA256/GIT_SHA); accepted this migration window, regenerate soon.",
-            file=sys.stderr,
-        )
-    try:
-        resolved = path.resolve()
-        repo_resolved = REPO.resolve()
-        temp_dir = Path(tempfile.gettempdir()).resolve()
-        is_inside_repo = resolved == repo_resolved or repo_resolved in resolved.parents
-        is_inside_temp = "HARNESS_HOOK_STATE" in os.environ and (resolved == temp_dir or temp_dir in resolved.parents)
-        if not (is_inside_repo or is_inside_temp):
-            deny(f"Denied: review package must reside inside the repository: {path}")
-            return None
-    except Exception:
-        deny(f"Denied: invalid review package path: {path}")
-        return None
-    return path
-
-
-def parse_subagents(args: dict):
-    raw_subs = args.get("Subagents")
-    if isinstance(raw_subs, str):
-        raw_subs = json.loads(raw_subs)
-    if raw_subs is None:
-        return []
-    if not isinstance(raw_subs, list):
-        raise ValueError("Subagents must be a list")
-    return raw_subs
-
-
-def identify_subagent(sub: dict) -> tuple[str, str] | None:
-    for key in ("TypeName", "typeName", "type_name"):
-        raw = sub.get(key)
-        if raw:
-            canon = canonical_subagent_name(raw)
-            if canon in ALLOWED_KINDS:
-                return canon, ALLOWED_KINDS[canon]
-    for key in ("Name", "name", "Role", "role"):
-        raw = sub.get(key)
-        if raw:
-            canon = canonical_subagent_name(raw)
-            if canon in ALLOWED_KINDS:
-                return canon, ALLOWED_KINDS[canon]
-    return None
-
-
-def has_write_tools(obj: dict) -> bool:
-    for key in ("enable_write_tools", "enableWriteTools", "EnableWriteTools"):
-        if key in obj and is_true(obj.get(key)):
-            return True
-    return False
-
-
-def has_subagent_tools(obj: dict) -> bool:
-    for key in ("enable_subagent_tools", "enableSubagentTools", "EnableSubagentTools"):
-        if key in obj and is_true(obj.get(key)):
-            return True
-    return False
-
-
-def handle_define_subagent(args: dict, payload: dict | None = None) -> None:
-    name = canonical_subagent_name(args.get("name") or args.get("Name") or "")
-    if name in GUARD_NAMES or name == "code-review-guard-agent":
-        deny(
-            "Denied: code-review-guard-agent is retired as the delivery gate. "
-            "Define/invoke the 5 review leaves instead."
-        )
-        return
-    if name not in ALLOWED_KINDS:
-        deny(
-            f"Denied: subagent '{name}' is not in the allowed roster "
-            f"({', '.join(sorted(ALLOWED_KINDS))})"
-        )
-        return
-    if has_write_tools(args) or has_subagent_tools(args):
-        deny("Denied: subagents must keep write tools and nested subagent tools off.")
-        return
-    prompt = args.get("system_prompt") or args.get("systemPrompt") or args.get("SystemPrompt") or ""
-    if not prompts_match(str(prompt), name):
-        deny(
-            f"Denied: define_subagent system_prompt must match "
-            f".agents/subagents/{name}.json template verbatim (fingerprint + body)."
-        )
-        return
-    conv = conversation_id(payload) if payload else ""
-    if conv and conv != "unknown":
-        record_subagent_defined(conv, name)
-    allow(f"{name} template accepted.")
-
-
-def handle_invoke_subagent(payload: dict, args: dict) -> None:
-    try:
-        subs = parse_subagents(args)
-    except Exception:
-        deny("Denied: invoke_subagent Subagents is not valid JSON.")
-        return
-    if not subs or not isinstance(subs, list):
-        deny("Denied: Subagents must be a non-empty list.")
-        return
-    if len(subs) > 6:
-        deny("Denied: maximum 6 subagents allowed per invoke (5 review leaves + one optional specialist).")
-        return
-
-    conv = conversation_id(payload)
-    identified: list[tuple[dict, str, str]] = []
-    seen_names: set[str] = set()
-
-    for sub in subs:
-        if not isinstance(sub, dict):
-            deny("Denied: each item in Subagents must be an object.")
-            return
-        workspace = str(sub.get("Workspace") or sub.get("workspace") or "").strip().lower()
-        if workspace and workspace not in ("inherit", ""):
-            deny("Denied: subagent Workspace must be inherit. Worktrees/share are off.")
-            return
-        found = identify_subagent(sub)
-        if not found:
-            deny(
-                f"Denied: subagent '{sub.get('TypeName') or sub.get('Role')}' is not in the allowed roster "
-                f"({', '.join(sorted(ALLOWED_KINDS))})"
-            )
-            return
-        sub_name, agent_type = found
-        if sub_name in seen_names:
-            deny(f"Denied: duplicate subagent '{sub_name}' in the same invoke.")
-            return
-        seen_names.add(sub_name)
-        if has_write_tools(sub) or has_subagent_tools(sub):
-            deny(f"Denied: {sub_name} must keep write and subagent tools off.")
-            return
-        if sub_name in GUARD_NAMES or agent_type == "guard":
-            deny(
-                "Denied: code-review-guard-agent is retired as the delivery gate. "
-                "Dispatch all 5 review leaves in EXACTLY ONE invoke_subagent call: "
-                "bug-reviewer-agent, convention-reviewer-agent, security-reviewer-agent, "
-                "perf-anr-guardian-agent, regression-impact-reviewer-agent."
-            )
-            return
-        identified.append((sub, sub_name, agent_type))
-
-    names = {name for _, name, _ in identified}
-    review_names = names & REVIEW_FIVE
-    solo_perf = review_names == {"perf-anr-guardian-agent"} and names == {"perf-anr-guardian-agent"}
-
-    if review_names and not solo_perf:
-        package_paths: list[Path] = []
-        for sub, _name, _kind in identified:
-            if _name not in (REVIEW_FIVE | {"test-quality-reviewer-agent"}):
-                continue
-            path = require_review_package(sub)
-            if path is None:
-                return
-            package_paths.append(path)
-        unique_pkgs = {str(p.resolve()) for p in package_paths}
-        if len(unique_pkgs) != 1:
-            deny("Denied: all review leaves must share the same HARNESS_REVIEW_PACKAGE path.")
-            return
-        pkg = package_paths[0]
-        digest = file_sha256(pkg)
-        from _hook_state import package_contains_tests
-        has_tests = package_contains_tests(str(pkg)) or package_contains_tests(digest[:12])
-        required_leaves = REVIEW_FIVE | ({"test-quality-reviewer-agent"} if has_tests else set())
-
-        missing = required_leaves - names
-        if missing:
-            if has_tests:
-                deny(
-                    "Denied: this review package contains modified test files (*Test.kt, src/test/). "
-                    "Smart Test Promotion mandates all 6 leaves in ONE invoke_subagent call: "
-                    "bug-reviewer-agent, convention-reviewer-agent, security-reviewer-agent, "
-                    "perf-anr-guardian-agent, regression-impact-reviewer-agent, and test-quality-reviewer-agent "
-                    f"(missing: {', '.join(sorted(missing))})."
-                )
-            else:
-                deny(
-                    "Denied: delivery review must dispatch all 5 leaves in ONE invoke_subagent call "
-                    f"(missing: {', '.join(sorted(missing))}). "
-                    "Do not fire separate invoke_subagent calls."
-                )
-            return
-
-        if package_already_reviewed(conv, digest):
-            deny(
-                "Denied: this exact review package content was already reviewed. "
-                "Fix the findings, regenerate with `python .agents/scripts/review_package.py`, "
-                "then dispatch the leaves again."
-            )
-            return
-        used = invoke_count(conv, "review")
-        if used >= MAX_REVIEWS:
-            deny(
-                f"Denied: runaway review cap reached ({used}/{MAX_REVIEWS}). "
-                "This is an infinite-loop guard, not a quality skip. Stop and inspect why reviews are repeating."
-            )
-            return
-        record_review_round(conv, digest)
-        if has_tests:
-            allow("Smart Test Promotion: 6-leaf parallel review (+ test-quality-reviewer-agent) accepted.")
-        else:
-            allow("5-leaf parallel review accepted.")
-        return
-
-    if solo_perf:
-        used = invoke_count(conv, "perf")
-        if used >= MAX_REVIEWS:
-            deny(f"Denied: performance audit limit reached ({used}/{MAX_REVIEWS}).")
-            return
-        bump_invoke(conv, "perf")
-        allow("Solo perf-anr-guardian-agent accepted for /perf-audit.")
-        return
-
-    has_diag = any(kind == "diagnostics" for _, _, kind in identified)
-    has_ui = any(kind == "ui" for _, _, kind in identified)
-    has_test = any(kind == "test" for _, _, kind in identified)
-
-    if has_diag:
-        used = invoke_count(conv, "diagnostics")
-        if used >= MAX_DIAGNOSTICS:
-            deny(f"Denied: diagnostics limit reached ({used}/{MAX_DIAGNOSTICS}).")
-            return
-        bump_invoke(conv, "diagnostics")
-    if has_ui:
-        used = invoke_count(conv, "ui")
-        if used >= MAX_UI_REVIEWS:
-            deny(f"Denied: UI review limit reached ({used}/{MAX_UI_REVIEWS}).")
-            return
-        bump_invoke(conv, "ui")
-    if has_test:
-        used = invoke_count(conv, "test")
-        if used >= MAX_TEST_REVIEWS:
-            deny(f"Denied: test quality review limit reached ({used}/{MAX_TEST_REVIEWS}).")
-            return
-        bump_invoke(conv, "test")
-
-    allow(f"Specialist subagents accepted: {len(subs)} running.")
-
-
-INVOKE_NAME_RE = re.compile(r"invoke[_-]?subagent", re.IGNORECASE)
-CONV_ID_RE = re.compile(
-    r'(?:conversationId|conversation_id)\s*[:=]\s*"([0-9a-fA-F-]{8,})"',
-    re.IGNORECASE,
-)
-SENDER_RE = re.compile(r"sender=([0-9a-fA-F-]{8,}(?:/task-\d+)?)")
-STANDARD_PASS_TOKENS = ("BUG_PASS", "CONVENTION_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS")
-ALL_PASS_TOKENS = ("BUG_PASS", "CONVENTION_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS", "TEST_PASS")
-PASS_TOKENS = ALL_PASS_TOKENS
-EVIDENCE_RE = re.compile(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\b")
-
-
-def _record_verdict(
-    conv_id: str,
-    active_pkg12: str,
-    verdict: str,
-    reason: str,
-    chunks: list[str] | None = None,
-) -> None:
-    """Best-effort completion record for the machine-readable verdict artifact.
-
-    Strictly additive: never raises and never alters the allow/deny decision.
-    """
-    try:
-        if not active_pkg12:
-            return
-        record = read_verdict_record(active_pkg12) or {
-            "schema_version": 1,
-            "task_id": "",
-            "git_sha": "",
-            "package": {"path": "", "sha256": "", "sha256_12": active_pkg12},
-            "tree_fingerprint": None,
-            "files": {},
-            "dispatched_at": None,
+        record = {
+            "decision": decision,
+            "tool": tool[:80],
+            "reason": reason[:160],
+            "command_sha256_12": hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()[:12] if command else "",
         }
-        record["verdict"] = verdict
-        record["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        record["completed_reason"] = reason[:400]
-        leaves: dict[str, dict] = dict(record.get("leaves") or {})
-        findings: list[str] = list(record.get("findings") or [])
-        for chunk in chunks or []:
-            # Ignore ephemeral harness reminders, pipeline instructions, and system banners
-            if any(k in chunk for k in ("ACTIVE PIPELINE REMINDER", "Harness Quality Guard:", "QUORUM & PATIENCE MANDATE", "[QUORUM & PATIENCE")):
-                continue
-            for token in ALL_PASS_TOKENS:
-                if token in chunk:
-                    leaf = "test_quality" if token == "TEST_PASS" else token.split("_")[0].lower()
-                    evidence = EVIDENCE_RE.search(chunk)
-                    is_valid = bool(evidence) and evidence.group(1).lower() == active_pkg12.lower()
-                    ev_data = {
-                        "token": token,
-                        "verdict": token,
-                        "evidence": {
-                            "pkg": evidence.group(1) if evidence else "",
-                            "cites": int(evidence.group(2)) if evidence else 0,
-                            "valid": is_valid,
-                        },
-                    }
-                    if leaf not in leaves:
-                        leaves[leaf] = ev_data
-                    elif is_valid and not leaves[leaf].get("evidence", {}).get("valid"):
-                        # Upgrade previous un-evidenced or invalid entry with genuine verified evidence
-                        leaves[leaf] = ev_data
-            if "Findings" in chunk:
-                findings.append(chunk[:2000])
-        record["leaves"] = leaves
-        record["findings"] = findings[:50]
-        record["adjudication"] = adjudicate_review_findings(findings)
-        write_verdict_record(active_pkg12, record)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if len(lines) > AUDIT_MAX_RECORDS:
+            fd, temp_name = tempfile.mkstemp(prefix=".audit-", suffix=".tmp", dir=str(path.parent))
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines[-AUDIT_MAX_RECORDS:]) + "\n")
+            os.replace(temp_name, path)
     except Exception:
         pass
 
 
-def _evidence_mode() -> str:
-    raw = os.environ.get("HARNESS_EVIDENCE_MODE", "strict").strip().lower()
-    return "legacy" if raw == "legacy" else "strict"
+def emit(decision: str, reason: str, *, tool: str = "", command: str = "") -> None:
+    _audit(decision, reason, tool, command)
+    print(json.dumps({"decision": decision, "reason": reason}, ensure_ascii=False))
 
 
-def _valid_evidence_footer(text: str, active_pkg12: str) -> bool:
-    if not active_pkg12:
-        return False
-    return any(pkg.lower() == active_pkg12.lower() for pkg, _cites in EVIDENCE_RE.findall(text))
-
-
-def _evidenced_verdict_count(
-    chunks: list[str],
-    active_pkg12: str,
-    required_tokens: tuple[str, ...] = STANDARD_PASS_TOKENS,
-) -> int:
-    """Count distinct leaves whose verdict chunk carries a valid evidence footer.
-
-    A chunk satisfies one leaf when it contains the leaf's PASS token or a
-    Findings marker AND at least one EVIDENCE footer whose pkg matches the
-    active review package hash.
-    """
-    target_count = len(required_tokens)
-    satisfied_tokens: set[str] = set()
-    findings_leaves = 0
-    for chunk in chunks:
-        footer_ok = _valid_evidence_footer(chunk, active_pkg12)
-        if not footer_ok:
-            continue
-        tokens = {token for token in required_tokens if token in chunk}
-        satisfied_tokens |= tokens
-        if not tokens and "Findings" in chunk:
-            findings_leaves += 1
-    return len(satisfied_tokens) + min(findings_leaves, max(0, target_count - len(satisfied_tokens)))
-
-
-_INVOKE_TOOL_JSON_RE = re.compile(
-    r"""["']name["']\s*:\s*["']invoke_subagent["']""",
-    re.IGNORECASE,
-)
-_NON_INVOKE_TYPES = frozenset(
-    {"GENERIC", "CHECKPOINT", "EPHEMERAL_MESSAGE", "SYSTEM_MESSAGE"}
-)
-
-
-def _is_invoke_subagent_entry(entry: dict) -> bool:
-    for tool_call in _iter_tool_calls(entry):
-        name = _tool_name(tool_call).strip().lower()
-        if name == "invoke_subagent" or INVOKE_NAME_RE.fullmatch(name):
-            return True
-    entry_type = str(entry.get("type") or "").upper()
-    if entry_type in _NON_INVOKE_TYPES:
-        return False
-    source = str(entry.get("source") or "").upper()
-    if source in {"SYSTEM", "SYSTEM_SDK"}:
-        return False
-    blob = _entry_blob(entry)
-    return bool(_INVOKE_TOOL_JSON_RE.search(blob))
-
-
-def _iter_tool_calls(entry: dict):
-    for key in ("tool_calls", "toolCalls"):
-        raw = entry.get(key)
-        if isinstance(raw, list):
-            for item in raw:
-                if isinstance(item, dict):
-                    yield item
-        elif isinstance(raw, dict):
-            yield raw
-
-
-def _tool_name(tool_call: dict) -> str:
-    nested = tool_call.get("function")
-    if isinstance(nested, dict):
-        nested_name = nested.get("name")
-        if nested_name:
-            return str(nested_name)
-    return str(tool_call.get("name") or tool_call.get("toolName") or "")
-
-
-def _entry_blob(entry: dict) -> str:
-    try:
-        return json.dumps(entry, ensure_ascii=False)
-    except TypeError:
-        return str(entry)
-
-
-def _read_transcript_lines(path: Path) -> list[dict]:
-    max_bytes = 2_000_000
-    size = path.stat().st_size
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        if size > max_bytes:
-            handle.seek(size - max_bytes)
-            handle.readline()
-        raw_lines = handle.readlines()
-    entries = []
-    for line in raw_lines:
-        if not line.strip():
-            continue
+def _tool_name_and_args(payload: dict) -> tuple[str, dict]:
+    call = payload.get("toolCall") or payload.get("tool_call") or {}
+    name = str(call.get("name") or payload.get("toolName") or payload.get("tool_name") or "").lower()
+    args = call.get("args") or payload.get("toolArgs") or payload.get("tool_input") or {}
+    if isinstance(args, str):
         try:
-            entries.append(json.loads(line))
+            args = json.loads(args)
         except json.JSONDecodeError:
-            entries.append({"content": line})
-    return entries
+            args = {}
+    return name, args if isinstance(args, dict) else {}
 
 
-def _tail_has_verdicts(text: str, has_tests: bool = False) -> bool:
-    tokens = ALL_PASS_TOKENS if has_tests else STANDARD_PASS_TOKENS
-    req_count = 6 if has_tests else 5
-    if all(token in text for token in tokens):
-        return True
-    return text.count("Findings") >= req_count
+def _target(args: dict) -> str:
+    for key in ("TargetFile", "targetFile", "path", "file_path", "filePath"):
+        if args.get(key):
+            return str(args[key]).replace("\\", "/")
+    return ""
 
 
-def check_subagents_barrier(conv_id: str, payload: dict | None = None) -> tuple[bool, str]:
-    if not conv_id or conv_id == "unknown":
-        return True, "No conv id"
-    if not reviews_pending(conv_id):
-        return True, "No pending review round"
-
-    evidence_mode = _evidence_mode()
-    active_pkg12 = active_package_hash(conv_id)[:12]
-    from _hook_state import package_contains_tests
-    has_tests = package_contains_tests(active_pkg12)
-    expected_leaves = 6 if has_tests else 5
-    req_tokens = ALL_PASS_TOKENS if has_tests else STANDARD_PASS_TOKENS
-    round_label = "6-leaf (Smart Test Promotion)" if has_tests else "5-leaf"
-
-    if evidence_mode == "strict" and not active_pkg12:
-        return False, (
-            f"A {round_label} review round is pending but the active review package hash is unknown. "
-            f"Regenerate with `python .agents/scripts/review_package.py` and re-dispatch the {expected_leaves} leaves; "
-            "verdicts are only accepted with an EVIDENCE footer citing that package."
-        )
-
-    def strict_shortfall(chunks: list[str]) -> bool:
-        if evidence_mode != "strict":
-            return False
-        return _evidenced_verdict_count(chunks, active_pkg12, req_tokens) < expected_leaves
-
+def _safe_target(raw_target: str) -> tuple[bool, str]:
+    if not raw_target.strip():
+        return False, "Mutating file tool did not expose a target path; refusing an unscoped write."
+    raw = Path(raw_target).expanduser()
+    resolved = raw.resolve() if raw.is_absolute() else (REPO / raw).resolve()
     try:
-        barrier_ttl = float(os.environ.get("HARNESS_BARRIER_TTL", "21600"))
-    except (TypeError, ValueError):
-        barrier_ttl = 21600.0
-    since = pending_since(conv_id)
-    if barrier_ttl > 0 and since is not None and time.time() - since > barrier_ttl:
-        clear_pending_reviews(conv_id)
-        _record_verdict(conv_id, active_pkg12, "EXPIRED", f"Review round expired after the barrier TTL.")
-        return True, (
-            f"Pending review round expired after {int(barrier_ttl)}s barrier TTL. "
-            f"Re-run the {expected_leaves} review leaves if the code changed."
-        )
+        relative = resolved.relative_to(REPO.resolve()).as_posix()
+    except ValueError:
+        return False, "File mutation escapes the approved repository."
+    if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
+        return False, "Harness engine, state, and ownership evidence are immutable to agent file tools."
+    return True, relative
 
-    log_file = resolve_transcript_path(conv_id, payload)
-    if log_file is None or not log_file.is_file():
-        fallback = transcript_path(conv_id)
-        if evidence_mode == "legacy":
-            return False, (
-                f"A {round_label} review round is pending and the conversation transcript is not readable yet "
-                f"(looked for {fallback}). "
-                f"Wait until all {expected_leaves} leaves deliver PASS (or Findings). Do not assemble while they are running."
-            )
-        return False, (
-            f"A {round_label} review round is pending and the conversation transcript is not readable yet "
-            f"(looked for {fallback}). In strict evidence mode each leaf must end its reply with "
-            "`EVIDENCE pkg=<sha256_12> cites=<n>` matching the dispatched package "
-            f"(active package: pkg={active_pkg12}). Do not assemble while they are running."
-        )
+
+def _handle_stop() -> None:
     try:
-        lines = _read_transcript_lines(log_file)
+        plan = active_plan(REPO)
+        status = str(plan.get("status") or "")
     except Exception:
-        return False, (
-            f"A {round_label} review round is pending and the transcript could not be parsed. "
-            f"Wait for all {expected_leaves} review messages before tests/assemble."
-        )
-
-    last_invoke_idx = -1
-    for i, entry in enumerate(lines):
-        if _is_invoke_subagent_entry(entry):
-            last_invoke_idx = i
-
-    if last_invoke_idx == -1:
-        whole = "\n".join(_entry_blob(entry) for entry in lines)
-        if _tail_has_verdicts(whole, has_tests) and not strict_shortfall([whole]):
-            clear_pending_reviews(conv_id)
-            _record_verdict(
-                conv_id, active_pkg12, "PASS",
-                "Review verdicts found in transcript (invoke record missing).", [whole],
-            )
-            return True, "Review verdicts found in transcript (invoke record missing)."
-        if evidence_mode == "strict" and _tail_has_verdicts(whole, has_tests):
-            missing = _evidenced_verdict_count([whole], active_pkg12, req_tokens)
-            _record_verdict(
-                conv_id, active_pkg12, "FAIL",
-                f"Only {missing}/{expected_leaves} verdicts carried a valid EVIDENCE footer.", [whole],
-            )
-            return False, (
-                f"PASS/Findings tokens found for {missing}/{expected_leaves} leaves but EVIDENCE footers are missing "
-                f"or cite the wrong package (expected pkg={active_pkg12}). "
-                "Verdicts without a valid evidence footer do not count; ask the leaves to re-reply."
-            )
-        return False, (
-            f"A {round_label} review round is pending but the last invoke_subagent is not in the transcript tail. "
-            f"Wait for all {expected_leaves} leaves to reply before tests/assemble. "
-            "If they already replied, the log format may have changed — do not assemble until "
-            f"{' / '.join(req_tokens)} are visible."
-        )
-
-    after_entries = lines[last_invoke_idx + 1 :]
-    after = "\n".join(_entry_blob(entry) for entry in after_entries)
-    spawn_window = _entry_blob(lines[last_invoke_idx])
-    if after_entries:
-        spawn_window += "\n" + _entry_blob(after_entries[0])
-
-    spawned_ids = [sid for sid in CONV_ID_RE.findall(spawn_window) if sid != conv_id]
-    if spawned_ids:
-        replied_ids = set()
-        for entry in after_entries:
-            content = str(entry.get("content") or "") + _entry_blob(entry)
-            for sid in spawned_ids:
-                if f"sender={sid}" in content or sid in SENDER_RE.findall(content):
-                    replied_ids.add(sid)
-                elif sid in content and ("finished" in content.lower() or "PASS" in content or "Findings" in content):
-                    replied_ids.add(sid)
-        pending = [sid for sid in spawned_ids if sid not in replied_ids]
-        if not pending:
-            chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
-            if strict_shortfall(chunks):
-                evidenced = _evidenced_verdict_count(chunks, active_pkg12, req_tokens)
-                _record_verdict(
-                    conv_id, active_pkg12, "FAIL",
-                    f"All subagent senders replied, but only {evidenced}/{expected_leaves} verdicts carried a valid EVIDENCE footer.",
-                    chunks,
-                )
-                return False, (
-                    f"All subagent senders replied, but only {evidenced}/{expected_leaves} verdicts carry a valid "
-                    f"EVIDENCE footer (expected pkg={active_pkg12}). "
-                    "Forged, missing, or mismatched footers keep the barrier up; re-request the replies."
-                )
-            clear_pending_reviews(conv_id)
-            _record_verdict(conv_id, active_pkg12, "PASS", "All subagents completed.", chunks)
-            return True, "All subagents completed."
-        return False, (
-            f"Waiting for {len(pending)}/{len(spawned_ids)} review subagents to deliver their verdicts."
-        )
-
-    chunks = [str(entry.get("content") or "") + _entry_blob(entry) for entry in after_entries]
-    if _tail_has_verdicts(after, has_tests) and not strict_shortfall(chunks):
-        clear_pending_reviews(conv_id)
-        _record_verdict(conv_id, active_pkg12, "PASS", "All subagents completed.", chunks)
-        return True, "All subagents completed."
-    if evidence_mode == "strict" and _tail_has_verdicts(after, has_tests):
-        evidenced = _evidenced_verdict_count(chunks, active_pkg12, req_tokens)
-        _record_verdict(
-            conv_id, active_pkg12, "FAIL",
-            f"A {round_label} review round is pending: only {evidenced}/{expected_leaves} verdicts carried a valid EVIDENCE footer.",
-            chunks,
-        )
-        return False, (
-            f"A {round_label} review round is pending: {evidenced}/{expected_leaves} verdicts carry a valid EVIDENCE footer "
-            f"(expected pkg={active_pkg12}). Tokens alone no longer clear the barrier — "
-            "each leaf reply must include `EVIDENCE pkg=<sha256_12> cites=<n>`."
-        )
-    return False, (
-        f"A {round_label} review round is pending. Wait until all {expected_leaves} leaves reply "
-        "(PASS or Findings) before tests/assemble."
-    )
-
-
-def handle_run_command(command: str, payload: dict | None = None) -> None:
-    lower = command.lower()
-    lower_norm = re.sub(r"[\\]", "", lower)
-    conv = conversation_id(payload or {})
-    is_setup_script = any(
-        s in lower_norm
-        for s in (
-            "install_tool_adapters",
-            "install_or_update",
-            "setup_wizard",
-            "install_zoho_mcp",
-            "check_kit_update",
-            "review_package",
-        )
-    )
-    is_lint = not is_setup_script and "fast_kt_lint" in lower_norm
-    is_preflight = not is_setup_script and "preflight_check" in lower_norm
-
-    # Differentiate unit testing from assemble / device deployment
-    is_unit_test = not is_setup_script and any(
-        k in lower_norm
-        for k in ("testdebug", "unittest")
-    ) and not any(k in lower_norm for k in ("assemble", "run_device.py", "install", "bundle"))
-
-    is_assemble_or_device = not is_setup_script and any(
-        k in lower_norm
-        for k in ("assemble", "run_device.py", "install-start", "bundle")
-    )
-    # Standalone `gradle <task>` (classic CLI) — but never bare file mentions
-    # like `cat gradle.properties` / `gradle/libs.versions.toml`.
-    is_gradle_cli = not is_setup_script and bool(
-        re.search(r"\bgradle\b(?![\w./\\-]*\.)", lower_norm)
-    )
-    is_gradle_build = is_gradle_cli and not is_unit_test
-    is_assemble_or_device = is_assemble_or_device or is_gradle_build
-
-    is_gradle_or_test = is_unit_test or is_assemble_or_device or ("run_gradle_task.py" in lower_norm)
-
-    if (is_gradle_or_test or is_lint or is_preflight) and conv != "unknown":
-        ok, barrier_msg = check_subagents_barrier(conv, payload)
-        if not ok:
-            deny(
-                f"Denied: Parallel review barrier active. {barrier_msg} "
-                "You MUST NOT run preflight/tests/build until all review subagents have finished."
-            )
-            return
-
-    # Delivery Gate: assembleDebug, bundle, and device run REQUIRE a 5-leaf review round first.
-    # Unit tests (:app:testDebugUnitTest) and fast_kt_lint are allowed BEFORE review as a pre-gate.
-    if is_assemble_or_device and conv != "unknown" and os.environ.get("_IN_HOOK_SELFTEST") != "1":
-        if has_non_doc_code_changes() and invoke_count(conv, "review") < 1:
-            deny(
-                "Denied: working tree has code changes but no 5-leaf review round ran in this conversation. "
-                "Generate a review package and dispatch all 5 review leaves in one invoke_subagent call first before assemble/device run."
-            )
-            return
-
-    raw_gradle_pat = re.compile(
-        r"^\s*(?:\./|[\w.-]*[/\\])?(?:gradlew(?:\.bat)?|gradle)(?:\.exe)?(?:\s+(.*))?$",
-        re.IGNORECASE,
-    )
-    m_gradle = raw_gradle_pat.match(command.strip())
-    if m_gradle and not is_setup_script:
-        script_rel = (
-            "agents/scripts/run_gradle_task.py"
-            if (REPO / "agents" / "scripts" / "run_gradle_task.py").is_file()
-            else ".agents/scripts/run_gradle_task.py"
-        )
-        task_args = m_gradle.group(1).strip() if m_gradle.group(1) else ""
-        rewritten_cmd = f"python {script_rel} {task_args}".strip()
-        if is_antigravity(payload):
-            allow(
-                f"Self-healing: Rewriting raw gradlew command to '{rewritten_cmd}' for environment portability.",
-                overwrite={"CommandLine": rewritten_cmd},
-            )
-            return
-        else:
-            deny(f"Denied: raw gradlew is forbidden. Use: {rewritten_cmd}")
-            return
-
-    git_mutation_pat = re.compile(
-        r'(?:^|[;&|`\s\'"]|(?:\b(?:cmd|powershell|pwsh|bash|sh|zsh|env)\b[^\n\r]*?))'
-        r'(?:[a-zA-Z0-9_./\\:-]*[/\\])?git(?:\.exe)?[\'"]?\s+(.+)$',
-        re.IGNORECASE | re.DOTALL,
-    )
-    indirection_res = tuple(re.compile(p, re.IGNORECASE) for p in SHELL_INDIRECTION_PATTERNS)
-    # Scan each shell-chained segment separately so a leading inspection
-    # command cannot mask a chained mutation ("git status && git push").
-    segments = [s for s in re.split(r"&&|\|\||;|\||\r?\n", command) if s.strip()] or [command]
-    for segment in segments:
-        normalized_segment = normalize_command(segment)
-        lower_norm_segment = normalized_segment.lower()
-        for pattern in indirection_res:
-            if pattern.search(lower_norm_segment):
-                deny(
-                    "Denied: encoded or piped shell indirection is fail-closed denied. "
-                    "Run the plain command directly; do not wrap payloads through sh/base64/eval."
-                )
-                return
-        for m in git_mutation_pat.finditer(normalized_segment):
-            rest = m.group(1).strip()
-            rest_tokens = rest.split()
-            skip_next = False
-            for tok in rest_tokens:
-                cleaned_tok = tok.strip("'\"").strip()
-                if skip_next:
-                    skip_next = False
-                    continue
-                if cleaned_tok in ("-c", "-C", "--git-dir", "--work-tree"):
-                    skip_next = True
-                    continue
-                if cleaned_tok.startswith("-"):
-                    continue
-                if cleaned_tok.lower() in GIT_MUTATIONS:
-                    is_kit_dev = (
-                        os.environ.get("_IN_HOOK_SELFTEST") != "1"
-                        and (
-                            os.environ.get("HARNESS_KIT_DEV_GIT") == "1"
-                            or ((REPO / "harness_cli.py").is_file() and (REPO / "scripts_dev" / "release_version.py").is_file())
-                            or ((REPO / "agents" / "VERSION").is_file() and not (REPO / ".agents").is_dir())
-                        )
-                    )
-                    if is_kit_dev:
-                        break
-                    git_policy, _, _ = _product_policy()
-                    if git_policy == "agent-may-commit" and cleaned_tok.lower() in AGENT_ALLOWED_GIT_OPS:
-                        break
-                    if git_policy == "agent-may-commit":
-                        deny(
-                            "Denied: even with GIT_POLICY=agent-may-commit, only git add/commit are allowed; "
-                            "push, merge, rebase, reset, stash and every other git mutation stay developer-owned."
-                        )
-                    else:
-                        deny("Denied: git mutation is developer-owned in Android Studio. Inspection only. Never commit.")
-                    return
-                break
-
-    _, allow_emulator, _ = _product_policy()
-    if emulator_match(lower) and emulator_match(lower)[0] == "android_emulator":
-        if not allow_emulator:
-            deny("Denied: android emulator is forbidden. Physical device only.")
-            return
-
-    if re.search(r"\bandroid\s+(?:run|install)\b", lower) and "--device" not in lower:
-        deny("Denied: android run/install needs --device=<physical-serial>.")
+        emit("allow", "No active vNext task requires a delivery stop.", tool="stop")
         return
-
-    # Guard against host directory traversal & external scraping
-    # Prohibit commands that scan the developer's home/user directories
-    host_scan_pat = re.compile(
-        r'(?:get-childitem|gci|dir|find|findstr|grep|ls|locate)\b.*?'
-        r'(?:[c-z]:[/\\]users|/home/|~[/\\]|\$home|\$env:userprofile|%userprofile%)',
-        re.IGNORECASE,
-    )
-    if host_scan_pat.search(lower):
-        deny(
-            "Denied: scanning host user directories outside the repository is strictly prohibited. "
-            "Confine all file discovery and shell commands to the active workspace repository."
-        )
-        return
-
-    # Guard against live app backend / external API probing via ad-hoc network commands
-    network_res = tuple(re.compile(p, re.IGNORECASE) for p in DENIED_NETWORK_PATTERNS)
-    for pat in network_res:
-        if pat.search(command):
-            deny(
-                "Denied: outbound network probing to live app backend or external APIs is strictly prohibited. "
-                "All verification must rely strictly on local source code, tests, and mock fixtures."
-            )
-            return
-
-    # If running a scratch python script, inspect its content for live network calls
-    scratch_match = re.search(
-        r'\bpython(?:\.exe)?\s+["\']?([^"\']+[\\/]scratch[\\/][^"\']+\.py)["\']?',
-        command,
-        re.IGNORECASE,
-    )
-    if scratch_match:
-        scratch_file = Path(scratch_match.group(1))
-        if scratch_file.is_file():
-            try:
-                content = scratch_file.read_text(encoding="utf-8", errors="ignore")
-                for pat in network_res:
-                    if pat.search(content):
-                        deny(
-                            "Denied: scratch script attempts outbound network probing to live app backend or external APIs. "
-                            "All verification must rely strictly on local source code, tests, and mock fixtures."
-                        )
-                        return
-            except Exception:
-                pass
-
-    if "adb" not in lower and "emulator" not in lower and "avdmanager" not in lower:
-        allow()
-        return
-
-    emulator_hit = emulator_match(lower)
-    if emulator_hit:
-        name, _match = emulator_hit
-        if name == "monkey":
-            deny("Denied: adb monkey is forbidden. Use adb -s <id> shell am start.")
-            return
-        if not allow_emulator:
-            if name == "standalone_tool":
-                deny("Denied: emulator/AVD tooling is forbidden. Physical device only.")
-                return
-            deny("Denied: emulator targeting is forbidden.")
-            return
-
-    pm_messages = {
-        "clear": "Denied: pm clear app data requires explicit developer approval.",
-        "uninstall": "Denied: pm uninstall is forbidden. Use python .agents/scripts/run_device.py uninstall or adb -s <serial> uninstall <package>.",
-    }
-    for op in sorted(DENIED_PM_OPS):
-        # Also cover the `cmd package clear|uninstall <pkg>` laundering path:
-        # it performs the same data wipe as `pm <op>` and must deny identically.
-        if re.search(rf"\b(?:pm\s+|cmd\s+package\s+){re.escape(op)}\b", lower):
-            deny(pm_messages[op])
-            return
-
-    device_bound_pat = r"\b(?:" + "|".join(sorted(DEVICE_BOUND_ADB)) + r")\b"
-    device_bound = bool(re.search(device_bound_pat, lower))
-    if device_bound and not re.search(r"(?:^|\s)(?:-d|-s)\b", command):
-        deny("Denied: device-bound adb needs -d or -s <physical-serial>.")
-        return
-
-    allow("ADB command not blocked by safety hook.")
-
-
-def handle_schedule(args: dict, payload: dict) -> None:
-    prompt = str(args.get("Prompt") or args.get("prompt") or "").lower()
-    conv = conversation_id(payload)
-    if reviews_pending(conv) or any(
-        kw in prompt for kw in ("subagent", "reviewer", "subagents")
-    ):
-        deny(
-            "Denied: do not use schedule/timers to wait for subagents. "
-            "Antigravity wakes the agent automatically via Reactive Wakeup when subagents finish. "
-            "Simply stop calling tools to end your turn."
-        )
-        return
-    allow("Schedule call permitted.")
-
-
-def handle_manage_task(args: dict, payload: dict) -> None:
-    action = str(args.get("Action") or args.get("action") or "").lower()
-    task_id = str(args.get("TaskId") or args.get("taskId") or "")
-    conv = conversation_id(payload)
-    if action == "status" and conv != "unknown" and task_id:
-        count = record_task_poll(conv, task_id)
-        if count > 2:
-            deny(
-                "Denied: Busy polling on background task status is forbidden. "
-                "Antigravity automatically notifies you with a message when the background command finishes. "
-                "You MUST stop calling tools immediately to end your turn and wait for the completion notification."
-            )
-            return
-    allow("manage_task permitted.")
-
-
-def handle_manage_subagents(args: dict, payload: dict) -> None:
-    action = str(args.get("Action") or args.get("action") or "").lower()
-    conv = conversation_id(payload)
-    if action == "list" and conv != "unknown" and reviews_pending(conv):
-        count = record_subagents_poll(conv)
-        if count > 2:
-            deny(
-                "Denied: Busy polling on active subagents via manage_subagents(list) is forbidden. "
-                "Antigravity automatically delivers subagent responses via Reactive Wakeup. "
-                "You MUST stop calling tools immediately to end your turn."
-            )
-            return
-    allow("manage_subagents permitted.")
-
-
-def _state_dir() -> Path:
-    override = os.environ.get("HARNESS_HOOK_STATE")
-    if override:
-        return Path(override).resolve().parent
-    p = REPO / "agents" / "state"
-    if p.is_dir():
-        return p
-    p2 = REPO / ".agents" / "state"
-    if p2.is_dir():
-        return p2
-    return Path(__file__).resolve().parent.parent / "state"
-
-
-def _has_unreviewed_code_changes() -> bool:
-    test_override = os.environ.get("HARNESS_TEST_FORCE_CODE_CHANGES")
-    if test_override is not None:
-        return test_override.strip() in ("1", "true", "yes")
-    return has_non_doc_code_changes()
-
-
-def handle_stop(payload: dict) -> None:
-    """Antigravity Stop lifecycle hook handler with Loop Breaker.
-
-    Enforces that unreviewed code changes do not silently terminate the session
-    without a 5-leaf review round and preflight check.
-    If the diff is unchanged and blocked twice consecutively, or if an environment
-    failure (exit 30 protocol) or APPROVED verdict is reached, it allows termination.
-    """
-    termination_reason = str(
-        payload.get("terminationReason") or payload.get("termination_reason") or "model_stop"
-    )
-    if termination_reason != "model_stop":
-        allow(f"Stop hook allowed: termination reason is '{termination_reason}'.")
-        return
-
-    # 1. If no non-doc code changes in working tree, safe to stop.
-    if not _has_unreviewed_code_changes():
-        allow("Stop hook allowed: no uncommitted code changes in repository.")
-        return
-
-    # 2. Check if environment failure is active (exit 30 protocol: developer unblocked)
-    state_dir = _state_dir()
-    env_failure_file = state_dir / "env_failure.json"
-    if env_failure_file.is_file():
-        allow("Stop hook allowed: active environment failure (exit 30 protocol).")
-        return
-
-    # 3. Check if last_verdict.json has APPROVED or ENV_BLOCKED
-    verdict_file = state_dir / "last_verdict.json"
-    if verdict_file.is_file():
+    if status in {"IMPLEMENTING", "VERIFYING", "BLOCKED", "AWAITING_DEVELOPER_APPROVAL"}:
+        emit("continue", f"Active task is {status}; complete or cancel it before delivery.", tool="stop")
+    elif status == "READY_FOR_DELIVERY":
         try:
-            with open(verdict_file, "r", encoding="utf-8") as vf:
-                v_data = json.load(vf)
-            status = v_data.get("status")
-            if status == "APPROVED":
-                allow("Stop hook allowed: final delivery verdict is APPROVED.")
-                return
-            if status == "ENV_BLOCKED":
-                allow("Stop hook allowed: final delivery verdict is ENV_BLOCKED.")
-                return
-        except Exception:
-            pass
-
-    # 4. Check Loop Breaker to prevent infinite token drain
-    diff_sig = os.environ.get("HARNESS_TEST_DIFF_SIG")
-    if not diff_sig:
-        import subprocess
-        try:
-            proc = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=str(REPO),
-                capture_output=True,
-                text=True,
-                timeout=5,
+            from delivery_manifest import build_manifest
+            current = build_manifest(REPO)
+            stable = (
+                current.get("delivery_snapshot_sha256") == plan.get("ready_delivery_snapshot_sha256")
+                and current.get("change_set_sha256") == plan.get("ready_change_set_sha256")
             )
-            diff_sig = hashlib.sha256(proc.stdout.encode("utf-8", errors="replace")).hexdigest()[:16]
         except Exception:
-            diff_sig = "diff-unknown"
-
-    stop_state_file = state_dir / "stop_guard_state.json"
-    guard_state = {}
-    if stop_state_file.is_file():
-        try:
-            with open(stop_state_file, "r", encoding="utf-8") as sf:
-                guard_state = json.load(sf)
-        except Exception:
-            guard_state = {}
-
-    last_sig = guard_state.get("last_diff_sig", "")
-    consecutive_blocks = int(guard_state.get("consecutive_blocks", 0))
-
-    if diff_sig == last_sig and diff_sig != "diff-unknown":
-        consecutive_blocks += 1
+            stable = False
+        emit("allow" if stable else "continue", "Ready evidence is current." if stable else "Delivery changed after final verification; prepare a new run.", tool="stop")
     else:
-        last_sig = diff_sig
-        consecutive_blocks = 1
+        emit("allow", f"Active task status {status or 'unknown'} does not block stopping.", tool="stop")
 
-    guard_state["last_diff_sig"] = last_sig
-    guard_state["consecutive_blocks"] = consecutive_blocks
-    guard_state["last_ts"] = time.time()
 
-    try:
-        stop_state_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(stop_state_file, "w", encoding="utf-8") as sf:
-            json.dump(guard_state, sf, indent=2)
-    except Exception:
-        pass
-
-    # Loop Breaker threshold: after 2 consecutive blocks on identical diff, yield to user
-    if consecutive_blocks > 2:
-        allow(
-            "Stop hook loop breaker triggered: identical unreviewed diff blocked 2 times. "
-            "Allowing stop to prevent infinite loop; developer intervention requested."
-        )
+def _handle_command(command: str) -> None:
+    for code, pattern in DANGEROUS:
+        if pattern.search(command):
+            emit("deny", f"Denied by local safety boundary: {code}.", tool="run_command", command=command)
+            return
+    if RAW_GRADLE.search(command) and not ALLOWED_GRADLE_WRAPPER.search(command):
+        emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command)
         return
-
-    force_continue(
-        "Harness Delivery Stop Guard: Unreviewed code changes detected in repository. "
-        "Before finishing, you MUST run the 5-leaf review round (or python agents/scripts/record_review.py), "
-        "and pass preflight_check.py."
-    )
+    allowed, reason = command_allowed(REPO, command)
+    emit("allow" if allowed else "deny", reason, tool="run_command", command=command)
 
 
-MAX_STDIN_BYTES = 5 * 1024 * 1024
+def _handle_subagent(name: str, args: dict) -> None:
+    try:
+        plan = active_plan(REPO)
+        status = str(plan.get("status") or "")
+        if status == "IMPLEMENTING":
+            emit("allow", "On-demand specialist action is inside the approved implementation.", tool=name)
+            return
+        if status != "VERIFYING":
+            emit("deny", f"Subagent action is unavailable while task status is {status or 'missing'}.", tool=name)
+            return
+        if name != "invoke_subagent":
+            emit("allow", "Reviewer management is allowed during verification.", tool=name)
+            return
+        state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+        active = read_json(state / "active-task.json")
+        current = read_json(state / "tasks" / str(active["task_id"]) / "current-run.json")
+        policy = read_json(Path(current["policy"]))
+        expected = set(policy.get("reviewers") or [])
+        raw_subs = args.get("Subagents") or args.get("subagents") or []
+        actual = {
+            str(item.get("TypeName") or item.get("typeName") or item.get("name") or "")
+            for item in raw_subs if isinstance(item, dict)
+        }
+        if actual != expected:
+            emit("deny", f"Reviewer roster mismatch: expected {sorted(expected)}, got {sorted(actual)}.", tool=name)
+            return
+        if any(str(item.get("model") or "inherit").lower() not in {"", "inherit"} for item in raw_subs if isinstance(item, dict)):
+            emit("deny", "Reviewer model escalation requires explicit central-policy authorization.", tool=name)
+            return
+        if int(plan.get("review_rounds") or 0) >= int(policy.get("max_review_rounds") or 3):
+            emit("deny", "Review round cap reached; developer decision is required.", tool=name)
+            return
+        used_calls = int(plan.get("review_calls_used") or 0)
+        if used_calls + len(actual) > int(policy.get("model_call_budget") or 0):
+            emit("deny", "Reviewer model-call budget reached; developer decision is required.", tool=name)
+            return
+        emit("allow", "Reviewer roster exactly matches the immutable adaptive policy.", tool=name)
+    except Exception as exc:
+        emit("deny", f"Reviewer policy validation failed closed: {exc}", tool=name)
+
+
+def _handle_zoho_mutation(name: str, args: dict) -> None:
+    try:
+        plan = active_plan(REPO)
+        status = str(plan.get("status") or "")
+        approval = plan.get("approval") or {}
+        authorized = (
+            status in {"IMPLEMENTING", "READY_FOR_DELIVERY"}
+            and plan.get("execution_nonce")
+            and plan.get("execution_nonce") == approval.get("single_use_nonce")
+            and "zoho_sprints" in set(plan.get("external_writes") or [])
+        )
+        if not authorized:
+            emit("deny", "Zoho mutation is not included in the active approved plan.", tool=name)
+            return
+        operation_id = str(args.get("operation_id") or "").strip()
+        if not operation_id:
+            emit("deny", "Zoho mutations require a stable operation_id for idempotency.", tool=name)
+            return
+        requested_status = str(args.get("status") or "").strip().lower()
+        if requested_status in {"done", "solved", "closed", "completed"}:
+            emit("deny", "Terminal tracker states are developer-owned.", tool=name)
+            return
+        emit("allow", "Zoho mutation is plan-bound and idempotency-bound.", tool=name)
+    except Exception as exc:
+        emit("deny", f"Zoho mutation authorization failed closed: {exc}", tool=name)
 
 
 def main() -> None:
     try:
-        if hasattr(sys.stdin, "reconfigure"):
-            try:
-                sys.stdin.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
         raw = sys.stdin.read()
         if len(raw.encode("utf-8", errors="replace")) > MAX_STDIN_BYTES:
-            deny(
-                "Denied: hook payload too large "
-                f"(>{MAX_STDIN_BYTES} bytes). Retry with a smaller tool input."
-            )
+            emit("deny", "Hook payload exceeds the 5 MiB safety limit.")
             return
-        if not raw.strip():
-            allow()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            raise ValueError("hook payload must be an object")
+        if any(key in payload for key in ("terminationReason", "termination_reason")) or payload.get("event") == "Stop" or payload.get("hook") == "Stop":
+            _handle_stop()
             return
-
-        payload = json.loads(raw)
-        if (
-            "terminationReason" in payload
-            or "termination_reason" in payload
-            or payload.get("event") == "Stop"
-            or payload.get("hook") == "Stop"
-        ):
-            handle_stop(payload)
-            return
-
-        tool_call = payload.get("toolCall") or {}
-        name = str(tool_call.get("name") or "").lower()
-        args = tool_call.get("args") or {}
-        _CONTEXT["tool"] = name or "run_command"
-        _CONTEXT["command"] = str(args.get("CommandLine") or args.get("commandLine") or "")
-        _CONTEXT["payload"] = payload if isinstance(payload, dict) else {}
-
-        if name == "define_subagent":
-            handle_define_subagent(args, payload)
-            return
-        if name == "invoke_subagent":
-            handle_invoke_subagent(payload, args)
-            return
-        if name == "manage_subagents":
-            handle_manage_subagents(args, payload)
-            return
-        if name == "manage_task":
-            handle_manage_task(args, payload)
-            return
-        if name == "schedule":
-            handle_schedule(args, payload)
-            return
-        if name in ("write_to_file", "replace_file_content"):
-            target = str(args.get("TargetFile") or args.get("targetFile") or "").replace("\\", "/")
-            norm_target = "/" + target.lstrip("/")
-            if (
-                "/.agents/scripts/" in norm_target
-                or "/agents/scripts/" in norm_target
-                or "/.agents/state/" in norm_target
-                or "/agents/state/" in norm_target
-            ):
-                deny(
-                    "Denied: .agents/scripts/ and .agents/state/ files are protected harness infrastructure. "
-                    "Manual editing or forging of review verdicts, gate ledgers, or internal scripts is strictly prohibited. "
-                    "Run the proper review subagents or gate commands instead."
-                )
+        name, args = _tool_name_and_args(payload)
+        if name in WRITE_TOOLS:
+            safe, detail = _safe_target(_target(args))
+            if not safe:
+                emit("deny", detail, tool=name)
                 return
-            allow("file edit permitted.")
+            allowed, reason = file_mutation_allowed(REPO)
+            emit("allow" if allowed else "deny", reason, tool=name)
             return
-        if name != "run_command":
-            allow()
+        if name == "run_command":
+            command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
+            _handle_command(command)
             return
-
-        command = str(args.get("CommandLine") or args.get("commandLine") or "")
-        handle_run_command(command, payload)
+        if name in SUBAGENT_TOOLS:
+            _handle_subagent(name, args)
+            return
+        if name in ZOHO_MUTATION_TOOLS:
+            _handle_zoho_mutation(name, args)
+            return
+        emit("allow", "Tool is outside the harness mutation boundary.", tool=name)
     except json.JSONDecodeError:
-        deny("Denied: safety hook received invalid JSON on stdin.")
+        emit("deny", "Safety hook received invalid JSON.")
     except Exception as exc:
-        deny(
-            f"Denied: safety hook error ({type(exc).__name__}: {exc}). "
-            "Retry the tool. Do not bypass the hook."
-        )
+        emit("deny", f"Safety hook failed closed ({type(exc).__name__}: {exc}).")
 
 
 if __name__ == "__main__":

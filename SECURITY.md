@@ -1,38 +1,42 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
-We actively maintain and provide security patches for the latest minor release line of the **Android Agent Harness**.
+| Version line | Supported |
+|---|---|
+| **v1.0.x** | Yes |
+| < v1.0.0 | No |
 
-| Version Line | Supported |
-| :--- | :--- |
-| **v0.27.x** | Yes |
-| < v0.27.0 | No |
+## Security boundary
 
----
+Android Agent Harness is a local development control layer, not an OS sandbox
+or remote-attestation system. Its guarantees are deliberately bounded:
 
-## Security Architecture & Invariants
+- an approved, hash-bound plan and single-use run identity are required before
+  project mutation;
+- host hooks deny covered unplanned file writes, raw Gradle/ADB, Git mutations,
+  destructive device actions, shell laundering, live probes, and unplanned
+  tracker writes;
+- deterministic policy is recomputed during final verification, so a stored
+  policy cannot silently drop gates or reviewers;
+- gate/review evidence is append-only and bound to one snapshot, change set,
+  run, producer, schema, and harness version;
+- review packages redact secret-shaped paths and evidence recursively redacts
+  secret-shaped keys and values;
+- release payload checksums, ownership hashes, staged replacement, backup, and
+  rollback protect install/update/uninstall;
+- Zoho writes require approved plan scope plus a stable operation ID; unknown
+  outcomes block blind retry and terminal states remain developer-owned.
 
-The Android Agent Harness is designed with strict OS-level containment and cryptographic security invariants:
+Conversational approval is reported as `RULE_ENFORCED`. `HARD_ENFORCED` is used
+only for mutation classes intercepted by an actual host-native boundary and
+never claims cryptographic human identity or universal bypass resistance.
 
-1. **Zero Secret Leakage**:
-   - Provider tokens, API keys, and credentials are kept strictly out of Git repositories via `.git/info/exclude`.
-   - Logcat interceptors actively sanitize sensitive authentication tokens, authorization headers, and PII before output.
-2. **Deterministic PreToolUse Hook Containment**:
-   - Python safety hooks intercept and reject destructive commands (`git reset --hard`, `git push --force`, `pm clear`, bare destructive ADB commands) before they reach the OS shell.
-3. **Cryptographic Delivery Gate**:
-   - Subagent reviews produce SHA-256 evidence footers linked to the immutable review package diff. No forged or synthetic verdicts are accepted.
-4. **Local Git Privacy (Zero Team Pollution)**:
-   - All harness configurations, adapters, transient states, and pre-commit hooks are stored locally in `.git/info/exclude`, leaving the shared team repository 100% clean.
+See [the threat model](docs/threat-model.md) for residual risks and non-claims.
 
----
+## Reporting a vulnerability
 
-## Reporting a Vulnerability
-
-If you discover a potential security vulnerability within the Android Agent Harness:
-
-1. **Do not create a public GitHub issue.**
-2. Please disclose the vulnerability privately via **[GitHub Private Vulnerability Reporting](https://github.com/rabee-elkholy/android-agent-harness/security/advisories/new)**.
-3. Include detailed steps to reproduce the vulnerability, including platform information, Python version, and relevant logs.
-
-We take security seriously and will investigate and patch verified vulnerabilities promptly.
+Do not open a public issue. Use
+[GitHub Private Vulnerability Reporting](https://github.com/rabee-elkholy/android-agent-harness/security/advisories/new)
+and include reproduction steps, operating system, Python version, host adapter,
+and sanitized logs.

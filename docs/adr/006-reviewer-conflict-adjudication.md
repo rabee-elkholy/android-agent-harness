@@ -1,5 +1,8 @@
 # ADR-006: Reviewer Conflict Adjudication & Structured Findings
 
+> Historical record. v1 selects reviewers adaptively and records structured
+> findings against one immutable package, with a maximum of three rounds.
+
 ## Context
 
 The five specialized reviewers (bug, convention, security, perf/ANR, regression) operate concurrently against a single review package. In non-trivial Android changes, reviewers may reach conflicting conclusions (for instance, Performance Guardian recommending memory caching while Bug Reviewer flags cache invalidation edge cases, or Security Reviewer identifying strict permission boundaries).

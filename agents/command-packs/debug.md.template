@@ -1,5 +1,5 @@
 ---
-description: Hypothesis-driven Android debugging with forensics, 5-leaf review, and physical-device validation.
+description: Hypothesis-driven Android debugging with an approved plan and adaptive verification.
 argument-hint: "[bug symptoms / Zoho id]"
 ---
 

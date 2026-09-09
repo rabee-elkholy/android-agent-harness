@@ -1,6 +1,8 @@
 ---
 name: android-harness
 description: Use when working on this Android app architecture, Compose or XML UI, Room, performance, or daily checkout facts.
+version: 1.0.0
+kernel-major: 1
 ---
 
 # Android harness (domain knowledge)
@@ -15,7 +17,7 @@ Setup fills product-specific references. Do not cite a stub file as if this app 
 - [**Performance & Optimization**](./references/performance-and-optimization.md): main-thread safety, leaks, Compose jank, WakeLocks.
 - [**Test Quality Guidelines**](./references/test-quality-guidelines.md): unit test depth, Coroutine test dispatchers, Turbine streams.
 - [**Daily work notes**](./references/daily-scenarios.md): checkout facts after setup.
-- [**Automated skills**](./references/automated-skills.md): five-leaf delivery gate.
+- [**Automated skills**](./references/automated-skills.md): adaptive, evidence-bound delivery gates.
 
 Zoho Sprints (when enabled): `.agents/workflows/zoho-sprints.md`. Mutate only on `update zoho`.
 

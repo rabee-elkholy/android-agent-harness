@@ -9,4 +9,4 @@
 - Device: {{DEVICE_POLICY}}
 - {{GIT_POLICY}}
 
-Qwen Code does not run Antigravity `hooks.json`. Still honor the five-leaf review (`BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`) before assemble. No `code-review-guard-agent`. No `LGTM`.
+Qwen Code does not run Antigravity hooks. Report `RULE_ENFORCED`, then follow the central adaptive policy and load its selected skills.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 PRODUCT_NAME = "this Android app"
+PROJECT_KIND = "application"
 APPLICATION_ID = "com.example.app"
 LAUNCHER = "com.example.app/.MainActivity"
 PACKAGE_PREFIX = "com.example"
@@ -12,6 +13,7 @@ APK_RELATIVE = "app/build/outputs/apk/debug/app-debug.apk"
 ANDROID_SRC = ("app", "src", "main")
 # Build variants (flavors). Setup wizard I.19 fills these when productFlavors exist.
 ACTIVE_FLAVOR = ""  # "" = default variant (no flavors). e.g. "staging"
+ACTIVE_VARIANT = "Debug"  # Exact selected variant, including combined flavor dimensions/build type.
 ASSEMBLE_TASKS = {}  # flavor -> task, e.g. {"staging": ":app:assembleStagingDebug"}
 APK_RELATIVES = {}  # flavor -> debug APK path, e.g. {"staging": "app/build/outputs/apk/staging/debug/app-staging-debug.apk"}
 # Language & Tracker settings (configured during setup)
@@ -19,8 +21,7 @@ CHAT_LANGUAGE = "mirror"  # "mirror" (Mirror developer language in chat: Arabic 
 TRACKER_LANGUAGE = "en_titles_ar_comments"  # "en_titles_ar_comments", "all_en", "all_ar" (Zoho / Jira / Linear / GitHub)
 ZOHO_LANGUAGE = TRACKER_LANGUAGE  # Alias for backward compatibility
 ALLOW_EMULATOR = True  # True (both physical and emulator allowed), False (physical device only)
-# Git policy (setup wizard I.3): "never" (default) | "agent-may-commit" (agent may run git add/commit only,
-# and only when the developer explicitly asked in chat; push/merge/rebase/reset stay forbidden).
+# Git history and index remain developer-owned. Host hooks deny agent-driven Git mutations.
 GIT_POLICY = "never"
 # Install confirmation (setup wizard I.10): "confirm" (agent must ask the developer before device install)
 # | "allow" (install without asking). Enforced via the invocation reminder; the safety hook cannot see chat.
@@ -37,5 +38,8 @@ PROJECT_STRUCTURE = "single_module"  # "single_module" | "multi_module" | "kmp"
 # Options: manual_only (Developer manual steps - Default)
 #        | disabled (assemble only; developer tests outside the harness)
 DEVICE_VERIFICATION_MODE = "manual_only"
-
-
+# Report actual host capability. Setup recalculates this after adapters install.
+ENFORCEMENT_TIER = "RULE_ENFORCED"
+ENFORCEMENT_BY_HOST = {}
+MODEL_CALL_BUDGET = 8
+ALLOW_MODEL_ESCALATION = False

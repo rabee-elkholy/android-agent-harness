@@ -4,7 +4,7 @@ description: Zoho Sprints ingest, create, and update zoho — same workflow as t
 
 # Zoho Sprints
 
-Follow `.agents/rules/harness-rules.md` section 5. This file is the playbook. **Zoho Desk is not used.** If `workflow_defaults.json` has empty values, the server resolves defaults at runtime. Fill them during install (I.16) or leave them for the developer to configure later.
+Follow `.agents/rules/harness-rules.md` section 7. This file is the playbook. **Zoho Desk is not used.** If `workflow_defaults.json` has empty values, the server resolves defaults at runtime. Fill them during install (I.16) or leave them for the developer to configure later.
 
 Credentials stay in the user-level config. Never copy tokens into the repo. Never mutate Zoho unless the developer explicitly says `update zoho` (or an equivalent explicit order).
 
@@ -16,7 +16,7 @@ Pass sprint_id + item id (display number or internal id). The server resolves di
 
 ## Ingest (read-only — not `update zoho`)
 
-**Bug id:** fetch details if tools exist, explain in chat, start analysis. Still write `.agents/state/plans/implementation_plan.md` for non-trivial bugs and request approval.
+**Bug id:** fetch details if tools exist, explain in chat, analyze, then draft the normal task plan with `workflow.py` and request approval.
 
 **Feature task id:** fetch, explain, then ask whether to start the plan. Do not implement until they approve.
 
@@ -37,13 +37,17 @@ This still counts as a mutate. Do it only on an explicit create request (includi
 
 ## `update zoho` (mutate)
 
-Never `Done` / `Solved`.
+Never `Done` / `Solved`. The approved task plan must list
+`--external-write zoho_sprints`; an Android delivery plan without that field is
+not tracker-write authority.
+
+For every mutation, generate one stable `operation_id` from the task id and intended action (for example `SP-123-ready-retest-abc1234`) and reuse it on retries. If the server reports an unknown previous outcome, inspect the item before deciding whether a new operation is needed; never change the id just to force a retry.
 
 | When | Status | What to write |
 |---|---|---|
 | Work started (Plan approved) | `In progress` | Silent status transition (no comment). |
-| Device phases all Pass (`update zoho` on **Bug**) | `Ready To ReTest` | Full template in a **Comment**. **NEVER edit Bug Description** (preserves QA's original report). |
-| Device phases all Pass (`update zoho` on **Task / Story / Sub-task**) | `Ready To ReTest` | Full template written/updated in **Description**. Short **comment** with the commit hash (`Commit: <hash>`). |
+| All policy-selected delivery gates pass (`update zoho` on **Bug**) | `Ready To ReTest` | Full template in a **Comment**. **NEVER edit Bug Description** (preserves QA's original report). |
+| All policy-selected delivery gates pass (`update zoho` on **Task / Story / Sub-task**) | `Ready To ReTest` | Full template written/updated in **Description**. Short **comment** with the commit hash (`Commit: <hash>`). |
 
 ### Audience & Tone Policy
 - **Primary Audience**: **QA / Testers & Product Stakeholders**.

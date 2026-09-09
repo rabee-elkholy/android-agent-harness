@@ -1,6 +1,8 @@
 ---
 name: test-driven-development
 description: Use when developing business logic, UseCases, Repositories, ViewModels, or reproducing and fixing bugs using strict Red-Green-Refactor cycles. Requires writing and proving a failing test before writing implementation code.
+version: 1.0.0
+kernel-major: 1
 ---
 
 # Test-Driven Development (TDD) Skill

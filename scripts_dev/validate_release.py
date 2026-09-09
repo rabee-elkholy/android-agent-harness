@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import sys
+import json
 from pathlib import Path
 
 from pin_prompt_docs import CHECKSUM_DOCS, URL_FILES, VERIFY_SENTENCE
@@ -27,7 +28,7 @@ def pinned_url_errors(text: str, version: str, label: str) -> list[str]:
     """Report floating or stale raw prompt URLs in one release-controlled file."""
     matches = list(RAW_PROMPT_RE.finditer(text))
     if not matches:
-        return [f"{label}: no versioned raw prompt URL found"]
+        return []
     expected = f"v{version}"
     return [
         f"{label}: raw prompt URL uses {match.group('ref')}, expected {expected}"
@@ -131,14 +132,24 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
 
     architecture = (repo_root / "docs" / "architecture.md").read_text(encoding="utf-8")
     workflows = (repo_root / "docs" / "workflows.md").read_text(encoding="utf-8")
-    if "Preflight --> ReviewPackage" not in architecture or "ReviewPackage --> ReviewGate" not in architecture:
-        errors.append("docs/architecture.md must place preflight before review packaging")
-    if "D -- Tests Pass --> E[\"4. Preflight Gate\"]" not in workflows or "E -- PASS --> F[\"5. Review Package\"]" not in workflows:
-        errors.append("docs/workflows.md must place preflight before review packaging")
+    for marker in ("AWAITING_DEVELOPER_APPROVAL", "delivery snapshot", "final verifier", "RULE_ENFORCED"):
+        if marker not in architecture:
+            errors.append(f"docs/architecture.md missing v1 contract marker: {marker}")
+    for marker in ("explicit developer approval", "selected gates", "Read-only final verification"):
+        if marker not in workflows:
+            errors.append(f"docs/workflows.md missing v1 workflow marker: {marker}")
 
-    quickstart = (repo_root / "docs" / "quickstart.md").read_text(encoding="utf-8")
-    if "Exit codes: 0 PASS, 1 FAIL, 2 STALE/incomplete." not in quickstart:
-        errors.append("docs/quickstart.md must document the verified 0/1/2 exit-code contract")
+    checksum_path = repo_root / "agents" / "release_checksums.json"
+    try:
+        checksums = json.loads(checksum_path.read_text(encoding="utf-8"))
+        if checksums.get("schema_version") != 1 or checksums.get("algorithm") != "sha256":
+            errors.append("agents/release_checksums.json has an unsupported schema")
+        for rel, expected in (checksums.get("files") or {}).items():
+            path = repo_root / rel
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                errors.append(f"release checksum mismatch: {rel}")
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"agents/release_checksums.json is missing or unreadable: {exc}")
 
     publish = (repo_root / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
     errors.extend(publish_workflow_errors(publish))

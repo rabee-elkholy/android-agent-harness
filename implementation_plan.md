@@ -6,6 +6,9 @@ ArtifactMetadata:
 
 # Android Harness Reliability Improvement Plan
 
+> Superseded by `implementation_plan_vnext.md`. This file is retained only as
+> pre-v1 design history and is not an executable plan.
+
 ## Objective
 
 Resolve the verified reliability gaps in the current `v0.27.23` harness without broad refactoring, new runtime dependencies, weakened safety gates, state-format breakage, or changes to Android application code.
@@ -232,4 +235,3 @@ Because this work changes test files, every implementation phase requires the fi
 - Changed trees cannot reuse stale preflight results.
 - Release validation detects stale URLs, stale checksums, version drift, and workflow documentation drift.
 - No new runtime dependency, Android permission, persistent service, or external network call is added.
-

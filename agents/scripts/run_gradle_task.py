@@ -30,6 +30,7 @@ from _gate_results import (  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
 from _variants import resolve_or_raise  # noqa: E402
 from gradle_error_parser import format_errors, parse_compiler_errors  # noqa: E402
+from artifact_set import build_artifact_set, resolve_artifacts  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -97,19 +98,11 @@ def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
 
 def run_gradle(task_args: list[str]) -> int:
     enable_line_buffered_stdio()
-    try:
-        from _hook_state import review_advisory
-
-        advisory = review_advisory()
-        if advisory:
-            live_print(advisory)
-    except Exception:
-        pass
     gradle_args = with_plain_console(task_args)
     task_label = task_args[0] if task_args else "gradle"
     artifact_name = gate_artifact_name(task_label)
 
-    def record(status: str, exit_code: int, env_class: str = "", detail: str = "") -> None:
+    def record(status: str, exit_code: int, env_class: str = "", detail: str = "", **extra) -> None:
         write_gate_result(artifact_name, {
             "schema_version": 1,
             "task": task_label,
@@ -118,6 +111,7 @@ def run_gradle(task_args: list[str]) -> int:
             "env_class": env_class,
             "git_sha": current_head_sha(),
             "detail": detail,
+            **extra,
         })
 
     try:
@@ -170,7 +164,31 @@ def run_gradle(task_args: list[str]) -> int:
         record("FAIL", code, verdict.env_class, verdict.reason)
 
     if code == 0:
-        record("PASS", 0)
+        artifact_set = None
+        artifact_error = ""
+        try:
+            from _product import PROJECT_KIND
+        except ImportError:
+            PROJECT_KIND = "application"
+        if PROJECT_KIND == "application" and any("assemble" in arg.lower() for arg in task_args):
+            try:
+                from _product import APPLICATION_ID
+                from _variants import apk_relative
+
+                paths = resolve_artifacts(REPO_ROOT, task_label, apk_relative())
+                artifact_set = build_artifact_set(
+                    REPO_ROOT,
+                    task_label,
+                    paths,
+                    application_id=str(APPLICATION_ID or ""),
+                )
+            except Exception as exc:
+                artifact_error = str(exc)
+        if artifact_error:
+            record("FAIL", 1, "CODE", artifact_error)
+            live_print(f"[!] BUILD OUTPUT AMBIGUOUS: {artifact_error}", err=True)
+            return 1
+        record("PASS", 0, artifact_set=artifact_set)
         hint = _duration_hint(raw_log)
         if hint == "done":
             hint = f"{time.time() - started:.1f}s"
@@ -179,24 +197,10 @@ def run_gradle(task_args: list[str]) -> int:
             lower = item.lower()
             if "BUILD SUCCESSFUL" in item or "tests completed" in lower or " passed" in lower:
                 live_print(f"    {item}")
-        if any("assemble" in arg.lower() for arg in task_args):
-            try:
-                from _variants import apk_relative
-
-                apk = REPO_ROOT / apk_relative()
-            except Exception:
-                apk = REPO_ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
-            if not apk.is_file():
-                candidates = [
-                    p
-                    for p in REPO_ROOT.glob("**/outputs/apk/**/*.apk")
-                    if "debug" in p.as_posix().lower() and not p.name.endswith("-androidTest.apk")
-                ]
-                apk = sorted(candidates)[0] if candidates else apk
-            if apk.is_file():
-                size_mb = apk.stat().st_size / (1024 * 1024)
-                rel = apk.relative_to(REPO_ROOT).as_posix()
-                live_print(f"[+] Output APK: {rel} ({size_mb:.1f} MB)")
+        if artifact_set:
+            live_print(f"[+] Installable artifact set: {artifact_set['artifact_set_sha256'][:12]}")
+            for member in artifact_set["members"]:
+                live_print(f"    {member['path']} ({int(member['size']) / (1024 * 1024):.1f} MB)")
         return 0
 
     live_print(f"[!] BUILD FAILED (exit {code})")

@@ -11,6 +11,7 @@ from .discovery import (
     auto_blurb,
     auto_from_facts,
     discover,
+    discover_android_source_root,
     markdown_path,
     setup_dir,
 )
@@ -71,7 +72,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                 "options": py_opts,
             }
         )
-    modules = d.get("modules") or []
+    modules = d.get("modules") or d.get("android_modules") or []
     if len(modules) != 1:
         mod_opts = [{"id": m, "label": m} for m in modules]
         mod_opts.append({"id": "other", "label": t(lang, "i5_other")})
@@ -87,7 +88,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             }
         )
     launchers = d.get("launchers") or []
-    if len(launchers) != 1:
+    if d.get("project_kind") == "application" and len(launchers) != 1:
         launch_opts = [{"id": x, "label": x} for x in launchers]
         launch_opts.append({"id": "other", "label": t(lang, "i6_other")})
         qs.append(
@@ -105,6 +106,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
     if flavors:
         flavor_opts = [{"id": f, "label": f} for f in flavors]
         flavor_opts.append({"id": "default", "label": t(lang, "i19_default")})
+        flavor_opts.append({"id": "other", "label": t(lang, "i19_other")})
         qs.append(
             {
                 "id": "i19",
@@ -237,22 +239,6 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                 ],
             }
         )
-
-    # --- Station 2: Git Governance & Safety ---
-    qs.append(
-        {
-            "id": "i3",
-            "station": 2,
-            "station_title": "Git Governance & Safety",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i3"),
-            "options": [
-                {"id": "never", "label": t(lang, "i3_never")},
-                {"id": "agent-may-commit", "label": t(lang, "i3_may")},
-            ],
-        }
-    )
 
     # --- Station 3: Project Management & Task Tracker ---
     qs.append(
@@ -528,11 +514,12 @@ def normalize(raw: dict, facts: dict) -> dict:
     if module and not module.startswith(":"):
         module = ":" + module
     if not module:
-        raise SystemExit("No application module found; set i5.")
+        raise SystemExit("No Android application or library module found; set i5.")
+    project_kind = str(facts.get("project_kind") or "application")
     launcher = raw.get("i6") or auto["launcher"]
     if launcher == "other":
         launcher = raw.get("i6_text") or ""
-    if not launcher:
+    if not launcher and project_kind == "application":
         raise SystemExit("No launcher activity found; set i6.")
     apk = raw.get("i6b")
     apk_path = auto["apk_path"]
@@ -549,6 +536,8 @@ def normalize(raw: dict, facts: dict) -> dict:
     else:
         apk = "path"
     product = auto["product"]
+    application_id = str((facts.get("module_application_ids") or {}).get(module) or auto.get("application_id") or "")
+    android_src = discover_android_source_root(Path(str(facts.get("repo") or ".")), module)
     if raw.get("i1") == "other":
         product = raw.get("i1_text") or product
     locales = auto["locales"]
@@ -624,20 +613,23 @@ def normalize(raw: dict, facts: dict) -> dict:
             device = "allow"
         install_confirm = raw.get("i10") or auto["install_confirm"]
 
-    git_policy = raw.get("i3") or "never"
-    if git_policy not in {"never", "agent-may-commit"}:
-        git_policy = "never"
+    git_policy = "never"
     chat_lang = raw.get("i17") or auto.get("chat_language") or "mirror"
     if chat_lang not in {"en", "mirror", "ar"}:
         chat_lang = "mirror"
     discovered_flavors = [str(f) for f in (facts.get("flavors") or [])]
-    flavor = str(raw.get("i19") or "").strip()
+    flavor_choice = str(raw.get("i19") or "").strip()
+    custom_variant = flavor_choice == "other"
+    flavor = str(raw.get("i19_text") or "").strip() if custom_variant else flavor_choice
     if flavor in ("", "default"):
         flavor = ""
-    if discovered_flavors and flavor and flavor not in discovered_flavors:
+    if discovered_flavors and flavor and not custom_variant and flavor not in discovered_flavors:
         raise SystemExit(f"Unknown flavor '{flavor}'. Known: {', '.join(discovered_flavors)}")
+    if custom_variant and not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", flavor):
+        raise SystemExit("Custom build variant must be one Gradle variant name, for example FreeEuStaging.")
+    build_variant = flavor if custom_variant else (f"{_flavor_pascal(flavor)}Debug" if flavor else "Debug")
     assemble_tasks = (
-        {f: f"{module}:assemble{_flavor_pascal(f)}Debug" for f in discovered_flavors}
+        {f: f"{module.rstrip(':')}:assemble{_flavor_pascal(f)}Debug" for f in discovered_flavors}
         if module
         else {}
     )
@@ -656,7 +648,12 @@ def normalize(raw: dict, facts: dict) -> dict:
         "git_policy": git_policy,
         "device_policy": device,
         "module": module,
-        "assemble": f"{module}:assembleDebug",
+        "application_id": application_id,
+        "android_src": android_src,
+        "project_kind": project_kind,
+        "assemble": f"{module.rstrip(':')}:assemble{build_variant}",
+        "build_variant": build_variant,
+        "flavor_mode": "custom_variant" if custom_variant else "flavor" if flavor else "default",
         "flavor": flavor,
         "assemble_tasks": assemble_tasks,
         "launcher": launcher,
@@ -739,20 +736,6 @@ def write_answers(repo: Path, answers: dict) -> None:
             "",
         ])
     markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
-    # Ensure all harness rules are isolated locally via .git/info/exclude without polluting shared .gitignore
-    try:
-        from .._repo_files import ensure_local_git_privacy
-        ensure_local_git_privacy(repo, clean_strays=True)
-    except (ImportError, ValueError):
-        try:
-            import sys
-            scripts_dir = Path(__file__).resolve().parent.parent
-            if str(scripts_dir) not in sys.path:
-                sys.path.insert(0, str(scripts_dir))
-            from _repo_files import ensure_local_git_privacy
-            ensure_local_git_privacy(repo, clean_strays=True)
-        except Exception:
-            pass
 
 
 def flags_from_answers(answers: dict) -> str:

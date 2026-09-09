@@ -5,7 +5,7 @@ alwaysApply: true
 
 Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 
-Use `{{PY}}` for harness scripts. Assemble with `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`. After non-trivial work, run all five reviewers (`BUG_PASS`, `CONVENTION_PASS`, `SECURITY_PASS`, `PERF_PASS`, `REGRESSION_PASS`). Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
+Use `{{PY}}` for harness scripts. The central policy selects relevant reviewers and gates from the final change surfaces. Do not substitute an agent-authored verdict for evidence.
 
 Device: {{DEVICE_POLICY}}
 

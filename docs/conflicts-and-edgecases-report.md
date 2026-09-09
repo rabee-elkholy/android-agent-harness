@@ -1,5 +1,8 @@
 # System Audit Report — Conflicts, Edge Cases & Arabic Inventory
 
+> Historical pre-v1 audit. Its findings drove the clean-break architecture and
+> its filenames, line numbers, and runtime claims do not describe v1.
+
 > Scope: `android-harness-kit` (this repository). Report only — no fixes were applied as part of this audit.
 > Date: 2026-08-31 · Generated from a full-source scan excluding `agents/state/` (ephemeral) and `__pycache__/`.
 

@@ -1,12 +1,9 @@
 ---
-description: Hook selftest, string parity, Room migration gate, and fast Kotlin lint before assemble.
+description: Run only preflight checks selected by the active immutable policy.
 ---
 
-# Preflight Build Sanity Check
+# Adaptive preflight
 
-Follow `.agents/rules/harness-rules.md`.
+After `workflow.py prepare-verification`, run `python .agents/scripts/preflight_check.py`. It always checks plan authority and harness safety; localization, Room, and fast Kotlin checks run only when selected by policy. The command writes snapshot-bound evidence and never edits project files.
 
-## Steps
-
-1. `python .agents/scripts/preflight_check.py` — includes a cached `_hook_selftest.py` run when harness files changed.
-2. If it fails, stop. If it passes: proceed to assemble task (`python .agents/scripts/run_gradle_task.py :app:assembleDebug`) — only after the unified review gate has cleared.
+Do not run assemble or device phases unless their policy gates are present.

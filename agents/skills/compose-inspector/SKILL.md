@@ -1,6 +1,8 @@
 ---
 name: compose-inspector
 description: Use when inspecting or building Jetpack Compose UI for recomposition safety, stability (@Immutable/@Stable), RTL/LTR, remember/derivedStateOf, and Lazy list keys.
+version: 1.0.0
+kernel-major: 1
 ---
 
 # Compose Inspector & Layout Verifier

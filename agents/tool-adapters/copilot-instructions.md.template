@@ -3,7 +3,7 @@
 Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 
 - Run harness scripts with `{{PY}}` (never assume `python3` on Windows).
-- After non-trivial implementation, create a review package and obtain all five PASS tokens before assemble.
+- Use the central policy to select only the required reviewers and gates, then bind their evidence to the final snapshot.
 - Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
 - Device: {{DEVICE_POLICY}}
 - {{GIT_POLICY}}
@@ -12,4 +12,4 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
   git mutations, emulator tooling, and unsafe adb commands. Do not try to bypass it.
   If the hook file is absent (older checkout, hook support unavailable), treat
   `{{PY}} .agents/scripts/pre_tool_safety.py` as the reference policy: apply the same
-  denials yourself before every shell command (best-effort). Git mutations are never allowed.
+  denials yourself before every shell command (best-effort). The hook can hard-enforce covered mutations, but conversational approval remains `RULE_ENFORCED`; read the detected tier from `_product.py` and do not claim cryptographic human separation.

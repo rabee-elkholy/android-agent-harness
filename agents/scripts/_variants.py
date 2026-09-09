@@ -1,8 +1,9 @@
 """Build-variant (flavor) resolution shared by runners, wizard, and doctor.
 
-Backward compatible: when _product.py predates flavors, every resolver falls
-back to the classic single-variant behavior (empty flavor = default variant).
-Only Debug variants of flavors are supported — daily work is debug per policy.
+Backward compatible: when _product.py predates variants, every resolver falls
+back to its configured assemble task. Explicit ``--flavor`` remains a shortcut
+for known flavor-to-task mappings; the default task may be any exact combined
+variant selected during setup.
 """
 from __future__ import annotations
 
@@ -14,6 +15,11 @@ except ImportError:
     ACTIVE_FLAVOR = ""
     ASSEMBLE_TASKS = {}
     APK_RELATIVES = {}
+
+try:
+    from _product import ACTIVE_VARIANT  # type: ignore
+except ImportError:
+    ACTIVE_VARIANT = "Debug"
 
 try:
     from _product import MODULE as _APP_MODULE  # type: ignore
@@ -28,7 +34,8 @@ def _default_module() -> str:
         from _product import ASSEMBLE_TASK  # type: ignore
 
         task = str(ASSEMBLE_TASK or ":app:assembleDebug")
-        return task.split(":assemble")[0] or ":app"
+        module = task.split(":assemble")[0]
+        return module if module else ":"
     except ImportError:
         return ":app"
 
@@ -54,18 +61,20 @@ def pascal(name: str) -> str:
 
 
 def assemble_task(flavor: str | None = None) -> str:
-    fl = normalize_flavor(flavor if flavor is not None else ACTIVE_FLAVOR)
-    if not fl:
+    if flavor is None:
         try:
             from _product import ASSEMBLE_TASK  # type: ignore
 
             return str(ASSEMBLE_TASK or ":app:assembleDebug")
         except ImportError:
             return ":app:assembleDebug"
+    fl = normalize_flavor(flavor)
+    if not fl:
+        return assemble_task(None)
     mapped = str(ASSEMBLE_TASKS.get(fl) or "").strip()
     if mapped:
         return mapped
-    return f"{_default_module()}:assemble{pascal(fl)}Debug"
+    return f"{_default_module().rstrip(':')}:assemble{pascal(fl)}Debug"
 
 
 def apk_relative(flavor: str | None = None) -> str:
@@ -86,7 +95,9 @@ def apk_relative(flavor: str | None = None) -> str:
 
 def resolve_or_raise(flavor_arg: str | None) -> tuple[str, str]:
     """Return (normalized_flavor, assemble_task); raise SystemExit on unknown flavor."""
-    fl = normalize_flavor(flavor_arg) if flavor_arg is not None else active_flavor()
+    if flavor_arg is None:
+        return active_flavor(), assemble_task(None)
+    fl = normalize_flavor(flavor_arg)
     known = known_flavors()
     if fl and known and fl not in known:
         raise SystemExit(

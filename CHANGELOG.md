@@ -5,6 +5,23 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - Unreleased
+
+### Approval-first adaptive architecture
+
+- Replaced automatic execution and fixed reviewer fan-out with an explicit, hash-bound plan approval and single-use execution authority.
+- Added deterministic change classification, on-demand versioned skills, adaptive reviewers/gates, and a three-round review cap.
+- Added canonical Git-blob delivery manifests covering staged, unstaged, untracked, deleted, renamed, and redacted external build inputs.
+- Added append-only run evidence and a read-only final verifier that rejects stale, mixed, forged, missing, or emergency evidence.
+- Added complete split-APK artifact-set hashing across assemble, install, and launch.
+- Added transactional clean install, same-major update, ownership-safe dry-run uninstall, tailoring preservation, backup, and rollback.
+- Preserved Zoho Sprints behavior while adding stable mutation operation ids and unknown-outcome protection against duplicate retries.
+- Replaced the monolithic hook policy with a compact safety boundary and honest per-host enforcement reporting.
+- Added offline architecture, lifecycle, concurrency, security, Zoho, and cross-platform CI regression coverage.
+- Made sensitive final approval distinct from initial plan approval, narrowed
+  later review rounds, enforced model-call budgets, and removed device-global
+  log/network/permission side effects.
+
 ## [0.27.24] - 2026-09-08
 
 ### Harness Reliability and Release Integrity

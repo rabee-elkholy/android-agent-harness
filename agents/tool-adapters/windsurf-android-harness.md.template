@@ -6,7 +6,7 @@ trigger: always_on
 
 Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 
-Use `{{PY}}` for `.agents/scripts/*`. Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`. Five-leaf review before assemble. No `code-review-guard-agent`. No `LGTM`.
+Use `{{PY}}` for `.agents/scripts/*`. Follow the central adaptive policy and load its selected skills. Delivery requires one matching read-only verifier result.
 
 Device: {{DEVICE_POLICY}}
 

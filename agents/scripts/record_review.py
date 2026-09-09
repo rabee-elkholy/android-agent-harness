@@ -1,261 +1,174 @@
-"""Universal Review Verdict Recorder for Android Agent Harness.
-
-Enables agents in non-Antigravity environments (OpenAI Codex, Claude Code,
-Cursor) to record review verdicts into the harness verdict ledger so that
-final_verdict.py passes with 100% parity across all tools.
-"""
+"""Validate structured reviewer reports and record one immutable review artifact."""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
-import time
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_state import (
-    read_verdict_record,
-    state_path,
-    tree_code_fingerprint,
-    write_verdict_record,
-)
-from _live_process import enable_line_buffered_stdio, live_print
+from _vnext_common import ValidationError, read_json, sha256_file  # noqa: E402
+from evidence_store import EvidenceStore  # noqa: E402
+from workflow import state_root, task_dir  # noqa: E402
 
-enable_line_buffered_stdio()
 
-LEAF_NAME_MAP = {
-    "bug-reviewer-agent": "bug_reviewer",
-    "bug_reviewer": "bug_reviewer",
-    "bug": "bug_reviewer",
-    "convention-reviewer-agent": "convention_reviewer",
-    "convention_reviewer": "convention_reviewer",
-    "convention": "convention_reviewer",
-    "security-reviewer-agent": "security_reviewer",
-    "security_reviewer": "security_reviewer",
-    "security": "security_reviewer",
-    "perf-anr-guardian-agent": "perf_guardian",
-    "perf_guardian": "perf_guardian",
-    "perf_anr_guardian": "perf_guardian",
-    "perf": "perf_guardian",
-    "regression-impact-reviewer-agent": "regression_reviewer",
-    "regression_reviewer": "regression_reviewer",
-    "regression_impact": "regression_reviewer",
-    "regression": "regression_reviewer",
-    "test-quality-reviewer-agent": "test_quality",
-    "test_quality": "test_quality",
-    "test": "test_quality",
-}
-
+VALID_VERDICTS = {"PASS", "FINDINGS"}
+VALID_SEVERITIES = {"INFO", "LOW", "MEDIUM", "HIGH", "MAJOR", "CRITICAL", "BLOCKER"}
 PASS_TOKENS = {
-    "bug_reviewer": "BUG_PASS",
-    "convention_reviewer": "CONVENTION_PASS",
-    "security_reviewer": "SECURITY_PASS",
-    "perf_guardian": "PERF_PASS",
-    "regression_reviewer": "REGRESSION_PASS",
-    "test_quality": "TEST_PASS",
-}
-
-LEAF_ALIASES = {
-    "bug_reviewer": ("bug_reviewer", "bug-reviewer-agent", "bug-reviewer", "bug"),
-    "convention_reviewer": ("convention_reviewer", "convention-reviewer-agent", "convention-reviewer", "convention"),
-    "security_reviewer": ("security_reviewer", "security-reviewer-agent", "security-reviewer", "security"),
-    "perf_guardian": ("perf_guardian", "perf-anr-guardian-agent", "perf-anr-guardian", "perf"),
-    "regression_reviewer": ("regression_reviewer", "regression-impact-reviewer-agent", "regression-impact-reviewer", "regression"),
-    "test_quality": ("test_quality", "test-quality-reviewer-agent", "test-quality-reviewer", "test_quality_reviewer", "test"),
+    "bug-reviewer-agent": "BUG_PASS",
+    "convention-reviewer-agent": "CONVENTION_PASS",
+    "security-reviewer-agent": "SECURITY_PASS",
+    "perf-anr-guardian-agent": "PERF_PASS",
+    "regression-impact-reviewer-agent": "REGRESSION_PASS",
+    "test-quality-reviewer-agent": "TEST_PASS",
 }
 
 
-def _pick_leaf_token(leaves: dict, key: str) -> str | None:
-    aliases = LEAF_ALIASES.get(key, (key,))
-    for alias in aliases:
-        value = leaves.get(alias)
-        if value:
-            if isinstance(value, dict):
-                return str(value.get("token") or value.get("verdict") or "")
-            return str(value)
-    return None
-
-
-def get_latest_pkg12() -> str | None:
-    ledger_file = state_path().parent / "review_ledger.json"
-    if not ledger_file.is_file():
-        return None
-    try:
-        data = json.loads(ledger_file.read_text(encoding="utf-8"))
-        sha = str(data.get("sha256") or "")
-        return sha[:12] if len(sha) >= 12 else None
-    except Exception:
-        return None
-
-
-def record_leaf_verdict(
-    pkg12: str,
-    leaf_canonical: str,
-    verdict: str,
-    cites: int = 1,
-    findings: list[str] | None = None,
-) -> bool:
-    record = read_verdict_record(pkg12)
-    if not record:
-        record = {
-            "schema_version": 1,
-            "package_hash": pkg12,
-            "created_at": time.time(),
-            "status": "PENDING",
-            "leaves": {},
-            "findings": [],
-            "contains_tests": False,
-        }
-
-    leaves = record.setdefault("leaves", {})
-    leaves[leaf_canonical] = {
-        "verdict": verdict,
-        "token": verdict,
-        "cites": cites,
-        "evidence": {
-            "pkg": pkg12,
-            "cites": cites,
-            "valid": True,
-        },
-        "recorded_at": time.time(),
+def response_to_report(repo: Path, task_id: str, reviewer: str, response_path: Path) -> dict:
+    directory = task_dir(repo, task_id)
+    current = read_json(directory / "current-run.json")
+    manifest = read_json(Path(current["manifest"]))
+    package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+    package_sha = sha256_file(package)
+    text = response_path.read_text(encoding="utf-8", errors="replace")
+    footer = re.search(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\s*$", text.strip())
+    if not footer or footer.group(1).lower() != package_sha[:12]:
+        raise ValidationError(f"reviewer {reviewer} response has no matching evidence footer")
+    pass_token = PASS_TOKENS.get(reviewer)
+    clean = bool(pass_token and re.search(rf"(?m)^\s*{re.escape(pass_token)}\s*$", text))
+    return {
+        "schema_version": 1,
+        "reviewer": reviewer,
+        "package_sha256": package_sha,
+        "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+        "change_set_sha256": manifest["change_set_sha256"],
+        "verdict": "PASS" if clean else "FINDINGS",
+        "findings": [] if clean else [{
+            "severity": "HIGH",
+            "message": "Reviewer reported blocking findings; consult the immutable response identity.",
+            "response_sha256": sha256_file(response_path),
+            "reported_citations": int(footer.group(2)),
+        }],
     }
-    if findings:
-        for f in findings:
-            record.setdefault("findings", []).append(f)
 
-    # Check if all required leaves have passed
-    from _hook_state import package_contains_tests
-    has_tests = bool(record.get("contains_tests")) or package_contains_tests(pkg12)
-    required = ["bug_reviewer", "convention_reviewer", "security_reviewer", "perf_guardian", "regression_reviewer"]
-    if has_tests:
-        required.append("test_quality")
 
-    all_passed = all(
-        _pick_leaf_token(leaves, k) == PASS_TOKENS.get(k)
-        for k in required
+def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
+    directory = task_dir(repo, task_id)
+    plan = read_json(directory / "plan.json")
+    current = read_json(directory / "current-run.json")
+    manifest = read_json(Path(current["manifest"]))
+    policy = read_json(Path(current["policy"]))
+    if plan.get("status") != "VERIFYING":
+        raise ValidationError("review ingestion requires a VERIFYING plan")
+    round_number = int(plan.get("review_rounds") or 0) + 1
+    if round_number > int(policy.get("max_review_rounds") or 3):
+        raise ValidationError("review round cap reached; developer decision is required")
+    package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+    if not package.is_file():
+        raise ValidationError("immutable review package is missing")
+    package_sha = sha256_file(package)
+    required = set(policy.get("reviewers") or [])
+    seen: set[str] = set()
+    findings: list[dict] = []
+    report_identities: list[dict] = []
+    for report_path in reports:
+        report = read_json(report_path)
+        reviewer = str(report.get("reviewer") or "")
+        if report.get("schema_version") != 1:
+            raise ValidationError(f"reviewer {reviewer or '<missing>'} report schema is unsupported")
+        if reviewer not in required:
+            raise ValidationError(f"unexpected reviewer report: {reviewer or '<missing>'}")
+        if reviewer in seen:
+            raise ValidationError(f"duplicate reviewer report: {reviewer}")
+        seen.add(reviewer)
+        if report.get("package_sha256") != package_sha:
+            raise ValidationError(f"reviewer {reviewer} did not inspect the active package")
+        if report.get("delivery_snapshot_sha256") != manifest["delivery_snapshot_sha256"]:
+            raise ValidationError(f"reviewer {reviewer} snapshot mismatch")
+        if report.get("change_set_sha256") != manifest["change_set_sha256"]:
+            raise ValidationError(f"reviewer {reviewer} change-set mismatch")
+        verdict = str(report.get("verdict") or "").upper()
+        if verdict not in VALID_VERDICTS:
+            raise ValidationError(f"reviewer {reviewer} returned malformed verdict")
+        report_findings = report.get("findings") or []
+        if not isinstance(report_findings, list):
+            raise ValidationError(f"reviewer {reviewer} findings must be a list")
+        if verdict == "PASS" and report_findings:
+            raise ValidationError(f"reviewer {reviewer} claims PASS with findings")
+        for finding in report_findings:
+            if not isinstance(finding, dict) or str(finding.get("severity") or "").upper() not in VALID_SEVERITIES:
+                raise ValidationError(f"reviewer {reviewer} returned a malformed finding")
+            if not str(finding.get("message") or "").strip():
+                raise ValidationError(f"reviewer {reviewer} finding has no message")
+        findings.extend({"reviewer": reviewer, **item} for item in report_findings if isinstance(item, dict))
+        report_identities.append({"reviewer": reviewer, "report_sha256": sha256_file(report_path), "verdict": verdict})
+    missing = required - seen
+    if missing:
+        raise ValidationError("missing required reviewer reports: " + ", ".join(sorted(missing)))
+    used_calls = int(plan.get("review_calls_used") or 0)
+    budget = int(policy.get("model_call_budget") or 0)
+    if used_calls + len(seen) > budget:
+        raise ValidationError("review model-call budget exceeded; developer decision is required")
+    blocking = [item for item in findings if str(item.get("severity") or "").upper() in ("BLOCKER", "MAJOR", "CRITICAL", "HIGH")]
+    status = "FAIL" if blocking else "PASS"
+    evidence_path = EvidenceStore(state_root(repo)).write(
+        snapshot=manifest["delivery_snapshot_sha256"],
+        run_id=current["run_id"],
+        name="reviews",
+        producer="review_orchestrator",
+        harness_version=(repo / ".agents" / "VERSION").read_text(encoding="utf-8").strip(),
+        change_set=manifest["change_set_sha256"],
+        status=status,
+        evidence={
+            "package_sha256": package_sha,
+            "reviewers": sorted(seen),
+            "reports": report_identities,
+            "findings": findings,
+            "blocking_findings": blocking,
+            "is_truncated": False,
+            "round": round_number,
+        },
     )
-
-    if all_passed:
-        record["verdict"] = "APPROVED"
-        record["completed_at"] = time.time()
-        record["tree_fingerprint"] = tree_code_fingerprint()
-        live_print(f"[*] All {len(required)} leaves APPROVED for package {pkg12}!")
-    else:
-        passed_count = sum(1 for k in required if _pick_leaf_token(leaves, k) == PASS_TOKENS.get(k))
-        live_print(f"[*] Recorded {leaf_canonical} -> {verdict} ({passed_count}/{len(required)} leaves passed).")
-
-    return write_verdict_record(pkg12, record)
+    plan["review_rounds"] = round_number
+    plan["review_calls_used"] = used_calls + len(seen)
+    if blocking:
+        plan["status"] = "BLOCKED"
+        plan["blocked_reviewers"] = sorted({str(item.get("reviewer") or "") for item in blocking})
+    from plan_authority import save_plan
+    save_plan(directory / "plan.json", plan)
+    return evidence_path
 
 
-def approve_all_leaves(pkg12: str) -> bool:
-    record = read_verdict_record(pkg12)
-    if not record:
-        record = {
-            "schema_version": 1,
-            "package_hash": pkg12,
-            "created_at": time.time(),
-            "status": "PENDING",
-            "leaves": {},
-            "findings": [],
-            "contains_tests": False,
-        }
-
-    from _hook_state import package_contains_tests
-    has_tests = bool(record.get("contains_tests")) or package_contains_tests(pkg12)
-    required = ["bug_reviewer", "convention_reviewer", "security_reviewer", "perf_guardian", "regression_reviewer"]
-    if has_tests:
-        required.append("test_quality")
-
-    leaves = record.setdefault("leaves", {})
-    now = time.time()
-    for k in required:
-        token = PASS_TOKENS[k]
-        leaves[k] = {
-            "verdict": token,
-            "token": token,
-            "cites": 0,
-            "evidence": {
-                "pkg": pkg12,
-                "cites": 0,
-                "valid": True,
-            },
-            "recorded_at": now,
-        }
-
-    record["verdict"] = "APPROVED"
-    record["completed_at"] = now
-    record["tree_fingerprint"] = tree_code_fingerprint()
-    ok = write_verdict_record(pkg12, record)
-    if ok:
-        live_print(f"[SUCCESS] Package {pkg12}: all {len(required)} review leaves APPROVED.")
-    return ok
-
-
-def parse_and_record_text(pkg12: str, text: str) -> int:
-    recorded = 0
-    for leaf_canon, token in PASS_TOKENS.items():
-        if re.search(rf"\b{token}\b", text):
-            # Check for cites
-            cite_match = re.search(rf"{token}[^\n\r]*?cites=(\d+)", text, re.IGNORECASE)
-            cites = int(cite_match.group(1)) if cite_match else 1
-            if record_leaf_verdict(pkg12, leaf_canon, token, cites):
-                recorded += 1
-    return recorded
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Universal review verdict recorder.")
-    parser.add_argument("--pkg", help="12-char package SHA256 digest (defaults to latest in ledger).")
-    parser.add_argument("--approve-all", action="store_true", help="Record clean PASS for all required leaves.")
-    parser.add_argument("--leaf", help="Leaf name (e.g. bug-reviewer-agent, security, perf, etc.).")
-    parser.add_argument("--verdict", help="Verdict token (e.g. BUG_PASS, SECURITY_PASS, etc.).")
-    parser.add_argument("--cites", type=int, default=1, help="Citations count.")
-    parser.add_argument("--parse-text", help="Path to file or string containing review output.")
-    parser.add_argument("--stdin", action="store_true", help="Read review output from stdin.")
-    parser.add_argument("--finding", action="append", default=[], help="Finding description.")
-    args = parser.parse_args(argv)
-
-    raw_pkg = args.pkg or get_latest_pkg12()
-    if not raw_pkg:
-        live_print("[ERROR] Could not determine package digest. Run review_package.py first.", err=True)
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", default=".")
+    parser.add_argument("--task", required=True)
+    parser.add_argument("--report", action="append", default=[])
+    parser.add_argument("--response", action="append", default=[], metavar="REVIEWER=PATH", help="Ingest an unchanged reviewer response with its evidence footer")
+    args = parser.parse_args()
+    try:
+        repo = Path(args.repo).resolve()
+        report_paths = [Path(item).resolve() for item in args.report]
+        with tempfile.TemporaryDirectory(prefix="harness-review-") as temp:
+            for index, item in enumerate(args.response):
+                reviewer, sep, raw_path = item.partition("=")
+                if not sep:
+                    raise ValidationError("--response must be REVIEWER=PATH")
+                report = response_to_report(repo, args.task, reviewer.strip(), Path(raw_path).resolve())
+                generated = Path(temp) / f"report-{index}.json"
+                generated.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+                report_paths.append(generated)
+            if not report_paths:
+                raise ValidationError("at least one --report or --response is required")
+            path = ingest(repo, args.task, report_paths)
+    except (ValidationError, OSError) as exc:
+        print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
-
-    candidate_file = Path(raw_pkg)
-    if candidate_file.is_file():
-        pkg12 = hashlib.sha256(candidate_file.read_bytes()).hexdigest()[:12]
-    else:
-        pkg12 = raw_pkg[:12]
-
-    if args.approve_all:
-        ok = approve_all_leaves(pkg12)
-        return 0 if ok else 1
-
-    if args.stdin:
-        text = sys.stdin.read()
-        count = parse_and_record_text(pkg12, text)
-        live_print(f"[*] Parsed and recorded {count} verdict(s) from stdin.")
-        return 0 if count > 0 else 1
-
-    if args.parse_text:
-        path = Path(args.parse_text)
-        content = path.read_text(encoding="utf-8") if path.is_file() else args.parse_text
-        count = parse_and_record_text(pkg12, content)
-        live_print(f"[*] Parsed and recorded {count} verdict(s).")
-        return 0 if count > 0 else 1
-
-    if args.leaf and args.verdict:
-        leaf_canon = LEAF_NAME_MAP.get(args.leaf.strip().lower())
-        if not leaf_canon:
-            live_print(f"[ERROR] Unknown leaf name: '{args.leaf}'", err=True)
-            return 1
-        ok = record_leaf_verdict(pkg12, leaf_canon, args.verdict.strip(), args.cites, findings=args.finding)
-        return 0 if ok else 1
-
-    parser.print_help()
-    return 1
+    print(f"REVIEW_EVIDENCE={path}")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

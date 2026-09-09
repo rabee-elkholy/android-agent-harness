@@ -1,48 +1,46 @@
-# Porting tokens
+# Porting and project tailoring
 
-Naive replace of a display name is not enough. After copy, **fill product constants** and rewrite architecture from **this** checkout.
+Do not copy another application's installed `.agents` directory. Run the v1
+installer against the target checkout so discovery creates a fresh product
+configuration and ownership manifest.
 
-The kit ships generic defaults in `agents/scripts/_product.py` (`com.example.app`, `.MainActivity`, `:app:assembleDebug`). Setup overwrites them from Gradle/manifests. Do **not** copy a parent product's company, package, or launcher into a stranger app.
+## Project values
 
-## Fill from disk
-
-| Kit default | Replace with |
+| Value | Source |
 |---|---|
-| `PRODUCT_NAME` in `_product.py` and `harness-rules.md` title | I.1 product name |
-| `APPLICATION_ID` / `PACKAGE_PREFIX` | Real `applicationId` (keep regex escapes in logcat/lint) |
-| `LAUNCHER` | Real launcher (`applicationId/.MainActivity`, etc.) |
-| `ASSEMBLE_TASK` / `UNIT_TEST_TASK` | `:<androidApplicationModule>:assembleDebug` / `testDebugUnitTest` |
-| `APK_RELATIVE` | Real debug APK, **including** the `run_gradle_task.py` existence check. Glob `**/outputs/apk/debug/*.apk` if the filename is unknown. |
-| `ANDROID_SRC` path pieces | Real source root. Replacing only `"app"` is not enough: KMP Android res is often `composeApp/src/androidMain`, not `composeApp/src/main`. |
-| Theme wrapper in subagent JSON / `compose-inspector` | Real theme token, or `MaterialTheme` if none |
-| DI / ViewModel base in `architecture-guidelines.md` | Real bases (Koin + `BaseViewModel`, Hilt + MVI, …) or delete invented rules |
-| Sender personal name | This team's developer name (who commits). Never copy portal ids or tokens. |
+| Product and project kind | Gradle settings and Android plugins |
+| Application ID and launcher | Android module configuration and manifest |
+| Assemble/test tasks | Selected module and exact build variant |
+| APK set | Gradle output metadata after assemble |
+| UI, DI, persistence, structure | Existing build/source inspection |
+| Locales | Actual `res/values*` directories |
+| Device policy | Developer setup answer |
+| Enforcement tier | Detected host capability, never a setup claim |
 
-`HARNESS_REVIEW_PACKAGE` and `HARNESS_*_FINGERPRINT` stay. Rename everywhere if you rebrand those env tokens.
+For multiple flavor dimensions or custom build types, enter the exact combined
+variant (for example `FreeEuStaging`). Library-only projects keep launcher/APK
+empty and never select device gates.
 
-## Install traps
+## Tailoring boundary
 
-- **I.4 allow emulator:** Set `ALLOW_EMULATOR = True` (or `False` for physical device only) in `_product.py`. Device runners (`run_device.py`, `logcat_doctor.py`, `capture_screen.py`) and the safety hook (`pre_tool_safety.py`) automatically consume this centralized policy at runtime — no hook rewrite needed. Keep `adb monkey` denied always.
-- **I.3 git policy:** Set `GIT_POLICY = "never"` (default) or `"agent-may-commit"` in `_product.py`. The safety hook honors it: `agent-may-commit` allows only `git add`/`commit`; every other mutation stays denied.
-- **I.10 install confirmation:** Set `INSTALL_CONFIRM = "confirm"` or `"allow"` in `_product.py`; the invocation reminder enforces the ask-first duty.
-- **I.22 device verification:** Set `DEVICE_VERIFICATION_MODE = "manual_only"` / `"disabled"` in `_product.py`.
-- **I.8 one locale:** if there is no second `values-*` folder, skip key parity in `check_strings.py` or preflight fails. Point `RES_DIR` at the real `res` root.
-- **I.9 scaffold:** do not ask. `main()` stays disabled. `_hook_selftest.py` still imports `new_feature_scaffold.VIEWMODEL` and `.SCREEN` (needs `locale = "ar"` / `"en"` and `isEmpty = true`). Keep those constants.
-- **Leftover grep:** do not write forbidden parent-product tokens even in “do not use …” sentences inside `.agents`.
-- **I.12:** if another product on this PC already uses `~/.gemini/config.json`, skip global writes.
-- **I.16 Zoho Sprints:** run `install_zoho_mcp.py --enable` or `--disable` from answers. Never copy `zoho_config.json`, refresh tokens, or client secrets into the repo. Point `ZOHO_SPRINTS_CONFIG` at an existing user-level file when one is already on this PC. Do not write `~/.gemini/config/mcp_config.json`.
-- **Tool adapters:** do not hand-edit one `AGENTS.md` and skip the rest. Run `install_tool_adapters.py --tools <selected ids>`. Do not copy `remoteControlHostname`, tokens, or `sdk.dir`. Do not overwrite `.aider.conf.yml` or `~/.gemini`.
+Project conventions may be added to the documented Android reference files and
+Zoho workflow defaults. Compatible update preserves those locations. Tailoring
+must not weaken the kernel, approval requirement, deterministic policy,
+evidence binding, Git/device safety, or terminal tracker-state ownership.
 
-## Do not weaken
+## Verification after installation
 
-- 5-leaf review + `*_PASS`
-- `pre_tool_safety.py` barrier (except package/activity strings)
-- live `run_gradle_task.py` / `_live_process.py`
-- `adb monkey` deny always. Emulator deny **only** when `ALLOW_EMULATOR = False` in `_product.py` (setup I.4 = physical only)
-- `code-review-guard-agent` retired / no `LGTM`
+```bash
+python .agents/scripts/harness_doctor.py --json
+python .agents/scripts/_vnext_selftest.py
+python .agents/scripts/_hook_selftest.py
+```
 
-## After port, grep `.agents` must not find
+The install itself does not run the Android build or modify application/Gradle
+source. Run project gates only inside an approved task.
 
-After port, grep `.agents` for any leftover references to the project the kit was originally extracted from. The install selftest (`_hook_selftest.py`) checks for kit placeholder leftovers automatically (`com.example.app`, `com.example`, `this Android app`). Setup adds project-specific needles during install.
+## Secrets and host configuration
 
-Theme-wrapper name only if they kept it. `HARNESS_REVIEW_PACKAGE` may stay.
+Never copy `local.properties`, SDK paths, keystores, provider JSON, tokens, or
+user-level IDE configuration between projects. Zoho credentials remain under
+the user's profile; project MCP files contain command/config paths only.

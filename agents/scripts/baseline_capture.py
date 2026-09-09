@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _gate_results import current_head_sha  # noqa: E402
+from _env_codes import EXIT_ENV  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print  # noqa: E402
 from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
 
@@ -111,9 +112,8 @@ def collect_failures(repo: Path) -> list[dict]:
 
 
 def baseline_path() -> Path:
-    from _hook_state import state_path
-
-    return state_path().with_name("baseline.json")
+    override = os.environ.get("HARNESS_HOOK_STATE", "").strip()
+    return Path(override).with_name("baseline.json") if override else Path(__file__).resolve().parent.parent / "state" / "baseline.json"
 
 
 def write_baseline(data: dict) -> Path | None:
@@ -169,10 +169,17 @@ def main(argv=None) -> int:
         task = _unit_test_task()
         live_print(f"[*] Running {task} before capturing the baseline...")
         from run_gradle_task import run_gradle
+        from run_tests_gate import report_signatures
 
+        reports_before = report_signatures(REPO, task)
         code = run_gradle([task])
-        if code != 0:
-            live_print(f"[REFUSED] Unit tests did not pass (exit {code}); baseline not captured.", err=True)
+        reports_after = report_signatures(REPO, task)
+        fresh_reports = any(reports_before.get(path) != signature for path, signature in reports_after.items())
+        if code == EXIT_ENV:
+            live_print(f"[REFUSED] Unit tests were blocked by the environment (exit {code}); baseline not captured.", err=True)
+            return code
+        if code != 0 and (not collect_failures(REPO) or not fresh_reports):
+            live_print("[REFUSED] Gradle failed without fresh parsed test failures; baseline not captured.", err=True)
             return code
 
     head = current_head_sha()

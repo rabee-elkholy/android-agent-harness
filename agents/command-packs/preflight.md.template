@@ -1,5 +1,5 @@
 ---
-description: Run the preflight sanity suite: hook selftest, string parity, Room migration gate, fast Kotlin lint.
+description: Run only the preflight checks selected by the active immutable policy.
 argument-hint: ""
 ---
 

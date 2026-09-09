@@ -1,5 +1,5 @@
 ---
-description: Deliver an Android change end-to-end: plan artifact, implement, 5-leaf review gate, preflight, assemble, device phases.
+description: Deliver an approved Android change with adaptive, evidence-bound quality gates.
 argument-hint: "[what to deliver]"
 ---
 

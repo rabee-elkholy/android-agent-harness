@@ -1,5 +1,8 @@
 # ADR-001: Five-Leaf Review Gate as the only delivery barrier
 
+> Historical record, superseded by the v1 adaptive policy in
+> `agents/scripts/review_policy.py`. This fixed roster is not operational.
+
 ## Context
 
 Before the harness, agents self-approved code and assembled unverified diffs.

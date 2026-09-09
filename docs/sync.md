@@ -1,47 +1,29 @@
-# Sync kit ↔ parent product
+# Maintaining kit and installed projects
 
-The kit is a **portable** engine. The parent app has its **own** live `.agents`. **Do not copy either `.agents` folder onto the other.** That is the fastest way to destroy product identity on one side and portability on the other.
+The repository contains the portable release source. Each Android project has
+its own installed `.agents` engine, product identity, local state, ownership
+manifest, and preserved tailoring. Never copy an installed tree into this kit
+or copy the kit's `agents/` directory manually into a project.
 
-Use a **file-level patch**, one direction, then prove it.
+## Kit to project
 
-## What belongs where
+Publish a validated compatible v1 release, then run the lifecycle updater in
+the project. It validates release checksums, refuses modified managed files,
+preserves allowed tailoring, stages the replacement, and rolls back on failure.
 
-| Kind | Examples | Kit | Parent product |
-|---|---|---|---|
-| **Engine** | `pre_tool_safety.py`, `_live_process.py`, `run_gradle_task.py`, `run_device.py`, `_hook_selftest.py`, `hooks.json`, 5 reviewer JSON files, `*_PASS` protocol | Yes (generic identity in `_product.py`) | Yes (parent fills its own `_product.py` / rules) |
-| **Product identity** | Parent company/package/launcher/domain skills | **Must not** appear in `agents/` | **Must stay** (this is the real app) |
-| **Kit packaging** | `docs/install-or-update-prompt.md`, `setup-prompt.md`, `install_tool_adapters.py --tools`, empty kit `mcp_config.json`, Zoho MCP **server code** (no tokens) | Yes | No (do not “install” the kit into the parent as if it were a stranger app) |
-| **Machine / secrets** | `state/`, `local.properties`, `~/.gemini`, Zoho tokens / `zoho_config.json`, `sdk.dir` | Never | Never copy into the kit |
+## Project fix to kit
 
-Do not weaken the engine (see `docs/porting.md`).
+Reproduce the issue in a clean fixture, patch the generic source here, add an
+offline regression test, and run the complete selftest/release validation.
+Remove product names, package IDs, launchers, credentials, state, screenshots,
+and domain-only assumptions before proposing the change.
 
-## Never
+## Never synchronize
 
-- Overwrite the parent’s live `.agents` with the kit tree (or with `dist/android-agent-harness`).
-- Overwrite the GitHub kit with the parent’s live `.agents` (it contains `state/`, product-only edits, and often a nested `dist/`).
-- Run `install-or-update-prompt.md` **on the parent product**. Those prompts fill generic kit defaults from disk. The parent already has its real identity.
-- Copy `~/.gemini` either way.
-- Naive find-replace of the product name in either direction.
-- Promote parent product-specific domain skills (ads, GPS, audio, education, payments) into the kit.
+- `.agents/state/`, `.harness-backup/`, `.harness-recovery/`;
+- `_product.py` values from a real application;
+- `local.properties`, keystores, tokens, provider JSON, or user IDE config;
+- approval, reviewer, gate, APK, or tracker evidence from another checkout.
 
-## Parent → kit (promote an engine fix)
-
-1. Backup the kit clone.
-2. Diff **only** the engine files you changed in the parent (scripts, hooks, reviewer JSON, selftest). Skip `state/`, MCP, Gemini, `dist/`.
-3. Copy those files into `android-agent-harness/agents/…` (same relative path).
-4. If the change is product-specific (package, launcher, theme, domain copy), **do not** promote it. Strip identity first; kit `_product.py` stays generic.
-5. In the kit: `$PY agents/scripts/_hook_selftest.py`. Grep `agents/` for parent identity tokens — must be clean.
-6. Commit the kit. Products update with `docs/install-or-update-prompt.md` (not the parent).
-
-## Kit → parent (bring a portable engine fix home)
-
-1. Backup the parent’s live `.agents` (not only `dist/`).
-2. Diff the same engine files in the kit vs the parent.
-3. Copy **only** those engine files into the parent’s live `.agents/scripts` (etc.).
-4. Do **not** replace parent `harness-rules.md` with the generic kit copy. Do **not** overwrite parent domain skill refs with generic files. Do **not** run leftover-grep-as-if-foreign-app (the parent should still say its real name / module / launcher).
-5. Keep parent I.4 (physical-only) and git policy as they are unless you intend to change them.
-6. `python .agents/scripts/_hook_selftest.py` in the parent → `Total test failures: 0`. Then a **new chat**.
-
-## If you are unsure which bucket a file is
-
-Treat it as **parent-only** until you can name the engine behavior it changes (barrier, heartbeat, five leaves, monkey deny). Packaging docs never go to the parent. Product skills never go to the kit.
+Project references and Zoho workflow defaults are preserved by the updater but
+cannot weaken the v1 kernel or evidence rules.

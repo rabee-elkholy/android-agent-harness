@@ -7,4 +7,4 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. That file wins.
 - Device: {{DEVICE_POLICY}}
 - {{GIT_POLICY}}
 
-Antigravity loads `.agents/hooks.json` in this repo. Gemini CLI does not; still honor the five-leaf review before assemble. No `code-review-guard-agent`. No `LGTM`.
+Antigravity loads `.agents/hooks.json`; Gemini CLI does not. Detect and report the actual enforcement tier, then follow the central adaptive policy.

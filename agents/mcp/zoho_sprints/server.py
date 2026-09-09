@@ -14,6 +14,7 @@ from _client import WORKFLOW_KEYS, ZohoSprintsAPI, _workflow_defaults  # noqa: E
 from _config import ENV_CONFIG, resolve_config_path  # noqa: E402
 from _dns import _dns_query_fallback, apply_dns_fallback  # noqa: E402
 from _formatter import _EMOJI_RE, _strip_emoji, format_zoho_html  # noqa: E402
+from _idempotency import execute_once  # noqa: E402
 
 _api: ZohoSprintsAPI | None = None
 
@@ -113,6 +114,13 @@ TOOLS = [
     },
 ]
 
+for _tool in TOOLS:
+    if _tool["name"] in {"zoho_create_task", "zoho_update_task_status", "zoho_add_comment", "zoho_update_task_description"}:
+        _tool["inputSchema"]["properties"]["operation_id"] = {
+            "type": "string",
+            "description": "Stable retry key. vNext workflows always provide this to prevent duplicate writes.",
+        }
+
 
 def get_api() -> ZohoSprintsAPI:
     global _api
@@ -157,7 +165,6 @@ def _lookup_maps(api: ZohoSprintsAPI) -> tuple[dict, dict, dict, dict, dict, dic
 
 def handle_call_tool(name: str, arguments: dict) -> dict:
     api = get_api()
-    status_id_by_name, status_name_by_id, type_id_by_name, type_name_by_id, prio_id_by_name, prio_name_by_id = _lookup_maps(api)
 
     if name == "zoho_list_sprints":
         res = api.get_sprints()
@@ -179,6 +186,7 @@ def handle_call_tool(name: str, arguments: dict) -> dict:
         return {"content": [{"type": "text", "text": json.dumps(sprints_list, ensure_ascii=False, indent=2)}]}
 
     if name == "zoho_list_tasks":
+        status_id_by_name, status_name_by_id, type_id_by_name, type_name_by_id, prio_id_by_name, prio_name_by_id = _lookup_maps(api)
         sprint_id = arguments.get("sprint_id") or api.get_active_sprint_id()
         items_data = api.list_items(sprint_id)
         user_display = items_data.get("userDisplayName") or {}
@@ -234,6 +242,7 @@ def handle_call_tool(name: str, arguments: dict) -> dict:
         return {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}
 
     if name == "zoho_create_task":
+        status_id_by_name, status_name_by_id, type_id_by_name, type_name_by_id, prio_id_by_name, prio_name_by_id = _lookup_maps(api)
         sprint_id = arguments.get("sprint_id")
         parent_item_id = arguments.get("parent_item_id")
         if parent_item_id:
@@ -248,34 +257,35 @@ def handle_call_tool(name: str, arguments: dict) -> dict:
             raise RuntimeError(f"Unknown item type: {task_type}. Allowed: {sorted(type_id_by_name)}")
         if not prio_id:
             raise RuntimeError(f"Unknown priority: {task_prio}. Allowed: {sorted(prio_id_by_name)}")
-        res = api.create_item(
-            sprint_id,
-            arguments["name"],
-            type_id,
-            prio_id,
-            arguments.get("description") or "",
-            str(arguments.get("points") or "0"),
-            parent_item_id=parent_item_id,
+        res = execute_once(
+            name, arguments, lambda: api.create_item(
+                sprint_id, arguments["name"], type_id, prio_id,
+                arguments.get("description") or "", str(arguments.get("points") or "0"),
+                parent_item_id=parent_item_id,
+            ),
         )
         return {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}
 
     if name == "zoho_update_task_status":
+        status_id_by_name, status_name_by_id, type_id_by_name, type_name_by_id, prio_id_by_name, prio_name_by_id = _lookup_maps(api)
         sprint_id, item_id = api.resolve_item(arguments["item_id"], arguments.get("sprint_id"))
         target_status = arguments["status"]
+        if str(target_status).strip().lower() in {"done", "solved", "closed", "completed"}:
+            raise RuntimeError("Done/Solved/Closed statuses are forbidden; use Ready To ReTest after verified delivery")
         status_id = status_id_by_name.get(str(target_status).lower())
         if not status_id:
             raise RuntimeError(f"Unknown status: {target_status}. Allowed: {sorted(status_id_by_name)}")
-        res = api.update_item_status(sprint_id, item_id, status_id)
+        res = execute_once(name, arguments, lambda: api.update_item_status(sprint_id, item_id, status_id))
         return {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}
 
     if name == "zoho_add_comment":
         sprint_id, item_id = api.resolve_item(arguments["item_id"], arguments.get("sprint_id"))
-        res = api.add_comment(sprint_id, item_id, arguments["comment"])
+        res = execute_once(name, arguments, lambda: api.add_comment(sprint_id, item_id, arguments["comment"]))
         return {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}
 
     if name == "zoho_update_task_description":
         sprint_id, item_id = api.resolve_item(arguments["item_id"], arguments.get("sprint_id"))
-        res = api.update_item_description(sprint_id, item_id, arguments["description"])
+        res = execute_once(name, arguments, lambda: api.update_item_description(sprint_id, item_id, arguments["description"]))
         return {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}
 
     raise RuntimeError(f"Unknown tool: {name}")

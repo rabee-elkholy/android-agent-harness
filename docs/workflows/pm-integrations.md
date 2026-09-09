@@ -20,7 +20,7 @@ sequenceDiagram
     Dev->>MCP: zoho_get_task_details(task_id)
     MCP->>Zoho: Fetch Bug Description & Attachments
     Zoho-->>Dev: Ticket Context, Steps to Reproduce
-    Note over Dev: Code Implementation & 5-Leaf Review Gate
+    Note over Dev: Approved implementation and adaptive verification
     Dev->>MCP: zoho_update_task_status("Ready To ReTest")
     Dev->>MCP: zoho_add_comment(QA-Centric Handoff + Commit Hash + Impact Area)
     MCP-->>Zoho: Status Updated & Commit Traceability Logged

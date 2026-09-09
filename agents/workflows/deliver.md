@@ -1,23 +1,17 @@
 ---
-description: Implement or refactor, atomic per-phase review, test gate, assemble, device validation, and sign-off.
+description: Deliver an approved Android change through adaptive, evidence-bound verification.
 ---
 
 # Deliver an Android change
 
-Follow `.agents/rules/harness-rules.md` exactly. Do not commit. Do not use worktrees. Do not invoke `code-review-guard-agent`.
+Follow `.agents/rules/harness-rules.md`. Analysis and planning are read-only. No implementation begins until the developer explicitly approves the exact plan.
 
-## Steps
+1. Draft the task with `workflow.py draft`; include expected surfaces, modules, risks, test strategy, device strategy, rollback, and routed skills.
+2. Present the plan and wait. After explicit approval, record its proof with `workflow.py approve`, then consume it once with `workflow.py begin`.
+3. Implement only the approved scope. Use TDD and domain skills selected by the plan. Material classifier drift invalidates approval.
+4. Run `workflow.py prepare-verification`. Read the generated policy; do not invent extra gates or omit selected gates.
+5. Run selected unit, preflight, assemble, and device gates. Build/install/launch evidence must refer to the same complete APK set.
+6. If reviewers are selected, create one complete package, dispatch exactly those reviewer roles, and ingest their structured reports. Findings return the task to `BLOCKED`; use `resume` after fixing. Maximum three review rounds.
+7. Run read-only `workflow.py verify`, then `workflow.py complete`. Present the result only when the exact snapshot remains ready.
 
-1. **Inspect & Plan**: For non-trivial work, consult `brainstorming/SKILL.md` and write `implementation_plan.md` artifact (`RequestFeedback: true`). Present Milestone Delivery Strategy for multi-phase tasks and proactively ask in chat about Zoho Sprints story/tasks creation. Wait for developer approval via native Proceed button.
-2. **Atomic Phase Execution (Repeat per Phase)**:
-   - **TDD & Code**: Follow `test-driven-development/SKILL.md` (Red -> Prove Failure -> Green -> Refactor).
-   - **Stage 0 Shift-Left Test, Preflight & Pre-Audit Pre-Gate**: Run `python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest` AND `python .agents/scripts/preflight_check.py` (verifies string parity via `check_strings.py`, Room database migrations via `room_guard.py`, Kotlin syntax/rules via `fast_kt_lint.py`, and risk tier). Perform a Shift-Left Pre-Audit against reviewer standards (zero inline FQCNs, Compose dual-locale Previews, RTL/strings parity) to ensure clean 1st-round PASS and avoid context bloat. Running preflight before review guarantees that no post-review string extractions or Room migration fixes invalidate review packages or burn review rounds.
-   - **Stage 1 Unified Parallel Review Gate**: Dispatch review leaves in EXACTLY ONE parallel `invoke_subagent` call: all 5 standard leaves (`bug`, `convention`, `security`, `perf`, `regression`), or all 6 leaves (+ `test-quality-reviewer-agent` promoted automatically when `*Test.kt` is touched). Zero timers/sleep. Quorum patience: strictly silent wait (`""`) on intermediate arrivals; never announce completion until full quorum arrives. When the round completes, output a **Review Round Summary Card** in chat. In rounds 1-2 this card is strictly informational and non-blocking: never end turn or pause; immediately fix at root cause, re-verify with `preflight_check.py`, and re-dispatch (rounds must converge in <= 2 rounds; pause to prompt developer only at round 3 cap).
-   - **Stage 2 AssembleDebug Gate**: Run `python .agents/scripts/run_gradle_task.py :app:assembleDebug`. (Preflight was already validated in Stage 0 before review; running `python .agents/scripts/preflight_check.py` here before assemble is permitted as a fast idempotent sanity assertion).
-   - **Stage 3 Device Verification & Checkpoint Commit**:
-     * Run `python .agents/scripts/run_device.py install-start` to install and launch the target Activity/Screen on the connected device. If no device is connected, HALT and prompt developer via `ask_question`; never silently skip.
-     * Output 2-3 **diff-grounded** numbered test steps in chat strictly derived from the modified code (1. Navigation: path to modified screen, 2. Interaction: specific action matching the diff, 3. Verification: expected visual/behavioral outcome).
-     * Trigger interactive confirmation modal (`ask_question`): *"Please test the steps above on your device and confirm the result:"* with options `PASS — Device testing passed successfully` / `FAIL — Issue or crash encountered on device`.
-     * Upon **PASS**: Output the Phase Milestone Card with the drafted Conventional Commit message for Phase N.
-     * **MANDATORY HARD STOP**: Stop immediately and wait for the developer to commit Phase N and explicitly instruct to begin Phase N+1. Never touch Phase N+1 files before developer commit.
-3. **Task Completion**: Output walkthrough summary and final task summary in the active conversation language after all phases are verified and committed.
+Never commit or push; Git index/history remain developer-owned. Zoho mutation requires the explicit trigger, approved `zoho_sprints` external-write scope, and a stable operation id.

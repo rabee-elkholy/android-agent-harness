@@ -1,6 +1,8 @@
 ---
 name: systematic-debugging
 description: Use when diagnosing this Android app bugs, crashes, or unexpected UI behavior. Requires explicit hypotheses before code changes.
+version: 1.0.0
+kernel-major: 1
 ---
 
 # Systematic Debugging Skill (Superpowers Protocol)

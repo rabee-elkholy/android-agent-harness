@@ -2,7 +2,7 @@
 
 Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 
-Use `{{PY}}` for `.agents/scripts/*`. Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`. Five-leaf review before assemble. No `code-review-guard-agent`. No `LGTM`.
+Use `{{PY}}` for `.agents/scripts/*`. The central policy selects the required tests, reviewers, assemble, and device checks. Delivery requires the read-only verifier to approve one matching evidence run.
 
 Device: {{DEVICE_POLICY}}
 

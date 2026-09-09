@@ -12,15 +12,15 @@ sys.path.insert(0, str(SCRIPTS))
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
 
-from _hook_state import state_path  # noqa: E402
 from baseline_capture import (  # noqa: E402
+    baseline_path,
     collect_failures,
     fingerprint,
     load_baseline,
     parse_report,
     test_key,
 )
-from run_tests_gate import baseline_advisory, classify_failures  # noqa: E402
+from run_tests_gate import baseline_advisory, classify_failures, report_paths, report_signatures  # noqa: E402
 
 FAILURES: list[str] = []
 ROOT = Path(tempfile.mkdtemp())
@@ -136,8 +136,22 @@ def test_collect_failures_dedup() -> None:
     check(entries[0]["test_name"] < entries[1]["test_name"], "entries sorted by test name")
 
 
+def test_task_report_scope_and_freshness() -> None:
+    directory = ROOT / "freshness"
+    report = write_report(directory / "app")
+    unrelated = directory / "other/build/test-results/testReleaseUnitTest/TEST-other.xml"
+    unrelated.parent.mkdir(parents=True, exist_ok=True)
+    unrelated.write_text(XML_SAMPLE, encoding="utf-8")
+    paths = report_paths(directory, ":app:testDebugUnitTest")
+    check(paths == [report], "test evidence is scoped to the exact configured task")
+    before = report_signatures(directory, ":app:testDebugUnitTest")
+    report.write_text(XML_SAMPLE + "\n", encoding="utf-8")
+    after = report_signatures(directory, ":app:testDebugUnitTest")
+    check(before != after, "changed report has a fresh signature")
+
+
 def test_load_baseline() -> None:
-    path = state_path().with_name("baseline.json")
+    path = baseline_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"schema_version": 1, "unit_tests": [{"test_name": "A#a", "fingerprint": "1"}]}', encoding="utf-8")
     data = load_baseline()
@@ -155,6 +169,7 @@ def main() -> int:
     test_classify_malformed_baseline()
     test_baseline_advisory()
     test_collect_failures_dedup()
+    test_task_report_scope_and_freshness()
     test_load_baseline()
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")

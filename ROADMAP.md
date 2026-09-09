@@ -1,5 +1,9 @@
 # Roadmap
 
+> Archive note: pre-v1 completion history below is retained for provenance.
+> Current architecture and remaining release acceptance live in
+> `implementation_plan_vnext.md`.
+
 ## Phase 1 — Supply-chain integrity
 - [x] Pin-to-tag CLI provisioning, never floats to `main` (v0.9.0)
 - [x] Threat-model table in SECURITY.md mapping attack classes to proving tests (v0.10.0)
@@ -42,4 +46,3 @@
 - Native hook bridges for Windsurf / Cursor / Codex when their hook protocols ship
 - Python 3.14 CI coverage extension
 - Opt-in telemetry to automate benchmark collection
-

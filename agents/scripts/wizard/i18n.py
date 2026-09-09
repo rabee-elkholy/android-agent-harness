@@ -200,6 +200,7 @@ T = {
             "Pick the default variant if you do not use flavors daily."
         ),
         "i19_default": "Default variant only — no daily flavor (Recommended if unsure)",
+        "i19_other": "Exact combined build variant (for multiple dimensions or custom build types)",
         "auto_blurb": (
             "From this project I will use (no extra questions): Python {py}, "
             "module {module}, launcher {launcher}, APK {apk}, stack {stack}, locales {locales}. "

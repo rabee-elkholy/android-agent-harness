@@ -15,14 +15,13 @@ after install, re-run the wizard (previous answers are pre-filled) — see
 | `I.2` | **Python Executable** | *Auto-detected* | Asked only when Python is missing or ambiguous. |
 | `I.5` | **Application Module** | *Auto-detected* | Asked only when the module is missing or ambiguous. |
 | `I.6` | **Launcher / APK** | *Auto-detected* | Asked only when the launcher or APK is missing or ambiguous. |
-| `I.19` | **Daily Flavor** | *Conditional* | Asked only when Gradle product flavors are discovered. |
+| `I.19` | **Daily Variant** | *Conditional* | Pick a discovered flavor or enter an exact combined variant such as `FreeEuStaging` for multiple dimensions/custom build types. |
 | `b_*` | **Greenfield Architecture** | *Conditional* | Platform, architecture, DI, navigation, UI, database, networking, and locale questions for blank projects. |
 
-### Station 2: Git Governance & Safety
+### Git governance
 
-| Parameter | Name | Default | Options / Description |
-| :--- | :--- | :--- | :--- |
-| `I.3` | **Git Commit Policy** | `Manual in IDE` | Developer commits manually *(Recommended)* or agent commits only on explicit request. |
+Git index/history mutations are developer-owned in v1 and are not a setup
+toggle. The harness never commits, rebases, resets, or pushes automatically.
 
 ### Station 3: Project Management & Task Tracker
 

@@ -1,3 +1,10 @@
 # Keep the golden fixtures byte-stable: git must not normalize EOLs on these
 # trees in either direction, so they always match the generator output exactly.
 tests/fixtures/golden/** -text
+
+# Release checksums cover the installable harness payload byte-for-byte.
+# Keep those files stable across Windows, macOS, and Linux checkouts.
+agents/** text=auto eol=lf
+
+# These prompts contain checksums of their exact byte payloads.
+docs/*-prompt.md text eol=lf

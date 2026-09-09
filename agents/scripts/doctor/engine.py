@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from .models import (
@@ -20,7 +21,7 @@ from .models import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _repo_files import ensure_local_git_privacy  # noqa: E402
+from _enforcement import detect as detect_enforcement  # noqa: E402
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -106,9 +107,8 @@ class HarnessDoctor:
         else:
             self.log(category, "ADB Command", "WARN", "ADB CLI ('adb') not found in PATH.")
 
-        if (self.repo / ".git").is_dir():
+        if (self.repo / ".git").exists():
             self.log(category, "Git Repository", "PASS", "Active Git repository detected.")
-            ensure_local_git_privacy(self.repo)
             self._check_gitignore(category)
             self._check_git_status(category)
         else:
@@ -120,8 +120,17 @@ class HarnessDoctor:
             ignore_files.append(self.repo / ".gitignore")
         if (self.agents_dir / ".gitignore").is_file():
             ignore_files.append(self.agents_dir / ".gitignore")
-        if (self.repo / ".git" / "info" / "exclude").is_file():
-            ignore_files.append(self.repo / ".git" / "info" / "exclude")
+        try:
+            proc = subprocess.run(
+                ["git", "rev-parse", "--git-path", "info/exclude"], cwd=str(self.repo),
+                capture_output=True, text=True, check=False, timeout=5.0,
+            )
+            raw = (proc.stdout or "").strip()
+            git_exclude = Path(raw) if Path(raw).is_absolute() else (self.repo / raw).resolve()
+            if proc.returncode == 0 and git_exclude.is_file():
+                ignore_files.append(git_exclude)
+        except Exception:
+            pass
 
         if not ignore_files:
             self.log(category, "Git Ignore Rules", "WARN", "No .gitignore or .git/info/exclude file detected. Critical transient and secret files may be tracked.")
@@ -183,7 +192,7 @@ class HarnessDoctor:
                         category,
                         "Git Working Tree",
                         "PASS",
-                        f"Working tree has {len(uncommitted)} uncommitted application file(s). Harness files are 100% locally private.",
+                        f"Working tree has {len(uncommitted)} uncommitted file(s); inspect the listed paths before delivery.",
                         details=[f"Uncommitted: {l}" for l in uncommitted[:8]] + ([f"... and {len(uncommitted) - 8} more"] if len(uncommitted) > 8 else []),
                     )
         except Exception as exc:
@@ -303,6 +312,14 @@ class HarnessDoctor:
             self.log(category, "Device Policy", "PASS", f"ALLOW_EMULATOR = {allow_emu}")
             verification_mode = getattr(_product, "DEVICE_VERIFICATION_MODE", "autonomous_e2e")
             self.log(category, "Device Verification", "PASS", f"DEVICE_VERIFICATION_MODE = {verification_mode}")
+            configured_hosts = list((getattr(_product, "ENFORCEMENT_BY_HOST", {}) or {}).keys())
+            enforcement = detect_enforcement(self.repo, configured_hosts)
+            self.log(
+                category,
+                "Enforcement Capability",
+                "PASS",
+                f"overall={enforcement['overall']}; approval={enforcement['approval_trust']}; mutation hooks: {', '.join(f'{key}={value}' for key, value in enforcement['by_host'].items()) or 'no configured hosts'}",
+            )
 
             self._check_install_consistency(category)
         except Exception as exc:
@@ -625,9 +642,10 @@ class HarnessDoctor:
     def check_safety_and_selftest(self) -> None:
         category = "8. Safety & Concurrency"
         try:
-            from _hook_state import state_lock
-            with state_lock(timeout=2.0):
-                pass
+            from evidence_store import StateLock
+            with tempfile.TemporaryDirectory(prefix="harness-doctor-") as temp:
+                with StateLock(Path(temp), timeout_seconds=2.0):
+                    pass
             self.log(category, "State File Lock", "PASS", "Cross-platform atomic state_lock() acquired and released cleanly.")
         except Exception as exc:
             self.log(category, "State File Lock", "FAIL", f"state_lock() failed: {exc}")
@@ -639,7 +657,7 @@ class HarnessDoctor:
         selftest_script = self.agents_dir / "scripts" / "_hook_selftest.py"
         if selftest_script.is_file():
             if self.live_stream:
-                print("         -> Executing 180+ hook selftest assertions in background...", flush=True)
+                print("         -> Executing compact vNext hook contract tests...", flush=True)
             proc = subprocess.run(
                 [sys.executable, str(selftest_script)],
                 capture_output=True,
@@ -676,7 +694,7 @@ class HarnessDoctor:
             if self.live_stream:
                 print("         -> Executing preflight sanity checks (strings, room, lint)...", flush=True)
             proc = subprocess.run(
-                [sys.executable, str(preflight_script)],
+                [sys.executable, str(preflight_script), "--diagnostic"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

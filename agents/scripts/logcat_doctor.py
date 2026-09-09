@@ -3,7 +3,6 @@
 Usage:
   python .agents/scripts/logcat_doctor.py
   python .agents/scripts/logcat_doctor.py --device <SERIAL> --lines 1000
-  python .agents/scripts/logcat_doctor.py --clear
 """
 from __future__ import annotations
 
@@ -97,7 +96,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Logcat Doctor & Crash Triage for this Android app")
     parser.add_argument("-d", "--device", default=None, help="Physical device serial (default: first non-emulator adb device)")
     parser.add_argument("--lines", type=int, default=1000, help="Number of logcat lines to fetch")
-    parser.add_argument("--clear", action="store_true", help="Clear logcat buffer on device")
     args = parser.parse_args()
 
     allow_emu = bool(ALLOW_EMULATOR)
@@ -111,11 +109,6 @@ def main() -> int:
 
     print(f"[*] Connected Device: {serial}")
 
-
-    if args.clear:
-        subprocess.run(["adb", "-s", serial, "logcat", "-c"], check=False)
-        print("[OK] Logcat buffer cleared.")
-        return 0
 
     print(f"[*] Fetching last {args.lines} lines from {serial}...")
     raw = fetch_logcat(serial, args.lines)

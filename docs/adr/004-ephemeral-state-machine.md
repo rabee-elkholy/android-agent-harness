@@ -1,5 +1,8 @@
 # ADR-004: Ephemeral per-conversation review state machine
 
+> Historical record, superseded by v1 task plans and append-only run evidence.
+> References below are non-operative.
+
 ## Context
 
 Review rounds must be tied to exact code snapshots and to the conversation

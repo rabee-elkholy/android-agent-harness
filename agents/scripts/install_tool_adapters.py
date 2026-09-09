@@ -710,7 +710,12 @@ def sync_hooks_json(repo: Path, py: str, *, dry_run: bool) -> list[str]:
         if isinstance(obj, dict):
             for key, value in list(obj.items()):
                 if key == "command" and isinstance(value, str):
-                    new = re.sub(r"^python(?:\d+)?(?=\.exe\b|\s)", py, value, count=1)
+                    new = re.sub(
+                        r"^python(?:\d+)?(?=\.exe\b|\s)",
+                        lambda _match: py,
+                        value,
+                        count=1,
+                    )
                     if new != value:
                         obj[key] = new
                         changed = True

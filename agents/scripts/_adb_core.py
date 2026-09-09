@@ -9,7 +9,7 @@ Single source of truth for everything the device-side test engines need:
   unknown/typo actions can never pass silently.
 - ``DeviceSession``: polling-based synchronization, single-call hierarchy dumps,
   reliable text input (ASCII `input text` + ADBKeyboard broadcast for Arabic),
-  verified taps, pid/process-scoped crash detection with a cleared baseline.
+  verified taps, and process-scoped crash detection against a read-only baseline.
 - ``FlowExecutor``: a shared step interpreter used by both the QA engine and the
   smoke fallback, so no step semantics are duplicated.
 
@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import datetime
+import hashlib
 import json
 import re
 import subprocess
@@ -896,15 +897,12 @@ class DeviceSession:
         return self.swipe_left() if forward else self.swipe_right()
 
     def set_network(self, online: bool) -> tuple[bool, str]:
-        """Toggle device Wi-Fi and mobile data. Returns (ok, reason)."""
-        state_cmd = "enable" if online else "disable"
-        try:
-            self.run_adb(["shell", "svc", "wifi", state_cmd], timeout=10.0)
-            self.run_adb(["shell", "svc", "data", state_cmd], timeout=10.0)
-            time.sleep(1.0)
-            return True, ""
-        except Exception as exc:
-            return False, f"failed to set network {state_cmd}: {exc}"
+        """Refuse global connectivity mutations; the operator owns device state."""
+        requested = "online" if online else "offline"
+        return False, (
+            f"setNetwork({requested}) requires a manual device-state change; "
+            "the harness never toggles global Wi-Fi or mobile data"
+        )
 
     # -- keyboard & text ---------------------------------------------------
     def hide_keyboard(self) -> None:
@@ -966,7 +964,11 @@ class DeviceSession:
 
     # -- logcat ------------------------------------------------------------
     def start_logcat_session(self) -> None:
-        self.run_adb(["logcat", "-c"])
+        existing = self.check_logcat_crashes()
+        self._known_crash_hashes = {
+            hashlib.sha256(str(item.get("stacktrace") or "").encode("utf-8", errors="replace")).hexdigest()
+            for item in existing
+        }
 
     def check_logcat_crashes(self) -> list[dict]:
         proc = self.run_adb(["logcat", "-d", "-v", "brief"], timeout=20.0)
@@ -988,7 +990,11 @@ class DeviceSession:
             elif "ANR in " in line and self.package in line:
                 crashes.append({"pattern": "ANR", "summary": line.strip(), "stacktrace": line})
             i += 1
-        return crashes[:5]
+        known = getattr(self, "_known_crash_hashes", set())
+        return [
+            item for item in crashes
+            if hashlib.sha256(str(item.get("stacktrace") or "").encode("utf-8", errors="replace")).hexdigest() not in known
+        ][:5]
 
     # -- screenshots -------------------------------------------------------
     def capture_screenshot(self, name: str, out_dir: Path) -> Path | None:
@@ -1092,7 +1098,6 @@ class FlowExecutor:
     # -- main entry --------------------------------------------------------
     def prepare(self, target_activity=None, target_deeplink=None, stop_first=False) -> bool:
         self.session.wake_and_unlock()
-        self.session.grant_common_permissions()
         if not self.session.launch_app_or_target(target_activity, target_deeplink, stop_first):
             return False
         nodes = self.session.dump_hierarchy()
@@ -1103,35 +1108,27 @@ class FlowExecutor:
         """Run steps, stopping at the first hard failure. Returns a result dict."""
         steps_out: list[dict] = []
         self.session.start_logcat_session()
-        self._network_modified = False
 
-        try:
-            for idx, step in enumerate(steps, start=1):
-                action = step.get("action", "")
-                desc = f"Step {idx}: {action}"
+        for idx, step in enumerate(steps, start=1):
+            action = step.get("action", "")
+            desc = f"Step {idx}: {action}"
 
-                outcome = self._run_step(idx, desc, step, steps_out)
-                if outcome.get("verdict") == "FAIL":
-                    return outcome
-                # Crash scan after every step (cheap now: baseline was cleared).
-                crashes = self.session.check_logcat_crashes()
-                if crashes:
-                    return self._fail(idx, desc, f"runtime crash: {crashes[0]['summary']}", self.session.dump_hierarchy(), "RUNTIME_CRASH", steps_out)
+            outcome = self._run_step(idx, desc, step, steps_out)
+            if outcome.get("verdict") == "FAIL":
+                return outcome
+            # Crash scan after every step, ignoring only the read-only baseline.
+            crashes = self.session.check_logcat_crashes()
+            if crashes:
+                return self._fail(idx, desc, f"runtime crash: {crashes[0]['summary']}", self.session.dump_hierarchy(), "RUNTIME_CRASH", steps_out)
 
-            final_shot = self.session.capture_screenshot("flow_final", self.screenshots_dir)
-            return {
-                "verdict": "PASS",
-                "locale": self.active_locale,
-                "steps": steps_out,
-                "crashes": [],
-                "final_screenshot": str(final_shot) if final_shot else None,
-            }
-        finally:
-            if getattr(self, "_network_modified", False):
-                try:
-                    self.session.set_network(online=True)
-                except Exception:
-                    pass
+        final_shot = self.session.capture_screenshot("flow_final", self.screenshots_dir)
+        return {
+            "verdict": "PASS",
+            "locale": self.active_locale,
+            "steps": steps_out,
+            "crashes": [],
+            "final_screenshot": str(final_shot) if final_shot else None,
+        }
 
     # -- step handlers -----------------------------------------------------
     def _run_step(self, idx: int, desc: str, step: dict, steps_out: list[dict]) -> dict:
@@ -1277,7 +1274,6 @@ class FlowExecutor:
             ok, err = self.session.set_network(online_bool)
             if not ok:
                 return self._fail(idx, desc, err or "network switch failed", [], "ENV_FAILURE", steps_out)
-            self._network_modified = not online_bool
             steps_out.append({"step": f"{desc} ({'online' if online_bool else 'offline'})", "status": "PASS"})
 
         elif action == "assertText":

@@ -1,158 +1,48 @@
+"""Low-noise task-state reminder for hosts that support PreInvocation hooks."""
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_state import (  # noqa: E402
-    MAX_REVIEWS,
-    invoke_count,
-    latest_expired_note,
-    reviews_pending,
-    round_cap_warning,
-)
+from _repo_files import REPO  # noqa: E402
 
 
-def conversation_id(payload: dict) -> str:
-    return str(payload.get("conversationId") or payload.get("conversation_id") or "unknown")
-
-
-def _policy_bits() -> dict:
-    """Read wizard-configured policies from _product.py (I.3/I.4/I.10 + tasks)."""
+def _message() -> str:
     try:
-        import _product  # noqa: PLC0415
+        from mutation_guard import active_plan
+        plan = active_plan(REPO)
     except Exception:
-        return {
-            "unit_test_task": ":app:testDebugUnitTest",
-            "assemble_task": ":app:assembleDebug",
-            "allow_emulator": True,
-            "git_policy": "never",
-            "install_confirm": "confirm",
-            "e2e_confirm": "confirm",
-        }
-    return {
-        "unit_test_task": str(getattr(_product, "UNIT_TEST_TASK", ":app:testDebugUnitTest")),
-        "assemble_task": str(getattr(_product, "ASSEMBLE_TASK", ":app:assembleDebug")),
-        "allow_emulator": bool(getattr(_product, "ALLOW_EMULATOR", True)),
-        "git_policy": str(getattr(_product, "GIT_POLICY", "never") or "never"),
-        "install_confirm": str(getattr(_product, "INSTALL_CONFIRM", "confirm") or "confirm"),
-        "e2e_confirm": str(getattr(_product, "E2E_CONFIRM", "confirm") or "confirm"),
-    }
-
-
-def check_update_directive() -> str:
-    try:
-        from check_kit_update import check_for_update
-
-        info = check_for_update(force=False)
-        if info.get("has_update"):
-            curr = info.get("current", "")
-            latest = info.get("latest", "")
-            return (
-                f" [KIT UPDATE AVAILABLE: v{latest}]: A newer version of Android Agent Harness (v{latest}) is available (installed: v{curr}). "
-                f"In this opening turn, notify the developer via ask_question in their language: 'New Android Agent Harness v{latest} is available! What would you like to do?' "
-                f"Choices: 'View Changes' / 'Remind me tomorrow' / 'Update now' (localize the labels to the developer's language). "
-                f"If they pick 'Remind me tomorrow': run `python .agents/scripts/check_kit_update.py --snooze 1` and proceed with their request. "
-                f"If they pick 'View Changes': run `python .agents/scripts/check_kit_update.py --show-changes` to show the changelog, then ask 'Update now' or 'Remind me tomorrow'. "
-                f"If they pick 'Update now': ask the developer to paste the install-or-update prompt for v{latest} "
-                f"(https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v{latest}/docs/install-or-update-prompt.md) in a new strong-model chat."
-            )
-    except Exception:
-        pass
-    return ""
-
-
-def message_for(used_reviews: int, pending: bool, update_directive: str = "", round_note: str = "") -> str:
-    if used_reviews >= MAX_REVIEWS:
         return (
-            f"Harness Quality Guard: Runaway review cap reached ({used_reviews}/{MAX_REVIEWS}). "
-            "This is an infinite-loop stop, not permission to skip quality. "
-            "If more reviews are genuinely required, start a NEW conversation on this folder "
-            "(the cap resets per conversation). Do not assemble a leftover APK."
+            "Android Harness: analysis and planning are read-only. Before any implementation, "
+            "draft a task plan and obtain explicit developer approval. Never auto-start a plan."
         )
-    bits = _policy_bits()
-    expired_note = latest_expired_note()
-    pending_note = (
-        " [QUORUM & PATIENCE MANDATE]: A review round is currently IN FLIGHT. DO NOT DECLARE COMPLETION OR SAY 'FINISHED' IN CHAT. Only a subset of reviewers have reported. You MUST OUTPUT EXACTLY EMPTY STRING ('') AND DO NOT CALL TOOLS. Wait patiently until all reviewers reply and valid EVIDENCE footers are recorded. Downstream assemble/device gates are physically locked until full quorum arrives."
-        if pending
-        else ""
-    )
-    device_line = (
-        "Physical device only. Do not touch emulator/AVD tooling."
-        if not bits["allow_emulator"]
-        else "Physical device or emulator are both allowed (prefer physical when both are connected)."
-    )
-    git_line = (
-        "Never commit. Leave changes unstaged; the developer commits from their IDE."
-        if bits["git_policy"] != "agent-may-commit"
-        else "Git policy allows ONLY `git add` / `git commit`, and only when the developer explicitly asked in this chat. push/merge/rebase/reset/stash stay forbidden."
-    )
-    install_line = (
-        "INSTALL_CONFIRM=confirm: before running run_device.py install-start or any install, ask the developer via ask_question and wait for approval."
-        if bits["install_confirm"] != "allow"
-        else "Device install does not need a confirmation modal on this project."
-    )
-    device_verif_line = (
-        "DEVICE VERIFICATION: Default mode is interactive manual checklist. Run `run_device.py install-start`, write 2-3 simple test steps in chat, trigger `ask_question` confirmation ('PASS / FAIL'), and upon PASS deliver the drafted Conventional Commit message."
-    )
-    cap_note = f" {round_note}" if round_note else ""
-    return (
-        f"Harness Quality Guard: review rounds used {used_reviews}/{MAX_REVIEWS}.{pending_note}{expired_note}{cap_note}{update_directive} "
-        "ACTIVE PIPELINE REMINDER: "
-        f"1. Pre-gate: `{bits['unit_test_task']}` + `preflight_check.py` before review. "
-        "2. Review: Run `review_package.py`. SMART TEST PROMOTION mandates all 6 leaves (+ test-quality-reviewer-agent -> TEST_PASS) for test diffs (*Test.kt, src/test/); "
-        "otherwise dispatch the 5 standard review leaves in EXACTLY ONE invoke_subagent call: "
-        "bug-reviewer-agent, convention-reviewer-agent, security-reviewer-agent, perf-anr-guardian-agent, regression-impact-reviewer-agent. "
-        "Do not use code-review-guard-agent. Zero chat noise on intermediate reviews; ZERO-TIMER INVARIANT: never use schedule or polling timers for subagents. "
-        "3. ROUND SUMMARY CARDS: Emit structured card in developer's language when all verdicts arrive. NON-BLOCKING INVARIANT: in rounds 1-2, card is informational; never halt or wait for developer approval after card; autonomously fix, preflight, and re-dispatch round N+1 immediately (pause only at Round 3 Cap). Converge in <= 2 rounds (Shift-Left Pre-Audit before review_package.py). "
-        "4. On-demand specialists: qa-diagnostics-agent, android-ui-expert-agent. "
-        f"5. Build & Device: `{bits['assemble_task']}` -> `run_device.py install-start` (preflight was validated in pre-gate). {device_line} {git_line} {install_line} {device_verif_line} "
-        "6. AUTONOMOUS PHASE PIPELINE: Multi-phase tasks stop after device test + ask_question for developer commit before next phase. "
-        "7. Project Trackers: Mutate only on 'update zoho' (zero emojis/jargon in QA comments). "
-        "8. INTERACTIVE DISCOVERY & ATTACHED MEDIA: Inspect attached screenshots/media via view_file in Turn 1. If material business/product edge cases (offline states, empty data, fallback UI) are underspecified, YOU MUST CALL ask_question (modal with selectable options) BEFORE authoring implementation_plan.md. Omit generic questionnaires on narrow bug fixes. NEVER output questions as chat prose and NEVER put them in open questions. ZERO-SCRAPING: never search host PC or scrape web for failed tracker tickets; fallback to prompt immediately. "
-        "REALITY-CHECK & GROUNDING FIRST: On bug triage, check git diff/status first. If suspect fix is already present in working tree, NEVER assume OS/coroutine failures; ask developer via ask_question immediately. ONE-SHOT VIEWING: read files <=400 lines in single view_file call; zero micro-slice ping-pong. GRAPH-FIRST: Use project_graph.py --find <Symbol/Function>, --features, or --string \"<UI Text>\" for Arabic/localized UI labels (targeted grep on strings.xml is explicitly permitted; NEVER guess English translations). Never cascade root grep_search. Max 3-4 files exploration limit; zero git archaeology. "
-        "ZERO-LIVE-NETWORK: Strictly forbidden from making outbound HTTP/API requests or probing app endpoints/production servers via Python/curl/scratch scripts; rely strictly on local code and test mocks. "
-        "LOCAL-FIXTURES-FIRST: Always inspect local mocks/test fixtures (src/test/, test/resources/, Fake*Repository) before declaring backend data ambiguous; if still ambiguous, halt at 3-4 files and ask developer via ask_question with business options (never spam trivial questions on deterministic code facts). "
-        "INTERRUPT-PRECEDENCE: When user message contains a halt/interruption or behavioral question (\"وقف\", \"رد عليا\", \"بتعمل ايه\"), yield 0 tool calls immediately and respond 100% in conversational text. "
-        "UI-DEFECT-BOUNDARY: Text duplication, formatting, and share sheet defects are strictly limited to UI/Formatters/ViewModels; never descend into Retrofit interfaces or search for Base URLs. "
-        "MISSING-LEGACY-CODE: When restoring deleted code or requested to check git ('check git'), limit to 1 targeted git query (git log -n 5 or git log -S <symbol> -n 3). If not found in immediate history, STOP git archaeology immediately and call ask_question to ask developer for reference project path or commit. NEVER loop in iterative git log/diff. "
-        "PURE-ENGLISH-SYSTEM: All rules, prompts, git commit messages, and internal engine files must remain 100% in English with zero emojis."
-    )
+    status = str(plan.get("status") or "UNKNOWN")
+    task_id = str(plan.get("task_id") or "unknown")
+    if status == "AWAITING_DEVELOPER_APPROVAL":
+        next_step = "Wait for explicit approval; do not edit files or run mutating commands."
+    elif status == "IMPLEMENTING":
+        next_step = "Implement only the approved scope. Material surface drift requires a revised approval."
+    elif status == "VERIFYING":
+        next_step = "Run only the gates and reviewers selected in the immutable current-run policy, then use task complete."
+    elif status == "BLOCKED":
+        next_step = "Fix the recorded findings with task resume, or request a developer decision at the round cap."
+    elif status == "READY_FOR_DELIVERY":
+        next_step = "Do not mutate the delivery. Present the verified result and leave Git/Zoho actions to explicit requests."
+    else:
+        next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
+    return f"Android Harness task {task_id}: {status}. {next_step} Zoho mutates only after explicit `update zoho`."
 
 
-def should_inject(payload: dict, used_reviews: int, pending: bool) -> bool:
-    if used_reviews >= MAX_REVIEWS or pending:
-        return True
-    invocation = payload.get("invocationNum")
-    try:
-        n = int(invocation)
-    except (TypeError, ValueError):
-        n = 0 if invocation in (0, "0", None) else -1
-    return n in (0, 1) or (n > 0 and n % 4 == 0)
-
-
-def main():
+def main() -> None:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
-        conv = conversation_id(payload)
-        used_reviews = invoke_count(conv, "review")
-        pending = reviews_pending(conv)
-        if not should_inject(payload, used_reviews, pending):
-            print(json.dumps({}))
-            return
-        invocation = payload.get("invocationNum")
-        try:
-            n = int(invocation)
-        except (TypeError, ValueError):
-            n = 0 if invocation in (0, "0", None) else -1
-        update_dir = check_update_directive() if n in (0, 1) else ""
-        task_id = payload.get("taskId") or payload.get("task_id") or None
-        round_note = round_cap_warning(task_id)
-        print(json.dumps({
-            "injectSteps": [{"ephemeralMessage": message_for(used_reviews, pending, update_dir, round_note)}]
-        }))
+        invocation = int(payload.get("invocationNum") or 0) if isinstance(payload, dict) else 0
+        print(json.dumps({"injectSteps": [{"ephemeralMessage": _message()}]} if invocation in (0, 1) else {}))
     except Exception:
-        print(json.dumps({}))
+        print("{}")
 
 
 if __name__ == "__main__":

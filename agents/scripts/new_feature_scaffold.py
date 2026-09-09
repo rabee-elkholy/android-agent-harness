@@ -361,7 +361,7 @@ def scaffold_feature(feature_name: str, target_dir: Path | None = None) -> Path:
     append_string_key(RES_DIR / "values-ar" / "strings.xml", f"{snake}_empty", "Nothing to show yet")
 
     print(f"Scaffolded {pascal} feature at: {dest}")
-    print("Next: wire UseCase + navigation, then run the 5-leaf review. Do not leave this scaffold as production behavior.")
+    print("Next: wire UseCase + navigation, then run the reviewers and gates selected by the active policy.")
     return dest
 
 

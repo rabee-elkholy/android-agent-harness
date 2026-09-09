@@ -8,16 +8,16 @@ HEAD = "Read `.agents/rules/harness-rules.md` first. That file wins over everyth
 TAIL = "\nUser request / context: $ARGUMENTS\n"
 
 packs = {
-    "deliver": ("Deliver an Android change end-to-end: plan artifact, implement, 5-leaf review gate, preflight, assemble, device phases.", "[what to deliver]"),
-    "debug": ("Hypothesis-driven Android debugging with forensics, 5-leaf review, and physical-device validation.", "[bug symptoms / Zoho id]"),
-    "new-feature": ("Implement a new Android feature through the mandatory planning artifact and 5-leaf delivery gate.", "[feature description]"),
-    "preflight": ("Run the preflight sanity suite: hook selftest, string parity, Room migration gate, fast Kotlin lint.", ""),
+    "deliver": ("Deliver an approved Android change with adaptive gates, reviewers, build, and optional device evidence.", "[what to deliver]"),
+    "debug": ("Hypothesis-driven Android debugging with an approved fix plan and risk-selected verification.", "[bug symptoms / Zoho id]"),
+    "new-feature": ("Implement a new Android feature through explicit plan approval and adaptive delivery policy.", "[feature description]"),
+    "preflight": ("Run the offline preflight and only the deterministic checks selected by the active policy.", ""),
     "check-strings": ("Fail on English/Arabic string key drift or hardcoded user-facing text; fix both locale files.", ""),
     "perf-audit": ("Static + optional device ANR audit via perf_guard and perf-anr-guardian-agent.", "[optional file paths]"),
     "test-quality-audit": ("Audit modified unit/UI test files for assertion depth, dispatchers, and mocking integrity.", ""),
     "crash-triage": ("Pull physical-device fatals via logcat_doctor and hand them to qa-diagnostics-agent.", "[symptoms]"),
     "commit-msg": ("Draft a Conventional Commit message for Android Studio after every phase is Pass. The agent never commits.", ""),
-    "zoho-sprints": ("Zoho Sprints ingest/create/update playbook. Mutate only on explicit update zoho.", "[item id or update zoho]"),
+    "zoho-sprints": ("Zoho Sprints playbook. Writes require update zoho, approved external scope, and operation_id.", "[item id or update zoho]"),
 }
 
 for name, (desc, hint) in packs.items():

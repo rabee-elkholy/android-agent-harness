@@ -1,6 +1,8 @@
 ---
 name: gradle-build-optimizer
 description: Use when Gradle builds hang, lock on Windows, or a targeted :app assemble/test is enough instead of a full rebuild.
+version: 1.0.0
+kernel-major: 1
 ---
 
 # Gradle Build Optimizer

@@ -1,41 +1,34 @@
-# Demo Media — Recording Guide
+# Demo media recording guide
 
-Placeholder directory for the README demo GIFs. Record each shot, export as
-GIF at 1200px width, and drop the file into this directory with the exact
-name referenced by the README demo table. Keep every shot under 30 seconds
-and never show real credentials, tokens, or private code.
+Never show credentials, tokens, private source, device identifiers, or user
+data. Keep each clip under 30 seconds and export at 1200 px width.
 
-## Shot 1: `install.gif` — Install wizard end-to-end
+## `install.gif`
 
-1. Fresh terminal in an Android project root: `python harness_cli.py init`.
-2. Show 3-4 wizard questions answered (backup, git policy, tools).
-3. Paste the pinned install prompt into a new chat and show the structural
-   port starting (facts table or backup line is enough).
+Show a clean project, setup discovery, the ownership manifest, and doctor
+summary. Do not imply that installation runs Gradle or changes application
+source.
 
-## Shot 2: `review.gif` — Five-leaf dispatch + evidence footers
+## `approval.gif`
 
-1. After an edit, run `python .agents/scripts/review_package.py` and
-   highlight the printed `HARNESS_REVIEW_PACKAGE=` / `HARNESS_PACKAGE_SHA256_12=`.
-2. Dispatch all five reviewers in one call; scroll their replies ending in
-   `BUG_PASS ... EVIDENCE pkg=<hash> cites=<n>`.
-3. Show `state/verdicts/verdict-<pkg12>.json` and run
-   `android-harness verify --repo .`.
+Show plan draft, explicit developer approval, `begin`, and one attempted write
+being denied before approval and allowed afterward.
 
-## Shot 3: `safety.gif` — Blocked commit + pre-commit gate
+## `review.gif`
 
-1. Agent attempts `git commit -m x`: show the hook's deny JSON.
-2. Stage a string-parity violation, run `git commit`: show the pre-commit
-   gate blocking with `[STRINGS]` findings.
-3. Fix, restage, commit successfully.
+Show final classification/policy, the immutable review package, only the
+reviewers selected by policy, structured report ingestion, and the read-only
+final verifier. A micro-change demo should show
+`REVIEW_NOT_REQUIRED_BY_POLICY`, not fabricated PASS tokens.
 
-## Shot 4: `doctor.gif` — 12-dimension doctor report
+## `safety.gif`
 
-1. Run `python harness_cli.py doctor --json`.
-2. Scroll the dimension results and the summary line
-   (`Diagnostic Summary: N Passed ...`).
+Show an implicit Git mutation, raw Gradle command, destructive ADB command,
+and unplanned Zoho write being denied. Then show the approved gate wrapper.
 
-## Export tips
+## `lifecycle.gif`
 
-- macOS: `ffmpeg -i in.mov -vf "fps=12,scale=1200:-1" out.gif`
-- Windows: record with Xbox Game Bar / ShareX, then convert with ffmpeg.
-- Verify each GIF opens from the README demo table before publishing.
+Show compatible update preserving a tailored reference, uninstall dry-run,
+and applied uninstall restoring the original root adapter.
+
+Verify every recorded command against v1 before publishing the media.

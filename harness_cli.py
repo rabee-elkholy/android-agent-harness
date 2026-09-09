@@ -13,7 +13,7 @@ Usage:
     android-harness init  [--repo PATH] [--lang en|ar] [--kit PATH]
     android-harness update [--repo PATH] [--kit PATH]
     android-harness explain [--last N] [--repo PATH] [--kit PATH]
-    android-harness verify [--repo PATH] [--verdict PATH] [--rerun-checks] [--kit PATH]
+    android-harness verify --task TASK_ID [--repo PATH] [--kit PATH]
     android-harness doctor [--repo PATH] [--json] [--device] [--kit PATH]
     android-harness preflight [--repo PATH] [--kit PATH]
     android-harness selftest [--kit PATH]
@@ -22,7 +22,8 @@ Usage:
 Exit codes (documented contract):
     0  PASS / nothing wrong
     1  findings, failures, or configuration errors
-    2  incomplete or stale verification (verify: verdict from another commit)
+    2  configuration error
+    30 environment-blocked verification
     130 interrupted (Ctrl-C)
 
 Or without installing:
@@ -31,14 +32,11 @@ Or without installing:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -309,17 +307,17 @@ def cmd_init(args: argparse.Namespace) -> int:
     if not answers.is_file():
         print("[!] answers.json missing after wizard; rerun init.")
         return 1
-    print("[*] Applying engine port to target app...")
+    print("[*] Installing the vNext engine into the target app...")
     port_code = run_engine_script(
         kit,
-        "install_or_update.py",
-        ["--repo", str(repo), "--kit", str(kit)],
+        "lifecycle.py",
+        ["install", "--repo", str(repo), "--kit", str(kit)],
     )
     if port_code != 0:
         print("[!] Engine port reported failures; review doctor output above.")
         return port_code
     print()
-    print("[SUCCESS] Android Agent Harness installed and verified.")
+    print("[SUCCESS] Android Agent Harness installed; run doctor for local validation.")
     print(f"[VERIFY] Run anytime: android-harness doctor --repo \"{repo}\"")
     return 0
 
@@ -351,11 +349,11 @@ def cmd_update(args: argparse.Namespace) -> int:
         repo = find_repo(args.repo)
         answers = repo / ".harness-setup" / "answers.json"
         if answers.is_file():
-            print("[*] Applying engine update directly to app checkout...")
+            print("[*] Applying a compatible vNext engine update to the app checkout...")
             port_code = run_engine_script(
                 kit,
-                "install_or_update.py",
-                ["--repo", str(repo), "--kit", str(kit)],
+                "lifecycle.py",
+                ["update", "--repo", str(repo), "--kit", str(kit)],
             )
             if port_code != 0:
                 print(
@@ -369,6 +367,34 @@ def cmd_update(args: argparse.Namespace) -> int:
     print(f"       paste {_prompt_url(new_version, 'install-or-update-prompt.md')}")
     print("       in a NEW strong-model chat opened at the Android project root.")
     return 0
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    kit = resolve_kit(args.kit)
+    repo = find_repo(args.repo) if args.repo else find_repo(None)
+    command = ["uninstall", "--repo", str(repo)]
+    if args.apply:
+        command.append("--apply")
+    if args.legacy:
+        command.append("--legacy")
+    return run_engine_script(kit, "lifecycle.py", command)
+
+
+def cmd_task(args: argparse.Namespace) -> int:
+    kit = resolve_kit(args.kit)
+    task_args = list(args.task_args)
+    if task_args and task_args[0] == "--":
+        task_args = task_args[1:]
+    repo_value = None
+    for index, value in enumerate(task_args):
+        if value == "--repo" and index + 1 < len(task_args):
+            repo_value = task_args[index + 1]
+            break
+    repo = Path(repo_value).expanduser().resolve() if repo_value else Path.cwd().resolve()
+    installed = repo / ".agents" / "scripts" / "workflow.py"
+    if installed.is_file():
+        return subprocess.run([sys.executable, str(installed), *task_args], cwd=str(repo), check=False).returncode
+    return run_engine_script(kit, "workflow.py", task_args)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -434,7 +460,16 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     prev_cwd = Path.cwd()
     os.chdir(kit)
     try:
-        return run_engine_script(kit, "_hook_selftest.py", [])
+        scripts = (
+            "_vnext_selftest.py", "_hook_selftest.py", "_security_selftest.py",
+            "_zoho_selftest.py", "_baseline_selftest.py", "_graph_selftest.py",
+            "_adb_core_selftest.py", "_env_codes_selftest.py", "_performance_selftest.py",
+        )
+        for script in scripts:
+            code = run_engine_script(kit, script, [])
+            if code != 0:
+                return code
+        return 0
     finally:
         os.chdir(prev_cwd)
 
@@ -473,12 +508,6 @@ def cmd_explain(args: argparse.Namespace) -> int:
     if not audit_path.is_file():
         print(f"[i] No audit log yet at {audit_path}")
         return 0
-    sys.path.insert(0, str(_script_root(kit)))
-    try:
-        from policy_vocab import REASON_CODES
-    except Exception:
-        REASON_CODES = {}
-
     records: list[dict] = []
     with open(audit_path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -494,7 +523,7 @@ def cmd_explain(args: argparse.Namespace) -> int:
     last_n = max(1, args.last)
     for rec in records[-last_n:]:
         code = str(rec.get("reason_code") or "")
-        label = REASON_CODES.get(code, code or "UNSPECIFIED")
+        label = code or "UNSPECIFIED"
         ts = rec.get("ts") or 0
         stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts))) if ts else "?"
         decision = str(rec.get("decision") or "?").upper()
@@ -508,277 +537,19 @@ def cmd_explain(args: argparse.Namespace) -> int:
     return 0
 
 
+
 def cmd_verify(args: argparse.Namespace) -> int:
-    ensure_kit(args.kit)
-    repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
-    if args.verdict:
-        verdict_path = Path(args.verdict).expanduser().resolve()
-    else:
-        candidates: list[Path] = []
-        for rel in (".agents/state/verdicts", "agents/state/verdicts"):
-            vdir = repo / rel
-            if vdir.is_dir():
-                candidates.extend(sorted(vdir.glob("verdict-*.json")))
-        if not candidates:
-            raise SystemExit(
-                "[ERROR] No verdict artifacts found under the repo state dirs. "
-                "Run `python .agents/scripts/review_package.py` and complete a "
-                "5-leaf review round first."
-            )
-        verdict_path = candidates[-1]
-    try:
-        record = json.loads(verdict_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise SystemExit(f"[ERROR] Cannot read verdict {verdict_path}: {exc}")
-    if not isinstance(record, dict) or record.get("schema_version") not in (1, 2):
-        raise SystemExit("[FAIL] verdict artifact missing or unsupported schema_version (expected 1 or 2).")
-    print(f"[*] Verifying {verdict_path.name} against {repo}")
-
-    problems: list[str] = []
-
-    verdict = str(record.get("verdict") or "").upper()
-    accepted_verdicts = {"PASS", "APPROVED"}
-    if verdict not in accepted_verdicts:
-        problems.append(
-            f"verdict is {record.get('verdict')!r}, expected PASS or APPROVED"
+    """Run the read-only vNext final verifier for one active task."""
+    kit = resolve_kit(args.kit)
+    repo = find_repo(args.repo) if args.repo else find_repo(None)
+    client_workflow = repo / ".agents" / "scripts" / "workflow.py"
+    if client_workflow.is_file():
+        proc = subprocess.run(
+            [sys.executable, str(client_workflow), "verify", "--repo", str(repo), "--task-id", args.task],
+            cwd=str(repo), check=False,
         )
-
-    package = record.get("package") or {}
-    raw_pkg_path = str(package.get("path") or "").strip()
-    pkg_sha = str(package.get("sha256") or "")
-    if raw_pkg_path:
-        pkg_path = Path(raw_pkg_path).resolve()
-        repo_res = repo.resolve()
-        temp_res = Path(tempfile.gettempdir()).resolve()
-        is_safe_pkg = (
-            repo_res in pkg_path.parents
-            or pkg_path == repo_res
-            or temp_res in pkg_path.parents
-        )
-        if not is_safe_pkg:
-            problems.append(f"review package path escapes allowed directories: {raw_pkg_path}")
-        elif pkg_path.is_file() and pkg_sha:
-            digest = hashlib.sha256(pkg_path.read_bytes()).hexdigest()
-            if digest != pkg_sha:
-                problems.append(f"review package content changed since the round: {pkg_path.name}")
-        elif not pkg_path.is_file():
-            problems.append(f"review package file missing: {pkg_path}")
-    else:
-        problems.append("review package path missing in verdict")
-
-    files = record.get("files") or {}
-    missing: list[str] = []
-    changed: list[str] = []
-    escaped: list[str] = []
-    repo_res = repo.resolve()
-    for rel, want in sorted(files.items()):
-        fpath = (repo / str(rel).replace("/", os.sep)).resolve()
-        if repo_res not in fpath.parents and fpath != repo_res:
-            escaped.append(str(rel))
-            continue
-        if not fpath.is_file():
-            missing.append(str(rel))
-            continue
-        digest = hashlib.sha256(fpath.read_bytes()).hexdigest()
-        if digest != want:
-            changed.append(str(rel))
-    for rel in escaped:
-        problems.append(f"reviewed file path escapes repository root: {rel}")
-    for rel in missing[:10]:
-        problems.append(f"file from the reviewed diff is missing in this checkout: {rel}")
-    if len(missing) > 10:
-        problems.append(f"... and {len(missing) - 10} more missing files")
-    for rel in changed[:10]:
-        problems.append(f"file changed since the verified round: {rel}")
-    if len(changed) > 10:
-        problems.append(f"... and {len(changed) - 10} more changed files")
-
-    leaf_aliases = {
-        "bug_reviewer": {
-            "bug_reviewer",
-            "bug-reviewer-agent",
-            "bug-reviewer",
-            "bug",
-        },
-        "convention_reviewer": {
-            "convention_reviewer",
-            "convention-reviewer-agent",
-            "convention-reviewer",
-            "convention",
-            "conv",
-        },
-        "security_reviewer": {
-            "security_reviewer",
-            "security-reviewer-agent",
-            "security-reviewer",
-            "security",
-        },
-        "perf_guardian": {
-            "perf_guardian",
-            "perf-anr-guardian-agent",
-            "perf-anr-guardian",
-            "perf",
-        },
-        "regression_reviewer": {
-            "regression_reviewer",
-            "regression-impact-reviewer-agent",
-            "regression-impact-reviewer",
-            "regression",
-        },
-        "test_quality": {
-            "test_quality",
-            "test-quality-reviewer-agent",
-            "test-quality-reviewer",
-            "test_quality_reviewer",
-            "test",
-        },
-    }
-    expected_tokens = {
-        "bug_reviewer": "BUG_PASS",
-        "convention_reviewer": "CONVENTION_PASS",
-        "security_reviewer": "SECURITY_PASS",
-        "perf_guardian": "PERF_PASS",
-        "regression_reviewer": "REGRESSION_PASS",
-        "test_quality": "TEST_PASS",
-    }
-    alias_to_canonical = {
-        alias: canonical
-        for canonical, aliases in leaf_aliases.items()
-        for alias in aliases
-    }
-
-    def _is_test_path(path: str) -> bool:
-        normalized = str(path).replace("\\", "/").lower()
-        return (
-            "/test/" in f"/{normalized}"
-            or "/androidtest/" in f"/{normalized}"
-            or "/sharedtest/" in f"/{normalized}"
-            or normalized.endswith("test.kt")
-            or normalized.endswith("tests.kt")
-            or normalized.endswith("test.java")
-            or normalized.endswith("tests.java")
-        )
-
-    leaves = record.get("leaves") or {}
-    if not isinstance(leaves, dict):
-        problems.append("review leaves must be a JSON object")
-        leaves = {}
-    if verdict in accepted_verdicts:
-        contains_tests = bool(record.get("contains_tests")) or any(
-            _is_test_path(str(path)) for path in files
-        )
-        required_leaves = [
-            "bug_reviewer",
-            "convention_reviewer",
-            "security_reviewer",
-            "perf_guardian",
-            "regression_reviewer",
-        ]
-        if contains_tests:
-            required_leaves.append("test_quality")
-
-        normalized_leaves: dict[str, tuple[str, object]] = {}
-        unknown_leaves: list[str] = []
-        duplicate_leaves: list[str] = []
-        for raw_name, leaf_data in leaves.items():
-            raw_key = str(raw_name)
-            canonical = alias_to_canonical.get(raw_key)
-            if canonical is None:
-                unknown_leaves.append(raw_key)
-                continue
-            if canonical in normalized_leaves:
-                duplicate_leaves.append(canonical)
-                continue
-            normalized_leaves[canonical] = (raw_key, leaf_data)
-
-        if unknown_leaves:
-            problems.append(
-                f"unknown leaf names in verdict: {sorted(unknown_leaves)}"
-            )
-        if duplicate_leaves:
-            problems.append(
-                "duplicate aliases recorded for leaf roles: "
-                f"{sorted(set(duplicate_leaves))}"
-            )
-
-        for canonical in required_leaves:
-            normalized = normalized_leaves.get(canonical)
-            if normalized is None:
-                problems.append(f"missing required review leaf: {canonical}")
-                continue
-            _, leaf_data = normalized
-            if isinstance(leaf_data, dict):
-                token = str(
-                    leaf_data.get("token") or leaf_data.get("verdict") or ""
-                )
-            else:
-                token = str(leaf_data)
-            expected = expected_tokens[canonical]
-            if token != expected:
-                problems.append(
-                    f"review leaf {canonical} has token {token!r}, expected {expected}"
-                )
-
-    stale = False
-    git_sha = str(record.get("git_sha") or "")
-    if git_sha:
-        proc_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        head = (proc_head.stdout or "").strip()
-        if re.fullmatch(r"[0-9a-f]{40}", head) and head != git_sha:
-            stale = True
-            print(f"[!] STALE: verdict generated at {git_sha[:12]} but HEAD is {head[:12]}.")
-
-    if args.rerun_checks:
-        engine_scripts = repo / ".agents" / "scripts"
-        if not engine_scripts.is_dir():
-            print("[i] --rerun-checks skipped: this checkout has no installed .agents engine.")
-        else:
-            checks_ok = True
-            for script in ("fast_kt_lint.py", "check_strings.py"):
-                target = engine_scripts / script
-                if not target.is_file():
-                    continue
-                proc_chk = subprocess.run(
-                    [sys.executable, str(target)],
-                    cwd=str(repo),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
-                )
-                if proc_chk.returncode != 0:
-                    checks_ok = False
-                    tail = "\n".join((proc_chk.stdout or "").strip().splitlines()[-8:])
-                    print(f"[FAIL] {script}:")
-                    print(tail)
-            if not checks_ok:
-                problems.append("re-run checks failed")
-
-    if problems:
-        print(f"\n[FAIL] verify failed with {len(problems)} problem(s):")
-        for item in problems:
-            print(f"  - {item}")
-        return EXIT_FINDINGS
-    if stale:
-        print(
-            "\n[STALE] Package and file hashes match the recorded verdict, but it was "
-            "generated at a different commit than the current HEAD."
-        )
-        return EXIT_INCOMPLETE_OR_STALE
-    print(
-        "\n[PASS] Verdict artifact verified: package hash, changed-file hashes, and "
-        "5 evidenced leaves all match this checkout."
-    )
-    return EXIT_PASS
+        return proc.returncode
+    return run_engine_script(kit, "workflow.py", ["verify", "--repo", str(repo), "--task-id", args.task])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -799,6 +570,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout to refresh (default: auto-discover or clone).")
     sp.add_argument("--force", action="store_true", help="Force remote release check.")
     sp.set_defaults(func=cmd_update)
+
+    sp = sub.add_parser("uninstall", help="Preview or apply an ownership-safe harness removal.")
+    sp.add_argument("--repo", help="Android checkout containing the harness (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the lifecycle engine.")
+    sp.add_argument("--apply", action="store_true", help="Apply the previewed removal.")
+    sp.add_argument("--legacy", action="store_true", help="Remove a legacy installation after backing it up.")
+    sp.set_defaults(func=cmd_uninstall)
+
+    sp = sub.add_parser("task", help="Run the vNext plan/approval/verification lifecycle.")
+    sp.add_argument("--kit", help="Kit checkout providing the workflow engine.")
+    sp.add_argument("task_args", nargs=argparse.REMAINDER, help="Arguments passed to workflow.py")
+    sp.set_defaults(func=cmd_task)
 
     sp = sub.add_parser("doctor", help="12-dimension diagnostic for an Android checkout.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
@@ -834,18 +617,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser(
         "verify",
-        help="Verify a review verdict.json artifact against actual repo state.",
+        help="Run the read-only final verifier for an active vNext task.",
     )
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
-    sp.add_argument(
-        "--verdict",
-        help="Path to a verdict-*.json file (default: newest under the repo state dir).",
-    )
-    sp.add_argument(
-        "--rerun-checks",
-        action="store_true",
-        help="Additionally re-run fast_kt_lint.py and check_strings.py (requires an installed .agents engine).",
-    )
+    sp.add_argument("--task", required=True, help="Approved task id to verify.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
     sp.set_defaults(func=cmd_verify)
 

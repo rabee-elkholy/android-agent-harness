@@ -26,45 +26,38 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Run Core Safety & Hook Self-Tests
+      - name: Run vNext architecture tests
+        run: |
+          python -m unittest agents/scripts/_vnext_selftest.py -v
+
+      - name: Run host safety hook tests
         run: |
           python agents/scripts/_hook_selftest.py
 
-      - name: Run Adversarial Security Self-Tests (B1)
+      - name: Run adversarial security tests
         run: |
           python agents/scripts/_security_selftest.py
 
-      - name: Run ADB Core Self-Tests
+      - name: Run Zoho compatibility and idempotency tests
+        run: |
+          python agents/scripts/_zoho_selftest.py
+
+      - name: Run ADB core tests
         run: |
           python agents/scripts/_adb_core_selftest.py
 
-      - name: Run Code Graph Self-Tests
-        run: |
-          python agents/scripts/_graph_selftest.py
-
-      - name: Run Environment/Code Failure Classifier Self-Tests
+      - name: Run environment failure classifier tests
         run: |
           python agents/scripts/_env_codes_selftest.py
 
-      - name: Run Review-Round Cap Ledger Self-Tests
-        run: |
-          python agents/scripts/_round_cap_selftest.py
-
-      - name: Run Final Verdict Aggregation Self-Tests
-        run: |
-          python agents/scripts/_final_verdict_selftest.py
-
-      - name: Run Baseline & Test-Gate Self-Tests
+      - name: Run baseline and graph compatibility tests
         run: |
           python agents/scripts/_baseline_selftest.py
+          python agents/scripts/_graph_selftest.py
 
-      - name: Run Risk-Tier & Impact-Analysis Self-Tests
+      - name: Compile Python sources
         run: |
-          python agents/scripts/_risk_and_impact_selftest.py
-
-      - name: Run Preflight Sanity Verification
-        run: |
-          python agents/scripts/preflight_check.py
+          python -m compileall -q agents/scripts agents/mcp/zoho_sprints harness_cli.py
 
       - name: Smoke Standalone CLI Dispatcher
         env:
@@ -72,3 +65,54 @@ jobs:
         run: |
           python harness_cli.py version
           python harness_cli.py doctor --json
+
+  performance:
+    name: Performance regression budget
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+      - name: Run performance tripwire
+        run: python agents/scripts/_performance_selftest.py
+
+  release-lifecycle:
+    name: Wheel lifecycle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Build wheel without network dependencies
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        run: python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist
+      - name: Validate installed wheel lifecycle
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        run: python scripts_dev/release_lifecycle_smoke.py --wheel-dir dist
+
+  release-metadata:
+    name: Release metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Validate release-controlled metadata
+        run: python scripts_dev/validate_release.py

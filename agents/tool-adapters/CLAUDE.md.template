@@ -4,17 +4,9 @@
 
 **Source of truth:** `.agents/rules/harness-rules.md` (and `AGENTS.md`).
 
-## Subagents
+## Reviewers
 
-After `{{PY}} .agents/scripts/review_package.py`, launch all five in parallel (same package path). Agent files: `.claude/agents/` (generated from `.agents/subagents/*.json`).
-
-- `bug-reviewer-agent`
-- `convention-reviewer-agent`
-- `security-reviewer-agent`
-- `perf-anr-guardian-agent`
-- `regression-impact-reviewer-agent`
-
-Wait for `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS`. Do not invoke `code-review-guard-agent`. Do not wait for `LGTM`.
+Run only the reviewer roles selected by `.agents/scripts/review_policy.py` against the same immutable review package. Agent files are generated under `.claude/agents/`. Missing required coverage or malformed output blocks delivery.
 
 On-demand specialists (`.claude/agents/`):
 - `qa-diagnostics-agent` (Logcat crash forensics)
@@ -25,7 +17,7 @@ Device: {{DEVICE_POLICY}}
 
 {{GIT_POLICY}}
 
-Antigravity `hooks.json` does **not** run here. Do not assemble until those five verdicts exist.
+Read `ENFORCEMENT_TIER` and `ENFORCEMENT_BY_HOST` from `.agents/scripts/_product.py`. Claude's executable hook may hard-enforce covered mutations, but conversational approval remains `RULE_ENFORCED`; never claim cryptographic human separation.
 
 ```
 {{PY}} .agents/scripts/fast_kt_lint.py

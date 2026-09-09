@@ -101,11 +101,26 @@ def discover_modules(repo: Path) -> list[str]:
             continue
         rel = path.parent.relative_to(repo).as_posix()
         if rel == ".":
-            mod = ":app"
+            mod = ":"
         else:
             mod = ":" + rel.replace("/", ":")
         if mod not in modules:
             modules.append(mod)
+    return modules
+
+
+def discover_android_modules(repo: Path) -> list[str]:
+    modules: list[str] = []
+    for path in gradle_files(repo):
+        text = read_text(path)
+        if not re.search(r"com\.android\.(?:application|library|dynamic-feature)|androidTarget\s*\(", text):
+            continue
+        if re.search(r"com\.android\.(?:application|library|dynamic-feature).*apply\s+false", text):
+            continue
+        rel = path.parent.relative_to(repo).as_posix()
+        module = ":" + rel.replace("/", ":") if rel != "." else ":"
+        if module not in modules:
+            modules.append(module)
     return modules
 
 
@@ -131,18 +146,51 @@ def discover_application_ids(repo: Path) -> list[str]:
     return ids
 
 
+def discover_module_application_ids(repo: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for path in gradle_files(repo):
+        text = read_text(path)
+        match = re.search(r'applicationId(?:\s*=\s*|\s+)["\']([^"\']+)["\']', text)
+        if not match:
+            match = re.search(r'namespace(?:\s*=\s*|\s+)["\']([^"\']+)["\']', text)
+        if not match:
+            continue
+        rel = path.parent.relative_to(repo).as_posix()
+        module = ":" + rel.replace("/", ":") if rel != "." else ":"
+        result[module] = match.group(1)
+    return result
+
+
+def discover_android_source_root(repo: Path, module: str) -> list[str]:
+    module_dir = repo.joinpath(*[part for part in module.split(":") if part])
+    for source_set in ("androidMain", "main"):
+        candidate = module_dir / "src" / source_set
+        if candidate.is_dir():
+            return list(candidate.relative_to(repo).parts)
+    return list((module_dir / "src" / "main").relative_to(repo).parts)
+
+
 def discover_launchers(repo: Path) -> list[str]:
     ids = discover_application_ids(repo)
-    pkg = ids[0] if ids else ""
+    module_ids = discover_module_application_ids(repo)
     found: list[str] = []
     for path in repo.glob("**/AndroidManifest.xml"):
         if skip_path(path, repo):
             continue
         text = read_text(path)
+        relative_parts = path.relative_to(repo).parts
+        try:
+            source_index = relative_parts.index("src")
+            module = ":" + ":".join(relative_parts[:source_index]) if source_index else ":"
+        except ValueError:
+            module = ":"
+        manifest_pkg = re.search(r'package\s*=\s*["\']([^"\']+)["\']', text)
+        pkg = module_ids.get(module) or (manifest_pkg.group(1) if manifest_pkg else "") or (ids[0] if ids else "")
         if "android.intent.action.MAIN" not in text or "android.intent.category.LAUNCHER" not in text:
             continue
 
         # 1. Structured XML parsing (robust against self-closing sibling tags)
+        manifest_launcher_found = False
         try:
             import xml.etree.ElementTree as ET
             tree = ET.parse(path)
@@ -163,6 +211,7 @@ def discover_launchers(repo: Path) -> list[str]:
                 if has_main and has_launcher:
                     name = elem.attrib.get("{http://schemas.android.com/apk/res/android}name") or elem.attrib.get("android:name") or elem.attrib.get("name")
                     if name:
+                        manifest_launcher_found = True
                         name = name.strip()
                         if name.startswith("."):
                             comp = f"{pkg}/{name}" if pkg else name
@@ -181,7 +230,7 @@ def discover_launchers(repo: Path) -> list[str]:
             pass
 
         # 2. Fallback regex search if XML parser failed
-        if not found:
+        if not manifest_launcher_found:
             act_blocks = re.findall(r"<(?:activity|activity-alias)\b[\s\S]*?</(?:activity|activity-alias)>", text)
             for block in act_blocks:
                 if "android.intent.action.MAIN" not in block or "android.intent.category.LAUNCHER" not in block:
@@ -447,6 +496,7 @@ def count_source_files(repo: Path) -> int:
 
 def discover(repo: Path) -> dict:
     modules = discover_modules(repo)
+    android_modules = discover_android_modules(repo)
     pythons = discover_pythons()
     raw_locales = discover_locales(repo)
     clean_locales = discover_clean_locales(raw_locales)
@@ -457,10 +507,14 @@ def discover(repo: Path) -> dict:
     structure = discover_project_structure(repo, modules)
     arch_bases = discover_architectural_bases(repo)
     return {
+        "repo": str(repo.resolve()),
         "product": discover_product(repo),
         "pythons": pythons,
         "modules": modules,
+        "android_modules": android_modules,
+        "project_kind": "application" if modules else "library" if android_modules else "unsupported",
         "application_ids": discover_application_ids(repo),
+        "module_application_ids": discover_module_application_ids(repo),
         "launchers": discover_launchers(repo),
         "apk_hint": discover_apk_hint(repo),
         "locales": raw_locales,
@@ -482,7 +536,7 @@ def discover(repo: Path) -> dict:
 
 def auto_from_facts(facts: dict) -> dict:
     pythons = facts.get("pythons") or []
-    modules = facts.get("modules") or []
+    modules = facts.get("modules") or facts.get("android_modules") or []
     launchers = facts.get("launchers") or []
     hint = facts.get("apk_hint") or ""
     if hint:
@@ -492,10 +546,14 @@ def auto_from_facts(facts: dict) -> dict:
         apk_mode = "glob"
         apk_path = "**/outputs/apk/debug/*.apk"
     clean_locales = facts.get("clean_locales") or ["en"]
+    selected_module = modules[0] if modules else ""
     return {
         "product": facts.get("product") or "App",
         "py": pythons[0] if pythons else "",
-        "module": modules[0] if modules else "",
+        "module": selected_module,
+        "project_kind": facts.get("project_kind") or "application",
+        "application_id": (facts.get("module_application_ids") or {}).get(selected_module, ""),
+        "android_src": discover_android_source_root(Path(facts["repo"]), selected_module) if facts.get("repo") and selected_module else [],
         "launcher": launchers[0] if launchers else "",
         "apk": apk_mode,
         "apk_path": apk_path,

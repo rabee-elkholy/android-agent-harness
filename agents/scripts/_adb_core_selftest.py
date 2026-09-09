@@ -222,6 +222,15 @@ def test_grant_permissions_multipackage() -> None:
     check(target_pkgs == ["com.fixture.app", "com.fixture.legacy"], "multi-package targets resolved for permissions")
 
 
+def test_network_mutation_is_refused() -> None:
+    session = DeviceSession(serial="mock", package="com.fixture.app")
+    session.run_adb = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ADB must not run"))
+    offline_ok, offline_reason = session.set_network(False)
+    online_ok, online_reason = session.set_network(True)
+    check(not offline_ok and "manual" in offline_reason, "offline request is side-effect free")
+    check(not online_ok and "manual" in online_reason, "online request is side-effect free")
+
+
 def main() -> int:
     test_parse_bounds()
     test_hierarchy_parse_and_find()
@@ -238,6 +247,7 @@ def main() -> int:
     test_foreground_package_multitier_parsing()
     test_diff_discovery_no_git_errors()
     test_grant_permissions_multipackage()
+    test_network_mutation_is_refused()
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")
         for item in FAILURES:
