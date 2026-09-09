@@ -112,7 +112,7 @@ def _snapshot_app_files(repo: Path) -> dict[str, str]:
         except ValueError:
             continue
         parts = Path(rel).parts
-        if parts and parts[0].startswith((".git", ".agents", ".harness")):
+        if parts and (parts[0].startswith((".git", ".agents", ".harness", ".gradle", ".idea")) or parts[0] == "build" or path.name.endswith(".lock")):
             continue
         digest = sha256_file(path)
         if digest:

@@ -72,7 +72,7 @@
     "agents/scripts/install_or_update.py": "8c5d14933819331b330b4693d7f531a997d3361702624eb00447466cba9fe2b7",
     "agents/scripts/install_tool_adapters.py": "467a9b5418d9f5d8e1474544b1f32974afabe9e84f4088f01d8b722e785a2bcb",
     "agents/scripts/install_zoho_mcp.py": "3d1b9a326f05480a5a9a11b02380475ca7b94369fa16698e909a6df1dbd66b91",
-    "agents/scripts/lifecycle.py": "66e230578650f7af142087daaed00337df00063bdfdbddb73b7d6108567b7b78",
+    "agents/scripts/lifecycle.py": "3aedd3495028b09c4bd745ddb3fc550709963759b00ffe01cb71382116465d82",
     "agents/scripts/logcat_doctor.py": "d4ca172f1a91bd35106023cf8212ddcbd2409207b306d589b1f5b48dc753524e",
     "agents/scripts/mutation_guard.py": "6bda6fe8386e417bdedbc399d3637ad7d0542eedad96090d6a22a636f8c3015e",
     "agents/scripts/new_feature_scaffold.py": "804c8b1195e83030e7cc167ec140870a76bd2ca7cf2dbd8566b7b3a3124fa7fb",
