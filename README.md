@@ -17,13 +17,21 @@ A local, zero-dependency development harness for Android projects. It is designe
 
 ### Chat installation (recommended)
 
-Open the Android project root in your coding agent, then paste the complete
-[pinned installation prompt](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.0/docs/install-or-update-prompt.md)
-into the chat. The prompt detects whether the project needs a clean install,
-a same-major update, or an ownership-safe legacy replacement. It provisions
-the kit from the immutable `v1.0.0` tag and must show the exact operation and
-wait for your explicit approval before it installs, updates, or removes
-anything.
+Open the Android project root in your coding agent, then paste:
+
+```text
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.0/docs/install-or-update-prompt.md and follow all instructions.
+```
+
+The AI agent will:
+1. Perform read-only discovery of your Android project structure.
+2. Ask setup questions directly in chat with recommended choices marked with **«أفضل»**.
+3. Present a precise installation plan with an executable non-interference snapshot guarantee.
+4. Wait for your explicit approval before modifying anything or provisioning the kit.
+5. Provision the pinned kit into `~/.android-harness/kit`, verify integrity, and perform an atomic clean install or update.
+6. Run `doctor` verification and verify zero application files were altered.
+
+*(Note: In pre-release testing before the GitHub release tag `v1.0.0` is published, point to the exact commit URL instead).*
 
 ### Terminal installation (alternative)
 

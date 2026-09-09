@@ -8,7 +8,17 @@
 - JDK/Android SDK only when selected build gates need them;
 - ADB device only when the adaptive policy selects device verification.
 
-## Clean installation
+## Chat installation (recommended)
+
+Open the Android project root in your coding agent and paste:
+
+```text
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.0/docs/install-or-update-prompt.md and follow all instructions.
+```
+
+The agent interviews you in chat, preserves references, shows an explicit plan, provisions the pinned kit into `~/.android-harness/kit`, and runs doctor.
+
+## Terminal installation (alternative)
 
 ```bash
 python harness_cli.py init --repo /path/to/app --kit .

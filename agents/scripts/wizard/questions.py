@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _vnext_common import atomic_write_bytes, atomic_write_json  # noqa: E402
+from .schema import validate_raw_answers  # noqa: E402
 from .discovery import (
     _flavor_pascal,
     answers_path,
@@ -501,6 +505,9 @@ def prompt_text(lang: str) -> str:
 
 
 def normalize(raw: dict, facts: dict) -> dict:
+    errors = validate_raw_answers(raw)
+    if errors:
+        raise SystemExit("[ERROR] answers schema validation failed:\n  " + "\n  ".join(errors))
     if raw.get("i0") == "no":
         return {"schema": SCHEMA, "i0": False, "backup": False}
     auto = auto_from_facts(facts)
@@ -687,9 +694,7 @@ def normalize(raw: dict, facts: dict) -> dict:
 def write_answers(repo: Path, answers: dict) -> None:
     dest = setup_dir(repo)
     dest.mkdir(parents=True, exist_ok=True)
-    answers_path(repo).write_text(
-        json.dumps(answers, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    atomic_write_json(answers_path(repo), answers)
     md = [
         "# SETUP_ANSWERS",
         "",
@@ -735,7 +740,7 @@ def write_answers(repo: Path, answers: dict) -> None:
             f"- Locales: {b.get('locales')}",
             "",
         ])
-    markdown_path(repo).write_text("\n".join(md), encoding="utf-8")
+    atomic_write_bytes(markdown_path(repo), ("\n".join(md) + "\n").encode("utf-8"))
 
 
 def flags_from_answers(answers: dict) -> str:

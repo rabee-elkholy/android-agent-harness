@@ -150,9 +150,18 @@ def find_repo(explicit: str | None) -> Path:
 
 
 def load_write_payload(path: Path) -> dict:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    if path.is_symlink():
+        raise SystemExit(f"[ERROR] answers file cannot be a symlink: {path}")
+    if not path.is_file():
+        raise SystemExit(f"[ERROR] answers file not found: {path}")
+    if path.stat().st_size > 1024 * 1024:
+        raise SystemExit(f"[ERROR] answers file exceeds maximum permitted size (1MB): {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"[ERROR] answers JSON is invalid: {exc}")
     if not isinstance(data, dict):
-        raise SystemExit("answers JSON must be an object.")
+        raise SystemExit("[ERROR] answers JSON must be an object.")
     return data
 
 
@@ -191,6 +200,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.answers_json:
             raise SystemExit("write needs --answers-json")
         raw = load_write_payload(Path(args.answers_json))
+        from wizard.schema import validate_raw_answers
+        val_errors = validate_raw_answers(raw)
+        if val_errors:
+            raise SystemExit(
+                "[ERROR] answers schema validation failed:\n  " + "\n  ".join(val_errors)
+            )
         if raw.get("schema") == SCHEMA and raw.get("i0") is True and "product" in raw:
             answers = raw
         else:

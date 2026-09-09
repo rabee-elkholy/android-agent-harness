@@ -32,6 +32,7 @@ Or without installing:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -39,6 +40,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 KIT_REPO_URL = "https://github.com/rabee-elkholy/android-agent-harness.git"
@@ -92,11 +94,60 @@ def _latest_release_tag(timeout: float = 3.0) -> str | None:
     return None
 
 
-def _provision_pinned(url: str, dest: Path, version: str) -> None:
-    """Fresh checkout of exactly tag v<version>. No main, no float."""
-    if dest.exists():
+def _verify_kit_checksums(kit: Path) -> None:
+    """Pre-execution release checksum verifier.
+
+    Verifies every file in agents/release_checksums.json using standard library Python
+    before importing or executing any kit scripts. Rejects symlinks and path traversal.
+    """
+    checksum_file = kit / "agents" / "release_checksums.json"
+    if not checksum_file.is_file() or checksum_file.is_symlink():
+        raise SystemExit(f"[ERROR] Kit release checksums manifest missing or symlink: {checksum_file}")
+    try:
+        manifest = json.loads(checksum_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"[ERROR] Kit release checksums manifest corrupt: {exc}")
+    files = manifest.get("files") or {}
+    for rel, expected in files.items():
+        rel_path = Path(rel)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            raise SystemExit(f"[ERROR] Suspicious path in release checksums: {rel}")
+        target = kit / rel_path
+        if not target.is_file() or target.is_symlink():
+            raise SystemExit(f"[ERROR] Missing or symlinked kit file: {rel}")
+        h = hashlib.sha256()
+        with open(target, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        if h.hexdigest() != expected:
+            raise SystemExit(f"[ERROR] Kit release checksum mismatch for {rel}")
+
+
+def _recover_stale_kit(dest: Path) -> None:
+    """Recover from interrupted promotions or remove stale backup kits."""
+    previous = dest.with_name(f"{dest.name}.previous")
+    if dest.is_dir() and _has_engine(dest):
+        if previous.exists():
+            shutil.rmtree(previous, ignore_errors=True)
+    elif previous.is_dir() and not dest.exists():
+        try:
+            os.replace(previous, dest)
+        except OSError:
+            pass
+    elif previous.is_dir() and dest.is_dir() and not _has_engine(dest):
         shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(previous, dest)
+        except OSError:
+            pass
+
+
+def _provision_pinned(url: str, dest: Path, version: str) -> None:
+    """Fresh checkout of exactly tag v<version> via staging and Windows-safe atomic transaction."""
+    _recover_stale_kit(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging = dest.parent / f"staging_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    staging.mkdir(parents=True, exist_ok=True)
     tag = f"v{version}"
     steps = [
         (["git", "init", "-q"], True),
@@ -115,13 +166,56 @@ def _provision_pinned(url: str, dest: Path, version: str) -> None:
         ),
         (["git", "checkout", "-q", "--detach", tag], True),
     ]
-    for step, use_cwd in steps:
-        proc = subprocess.run(step, check=False, cwd=str(dest) if use_cwd else None)
-        if proc.returncode != 0:
-            shutil.rmtree(dest, ignore_errors=True)
+    try:
+        for step, use_cwd in steps:
+            proc = subprocess.run(step, check=False, cwd=str(staging) if use_cwd else None)
+            if proc.returncode != 0:
+                raise SystemExit(
+                    f"[ERROR] Could not provision kit at tag {tag}. {_manual_remediation(version)}"
+                )
+        if not _has_engine(staging):
             raise SystemExit(
-                f"[ERROR] Could not provision kit at tag {tag}. {_manual_remediation(version)}"
+                f"[ERROR] Kit checkout at v{version} has no harness engine. {_manual_remediation(version)}"
             )
+        found = _read_version_file(staging)
+        if found != version:
+            raise SystemExit(
+                f"[ERROR] Pinned kit checkout reports v{found} but v{version} was requested. "
+                + _manual_remediation(version)
+            )
+        _verify_kit_checksums(staging)
+
+        # Windows-safe atomic replacement transaction:
+        # kit -> kit.previous, staging -> kit, validate, clean kit.previous
+        previous = dest.with_name(f"{dest.name}.previous")
+        has_prev = False
+        if dest.exists():
+            if previous.exists():
+                shutil.rmtree(previous, ignore_errors=True)
+            try:
+                os.replace(dest, previous)
+                has_prev = True
+            except OSError:
+                time.sleep(0.1)
+                os.replace(dest, previous)
+                has_prev = True
+        try:
+            os.replace(staging, dest)
+            if not _has_engine(dest) or _read_version_file(dest) != version:
+                raise RuntimeError("Engine validation failed after kit promotion")
+            if has_prev and previous.exists():
+                shutil.rmtree(previous, ignore_errors=True)
+        except Exception as exc:
+            shutil.rmtree(dest, ignore_errors=True)
+            if has_prev and previous.exists():
+                try:
+                    os.replace(previous, dest)
+                except OSError:
+                    pass
+            raise SystemExit(f"[ERROR] Failed promoting staged kit to {dest}: {exc}")
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def _script_root(kit: Path) -> Path:
@@ -294,32 +388,53 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"  target app : {repo}")
     print(f"  engine kit : {kit}")
     print("==================================================")
-    lang_args = ["--lang", args.lang] if args.lang else []
-    code = run_engine_script(
-        kit,
-        "setup_wizard.py",
-        ["--repo", str(repo), *lang_args],
-    )
-    if code != 0:
-        print("[!] Setup wizard did not complete; nothing was installed.")
-        return code
-    answers = repo / ".harness-setup" / "answers.json"
-    if not answers.is_file():
-        print("[!] answers.json missing after wizard; rerun init.")
-        return 1
-    print("[*] Installing the vNext engine into the target app...")
-    port_code = run_engine_script(
-        kit,
-        "lifecycle.py",
-        ["install", "--repo", str(repo), "--kit", str(kit)],
-    )
-    if port_code != 0:
-        print("[!] Engine port reported failures; review doctor output above.")
-        return port_code
-    print()
-    print("[SUCCESS] Android Agent Harness installed; run doctor for local validation.")
-    print(f"[VERIFY] Run anytime: android-harness doctor --repo \"{repo}\"")
-    return 0
+    answers_arg = getattr(args, "answers_json", None)
+    temp_to_clean: Path | None = None
+    if answers_arg:
+        p = Path(answers_arg).resolve()
+        if p.is_symlink() or not p.is_file():
+            raise SystemExit(f"[ERROR] --answers-json path is missing or a symlink: {answers_arg}")
+        temp_to_clean = p
+
+    try:
+        if answers_arg:
+            wizard_args = ["write", "--repo", str(repo), "--answers-json", str(temp_to_clean)]
+            if args.lang:
+                wizard_args.extend(["--lang", args.lang])
+            code = run_engine_script(kit, "setup_wizard.py", wizard_args)
+        else:
+            lang_args = ["--lang", args.lang] if args.lang else []
+            code = run_engine_script(
+                kit,
+                "setup_wizard.py",
+                ["--repo", str(repo), *lang_args],
+            )
+        if code != 0:
+            print("[!] Setup wizard did not complete; nothing was installed.")
+            return code
+        answers = repo / ".harness-setup" / "answers.json"
+        if not answers.is_file():
+            print("[!] answers.json missing after wizard; rerun init.")
+            return 1
+        print("[*] Installing the vNext engine into the target app...")
+        port_code = run_engine_script(
+            kit,
+            "lifecycle.py",
+            ["install", "--repo", str(repo), "--kit", str(kit)],
+        )
+        if port_code != 0:
+            print("[!] Engine port reported failures; review doctor output above.")
+            return port_code
+        print()
+        print("[SUCCESS] Android Agent Harness installed; run doctor for local validation.")
+        print(f"[VERIFY] Run anytime: android-harness doctor --repo \"{repo}\"")
+        return 0
+    finally:
+        if temp_to_clean and temp_to_clean.is_file():
+            try:
+                temp_to_clean.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def cmd_update(args: argparse.Namespace) -> int:
@@ -563,6 +678,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--lang", choices=("en", "ar"), default=None, help="Wizard language.")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
+    sp.add_argument("--answers-json", help="Path to validated answers JSON for non-interactive setup.")
     sp.set_defaults(func=cmd_init)
 
     sp = sub.add_parser("update", help="Refresh the local kit engine and print upgrade steps.")

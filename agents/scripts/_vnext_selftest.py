@@ -15,6 +15,8 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parent
 KIT = SCRIPTS.parents[1]
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(KIT))
+import harness_cli  # noqa: E402
 
 from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, sha256_file  # noqa: E402
 from artifact_set import build_artifact_set, resolve_artifacts, verify_artifact_set  # noqa: E402
@@ -90,24 +92,164 @@ class ChatInstallationDocsTests(unittest.TestCase):
     def test_chat_prompt_is_pinned_and_self_contained(self) -> None:
         tag = f"v{self.version}"
         self.assertIn(f"--branch {tag} --single-branch", self.prompt)
-        self.assertIn(f"describe --tags --exact-match", self.prompt)
-        self.assertIn("This prompt is complete", self.prompt)
+        self.assertIn("describe --tags --exact-match", self.prompt)
+        self.assertIn("«أفضل»", self.prompt)
         self.assertNotIn("android-agent-harness/main/", self.prompt)
         self.assertNotIn("releases/latest", self.prompt)
 
     def test_chat_prompt_covers_approved_install_and_update_paths(self) -> None:
         for marker in (
-            "**Clean install:**",
-            "**Same-major update:**",
-            "**Legacy replacement:**",
-            "harness_cli.py init --repo <app-root> --kit <kit-dir>",
-            "harness_cli.py update --repo <app-root> --kit <kit-dir>",
-            "harness_cli.py uninstall --repo <app-root> --legacy --apply",
-            "Stop and wait",
-            "explicitly approves the displayed commands",
-            "Ask before deleting it",
+            "Clean Install",
+            "Same-Major Update",
+            "Legacy Replacement",
+            "harness_cli.py\" init --repo",
+            "harness_cli.py\" update --repo",
+            "harness_cli.py\" uninstall --repo",
+            "STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL",
+            "Phase 1: Read-Only Project Discovery",
+            "Phase 2: Chat Interview (Setup Questions)",
+            "Phase 4: Exact Plan & Explicit Approval Gate",
+            "Phase 5: Verified Kit Bootstrap",
+            "Phase 7: Doctor & Verification",
         ):
             self.assertIn(marker, self.prompt)
+
+
+class ChatInstallationLifecycleTests(RepoCase):
+    def test_harness_cli_init_with_answers_json(self) -> None:
+        temp_answers = self.repo / "temp_answers.json"
+        write(
+            temp_answers,
+            json.dumps({
+                "i0": "yes",
+                "i1": "Fixture",
+                "i2": sys.executable,
+                "i5": ":app",
+                "i6": "com.example.fixture.MainActivity",
+                "i14": ["codex"],
+                "i15": "yes",
+                "i20": "none",
+            }),
+        )
+        args = Namespace(
+            repo=str(self.repo),
+            kit=str(KIT),
+            answers_json=str(temp_answers),
+            lang="en",
+        )
+        code = harness_cli.cmd_init(args)
+        self.assertEqual(0, code)
+        self.assertTrue((self.repo / ".agents").is_dir())
+        self.assertTrue((self.repo / ".harness-setup" / "answers.json").is_file())
+        self.assertFalse(temp_answers.exists())
+
+    def test_setup_wizard_schema_validation_rejects_unknown_keys_and_symlinks(self) -> None:
+        bad_answers = self.repo / "bad_answers.json"
+        write(bad_answers, json.dumps({"unknown_key_xyz": "value"}))
+        from wizard.schema import validate_raw_answers
+        payload = json.loads(bad_answers.read_text(encoding="utf-8"))
+        errors = validate_raw_answers(payload)
+        self.assertTrue(any("unknown question keys" in e for e in errors))
+
+        link_answers = self.repo / "symlink_answers.json"
+        try:
+            link_answers.symlink_to(bad_answers)
+            from setup_wizard import load_write_payload
+            with self.assertRaises(SystemExit) as ctx:
+                load_write_payload(link_answers)
+            self.assertIn("cannot be a symlink", str(ctx.exception))
+        except (OSError, NotImplementedError):
+            pass
+
+    def test_temporary_answers_file_is_cleaned_up_on_failure(self) -> None:
+        temp_answers = self.repo / "fail_answers.json"
+        write(temp_answers, json.dumps({"unknown_key_fail": True}))
+        args = Namespace(
+            repo=str(self.repo),
+            kit=str(KIT),
+            answers_json=str(temp_answers),
+            lang="en",
+        )
+        code = harness_cli.cmd_init(args)
+        self.assertNotEqual(0, code)
+        self.assertFalse(temp_answers.exists())
+
+    def test_pre_execution_checksums_verifier_rejects_tampered_kit(self) -> None:
+        temp_kit_dir = tempfile.TemporaryDirectory()
+        try:
+            kit_copy = Path(temp_kit_dir.name) / "kit"
+            shutil.copytree(KIT / "agents", kit_copy / "agents")
+            harness_cli._verify_kit_checksums(kit_copy)
+
+            tampered_file = kit_copy / "agents" / "VERSION"
+            tampered_file.write_text("0.0.0-tampered", encoding="utf-8")
+            with self.assertRaises(SystemExit) as ctx:
+                harness_cli._verify_kit_checksums(kit_copy)
+            self.assertIn("checksum mismatch", str(ctx.exception))
+        finally:
+            temp_kit_dir.cleanup()
+
+    def test_windows_kit_transaction_and_recovery(self) -> None:
+        target_dir = self.repo / "kit_target"
+        target_dir.mkdir()
+        previous = target_dir.with_name(f"{target_dir.name}.previous")
+        previous.mkdir()
+        write(previous / "agents/VERSION", "1.0.0")
+        write(previous / "agents/scripts/setup_wizard.py", "# dummy")
+        harness_cli._recover_stale_kit(target_dir)
+        self.assertTrue(harness_cli._has_engine(target_dir))
+        self.assertFalse(previous.exists())
+
+    def test_executable_app_snapshot_fails_if_app_code_modified(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "tools": ["codex"],
+            "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        original_install_engine = lifecycle_module._install_engine
+
+        def tampering_install_engine(repo: Path, kit: Path, answers: dict) -> None:
+            original_install_engine(repo, kit, answers)
+            write(repo / "app/src/main/kotlin/A.kt", "unauthorized modification\n")
+
+        with mock.patch.object(lifecycle_module, "_install_engine", tampering_install_engine):
+            with self.assertRaises(ValidationError) as ctx:
+                install(self.repo, KIT)
+            self.assertIn("outside harness boundary were modified", str(ctx.exception))
+
+    def test_chat_installation_prompt_contract_and_schema_alignment(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        from wizard.schema import CANONICAL_PROMPT_KEYS
+        for key in CANONICAL_PROMPT_KEYS:
+            self.assertIn(f"`{key}`", prompt_text)
+        self.assertIn("«أفضل»", prompt_text)
+        self.assertIn("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL", prompt_text)
+
+    def test_chat_installation_with_existing_project_agents_md(self) -> None:
+        agents_md = self.repo / "AGENTS.md"
+        write(agents_md, "# Existing Custom Instructions\n")
+        run_git(self.repo, "add", "AGENTS.md")
+        run_git(self.repo, "commit", "-qm", "add existing AGENTS.md")
+
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "tools": ["codex"],
+            "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        res = install(self.repo, KIT)
+        self.assertEqual("PASS", res["status"])
+        backup_dir = Path(res["backup"])
+        self.assertTrue((backup_dir / "AGENTS.md").is_file())
+
+    def test_crlf_lf_checksum_stability_and_paths_with_spaces(self) -> None:
+        spaces_repo = self.repo / "sub dir with spaces"
+        spaces_repo.mkdir()
+        write(spaces_repo / "gradlew", "#!/bin/sh\nexit 0\n")
+        write(spaces_repo / "build.gradle.kts", "// gradle\n")
+        snapshot = lifecycle_module._snapshot_app_files(spaces_repo)
+        self.assertIn("build.gradle.kts", snapshot)
 
 
 class ManifestTests(RepoCase):

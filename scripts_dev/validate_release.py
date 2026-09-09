@@ -84,6 +84,25 @@ def publish_workflow_errors(text: str) -> list[str]:
     return errors
 
 
+def answer_schema_drift_errors(repo_root: Path) -> list[str]:
+    """Ensure all question keys in install-or-update-prompt.md are defined in ANSWER_SCHEMA."""
+    prompt_path = repo_root / "docs" / "install-or-update-prompt.md"
+    if not prompt_path.is_file():
+        return ["docs/install-or-update-prompt.md is missing"]
+    text = prompt_path.read_text(encoding="utf-8")
+
+    wizard_dir = repo_root / "agents" / "scripts"
+    if str(wizard_dir) not in sys.path:
+        sys.path.insert(0, str(wizard_dir))
+    from wizard.schema import ALLOWED_QUESTION_KEYS
+
+    found_keys = re.findall(r"`(i\d+[a-z]?|b_[a-z]+)`", text)
+    unknown = [k for k in found_keys if k not in ALLOWED_QUESTION_KEYS]
+    if unknown:
+        return [f"install-or-update-prompt.md contains unknown question keys: {', '.join(sorted(set(unknown)))}"]
+    return []
+
+
 def validate_release(repo_root: Path, tag: str) -> list[str]:
     errors: list[str] = []
     version_file = repo_root / "agents" / "VERSION"
@@ -118,6 +137,8 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
         checksum_issue = checksum_doc_error(path.read_bytes(), version, rel)
         if checksum_issue:
             errors.append(checksum_issue)
+
+    errors.extend(answer_schema_drift_errors(repo_root))
 
     security = (repo_root / "SECURITY.md").read_text(encoding="utf-8")
     major, minor, _ = version.split(".")

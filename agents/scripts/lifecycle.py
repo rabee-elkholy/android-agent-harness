@@ -101,6 +101,48 @@ def _snapshot_files(repo: Path, paths: list[Path]) -> dict[str, str | None]:
     return result
 
 
+def _snapshot_app_files(repo: Path) -> dict[str, str]:
+    """Cryptographically snapshot all Android product and build files outside harness."""
+    snapshot: dict[str, str] = {}
+    for path in repo.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            rel = path.resolve().relative_to(repo.resolve()).as_posix()
+        except ValueError:
+            continue
+        parts = Path(rel).parts
+        if parts and parts[0].startswith((".git", ".agents", ".harness")):
+            continue
+        digest = sha256_file(path)
+        if digest:
+            snapshot[rel] = digest
+    return snapshot
+
+
+def _verify_app_snapshot(repo: Path, before: dict[str, str], allowed_adapter_rels: set[str]) -> None:
+    """Ensure zero application source or build files were modified during setup."""
+    after = _snapshot_app_files(repo)
+    modified_or_new: list[str] = []
+    for rel, digest in before.items():
+        if rel in allowed_adapter_rels:
+            continue
+        current_digest = after.get(rel)
+        if current_digest != digest:
+            modified_or_new.append(f"{rel} (modified or deleted)")
+
+    for rel in after:
+        if rel in allowed_adapter_rels or rel in before:
+            continue
+        modified_or_new.append(f"{rel} (newly created)")
+
+    if modified_or_new:
+        raise ValidationError(
+            "Application files outside harness boundary were modified: "
+            + ", ".join(modified_or_new[:10])
+        )
+
+
 def _candidate_adapter_paths(repo: Path) -> list[Path]:
     candidates = [
         "AGENTS.md", "CLAUDE.md", "CODEX.md", "GEMINI.md", "QWEN.md",
@@ -318,10 +360,13 @@ def install(repo: Path, kit: Path) -> dict:
     if (repo / ".agents").exists() or (repo / OWNERSHIP_RELATIVE).exists():
         raise ValidationError("target already contains a harness; uninstall it before the clean vNext install")
     answers = _load_answers(repo)
+    app_before = _snapshot_app_files(repo)
     before = _snapshot_files(repo, _candidate_adapter_paths(repo))
     backup = _backup(repo, None, "install", _candidate_adapter_paths(repo))
     try:
         _install_engine(repo, kit, answers)
+        allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
+        _verify_app_snapshot(repo, app_before, allowed_adapters)
         ownership = _write_ownership(repo, version=version, before=before, backup=backup)
     except Exception:
         if (repo / ".agents").exists():
@@ -329,7 +374,7 @@ def install(repo: Path, kit: Path) -> dict:
         _rollback_adapters(repo, backup, before)
         _managed_exclude(repo, remove=True)
         raise
-    return {"status": "PASS", "action": "install", "version": version, "ownership": ownership, "backup": str(backup)}
+    return {"status": "PASS", "action": "install", "version": version, "ownership": ownership, "backup": str(backup), "app_snapshot_verified": True}
 
 
 def update(repo: Path, kit: Path) -> dict:
@@ -351,6 +396,7 @@ def update(repo: Path, kit: Path) -> dict:
     if conflicts:
         raise ValidationError("user-modified managed files require clean recovery: " + ", ".join(conflicts[:10]))
     answers = _load_answers(repo)
+    app_before = _snapshot_app_files(repo)
     before = _snapshot_files(repo, _candidate_adapter_paths(repo))
     backup = _backup(repo, ownership, "update", _candidate_adapter_paths(repo))
     preserve_root = repo / ".harness-recovery" / f"preserve-{uuid.uuid4().hex}"
@@ -370,6 +416,8 @@ def update(repo: Path, kit: Path) -> dict:
         os.replace(repo / ".agents", old_agents)
         _install_engine(repo, kit, answers)
         _restore_preserved(repo, preserve_root, preserved)
+        allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
+        _verify_app_snapshot(repo, app_before, allowed_adapters)
         new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
         journal["status"] = "COMPLETED"
         journal["completed_at"] = utc_now()
@@ -386,7 +434,7 @@ def update(repo: Path, kit: Path) -> dict:
         raise
     finally:
         shutil.rmtree(preserve_root, ignore_errors=True)
-    return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup)}
+    return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup), "app_snapshot_verified": True}
 
 
 def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
