@@ -347,7 +347,10 @@ class ArtifactAndVerifierTests(RepoCase):
             "elements": [{"outputFile": "config.xhdpi.apk"}, {"outputFile": "base.apk"}],
         }))
         paths = resolve_artifacts(self.repo, ":app:assembleDebug")
-        self.assertEqual([output / "base.apk", output / "config.xhdpi.apk"], paths)
+        self.assertEqual(
+            [(output / "base.apk").resolve(), (output / "config.xhdpi.apk").resolve()],
+            paths,
+        )
 
     def test_read_only_verifier_approves_one_bound_run(self) -> None:
         expected_policy = decide({
