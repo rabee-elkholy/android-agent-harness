@@ -5,7 +5,7 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-09-09
 
 ### Approval-first adaptive architecture
 
@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made sensitive final approval distinct from initial plan approval, narrowed
   later review rounds, enforced model-call budgets, and removed device-global
   log/network/permission side effects.
+- Added a self-contained, approval-gated chat installation path pinned to the
+  immutable release tag, with clean install, same-major update, and legacy
+  replacement coverage. Terminal installation remains available as an
+  alternative.
 
 ## [0.27.24] - 2026-09-08
 

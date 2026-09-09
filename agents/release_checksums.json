@@ -48,7 +48,7 @@
     "agents/scripts/_security_selftest.py": "4c04b699b7dc3b7ef6ae946b3bcb8bf03ea22c8452d153c79cd7c961ed173d0f",
     "agents/scripts/_variants.py": "9e7b8c3a813936e99118efc41288a950a5171cfe719c4e8cd1b5234960a26dcb",
     "agents/scripts/_vnext_common.py": "8289fdf42e8e5e92adbdca4dad9b709bbd7aa70756538ba882fbcdded42d28f8",
-    "agents/scripts/_vnext_selftest.py": "090f65fb7409119337b6a547402cda3d749db8570f8ace8f1a750ca3bbaa2445",
+    "agents/scripts/_vnext_selftest.py": "7c8809cea01b243b2b545b018fa5e7cfa746483bf4bfde69a5077abda0fce55b",
     "agents/scripts/_zoho_selftest.py": "dddd9a855a41bb86d1829b2328b1b8990c5b99780bbd41af204cd3708ab18a89",
     "agents/scripts/artifact_set.py": "a24249e21c65909eb110fa6b8a743f7e3984736272bce71c3c1640fb7c0dca6a",
     "agents/scripts/baseline_capture.py": "488b4d444b97d9d27e2446d104c5640cf2b5955646adf992e5ffa4e617afe830",

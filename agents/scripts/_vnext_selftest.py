@@ -70,6 +70,46 @@ class RepoCase(unittest.TestCase):
         self.temp.cleanup()
 
 
+class ChatInstallationDocsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.version = (KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+        self.readme = (KIT / "README.md").read_text(encoding="utf-8")
+        self.prompt = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+
+    def test_chat_installation_is_primary_and_terminal_is_alternative(self) -> None:
+        chat_heading = "### Chat installation (recommended)"
+        terminal_heading = "### Terminal installation (alternative)"
+        self.assertIn(chat_heading, self.readme)
+        self.assertIn(terminal_heading, self.readme)
+        self.assertLess(self.readme.index(chat_heading), self.readme.index(terminal_heading))
+        self.assertIn(
+            f"android-agent-harness/v{self.version}/docs/install-or-update-prompt.md",
+            self.readme,
+        )
+
+    def test_chat_prompt_is_pinned_and_self_contained(self) -> None:
+        tag = f"v{self.version}"
+        self.assertIn(f"--branch {tag} --single-branch", self.prompt)
+        self.assertIn(f"describe --tags --exact-match", self.prompt)
+        self.assertIn("This prompt is complete", self.prompt)
+        self.assertNotIn("android-agent-harness/main/", self.prompt)
+        self.assertNotIn("releases/latest", self.prompt)
+
+    def test_chat_prompt_covers_approved_install_and_update_paths(self) -> None:
+        for marker in (
+            "**Clean install:**",
+            "**Same-major update:**",
+            "**Legacy replacement:**",
+            "harness_cli.py init --repo <app-root> --kit <kit-dir>",
+            "harness_cli.py update --repo <app-root> --kit <kit-dir>",
+            "harness_cli.py uninstall --repo <app-root> --legacy --apply",
+            "Stop and wait",
+            "explicitly approves the displayed commands",
+            "Ask before deleting it",
+        ):
+            self.assertIn(marker, self.prompt)
+
+
 class ManifestTests(RepoCase):
     def test_snapshot_is_stable_when_identical_content_is_committed(self) -> None:
         write(self.repo / "app/src/main/kotlin/A.kt", b"internal class B\r\n")

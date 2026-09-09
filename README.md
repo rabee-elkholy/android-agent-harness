@@ -15,10 +15,24 @@ A local, zero-dependency development harness for Android projects. It is designe
 
 ## Install
 
-Use a clean Android Git checkout with its Gradle Wrapper:
+### Chat installation (recommended)
+
+Open the Android project root in your coding agent, then paste the complete
+[pinned installation prompt](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.0/docs/install-or-update-prompt.md)
+into the chat. The prompt detects whether the project needs a clean install,
+a same-major update, or an ownership-safe legacy replacement. It provisions
+the kit from the immutable `v1.0.0` tag and must show the exact operation and
+wait for your explicit approval before it installs, updates, or removes
+anything.
+
+### Terminal installation (alternative)
+
+Use a clean Android Git checkout with its Gradle Wrapper and a kit checkout
+pinned to the same immutable release tag:
 
 ```bash
-python harness_cli.py init --repo /path/to/android-project --kit /path/to/android-agent-harness
+git clone --depth 1 --branch v1.0.0 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git /path/to/android-agent-harness
+python /path/to/android-agent-harness/harness_cli.py init --repo /path/to/android-project --kit /path/to/android-agent-harness
 ```
 
 The wizard writes local answers, then the lifecycle engine stages and validates `.agents`, creates only selected host adapters, records ownership, and keeps all harness files out of the shared Git index through `.git/info/exclude`.
