@@ -1,15 +1,15 @@
 # Install or update Android Agent Harness
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.0/docs/install-or-update-prompt.md`
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.1/docs/install-or-update-prompt.md`
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.0` — **SHA-256**: `0238164e5071178d2e5b98415375ece7ce5016e90ea82ed9cf7361b73554ad57` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.1` — **SHA-256**: `d1db3443b8d178dc4a93a3ee9e1d5ad18bcf2ee73f18e118d70be8da40475a47` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 
 You are operating inside the Android project root checkout (`<app-root>`). Keep all conversational discussion in the developer's preferred language (e.g. Arabic or English) and all repository code artifacts strictly in English.
 
-> **Pre-release Note**: Before `v1.0.0` is published and tagged on GitHub, manual testing uses an immutable exact commit URL (`https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/<EXACT_COMMIT>/docs/install-or-update-prompt.md`). The only authorized kit source is the immutable tag `v1.0.0` (or exact commit) from `https://github.com/rabee-elkholy/android-agent-harness.git`. Never use, clone, pull, or resolve the floating `main` branch.
+> **Pre-release Note**: Before `v1.0.1` is published and tagged on GitHub, manual testing uses an immutable exact commit URL (`https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/<EXACT_COMMIT>/docs/install-or-update-prompt.md`). The only authorized kit source is the immutable tag `v1.0.1` (or exact commit) from `https://github.com/rabee-elkholy/android-agent-harness.git`. Never use, clone, pull, or resolve the floating `main` branch.
 
 ---
 
@@ -38,7 +38,7 @@ Perform read-only inspection first. **STRICT RULE**: Do NOT edit files, do NOT r
 The setup wizard payload is the sole interview authority. Do not invent static questions or assume modules that do not exist.
 
 1. **Inspect the Kit Cache Read-Only**:
-   Use `<kit-dir>` (`~/.android-harness/kit` on Linux/macOS, `%USERPROFILE%\.android-harness\kit` on Windows). Without importing or executing kit code, verify with Python standard-library operations that the cache is a regular, boundary-safe checkout of `v1.0.0`, `agents/VERSION` is `1.0.0`, and every entry in `agents/release_checksums.json` matches. If it is valid, reuse it.
+   Use `<kit-dir>` (`~/.android-harness/kit` on Linux/macOS, `%USERPROFILE%\.android-harness\kit` on Windows). Without importing or executing kit code, verify with Python standard-library operations that the cache is a regular, boundary-safe checkout of `v1.0.1`, `agents/VERSION` is `1.0.1`, and every entry in `agents/release_checksums.json` matches. If it is valid, reuse it.
 2. **Bootstrap Approval Gate (Only If the Cache Is Missing or Invalid)**:
    Present the exact clone, verification, staging, promotion, replacement, and rollback commands before running them. State every user-cache path that may be created, replaced, or removed.
 
@@ -48,7 +48,7 @@ The setup wizard payload is the sole interview authority. Do not invent static q
 
    After bootstrap approval, fetch into a temporary staging folder (`<staging-dir>`):
    ```bash
-   git clone --depth 1 --branch v1.0.0 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
+   git clone --depth 1 --branch v1.0.1 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
    git -C <staging-dir> describe --tags --exact-match
    ```
    Before importing or running kit scripts, use a standard-library-only verifier to confirm `agents/VERSION`, every checksum, and the absence of symlinks or out-of-boundary paths. If verification fails, remove only `<staging-dir>` and STOP. If it passes, promote it atomically: rename an existing `<kit-dir>` to `<kit-dir>.previous`, move `<staging-dir>` to `<kit-dir>`, revalidate, then remove `<kit-dir>.previous`. Restore `<kit-dir>.previous` if promotion or revalidation fails.
@@ -77,7 +77,7 @@ The setup wizard payload is the sole interview authority. Do not invent static q
 
 Present a comprehensive installation plan in chat detailing:
 - **Detected Lifecycle Path**: Clean Install, Same-Major Update, or Legacy Replacement.
-- **Kit Source**: Immutable release tag `v1.0.0` (never floating `main`).
+- **Kit Source**: Immutable release tag `v1.0.1` (never floating `main`).
 - **User-Level Cache**: `~/.android-harness/kit`.
 - **Target App Files**: List files to be created (`.agents/`, `.harness-setup/answers.json`, `.harness-setup/ownership-v1.json`, configured adapters).
 - **Executable Non-Interference Guarantee**: A cryptographic pre-install snapshot of all Android product files (`src/`, `build.gradle*`, `gradlew*`) will be recorded. A post-install snapshot comparison ensures zero unauthorized file modifications, triggering automated rollback if violated.

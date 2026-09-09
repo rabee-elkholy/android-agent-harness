@@ -14,6 +14,7 @@ from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 KIT = SCRIPTS.parents[1]
+HARNESS_VERSION = (KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(KIT))
 import harness_cli  # noqa: E402
@@ -576,7 +577,7 @@ class ArtifactAndVerifierTests(RepoCase):
         atomic_write_json(manifest_path, manifest)
         state = self.repo / ".agents/state"
         store = EvidenceStore(state)
-        common = dict(snapshot=manifest["delivery_snapshot_sha256"], run_id="run-verify", harness_version="1.0.0", change_set=manifest["change_set_sha256"])
+        common = dict(snapshot=manifest["delivery_snapshot_sha256"], run_id="run-verify", harness_version=HARNESS_VERSION, change_set=manifest["change_set_sha256"])
         store.write(**common, name="unit_tests", producer="run_tests_gate", status="PASS", evidence={"executed": 2})
         store.write(**common, name="preflight", producer="preflight_check", status="PASS", evidence={})
         store.write(**common, name="assemble", producer="run_gradle_task", status="PASS", evidence={"artifact_set_sha256": "f" * 64})
@@ -832,7 +833,7 @@ class EndToEndWorkflowTests(RepoCase):
         store = EvidenceStore(state_root(self.repo))
         evidence_common = dict(
             snapshot=current["delivery_snapshot_sha256"], run_id=current["run_id"],
-            harness_version="1.0.0", change_set=current["change_set_sha256"], status="PASS",
+            harness_version=HARNESS_VERSION, change_set=current["change_set_sha256"], status="PASS",
         )
         store.write(**evidence_common, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
         store.write(**evidence_common, name="preflight", producer="preflight_check", evidence={})

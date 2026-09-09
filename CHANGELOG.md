@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-09-09
+
+### Chat installation contract hardening
+
+- Made the setup wizard JSON payload the sole authority for adaptive chat questions and conditional options.
+- Added a separate, explicit approval gate for downloading or replacing the user-level kit cache.
+- Kept application installation, update, and legacy replacement behind a second lifecycle-specific approval.
+- Deferred temporary answer-file creation until lifecycle approval and placed it outside the Android checkout.
+- Added regression coverage for the two-stage approval order and dynamic question contract.
+
 ## [1.0.0] - 2026-09-09
 
 ### Approval-first adaptive architecture
