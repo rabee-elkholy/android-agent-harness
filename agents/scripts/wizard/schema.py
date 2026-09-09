@@ -93,21 +93,6 @@ ALLOWED_NORMALIZED_KEYS = {
     "asked",
 }
 
-CANONICAL_PROMPT_KEYS = (
-    "i0",
-    "i14",
-    "i1",
-    "i5",
-    "i19",
-    "i3",
-    "i20",
-    "i18",
-    "i16",
-    "i15",
-    "i4",
-)
-
-
 def validate_raw_answers(payload: Any) -> list[str]:
     """Validate a raw answers JSON dictionary against ANSWER_SCHEMA.
 

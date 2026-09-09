@@ -2,7 +2,7 @@
 
 > **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.0/docs/install-or-update-prompt.md`
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.0` — **SHA-256**: `4f585d435b2745ff63ddd6bcb41c7078df6980149ec8225b6a6fd527516dd6a7` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.0` — **SHA-256**: `0238164e5071178d2e5b98415375ece7ce5016e90ea82ed9cf7361b73554ad57` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
@@ -33,41 +33,36 @@ Perform read-only inspection first. **STRICT RULE**: Do NOT edit files, do NOT r
 
 ---
 
-### Phase 2: Chat Interview (Setup Questions)
+### Phase 2: Approved Kit Bootstrap & Chat Interview
 
 The setup wizard payload is the sole interview authority. Do not invent static questions or assume modules that do not exist.
 
-1. **Prepare Kit for Dynamic Discovery**:
-   Use the user-level cache `<kit-dir>` (`~/.android-harness/kit` on Linux/macOS, `%USERPROFILE%\.android-harness\kit` on Windows). If `<kit-dir>` is already prepared at `v1.0.0` with valid checksums, reuse it. Otherwise, fetch and verify into user cache as detailed in Phase 5.
-2. **Execute Wizard Discovery**:
+1. **Inspect the Kit Cache Read-Only**:
+   Use `<kit-dir>` (`~/.android-harness/kit` on Linux/macOS, `%USERPROFILE%\.android-harness\kit` on Windows). Without importing or executing kit code, verify with Python standard-library operations that the cache is a regular, boundary-safe checkout of `v1.0.0`, `agents/VERSION` is `1.0.0`, and every entry in `agents/release_checksums.json` matches. If it is valid, reuse it.
+2. **Bootstrap Approval Gate (Only If the Cache Is Missing or Invalid)**:
+   Present the exact clone, verification, staging, promotion, replacement, and rollback commands before running them. State every user-cache path that may be created, replaced, or removed.
+
+   > [!CAUTION]
+   > **STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.**
+   > Do not download, clone, create, replace, rename, or remove any kit-cache file before the developer explicitly approves this bootstrap plan. This approval authorizes only the stated user-cache bootstrap; it does not authorize installing, updating, or removing anything in `<app-root>`.
+
+   After bootstrap approval, fetch into a temporary staging folder (`<staging-dir>`):
+   ```bash
+   git clone --depth 1 --branch v1.0.0 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
+   git -C <staging-dir> describe --tags --exact-match
+   ```
+   Before importing or running kit scripts, use a standard-library-only verifier to confirm `agents/VERSION`, every checksum, and the absence of symlinks or out-of-boundary paths. If verification fails, remove only `<staging-dir>` and STOP. If it passes, promote it atomically: rename an existing `<kit-dir>` to `<kit-dir>.previous`, move `<staging-dir>` to `<kit-dir>`, revalidate, then remove `<kit-dir>.previous`. Restore `<kit-dir>.previous` if promotion or revalidation fails.
+3. **Execute Wizard Discovery**:
    Run the read-only discovery command once into a single JSON object:
    ```bash
    python "<kit-dir>/agents/scripts/setup_wizard.py" questions --repo "<app-root>"
    ```
    Extract `auto_blurb` and the `questions` array. Print `auto_blurb` in chat to summarize discovered facts.
-3. **Ask Dynamic Questions**:
+4. **Ask Dynamic Questions**:
    Ask **only** the questions returned in the `questions` array. When asking in chat, use the developer's conversation language, with recommended choices marked **(Recommended)** (the wizard automatically positions previous/detected choices as option 1).
-
-   **Canonical Questions Reference**:
-   - `i0`: Install & Backup Confirmation (`yes` [Recommended], `skip`, `no`)
-   - `i14`: AI Tool Adapters (`gemini` [Recommended], `claude`, `codex`, `cursor`, `copilot`, `all`)
-   - `i1`: Product Name (discovered application name)
-   - `i5`: Application Module (only asked if multiple application modules exist; skipped if only one module is detected)
-   - `i19`: Build Variant / Flavor (only asked if custom product flavors exist; skipped for standard debug)
-   - `i3`: Git Commit Policy (`never` [Recommended] — agent never commits, `agent-may-commit`)
-   - `i20`: Project Management & Task Tracker (`zoho_sprints` [Recommended], `github_projects`, `jira_mcp`, `linear_mcp`, `none`)
-   - `i18`: Task Tracker Language Policy (only asked when `i20` is not `none`):
-     - 1) `en_titles_ar_comments` (English task titles, Arabic descriptions/comments) — **(Recommended)**
-     - 2) `all_en` (All English)
-     - 3) `all_ar` (All Arabic)
-   - `i16`: Zoho Sprints MCP Integration (only asked when `i20` is `zoho_sprints`):
-     - 1) `skip` (Skip local token configuration) — **(Recommended)**
-     - 2) `enable` (Configure Zoho Sprints MCP)
-   - `i15`: Unit Tests Policy (`yes` [Recommended], `no`)
-   - `i4`: Device Testing Policy (`allow` [Recommended], `physical-only`, `skip`)
-
-4. **Persist Answers**:
-   Write the collected answers to a temporary JSON file `<temp-answers>.json`.
+   Respect each returned question's `required`, `allow_multiple`, `options`, and `depends_on` fields exactly. Do not use a separately maintained question list or offer an option that is absent from the payload.
+5. **Hold Answers In Memory**:
+   Keep the collected answers in memory. Do not write `<temp-answers>.json` or any other file yet.
 
 ---
 
@@ -90,28 +85,17 @@ Present a comprehensive installation plan in chat detailing:
 
 > [!CAUTION]
 > **STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.**
-> Pasting this prompt does not constitute authorization. Do NOT clone the kit, do NOT write files, and do NOT alter the repository until the developer explicitly responds with approval (e.g. "Approve").
+> Pasting this prompt and approving the kit bootstrap do not authorize an app-root mutation. Do not write the answers file, install, update, remove, or alter `<app-root>` until the developer explicitly approves this exact lifecycle plan (e.g. "Approve clean install").
 
 ---
 
-### Phase 5: Verified Kit Bootstrap (After Approval)
+### Phase 5: Post-Approval Preparation
 
-Only after explicit approval, prepare the engine kit at user-level cache `<kit-dir>` (`~/.android-harness/kit`):
+Only after the explicit lifecycle approval from Phase 4:
 
-1. If `<kit-dir>` already exists with valid engine at `v1.0.0` and valid checksums, reuse it.
-2. Otherwise, fetch into a temporary staging folder (`<staging-dir>`):
-   ```bash
-   git clone --depth 1 --branch v1.0.0 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
-   git -C <staging-dir> describe --tags --exact-match
-   ```
-3. **Pre-Execution Integrity Verifier**:
-   Before importing or running any kit scripts, run a standard library Python check:
-   - Verify `agents/VERSION` equals `1.0.0`.
-   - Verify every file in `agents/release_checksums.json` matches its SHA-256 hash.
-   - Reject symlinks or out-of-boundary paths.
-   *(Note: Release checksums verify integrity against corruption and accidental tampering; signed releases remain the cryptographic trust boundary).*
-4. **Windows-Safe Atomic Promotion**:
-   If `<kit-dir>` already exists, rename `<kit-dir>` to `<kit-dir>.previous`, move `<staging-dir>` to `<kit-dir>`, validate engine, and purge `<kit-dir>.previous`. On failure, restore `<kit-dir>.previous`.
+1. Revalidate the already prepared `<kit-dir>` without modifying it. If its tag, version, boundary checks, or checksums changed since the interview, STOP and request a new bootstrap plan and approval.
+2. Create `<temp-answers>.json` in the operating system's temporary directory, outside `<app-root>`, using the exact in-memory answers collected from the wizard payload.
+3. Record the pre-install application snapshot immediately before the approved lifecycle command.
 
 ---
 

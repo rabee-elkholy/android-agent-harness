@@ -107,9 +107,9 @@ class ChatInstallationDocsTests(unittest.TestCase):
             "harness_cli.py\" uninstall --repo",
             "STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL",
             "Phase 1: Read-Only Project Discovery",
-            "Phase 2: Chat Interview (Setup Questions)",
+            "Phase 2: Approved Kit Bootstrap & Chat Interview",
             "Phase 4: Exact Plan & Explicit Approval Gate",
-            "Phase 5: Verified Kit Bootstrap",
+            "Phase 5: Post-Approval Preparation",
             "Phase 7: Doctor & Verification",
         ):
             self.assertIn(marker, self.prompt)
@@ -220,11 +220,24 @@ class ChatInstallationLifecycleTests(RepoCase):
 
     def test_chat_installation_prompt_contract_and_schema_alignment(self) -> None:
         prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
-        from wizard.schema import CANONICAL_PROMPT_KEYS
-        for key in CANONICAL_PROMPT_KEYS:
-            self.assertIn(f"`{key}`", prompt_text)
+        self.assertIn("setup wizard payload is the sole interview authority", prompt_text)
+        self.assertIn("Ask **only** the questions returned", prompt_text)
+        self.assertIn("Respect each returned question's `required`, `allow_multiple`, `options`, and `depends_on`", prompt_text)
+        self.assertNotIn("Canonical Questions Reference", prompt_text)
         self.assertIn("(Recommended)", prompt_text)
         self.assertIn("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL", prompt_text)
+
+    def test_chat_installation_has_separate_bootstrap_and_lifecycle_approvals(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        bootstrap_gate = prompt_text.index("STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL")
+        clone = prompt_text.index("git clone --depth 1")
+        lifecycle_gate = prompt_text.index("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL")
+        answers_write = prompt_text.index("Create `<temp-answers>.json`")
+        self.assertLess(bootstrap_gate, clone)
+        self.assertLess(clone, lifecycle_gate)
+        self.assertLess(lifecycle_gate, answers_write)
+        self.assertIn("does not authorize installing, updating, or removing anything in `<app-root>`", prompt_text)
+        self.assertIn("outside `<app-root>`", prompt_text)
 
     def test_chat_installation_with_existing_project_agents_md(self) -> None:
         agents_md = self.repo / "AGENTS.md"
