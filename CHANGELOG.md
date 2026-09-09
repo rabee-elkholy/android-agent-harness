@@ -5,6 +5,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-09-09
+
+### Safety boundary unblocking for chat installation and updates
+
+- Unblocked kit bootstrap, staging clone, and lifecycle update commands from requiring an active application plan.
+- Allowed writing temporary setup answers JSON files in the OS temp directory outside the repository without an active task plan.
+- Enhanced safety regex matching to support quoted paths, py launcher, and whitespace across inspection and lifecycle commands.
+- Strengthened fail-closed repository boundary to prevent internal protected state writes even when test repositories are hosted inside temp directories.
+
 ## [1.0.2] - 2026-09-09
 
 ### Reliable chat installation

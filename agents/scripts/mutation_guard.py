@@ -10,11 +10,12 @@ from plan_authority import require_mutation
 
 READ_ONLY_COMMANDS = (
     re.compile(r"^\s*(?:git\s+)?(?:status|diff|log|show|ls-files|rev-parse)\b", re.I),
-    re.compile(r"^\s*git\s+(?:status|diff|log|show|ls-files|rev-parse|symbolic-ref|check-ignore)\b", re.I),
+    re.compile(r"^\s*git\s+(?:-C\s+(?:\"[^\"]+\"|\S+)\s+)?(?:status|diff|log|show|ls-files|rev-parse|symbolic-ref|check-ignore|describe)\b", re.I),
     re.compile(r"^\s*(?:rg|grep|sed|head|tail|ls|pwd|wc)\b", re.I),
-    re.compile(r"^\s*python(?:\d+(?:\.\d+)?)?\s+[^\s]*(?:project_graph|harness_doctor|change_classifier|review_policy|delivery_manifest)\.py\b(?!.*--output)", re.I),
-    re.compile(r"^\s*python(?:\d+(?:\.\d+)?)?\s+[^\s]*harness_cli\.py\s+(?:version|doctor|explain)\b", re.I),
-    re.compile(r"^\s*python(?:\d+(?:\.\d+)?)?\s+[^\s]*harness_cli\.py(?:\s+\w+)?\s+--help\s*$", re.I),
+    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*(?:project_graph|harness_doctor|change_classifier|review_policy|delivery_manifest)\.py\"|\S*(?:project_graph|harness_doctor|change_classifier|review_policy|delivery_manifest)\.py)\b(?!.*--output)", re.I),
+    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*setup_wizard\.py\"|\S*setup_wizard\.py)\s+questions\b", re.I),
+    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*harness_cli\.py\"|\S*harness_cli\.py)\s+(?:version|doctor|explain)\b", re.I),
+    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*harness_cli\.py\"|\S*harness_cli\.py)(?:\s+\w+)?\s+--help\s*$", re.I),
 )
 VERIFY_COMMANDS = re.compile(
     r"(?:run_gradle_task|run_tests_gate|preflight_check|review_package|final_verifier|check_strings|room_guard|fast_kt_lint|run_device)\.py|workflow\.py\s+(?:verify|complete)\b|harness_cli\.py\s+verify\b",
@@ -23,6 +24,11 @@ VERIFY_COMMANDS = re.compile(
 BOOTSTRAP_WORKFLOW = re.compile(
     r"(?:workflow\.py|android-harness\s+task)\s+(?:draft|begin|status)\b",
     re.I,
+)
+LIFECYCLE_COMMANDS = (
+    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*harness_cli\.py\"|\S*harness_cli\.py)\s+(?:init|update|uninstall)\b", re.I),
+    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*setup_wizard\.py\"|\S*setup_wizard\.py)\s+write\b", re.I),
+    re.compile(r"^\s*git\s+clone\s+.*(?:\.android-harness|kit-stage)", re.I),
 )
 SHELL_LAUNDERING = re.compile(r"`|\$\(|[<>]|(?<!\|)\|(?!\|)")
 
@@ -33,6 +39,13 @@ def _is_read_only(command: str) -> bool:
         return False
     segments = [item.strip() for item in re.split(r"(?:&&|\|\||;|\r?\n)", command) if item.strip()]
     return bool(segments) and all(any(pattern.search(item) for pattern in READ_ONLY_COMMANDS) for item in segments)
+
+
+def _is_lifecycle_command(command: str) -> bool:
+    if SHELL_LAUNDERING.search(command):
+        return False
+    segments = [item.strip() for item in re.split(r"(?:&&|\|\||;|\r?\n)", command) if item.strip()]
+    return bool(segments) and all(any(pattern.search(item) for pattern in LIFECYCLE_COMMANDS) for item in segments)
 
 
 def _state_root(repo: Path) -> Path:
@@ -72,6 +85,8 @@ def command_allowed(repo: Path, command: str) -> tuple[bool, str]:
         return True, "task-authority workflow command"
     if _is_read_only(normalized):
         return True, "read-only inspection command"
+    if _is_lifecycle_command(normalized):
+        return True, "harness lifecycle engine command"
     try:
         plan = active_plan(repo)
     except ValidationError as exc:

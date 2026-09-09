@@ -138,6 +138,27 @@ class HookTests(unittest.TestCase):
         proc = subprocess.run([sys.executable, str(ENGINE)], input="{bad", capture_output=True, text=True, env=self.env, check=False, timeout=15)
         self.assertEqual("deny", json.loads(proc.stdout)["decision"])
 
+    def test_lifecycle_commands_allowed_without_plan(self):
+        commands = (
+            "git clone --depth 1 --branch v1.0.3 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git C:/Users/test/.android-harness/kit-stage-v1.0.3",
+            'git -C "C:/Users/test/.android-harness/kit-stage-v1.0.3" describe --tags --exact-match',
+            'python "C:/Users/test/.android-harness/kit-stage-v1.0.3/harness_cli.py" version --kit "C:/Users/test/.android-harness/kit-stage-v1.0.3"',
+            'python "C:/Users/test/.android-harness/kit/agents/scripts/setup_wizard.py" questions --repo .',
+            'python "C:/Users/test/.android-harness/kit/harness_cli.py" update --no-refresh --repo . --kit "C:/Users/test/.android-harness/kit" --answers-json "C:/temp/answers.json"',
+            'python "C:/Users/test/.android-harness/kit/harness_cli.py" init --replace-legacy --repo . --kit "C:/Users/test/.android-harness/kit" --answers-json "C:/temp/answers.json"',
+            'python "C:/Users/test/.android-harness/kit/harness_cli.py" doctor --install-check --repo . --kit "C:/Users/test/.android-harness/kit" --json',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.call("run_command", {"CommandLine": command})["decision"])
+
+    def test_temp_answers_write_allowed_without_plan(self):
+        with tempfile.TemporaryDirectory() as external_temp:
+            temp_answers = Path(external_temp) / "harness-answers.json"
+            self.assertEqual("allow", self.call("write_to_file", {"TargetFile": str(temp_answers)})["decision"])
+            temp_script = Path(external_temp) / "evil.py"
+            self.assertEqual("deny", self.call("write_to_file", {"TargetFile": str(temp_script)})["decision"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

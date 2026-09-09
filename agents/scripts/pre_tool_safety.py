@@ -108,18 +108,21 @@ def _target(args: dict) -> str:
     return ""
 
 
-def _safe_target(raw_target: str) -> tuple[bool, str]:
+def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
     if not raw_target.strip():
-        return False, "Mutating file tool did not expose a target path; refusing an unscoped write."
+        return False, "Mutating file tool did not expose a target path; refusing an unscoped write.", False
     raw = Path(raw_target).expanduser()
     resolved = raw.resolve() if raw.is_absolute() else (REPO / raw).resolve()
     try:
         relative = resolved.relative_to(REPO.resolve()).as_posix()
     except ValueError:
-        return False, "File mutation escapes the approved repository."
+        temp_dir = Path(tempfile.gettempdir()).resolve()
+        if (resolved == temp_dir or temp_dir in resolved.parents) and resolved.suffix.lower() == ".json":
+            return True, str(resolved), True
+        return False, "File mutation escapes the approved repository.", False
     if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
-        return False, "Harness engine, state, and ownership evidence are immutable to agent file tools."
-    return True, relative
+        return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
+    return True, relative, False
 
 
 def _handle_stop() -> None:
@@ -240,9 +243,12 @@ def main() -> None:
             return
         name, args = _tool_name_and_args(payload)
         if name in WRITE_TOOLS:
-            safe, detail = _safe_target(_target(args))
+            safe, detail, is_temp = _safe_target(_target(args))
             if not safe:
                 emit("deny", detail, tool=name)
+                return
+            if is_temp:
+                emit("allow", "Temporary setup answers JSON write is allowed.", tool=name)
                 return
             allowed, reason = file_mutation_allowed(REPO)
             emit("allow" if allowed else "deny", reason, tool=name)
