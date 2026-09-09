@@ -97,6 +97,22 @@ class HookTests(unittest.TestCase):
         wrapped = "python harness_cli.py task --kit . approve --repo . --task-id t"
         self.assertEqual("deny", self.call("run_command", {"CommandLine": wrapped})["decision"])
 
+    def test_conversation_approval_is_allowed(self):
+        cmd = "python .agents/scripts/workflow.py approve --repo . --task-id t --source conversation --proof-reference ok --enforcement-tier RULE_ENFORCED"
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": cmd})["decision"])
+
+    def test_developer_terminal_approval_by_agent_is_denied(self):
+        cmd = "python .agents/scripts/workflow.py approve --repo . --task-id t --source developer_terminal --proof-reference ok --enforcement-tier RULE_ENFORCED"
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": cmd})["decision"])
+
+    def test_help_command_is_read_only_allowed(self):
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/workflow.py --help"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/workflow.py draft -h"})["decision"])
+
+    def test_ide_artifact_write_is_allowed(self):
+        brain_target = str(Path.home() / ".gemini" / "antigravity" / "brain" / "test-convo" / "implementation_plan.md")
+        self.assertEqual("allow", self.call("write_to_file", {"TargetFile": brain_target})["decision"])
+
     def test_external_and_destructive_commands_stay_denied(self):
         self.activate()
         attacks = (
@@ -116,6 +132,7 @@ class HookTests(unittest.TestCase):
         self.activate("VERIFYING")
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "./gradlew :app:testDebugUnitTest"})["decision"])
         self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/run_tests_gate.py"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/record_review.py --task t --reviewer bug --verdict PASS"})["decision"])
 
     def test_zoho_mutation_requires_plan_scope_and_operation_id(self):
         self.activate()
@@ -126,13 +143,20 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("zoho_add_comment", {"item_id": "1", "comment": "ready"})["decision"])
         self.assertEqual("deny", self.call("zoho_update_task_status", {"status": "Done", "operation_id": "task-1-done"})["decision"])
 
-    def test_stop_blocks_incomplete_task(self):
+    def test_stop_allows_turn_completion(self):
         self.activate("IMPLEMENTING")
-        self.assertEqual("continue", self.call("", stop=True)["decision"])
+        self.assertEqual("allow", self.call("", stop=True)["decision"])
         self.activate("AWAITING_DEVELOPER_APPROVAL")
         self.assertEqual("allow", self.call("", stop=True)["decision"])
         self.activate("READY_FOR_DELIVERY")
         self.assertEqual("allow", self.call("", stop=True)["decision"])
+
+    def test_resume_allowed_in_verifying_and_blocked(self):
+        self.activate("VERIFYING")
+        cmd = "python .agents/scripts/workflow.py resume --repo . --task-id task-1"
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": cmd})["decision"])
+        self.activate("BLOCKED")
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": cmd})["decision"])
 
     def test_oversized_and_invalid_payload_fail_closed(self):
         proc = subprocess.run([sys.executable, str(ENGINE)], input="{" + "x" * (5 * 1024 * 1024), capture_output=True, text=True, env=self.env, check=False, timeout=15)

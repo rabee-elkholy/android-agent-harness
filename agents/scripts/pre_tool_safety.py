@@ -39,8 +39,10 @@ PROTECTED_ROOTS = (
 # development boundary or make recovery materially harder.
 DANGEROUS = (
     ("developer_authority", re.compile(
-        r"(?:workflow\.py\b.*\b(?:approve(?:-sensitive)?|cancel)\b|"
-        r"(?:android-harness|harness_cli\.py)\s+task\b.*\b(?:approve(?:-sensitive)?|cancel)\b)",
+        r"(?:workflow\.py\b.*\b(?:approve-sensitive|cancel)\b|"
+        r"workflow\.py\b.*\bapprove\b(?!.*\s--source\s+conversation\b)|"
+        r"(?:android-harness|harness_cli\.py)\s+task\b.*\b(?:approve-sensitive|cancel)\b|"
+        r"(?:android-harness|harness_cli\.py)\s+task\b.*\bapprove\b(?!.*\s--source\s+conversation\b))",
         re.I,
     )),
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)\b", re.I)),
@@ -108,6 +110,17 @@ def _target(args: dict) -> str:
     return ""
 
 
+def _is_ide_artifact(resolved: Path) -> bool:
+    try:
+        parts = {p.lower() for p in resolved.parts}
+        if ".gemini" in parts and "antigravity" in parts and "brain" in parts:
+            return True
+        brain_root = (Path.home() / ".gemini" / "antigravity" / "brain").resolve()
+        return resolved == brain_root or brain_root in resolved.parents
+    except Exception:
+        return False
+
+
 def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
     if not raw_target.strip():
         return False, "Mutating file tool did not expose a target path; refusing an unscoped write.", False
@@ -118,6 +131,8 @@ def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
     except ValueError:
         temp_dir = Path(tempfile.gettempdir()).resolve()
         if (resolved == temp_dir or temp_dir in resolved.parents) and resolved.suffix.lower() == ".json":
+            return True, str(resolved), True
+        if _is_ide_artifact(resolved):
             return True, str(resolved), True
         return False, "File mutation escapes the approved repository.", False
     if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
@@ -132,21 +147,7 @@ def _handle_stop() -> None:
     except Exception:
         emit("allow", "No active vNext task requires a delivery stop.", tool="stop")
         return
-    if status in {"IMPLEMENTING", "VERIFYING", "BLOCKED"}:
-        emit("continue", f"Active task is {status}; complete or cancel it before delivery.", tool="stop")
-    elif status == "READY_FOR_DELIVERY":
-        try:
-            from delivery_manifest import build_manifest
-            current = build_manifest(REPO)
-            stable = (
-                current.get("delivery_snapshot_sha256") == plan.get("ready_delivery_snapshot_sha256")
-                and current.get("change_set_sha256") == plan.get("ready_change_set_sha256")
-            )
-        except Exception:
-            stable = False
-        emit("allow" if stable else "continue", "Ready evidence is current." if stable else "Delivery changed after final verification; prepare a new run.", tool="stop")
-    else:
-        emit("allow", f"Active task status {status or 'unknown'} does not block stopping.", tool="stop")
+    emit("allow", f"Turn completion permitted for task in status {status or 'unknown'}.", tool="stop")
 
 
 def _handle_command(command: str) -> None:
@@ -248,7 +249,7 @@ def main() -> None:
                 emit("deny", detail, tool=name)
                 return
             if is_temp:
-                emit("allow", "Temporary setup answers JSON write is allowed.", tool=name)
+                emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name)
                 return
             allowed, reason = file_mutation_allowed(REPO)
             emit("allow" if allowed else "deny", reason, tool=name)

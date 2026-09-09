@@ -20,7 +20,7 @@ A local, zero-dependency development harness for Android projects. It is designe
 Open the Android project root in your coding agent, then paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.3/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.4/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The AI agent will:

@@ -367,6 +367,16 @@ def _install_engine(repo: Path, kit: Path, answers: dict) -> None:
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _warm_project_graph(repo: Path) -> None:
+    try:
+        from _graph_core import GraphEngine
+        engine = GraphEngine(repo)
+        engine.sync(force_full=True)
+        engine.save_cache()
+    except Exception:
+        pass
+
+
 def install(repo: Path, kit: Path) -> dict:
     repo = _validate_repo(repo)
     kit, version = _validate_kit(kit)
@@ -381,6 +391,7 @@ def install(repo: Path, kit: Path) -> dict:
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
         ownership = _write_ownership(repo, version=version, before=before, backup=backup)
+        _warm_project_graph(repo)
     except Exception:
         if (repo / ".agents").exists():
             shutil.rmtree(repo / ".agents", ignore_errors=True)
@@ -432,6 +443,7 @@ def update(repo: Path, kit: Path) -> dict:
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
         new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
+        _warm_project_graph(repo)
         journal["status"] = "COMPLETED"
         journal["completed_at"] = utc_now()
         atomic_write_json(journal_path, journal)
@@ -473,6 +485,7 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
         allowed_adapters = {p.relative_to(repo).as_posix() for p in adapters}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
         ownership = _write_ownership(repo, version=target_version, before=before, backup=backup)
+        _warm_project_graph(repo)
         shutil.rmtree(old_agents, ignore_errors=True)
     except Exception:
         shutil.rmtree(repo / ".agents", ignore_errors=True)

@@ -921,6 +921,57 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertEqual("READY_FOR_DELIVERY", ready["status"])
         self.assertEqual(current["delivery_snapshot_sha256"], ready["ready_delivery_snapshot_sha256"])
 
+    def test_record_review_cli_staged_verdicts_e2e(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest",
+            "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "e2e-review-cli"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Test review CLI", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore changed source",
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="test-msg",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/A.kt", "internal class ChangedReview\n")
+        current = prepare_verification(Namespace(**common))
+        package, _ = build_package(self.repo, task_id)
+        package_sha = sha256_file(package)
+        policy = json.loads(Path(current["policy"]).read_text(encoding="utf-8"))
+        reviewers = policy["reviewers"]
+        first_rev = reviewers[0]
+        proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--reviewer", first_rev, "--verdict", "PASS", "--evidence-pkg", package_sha[:12]],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("STAGED_REVIEW", proc.stdout)
+        proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--status"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(f"STAGED_REVIEWS=1/{len(reviewers)}", proc.stdout)
+        for rev in reviewers[1:]:
+            proc = subprocess.run(
+                [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--reviewer", rev, "--verdict", "PASS", "--evidence-pkg", package_sha[:12]],
+                cwd=self.repo, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("REVIEW_EVIDENCE=", proc.stdout)
+        store = EvidenceStore(state_root(self.repo))
+        review_record = store.read(current["delivery_snapshot_sha256"], current["run_id"], "reviews")
+        self.assertEqual("PASS", review_record["status"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

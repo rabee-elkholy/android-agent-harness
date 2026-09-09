@@ -5,6 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-09-09
+
+### Stop hook idle unblocking and review recording bridge
+
+- **Stop hook idle unblocking**: Allowed the host `Stop` hook (`pre_tool_safety.py`) to emit `allow` during active task states (`VERIFYING`, `IMPLEMENTING`), eliminating the toxic polling loop when waiting for asynchronous background tasks and reviewer subagents.
+- **Reviewer verdict recording bridge (`record_review.py`)**: Added `record_review.py`, `final_verdict.py`, and `perf_guard.py` to `VERIFY_COMMANDS` in `mutation_guard.py`, allowing the agent to record reviewer verdicts during `VERIFYING`.
+- **Incremental staged review recording**: Upgraded `record_review.py` to support `--reviewer <name> --verdict PASS` and `--verdict <name>=PASS`, staging evaluations incrementally and automatically completing immutable ingestion once all required reviewers are present.
+- **Workflow recovery unblocking**: Authorized `workflow.py resume` during both `VERIFYING` and `BLOCKED` states so that compilation or test failures can be fixed without task invalidation.
+- **Task draft collision fix**: Changed directory creation in `workflow.py draft` to `exist_ok=True` to prevent `WinError 183` collisions on task re-drafting.
+- **Discovery and efficiency enforcement**: Mandated `project_graph.py` upfront at discovery and forbade unanchored grep cascades and busy-wait polling with `manage_task status`.
+
 ## [1.0.3] - 2026-09-09
 
 ### Safety boundary unblocking for chat installation and updates

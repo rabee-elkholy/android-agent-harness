@@ -1,11 +1,11 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.3` — **SHA-256**: `3e49c0c6990668a0deb71e14193a2e6f51b58dc92c3be234fcfd26fc54627fae` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.4` — **SHA-256**: `238545f14952b17a2c2d1e80fcb940c51c55ef51058d97dade55d602153b45d0` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
 If truncated, STOP. Never bypass hooks or use floating `main`. Speak developer's language; keep files in English.
-Run all commands directly; never demand terminal execution. Prefer `ask_question` for approvals.
+Run all commands directly; never demand terminal execution. Universally use `ask_question` for all approvals and decisions.
 
 ## Phase 1: Read-only discovery
 Do not mutate, download, build, install, or remove.

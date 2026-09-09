@@ -15,19 +15,20 @@ def _message() -> str:
         plan = active_plan(REPO)
     except Exception:
         return (
-            "Android Harness: analysis and planning are read-only. Before any implementation, "
-            "draft a task plan and obtain explicit developer approval. Never auto-start a plan."
+            "Android Harness: discovery MUST start with `python .agents/scripts/project_graph.py --feature <name>` "
+            "or `--find <Symbol>` before inspecting files. Unanchored grep cascades are forbidden. "
+            "Analysis and planning are read-only. Before implementation, draft a task plan and obtain explicit developer approval."
         )
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "AWAITING_DEVELOPER_APPROVAL":
         next_step = "Wait for explicit approval; do not edit files or run mutating commands."
     elif status == "IMPLEMENTING":
-        next_step = "Implement only the approved scope. Material surface drift requires a revised approval."
+        next_step = "Implement approved scope. Do NOT poll background tasks with manage_task status; wait for background notification."
     elif status == "VERIFYING":
-        next_step = "Run only the gates and reviewers selected in the immutable current-run policy, then use task complete."
+        next_step = "Run only gates/reviewers in current-run policy. Record reviewer verdicts with `record_review.py --task <id> --reviewer <name> --verdict PASS`. If code fixes needed, run workflow.py resume."
     elif status == "BLOCKED":
-        next_step = "Fix the recorded findings with task resume, or request a developer decision at the round cap."
+        next_step = "Fix recorded findings with workflow.py resume, or request developer decision at the round cap."
     elif status == "READY_FOR_DELIVERY":
         next_step = "Do not mutate the delivery. Present the verified result and leave Git/Zoho actions to explicit requests."
     else:

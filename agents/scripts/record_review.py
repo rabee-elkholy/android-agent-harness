@@ -141,33 +141,139 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
     return evidence_path
 
 
+def verdict_to_report(
+    repo: Path,
+    task_id: str,
+    reviewer: str,
+    verdict: str,
+    message: str = "",
+    severity: str = "HIGH",
+    evidence_pkg: str = "",
+    citations: int = 0,
+) -> dict:
+    directory = task_dir(repo, task_id)
+    current = read_json(directory / "current-run.json")
+    manifest = read_json(Path(current["manifest"]))
+    package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+    if not package.is_file():
+        raise ValidationError("immutable review package is missing")
+    package_sha = sha256_file(package)
+    if evidence_pkg:
+        clean_pkg = evidence_pkg.strip().lower()
+        if not package_sha[:12].startswith(clean_pkg) and not clean_pkg.startswith(package_sha[:12]):
+            raise ValidationError(f"evidence package sha prefix mismatch: {clean_pkg} != {package_sha[:12]}")
+    v_upper = verdict.strip().upper()
+    if v_upper not in VALID_VERDICTS:
+        raise ValidationError(f"invalid verdict {verdict}; must be PASS or FINDINGS")
+    findings = []
+    if v_upper != "PASS":
+        findings.append({
+            "severity": severity if severity in VALID_SEVERITIES else "HIGH",
+            "message": message or f"Reviewer {reviewer} reported blocking findings.",
+            "reported_citations": citations,
+        })
+    return {
+        "schema_version": 1,
+        "reviewer": reviewer,
+        "package_sha256": package_sha,
+        "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+        "change_set_sha256": manifest["change_set_sha256"],
+        "verdict": v_upper,
+        "findings": findings,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", required=True)
     parser.add_argument("--report", action="append", default=[])
     parser.add_argument("--response", action="append", default=[], metavar="REVIEWER=PATH", help="Ingest an unchanged reviewer response with its evidence footer")
+    parser.add_argument("--verdict", action="append", default=[], metavar="[REVIEWER=]VERDICT", help="Record a reviewer verdict directly (e.g. bug-reviewer-agent=PASS, or PASS with --reviewer)")
+    parser.add_argument("--reviewer", help="Reviewer name when recording a single verdict with --verdict")
+    parser.add_argument("--evidence-pkg", default="", help="Optional package SHA prefix to validate against active review package")
+    parser.add_argument("--message", default="", help="Optional finding message if verdict is FINDINGS")
+    parser.add_argument("--severity", default="HIGH", help="Severity of findings (default HIGH)")
+    parser.add_argument("--citations", type=int, default=0, help="Reported citations count")
+    parser.add_argument("--status", action="store_true", help="Show currently staged review status for active run")
     args = parser.parse_args()
     try:
         repo = Path(args.repo).resolve()
-        report_paths = [Path(item).resolve() for item in args.report]
-        with tempfile.TemporaryDirectory(prefix="harness-review-") as temp:
-            for index, item in enumerate(args.response):
-                reviewer, sep, raw_path = item.partition("=")
+        task_directory = task_dir(repo, args.task)
+        current = read_json(task_directory / "current-run.json")
+        policy = read_json(Path(current["policy"]))
+        required = set(policy.get("reviewers") or [])
+        staging_dir = task_directory / "staged-reviews" / str(current["run_id"])
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.status:
+            staged_files = list(staging_dir.glob("*.json"))
+            staged_names = {p.stem for p in staged_files}
+            missing = required - staged_names
+            print(f"STAGED_REVIEWS={len(staged_names)}/{len(required)}")
+            for p in sorted(staged_files):
+                r = read_json(p)
+                print(f"  - {r.get('reviewer')}: {r.get('verdict')}")
+            if missing:
+                print("MISSING_REVIEWERS=" + ", ".join(sorted(missing)))
+            return 0
+
+        for rep_str in args.report:
+            rep_path = Path(rep_str).resolve()
+            rep = read_json(rep_path)
+            reviewer = str(rep.get("reviewer") or "")
+            if not reviewer:
+                raise ValidationError(f"report {rep_path} has no reviewer field")
+            (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        for item in args.response:
+            reviewer, sep, raw_path = item.partition("=")
+            if not sep:
+                raise ValidationError("--response must be REVIEWER=PATH")
+            rep = response_to_report(repo, args.task, reviewer.strip(), Path(raw_path).resolve())
+            (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        verdict_items = list(args.verdict)
+        if args.reviewer and verdict_items:
+            v_val = verdict_items[-1]
+            if "=" in v_val:
+                r_name, _, v_val = v_val.partition("=")
+            else:
+                r_name = args.reviewer
+            rep = verdict_to_report(
+                repo, args.task, r_name.strip(), v_val.strip(),
+                message=args.message, severity=args.severity,
+                evidence_pkg=args.evidence_pkg, citations=args.citations,
+            )
+            (staging_dir / f"{r_name.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+        elif verdict_items:
+            for item in verdict_items:
+                reviewer, sep, v_val = item.partition("=")
                 if not sep:
-                    raise ValidationError("--response must be REVIEWER=PATH")
-                report = response_to_report(repo, args.task, reviewer.strip(), Path(raw_path).resolve())
-                generated = Path(temp) / f"report-{index}.json"
-                generated.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
-                report_paths.append(generated)
-            if not report_paths:
-                raise ValidationError("at least one --report or --response is required")
-            path = ingest(repo, args.task, report_paths)
+                    raise ValidationError("--verdict without --reviewer must be REVIEWER=VERDICT")
+                rep = verdict_to_report(
+                    repo, args.task, reviewer.strip(), v_val.strip(),
+                    message=args.message, severity=args.severity,
+                    evidence_pkg=args.evidence_pkg, citations=args.citations,
+                )
+                (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        staged_files = sorted(staging_dir.glob("*.json"))
+        if not staged_files:
+            raise ValidationError("at least one --report, --response, or --verdict is required")
+
+        staged_names = {p.stem for p in staged_files}
+        missing = required - staged_names
+        if missing:
+            print(f"STAGED_REVIEW ({len(staged_names)}/{len(required)} recorded, waiting for: {', '.join(sorted(missing))})")
+            return 0
+
+        path = ingest(repo, args.task, staged_files)
+        print(f"REVIEW_EVIDENCE={path}")
+        return 0
     except (ValidationError, OSError) as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
-    print(f"REVIEW_EVIDENCE={path}")
-    return 0
 
 
 if __name__ == "__main__":

@@ -30,6 +30,16 @@ except ImportError:
     pin_urls = None
     fill_checksums = None
 
+try:
+    from generate_release_checksums import main as generate_checksums
+except ImportError:
+    generate_checksums = None
+
+try:
+    from validate_release import validate_release
+except ImportError:
+    validate_release = None
+
 
 def read_current_version() -> str:
     return (ROOT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
@@ -209,11 +219,15 @@ def main(argv: list[str] | None = None) -> int:
 
     # Step 3: URL Pinning & Cryptographic Hashes
     print("\n[2/5] Pinning prompt URLs & computing SHA-256 tamper-evident hashes...")
-    if not args.dry_run and pin_urls and fill_checksums:
-        pin_logs = pin_urls(target_version)
-        checksum_logs = fill_checksums(target_version)
-        for line in pin_logs + checksum_logs:
-            print(f"  + {line}")
+    if not args.dry_run:
+        if pin_urls and fill_checksums:
+            pin_logs = pin_urls(target_version)
+            checksum_logs = fill_checksums(target_version)
+            for line in pin_logs + checksum_logs:
+                print(f"  + {line}")
+        if generate_checksums:
+            generate_checksums()
+            print("  + Generated agents/release_checksums.json")
     else:
         print(f"  [dry-run] Would pin URLs to v{target_version} and compute prompt hashes.")
 
@@ -230,6 +244,16 @@ def main(argv: list[str] | None = None) -> int:
             print(res.stderr[-1500:])
             return 1
         print("  [SUCCESS] All hook self-tests passed (0 failures).")
+
+        if validate_release and not args.dry_run:
+            print("  + Running validate_release suite...")
+            val_errors = validate_release(ROOT, target_version)
+            if val_errors:
+                print("[FAIL] Release validation failed:")
+                for err in val_errors:
+                    print(f"  - {err}")
+                return 1
+            print("  [SUCCESS] Release validation passed.")
 
         # Verify PyPI build & metadata
         try:

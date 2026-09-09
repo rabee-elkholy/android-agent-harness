@@ -74,7 +74,7 @@ def draft(args: argparse.Namespace) -> dict:
         external_writes=list(getattr(args, "external_write", None) or []),
     )
     directory = task_dir(repo, args.task_id)
-    directory.mkdir(parents=True, exist_ok=False)
+    directory.mkdir(parents=True, exist_ok=True)
     save_plan(directory / "plan.json", plan)
     atomic_write_json(directory / "preliminary-classification.json", classification)
     atomic_write_json(directory / "preliminary-policy.json", preliminary_policy)
