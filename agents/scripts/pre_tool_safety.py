@@ -27,6 +27,7 @@ WRITE_TOOLS = {
     "create_file", "delete_file", "move_file", "rename_file",
 }
 SUBAGENT_TOOLS = {"define_subagent", "invoke_subagent", "manage_subagents", "manage_task", "schedule"}
+SEARCH_TOOLS = {"grep_search", "find_by_name"}
 ZOHO_MUTATION_TOOLS = {
     "zoho_create_task", "zoho_update_task_status", "zoho_add_comment",
     "zoho_update_task_description",
@@ -159,6 +160,8 @@ def _handle_command(command: str) -> None:
         emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command)
         return
     allowed, reason = command_allowed(REPO, command)
+    if allowed and re.search(r"project_graph(?:\.py)?\b", command):
+        reason = f"project_graph executed: {reason}"
     emit("allow" if allowed else "deny", reason, tool="run_command", command=command)
 
 
@@ -230,6 +233,112 @@ def _handle_zoho_mutation(name: str, args: dict) -> None:
         emit("deny", f"Zoho mutation authorization failed closed: {exc}", tool=name)
 
 
+def _is_targeted_search_path(target: str) -> bool:
+    if not target or target.strip() in {".", "./", "", "/", "\\"}:
+        return False
+    p = target.replace("\\", "/").strip().rstrip("/")
+    file_exts = (
+        ".kt", ".java", ".xml", ".gradle", ".kts", ".json", ".properties",
+        ".pro", ".txt", ".md", ".toml", ".png", ".jpg", ".webp", ".svg",
+    )
+    if any(p.lower().endswith(ext) for ext in file_exts):
+        return True
+
+    generic_roots = {
+        "app", "core", "domain", "data", "feature", "features",
+        "app/src", "app/src/main", "app/src/main/java", "app/src/main/res",
+        "core/src", "core/src/main", "core/src/main/java",
+    }
+    try:
+        resolved = Path(target).resolve()
+        rel = resolved.relative_to(REPO.resolve()).as_posix().lower()
+    except Exception:
+        rel = p.lstrip("./").lower()
+
+    if rel in generic_roots or rel in {".", ""}:
+        return False
+
+    parts = [part for part in rel.split("/") if part]
+    if len(parts) >= 4:
+        return True
+    if any(segment in {"feature", "features", "navigation", "ui", "viewmodel", "repository", "datasource"} for segment in parts):
+        return True
+    return False
+
+
+def _handle_search(name: str, args: dict) -> None:
+    if name == "grep_search":
+        target = str(args.get("SearchPath") or args.get("searchPath") or "")
+    else:
+        target = str(args.get("SearchDirectory") or args.get("searchDirectory") or "")
+
+    if _is_targeted_search_path(target):
+        emit("allow", "Search is targeted to a specific file or feature directory.", tool=name)
+        return
+
+    try:
+        plan = active_plan(REPO)
+        status = str(plan.get("status") or "")
+    except Exception:
+        status = ""
+
+    if status == "VERIFYING":
+        emit("allow", "Reviewer verification search is permitted.", tool=name)
+        return
+
+    consecutive_broad_searches = 0
+    try:
+        audit_file = _audit_path()
+        if audit_file.exists():
+            lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            records = [json.loads(line) for line in lines if line.strip()]
+            for rec in reversed(records[-10:]):
+                t = rec.get("tool", "")
+                if t in SEARCH_TOOLS:
+                    if "targeted" not in rec.get("reason", "").lower():
+                        consecutive_broad_searches += 1
+                elif t in ("run_command", "view_file", "write_to_file", "replace_file_content"):
+                    break
+    except Exception:
+        consecutive_broad_searches = 0
+
+    if consecutive_broad_searches >= 2:
+        emit(
+            "deny",
+            "Unanchored search cascade detected (multiple consecutive repository-wide searches). "
+            "Run 'python .agents/scripts/project_graph.py --feature <name>' or '--find <symbol>' for architectural discovery, "
+            "or narrow SearchPath to a specific file or feature directory.",
+            tool=name,
+        )
+        return
+
+    if status not in {"IMPLEMENTING", "READY_FOR_DELIVERY"}:
+        has_run_graph = False
+        try:
+            audit_file = _audit_path()
+            if audit_file.exists():
+                lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
+                records = [json.loads(line) for line in lines if line.strip()]
+                for rec in reversed(records[-20:]):
+                    if rec.get("tool") == "run_command" and "project_graph executed" in rec.get("reason", "").lower() and rec.get("decision") == "allow":
+                        has_run_graph = True
+                        break
+        except Exception:
+            has_run_graph = False
+
+        if not has_run_graph:
+            emit(
+                "deny",
+                "Unanchored repository-wide search is paused during initial discovery. "
+                "Start by running 'python .agents/scripts/project_graph.py --feature <name>' or '--find <symbol>' "
+                "to inspect the architectural slice, or specify a targeted SearchPath for literal text.",
+                tool=name,
+            )
+            return
+
+    emit("allow", "Search is permitted outside cascade limits.", tool=name)
+
+
 def main() -> None:
     try:
         raw = sys.stdin.read()
@@ -260,6 +369,9 @@ def main() -> None:
             return
         if name in SUBAGENT_TOOLS:
             _handle_subagent(name, args)
+            return
+        if name in SEARCH_TOOLS:
+            _handle_search(name, args)
             return
         if name in ZOHO_MUTATION_TOOLS:
             _handle_zoho_mutation(name, args)

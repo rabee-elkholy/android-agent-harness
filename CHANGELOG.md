@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-09-09
+
+### Subagent Architectural Graph Integration and Smart Anti-Cascade Grep Guard
+
+- **Subagent Architectural Graph Integration (`review_package.py`)**: Embedded an authoritative `## ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY` section in `review-package.md`, pre-computing Clean Architecture layer mappings (`UI -> ViewModel -> Domain -> Data`), cross-module caller dependencies, and navigation links for changed files so all 6 subagent reviewers get immediate, authoritative architectural context without needing shell write tools.
+- **Roster Alignment Across All 6 Reviewers**: Synchronized system prompts and investigation protocols across all 6 reviewer roles (`perf-anr-guardian-agent`, `bug-reviewer-agent`, `regression-impact-reviewer-agent`, `convention-reviewer-agent`, `security-reviewer-agent`, and `test-quality-reviewer-agent`) to inspect the pre-computed topology and trace external callers directly via bounded `view_file` calls.
+- **Smart Anti-Cascade Grep Guard (`pre_tool_safety.py`, `hooks.json`)**: Added `grep_search` and `find_by_name` to PreToolUse hooks. Permits file-specific and feature-targeted searches as well as reviewer verification searches unconditionally, while intercepting unanchored whole-repository cascades during initial discovery and redirecting agents to `project_graph.py --feature <name>` or `--find <symbol>`.
+- **Persistent Turn-Start Reminder (`pre_invocation_reminder.py`)**: Updated the ephemeral hook to inject a compact reminder across all subsequent conversation invocations, ensuring long-running agents retain awareness of graph-first discovery and central rules.
+- **Deterministic Checksum and Prompt Alignment**: Normalized `agents/VERSION` line endings to LF, aligned prompt version pinning to `v1.0.5`, and updated `release_checksums.json` covering all 147 files.
+
 ## [1.0.4] - 2026-09-09
 
 ### Stop hook idle unblocking and review recording bridge

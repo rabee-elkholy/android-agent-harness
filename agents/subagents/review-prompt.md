@@ -9,7 +9,7 @@ Listed paths:
 - [path]
 - [path]
 
-Examine the review package. Read surrounding callers/contracts when a finding depends on them.
+Examine the review package and its embedded ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY. Read identified callers/contracts directly with view_file when a finding depends on them.
 
 High-signal only: BLOCKER / MAJOR. Drop MINOR/NIT. Cite a project rule when the finding is architectural.
 

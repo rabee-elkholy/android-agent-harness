@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,72 @@ def _git_diff(repo: Path, paths: list[str]) -> str:
             raise ValidationError((proc.stderr or "git diff failed").strip())
         chunks.append(proc.stdout or "")
     return "".join(chunks)
+
+
+def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
+    try:
+        from _graph_core import GraphEngine
+        engine = GraphEngine(repo)
+        engine.sync()
+        graph = engine.graph
+
+        touched_nodes = []
+        for path in changed_paths:
+            norm_p = path.replace("\\", "/").lower()
+            for nid, node in graph.nodes.items():
+                if node.file_path and node.file_path.replace("\\", "/").lower() == norm_p:
+                    touched_nodes.append(node)
+
+        if not touched_nodes:
+            for path in changed_paths:
+                stem = Path(path).stem
+                matched = graph.find_node(stem)
+                if matched and matched not in touched_nodes:
+                    touched_nodes.append(matched)
+
+        lines = [
+            "## ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY",
+            "*(Authoritative architecture graph slice extracted by GraphEngine)*",
+            "",
+        ]
+
+        features = set()
+        for node in touched_nodes:
+            m = re.search(r"/(?:features|feature)/([a-zA-Z0-9_]+)/", node.file_path or "", re.I)
+            if m:
+                features.add(m.group(1))
+        if features:
+            lines.append(f"**Associated Features**: {', '.join(sorted(features))}")
+
+        lines.append("\n### Touched Components & Architecture Layers:")
+        if touched_nodes:
+            for node in sorted(touched_nodes, key=lambda n: n.name):
+                targets = [graph.nodes[t].name for t in graph.get_targets(node.id) if t in graph.nodes][:5]
+                deps_str = f" -> [{', '.join(targets)}]" if targets else ""
+                lines.append(f"- **{node.name}** (`{node.type}`) [{node.file_path or 'unknown'}]{deps_str}")
+        else:
+            lines.append("- *(No direct architectural nodes detected for changed paths; e.g. non-code or root config)*")
+
+        lines.append("\n### Blast Radius (Immediate Callers & Upstream Consumers):")
+        has_sources = False
+        for node in touched_nodes:
+            sources = [graph.nodes[s] for s in graph.get_sources(node.id) if s in graph.nodes]
+            if sources:
+                has_sources = True
+                callers = [f"`{s.name}` (`{s.type}`, {s.file_path})" for s in sources[:6]]
+                lines.append(f"- **Callers of {node.name}** ({len(sources)} total):")
+                for c in callers:
+                    lines.append(f"  * {c}")
+        if not has_sources:
+            lines.append("- Zero external callers detected in codebase graph (isolated leaf or new component).")
+
+        lines.append("\n### Reviewer Call-Chain Guidance:")
+        lines.append("- Inspect any identified callers or contract files directly with `view_file` (maximum 2 hops).")
+        lines.append("- Do NOT run unanchored repository-wide searches; all relevant callers and layer mappings are pre-computed above.")
+        lines.append("")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"\n## ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY\n*(Graph slice generation notice: {exc})*\n"
 
 
 def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
@@ -77,7 +144,8 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         "is_truncated": False,
         "changed_files": len(changes),
     }
-    content = "\n".join((HEADER, "```json", json.dumps(metadata, ensure_ascii=False, indent=2), "```", "", "## Git diff", "```diff", diff, "```", *extras))
+    topology = generate_review_topology(repo, paths)
+    content = "\n".join((HEADER, "```json", json.dumps(metadata, ensure_ascii=False, indent=2), "```", "", topology, "", "## Git diff", "```diff", diff, "```", *extras))
     package_dir = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"]
     package_path = package_dir / "review-package.md"
     if package_path.exists():

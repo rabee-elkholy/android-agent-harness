@@ -36,12 +36,28 @@ def _message() -> str:
     return f"Android Harness task {task_id}: {status}. {next_step} Zoho mutates only after explicit `update zoho`."
 
 
+def _compact_message() -> str:
+    try:
+        from mutation_guard import active_plan
+        plan = active_plan(REPO)
+        status = str(plan.get("status") or "UNKNOWN")
+        task_id = str(plan.get("task_id") or "unknown")
+        if status == "IMPLEMENTING":
+            return f"Harness [Task {task_id}: IMPLEMENTING]: Mutate only approved files. Use project_graph.py for callers. Wait for background task completion."
+        if status == "VERIFYING":
+            return f"Harness [Task {task_id}: VERIFYING]: Launch routed reviewers in parallel. Reviewers use embedded ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY."
+        return f"Harness [Task {task_id}: {status}]: Architectural discovery uses `project_graph.py`. Unanchored grep cascades are blocked."
+    except Exception:
+        return "Android Harness: Use `project_graph.py --feature <name>` or `--find <Symbol>`. Unanchored grep cascades are forbidden."
+
+
 def main() -> None:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
         invocation = int(payload.get("invocationNum") or 0) if isinstance(payload, dict) else 0
-        print(json.dumps({"injectSteps": [{"ephemeralMessage": _message()}]} if invocation in (0, 1) else {}))
+        msg = _message() if invocation in (0, 1) else _compact_message()
+        print(json.dumps({"injectSteps": [{"ephemeralMessage": msg}]}))
     except Exception:
         print("{}")
 

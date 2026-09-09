@@ -185,6 +185,19 @@ class HookTests(unittest.TestCase):
             temp_script = Path(external_temp) / "evil.py"
             self.assertEqual("deny", self.call("write_to_file", {"TargetFile": str(temp_script)})["decision"])
 
+    def test_search_guard_rules(self):
+        # 1. Targeted file search is always allowed
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app/src/main/java/com/example/HomeActivity.kt", "Query": "test"})["decision"])
+        self.assertEqual("allow", self.call("find_by_name", {"SearchDirectory": "app/src/main/java/com/example/features/login", "Pattern": "*.kt"})["decision"])
+
+        # 2. Broad search during discovery without project_graph is denied
+        self.assertEqual("deny", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
+        self.assertEqual("deny", self.call("find_by_name", {"SearchDirectory": ".", "Pattern": "test"})["decision"])
+
+        # 3. Broad search during VERIFYING is allowed (reviewers never blocked)
+        self.activate("VERIFYING")
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
