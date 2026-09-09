@@ -132,7 +132,7 @@ def _handle_stop() -> None:
     except Exception:
         emit("allow", "No active vNext task requires a delivery stop.", tool="stop")
         return
-    if status in {"IMPLEMENTING", "VERIFYING", "BLOCKED", "AWAITING_DEVELOPER_APPROVAL"}:
+    if status in {"IMPLEMENTING", "VERIFYING", "BLOCKED"}:
         emit("continue", f"Active task is {status}; complete or cancel it before delivery.", tool="stop")
     elif status == "READY_FOR_DELIVERY":
         try:

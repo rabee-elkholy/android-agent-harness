@@ -129,6 +129,8 @@ class HookTests(unittest.TestCase):
     def test_stop_blocks_incomplete_task(self):
         self.activate("IMPLEMENTING")
         self.assertEqual("continue", self.call("", stop=True)["decision"])
+        self.activate("AWAITING_DEVELOPER_APPROVAL")
+        self.assertEqual("allow", self.call("", stop=True)["decision"])
         self.activate("READY_FOR_DELIVERY")
         self.assertEqual("allow", self.call("", stop=True)["decision"])
 
