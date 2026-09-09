@@ -58,7 +58,7 @@
     "agents/scripts/check_kit_update.py": "8a5f978eb13c2504f14a517f2aa1eb3711240399a9dfe95cc5fe1515b7fd0df4",
     "agents/scripts/check_strings.py": "a9a1c5b62b30ccdf013e55ca727471b597d989f94591222bc1de5f83cb956584",
     "agents/scripts/copilot_pre_tool_safety.py": "43026cd631de2c2e3ca1e7bb8e75aac7d99bf0c859f1a1250497ffc5561344ab",
-    "agents/scripts/delivery_manifest.py": "92696eb23d8b09ff99cc1b1b7a9a2f7cf4632800edb6f2f8a53647183848111c",
+    "agents/scripts/delivery_manifest.py": "4d82f9dc5033e046bcd24c77ee66718c473f09b2ce602004178dc45bb2dfcedd",
     "agents/scripts/doctor/__init__.py": "86a2eddbbf4da8ad0744a6d998110e34f3c9c1f964d8f6fed2e78390221e29f4",
     "agents/scripts/doctor/engine.py": "0bfbdef26b20e0e6ff308be66df0bb60047187d35a42b69abc0dc08cd7ccb6af",
     "agents/scripts/doctor/models.py": "a186883439f75446bb518539bbf9bb0d6e498b66a1faa2d30a9a552378ab0864",

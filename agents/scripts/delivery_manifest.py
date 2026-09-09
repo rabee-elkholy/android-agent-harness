@@ -180,6 +180,8 @@ def _porcelain_changes(
             identity = f"tombstone:git:{base_oid}"
         else:
             oid = _working_tree_oid(repo, rel, path, algorithm)
+            if status == "M" and xy == ".M" and oid == index_entries.get(rel):
+                continue
             content_cache[rel] = oid
             identity = f"git:{oid}"
         entries.append(ChangeEntry(status=status, path=rel, old_path=old_rel, content_identity=identity))
