@@ -5,6 +5,14 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-09-09
+
+### Cross-Platform Checksum Normalization and Automated Prompt Pinning
+
+- **Cross-Platform LF Normalization (`generate_release_checksums.py`, `release_version.py`)**: Enforced Unix LF (`\n`) line endings when generating `agents/VERSION`, `pyproject.toml`, `CITATION.cff`, and `_hook_selftest.py` across all operating systems. `generate_release_checksums.py` now automatically normalizes any CRLF occurrences on disk to LF before computing cryptographic SHA-256 digests, guaranteeing that `agents/release_checksums.json` matches byte-for-byte on Linux, macOS, and Windows CI runners.
+- **Automated Prompt Branch Pinning (`pin_prompt_docs.py`)**: Enhanced `pin_urls` to automatically detect and synchronize `--branch vX.Y.Z --single-branch` and detached release references (`detached `vX.Y.Z``) in `docs/install-or-update-prompt.md` and `README.md`, eliminating manual doc sync errors.
+- **Release Validation Hardening (`validate_release.py`)**: Added automated checks enforcing that prompt branch pins match the release version and that zero files in `agents/release_checksums.json` contain Windows CRLF line endings.
+
 ## [1.0.6] - 2026-09-09
 
 ### Diff-Aware Classification, In-Chat Sensitive Approval, and Interactive Device Verification

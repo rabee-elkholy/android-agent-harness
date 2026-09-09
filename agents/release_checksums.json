@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "agents/.gitignore": "8a0eaa7cc8e55d17da96f31f6863b5e9b5aba15bb03fd6e8fb07a8cb89e5715c",
-    "agents/VERSION": "3dd81e3d2bbe930a0c98531afa6c35bd862ee8a08458ec0d7d1b51138d7b3a3c",
+    "agents/VERSION": "6d6b9230dd8b8aac527f8929b7c2fc1fa0365deccca856216de979d6f5c6a6fe",
     "agents/command-packs/check-strings.md.template": "688d464d69849d4b5bc68faae49bf79a196d882765ac5eaf9b829bd8df8b9c0b",
     "agents/command-packs/commit-msg.md.template": "cf8bd58a510a6953a66e2c705c8c9515f0369e4fa454af9bbc9c7f6b1805b80e",
     "agents/command-packs/crash-triage.md.template": "acea2311229cc8d4f7d1eae515a4d3f3b52246437df25ee75dfa40d3407dc69a",
@@ -38,7 +38,7 @@
     "agents/scripts/_gate_results.py": "42afd7d3fa5d66fe883fd0de7ef95fe87a66bc27ed2a72767feae5b55612fb55",
     "agents/scripts/_graph_core.py": "0a89be409e0200aef62367ddc069518ff4b83036b4c2fd7696a543632d3d920b",
     "agents/scripts/_graph_selftest.py": "8a79916143ac47fadbf03bc5cf886d2e1c804f019087975aceeba57ec3b99b5f",
-    "agents/scripts/_hook_selftest.py": "b0e6863993df4e81ba9d9f629c5317ce74b8bd1607a2dd497bf7c76c4c8f4964",
+    "agents/scripts/_hook_selftest.py": "6da4acf61ae53a1240b3df9fd6d20bc5a64e2cd46d6b2b714efc314096ca6390",
     "agents/scripts/_installer_config.py": "94829e8c573739de5cd13e06bc17e3290cba39649a43ee55a853d313b36e7d6a",
     "agents/scripts/_live_process.py": "5a6f0f05c66e8b220ddadafb1f8a7c7460d27299898571a70089d5aeb303937b",
     "agents/scripts/_modules.py": "a5145e4219b4085341258ed7d1b830af22e044398ea1f6895b0cbc43737d99e3",

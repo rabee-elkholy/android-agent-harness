@@ -138,6 +138,16 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
         if checksum_issue:
             errors.append(checksum_issue)
 
+    prompt_path = repo_root / "docs" / "install-or-update-prompt.md"
+    if prompt_path.is_file():
+        prompt_content = prompt_path.read_text(encoding="utf-8")
+        expected_branch = f"--branch v{version} --single-branch"
+        if expected_branch not in prompt_content:
+            errors.append(f"docs/install-or-update-prompt.md does not pin '{expected_branch}'")
+        expected_detached = f"detached `v{version}`"
+        if expected_detached not in prompt_content:
+            errors.append(f"docs/install-or-update-prompt.md does not reference '{expected_detached}'")
+
     errors.extend(answer_schema_drift_errors(repo_root))
 
     security = (repo_root / "SECURITY.md").read_text(encoding="utf-8")
@@ -167,7 +177,13 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
             errors.append("agents/release_checksums.json has an unsupported schema")
         for rel, expected in (checksums.get("files") or {}).items():
             path = repo_root / rel
-            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            if not path.is_file():
+                errors.append(f"release checksum target missing: {rel}")
+                continue
+            raw_data = path.read_bytes()
+            if b"\r\n" in raw_data:
+                errors.append(f"release target contains Windows CRLF line endings: {rel}")
+            elif hashlib.sha256(raw_data).hexdigest() != expected:
                 errors.append(f"release checksum mismatch: {rel}")
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"agents/release_checksums.json is missing or unreadable: {exc}")

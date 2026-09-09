@@ -70,7 +70,7 @@ def update_version_files(new_version: str) -> list[str]:
 
     # 1. agents/VERSION
     ver_file = ROOT / "agents" / "VERSION"
-    ver_file.write_text(f"{new_version}\n", encoding="utf-8")
+    ver_file.write_text(f"{new_version}\n", encoding="utf-8", newline="\n")
     logs.append(f"Updated agents/VERSION -> {new_version}")
 
     # 2. pyproject.toml
@@ -78,7 +78,7 @@ def update_version_files(new_version: str) -> list[str]:
     if pyproject_file.is_file():
         text = pyproject_file.read_text(encoding="utf-8")
         updated = re.sub(r'version\s*=\s*"[^"]+"', f'version = "{new_version}"', text)
-        pyproject_file.write_text(updated, encoding="utf-8")
+        pyproject_file.write_text(updated, encoding="utf-8", newline="\n")
         logs.append(f"Updated pyproject.toml -> version = \"{new_version}\"")
 
     # 3. CITATION.cff
@@ -87,7 +87,7 @@ def update_version_files(new_version: str) -> list[str]:
         text = citation_file.read_text(encoding="utf-8")
         text = re.sub(r'version:\s*\S+', f'version: {new_version}', text)
         text = re.sub(r'date-released:\s*\S+', f'date-released: {today}', text)
-        citation_file.write_text(text, encoding="utf-8")
+        citation_file.write_text(text, encoding="utf-8", newline="\n")
         logs.append(f"Updated CITATION.cff -> version: {new_version}, date-released: {today}")
 
     # 4. agents/scripts/_hook_selftest.py
@@ -99,7 +99,7 @@ def update_version_files(new_version: str) -> list[str]:
             f'get_current_version() == "{new_version}"',
             text,
         )
-        selftest_file.write_text(updated, encoding="utf-8")
+        selftest_file.write_text(updated, encoding="utf-8", newline="\n")
         logs.append(f"Updated _hook_selftest.py assertion -> {new_version}")
 
     return logs

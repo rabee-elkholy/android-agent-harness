@@ -88,9 +88,26 @@ def pin_urls(tag: str) -> list[str]:
         path = ROOT / rel
         text = _read(path)
         updated, count = URL_RE.subn(lambda m: f"{m.group(1)}v{tag}{m.group(2)}", text)
-        if count and updated != text:
+        updated, branch_count = re.subn(
+            r"(--branch\s+)v?\d+\.\d+\.\d+(\s+--single-branch)",
+            rf"\g<1>v{tag}\2",
+            updated,
+        )
+        updated, detached_count = re.subn(
+            r"(detached\s+`)v?\d+\.\d+\.\d+(`)",
+            rf"\g<1>v{tag}\2",
+            updated,
+        )
+        if (count or branch_count or detached_count) and updated != text:
             _write(path, updated)
-            logs.append(f"pinned {count} URL(s) to v{tag} in {rel}")
+            parts = []
+            if count:
+                parts.append(f"{count} URL(s)")
+            if branch_count:
+                parts.append(f"{branch_count} branch ref(s)")
+            if detached_count:
+                parts.append(f"{detached_count} detached ref(s)")
+            logs.append(f"pinned {', '.join(parts)} to v{tag} in {rel}")
     return logs
 
 

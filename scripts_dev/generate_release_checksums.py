@@ -22,9 +22,17 @@ def included(path: Path) -> bool:
     )
 
 
+def normalize_and_read(path: Path) -> bytes:
+    data = path.read_bytes()
+    if b"\r\n" in data:
+        data = data.replace(b"\r\n", b"\n")
+        path.write_bytes(data)
+    return data
+
+
 def main() -> int:
     files = {
-        path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        path.relative_to(ROOT).as_posix(): hashlib.sha256(normalize_and_read(path)).hexdigest()
         for path in sorted(AGENTS.rglob("*")) if included(path)
     }
     payload = {"schema_version": 1, "algorithm": "sha256", "files": files}
