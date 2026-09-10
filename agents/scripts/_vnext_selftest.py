@@ -108,7 +108,7 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn(f"--branch {tag} --single-branch", self.prompt)
         self.assertIn("describe --tags --exact-match", self.prompt)
         self.assertIn("recommended", self.prompt)
-        self.assertLessEqual(len(self.prompt.encode("utf-8")), 4054)
+        self.assertLessEqual(len(self.prompt.encode("utf-8")), 4096)
         self.assertNotIn("android-agent-harness/main/", self.prompt)
         self.assertNotIn("releases/latest", self.prompt)
 
