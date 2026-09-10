@@ -13,7 +13,17 @@ from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, 
 from change_classifier import classify  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
 from final_verifier import verify  # noqa: E402
-from plan_authority import approve, begin, changed_modules, check_material_drift, create_plan, module_id, save_plan  # noqa: E402
+from plan_authority import (  # noqa: E402
+    DEFAULT_APP_SURFACES,
+    approve,
+    begin,
+    changed_modules,
+    check_material_drift,
+    create_plan,
+    module_id,
+    normalize_expected_surfaces,
+    save_plan,
+)
 from review_policy import decide, decide_later_round  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
 
@@ -54,9 +64,12 @@ def _load_plan(repo: Path, task_id: str) -> dict:
 def draft(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     classification = classify(repo)
-    expected = [item.strip().upper() for item in (args.expected_surfaces or "").split(",") if item.strip()]
+    raw_expected = [item.strip() for item in (args.expected_surfaces or "").split(",") if item.strip()]
+    expected = normalize_expected_surfaces(raw_expected)
     if not expected:
-        expected = list(classification["surfaces"])
+        expected = list(classification.get("surfaces") or [])
+    if not expected and not classification.get("changed_files"):
+        expected = list(DEFAULT_APP_SURFACES)
     policy_input = dict(classification)
     policy_input["surfaces"] = expected
     preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo))

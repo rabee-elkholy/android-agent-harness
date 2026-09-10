@@ -5,6 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-09-10
+
+### Surface Alias Normalization, Safe Clean-Repo Baselines, and Strict Verification Pipeline Order
+
+- **Surface Alias Normalization (`plan_authority.py`, `workflow.py`)**: Introduced `SURFACE_ALIASES` mapping natural surface descriptors (`code`, `ui`, `compose`, `xml`, `strings`, `tests`, `db`, `permissions`) to formal canonical classifier outputs. Added `normalize_expected_surfaces` to eliminate false-positive Material Implementation Drift halts caused by free-form naming in `workflow.py draft`.
+- **Safe Clean-Repo Baseline Defaulting (`workflow.py`, `plan_authority.py`)**: Added `DEFAULT_APP_SURFACES = ["BUSINESS_LOGIC", "COMPOSE_UI", "XML_UI", "RESOURCE_UI"]` for draft plans created on clean working copies when `--expected-surfaces` is omitted, eliminating false drift on standard logic/UI edits while strictly keeping sensitive surfaces (`BILLING`, `AUTH`, `SECURITY`, `ROOM_SCHEMA`, `MANIFEST_PERMISSION`) protected by drift halts.
+- **Strict Verification Pipeline Execution Priority (`review_policy.py`)**: Replaced alphabetical sorting of policy `gates` with `PIPELINE_GATE_ORDER = ("preflight", "localization", "manifest", "unit_tests", "assemble", "device")`, guaranteeing that any tool or agent inspecting `policy.json` receives gates strictly in priority execution sequence.
+- **Verification Directive Realignment (`pre_invocation_reminder.py`)**: Realigned `VERIFYING` state ephemeral reminders in `_compact_message()` and `_message()` to explicitly instruct: `Order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (if required) -> 5. verify.`, preventing premature reviewer dispatch or premature APK installation on physical devices.
+- **Hard Verification Pipeline Invariants (`harness-rules.md`, `deliver.md`)**: Codified strict pipeline rules in Section 4: prohibiting APK installation or device deployment before JVM unit tests pass, and prohibiting AI reviewer dispatch before preflight and unit tests pass. Updated `deliver.md` steps 4–5 into explicit sequential sub-phases.
+- **Deterministic Test Hardening (`_vnext_selftest.py`)**: Added test coverage for surface alias normalization, clean-repo draft baseline defaulting, sensitive drift retention, and execution-priority gate sorting.
+
 ## [1.0.8] - 2026-09-10
 
 ### Structural Context Classification, Enhanced Test Fingerprinting, and Hardened Room & Resource Guards

@@ -28,8 +28,17 @@ from final_verifier import verify  # noqa: E402
 from install_tool_adapters import sync_hooks_json  # noqa: E402
 from lifecycle import OWNERSHIP_RELATIVE, _validate_kit, install, replace_legacy, uninstall, update  # noqa: E402
 import lifecycle as lifecycle_module  # noqa: E402
-from plan_authority import approve, begin, changed_modules, check_material_drift, create_plan, save_plan  # noqa: E402
-from review_policy import decide, decide_later_round  # noqa: E402
+from plan_authority import (  # noqa: E402
+    DEFAULT_APP_SURFACES,
+    approve,
+    begin,
+    changed_modules,
+    check_material_drift,
+    create_plan,
+    normalize_expected_surfaces,
+    save_plan,
+)
+from review_policy import PIPELINE_GATE_ORDER, decide, decide_later_round  # noqa: E402
 from run_device import adb_result_ok  # noqa: E402
 from review_package import build_package  # noqa: E402
 from record_review import ingest  # noqa: E402
@@ -608,6 +617,58 @@ class AuthorityAndEvidenceTests(RepoCase):
             begin(self.repo, plan)
         self.assertEqual([], check_material_drift(plan, ["BUSINESS_LOGIC"]))
         self.assertEqual(["surface:BILLING"], check_material_drift(plan, ["BUSINESS_LOGIC", "BILLING"]))
+
+    def test_surface_aliases_normalization(self) -> None:
+        self.assertEqual(
+            ["BUSINESS_LOGIC", "COMPOSE_UI", "RESOURCE_UI", "XML_UI"],
+            normalize_expected_surfaces(["code", "ui"]),
+        )
+        self.assertEqual(["LOCALIZATION"], normalize_expected_surfaces(["strings"]))
+        self.assertEqual(["PERSISTENCE", "ROOM_SCHEMA"], normalize_expected_surfaces(["db"]))
+        self.assertEqual(["MANIFEST_PERMISSION"], normalize_expected_surfaces(["permissions"]))
+        self.assertEqual([], normalize_expected_surfaces(None))
+        self.assertEqual([], normalize_expected_surfaces([]))
+
+    def test_material_drift_with_surface_aliases(self) -> None:
+        plan = create_plan(self.repo, task_id="task-alias", requested_outcome="Change A", expected_surfaces=["code", "ui"])
+        self.assertEqual([], check_material_drift(plan, ["BUSINESS_LOGIC", "COMPOSE_UI"]))
+        self.assertEqual(["surface:BILLING"], check_material_drift(plan, ["BUSINESS_LOGIC", "BILLING"]))
+
+    def test_clean_repo_draft_defaults_to_app_surfaces_without_drift(self) -> None:
+        import argparse
+        args = argparse.Namespace(
+            repo=str(self.repo),
+            task_id="clean-draft",
+            outcome="Add feature",
+            expected_surfaces="",
+            expected_modules="",
+            test_strategy="",
+            device_strategy="",
+            risks="",
+            rollback="",
+            external_write=[],
+        )
+        plan = draft(args)
+        self.assertEqual(sorted(DEFAULT_APP_SURFACES), sorted(plan["expected_surfaces"]))
+        self.assertEqual([], check_material_drift(plan, ["BUSINESS_LOGIC", "COMPOSE_UI"]))
+        self.assertEqual(["surface:BILLING"], check_material_drift(plan, ["BUSINESS_LOGIC", "BILLING"]))
+        self.assertEqual(["surface:SECURITY"], check_material_drift(plan, ["BUSINESS_LOGIC", "SECURITY"]))
+
+    def test_pipeline_gates_ordered_by_execution_priority(self) -> None:
+        classification = {
+            "classification_sha256": "0" * 64,
+            "surfaces": ["BUSINESS_LOGIC", "COMPOSE_UI"],
+            "severity": "MEDIUM",
+            "confidence": "HIGH",
+            "changed_files": 2,
+        }
+        policy = decide(classification, KIT / "agents" / "skills")
+        gates = policy["gates"]
+        self.assertIn("preflight", gates)
+        self.assertIn("unit_tests", gates)
+        self.assertIn("device", gates)
+        self.assertLess(gates.index("preflight"), gates.index("unit_tests"))
+        self.assertLess(gates.index("unit_tests"), gates.index("device"))
 
     def test_base_change_invalidates_approval_before_begin(self) -> None:
         plan = create_plan(self.repo, task_id="task-two", requested_outcome="Change A", expected_surfaces=["BUSINESS_LOGIC"])

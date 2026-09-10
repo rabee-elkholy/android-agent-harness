@@ -13,6 +13,7 @@ from skill_router import route  # noqa: E402
 
 
 SCHEMA_VERSION = 1
+PIPELINE_GATE_ORDER = ("preflight", "localization", "manifest", "unit_tests", "assemble", "device")
 FIVE_REVIEWERS = {
     "bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent",
     "perf-anr-guardian-agent", "regression-impact-reviewer-agent",
@@ -119,7 +120,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "micro_eligible": micro,
         "review_status": "REVIEW_NOT_REQUIRED_BY_POLICY" if micro else "REQUIRED" if reviewers else "NONE",
         "reviewers": sorted(reviewers),
-        "gates": sorted(gates),
+        "gates": sorted(gates, key=lambda g: (PIPELINE_GATE_ORDER.index(g) if g in PIPELINE_GATE_ORDER else 99, g)),
         "device_required": device_required,
         "project_kind": project_kind,
         "max_review_rounds": 3,

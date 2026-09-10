@@ -30,6 +30,71 @@ APPROVAL_SOURCES = {"host_native", "conversation", "developer_terminal"}
 ENFORCEMENT_TIERS = {"HARD_ENFORCED", "RULE_ENFORCED"}
 EXTERNAL_WRITES = {"zoho_sprints"}
 
+SURFACE_ALIASES: dict[str, list[str]] = {
+    "CODE": ["BUSINESS_LOGIC"],
+    "LOGIC": ["BUSINESS_LOGIC"],
+    "BUSINESS": ["BUSINESS_LOGIC"],
+    "UI": ["COMPOSE_UI", "XML_UI", "RESOURCE_UI"],
+    "COMPOSE": ["COMPOSE_UI"],
+    "COMPOSE_UI": ["COMPOSE_UI"],
+    "XML": ["XML_UI"],
+    "XML_UI": ["XML_UI"],
+    "RESOURCE": ["RESOURCE_UI"],
+    "RESOURCES": ["RESOURCE_UI"],
+    "RESOURCE_UI": ["RESOURCE_UI"],
+    "STRINGS": ["LOCALIZATION"],
+    "LOCALIZATION": ["LOCALIZATION"],
+    "TEST": ["TEST_ONLY"],
+    "TESTS": ["TEST_ONLY"],
+    "TEST_ONLY": ["TEST_ONLY"],
+    "DB": ["ROOM_SCHEMA", "PERSISTENCE"],
+    "DATABASE": ["ROOM_SCHEMA", "PERSISTENCE"],
+    "PERSISTENCE": ["PERSISTENCE"],
+    "ROOM": ["ROOM_SCHEMA"],
+    "ROOM_SCHEMA": ["ROOM_SCHEMA"],
+    "NETWORK": ["NETWORK"],
+    "API": ["NETWORK", "PUBLIC_API"],
+    "PUBLIC_API": ["PUBLIC_API"],
+    "PERMISSIONS": ["MANIFEST_PERMISSION"],
+    "PERMISSION": ["MANIFEST_PERMISSION"],
+    "MANIFEST_PERMISSION": ["MANIFEST_PERMISSION"],
+    "BUILD": ["BUILD_CONFIG"],
+    "BUILD_CONFIG": ["BUILD_CONFIG"],
+    "GRADLE": ["BUILD_CONFIG"],
+    "DOCS": ["DOCS"],
+    "NATIVE": ["NATIVE_CODE"],
+    "NATIVE_CODE": ["NATIVE_CODE"],
+    "SECURITY": ["SECURITY"],
+    "AUTH": ["AUTH"],
+    "BILLING": ["BILLING"],
+    "CRYPTO": ["CRYPTO"],
+    "SENSITIVE_DATA": ["SENSITIVE_DATA"],
+    "COROUTINES": ["COROUTINES"],
+    "DEVICE_API": ["DEVICE_API"],
+}
+
+DEFAULT_APP_SURFACES: list[str] = [
+    "BUSINESS_LOGIC",
+    "COMPOSE_UI",
+    "XML_UI",
+    "RESOURCE_UI",
+]
+
+
+def normalize_expected_surfaces(raw_surfaces: list[str] | None) -> list[str]:
+    if not raw_surfaces:
+        return []
+    normalized: set[str] = set()
+    for item in raw_surfaces:
+        cleaned = str(item or "").strip().upper()
+        if not cleaned:
+            continue
+        if cleaned in SURFACE_ALIASES:
+            normalized.update(SURFACE_ALIASES[cleaned])
+        else:
+            normalized.add(cleaned)
+    return sorted(normalized)
+
 
 def module_id(value: str) -> str:
     parts = [part for part in str(value or "").strip().replace("/", ":").split(":") if part]
@@ -103,7 +168,7 @@ def create_plan(
         "created_at": utc_now(),
         "status": "AWAITING_DEVELOPER_APPROVAL",
         "requested_outcome": requested_outcome.strip(),
-        "expected_surfaces": sorted(set(expected_surfaces)),
+        "expected_surfaces": normalize_expected_surfaces(expected_surfaces),
         "expected_modules": sorted({module_id(item) for item in (expected_modules or [])}),
         "expected_files": sorted(set(expected_files or [])),
         "test_strategy": test_strategy,
@@ -180,8 +245,8 @@ def require_mutation(plan: dict) -> None:
 
 
 def check_material_drift(plan: dict, actual_surfaces: list[str], actual_modules: list[str] | None = None) -> list[str]:
-    expected_surfaces = set(plan.get("expected_surfaces") or [])
-    actual_surface_set = set(actual_surfaces)
+    expected_surfaces = set(normalize_expected_surfaces(plan.get("expected_surfaces") or []))
+    actual_surface_set = set(normalize_expected_surfaces(actual_surfaces))
     expected_modules = set(plan.get("expected_modules") or [])
     actual_module_set = set(actual_modules or [])
     return sorted(

@@ -26,7 +26,7 @@ def _message() -> str:
     elif status == "IMPLEMENTING":
         next_step = "Implement approved scope. Do NOT poll background tasks with manage_task status; wait for background notification."
     elif status == "VERIFYING":
-        next_step = "Run only gates/reviewers in current-run policy. Record reviewer verdicts with `record_review.py --task <id> --reviewer <name> --verdict PASS`. If device gate is required, execute manual check via ask_question before verify. If code fixes needed, run workflow.py resume."
+        next_step = "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (if required) -> 5. ask_question device check -> 6. verify. If code fixes needed, run workflow.py resume."
     elif status == "BLOCKED":
         next_step = "Fix recorded findings with workflow.py resume, or request developer decision at the round cap."
     elif status == "READY_FOR_DELIVERY":
@@ -45,7 +45,7 @@ def _compact_message() -> str:
         if status == "IMPLEMENTING":
             return f"Harness [Task {task_id}: IMPLEMENTING]: Mutate only approved files. Use project_graph.py for callers. Wait for background task completion."
         if status == "VERIFYING":
-            return f"Harness [Task {task_id}: VERIFYING]: Launch routed reviewers in parallel. Reviewers use embedded ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY."
+            return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (if required) -> 5. verify."
         return f"Harness [Task {task_id}: {status}]: Architectural discovery uses `project_graph.py`. Unanchored grep cascades are blocked."
     except Exception:
         return "Android Harness: Use `project_graph.py --feature <name>` or `--find <Symbol>`. Unanchored grep cascades are forbidden."

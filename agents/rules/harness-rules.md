@@ -62,12 +62,20 @@ python .agents/scripts/review_policy.py --repo . --json
 The central `review_policy.py` is the only gate/reviewer router. Adapters and prose may not duplicate or override its decisions.
 
 - Run only the tests, deterministic gates, reviewers, assemble, and device checks required by the final surfaces.
+- Verification follows a strict execution pipeline order:
+  1. Fast Deterministic Preflight (`python .agents/scripts/preflight_check.py`)
+  2. Automated Unit Tests (`python .agents/scripts/run_tests_gate.py`)
+  3. AI Specialist Reviewers (`python .agents/scripts/record_review.py`)
+  4. Assemble & Device Verification (`python .agents/scripts/run_device.py install-start`)
+  5. Interactive Device Verification (`ask_question`)
+  6. Read-Only Verification (`python .agents/scripts/workflow.py verify` & `complete`).
+  Never deploy or install an APK on a device before unit tests pass. Never dispatch AI reviewers before preflight and unit tests pass.
 - TDD is required for regressions and deterministic new behavior with a meaningful seam, not for docs, resources, mechanical renames, or untestable configuration.
 - A Gradle success with zero executed tests cannot satisfy a required test gate.
 - Documentation and eligible deterministic micro changes may require no semantic reviewer. Record `REVIEW_NOT_REQUIRED_BY_POLICY`; never fabricate reviewer PASS.
 - Normal logic, UI/runtime, coroutine, persistence, build, and sensitive changes use their routed reviewer subsets.
 - Critical/broad changes use the full reviewer set. Test changes add Test Quality review.
-- Reviewer execution is fully automatic: launching the routed reviewers (subagents) during the `VERIFYING` phase is covered by the initial task plan approval. The agent must launch the required reviewers immediately and automatically in a single parallel `invoke_subagent` call; never pause, ask, or wait for developer permission to run reviewers. As reviewer evaluations return, record each verdict using `python .agents/scripts/record_review.py --task <id> --reviewer <name> --verdict PASS --evidence-pkg <sha12>` (or pass all verdicts at once: `python .agents/scripts/record_review.py --task <id> --verdict <name1>=PASS --verdict <name2>=PASS ...`). Review evidence is automatically ingested once all required reviewers are recorded.
+- Reviewer execution is fully automatic: launching the routed reviewers (subagents) during the `VERIFYING` phase is covered by the initial task plan approval. Once preflight and unit tests pass, the agent must launch the required reviewers immediately and automatically in a single parallel `invoke_subagent` call; never pause, ask, or wait for developer permission to run reviewers. As reviewer evaluations return, record each verdict using `python .agents/scripts/record_review.py --task <id> --reviewer <name> --verdict PASS --evidence-pkg <sha12>` (or pass all verdicts at once: `python .agents/scripts/record_review.py --task <id> --verdict <name1>=PASS --verdict <name2>=PASS ...`). Review evidence is automatically ingested once all required reviewers are recorded.
 - Sensitive final delivery requires a second explicit developer approval bound
   to the frozen snapshot, solicited interactively via `ask_question`. Upon developer confirmation, the agent records the approval using:
   `python .agents/scripts/workflow.py approve-sensitive --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED`.
