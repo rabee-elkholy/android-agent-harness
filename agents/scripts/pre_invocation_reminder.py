@@ -30,7 +30,26 @@ def _message() -> str:
     elif status == "BLOCKED":
         next_step = "Fix recorded findings with workflow.py resume, or request developer decision at the round cap."
     elif status == "READY_FOR_DELIVERY":
-        next_step = "Do not mutate the delivery. Present the verified result and leave Git/Zoho actions to explicit requests."
+        try:
+            from workflow import _find_uncommitted_task_files, state_root
+            from plan_authority import deliver as deliver_plan, save_plan
+            dirty = _find_uncommitted_task_files(REPO, task_id, plan)
+            if not dirty:
+                plan = deliver_plan(plan)
+                task_plan_path = state_root(REPO) / "tasks" / task_id / "plan.json"
+                if task_plan_path.is_file():
+                    save_plan(task_plan_path, plan)
+                active_file = state_root(REPO) / "active-task.json"
+                if active_file.is_file():
+                    active_file.unlink(missing_ok=True)
+                return (
+                    "Android Harness: discovery MUST start with `python .agents/scripts/project_graph.py --feature <name>` "
+                    "or `--find <Symbol>` before inspecting files. Unanchored grep cascades are forbidden. "
+                    "Analysis and planning are read-only. Before implementation, draft a task plan and obtain explicit developer approval."
+                )
+        except Exception:
+            pass
+        next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
     else:
         next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
     return f"Android Harness task {task_id}: {status}. {next_step} Zoho mutates only after explicit `update zoho`."
@@ -46,6 +65,8 @@ def _compact_message() -> str:
             return f"Harness [Task {task_id}: IMPLEMENTING]: Mutate only approved files. Use project_graph.py for callers. Wait for background task completion."
         if status == "VERIFYING":
             return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (if required) -> 5. verify."
+        if status == "READY_FOR_DELIVERY":
+            return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close."
         return f"Harness [Task {task_id}: {status}]: Architectural discovery uses `project_graph.py`. Unanchored grep cascades are blocked."
     except Exception:
         return "Android Harness: Use `project_graph.py --feature <name>` or `--find <Symbol>`. Unanchored grep cascades are forbidden."

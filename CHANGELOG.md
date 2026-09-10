@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.10] - 2026-09-10
+
+### Task Delivery Lifecycle, Draft Collision Barrier, Device Gating, and Interactive Review Override
+
+- **Task Delivery Lifecycle & Cleanup (`plan_authority.py`, `workflow.py`)**: Added `deliver(plan)` to formalize the transition from `READY_FOR_DELIVERY` to `DELIVERED` with an immutable `delivered_at` timestamp. Added `workflow.py deliver` subcommand to cleanly finalize tasks and unlink `.agents/state/active-task.json`.
+- **Working Tree Collision Barrier & Auto-Delivery (`workflow.py`)**: Introduced `_find_uncommitted_task_files` in `workflow.py draft` to strictly block drafting new tasks when uncommitted changes from a prior task exist in the working tree (preventing cross-task contamination), with `--force` override available. Added auto-delivery for tasks in `READY_FOR_DELIVERY` once all files are committed to Git HEAD.
+- **Device Hard Barrier during Implementation (`mutation_guard.py`, `run_device.py`)**: Codified defense-in-depth blocking of `run_device.py` while the task is in `IMPLEMENTING` across both `mutation_guard.py` (shell command boundary) and `run_device.py` (internal state inspection).
+- **Strict Verification Gate Ordering (`run_device.py`)**: Enforced that `preflight` and `unit_tests` (when mandated by policy) must execute and pass in the active verification run before APK install or launch is permitted.
+- **Interactive Developer Review Override (`record_review.py`, `final_verifier.py`)**: Enabled developers to skip AI specialist reviews via interactive `ask_question` with mandatory risk disclosure. Added `--override-reviews`, `--proof-reference`, and `--source` to `record_review.py`, recording immutable `DEVELOPER_OVERRIDE` evidence with producer `developer_approval`.
+- **Sensitive Surface Protection**: Review overrides are strictly forbidden on tasks modifying `BILLING`, `AUTH`, `SECURITY`, `SENSITIVE_DATA`, or `CRYPTO` surfaces; both `record_review.py` and `final_verifier.py` fail closed.
+- **Noise Suppression (`pre_invocation_reminder.py`)**: Automatically finalizes clean `READY_FOR_DELIVERY` tasks upon commit and restores the clean initial prompt.
+- **Comprehensive Regression Suite (`_vnext_selftest.py`)**: Added 4 end-to-end unit tests validating delivery lifecycle, draft collision barriers, device gating, and review overrides.
+
 ## [1.0.9] - 2026-09-10
 
 ### Surface Alias Normalization, Safe Clean-Repo Baselines, and Strict Verification Pipeline Order

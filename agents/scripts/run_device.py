@@ -130,6 +130,60 @@ def run_adb(serial: str, adb_args: list[str], label: str) -> tuple[int, str]:
     return code, log
 
 
+def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
+    try:
+        from evidence_store import EvidenceStore
+        store = EvidenceStore(state_root)
+        snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
+        run_id = str(current_run.get("run_id") or "")
+        record = store.read(snapshot, run_id, gate_name)
+        if record and str(record.get("status") or "") == "PASS":
+            return True
+    except Exception:
+        pass
+    gate_res = read_gate_result(gate_name)
+    return bool(gate_res and str(gate_res.get("status") or "") == "PASS")
+
+
+def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
+    if getattr(args, "force", False) or args.action == "uninstall":
+        return None
+    try:
+        from mutation_guard import active_plan
+        from _vnext_common import read_json
+        active = active_plan(REPO)
+    except Exception:
+        return None
+    status = str(active.get("status") or "")
+    if status == "IMPLEMENTING":
+        live_print(
+            "[FAIL] Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first.",
+            err=True,
+        )
+        return EXIT_ENV
+    if status == "VERIFYING" and args.action in ("install", "start", "install-start"):
+        task_id = str(active.get("task_id") or "")
+        state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+        current_path = state / "tasks" / task_id / "current-run.json"
+        if current_path.is_file():
+            try:
+                from _vnext_common import read_json
+                current_run = read_json(current_path)
+                policy_path = Path(str(current_run.get("policy") or ""))
+                if policy_path.is_file():
+                    policy = read_json(policy_path)
+                    required_gates = set(policy.get("gates") or [])
+                    if "preflight" in required_gates and not _gate_passed(state, current_run, "preflight"):
+                        live_print("[FAIL] Pipeline order violation: preflight_check must pass before device deployment.", err=True)
+                        return EXIT_ENV
+                    if "unit_tests" in required_gates and not _gate_passed(state, current_run, "unit_tests"):
+                        live_print("[FAIL] Pipeline order violation: run_tests_gate must pass before device deployment.", err=True)
+                        return EXIT_ENV
+            except Exception:
+                pass
+    return None
+
+
 def main() -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
@@ -148,6 +202,10 @@ def main() -> int:
     parser.add_argument("--grant-runtime-permissions", action="store_true", help="Explicitly grant requested runtime permissions during install")
     parser.add_argument("--confirm-destructive", action="store_true", help="Required for uninstall")
     args = parser.parse_args()
+
+    prereq_err = _check_device_prerequisites(args)
+    if prereq_err is not None:
+        return prereq_err
 
     try:
         active_flavor, _task = resolve_or_raise(args.flavor)

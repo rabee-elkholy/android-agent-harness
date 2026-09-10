@@ -20,6 +20,7 @@ from plan_authority import (  # noqa: E402
     changed_modules,
     check_material_drift,
     create_plan,
+    deliver as deliver_plan,
     module_id,
     normalize_expected_surfaces,
     save_plan,
@@ -61,8 +62,60 @@ def _load_plan(repo: Path, task_id: str) -> dict:
     return read_json(_plan_path(repo, task_id))
 
 
+def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[str]:
+    try:
+        manifest = build_manifest(repo)
+        current_changes = {str(c.get("path") or "") for c in (manifest.get("changes") or [])}
+        if not current_changes:
+            return []
+        task_current = task_dir(repo, task_id) / "current-run.json"
+        if task_current.is_file():
+            run_info = read_json(task_current)
+            run_manifest_path = Path(str(run_info.get("manifest") or ""))
+            if run_manifest_path.is_file():
+                run_manifest = read_json(run_manifest_path)
+                task_files = {str(c.get("path") or "") for c in (run_manifest.get("changes") or [])}
+                return sorted(task_files & current_changes)
+        expected = set(plan.get("expected_files") or [])
+        return sorted(expected & current_changes)
+    except Exception:
+        return []
+
+
 def draft(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
+    active_path = state_root(repo) / "active-task.json"
+    if active_path.is_file():
+        try:
+            active = read_json(active_path)
+            prev_id = str(active.get("task_id") or "")
+            if prev_id and prev_id != args.task_id:
+                prev_plan_path = Path(str(active.get("plan_path") or ""))
+                if not prev_plan_path.is_absolute():
+                    prev_plan_path = repo / prev_plan_path
+                if prev_plan_path.is_file():
+                    prev_plan = read_json(prev_plan_path)
+                    prev_status = str(prev_plan.get("status") or "")
+                    if prev_status == "READY_FOR_DELIVERY":
+                        dirty = _find_uncommitted_task_files(repo, prev_id, prev_plan)
+                        if dirty and not getattr(args, "force", False):
+                            raise ValidationError(
+                                f"previous task '{prev_id}' is READY_FOR_DELIVERY with uncommitted changes: "
+                                f"{', '.join(sorted(dirty))}. Commit or stash them before starting a new task, or pass --force."
+                            )
+                        prev_plan = deliver_plan(prev_plan)
+                        save_plan(prev_plan_path, prev_plan)
+                        active_path.unlink(missing_ok=True)
+                    elif prev_status in ("IMPLEMENTING", "VERIFYING", "APPROVED"):
+                        if not getattr(args, "force", False):
+                            raise ValidationError(
+                                f"active task '{prev_id}' is currently {prev_status}. "
+                                f"Complete or cancel it first via 'workflow.py cancel', or pass --force."
+                            )
+        except ValidationError:
+            raise
+        except Exception:
+            pass
     classification = classify(repo)
     raw_expected = [item.strip() for item in (args.expected_surfaces or "").split(",") if item.strip()]
     expected = normalize_expected_surfaces(raw_expected)
@@ -282,6 +335,22 @@ def resume(args: argparse.Namespace) -> dict:
     return plan
 
 
+def deliver_task(args: argparse.Namespace) -> dict:
+    repo = Path(args.repo).resolve()
+    plan = _load_plan(repo, args.task_id)
+    plan = deliver_plan(plan)
+    save_plan(_plan_path(repo, args.task_id), plan)
+    active_path = state_root(repo) / "active-task.json"
+    if active_path.is_file():
+        try:
+            active = read_json(active_path)
+            if str(active.get("task_id") or "") == args.task_id:
+                active_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return plan
+
+
 def status(args: argparse.Namespace) -> dict:
     return _load_plan(Path(args.repo).resolve(), args.task_id)
 
@@ -304,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         "--external-write", action="append", choices=("zoho_sprints",), default=[],
         help="External mutation explicitly included in the plan presented for approval",
     )
+    command.add_argument("--force", action="store_true", help="Bypass active task collision barriers")
     command.set_defaults(handler=draft)
     command = sub.add_parser("approve", parents=[common])
     command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
@@ -319,6 +389,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("prepare-verification", parents=[common]).set_defaults(handler=prepare_verification)
     sub.add_parser("verify", parents=[common]).set_defaults(handler=verify_task)
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)
+    sub.add_parser("deliver", parents=[common]).set_defaults(handler=deliver_task)
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
     sub.add_parser("status", parents=[common]).set_defaults(handler=status)

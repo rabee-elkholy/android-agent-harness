@@ -23,7 +23,7 @@ VERIFY_COMMANDS = re.compile(
     re.I,
 )
 BOOTSTRAP_WORKFLOW = re.compile(
-    r"(?:workflow\.py|android-harness\s+task)\s+(?:draft|begin|status|approve)\b",
+    r"(?:workflow\.py|android-harness\s+task)\s+(?:draft|begin|status|approve|deliver)\b",
     re.I,
 )
 LIFECYCLE_COMMANDS = (
@@ -49,17 +49,19 @@ def _is_lifecycle_command(command: str) -> bool:
     return bool(segments) and all(any(pattern.search(item) for pattern in LIFECYCLE_COMMANDS) for item in segments)
 
 
-def _state_root(repo: Path) -> Path:
-    installed = repo / ".agents" / "state"
-    return installed if installed.parent.is_dir() else repo / "agents" / "state"
+def _state_root(repo: Path | str) -> Path:
+    repo_path = Path(repo)
+    installed = repo_path / ".agents" / "state"
+    return installed if installed.parent.is_dir() else repo_path / "agents" / "state"
 
 
-def active_plan(repo: Path) -> dict:
-    state = _state_root(repo)
+def active_plan(repo: Path | str) -> dict:
+    repo_path = Path(repo)
+    state = _state_root(repo_path)
     active = read_json(state / "active-task.json")
     plan_path = Path(str(active.get("plan_path") or ""))
     if not plan_path.is_absolute():
-        plan_path = repo / plan_path
+        plan_path = repo_path / plan_path
     plan_resolved = plan_path.resolve()
     state_resolved = state.resolve()
     if state_resolved != plan_resolved and state_resolved not in plan_resolved.parents:
@@ -76,7 +78,9 @@ def file_mutation_allowed(repo: Path) -> tuple[bool, str]:
     return True, f"mutation authorized by approved plan {plan.get('plan_id')}"
 
 
-def command_allowed(repo: Path, command: str) -> tuple[bool, str]:
+def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
+    if isinstance(repo, str) and (isinstance(command, Path) or (" " in repo and not " " in str(command))):
+        repo, command = command, repo
     normalized = str(command or "").strip()
     if not normalized:
         return True, "empty command"
@@ -94,6 +98,8 @@ def command_allowed(repo: Path, command: str) -> tuple[bool, str]:
         return False, f"mutation requires an active approved plan: {exc}"
     status = str(plan.get("status") or "")
     if status == "IMPLEMENTING":
+        if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I):
+            return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
         try:
             require_mutation(plan)
         except ValidationError as exc:

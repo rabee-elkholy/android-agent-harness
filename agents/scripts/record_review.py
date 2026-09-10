@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import ValidationError, read_json, sha256_file  # noqa: E402
+from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
 from workflow import state_root, task_dir  # noqa: E402
 
@@ -196,15 +196,51 @@ def main() -> int:
     parser.add_argument("--severity", default="HIGH", help="Severity of findings (default HIGH)")
     parser.add_argument("--citations", type=int, default=0, help="Reported citations count")
     parser.add_argument("--status", action="store_true", help="Show currently staged review status for active run")
+    parser.add_argument("--override-reviews", action="store_true", help="Record explicit developer override of semantic reviewers")
+    parser.add_argument("--proof-reference", default="", help="Proof reference for developer override")
+    parser.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), default="conversation", help="Source for developer override")
     args = parser.parse_args()
     try:
         repo = Path(args.repo).resolve()
         task_directory = task_dir(repo, args.task)
+        plan = read_json(task_directory / "plan.json")
         current = read_json(task_directory / "current-run.json")
         policy = read_json(Path(current["policy"]))
         required = set(policy.get("reviewers") or [])
         staging_dir = task_directory / "staged-reviews" / str(current["run_id"])
         staging_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.override_reviews:
+            if plan.get("status") != "VERIFYING":
+                raise ValidationError("review override requires a VERIFYING plan")
+            if not str(args.proof_reference).strip():
+                raise ValidationError("review override requires non-empty --proof-reference")
+            sensitive = sorted(set(policy.get("surfaces") or []) & {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
+            if sensitive:
+                raise ValidationError(f"review override is strictly forbidden on sensitive surfaces: {', '.join(sensitive)}")
+            manifest = read_json(Path(current["manifest"]))
+            version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
+            harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+            override_evidence = {
+                "schema_version": 1,
+                "developer_override": True,
+                "source": args.source,
+                "proof_reference_sha256": canonical_sha256({"reference": args.proof_reference}),
+                "overridden_reviewers": sorted(required),
+                "timestamp": utc_now(),
+            }
+            path = EvidenceStore(state_root(repo)).write(
+                snapshot=manifest["delivery_snapshot_sha256"],
+                run_id=str(current["run_id"]),
+                name="reviews",
+                producer="developer_approval",
+                harness_version=harness_version,
+                change_set=manifest["change_set_sha256"],
+                status="PASS",
+                evidence=override_evidence,
+            )
+            print(f"REVIEW_OVERRIDE=DEVELOPER_OVERRIDE {path}")
+            return 0
 
         if args.status:
             staged_files = list(staging_dir.glob("*.json"))

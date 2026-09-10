@@ -25,7 +25,7 @@ ALLOWED_PRODUCERS = {
     "assemble": {"run_gradle_task"},
     "device_install": {"run_device"},
     "device_launch": {"run_device"},
-    "reviews": {"review_orchestrator"},
+    "reviews": {"review_orchestrator", "developer_approval"},
     "sensitive_approval": {"developer_approval"},
 }
 
@@ -202,13 +202,28 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             reasons.append(error)
         elif review_record:
             evidence = review_record.get("evidence") or {}
-            covered = set(evidence.get("reviewers") or [])
-            if not reviewers <= covered:
-                reasons.append("required reviewer coverage is incomplete")
-            if evidence.get("is_truncated"):
-                reasons.append("truncated review cannot approve delivery")
-            if evidence.get("blocking_findings"):
-                reasons.append("review contains unresolved blocking findings")
+            if evidence.get("developer_override"):
+                sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+                if sensitive:
+                    err_msg = "developer review override is forbidden on sensitive surfaces: " + ", ".join(sensitive)
+                    reasons.append(err_msg)
+                    checks[-1]["status"] = "FAIL"
+                    checks[-1]["detail"] = err_msg
+                elif not str(evidence.get("proof_reference_sha256") or "").strip():
+                    err_msg = "developer review override is missing proof reference"
+                    reasons.append(err_msg)
+                    checks[-1]["status"] = "FAIL"
+                    checks[-1]["detail"] = err_msg
+                else:
+                    checks[-1]["detail"] = "bound developer override PASS"
+            else:
+                covered = set(evidence.get("reviewers") or [])
+                if not reviewers <= covered:
+                    reasons.append("required reviewer coverage is incomplete")
+                if evidence.get("is_truncated"):
+                    reasons.append("truncated review cannot approve delivery")
+                if evidence.get("blocking_findings"):
+                    reasons.append("review contains unresolved blocking findings")
 
     for carried in policy.get("carried_reviews") or []:
         reviewer = str(carried.get("reviewer") or "")

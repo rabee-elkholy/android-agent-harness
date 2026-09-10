@@ -255,6 +255,14 @@ def check_material_drift(plan: dict, actual_surfaces: list[str], actual_modules:
     )
 
 
+def deliver(plan: dict) -> dict:
+    if plan.get("status") != "READY_FOR_DELIVERY":
+        raise ValidationError("only a task in READY_FOR_DELIVERY can be marked DELIVERED")
+    plan["status"] = "DELIVERED"
+    plan["delivered_at"] = utc_now()
+    return plan
+
+
 def save_plan(path: Path, plan: dict) -> None:
     atomic_write_json(path, plan)
 

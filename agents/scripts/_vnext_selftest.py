@@ -19,7 +19,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(KIT))
 import harness_cli  # noqa: E402
 
-from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, sha256_file  # noqa: E402
+from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, sha256_file  # noqa: E402
 from artifact_set import build_artifact_set, resolve_artifacts, verify_artifact_set  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
@@ -48,7 +48,7 @@ from _repo_files import first_adb_serial  # noqa: E402
 from wizard.discovery import discover, discover_android_source_root, discover_di_framework, discover_launchers, discover_module_application_ids  # noqa: E402
 from wizard.questions import normalize, questions_payload  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
-from workflow import begin_task, complete, draft, prepare_verification, record_approval, record_sensitive_approval, state_root  # noqa: E402
+from workflow import begin_task, complete, deliver_task, draft, prepare_verification, record_approval, record_sensitive_approval, state_root, task_dir  # noqa: E402
 
 
 
@@ -1266,7 +1266,248 @@ class EndToEndWorkflowTests(RepoCase):
         proc2 = subprocess.run([sys.executable, str(script)], cwd=self.repo, capture_output=True, text=True, check=False)
         self.assertEqual(0, proc2.returncode, proc2.stdout + proc2.stderr)
 
+    def test_workflow_deliver_lifecycle(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "test-deliver-lifecycle"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Test delivery lifecycle", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        with self.assertRaises(ValidationError):
+            deliver_task(Namespace(**common))
 
+        write(self.repo / "app/src/main/kotlin/Deliv.kt", "package com.fixture\nclass Deliv\n")
+        current = prepare_verification(Namespace(**common))
+        with self.assertRaises(ValidationError):
+            deliver_task(Namespace(**common))
+
+        policy = json.loads(Path(current["policy"]).read_text(encoding="utf-8"))
+        store = EvidenceStore(state_root(self.repo))
+        evidence_common = dict(
+            snapshot=current["delivery_snapshot_sha256"], run_id=current["run_id"],
+            harness_version=HARNESS_VERSION, change_set=current["change_set_sha256"], status="PASS",
+        )
+        store.write(**evidence_common, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
+        store.write(**evidence_common, name="preflight", producer="preflight_check", evidence={})
+        store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+        store.write(**evidence_common, name="reviews", producer="review_orchestrator", evidence={"reviewers": policy.get("reviewers") or [], "is_truncated": False, "blocking_findings": []})
+        complete(Namespace(**common))
+
+        res = deliver_task(Namespace(**common))
+        self.assertEqual("DELIVERED", res["status"])
+        self.assertIn("delivered_at", res)
+
+        active_task = self.repo / ".agents/state/active-task.json"
+        self.assertFalse(active_task.exists())
+
+    def test_workflow_draft_collision_barrier_and_auto_delivery(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task1 = "task-one"
+        common1 = {"repo": str(self.repo), "task_id": task1}
+        draft(Namespace(
+            **common1, outcome="Task 1", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common1, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common1))
+
+        write(self.repo / "app/src/main/kotlin/DirtyFile.kt", "package com.fixture\nclass DirtyFile\n")
+
+        task_temp = "task-temp"
+        common_temp = {"repo": str(self.repo), "task_id": task_temp}
+        with self.assertRaises(ValidationError) as ctx1:
+            draft(Namespace(
+                **common_temp, outcome="Task Temp", expected_surfaces="BUSINESS_LOGIC",
+                expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+                risks="", rollback="Restore", external_write=[], force=False,
+            ))
+        self.assertIn("implementing", str(ctx1.exception).lower())
+
+        current1 = prepare_verification(Namespace(**common1))
+        policy1 = json.loads(Path(current1["policy"]).read_text(encoding="utf-8"))
+        store = EvidenceStore(state_root(self.repo))
+        evidence_common = dict(
+            snapshot=current1["delivery_snapshot_sha256"], run_id=current1["run_id"],
+            harness_version=HARNESS_VERSION, change_set=current1["change_set_sha256"], status="PASS",
+        )
+        store.write(**evidence_common, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
+        store.write(**evidence_common, name="preflight", producer="preflight_check", evidence={})
+        store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+        store.write(**evidence_common, name="reviews", producer="review_orchestrator", evidence={"reviewers": policy1.get("reviewers") or [], "is_truncated": False, "blocking_findings": []})
+        complete(Namespace(**common1))
+
+        with self.assertRaises(ValidationError) as ctx2:
+            draft(Namespace(
+                **common_temp, outcome="Task Temp", expected_surfaces="BUSINESS_LOGIC",
+                expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+                risks="", rollback="Restore", external_write=[], force=False,
+            ))
+        self.assertIn("uncommitted changes", str(ctx2.exception).lower())
+
+        task_forced = draft(Namespace(
+            **common_temp, outcome="Task Temp Forced", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=True,
+        ))
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", task_forced["status"])
+
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "commit task 1 files")
+
+        task2 = "task-two"
+        common2 = {"repo": str(self.repo), "task_id": task2}
+        draft(Namespace(
+            **common2, outcome="Task 2", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+
+        task1_plan = read_json(task_dir(self.repo, task1) / "plan.json")
+        self.assertEqual("DELIVERED", task1_plan["status"])
+
+    def test_device_gating_blocks_implementing_and_enforces_prerequisites(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "test-device-gate"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Device test gate", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+
+        allowed, reason = command_allowed(self.repo, "python .agents/scripts/run_device.py install-start")
+        self.assertFalse(allowed)
+        self.assertIn("device operation", reason.lower())
+
+        proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/scripts/run_device.py"), "install-start"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("implementing", (proc.stderr + proc.stdout).lower())
+
+        write(self.repo / "app/src/main/kotlin/DevGate.kt", "package com.fixture\nclass DevGate\n")
+        prepare_verification(Namespace(**common))
+
+        proc2 = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/scripts/run_device.py"), "install-start"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, proc2.returncode)
+        self.assertIn("preflight", (proc2.stderr + proc2.stdout).lower())
+
+    def test_developer_review_override(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+
+        task_id = "test-override-allowed"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Logic change", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/Logic.kt", "package com.fixture\nclass Logic\n")
+        current = prepare_verification(Namespace(**common))
+
+        proc = subprocess.run(
+            [
+                sys.executable, str(self.repo / ".agents/scripts/record_review.py"),
+                "--task", task_id,
+                "--override-reviews",
+                "--proof-reference", "Developer approved override in chat",
+                "--source", "conversation",
+            ],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        self.assertIn("DEVELOPER_OVERRIDE", proc.stdout)
+
+        store = EvidenceStore(state_root(self.repo))
+        review_record = store.read(current["delivery_snapshot_sha256"], current["run_id"], "reviews")
+        self.assertEqual("PASS", review_record["status"])
+        self.assertTrue(review_record["evidence"].get("developer_override"))
+
+        evidence_common = dict(
+            snapshot=current["delivery_snapshot_sha256"], run_id=current["run_id"],
+            harness_version=HARNESS_VERSION, change_set=current["change_set_sha256"], status="PASS",
+        )
+        store.write(**evidence_common, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
+        store.write(**evidence_common, name="preflight", producer="preflight_check", evidence={})
+        store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+        ready = complete(Namespace(**common))
+        self.assertEqual("READY_FOR_DELIVERY", ready["status"])
+
+        task_id_sec = "test-override-forbidden"
+        common_sec = {"repo": str(self.repo), "task_id": task_id_sec}
+        draft(Namespace(
+            **common_sec, outcome="Security change", expected_surfaces="SECURITY,BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Security tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=True,
+        ))
+        record_approval(Namespace(
+            **common_sec, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common_sec))
+        write(self.repo / "app/src/main/kotlin/Sec.kt", "package com.fixture\nimport javax.net.ssl.HostnameVerifier\nclass Sec {\n    val v: HostnameVerifier? = null\n}\n")
+        prepare_verification(Namespace(**common_sec))
+
+        proc_sec = subprocess.run(
+            [
+                sys.executable, str(self.repo / ".agents/scripts/record_review.py"),
+                "--task", task_id_sec,
+                "--override-reviews",
+                "--proof-reference", "Developer approved override in chat",
+            ],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, proc_sec.returncode)
+        self.assertIn("strictly forbidden", (proc_sec.stderr + proc_sec.stdout).lower())
 
 
 if __name__ == "__main__":

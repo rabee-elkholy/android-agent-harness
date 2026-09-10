@@ -20,7 +20,7 @@ A local, zero-dependency development harness for Android projects. It is designe
 Open the Android project root in your coding agent, then paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.9/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.10/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The AI agent will:
@@ -37,7 +37,7 @@ Use a clean Android Git checkout with its Gradle Wrapper and a kit checkout
 pinned to the same immutable release tag:
 
 ```bash
-git clone --depth 1 --branch v1.0.9 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git /path/to/android-agent-harness
+git clone --depth 1 --branch v1.0.10 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git /path/to/android-agent-harness
 python /path/to/android-agent-harness/harness_cli.py init --repo /path/to/android-project --kit /path/to/android-agent-harness
 ```
 
