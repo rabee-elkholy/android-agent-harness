@@ -292,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         ".github/",
         "agents/",
         "AGENTS.md",
+        "GEMINI.md",
         "pyproject.toml",
         "CITATION.cff",
         "CHANGELOG.md",
