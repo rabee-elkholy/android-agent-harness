@@ -5,6 +5,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.11] - 2026-09-10
+
+### Single-Shot Proceed Invariant, Direct Follow-Up Execution, and Anti-Stalling Reminders
+
+- **Single-Shot Proceed Invariant (`harness-rules.md`, `GEMINI.md.template`, `GEMINI.md`)**: Codified that the interactive **`Proceed`** button in Antigravity is single-shot and appears ONLY on the initial plan draft for task intake. Documented that subsequent updates show only a **`[Review]`** diff button.
+- **Direct Follow-Up Execution Rule (`harness-rules.md`, `AGENTS.md.template`, `AGENTS.md`)**: Mandated that within active tasks (`IMPLEMENTING` or `VERIFYING`), developer feedback, bug reports, and follow-ups are immediate execution directives. Prohibited agents from drafting redundant plans or stalling for nonexistent UI buttons; required direct code execution, verification, compilation, and deployment.
+- **Anti-Stalling Pre-Invocation Reminders (`pre_invocation_reminder.py`)**: Injected turn-by-turn anti-stalling directives for `IMPLEMENTING` and `VERIFYING` states to prevent agents from creating redundant plans or demanding `Proceed` on follow-ups.
+- **Regression Test Coverage (`_vnext_selftest.py`)**: Added test coverage validating the Single-Shot Proceed Invariant across rules, templates, and pre-invocation reminders.
+
 ## [1.0.10] - 2026-09-10
 
 ### Task Delivery Lifecycle, Draft Collision Barrier, Device Gating, and Interactive Review Override

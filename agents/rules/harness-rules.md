@@ -13,6 +13,8 @@ This file is the always-loaded safety and delivery kernel. It is intentionally s
 - Every code/configuration write, deletion, build, install, Git mutation, tracker mutation, or publication requires an explicit approved plan.
 - Drafting or presenting a plan never starts implementation. Silence, continuation, and unrelated replies are not approval.
 - Plans use native `implementation_plan.md` artifacts (`RequestFeedback: true`) with the interactive **Proceed** button — do NOT invoke `ask_question` for plan approval. Clicking **Proceed** (or confirming in chat) constitutes explicit developer approval.
+- Single-shot Proceed invariant: The interactive **Proceed** button is single-shot and appears ONLY on the initial plan draft for task intake. Subsequent plan edits or follow-ups only render a **Review** diff button in the host UI.
+- Direct follow-up execution: Once a task plan is approved (`IMPLEMENTING` or `VERIFYING`), developer feedback, bug reports, or minor follow-up adjustments are authorized within the existing scope. Agents are STRICTLY PROHIBITED from generating a new plan artifact or instructing the developer to click "Proceed" for follow-up fixes or revisions during active execution. Instead, the agent MUST immediately execute the changes (using `workflow.py resume` if in `VERIFYING`), run verification, compile, and deploy to device without stalling.
 - When the developer explicitly approves a plan (via the native **Proceed** action or conversation confirmation), the agent records the approval using:
   `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED`
   and immediately proceeds with `python .agents/scripts/workflow.py begin --repo . --task-id <id>`.
@@ -42,7 +44,7 @@ Use `.agents/scripts/workflow.py` to record lifecycle state. Approval is bound t
 - Before writing a file, preserve concurrent developer changes. Stop on an external edit instead of overwriting it.
 - Never use `git reset`, `stash`, `checkout --`, hidden commits, `assume-unchanged`, or automatic rollback of developer code.
 - Technical fixes inside approved behavior may proceed without phase stops. A multi-phase plan does not require repeated approval unless scope materially changes.
-- During verification, if compiler, lint, or test failures require code changes, return to implementation using: `python .agents/scripts/workflow.py resume --repo . --task-id <id>`. Do not recreate task drafts or invent new task IDs.
+- During verification, if compiler, lint, test failures, or developer critique require code changes, return to implementation using: `python .agents/scripts/workflow.py resume --repo . --task-id <id>`. Do not recreate task drafts, invent new task IDs, or stall waiting for nonexistent UI buttons.
 - Never poll or loop on background task status with `manage_task status`. Yield execution and wait for reactive completion messages.
 
 ## 3. Skills and instruction precedence

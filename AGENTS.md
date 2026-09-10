@@ -14,4 +14,4 @@ This checkout is the harness kit itself, not a client Android application:
 - leave changes unstaged unless the maintainer explicitly asks for Git operations;
 - do not publish or tag a release until release validation and CI pass.
 
-The approved vNext implementation plan authorizes the complete stated scope without phase-by-phase stops. Material expansion outside that plan still requires revised approval.
+The approved vNext implementation plan authorizes the complete stated scope without phase-by-phase stops. Material expansion outside that plan still requires revised approval. Follow-ups and technical fixes within active scope require immediate execution without plan re-drafting or waiting for nonexistent Proceed buttons.

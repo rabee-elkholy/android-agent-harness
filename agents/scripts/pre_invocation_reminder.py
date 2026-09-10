@@ -24,9 +24,9 @@ def _message() -> str:
     if status == "AWAITING_DEVELOPER_APPROVAL":
         next_step = "Wait for explicit approval; do not edit files or run mutating commands."
     elif status == "IMPLEMENTING":
-        next_step = "Implement approved scope. Do NOT poll background tasks with manage_task status; wait for background notification."
+        next_step = "Implement approved scope. Do not create new plans or demand 'Proceed' on follow-ups. Do NOT poll background tasks with manage_task status; wait for background notification."
     elif status == "VERIFYING":
-        next_step = "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (if required) -> 5. ask_question device check -> 6. verify. If code fixes needed, run workflow.py resume."
+        next_step = "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (if required) -> 5. ask_question device check -> 6. verify. If code fixes or developer critique needed, run workflow.py resume; never stall on new plans or demand 'Proceed'."
     elif status == "BLOCKED":
         next_step = "Fix recorded findings with workflow.py resume, or request developer decision at the round cap."
     elif status == "READY_FOR_DELIVERY":
@@ -62,9 +62,9 @@ def _compact_message() -> str:
         status = str(plan.get("status") or "UNKNOWN")
         task_id = str(plan.get("task_id") or "unknown")
         if status == "IMPLEMENTING":
-            return f"Harness [Task {task_id}: IMPLEMENTING]: Mutate only approved files. Use project_graph.py for callers. Wait for background task completion."
+            return f"Harness [Task {task_id}: IMPLEMENTING]: Mutate only approved files. Do not create new plans or ask for Proceed. Wait for background task completion."
         if status == "VERIFYING":
-            return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (if required) -> 5. verify."
+            return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install -> 5. verify. Run workflow.py resume for fixes; do not stall on follow-ups."
         if status == "READY_FOR_DELIVERY":
             return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close."
         return f"Harness [Task {task_id}: {status}]: Architectural discovery uses `project_graph.py`. Unanchored grep cascades are blocked."

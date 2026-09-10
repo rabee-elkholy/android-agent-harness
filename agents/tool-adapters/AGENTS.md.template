@@ -13,7 +13,7 @@ The compact, authoritative kernel is `.agents/rules/harness-rules.md`. Read it b
 - Run `.agents/scripts/workflow.py prepare-verification` after implementation and use its run identity for all evidence.
 - During verification, return to implementation for code fixes using `{{PY}} .agents/scripts/workflow.py resume`; never poll background tasks with `manage_task status`; record reviewer verdicts with `{{PY}} .agents/scripts/record_review.py`.
 - Delivery requires the read-only verifier to return `APPROVED` for the same plan, snapshot, change-set, and run.
-- Material scope drift requires a revised plan and new approval. Technical fixes inside approved scope do not require phase stops.
+- Material scope drift requires a revised plan and new approval. Technical fixes inside approved scope do not require phase stops. Inside active tasks (`IMPLEMENTING`/`VERIFYING`), developer feedback and bug fixes are immediate execution directives: never generate redundant plan artifacts or stall for nonexistent UI buttons; execute, verify, compile, and deploy directly.
 
 ## Environment
 

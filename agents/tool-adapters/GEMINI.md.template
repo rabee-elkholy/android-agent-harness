@@ -9,5 +9,6 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. That file wins.
 - Discovery: MUST start with `{{PY}} .agents/scripts/project_graph.py --feature <name>` or `--find <Symbol>`. Unanchored grep cascades are forbidden.
 - Background tasks: Wait for reactive background completion messages; never poll or loop on `manage_task status`.
 - Verification fixes: Run `{{PY}} .agents/scripts/workflow.py resume` to return to `IMPLEMENTING` when fixes are needed; record reviewer verdicts with `{{PY}} .agents/scripts/record_review.py`.
+- Antigravity Planning Lifecycle: The interactive Proceed button appears ONLY on initial task plan approval. Subsequent updates show only Review. Never tell the developer to click 'Proceed' on follow-ups or bug fixes during active tasks; execute, compile, and deploy directly.
 
 Antigravity loads `.agents/hooks.json`; Gemini CLI does not. Detect and report the actual enforcement tier, then follow the central adaptive policy.

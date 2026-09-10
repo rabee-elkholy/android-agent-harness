@@ -128,6 +128,26 @@ class ChatInstallationDocsTests(unittest.TestCase):
         ):
             self.assertIn(marker, self.prompt)
 
+    def test_single_shot_proceed_and_followup_execution_rules(self) -> None:
+        harness_rules = (KIT / "agents" / "rules" / "harness-rules.md").read_text(encoding="utf-8")
+        gemini_tpl = (KIT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
+        agents_tpl = (KIT / "agents" / "tool-adapters" / "AGENTS.md.template").read_text(encoding="utf-8")
+        gemini_root = (KIT / "GEMINI.md").read_text(encoding="utf-8")
+        agents_root = (KIT / "AGENTS.md").read_text(encoding="utf-8")
+
+        self.assertIn("Single-shot Proceed invariant", harness_rules)
+        self.assertIn("Direct follow-up execution", harness_rules)
+        self.assertIn("Antigravity Planning Lifecycle", gemini_tpl)
+        self.assertIn("Antigravity Planning Lifecycle", gemini_root)
+        self.assertIn("never generate redundant plan artifacts or stall for nonexistent UI buttons", agents_tpl)
+        self.assertIn("Follow-ups and technical fixes within active scope require immediate execution", agents_root)
+
+    def test_pre_invocation_reminder_anti_stalling_directives(self) -> None:
+        reminder_script = (KIT / "agents" / "scripts" / "pre_invocation_reminder.py").read_text(encoding="utf-8")
+        self.assertIn("Do not create new plans or ask for Proceed", reminder_script)
+        self.assertIn("never stall on new plans or demand 'Proceed'", reminder_script)
+        self.assertIn("do not stall on follow-ups", reminder_script)
+
 
 class ChatInstallationLifecycleTests(RepoCase):
     def test_harness_cli_init_with_answers_json(self) -> None:
