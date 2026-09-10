@@ -161,21 +161,30 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
 
 
 def discover_locale_pairs() -> list[tuple[Path, Path, str]]:
-    """Find all (base_values_strings, localized_values_strings, locale_tag) pairs."""
+    """Find all (base_values_xml, localized_values_xml, locale_tag) pairs for strings, plurals, and arrays."""
     pairs: list[tuple[Path, Path, str]] = []
     for res_dir in RES_DIRS:
-        base_file = res_dir / "values" / "strings.xml"
-        if not base_file.is_file():
+        base_dir = res_dir / "values"
+        if not base_dir.is_dir():
             continue
-        for val_dir in sorted(res_dir.glob("values-*")):
-            if not val_dir.is_dir():
-                continue
-            loc_strings = val_dir / "strings.xml"
-            if loc_strings.is_file():
+        base_files = [
+            f for f in base_dir.glob("*.xml")
+            if f.is_file() and (f.name.startswith(("strings", "plurals", "arrays")) or f.name in ("strings.xml", "plurals.xml", "arrays.xml"))
+        ]
+        if not base_files and (base_dir / "strings.xml").is_file():
+            base_files = [base_dir / "strings.xml"]
+        for base_file in sorted(base_files):
+            for val_dir in sorted(res_dir.glob("values-*")):
+                if not val_dir.is_dir():
+                    continue
                 tag = val_dir.name[len("values-") :]
-                if _is_language_locale_tag(tag):
-                    pairs.append((base_file, loc_strings, tag))
+                if not _is_language_locale_tag(tag):
+                    continue
+                loc_file = val_dir / base_file.name
+                if loc_file.is_file():
+                    pairs.append((base_file, loc_file, tag))
     return pairs
+
 
 
 def _is_test_path(path: Path) -> bool:
@@ -271,15 +280,16 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
     any_changed = False
 
     for changed in changed_paths():
-        if changed.name != "strings.xml":
+        if changed.suffix != ".xml":
             continue
         if "/values" not in changed.as_posix():
             continue
+        if not (changed.name.startswith(("strings", "plurals", "arrays")) or changed.name in ("strings.xml", "plurals.xml", "arrays.xml")):
+            continue
 
-        # Find the matching base strings.xml (in values/strings.xml)
         res_dir = changed.parent.parent
-        base_file = res_dir / "values" / "strings.xml"
-        if not base_file.exists():
+        base_file = res_dir / "values" / changed.name
+        if not base_file.exists() and not changed.exists():
             continue
 
         any_changed = True
@@ -301,15 +311,30 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
             check=False,
         )
         if proc.returncode != 0 or not proc.stdout.strip():
-            # Untracked / new file -> consider all keys touched
-            data, _ = _parse_resources(changed)
-            touched_by_base[base_file].update(data.keys())
+            if changed.exists:
+                # Untracked / new file -> consider all keys touched
+                data, _ = _parse_resources(changed)
+                touched_by_base[base_file].update(data.keys())
+            else:
+                proc_head = subprocess.run(
+                    ["git", "show", f"HEAD:{rel}"],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                if proc_head.returncode == 0:
+                    keys = _extract_keys_from_xml_lines(proc_head.stdout.splitlines())
+                    touched_by_base[base_file].update(keys)
         else:
-            added_lines = [
+            diff_lines = [
                 line[1:] for line in proc.stdout.splitlines()
-                if line.startswith("+") and not line.startswith("+++")
+                if (line.startswith("+") or line.startswith("-"))
+                and not (line.startswith("+++") or line.startswith("---"))
             ]
-            keys = _extract_keys_from_xml_lines(added_lines)
+            keys = _extract_keys_from_xml_lines(diff_lines)
             touched_by_base[base_file].update(keys)
 
     return touched_by_base, any_changed

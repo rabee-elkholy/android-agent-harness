@@ -97,11 +97,19 @@ def baseline_advisory(baseline: dict | None, head: str) -> str:
 def classify_failures(failed: list[dict], baseline: dict | None) -> tuple[list[dict], list[dict], int]:
     if not baseline:
         return list(failed), [], 0
-    known = {str(item.get("fingerprint") or "") for item in (baseline.get("unit_tests") or []) if item.get("fingerprint")}
+    unit_tests = baseline.get("unit_tests") or []
+    known = {str(item.get("fingerprint") or "") for item in unit_tests if item.get("fingerprint")}
+    # If baseline was captured before enhanced fingerprinting, allow fallback to legacy_fingerprint
+    has_enhanced_schema = any(item.get("error_type") is not None for item in unit_tests)
+
     new_regressions: list[dict] = []
     ignored: list[dict] = []
     for item in failed:
-        if item.get("fingerprint") in known:
+        fp = item.get("fingerprint")
+        leg_fp = item.get("legacy_fingerprint") or fp
+        if fp in known:
+            ignored.append(item)
+        elif not has_enhanced_schema and leg_fp in known:
             ignored.append(item)
         else:
             new_regressions.append(item)

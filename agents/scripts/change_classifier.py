@@ -57,13 +57,46 @@ def _head_text(repo: Path, relative: str) -> str:
     return proc.stdout if proc.returncode == 0 and len(proc.stdout) <= 2 * 1024 * 1024 else ""
 
 
-def _diff_content(repo: Path, changed: ChangedFile) -> str:
-    """Return added and removed lines from git diff, or full text for untracked/deleted files."""
+HUNK_LINE_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+DECL_RE = re.compile(r"\b(?:class|interface|object|fun|suspend\s+fun)\s+([A-Za-z0-9_]+)")
+
+
+def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -> str:
+    """Extract enclosing declaration (function or class) and leading annotations for modified lines."""
+    if not text or not modified_line_numbers:
+        return ""
+    lines = text.splitlines()
+    total = len(lines)
+    blocks: list[str] = []
+    seen_ranges: set[tuple[int, int]] = set()
+
+    for line_num in modified_line_numbers:
+        idx = min(max(0, line_num - 1), total - 1)
+        start_scan = max(0, idx - 40)
+        enclosing_idx = None
+        for cur in range(idx, start_scan - 1, -1):
+            if DECL_RE.search(lines[cur]):
+                enclosing_idx = cur
+                break
+        if enclosing_idx is not None:
+            decl_start = enclosing_idx
+            while decl_start > 0 and lines[decl_start - 1].strip().startswith("@"):
+                decl_start -= 1
+            r = (decl_start, idx + 1)
+            if r not in seen_ranges:
+                seen_ranges.add(r)
+                blocks.append("\n".join(lines[decl_start:idx + 1]))
+    return "\n".join(blocks)
+
+
+def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
+    """Return added/removed diff text and bounded enclosing structural context."""
     if changed.is_untracked:
-        return _read_text(changed.path) if changed.exists else ""
+        content = _read_text(changed.path) if changed.exists else ""
+        return content, ""
     before_rel = changed.old_rel_posix or changed.rel_posix
     if not changed.exists or changed.status == "D":
-        return _head_text(repo, before_rel)
+        return _head_text(repo, before_rel), ""
 
     diff_cmd = ["git", "diff", "-U0", "--no-ext-diff", "--find-renames", "HEAD", "--", changed.rel_posix]
     if changed.old_rel_posix and changed.old_rel_posix != changed.rel_posix:
@@ -74,15 +107,28 @@ def _diff_content(repo: Path, changed: ChangedFile) -> str:
     )
     if proc.returncode != 0:
         text = _read_text(changed.path) if changed.exists else ""
-        return text + "\n" + _head_text(repo, before_rel)
+        return text + "\n" + _head_text(repo, before_rel), ""
 
     lines: list[str] = []
+    line_nums: list[int] = []
     for line in proc.stdout.splitlines():
+        if line.startswith("@@"):
+            m = HUNK_LINE_RE.match(line)
+            if m:
+                start = int(m.group(1))
+                count = int(m.group(2)) if m.group(2) is not None else 1
+                line_nums.extend(range(start, start + max(1, count)))
+            continue
         if line.startswith("+++") or line.startswith("---"):
             continue
         if line.startswith("+") or line.startswith("-"):
             lines.append(line[1:])
-    return "\n".join(lines)
+    diff_text = "\n".join(lines)
+    context_text = ""
+    if changed.exists and Path(changed.rel_posix.lower()).suffix in (".kt", ".java") and line_nums:
+        context_text = _enclosing_structural_context(_read_text(changed.path), line_nums)
+    return diff_text, context_text
+
 
 
 def _changed_line_count(repo: Path, changes: list) -> int:
@@ -127,7 +173,7 @@ def classify(repo: Path) -> dict:
             continue
         lower = rel.lower()
         suffix = Path(lower).suffix
-        diff_text = _diff_content(root, changed)
+        diff_text, context_text = _diff_content(root, changed)
         before_rel = changed.old_rel_posix or rel
         full_text = (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel)
         test_path = "/test/" in f"/{lower}" or "/androidtest/" in f"/{lower}" or lower.endswith(("test.kt", "test.java"))
@@ -158,8 +204,11 @@ def classify(repo: Path) -> dict:
         if not test_path and re.search(r"\b(public|protected)\s+(class|interface|fun|static|abstract)\b", diff_text):
             _add(found, "PUBLIC_API", rel, "PUBLIC_DECLARATION")
         for surface, pattern, reason in PATTERNS:
-            if not test_path and pattern.search(diff_text):
-                _add(found, surface, rel, reason)
+            if not test_path:
+                if pattern.search(diff_text):
+                    _add(found, surface, rel, reason)
+                elif context_text and pattern.search(context_text):
+                    _add(found, surface, rel, f"{reason}_CONTEXT")
 
     non_docs = set(found) - {"DOCS", "TEST_ONLY"}
     relevant_changes = [item for item in changes if is_delivery_relevant(item.rel_posix) or (item.old_rel_posix and is_delivery_relevant(item.old_rel_posix))]

@@ -38,7 +38,9 @@ from mutation_guard import command_allowed  # noqa: E402
 from _repo_files import first_adb_serial  # noqa: E402
 from wizard.discovery import discover, discover_android_source_root, discover_di_framework, discover_launchers, discover_module_application_ids  # noqa: E402
 from wizard.questions import normalize, questions_payload  # noqa: E402
+from room_guard import check_room_working_tree  # noqa: E402
 from workflow import begin_task, complete, draft, prepare_verification, record_approval, record_sensitive_approval, state_root  # noqa: E402
+
 
 
 def run_git(repo: Path, *args: str) -> None:
@@ -453,6 +455,61 @@ class PolicyTests(RepoCase):
         result = classify(self.repo)
         self.assertIn("BILLING", result["surfaces"])
         self.assertEqual("CRITICAL", result["severity"])
+
+    def test_entity_field_change_in_bounded_context_triggers_room_schema(self) -> None:
+        write(
+            self.repo / "app/src/main/kotlin/User.kt",
+            "@Entity\n"
+            "data class User(\n"
+            "    val id: String,\n"
+            "    val age: Int\n"
+            ")\n",
+        )
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "initial entity")
+        write(
+            self.repo / "app/src/main/kotlin/User.kt",
+            "@Entity\n"
+            "data class User(\n"
+            "    val id: String,\n"
+            "    val age: Long\n"
+            ")\n",
+        )
+        result = classify(self.repo)
+        self.assertIn("ROOM_SCHEMA", result["surfaces"])
+        self.assertIn(result["severity"], ("HIGH", "CRITICAL"))
+
+    def test_room_cross_file_migration_succeeds(self) -> None:
+        write(
+            self.repo / "app/src/main/kotlin/AppDatabase.kt",
+            "@Database(entities = [User::class], version = 1)\n"
+            "abstract class AppDatabase : RoomDatabase()\n",
+        )
+        write(
+            self.repo / "app/src/main/kotlin/User.kt",
+            "@Entity\ndata class User(val id: String)\n",
+        )
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "initial room db")
+        write(
+            self.repo / "app/src/main/kotlin/AppDatabase.kt",
+            "@Database(entities = [User::class], version = 2)\n"
+            "abstract class AppDatabase : RoomDatabase()\n",
+        )
+        write(
+            self.repo / "app/src/main/kotlin/DatabaseModule.kt",
+            "val MIGRATION_1_2 = object : Migration(1, 2) {}\n"
+            "fun provideDb(context: Context): AppDatabase {\n"
+            "    return Room.databaseBuilder(context, AppDatabase::class.java, \"app.db\")\n"
+            "        .addMigrations(MIGRATION_1_2)\n"
+            "        .build()\n"
+            "}\n",
+        )
+        ok, msg = check_room_working_tree(repo=self.repo)
+        self.assertTrue(ok, msg)
+        self.assertIn("Room migration gate passed", msg)
+
+
 
     def test_persistence_routes_tests_and_android_knowledge(self) -> None:
         write(self.repo / "app/src/main/kotlin/A.kt", "internal val settingsDataStore = context.dataStore\n")
@@ -1092,6 +1149,63 @@ class EndToEndWorkflowTests(RepoCase):
         store = EvidenceStore(state_root(self.repo))
         review_record = store.read(current["delivery_snapshot_sha256"], current["run_id"], "reviews")
         self.assertEqual("PASS", review_record["status"])
+
+    def test_review_package_deduplicates_tracked_added_files(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "test-pkg-dedup"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Test dedup", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[],
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        new_file = self.repo / "app/src/main/kotlin/NewFeature.kt"
+        write(new_file, "package com.fixture\n\nclass NewFeature {\n    fun hello() = 42\n}\n")
+        run_git(self.repo, "add", "app/src/main/kotlin/NewFeature.kt")
+        prepare_verification(Namespace(**common))
+        package_path, _ = build_package(self.repo, task_id)
+        pkg_content = package_path.read_text(encoding="utf-8")
+        self.assertIn("+++ b/app/src/main/kotlin/NewFeature.kt", pkg_content)
+        self.assertNotIn("## NEW FILE app/src/main/kotlin/NewFeature.kt", pkg_content)
+        self.assertNotIn("## NEW UNTRACKED FILE app/src/main/kotlin/NewFeature.kt", pkg_content)
+
+    def test_check_strings_deletion_parity_in_diff_scope(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        base_strings = self.repo / "app/src/main/res/values/strings.xml"
+        loc_strings = self.repo / "app/src/main/res/values-ar/strings.xml"
+        write(base_strings, '<resources><string name="app_name">App</string><string name="logout">Logout</string></resources>\n')
+        write(loc_strings, '<resources><string name="app_name">تطبيق</string><string name="logout">خروج</string></resources>\n')
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "initial strings")
+        # Delete 'logout' from base only
+        write(base_strings, '<resources><string name="app_name">App</string></resources>\n')
+        script = self.repo / ".agents/scripts/check_strings.py"
+        proc = subprocess.run([sys.executable, str(script)], cwd=self.repo, capture_output=True, text=True, check=False)
+        self.assertEqual(1, proc.returncode, "diff-scoped should catch deleted key missing in base vs ar")
+        self.assertIn("logout", proc.stdout)
+        # Now delete 'logout' from ar as well
+        write(loc_strings, '<resources><string name="app_name">تطبيق</string></resources>\n')
+        proc2 = subprocess.run([sys.executable, str(script)], cwd=self.repo, capture_output=True, text=True, check=False)
+        self.assertEqual(0, proc2.returncode, proc2.stdout + proc2.stderr)
+
+
 
 
 if __name__ == "__main__":

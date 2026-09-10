@@ -25,9 +25,10 @@ def included(path: Path) -> bool:
 def normalize_and_read(path: Path) -> bytes:
     data = path.read_bytes()
     if b"\r\n" in data:
-        data = data.replace(b"\r\n", b"\n")
-        path.write_bytes(data)
+        rel = path.relative_to(ROOT).as_posix()
+        raise SystemExit(f"[FAIL] {rel} contains Windows CRLF line endings. Normalize text files to LF before generating checksums.")
     return data
+
 
 
 def main() -> int:

@@ -5,6 +5,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-09-10
+
+### Structural Context Classification, Enhanced Test Fingerprinting, and Hardened Room & Resource Guards
+
+- **Structural Context Classification (`change_classifier.py`)**: Added bounded upward declaration scanning (`_enclosing_structural_context`) to examine up to 40 lines above modified diff hunks. Inspects enclosing Kotlin/Java classes, interfaces, objects, and leading annotations (`@Entity`, etc.), ensuring modifications inside annotated entities trigger `ROOM_SCHEMA` and `PERSISTENCE` surfaces even when the class header itself was not touched.
+- **Normalized Test Failure Fingerprinting (`baseline_capture.py`, `run_tests_gate.py`)**: Added `normalize_failure_message` to strip unstable hex memory addresses (`<HEX>`), paths (`<PATH>`), line numbers (`:<LINE>`), and UUIDs from failure messages. Added `error_type` to fingerprints with backward-compatible fallback to `legacy_fingerprint` for older baseline schemas.
+- **Resource and Plural Parity Hardening (`check_strings.py`)**: Extended translation pair discovery and touched-keys analysis to cover `plurals.xml` and `arrays.xml` alongside `strings.xml`. Added deletion tracking (`-` lines) in git diffs to detect keys removed from base values without matching removals in localized variants.
+- **Cross-File Room Migration Discovery (`room_guard.py`)**: Added `find_candidate_migration_files` to discover migration definitions and registrations declared outside the database class (e.g. in `*Migration*.kt` or `*DatabaseModule*.kt`) within the Gradle module scope.
+- **Read-Only Release Checksum Generator (`generate_release_checksums.py`)**: Converted release checksum generation into a strictly read-only validation tool that aborts with `SystemExit` if CRLF line endings are encountered, preventing silent working tree mutations.
+- **Review Package Token Optimization and Ambiguity Notices (`review_package.py`)**: Prevented duplicating tracked added files already present in `git diff HEAD` within `review-package.md`, cutting redundant reviewer tokens by 30–50%. Added `Topology Ambiguity Notice` when stem lookups find multiple candidate classes.
+- **Isolated Changed Path Detection (`_repo_files.py`)**: Added `repo: Path | None = None` support to `changed_paths` to allow isolated unit and policy tests on temporary repositories without cross-contaminating global process state.
+
 ## [1.0.7] - 2026-09-09
 
 ### Cross-Platform Checksum Normalization and Automated Prompt Pinning

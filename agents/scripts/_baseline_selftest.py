@@ -160,6 +160,19 @@ def test_load_baseline() -> None:
     check(load_baseline() is None, "corrupt baseline reads as absent")
 
 
+def test_new_error_type_on_known_test_is_new_regression() -> None:
+    fp_old = fingerprint("A#a", error_type="TimeoutException", message="timed out after 5000ms")
+    fp_new = fingerprint("A#a", error_type="NullPointerException", message="user is null")
+    baseline = {"unit_tests": [
+        {"test_name": "A#a", "fingerprint": fp_old, "error_type": "TimeoutException", "status": "FAILED_PRE_EXISTING"},
+    ]}
+    failed = [
+        {"test_name": "A#a", "fingerprint": fp_new, "error_type": "NullPointerException"},
+    ]
+    new_regressions, ignored, _ = classify_failures(failed, baseline)
+    check(len(new_regressions) == 1 and not ignored, "new error type on known test is flagged NEW_REGRESSION")
+
+
 def main() -> int:
     test_parse_report()
     test_parse_corrupt()
@@ -167,6 +180,7 @@ def main() -> int:
     test_classify_without_baseline()
     test_classify_with_baseline()
     test_classify_malformed_baseline()
+    test_new_error_type_on_known_test_is_new_regression()
     test_baseline_advisory()
     test_collect_failures_dedup()
     test_task_report_scope_and_freshness()

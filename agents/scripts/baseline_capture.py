@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -68,12 +69,36 @@ def find_test_reports(repo: Path) -> list[Path]:
     return sorted(reports)
 
 
+HEX_ADDR_RE = re.compile(r"\b0x[0-9a-fA-F]+\b")
+LINE_NUM_RE = re.compile(r":\d+\b")
+PATH_RE = re.compile(r"([A-Za-z]:[\\/]|/(?:home|Users|tmp|var|private|workspace|app)[^:\s]+)")
+UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+TIMESTAMP_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b")
+
+
+def normalize_failure_message(msg: str) -> str:
+    """Normalize volatile data (hex addresses, paths, line numbers, timestamps, UUIDs) in test messages."""
+    if not msg:
+        return ""
+    text = msg.strip().lower()
+    text = UUID_RE.sub("<UUID>", text)
+    text = TIMESTAMP_RE.sub("<TIMESTAMP>", text)
+    text = HEX_ADDR_RE.sub("<HEX>", text)
+    text = PATH_RE.sub("<PATH>", text)
+    text = LINE_NUM_RE.sub(":<LINE>", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:120]
+
+
 def test_key(classname: str, name: str) -> str:
     return f"{classname}#{name}"
 
 
-def fingerprint(key: str) -> str:
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+def fingerprint(key: str, error_type: str = "", message: str = "") -> str:
+    norm_msg = normalize_failure_message(message)
+    clean_type = (error_type or "").strip().lower()
+    payload = f"{key}|{clean_type}|{norm_msg}" if (clean_type or norm_msg) else key
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def parse_report(path: Path) -> list[dict]:
@@ -93,10 +118,15 @@ def parse_report(path: Path) -> list[dict]:
         classname = case.get("classname") or ""
         name = case.get("name") or ""
         key = test_key(classname, name)
-        message = str(problem.get("message") or "").strip()
+        error_type = problem.get("type") or ""
+        message = str(problem.get("message") or problem.text or "").strip()
+        fp = fingerprint(key, error_type=error_type, message=message)
+        leg_fp = fingerprint(key)
         failures.append({
             "test_name": key,
-            "fingerprint": fingerprint(key),
+            "fingerprint": fp,
+            "legacy_fingerprint": leg_fp,
+            "error_type": error_type,
             "status": "FAILED_PRE_EXISTING",
             "message": message[:300],
         })

@@ -48,18 +48,34 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
                 if node.file_path and node.file_path.replace("\\", "/").lower() == norm_p:
                     touched_nodes.append(node)
 
+        ambiguous_matches: list[tuple[str, list[str]]] = []
         if not touched_nodes:
             for path in changed_paths:
                 stem = Path(path).stem
-                matched = graph.find_node(stem)
-                if matched and matched not in touched_nodes:
-                    touched_nodes.append(matched)
+                matches = graph.find_nodes(stem)
+                matched_candidates = [
+                    n for n in matches
+                    if n.name.lower() == stem.lower()
+                    or (n.file_path and Path(n.file_path).stem.lower() == stem.lower())
+                ]
+                if len(matched_candidates) == 1:
+                    if matched_candidates[0] not in touched_nodes:
+                        touched_nodes.append(matched_candidates[0])
+                elif len(matched_candidates) > 1:
+                    cands = [f"`{m.name}` [{m.file_path or 'unknown'}]" for m in matched_candidates[:4]]
+                    ambiguous_matches.append((stem, cands))
 
         lines = [
             "## ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY",
-            "*(Authoritative architecture graph slice extracted by GraphEngine)*",
+            "*(Pre-computed architectural graph context extracted by GraphEngine)*",
             "",
         ]
+
+        if ambiguous_matches:
+            lines.append("### Topology Ambiguity Notice:")
+            for stem, cands in ambiguous_matches:
+                lines.append(f"- Symbol `{stem}` has multiple architectural candidates: {', '.join(cands)} (advisory only; inspect callers directly).")
+            lines.append("")
 
         features = set()
         for node in touched_nodes:
@@ -120,13 +136,14 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
             continue
         rel = str(item.get("path") or "")
         path = repo / rel
-        lowered = rel.lower()
-        extras.append(f"\n## NEW FILE {rel}\n")
         if rel in secret_paths:
-            extras.append("[Content redacted because the path may contain secrets.]\n")
-        elif path.suffix.lower() in BINARY_SUFFIXES:
-            extras.append(f"[Binary content: sha256={sha256_file(path)} size={path.stat().st_size}]\n")
-        else:
+            continue
+        if path.suffix.lower() in BINARY_SUFFIXES:
+            extras.append(f"\n## BINARY FILE {rel}\n[Binary content: sha256={sha256_file(path)} size={path.stat().st_size}]\n")
+            continue
+        already_in_diff = f"+++ b/{rel}" in diff or f"diff --git a/{rel} b/{rel}" in diff
+        if not already_in_diff:
+            extras.append(f"\n## NEW UNTRACKED FILE {rel}\n")
             extras.append(path.read_text(encoding="utf-8", errors="replace"))
             extras.append("\n")
     metadata = {

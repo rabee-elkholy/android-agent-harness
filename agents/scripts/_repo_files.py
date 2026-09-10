@@ -171,9 +171,9 @@ def changed_files(repo: Path | None = None, *, include_untracked: bool = True) -
     return results
 
 
-def changed_paths(*, include_untracked: bool = True, include_deleted: bool = False) -> list[Path]:
+def changed_paths(*, include_untracked: bool = True, include_deleted: bool = False, repo: Path | None = None) -> list[Path]:
     """Working-tree files vs HEAD: staged, unstaged, and untracked (backward compatible)."""
-    cfs = changed_files(include_untracked=include_untracked)
+    cfs = changed_files(repo=repo, include_untracked=include_untracked)
     seen: dict[str, Path] = {}
     for cf in cfs:
         if not include_deleted and not cf.exists:
@@ -181,6 +181,7 @@ def changed_paths(*, include_untracked: bool = True, include_deleted: bool = Fal
         key = cf.rel_posix
         seen[key] = cf.path
     return list(seen.values())
+
 
 
 def working_tree_fingerprint(repo: Path | None = None) -> str | None:
