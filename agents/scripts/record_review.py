@@ -103,7 +103,13 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
             if not str(finding.get("message") or "").strip():
                 raise ValidationError(f"reviewer {reviewer} finding has no message")
         findings.extend({"reviewer": reviewer, **item} for item in report_findings if isinstance(item, dict))
-        report_identities.append({"reviewer": reviewer, "report_sha256": sha256_file(report_path), "verdict": verdict})
+        report_identities.append({
+            "reviewer": reviewer,
+            "report_sha256": sha256_file(report_path),
+            "verdict": verdict,
+            "provenance": str(report.get("provenance") or "unspecified"),
+        })
+
     missing = required - seen
     if missing:
         raise ValidationError("missing required reviewer reports: " + ", ".join(sorted(missing)))
@@ -215,10 +221,14 @@ def main() -> int:
                 raise ValidationError("review override requires a VERIFYING plan")
             if not str(args.proof_reference).strip():
                 raise ValidationError("review override requires non-empty --proof-reference")
+            severity = str(policy.get("severity") or "").upper()
+            if severity in ("HIGH", "CRITICAL"):
+                raise ValidationError(f"review override is strictly forbidden for {severity} severity changes")
             sensitive = sorted(set(policy.get("surfaces") or []) & {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
             if sensitive:
                 raise ValidationError(f"review override is strictly forbidden on sensitive surfaces: {', '.join(sensitive)}")
             manifest = read_json(Path(current["manifest"]))
+
             version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
             harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
             override_evidence = {
@@ -260,6 +270,7 @@ def main() -> int:
             reviewer = str(rep.get("reviewer") or "")
             if not reviewer:
                 raise ValidationError(f"report {rep_path} has no reviewer field")
+            rep.setdefault("provenance", "structured_report")
             (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         for item in args.response:
@@ -267,6 +278,7 @@ def main() -> int:
             if not sep:
                 raise ValidationError("--response must be REVIEWER=PATH")
             rep = response_to_report(repo, args.task, reviewer.strip(), Path(raw_path).resolve())
+            rep["provenance"] = "reviewer_response_footer"
             (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         verdict_items = list(args.verdict)
@@ -281,6 +293,7 @@ def main() -> int:
                 message=args.message, severity=args.severity,
                 evidence_pkg=args.evidence_pkg, citations=args.citations,
             )
+            rep["provenance"] = "lead_agent_recorded_verdict"
             (staging_dir / f"{r_name.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
         elif verdict_items:
             for item in verdict_items:
@@ -292,7 +305,9 @@ def main() -> int:
                     message=args.message, severity=args.severity,
                     evidence_pkg=args.evidence_pkg, citations=args.citations,
                 )
+                rep["provenance"] = "lead_agent_recorded_verdict"
                 (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+
 
         staged_files = sorted(staging_dir.glob("*.json"))
         if not staged_files:

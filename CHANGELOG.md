@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.12] - 2026-09-11
+
+### Release Immutability, Scoped Overrides, Device Prerequisite Strictness, Context Window Expansion, and Resilient Resource Guards
+
+- **Release Immutability & Safe Tag Management (`release_version.py`)**: Added local and remote Git tag preflight verification to prevent accidental tag overwrites. Removed unconditional forced flags (`-f`) from tag creation and pushing, and added GitHub Release preflight checks unless `--allow-tag-overwrite` is explicitly provided.
+- **Binary-Safe CRLF Validation (`generate_release_checksums.py`, `validate_release.py`)**: Restricted CRLF line-ending validation to text file extensions (`TEXT_EXTENSIONS`), allowing binary assets to be hashed raw without false-positive rejections.
+- **Review Override Scoping & Provenance Enforcement (`record_review.py`, `final_verifier.py`)**: Prohibited developer review overrides (`--override-reviews`) on tasks with `HIGH` or `CRITICAL` severity in addition to sensitive surfaces. Ingested and stamped reviewer response footer, structured report, and lead agent verdict provenance into report identities.
+- **Device Prerequisite Gate Strictness (`run_device.py`)**: Enforced that prerequisite verification gates (`preflight_check`, `unit_tests`) are verified exclusively through the active task snapshot in the evidence store, eliminating stale mutable gate fallbacks during active runs.
+- **Classifier Context Window Expansion & Enclosing Class Scoping (`change_classifier.py`)**: Expanded upward declaration scanning window to 100 lines for immediate declarations and up to 120 lines for enclosing `class/interface/object` declarations and annotations. Bounded outer class extraction to declaration headers, preventing untouched class-body properties from triggering false surface classifications. Added deterministic path floors for network security config and ProGuard/baseline profile files.
+- **Localization Guard Missing & Deleted Locale Coverage (`check_strings.py`)**: Added missing localized file detection for touched base XML resources, diff-scoped deletion parity checks, and explicit missing-file reporting.
+- **Room Guard Deleted Entities & Cross-File Registration (`room_guard.py`)**: Added entity deletion tracking via `git show HEAD:<path>`, triggering schema bump requirements when entities are deleted. Added module-wide candidate migration discovery for migrations declared across external files.
+- **Deterministic Regression Test Coverage (`_vnext_selftest.py`)**: Added 8 comprehensive unit tests validating each hardening capability.
+
 ## [1.0.11] - 2026-09-10
 
 ### Single-Shot Proceed Invariant, Direct Follow-Up Execution, and Anti-Stalling Reminders

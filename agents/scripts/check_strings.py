@@ -160,11 +160,21 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
     return res, duplicates
 
 
-def discover_locale_pairs() -> list[tuple[Path, Path, str]]:
+def discover_locale_pairs(res_dirs: list[Path] | None = None, repo: Path | None = None) -> list[tuple[Path, Path, str]]:
     """Find all (base_values_xml, localized_values_xml, locale_tag) pairs for strings, plurals, and arrays."""
+    r = repo or REPO
+    dirs = res_dirs if res_dirs is not None else RES_DIRS
     pairs: list[tuple[Path, Path, str]] = []
-    for res_dir in RES_DIRS:
+    deleted_locales_by_res: dict[Path, set[str]] = {}
+    for p in changed_paths(include_deleted=True, repo=r):
+        if p.suffix == ".xml" and "/values-" in p.as_posix():
+            tag = p.parent.name[len("values-") :]
+            if _is_language_locale_tag(tag):
+                deleted_locales_by_res.setdefault(p.parent.parent, set()).add(tag)
+
+    for res_dir in dirs:
         base_dir = res_dir / "values"
+
         if not base_dir.is_dir():
             continue
         base_files = [
@@ -173,17 +183,24 @@ def discover_locale_pairs() -> list[tuple[Path, Path, str]]:
         ]
         if not base_files and (base_dir / "strings.xml").is_file():
             base_files = [base_dir / "strings.xml"]
+
+        val_dirs: dict[str, Path] = {}
+        for val_dir in sorted(res_dir.glob("values-*")):
+            if not val_dir.is_dir():
+                continue
+            tag = val_dir.name[len("values-") :]
+            if _is_language_locale_tag(tag):
+                val_dirs[tag] = val_dir
+
+        for tag in deleted_locales_by_res.get(res_dir, set()):
+            val_dirs.setdefault(tag, res_dir / f"values-{tag}")
+
         for base_file in sorted(base_files):
-            for val_dir in sorted(res_dir.glob("values-*")):
-                if not val_dir.is_dir():
-                    continue
-                tag = val_dir.name[len("values-") :]
-                if not _is_language_locale_tag(tag):
-                    continue
+            for tag, val_dir in sorted(val_dirs.items()):
                 loc_file = val_dir / base_file.name
-                if loc_file.is_file():
-                    pairs.append((base_file, loc_file, tag))
+                pairs.append((base_file, loc_file, tag))
     return pairs
+
 
 
 
@@ -279,7 +296,9 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
     touched_by_base: dict[Path, set[str]] = {}
     any_changed = False
 
-    for changed in changed_paths():
+    for changed in changed_paths(include_deleted=True, repo=repo):
+
+
         if changed.suffix != ".xml":
             continue
         if "/values" not in changed.as_posix():
@@ -401,28 +420,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
+    r = repo or REPO
     args = parse_args(argv)
     print("==================================================")
     mode_str = "Full Repository Scan" if args.all else "Diff-Scoped (Modified Keys Only)"
     print(f"[Strings] Adaptive Localization & Placeholder Guard ({mode_str})")
     print("==================================================")
 
-    pairs = discover_locale_pairs()
+    res_dirs = RES_DIRS
+    if repo:
+        prim = r.joinpath(*ANDROID_SRC) / "res"
+        res_dirs = [prim] if prim.is_dir() else [r / "app/src/main/res"]
+
+    pairs = discover_locale_pairs(res_dirs=res_dirs, repo=r)
     errors = 0
 
     if not pairs:
         print("[OK] Single-locale checkout (no locale variants). Skipping translation parity.")
     else:
-        touched_by_base, any_string_changed = get_touched_string_keys(REPO)
+        touched_by_base, any_string_changed = get_touched_string_keys(r)
 
         for base_file, loc_file, tag in pairs:
             try:
-                base_rel = base_file.relative_to(REPO).as_posix()
-                loc_rel = loc_file.relative_to(REPO).as_posix()
+                base_rel = base_file.relative_to(r).as_posix()
+                loc_rel = loc_file.relative_to(r).as_posix()
             except ValueError:
                 base_rel = str(base_file)
                 loc_rel = str(loc_file)
+
 
             touched_keys = touched_by_base.get(base_file, set())
 
@@ -458,7 +484,9 @@ def main(argv: list[str] | None = None) -> int:
             missing_in_base = [k for k in keys_to_check if k in loc_keys and k not in base_keys]
 
             if missing_in_loc:
-                print(f"\n[!] Missing in {loc_rel} ({len(missing_in_loc)} modified key(s) vs {base_rel}):")
+                not_found_note = " (file does not exist)" if not loc_file.is_file() else ""
+                print(f"\n[!] Missing in {loc_rel}{not_found_note} ({len(missing_in_loc)} modified key(s) vs {base_rel}):")
+
                 for key in sorted(missing_in_loc):
                     print(f"   - {key}")
                 errors += len(missing_in_loc)

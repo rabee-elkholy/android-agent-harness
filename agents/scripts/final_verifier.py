@@ -203,8 +203,14 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         elif review_record:
             evidence = review_record.get("evidence") or {}
             if evidence.get("developer_override"):
+                severity = str(policy.get("severity") or "").upper()
                 sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
-                if sensitive:
+                if severity in ("HIGH", "CRITICAL"):
+                    err_msg = f"developer review override is forbidden for {severity} severity changes"
+                    reasons.append(err_msg)
+                    checks[-1]["status"] = "FAIL"
+                    checks[-1]["detail"] = err_msg
+                elif sensitive:
                     err_msg = "developer review override is forbidden on sensitive surfaces: " + ", ".join(sensitive)
                     reasons.append(err_msg)
                     checks[-1]["status"] = "FAIL"
@@ -216,6 +222,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     checks[-1]["detail"] = err_msg
                 else:
                     checks[-1]["detail"] = "bound developer override PASS"
+
             else:
                 covered = set(evidence.get("reviewers") or [])
                 if not reviewers <= covered:

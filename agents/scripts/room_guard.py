@@ -179,12 +179,23 @@ def find_candidate_migration_files(db_path: Path, changed_src: list[Path], repo:
         module_dir = module_dir.parent
     scan_root = module_dir if module_dir.is_dir() else root
     skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
-    for pattern in ("*Migration*.kt", "*DatabaseModule*.kt", "*DbModule*.kt", "*AppModule*.kt"):
+    for pattern in ("*Migration*.kt", "*DatabaseModule*.kt", "*DbModule*.kt", "*AppModule*.kt", "*Module*.kt", "*Provider*.kt"):
+
         for p in scan_root.glob(f"**/{pattern}"):
             if not (set(p.parts) & skip_parts) and p not in seen and p.is_file():
                 candidates.append(p)
                 seen.add(p)
+    for p in list(scan_root.glob("**/*.kt")) + list(scan_root.glob("**/*.java")):
+        if not (set(p.parts) & skip_parts) and p not in seen and p.is_file():
+            try:
+                head = p.read_text(encoding="utf-8", errors="replace")[:4000]
+                if "addMigrations" in head or "Migration(" in head:
+                    candidates.append(p)
+                    seen.add(p)
+            except Exception:
+                pass
     return candidates
+
 
 
 def iter_database_files(repo: Path | None = None) -> list[Path]:
@@ -211,10 +222,20 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
     def _rel(path: Path) -> str:
         return path.relative_to(root).as_posix()
 
-    paths = changed_paths(repo=root) if modified_rels is None else [root / r for r in modified_rels]
+    paths = changed_paths(repo=root, include_deleted=True) if modified_rels is None else [root / r for r in modified_rels]
     changed_src = [p for p in paths if p.suffix in (".kt", ".java") and p.is_file()]
     changed_types = changed_kotlin_types(changed_src)
     changed_rels = {_rel(p) for p in changed_src}
+
+    for p in paths:
+        if p.suffix in (".kt", ".java") and not p.is_file():
+            rel = _rel(p)
+            changed_rels.add(rel)
+            changed_types.add(p.stem)
+            head_content = git_head_text(rel, root)
+            if head_content:
+                changed_types.update(declared_type_names(head_content))
+
 
     databases: list[tuple[Path, DatabaseDecl]] = []
     for path in iter_database_files(root):
@@ -300,12 +321,14 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
                         f"{new_decl.rel}: {expected_name} exists but is not passed to addMigrations(...)."
                     )
                     break
-            var_matches = re.findall(rf"(?:val|var)\s+([A-Za-z0-9_]+)\s*(?::\s*Migration)?\s*=\s*(?:object\s*:\s*)?Migration\s*\(\s*{old_ver}\s*,\s*{new_ver}\s*\)", body)
-            for var_name in var_matches:
-                if var_name not in registered_tokens and var_name not in failures:
-                    failures.append(
-                        f"{new_decl.rel}: migration variable '{var_name}' ({old_ver} -> {new_ver}) is defined but not registered in addMigrations(...)."
-                    )
+            for b_text in all_bodies:
+                var_matches = re.findall(rf"(?:val|var)\s+([A-Za-z0-9_]+)\s*(?::\s*Migration)?\s*=\s*(?:object\s*:\s*)?Migration\s*\(\s*{old_ver}\s*,\s*{new_ver}\s*\)", b_text)
+                for var_name in var_matches:
+                    if var_name not in registered_tokens and not any(var_name in f for f in failures):
+                        failures.append(
+                            f"{new_decl.rel}: migration variable '{var_name}' ({old_ver} -> {new_ver}) is defined but not registered in addMigrations(...)."
+                        )
+
 
 
         if entity_hit and new_decl.destructive:

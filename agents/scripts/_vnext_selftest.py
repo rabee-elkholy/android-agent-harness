@@ -1529,6 +1529,165 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertNotEqual(0, proc_sec.returncode)
         self.assertIn("strictly forbidden", (proc_sec.stderr + proc_sec.stdout).lower())
 
+    def test_review_override_forbidden_on_high_severity(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+
+        task_id = "test-override-high-forbidden"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Room change", expected_surfaces="ROOM_SCHEMA,BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/Db.kt", "package com.fixture\nimport androidx.room.Database\n@Database(version = 1, entities = [])\nabstract class AppDb\n")
+        current = prepare_verification(Namespace(**common))
+
+        proc = subprocess.run(
+            [
+                sys.executable, str(self.repo / ".agents/scripts/record_review.py"),
+                "--task", task_id,
+                "--override-reviews",
+                "--proof-reference", "Developer approved override in chat",
+                "--source", "conversation",
+            ],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("strictly forbidden for high severity", (proc.stderr + proc.stdout).lower())
+
+    def test_device_prereq_blocks_stale_mutable_gate(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+
+        task_id = "test-device-prereq-stale"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="UI change", expected_surfaces="COMPOSE_UI,BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/Screen.kt", "package com.fixture\nimport androidx.compose.runtime.Composable\n@Composable fun Screen() {}\n")
+        current = prepare_verification(Namespace(**common))
+
+        state = self.repo / ".agents/state"
+        write(state / "gates/unit_tests.json", json.dumps({"status": "PASS", "head_sha": "stale-fake-head"}))
+
+        from run_device import _check_device_prerequisites
+        import argparse
+        args = argparse.Namespace(action="install", force=False)
+        with mock.patch("run_device.REPO", self.repo):
+            code = _check_device_prerequisites(args)
+            self.assertEqual(30, code)
+
+    def test_classifier_detects_sensitive_outer_class_long_function(self) -> None:
+        class_lines = ["package com.fixture", "import com.android.billingclient.api.BillingClient", "@BillingClient", "class PaymentHandler {"]
+        for i in range(60):
+            class_lines.append(f"    val dummy{i} = {i}")
+        class_lines.append("    fun updateState(status: Int) {")
+        class_lines.append("        val x = status + 1")
+        class_lines.append("    }")
+        class_lines.append("}")
+        file_path = self.repo / "app/src/main/kotlin/PaymentHandler.kt"
+        write(file_path, "\n".join(class_lines) + "\n")
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "add payment handler")
+
+        mod_lines = list(class_lines)
+        mod_lines[-3] = "        val x = status + 999"
+        write(file_path, "\n".join(mod_lines) + "\n")
+
+        classification = classify(self.repo)
+        self.assertIn("BILLING", classification.get("surfaces", []))
+
+    def test_classifier_deterministic_paths(self) -> None:
+        write(self.repo / "app/src/main/res/xml/network_security_config.xml", "<network-security-config />\n")
+        write(self.repo / "app/proguard-rules.pro", "-keep class com.fixture.** { *; }\n")
+        write(self.repo / "app/baseline-prof.txt", "HSPLcom/fixture/MainActivity;-><init>()V\n")
+        c = classify(self.repo)
+        self.assertIn("SECURITY", c.get("surfaces", []))
+        self.assertIn("BUILD_CONFIG", c.get("surfaces", []))
+
+    def test_check_strings_fails_on_missing_locale_file(self) -> None:
+        write(self.repo / "app/src/main/res/values/strings.xml", '<resources><string name="app_name">App</string></resources>\n')
+        write(self.repo / "app/src/main/res/values-ar/strings.xml", '<resources><string name="app_name">تطبيق</string></resources>\n')
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "strings baseline")
+
+        write(self.repo / "app/src/main/res/values/plurals.xml", '<resources><plurals name="items"><item quantity="one">1 item</item></plurals></resources>\n')
+
+        import check_strings
+        pairs = check_strings.discover_locale_pairs(res_dirs=[self.repo / "app/src/main/res"], repo=self.repo)
+        self.assertTrue(any(p[0].name == "plurals.xml" and p[2] == "ar" for p in pairs))
+        err_code = check_strings.main([], repo=self.repo)
+        self.assertNotEqual(0, err_code)
+
+    def test_check_strings_catches_deleted_locale_file(self) -> None:
+        write(self.repo / "app/src/main/res/values/strings.xml", '<resources><string name="title">Title</string></resources>\n')
+        write(self.repo / "app/src/main/res/values-ar/strings.xml", '<resources><string name="title">عنوان</string></resources>\n')
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "baseline")
+
+        (self.repo / "app/src/main/res/values-ar/strings.xml").unlink()
+
+        import check_strings
+        err_code = check_strings.main([], repo=self.repo)
+        self.assertNotEqual(0, err_code)
+
+
+    def test_room_guard_detects_deleted_entity(self) -> None:
+        write(self.repo / "app/src/main/kotlin/AppDatabase.kt", 'package com.fixture\nimport androidx.room.Database\n@Database(version = 1, entities = [OldItem::class])\nabstract class AppDatabase\n')
+        write(self.repo / "app/src/main/kotlin/OldItem.kt", 'package com.fixture\nimport androidx.room.Entity\n@Entity\ndata class OldItem(val id: Int)\n')
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "room baseline")
+
+        (self.repo / "app/src/main/kotlin/OldItem.kt").unlink()
+
+        from room_guard import check_room_working_tree
+        passed, msg = check_room_working_tree(repo=self.repo)
+        self.assertFalse(passed)
+        self.assertIn("entity schema changed but version stayed 1", msg)
+
+    def test_room_guard_detects_arbitrary_migration_variable_in_external_file(self) -> None:
+        write(self.repo / "app/src/main/kotlin/AppDatabase.kt", 'package com.fixture\nimport androidx.room.Database\n@Database(version = 1, entities = [Item::class])\nabstract class AppDatabase\n')
+        write(self.repo / "app/src/main/kotlin/Item.kt", 'package com.fixture\nimport androidx.room.Entity\n@Entity\ndata class Item(val id: Int)\n')
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "room v1")
+
+        write(self.repo / "app/src/main/kotlin/AppDatabase.kt", 'package com.fixture\nimport androidx.room.Database\n@Database(version = 2, entities = [Item::class])\nabstract class AppDatabase\n')
+        write(self.repo / "app/src/main/kotlin/Migrations.kt", 'package com.fixture\nimport androidx.room.migration.Migration\nval customUsersMigration = object : Migration(1, 2) {}\n')
+
+        from room_guard import check_room_working_tree
+        passed, msg = check_room_working_tree(repo=self.repo)
+        self.assertFalse(passed)
+        self.assertIn("customUsersMigration", msg)
+
+        write(self.repo / "app/src/main/kotlin/DatabaseModule.kt", 'package com.fixture\nfun provideDb(builder: Any) {\n    builder.addMigrations(customUsersMigration)\n}\n')
+        passed, msg = check_room_working_tree(repo=self.repo)
+        self.assertTrue(passed, msg)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

@@ -22,6 +22,11 @@ PINNED_ACTION_RE = re.compile(
     r"uses:\s*pypa/gh-action-pypi-publish@(?P<ref>[^\s#]+)"
 )
 FIXED_SCRIPT_COUNT_RE = re.compile(r"\b\d+\s+core\s+(?:harness\s+)?scripts\b", re.IGNORECASE)
+TEXT_EXTENSIONS = {
+    ".py", ".md", ".json", ".toml", ".yml", ".yaml", ".txt", ".xml",
+    ".sh", ".bat", ".ps1", ".cff", ".gradle", ".kts", ".properties",
+}
+
 
 
 def pinned_url_errors(text: str, version: str, label: str) -> list[str]:
@@ -181,10 +186,11 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
                 errors.append(f"release checksum target missing: {rel}")
                 continue
             raw_data = path.read_bytes()
-            if b"\r\n" in raw_data:
+            if path.suffix.lower() in TEXT_EXTENSIONS and b"\r\n" in raw_data:
                 errors.append(f"release target contains Windows CRLF line endings: {rel}")
             elif hashlib.sha256(raw_data).hexdigest() != expected:
                 errors.append(f"release checksum mismatch: {rel}")
+
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"agents/release_checksums.json is missing or unreadable: {exc}")
 

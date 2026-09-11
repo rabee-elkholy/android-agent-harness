@@ -131,18 +131,19 @@ def run_adb(serial: str, adb_args: list[str], label: str) -> tuple[int, str]:
 
 
 def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
-    try:
-        from evidence_store import EvidenceStore
-        store = EvidenceStore(state_root)
-        snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
-        run_id = str(current_run.get("run_id") or "")
-        record = store.read(snapshot, run_id, gate_name)
-        if record and str(record.get("status") or "") == "PASS":
-            return True
-    except Exception:
-        pass
+    snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
+    run_id = str(current_run.get("run_id") or "")
+    if snapshot and run_id:
+        try:
+            from evidence_store import EvidenceStore
+            store = EvidenceStore(state_root)
+            record = store.read(snapshot, run_id, gate_name)
+            return bool(record and str(record.get("status") or "") == "PASS")
+        except Exception:
+            return False
     gate_res = read_gate_result(gate_name)
     return bool(gate_res and str(gate_res.get("status") or "") == "PASS")
+
 
 
 def _check_device_prerequisites(args: argparse.Namespace) -> int | None:

@@ -146,6 +146,34 @@ def run_cmd(cmd: list[str], *, check: bool = True, cwd: Path = ROOT) -> subproce
     )
 
 
+def tag_exists_locally(tag_name: str) -> bool:
+    res = subprocess.run(["git", "tag", "-l", tag_name], cwd=ROOT, capture_output=True, text=True, check=False)
+    return bool(res.returncode == 0 and tag_name in res.stdout.split())
+
+
+def tag_exists_remotely(tag_name: str) -> bool:
+    try:
+        res = subprocess.run(
+            ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        return bool(res.returncode == 0 and res.stdout.strip())
+    except Exception:
+        return False
+
+
+def github_release_exists(tag_name: str) -> bool:
+    if not shutil.which("gh"):
+        return False
+    res = subprocess.run(["gh", "release", "view", tag_name], cwd=ROOT, capture_output=True, text=True, check=False)
+    return res.returncode == 0
+
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Unified one-command release automation for android-agent-harness."
@@ -173,6 +201,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip executing _hook_selftest.py.",
     )
+    parser.add_argument(
+        "--allow-tag-overwrite",
+        action="store_true",
+        help="Emergency recovery flag: allow overwriting existing git tag/release.",
+    )
     args = parser.parse_args(argv)
 
     current_version = read_current_version()
@@ -192,6 +225,15 @@ def main(argv: list[str] | None = None) -> int:
     if not re.fullmatch(r"\d+\.\d+\.\d+", target_version):
         print(f"[ERROR] Version must be semver X.Y.Z format, got '{target_version}'.")
         return 1
+
+    tag_name = f"v{target_version}"
+    if not args.allow_tag_overwrite:
+        if tag_exists_locally(tag_name):
+            print(f"[ERROR] Tag '{tag_name}' already exists locally. Release tags are immutable. Increment the patch version.")
+            return 1
+        if not args.dry_run and not args.no_push and tag_exists_remotely(tag_name):
+            print(f"[ERROR] Tag '{tag_name}' already exists on remote origin. Release tags are immutable. Increment the patch version.")
+            return 1
 
     print(f"[*] Release target: v{target_version} (current: v{current_version})")
     if args.dry_run:
@@ -310,7 +352,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  + Working tree already clean or commit skipped ({res_commit.stderr.strip()})")
 
     tag_name = f"v{target_version}"
-    res_tag = run_cmd(["git", "tag", "-f", tag_name])
+    tag_cmd = ["git", "tag", "-f", tag_name] if args.allow_tag_overwrite else ["git", "tag", tag_name]
+    res_tag = run_cmd(tag_cmd)
     print(f"  + Tagged: {tag_name}")
 
     if args.no_push:
@@ -319,12 +362,17 @@ def main(argv: list[str] | None = None) -> int:
 
     print("  + Pushing commit and tag to GitHub...")
     run_cmd(["git", "push", "origin", "main"])
-    run_cmd(["git", "push", "origin", tag_name, "-f"])
+    push_tag_cmd = ["git", "push", "origin", tag_name, "-f"] if args.allow_tag_overwrite else ["git", "push", "origin", tag_name]
+    run_cmd(push_tag_cmd)
     print(f"  [SUCCESS] Pushed {tag_name} to origin.")
 
     # Create/update GitHub Release via gh CLI if installed
     if shutil.which("gh"):
         print("  + Publishing GitHub Release via gh CLI...")
+        if not args.allow_tag_overwrite and github_release_exists(tag_name):
+            print(f"[FAIL] GitHub Release '{tag_name}' already exists. Release versions are immutable. Increment the patch version.")
+            return 1
+
         gh_proc = subprocess.run(
             [
                 "gh",
@@ -341,6 +389,9 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         if gh_proc.returncode != 0 and "already exists" in gh_proc.stderr:
+            if not args.allow_tag_overwrite:
+                print(f"[FAIL] GitHub Release '{tag_name}' already exists. Release versions are immutable. Increment the patch version.")
+                return 1
             gh_proc = subprocess.run(
                 [
                     "gh",
@@ -362,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [!] gh release warning: {gh_proc.stderr.strip()}")
     else:
         print("  [!] gh CLI not found on PATH. Release tag pushed, publish release notes via GitHub web UI.")
+
 
     print(f"\n==================================================")
     print(f"[SUCCESS] Release v{target_version} completed successfully!")

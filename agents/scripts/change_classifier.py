@@ -59,6 +59,8 @@ def _head_text(repo: Path, relative: str) -> str:
 
 HUNK_LINE_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 DECL_RE = re.compile(r"\b(?:class|interface|object|fun|suspend\s+fun)\s+([A-Za-z0-9_]+)")
+CLASS_DECL_RE = re.compile(r"\b(?:class|interface|object)\s+([A-Za-z0-9_]+)")
+FUN_DECL_RE = re.compile(r"\b(?:fun|suspend\s+fun)\s+([A-Za-z0-9_]+)")
 
 
 def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -> str:
@@ -72,7 +74,7 @@ def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -
 
     for line_num in modified_line_numbers:
         idx = min(max(0, line_num - 1), total - 1)
-        start_scan = max(0, idx - 40)
+        start_scan = max(0, idx - 100)
         enclosing_idx = None
         for cur in range(idx, start_scan - 1, -1):
             if DECL_RE.search(lines[cur]):
@@ -82,11 +84,34 @@ def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -
             decl_start = enclosing_idx
             while decl_start > 0 and lines[decl_start - 1].strip().startswith("@"):
                 decl_start -= 1
+
+            if FUN_DECL_RE.search(lines[enclosing_idx]):
+                class_scan_limit = max(0, idx - 120)
+                for c_cur in range(decl_start - 1, class_scan_limit - 1, -1):
+                    if CLASS_DECL_RE.search(lines[c_cur]):
+                        outer_start = c_cur
+                        while outer_start > 0 and lines[outer_start - 1].strip().startswith("@"):
+                            outer_start -= 1
+                        outer_class_end = c_cur + 1
+                        for scan_fwd in range(c_cur, min(c_cur + 5, total)):
+                            outer_class_end = scan_fwd + 1
+                            if "{" in lines[scan_fwd]:
+                                break
+                        class_range = (outer_start, outer_class_end)
+                        if class_range not in seen_ranges:
+                            seen_ranges.add(class_range)
+                            class_lines = list(lines[outer_start:outer_class_end])
+                            if class_lines and "{" in class_lines[-1]:
+                                class_lines[-1] = class_lines[-1].split("{", 1)[0]
+                            blocks.append("\n".join(class_lines))
+                        break
+
             r = (decl_start, idx + 1)
             if r not in seen_ranges:
                 seen_ranges.add(r)
                 blocks.append("\n".join(lines[decl_start:idx + 1]))
     return "\n".join(blocks)
+
 
 
 def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
@@ -203,7 +228,14 @@ def classify(repo: Path) -> dict:
             _add(found, "TEST_ONLY", rel, "TEST_CHANGE")
         if not test_path and re.search(r"\b(public|protected)\s+(class|interface|fun|static|abstract)\b", diff_text):
             _add(found, "PUBLIC_API", rel, "PUBLIC_DECLARATION")
+        if "network_security_config" in lower and suffix == ".xml":
+            _add(found, "SECURITY", rel, "NETWORK_SECURITY_CONFIG")
+        if Path(lower).name in ("consumer-rules.pro", "proguard-rules.pro"):
+            _add(found, "BUILD_CONFIG", rel, "PROGUARD_RULES")
+        if Path(lower).name == "baseline-prof.txt":
+            _add(found, "BUILD_CONFIG", rel, "BASELINE_PROFILE")
         for surface, pattern, reason in PATTERNS:
+
             if not test_path:
                 if pattern.search(diff_text):
                     _add(found, surface, rel, reason)

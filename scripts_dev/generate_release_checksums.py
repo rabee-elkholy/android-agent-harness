@@ -22,12 +22,23 @@ def included(path: Path) -> bool:
     )
 
 
+TEXT_EXTENSIONS = {
+    ".py", ".md", ".json", ".toml", ".yml", ".yaml", ".txt", ".xml",
+    ".sh", ".bat", ".ps1", ".cff", ".gradle", ".kts", ".properties",
+}
+
+
+def is_text_file(path: Path) -> bool:
+    return path.suffix.lower() in TEXT_EXTENSIONS
+
+
 def normalize_and_read(path: Path) -> bytes:
     data = path.read_bytes()
-    if b"\r\n" in data:
+    if is_text_file(path) and b"\r\n" in data:
         rel = path.relative_to(ROOT).as_posix()
         raise SystemExit(f"[FAIL] {rel} contains Windows CRLF line endings. Normalize text files to LF before generating checksums.")
     return data
+
 
 
 
