@@ -5,6 +5,14 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.17] - 2026-09-12
+
+### Deterministic Device Policy Artifact Verification & Prerequisite Hardening
+
+- **Deterministic Policy Artifact Verification (`final_verifier.py`, `run_device.py`)**: Extracted `validate_policy_artifact(...)` to evaluate policy integrity, classification freshness, and deterministic policy derivation (`decide` / `decide_later_round` with full `task_kind` and `project_kind` fidelity). Replaced unverified gate reading in `run_device._check_device_prerequisites()` with verified expected policy gates, preventing dropped `unit_tests` gates from bypassing device prerequisite safety.
+- **Local Tag Overwrite Warning Precision (`release_version.py`)**: Differentiated remote-verified `ABSENT` warnings from local `--no-push` overwrite warnings when `--allow-tag-overwrite` is supplied.
+- **Scenario Selftest Matrix Expansion (`_android_scenarios_selftest.py`)**: Added positive and negative test cases to `test_scenario_r05_device_prerequisites_safety` validating rejected tampered policies, rejected missing unit test evidence, and accepted complete evidence lifecycles.
+
 ## [1.0.16] - 2026-09-12
 
 ### Device Prerequisite Verification, Checked-In Source Preservation, Room Builder Scoping, and Remote Release Immutability

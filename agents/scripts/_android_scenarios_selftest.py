@@ -1010,6 +1010,60 @@ class AndroidScenariosSelftest(unittest.TestCase):
             code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
             self.assertEqual(EXIT_ENV, code)
 
+        # Tampered policy and full evidence verification lifecycle
+        from workflow import draft, record_approval, begin_task, prepare_verification
+        task_id = "TASK-DEV-2"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        args = argparse.Namespace(**common, outcome="Change logic", kind="FEATURE", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app", test_strategy="unit", device_strategy="none", risks="", rollback="", external_write=[], force=True)
+        draft(args)
+        record_approval(argparse.Namespace(**common, source="conversation", proof_reference="approved", enforcement_tier="RULE_ENFORCED"))
+        begin_task(args)
+        _write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "class MainActivity { fun value() = 2 }\n")
+        current = prepare_verification(args)
+
+        # 1. Tampered policy dropping unit_tests
+        policy_data = read_json(Path(current["policy"]))
+        original_gates = list(policy_data["gates"])
+        policy_data["gates"] = ["preflight"]
+        atomic_write_json(Path(current["policy"]), policy_data)
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+            self.assertEqual(EXIT_ENV, code)
+
+        # 2. Restore policy, write only preflight evidence (missing unit_tests)
+        policy_data["gates"] = original_gates
+        policy_data["policy_sha256"] = canonical_sha256({k: v for k, v in policy_data.items() if k != "policy_sha256"})
+        atomic_write_json(Path(current["policy"]), policy_data)
+        harness_version = (KIT / "agents/VERSION").read_text().strip()
+        EvidenceStore(state).write(
+            snapshot=current["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="preflight",
+            producer="preflight_check",
+            harness_version=harness_version,
+            change_set=current["change_set_sha256"],
+            status="PASS",
+            evidence={},
+        )
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+            self.assertEqual(EXIT_ENV, code)
+
+        # 3. Supply valid unit_tests evidence -> prerequisites pass (None)
+        EvidenceStore(state).write(
+            snapshot=current["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="unit_tests",
+            producer="run_tests_gate",
+            harness_version=harness_version,
+            change_set=current["change_set_sha256"],
+            status="PASS",
+            evidence={},
+        )
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+            self.assertIsNone(code)
+
     # --- Scenario R06: Release Automation Server Error Fail Closed ---
     def test_scenario_r06_release_automation_error_handling(self) -> None:
         import importlib.util

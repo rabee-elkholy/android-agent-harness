@@ -70,6 +70,75 @@ def _validate_artifact(
     return record, None
 
 
+def validate_policy_artifact(
+    repo: Path,
+    plan: dict,
+    policy: dict,
+    state_root: Path,
+    policy_path: Path,
+) -> tuple[dict | None, str | None, str]:
+    """Validate policy artifact integrity, status, classification freshness, and deterministic rules."""
+    if policy.get("classification_sha256") is None or policy.get("policy_sha256") != canonical_sha256(
+        {k: v for k, v in policy.items() if k != "policy_sha256"}
+    ):
+        return None, "policy artifact integrity mismatch", "BLOCKED"
+    if policy.get("status") == "USER_DECISION_REQUIRED":
+        return None, "material UNKNOWN surface requires developer decision", "USER_DECISION_REQUIRED"
+    if policy.get("status") != "PASS":
+        return None, "policy or mandatory skill routing did not pass", "BLOCKED"
+    current_classification = classify(repo)
+    if current_classification.get("classification_sha256") != policy.get("classification_sha256"):
+        return None, "current classification does not match the run policy", "STALE"
+    agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
+    configured_kind = _configured_project_kind()
+    if policy.get("project_kind") != configured_kind:
+        return None, "policy project kind does not match installed configuration", "BLOCKED"
+    task_kind = str(plan.get("task_kind") or "FEATURE")
+    expected_policy = decide(
+        current_classification, agents_root / "skills", project_kind=configured_kind, task_kind=task_kind
+    )
+    if int(policy.get("review_round") or 1) > 1:
+        basis = policy.get("later_round_source") or {}
+        source_run_id = str(basis.get("run_id") or "")
+        try:
+            previous_policy = read_json(policy_path.parent / f"policy-{source_run_id}.json")
+            if previous_policy.get("policy_sha256") != canonical_sha256(
+                {key: value for key, value in previous_policy.items() if key != "policy_sha256"}
+            ):
+                raise ValidationError("previous policy integrity mismatch")
+            source_reviews = EvidenceStore(state_root).read(
+                str(basis.get("snapshot") or ""), source_run_id, "reviews",
+            )
+            if source_reviews.get("change_set_sha256") != basis.get("change_set"):
+                raise ValidationError("previous review change-set mismatch")
+            reviewed_roles = set((source_reviews.get("evidence") or {}).get("reviewers") or [])
+            if reviewed_roles != set(previous_policy.get("reviewers") or []):
+                raise ValidationError("previous reviewer coverage does not match its policy")
+            passed_reviewers = [
+                str(item.get("reviewer") or "")
+                for item in (source_reviews.get("evidence") or {}).get("reports") or []
+                if str(item.get("verdict") or "").upper() == "PASS"
+            ]
+            expected_policy = decide_later_round(
+                current_classification,
+                agents_root / "skills",
+                previous_policy=previous_policy,
+                finding_owners=list(plan.get("blocked_reviewers") or []),
+                passed_reviewers=passed_reviewers,
+                source_snapshot=str(basis.get("snapshot") or ""),
+                source_change_set=str(basis.get("change_set") or ""),
+                source_run_id=source_run_id,
+                round_number=int(policy.get("review_round")),
+                project_kind=configured_kind,
+                task_kind=task_kind,
+            )
+        except (ValidationError, OSError, ValueError, TypeError) as exc:
+            return None, f"later-round policy source is invalid: {exc}", "BLOCKED"
+    if expected_policy != policy:
+        return None, "policy artifact does not match deterministic policy evaluation", "BLOCKED"
+    return expected_policy, None, "PASS"
+
+
 def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Path, state_root: Path, run_id: str) -> dict:
     checks: list[dict] = []
     reasons: list[str] = []
@@ -118,62 +187,12 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest))
     if drift:
         return _blocked("PLAN_APPROVAL_REQUIRED", ["material plan drift: " + ", ".join(drift)], checks)
-    if policy.get("classification_sha256") is None or policy.get("policy_sha256") != canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"}):
-        return _blocked("BLOCKED", ["policy artifact integrity mismatch"], checks)
-    if policy.get("status") == "USER_DECISION_REQUIRED":
-        return _blocked("USER_DECISION_REQUIRED", ["material UNKNOWN surface requires developer decision"], checks)
-    if policy.get("status") != "PASS":
-        return _blocked("BLOCKED", ["policy or mandatory skill routing did not pass"], checks)
-    current_classification = classify(repo)
-    if current_classification.get("classification_sha256") != policy.get("classification_sha256"):
-        return _blocked("STALE", ["current classification does not match the run policy"], checks)
-    agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
-    configured_kind = _configured_project_kind()
-    if policy.get("project_kind") != configured_kind:
-        return _blocked("BLOCKED", ["policy project kind does not match installed configuration"], checks)
-    task_kind = str(plan.get("task_kind") or "FEATURE")
-    expected_policy = decide(
-        current_classification, agents_root / "skills", project_kind=configured_kind, task_kind=task_kind
+    expected_policy, policy_error, block_status = validate_policy_artifact(
+        repo, plan, policy, state_root, policy_path
     )
-    if int(policy.get("review_round") or 1) > 1:
-        basis = policy.get("later_round_source") or {}
-        source_run_id = str(basis.get("run_id") or "")
-        try:
-            previous_policy = read_json(policy_path.parent / f"policy-{source_run_id}.json")
-            if previous_policy.get("policy_sha256") != canonical_sha256(
-                {key: value for key, value in previous_policy.items() if key != "policy_sha256"}
-            ):
-                raise ValidationError("previous policy integrity mismatch")
-            source_reviews = EvidenceStore(state_root).read(
-                str(basis.get("snapshot") or ""), source_run_id, "reviews",
-            )
-            if source_reviews.get("change_set_sha256") != basis.get("change_set"):
-                raise ValidationError("previous review change-set mismatch")
-            reviewed_roles = set((source_reviews.get("evidence") or {}).get("reviewers") or [])
-            if reviewed_roles != set(previous_policy.get("reviewers") or []):
-                raise ValidationError("previous reviewer coverage does not match its policy")
-            passed_reviewers = [
-                str(item.get("reviewer") or "")
-                for item in (source_reviews.get("evidence") or {}).get("reports") or []
-                if str(item.get("verdict") or "").upper() == "PASS"
-            ]
-            expected_policy = decide_later_round(
-                current_classification,
-                agents_root / "skills",
-                previous_policy=previous_policy,
-                finding_owners=list(plan.get("blocked_reviewers") or []),
-                passed_reviewers=passed_reviewers,
-                source_snapshot=str(basis.get("snapshot") or ""),
-                source_change_set=str(basis.get("change_set") or ""),
-                source_run_id=source_run_id,
-                round_number=int(policy.get("review_round")),
-                project_kind=configured_kind,
-                task_kind=task_kind,
-            )
-        except (ValidationError, OSError, ValueError, TypeError) as exc:
-            return _blocked("BLOCKED", [f"later-round policy source is invalid: {exc}"], checks)
-    if expected_policy != policy:
-        return _blocked("BLOCKED", ["policy artifact does not match deterministic policy evaluation"], checks)
+    if policy_error:
+        return _blocked(block_status, [policy_error], checks)
+    agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
     planned_skills = {(item.get("id"), item.get("sha256")) for item in plan.get("skills") or []}
     selected_skills = {(item.get("id"), item.get("sha256")) for item in (policy.get("skills") or {}).get("skills") or []}
     if planned_skills != selected_skills:

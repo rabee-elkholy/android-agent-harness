@@ -275,7 +275,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.allow_tag_overwrite:
             print(f"[ERROR] Tag '{tag_name}' already exists locally. Release tags are immutable. Increment the patch version.")
             return 1
-        print(f"[!] Warning: Local tag '{tag_name}' exists but origin was verified ABSENT. Overwriting local tag per --allow-tag-overwrite.")
+        if not args.dry_run and not args.no_push:
+            print(f"[!] Warning: Local tag '{tag_name}' exists but origin was verified ABSENT. Overwriting local tag per --allow-tag-overwrite.")
+        else:
+            print(f"[!] Warning: Local tag '{tag_name}' exists and will be overwritten locally per --allow-tag-overwrite.")
 
     print(f"[*] Release target: v{target_version} (current: v{current_version})")
     if args.dry_run:

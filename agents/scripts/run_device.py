@@ -246,7 +246,14 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
                 )
                 return EXIT_ENV
             policy = read_json(policy_path)
-            required_gates = set(policy.get("gates") or [])
+            from final_verifier import validate_policy_artifact
+            expected_policy, policy_error, _ = validate_policy_artifact(
+                REPO, active, policy, state, policy_path
+            )
+            if policy_error:
+                live_print(f"[FAIL] Invalid verification policy: {policy_error}.", err=True)
+                return EXIT_ENV
+            required_gates = set(expected_policy.get("gates") or [])
             if not required_gates:
                 live_print("[FAIL] Verification policy defines no required gates.", err=True)
                 return EXIT_ENV
