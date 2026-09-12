@@ -143,25 +143,37 @@ def run_adb(serial: str, adb_args: list[str], label: str) -> tuple[int, str]:
     return code, log
 
 
+def _read_harness_version(repo: Path) -> str:
+    for candidate in (
+        repo / ".agents" / "VERSION",
+        repo / "agents" / "VERSION",
+        Path(__file__).resolve().parent.parent / "VERSION",
+    ):
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8").strip()
+    return "1.0.0"
+
+
 def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
     snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
     run_id = str(current_run.get("run_id") or "")
-    if snapshot and run_id:
+    change_set = str(current_run.get("change_set_sha256") or "")
+    if not change_set and current_run.get("manifest"):
+        try:
+            from _vnext_common import read_json
+            manifest_p = Path(str(current_run["manifest"]))
+            if manifest_p.is_file():
+                change_set = str(read_json(manifest_p).get("change_set_sha256") or "")
+        except Exception:
+            pass
+    if snapshot and run_id and change_set:
         try:
             from evidence_store import EvidenceStore
-            from final_verifier import ALLOWED_PRODUCERS
-            from _harness_version import HARNESS_VERSION
+            from final_verifier import _validate_artifact
             store = EvidenceStore(state_root)
-            record = store.read(snapshot, run_id, gate_name)
-            if not record or str(record.get("status") or "") != "PASS":
-                return False
-            producer = str(record.get("producer") or "")
-            if producer not in ALLOWED_PRODUCERS.get(gate_name, set()):
-                return False
-            harness_ver = str(record.get("harness_version") or "")
-            if harness_ver and harness_ver != HARNESS_VERSION:
-                return False
-            return True
+            harness_version = _read_harness_version(REPO)
+            record, error = _validate_artifact(store, snapshot, change_set, run_id, gate_name, harness_version)
+            return error is None
         except Exception:
             return False
     return False
@@ -210,6 +222,14 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
                     err=True,
                 )
                 return EXIT_ENV
+            from delivery_manifest import build_manifest
+            current_snapshot = str(build_manifest(REPO).get("delivery_snapshot_sha256") or "")
+            if not current_snapshot or current_snapshot != snapshot:
+                live_print(
+                    f"[FAIL] Stale delivery snapshot in current-run ({snapshot} != active {current_snapshot}).",
+                    err=True,
+                )
+                return EXIT_ENV
             run_id = str(current_run.get("run_id") or "")
             expected_run_id = str(active.get("verification_run_id") or "")
             if not run_id or (expected_run_id and run_id != expected_run_id):
@@ -227,6 +247,9 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
                 return EXIT_ENV
             policy = read_json(policy_path)
             required_gates = set(policy.get("gates") or [])
+            if not required_gates:
+                live_print("[FAIL] Verification policy defines no required gates.", err=True)
+                return EXIT_ENV
             if "preflight" in required_gates and not _gate_passed(state, current_run, "preflight"):
                 live_print("[FAIL] Pipeline order violation: preflight_check must pass before device deployment.", err=True)
                 return EXIT_ENV

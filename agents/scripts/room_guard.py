@@ -37,9 +37,19 @@ JAVA_VAR_RE = re.compile(
 )
 
 
-def _extract_add_migrations_blocks(text: str) -> list[str]:
+def _extract_add_migrations_blocks(text: str, target_db_class: str = "") -> list[str]:
     blocks = []
     for m in re.finditer(r"\baddMigrations\s*\(", text):
+        if target_db_class:
+            preceding = text[: m.start()]
+            builder_matches = list(
+                re.finditer(
+                    r"databaseBuilder\s*\([^,]+,\s*([A-Za-z0-9_]+)(?:::class|\.class)",
+                    preceding,
+                )
+            )
+            if builder_matches and builder_matches[-1].group(1) != target_db_class:
+                continue
         start = m.end()
         depth = 1
         i = start
@@ -164,15 +174,11 @@ def parse_database_source(text: str, rel: str = "", repo: Path | None = None) ->
     header = db_ann.group(1) if db_ann else text.split("abstract class", 1)[0]
     raw_entities = frozenset(ENTITY_REF_RE.findall(header))
     entities = resolve_all_entity_types(raw_entities, root)
-    manual_migrations = set(
-        (int(a), int(b)) for a, b in MIGRATION_RE.findall(text)
-    )
-    auto_migrations = set(
+    auto_migrations = frozenset(
         (int(a), int(b)) for a, b in AUTO_MIGRATION_RE.findall(text)
     )
-    all_migrations = frozenset(manual_migrations | auto_migrations)
     registered: set[str] = set()
-    add_blocks = _extract_add_migrations_blocks(text)
+    add_blocks = _extract_add_migrations_blocks(text, target_db_class=class_name)
     for block in add_blocks:
         for token in IDENT_RE.findall(block):
             if token not in ADD_MIGRATIONS_KW:
@@ -182,7 +188,7 @@ def parse_database_source(text: str, rel: str = "", repo: Path | None = None) ->
         class_name=class_name,
         version=version,
         entity_names=entities,
-        migrations=all_migrations,
+        migrations=auto_migrations,
         registered=frozenset(registered),
         has_add_migrations=bool(add_blocks) or bool(auto_migrations),
         destructive=bool(DESTRUCTIVE_RE.search(text)),
@@ -337,7 +343,7 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
             target_start = old_ver
         elif "candidate migration files changed" in why and new_ver is not None and new_ver > 1:
             should_check_migrations = True
-            target_start = 1
+            target_start = None
 
         if should_check_migrations:
             all_migs = set(new_decl.migrations)
@@ -359,7 +365,7 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
                     candidate_texts.append(c_text)
                     for a, b in AUTO_MIGRATION_RE.findall(c_text):
                         all_migs.add((int(a), int(b)))
-                    add_blocks = _extract_add_migrations_blocks(c_text)
+                    add_blocks = _extract_add_migrations_blocks(c_text, target_db_class=new_decl.class_name)
                     if add_blocks:
                         has_add_migs = True
                         for block in add_blocks:
@@ -372,48 +378,67 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
             body = path.read_text(encoding="utf-8", errors="replace")
             all_bodies = [body] + candidate_texts
 
-            unregistered_candidates: list[tuple[str, int, int]] = []
-            # Check for migration variables in candidate files and credit registered ones
-            for b_text in all_bodies:
-                var_matches = KT_VAR_RE.findall(b_text) + JAVA_VAR_RE.findall(b_text)
-                for var_name, a_str, b_str in var_matches:
-                    edge = (int(a_str), int(b_str))
-                    if target_start <= edge[0] < edge[1] <= new_ver:
-                        if var_name in registered_tokens or var_name in str(new_decl.registered):
-                            all_migs.add(edge)
-                        else:
-                            unregistered_candidates.append((var_name, edge[0], edge[1]))
-
-                # Check named convention MIGRATION_A_B
-                for a_str, b_str in re.findall(r"\bMIGRATION_(\d+)_(\d+)\b", b_text):
-                    edge = (int(a_str), int(b_str))
-                    if target_start <= edge[0] < edge[1] <= new_ver:
-                        c_name = f"MIGRATION_{edge[0]}_{edge[1]}"
-                        if c_name in registered_tokens or c_name in str(new_decl.registered):
-                            all_migs.add(edge)
-                        else:
-                            unregistered_candidates.append((c_name, edge[0], edge[1]))
-
-                # Direct inline Migration(a, b) calls inside addMigrations
-                for add_block in _extract_add_migrations_blocks(b_text):
-                    for a_str, b_str in MIGRATION_RE.findall(add_block):
-                        all_migs.add((int(a_str), int(b_str)))
-
-            if not is_migration_path_covered(target_start, new_ver, frozenset(all_migs)):
-                if unregistered_candidates:
-                    for var_name, a_val, b_val in unregistered_candidates:
-                        if not any(var_name in f for f in failures):
-                            failures.append(
-                                f"{new_decl.rel}: migration variable '{var_name}' ({a_val} -> {b_val}) is defined but not registered in addMigrations(...)."
-                            )
+            if target_start is None:
+                all_candidate_edges: set[tuple[int, int]] = set()
+                for b_text in all_bodies:
+                    for _, a_str, b_str in KT_VAR_RE.findall(b_text) + JAVA_VAR_RE.findall(b_text):
+                        all_candidate_edges.add((int(a_str), int(b_str)))
+                    for a_str, b_str in re.findall(r"\bMIGRATION_(\d+)_(\d+)\b", b_text):
+                        all_candidate_edges.add((int(a_str), int(b_str)))
+                    for a_str, b_str in AUTO_MIGRATION_RE.findall(b_text):
+                        all_candidate_edges.add((int(a_str), int(b_str)))
+                    for add_block in _extract_add_migrations_blocks(b_text, target_db_class=new_decl.class_name):
+                        for a_str, b_str in MIGRATION_RE.findall(add_block):
+                            all_candidate_edges.add((int(a_str), int(b_str)))
+                relevant_edges = [edge for edge in all_candidate_edges if edge[1] <= new_ver]
+                if relevant_edges:
+                    target_start = min(edge[0] for edge in relevant_edges)
                 else:
+                    should_check_migrations = False
+
+            if should_check_migrations and target_start is not None:
+                unregistered_candidates: list[tuple[str, int, int]] = []
+                # Check for migration variables in candidate files and credit registered ones
+                for b_text in all_bodies:
+                    var_matches = KT_VAR_RE.findall(b_text) + JAVA_VAR_RE.findall(b_text)
+                    for var_name, a_str, b_str in var_matches:
+                        edge = (int(a_str), int(b_str))
+                        if target_start <= edge[0] < edge[1] <= new_ver:
+                            if var_name in registered_tokens or var_name in str(new_decl.registered):
+                                all_migs.add(edge)
+                            else:
+                                unregistered_candidates.append((var_name, edge[0], edge[1]))
+
+                    # Check named convention MIGRATION_A_B
+                    for a_str, b_str in re.findall(r"\bMIGRATION_(\d+)_(\d+)\b", b_text):
+                        edge = (int(a_str), int(b_str))
+                        if target_start <= edge[0] < edge[1] <= new_ver:
+                            c_name = f"MIGRATION_{edge[0]}_{edge[1]}"
+                            if c_name in registered_tokens or c_name in str(new_decl.registered):
+                                all_migs.add(edge)
+                            else:
+                                unregistered_candidates.append((c_name, edge[0], edge[1]))
+
+                    # Direct inline Migration(a, b) calls inside addMigrations
+                    for add_block in _extract_add_migrations_blocks(b_text, target_db_class=new_decl.class_name):
+                        for a_str, b_str in MIGRATION_RE.findall(add_block):
+                            all_migs.add((int(a_str), int(b_str)))
+
+                if not is_migration_path_covered(target_start, new_ver, frozenset(all_migs)):
+                    if unregistered_candidates:
+                        for var_name, a_val, b_val in unregistered_candidates:
+                            if not any(var_name in f for f in failures):
+                                failures.append(
+                                    f"{new_decl.rel}: migration variable '{var_name}' ({a_val} -> {b_val}) is defined but not registered in addMigrations(...)."
+                                )
+                    else:
+                        failures.append(
+                            f"{new_decl.rel}: version {target_start} -> {new_ver} but valid migration path is missing."
+                        )
+                if not has_add_migs:
                     failures.append(
-                        f"{new_decl.rel}: version {target_start} -> {new_ver} but valid migration path is missing."
+                        f"{new_decl.rel}: version bumped but addMigrations(...) or autoMigrations is missing."
                     )
-            if not has_add_migs:
-                failures.append(
-                    f"{new_decl.rel}: version bumped but addMigrations(...) or autoMigrations is missing."
-                )
 
 
 

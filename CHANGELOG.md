@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.16] - 2026-09-12
+
+### Device Prerequisite Verification, Checked-In Source Preservation, Room Builder Scoping, and Remote Release Immutability
+
+- **Device Prerequisite & Snapshot Freshness Verification (N01, `run_device.py`)**: Replaced broken module import with `_read_harness_version()` referencing `agents/VERSION`, integrated `final_verifier._validate_artifact` for full gate evidence validation, verified active `delivery_snapshot_sha256` freshness to fail closed on stale snapshots, and rejected empty verification policy gate definitions.
+- **Source-Set Generated Directory Allowance (N02, `pre_tool_safety.py`, `_android_scenarios_selftest.py`)**: Refined `EPHEMERAL_GENERATED_RE` to strictly deny ephemeral build outputs (`build/generated/`, `build/intermediates/`, and repo-root `generated/(source|ksp|kapt)/`) while permitting checked-in source-tree directories such as `app/src/main/generated/ksp/`.
+- **Manual Room Migration Registration Enforcement (N03, `room_guard.py`)**: Removed manual migrations declared in database class files from pre-registered `migrations`, requiring manual migrations to be explicitly registered in `addMigrations(...)` or inline builder calls to pass.
+- **DatabaseBuilder Scoping & Unchanged Version Migration Spanning (N04, `room_guard.py`)**: Scoped `addMigrations(...)` blocks to the specific database class declared in preceding `Room.databaseBuilder(...)` invocations to prevent false credit in shared DI modules. Derived `target_start` dynamically from candidate migration edges when candidate migration files are modified without incrementing the database schema version.
+- **Strict Remote Release Tag Immutability (N05, `release_version.py`)**: Made remote origin tag preflight and GitHub release verification unconditional even when `--allow-tag-overwrite` is passed. Disallowed `-f` flag on remote tag pushes, and removed destructive release overwrite fallbacks.
+
 ## [1.0.15] - 2026-09-12
 
 ### Structural Lexical Scoping, Manifest Floor Precision, Room Isolation, and Release Safety Hardening

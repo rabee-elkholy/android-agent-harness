@@ -36,7 +36,7 @@ PROTECTED_ROOTS = (
     ".agents", "agents/scripts", "agents/state", ".harness-setup/ownership-v1.json",
 )
 EPHEMERAL_GENERATED_RE = re.compile(
-    r"(?:^|/)build/(?:generated|intermediates)/|(?:^|/)generated/(?:source|ksp|kapt)/",
+    r"(?:^|/)build/(?:generated|intermediates)/|^generated/(?:source|ksp|kapt)/",
     re.I,
 )
 

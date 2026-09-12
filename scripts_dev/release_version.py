@@ -254,31 +254,28 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     tag_name = f"v{target_version}"
-    if not args.allow_tag_overwrite:
-        if tag_exists_locally(tag_name):
-            print(f"[ERROR] Tag '{tag_name}' already exists locally. Release tags are immutable. Increment the patch version.")
+    if not args.dry_run and not args.no_push:
+        remote_tag_state = tag_remote_status(tag_name)
+        if remote_tag_state == "PRESENT":
+            print(f"[ERROR] Tag '{tag_name}' already exists on remote origin. Release tags are immutable. Increment the patch version.")
             return 1
-        if not args.dry_run and not args.no_push:
-            remote_tag_state = tag_remote_status(tag_name)
-            if remote_tag_state == "PRESENT":
-                print(f"[ERROR] Tag '{tag_name}' already exists on remote origin. Release tags are immutable. Increment the patch version.")
-                return 1
-            elif remote_tag_state == "UNKNOWN":
-                print(f"[ERROR] Could not reliably verify remote tag status for '{tag_name}' on origin. Preflight check failed closed.")
-                return 1
+        elif remote_tag_state == "UNKNOWN":
+            print(f"[ERROR] Could not reliably verify remote tag status for '{tag_name}' on origin. Preflight check failed closed.")
+            return 1
 
-            gh_release_state = github_release_status(tag_name)
-            if gh_release_state == "PRESENT":
-                print(f"[ERROR] GitHub release '{tag_name}' already exists. Published releases are immutable. Increment the patch version.")
-                return 1
-            elif gh_release_state == "UNKNOWN":
-                print(f"[ERROR] Could not reliably verify GitHub release status for '{tag_name}'. Preflight check failed closed.")
-                return 1
-    else:
         gh_release_state = github_release_status(tag_name)
         if gh_release_state == "PRESENT":
-            print(f"[ERROR] Cannot overwrite published GitHub release '{tag_name}'. Release tags are immutable once published.")
+            print(f"[ERROR] GitHub release '{tag_name}' already exists. Published releases are immutable. Increment the patch version.")
             return 1
+        elif gh_release_state == "UNKNOWN":
+            print(f"[ERROR] Could not reliably verify GitHub release status for '{tag_name}'. Preflight check failed closed.")
+            return 1
+
+    if tag_exists_locally(tag_name):
+        if not args.allow_tag_overwrite:
+            print(f"[ERROR] Tag '{tag_name}' already exists locally. Release tags are immutable. Increment the patch version.")
+            return 1
+        print(f"[!] Warning: Local tag '{tag_name}' exists but origin was verified ABSENT. Overwriting local tag per --allow-tag-overwrite.")
 
     print(f"[*] Release target: v{target_version} (current: v{current_version})")
     if args.dry_run:
@@ -412,14 +409,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print("  + Pushing commit and tag to GitHub...")
     run_cmd(["git", "push", "origin", "main"])
-    push_tag_cmd = ["git", "push", "origin", tag_name, "-f"] if args.allow_tag_overwrite else ["git", "push", "origin", tag_name]
+    push_tag_cmd = ["git", "push", "origin", tag_name]
     run_cmd(push_tag_cmd)
     print(f"  [SUCCESS] Pushed {tag_name} to origin.")
 
-    # Create/update GitHub Release via gh CLI if installed
+    # Create GitHub Release via gh CLI if installed
     if shutil.which("gh"):
         print("  + Publishing GitHub Release via gh CLI...")
-        if not args.allow_tag_overwrite and github_release_exists(tag_name):
+        if github_release_exists(tag_name):
             print(f"[FAIL] GitHub Release '{tag_name}' already exists. Release versions are immutable. Increment the patch version.")
             return 1
 
@@ -439,24 +436,8 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         if gh_proc.returncode != 0 and "already exists" in gh_proc.stderr:
-            if not args.allow_tag_overwrite:
-                print(f"[FAIL] GitHub Release '{tag_name}' already exists. Release versions are immutable. Increment the patch version.")
-                return 1
-            gh_proc = subprocess.run(
-                [
-                    "gh",
-                    "release",
-                    "edit",
-                    tag_name,
-                    "--title",
-                    title,
-                    "--notes",
-                    notes,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-            )
+            print(f"[FAIL] GitHub Release '{tag_name}' already exists. Release versions are immutable. Increment the patch version.")
+            return 1
         if gh_proc.returncode == 0:
             print(f"  [SUCCESS] GitHub Release published: https://github.com/rabee-elkholy/android-agent-harness/releases/tag/{tag_name}")
         else:

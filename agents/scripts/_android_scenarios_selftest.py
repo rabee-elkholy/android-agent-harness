@@ -939,11 +939,14 @@ class AndroidScenariosSelftest(unittest.TestCase):
             for path in [
                 "app/build/generated/ksp/src/Foo.kt",
                 "src/androidApp/build/generated/ksp/Foo.kt",
-                "app/src/main/generated/ksp/Foo.kt",
+                "generated/ksp/Foo.kt",
             ]:
                 safe, msg, _ = pre_tool_safety._safe_target(path)
                 self.assertFalse(safe, f"Path {path} should be rejected as generated build output.")
                 self.assertIn("Cannot mutate generated build output", msg)
+
+            safe, _, _ = pre_tool_safety._safe_target("app/src/main/generated/ksp/Foo.kt")
+            self.assertTrue(safe, "Source path app/src/main/generated/ksp/Foo.kt should be allowed.")
 
     # --- Scenario R04: Room Multi-DB, Java, Inline, and Broken Registration ---
     def test_scenario_r04_room_hardening_matrix(self) -> None:
