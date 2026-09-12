@@ -1030,10 +1030,8 @@ class AndroidScenariosSelftest(unittest.TestCase):
             code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
             self.assertEqual(EXIT_ENV, code)
 
-        # 2. Restore policy, write only preflight evidence (missing unit_tests)
-        policy_data["gates"] = original_gates
-        policy_data["policy_sha256"] = canonical_sha256({k: v for k, v in policy_data.items() if k != "policy_sha256"})
-        atomic_write_json(Path(current["policy"]), policy_data)
+        # A self-consistent hash must not authorize an omitted prerequisite.
+        # Valid preflight evidence ensures missing preflight cannot mask the defect.
         harness_version = (KIT / "agents/VERSION").read_text().strip()
         EvidenceStore(state).write(
             snapshot=current["delivery_snapshot_sha256"],
@@ -1045,9 +1043,21 @@ class AndroidScenariosSelftest(unittest.TestCase):
             status="PASS",
             evidence={},
         )
-        with mock.patch.object(run_device, "REPO", self.repo):
+        policy_data["policy_sha256"] = canonical_sha256({k: v for k, v in policy_data.items() if k != "policy_sha256"})
+        atomic_write_json(Path(current["policy"]), policy_data)
+        with mock.patch.object(run_device, "REPO", self.repo), mock.patch.object(run_device, "live_print") as output:
             code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
             self.assertEqual(EXIT_ENV, code)
+            self.assertIn("does not match deterministic policy evaluation", str(output.call_args_list))
+
+        # 2. Restore policy, write only preflight evidence (missing unit_tests)
+        policy_data["gates"] = original_gates
+        policy_data["policy_sha256"] = canonical_sha256({k: v for k, v in policy_data.items() if k != "policy_sha256"})
+        atomic_write_json(Path(current["policy"]), policy_data)
+        with mock.patch.object(run_device, "REPO", self.repo), mock.patch.object(run_device, "live_print") as output:
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+            self.assertEqual(EXIT_ENV, code)
+            self.assertIn("run_tests_gate must pass", str(output.call_args_list))
 
         # 3. Supply valid unit_tests evidence -> prerequisites pass (None)
         EvidenceStore(state).write(
@@ -1096,4 +1106,3 @@ class AndroidScenariosSelftest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

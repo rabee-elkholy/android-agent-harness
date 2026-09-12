@@ -1,7 +1,7 @@
 ---
 name: test-driven-development
 description: Use when developing business logic, UseCases, Repositories, ViewModels, or reproducing and fixing bugs using strict Red-Green-Refactor cycles. Requires writing and proving a failing test before writing implementation code.
-version: 1.0.0
+version: 1.1.0
 kernel-major: 1
 ---
 
@@ -15,15 +15,12 @@ Production code is only written in response to a failing test that defines its r
 ## 2. Four-Phase TDD Protocol
 
 ### Phase 1: RED (Write the Failing Test)
-- Author a concise, focused unit test in `src/test/java/.../*Test.kt`.
+- Author a concise, focused test in the owning module's existing test source set, using its configured runner.
 - Test names must clearly describe the scenario and expected outcome (e.g. `loginViewModel_invalidPassword_emitsValidationError()`).
 - Capture both happy paths and boundary/error cases.
 
 ### Phase 2: PROVE FAILURE (Empirical Verification)
-- Execute the targeted unit test task:
-  ```bash
-  python .agents/scripts/run_gradle_task.py :app:testDebugUnitTest --tests "com.package.FeatureTest.testName"
-  ```
+- Resolve the exact module/variant test task from project configuration, then execute it through `python .agents/scripts/run_gradle_task.py`. Use a test filter only if that task supports it; do not assume `:app`, debug, or a JVM source set.
 - Verify that the test fails **for the expected assertion reason** (not due to a compilation failure or configuration error).
 
 ### Phase 3: GREEN (Minimal Implementation)
@@ -45,3 +42,5 @@ Production code is only written in response to a failing test that defines its r
 2. **Coroutines & Turbine**: Use `runTest` with `StandardTestDispatcher` or `app.cash.turbine:turbine` for testing Flows and Channels.
 3. **Mock Isolation**: Use pure Fakes or explicit `coEvery`/`every` definitions with `relaxed = false` for critical domain assertions. Never leak mock state across tests; reset in `@After`.
 4. **Zero Placeholder Tests**: Never commit empty test stubs or `TODO()` test bodies.
+5. **Test the Break**: State which plausible defect the test catches. Derive expected outcomes independently from the requirement or a reviewed fixture, never by calling or copying the implementation under test. Assert behavior rather than source-text fragments unless text itself is the public contract.
+6. **Positive Neighbor**: Pair a rejection regression with a nearby valid case when a guard could otherwise reject everything. Check the intended rejection reason so an import, setup, or unrelated validation failure cannot make the test pass. Do not impose an assertion-count quota.

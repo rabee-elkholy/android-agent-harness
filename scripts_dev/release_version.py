@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,8 +88,8 @@ def update_version_files(new_version: str) -> list[str]:
     citation_file = ROOT / "CITATION.cff"
     if citation_file.is_file():
         text = citation_file.read_text(encoding="utf-8")
-        text = re.sub(r'version:\s*\S+', f'version: {new_version}', text)
-        text = re.sub(r'date-released:\s*\S+', f'date-released: {today}', text)
+        text = re.sub(r'^version:[ \t]*\S+', f'version: {new_version}', text, flags=re.MULTILINE)
+        text = re.sub(r'^date-released:[ \t]*\S+', f'date-released: {today}', text, flags=re.MULTILINE)
         citation_file.write_text(text, encoding="utf-8", newline="\n")
         logs.append(f"Updated CITATION.cff -> version: {new_version}, date-released: {today}")
 
@@ -201,6 +204,74 @@ def github_release_exists(tag_name: str) -> bool:
 
 
 
+def wait_for_workflow(workflow: str, sha: str, *, branch: str = "main", timeout: float = 1800) -> bool:
+    """Require a successful completed run for the exact commit and ref."""
+    deadline = time.monotonic() + timeout
+    while True:
+        result = run_cmd([
+            "gh", "run", "list", "--workflow", workflow, "--commit", sha,
+            "--branch", branch, "--event", "push", "--limit", "20",
+            "--json", "databaseId,headSha,status,conclusion",
+        ], check=False)
+        if result.returncode != 0:
+            print(f"[FAIL] Cannot verify {workflow}: {result.stderr.strip()}")
+            return False
+        try:
+            runs = json.loads(result.stdout)
+            runs = [run for run in runs if run.get("headSha") == sha]
+            latest = max(runs, key=lambda run: int(run["databaseId"])) if runs else None
+        except (ValueError, TypeError, KeyError, AttributeError):
+            print(f"[FAIL] Invalid workflow response for {workflow}.")
+            return False
+        if latest and latest.get("status") == "completed":
+            if latest.get("conclusion") == "success":
+                return True
+            print(f"[FAIL] {workflow} concluded {latest.get('conclusion')} for {sha}.")
+            return False
+        if time.monotonic() >= deadline:
+            print(f"[FAIL] Timed out waiting for {workflow} on {sha}.")
+            return False
+        print(f"[WAIT] {workflow} for {sha[:12]} is pending.", flush=True)
+        time.sleep(min(15, max(0, deadline - time.monotonic())))
+
+
+def verify_packaging() -> bool:
+    """Build in an owned temporary copy without deleting checkout artifacts."""
+    with tempfile.TemporaryDirectory(prefix="harness-release-build-") as directory:
+        root = Path(directory) / "source"
+        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
+            ".git", ".agents", ".harness-*", "dist", "build", "*.egg-info",
+            "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+        ))
+        built = run_cmd([sys.executable, "-m", "build"], cwd=root, check=False)
+        if built.returncode != 0:
+            print(f"[FAIL] Package build failed: {built.stderr}")
+            return False
+        artifacts = sorted(str(path) for path in (root / "dist").glob("*") if path.is_file())
+        if not artifacts:
+            print("[FAIL] Packaging produced no distributions.")
+            return False
+        checked = run_cmd([sys.executable, "-m", "twine", "check", *artifacts], cwd=root, check=False)
+        if checked.returncode != 0:
+            print(f"[FAIL] Package metadata validation failed: {checked.stdout}\n{checked.stderr}")
+            return False
+    return True
+
+
+def publish_release(tag: str, title: str, notes: str) -> bool:
+    with tempfile.TemporaryDirectory(prefix="harness-release-notes-") as directory:
+        path = Path(directory) / "notes.md"
+        path.write_text(notes, encoding="utf-8", newline="\n")
+        result = run_cmd([
+            "gh", "release", "create", tag, "--verify-tag", "--title", title,
+            "--notes-file", str(path),
+        ], check=False)
+    if result.returncode != 0:
+        print(f"[FAIL] GitHub publication failed; tag may already exist. Inspect remote state before retrying: {result.stderr.strip()}")
+        return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Unified one-command release automation for android-agent-harness."
@@ -221,12 +292,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-push",
         action="store_true",
-        help="Commit and tag locally, but skip git push and GitHub release publication.",
+        help="Prepare a local commit without tagging, pushing, or publishing; tags require CI.",
     )
     parser.add_argument(
         "--skip-tests",
         action="store_true",
-        help="Skip executing _hook_selftest.py.",
+        help="Skip local tests for dry-run only; publication requires the complete suite.",
     )
     parser.add_argument(
         "--allow-tag-overwrite",
@@ -235,6 +306,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.skip_tests and not args.dry_run:
+        print("[ERROR] --skip-tests is allowed only with --dry-run.")
+        return 1
+    if not args.dry_run and not all((pin_urls, fill_checksums, generate_checksums, validate_release)):
+        print("[ERROR] Required release preparation or validation tooling is unavailable.")
+        return 1
     current_version = read_current_version()
 
     # Determine target version
@@ -320,8 +397,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Step 4: Run Tests
     if not args.skip_tests:
-        print("\n[3/5] Running hook selftest suite...")
-        selftest_cmd = [sys.executable, str(ROOT / "agents" / "scripts" / "_hook_selftest.py")]
+        print("\n[3/5] Running complete deterministic selftest suite...")
+        selftest_cmd = [sys.executable, str(ROOT / "harness_cli.py"), "selftest", "--kit", str(ROOT)]
         env = dict(os.environ)
         env["_IN_HOOK_SELFTEST"] = "1"
         res = subprocess.run(selftest_cmd, cwd=ROOT, capture_output=True, text=True, env=env)
@@ -330,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
             print(res.stdout[-1500:])
             print(res.stderr[-1500:])
             return 1
-        print("  [SUCCESS] All hook self-tests passed (0 failures).")
+        print("  [SUCCESS] All deterministic self-tests passed (0 failures).")
 
     if validate_release and not args.dry_run:
         print("  + Running validate_release suite...")
@@ -342,25 +419,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("  [SUCCESS] Release validation passed.")
 
-        # Verify PyPI build & metadata
-        try:
-            import build as _
-            import twine as _
-            print("  + Verifying distribution packaging build and twine check...")
-            res_build = subprocess.run([sys.executable, "-m", "build"], cwd=ROOT, capture_output=True, text=True)
-            if res_build.returncode != 0:
-                print(f"[FAIL] Package build failed:\n{res_build.stderr}")
-                return 1
-            res_twine = subprocess.run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=ROOT, capture_output=True, text=True)
-            if res_twine.returncode != 0 or "FAILED" in res_twine.stdout:
-                print(f"[FAIL] Twine check failed:\n{res_twine.stdout}\n{res_twine.stderr}")
-                return 1
-            print("  [SUCCESS] Distribution package builds cleanly and passes twine check.")
-        except ImportError:
-            print("  [i] 'build' or 'twine' not installed; skipping local packaging verification.")
-        finally:
-            for d in ["dist", "build", "android_agent_harness.egg-info"]:
-                shutil.rmtree(ROOT / d, ignore_errors=True)
+        if not verify_packaging():
+            return 1
+
     else:
         print("\n[3/5] Skipping tests (--skip-tests).")
 
@@ -401,52 +462,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[FAIL] Git commit failed with code {res_commit.returncode}:\n{combined_commit_out.strip()}")
         return 1
 
-    tag_name = f"v{target_version}"
-    tag_cmd = ["git", "tag", "-f", tag_name] if args.allow_tag_overwrite else ["git", "tag", tag_name]
-    res_tag = run_cmd(tag_cmd)
-    print(f"  + Tagged: {tag_name}")
-
+    sha = run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip()
     if args.no_push:
-        print(f"\n[OK] Release {tag_name} prepared locally (--no-push).")
+        print(f"[OK] Release commit {sha} prepared locally; tagging requires successful CI.")
         return 0
-
-    print("  + Pushing commit and tag to GitHub...")
-    run_cmd(["git", "push", "origin", "main"])
-    push_tag_cmd = ["git", "push", "origin", tag_name]
-    run_cmd(push_tag_cmd)
-    print(f"  [SUCCESS] Pushed {tag_name} to origin.")
-
-    # Create GitHub Release via gh CLI if installed
-    if shutil.which("gh"):
-        print("  + Publishing GitHub Release via gh CLI...")
-        if github_release_exists(tag_name):
-            print(f"[FAIL] GitHub Release '{tag_name}' already exists. Release versions are immutable. Increment the patch version.")
-            return 1
-
-        gh_proc = subprocess.run(
-            [
-                "gh",
-                "release",
-                "create",
-                tag_name,
-                "--title",
-                title,
-                "--notes",
-                notes,
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        if gh_proc.returncode != 0 and "already exists" in gh_proc.stderr:
-            print(f"[FAIL] GitHub Release '{tag_name}' already exists. Release versions are immutable. Increment the patch version.")
-            return 1
-        if gh_proc.returncode == 0:
-            print(f"  [SUCCESS] GitHub Release published: https://github.com/rabee-elkholy/android-agent-harness/releases/tag/{tag_name}")
-        else:
-            print(f"  [!] gh release warning: {gh_proc.stderr.strip()}")
-    else:
-        print("  [!] gh CLI not found on PATH. Release tag pushed, publish release notes via GitHub web UI.")
+    run_cmd(["git", "push", "origin", "HEAD:refs/heads/main"])
+    if not wait_for_workflow("ci.yml", sha):
+        return 1
+    if run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip() != sha:
+        print("[FAIL] HEAD changed during verification; release stopped.")
+        return 1
+    run_cmd(["git", "tag", tag_name, sha])
+    run_cmd(["git", "push", "origin", f"refs/tags/{tag_name}"])
+    if not wait_for_workflow("release-check.yml", sha, branch=tag_name):
+        return 1
+    if github_release_status(tag_name) != "ABSENT":
+        print("[FAIL] Release exists or its absence could not be verified.")
+        return 1
+    if not publish_release(tag_name, title, notes):
+        return 1
 
 
     print(f"\n==================================================")

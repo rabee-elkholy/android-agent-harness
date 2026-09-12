@@ -5,6 +5,21 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.18] - 2026-09-12
+
+### Stability-First Guidance, Safe Upgrades, and Verified Releases
+
+- Correct Compose stability guidance and reviewer prompts: annotations require valid contracts, recomposition changes require diagnosis, and derived state should change less often than its inputs.
+- Resolve locales, modules, source sets, and build variants from project configuration instead of assuming Arabic/English, an application module, or debug builds. Keep previews focused on changed states and supported tooling.
+- Strengthen test-quality guidance with independent expectations, intended rejection reasons, and nearby valid cases. Keep debugging hypothesis-driven and re-review scoped to fixes and resulting regressions under central policy.
+- Extend device prerequisite regression coverage to reject an omitted unit gate even after the policy hash is recomputed and valid preflight evidence exists, while preserving acceptance of complete evidence.
+- Add a stability-first dogfooding guide without changing the runtime architecture or adding workflow stages.
+- Reject incomplete FINDINGS reports instead of silently approving delivery.
+- Refresh unchanged default references on upgrade while preserving project tailoring and reporting references that differ from the new defaults.
+- Validate complete release checksum inventories and independent Citation File Format metadata; preserve `cff-version` when bumping the software version.
+- Build release packages in an owned temporary workspace, preserving existing checkout artifacts. Require the complete selftest suite and successful CI for the exact commit before tagging, plus successful tag validation before publication. PyPI uploads independently enforce the same checks.
+- Return failure when GitHub publication fails and pass release notes through a UTF-8 file. Local-only release preparation creates a commit without a tag; skipping tests is limited to dry runs.
+
 ## [1.0.17] - 2026-09-12
 
 ### Deterministic Device Policy Artifact Verification & Prerequisite Hardening

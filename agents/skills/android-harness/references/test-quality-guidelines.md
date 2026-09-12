@@ -10,6 +10,9 @@ This reference defines the quality standards enforced by `test-quality-reviewer-
    - Every test case must assert observable state, domain outcomes, or emitted events.
    - Avoid vacuous assertions (e.g. `assertNotNull(viewModel)` with zero subsequent state verification, or `assertTrue(true)`).
    - Verify both success and error state transitions (e.g. `State.Loading` -> `State.Success` / `State.Error`).
+   - Identify the real defect each test would catch. Expected results must come from the requirement or an independently reviewed fixture, not the implementation under test.
+   - For a rejection guard, include a nearby valid case and assert the intended failure reason. An unrelated setup/import error must not count as proof of correct rejection.
+   - Prefer observable behavior over source-text assertions unless text is the contract. No fixed assertion count is required.
 
 2. **Fakes over Fragile Mocks**:
    - Prefer in-memory fakes for repositories and data sources over deeply chained `Mockito.when()` or `every {}` stubs.

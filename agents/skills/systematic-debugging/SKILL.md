@@ -1,7 +1,7 @@
 ---
 name: systematic-debugging
 description: Use when diagnosing Android app bugs, crashes, regressions, or unexpected UI behavior. Requires explicit evidence and hypotheses before code changes.
-version: 1.1.0
+version: 1.2.0
 kernel-major: 1
 ---
 
@@ -17,6 +17,8 @@ Do NOT guess code fixes. Mandatory sequence for ALL bug, crash, or regression fi
 2. **Formulate Explicit Hypothesis**: Identify the most likely root cause at the producer level.
 3. **Plan Targeted Mutation**: Make the minimal fix directly addressing the root cause.
 4. **Verify**: Prove the original failure is resolved and no regressions are introduced.
+
+At a suspected component boundary, compare the input, output, state, and configuration of the working and broken paths. Test one falsifiable hypothesis at a time. If fixes repeatedly fail, revisit the first divergence and the hypothesis before adding another patch; preserve the observations that disproved earlier hypotheses. Keep this within the approved scope and existing review budget.
 
 ## 2. Prohibition of Symptom Swallowing
 - Never resolve bugs by swallowing exceptions, adding empty `try-catch`, or returning fallback `0`/`null`/dummy data.

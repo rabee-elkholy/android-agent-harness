@@ -612,7 +612,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_vnext_selftest.py", "_hook_selftest.py", "_security_selftest.py",
             "_zoho_selftest.py", "_baseline_selftest.py", "_graph_selftest.py",
             "_adb_core_selftest.py", "_env_codes_selftest.py", "_performance_selftest.py",
-            "_android_scenarios_selftest.py",
+            "_android_scenarios_selftest.py", "_release_safety_selftest.py",
         )
         for script in scripts:
             code = run_engine_script(kit, script, [])

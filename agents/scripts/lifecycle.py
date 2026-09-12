@@ -202,13 +202,22 @@ def subprocess_git(repo: Path, *args: str) -> str:
     return (proc.stdout or "").strip()
 
 
-def _copy_preserved(repo: Path, recovery: Path) -> list[str]:
+def _copy_preserved(repo: Path, recovery: Path, *, refresh_defaults: bool = False) -> list[str]:
     preserved: list[str] = []
+    defaults = {}
+    if refresh_defaults:
+        inventory = repo / ".agents/release_checksums.json"
+        if inventory.is_file():
+            defaults = read_json(inventory).get("files") or {}
     for pattern in PRESERVE_GLOBS:
         for source in repo.glob(pattern):
             if not source.is_file():
                 continue
             rel = source.relative_to(repo)
+            if refresh_defaults and rel.as_posix().startswith(".agents/skills/android-harness/references/"):
+                original_hash = defaults.get("agents/" + source.relative_to(repo / ".agents").as_posix())
+                if original_hash and _hash_or_none(source) == original_hash:
+                    continue
             target = recovery / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
@@ -424,7 +433,13 @@ def update(repo: Path, kit: Path) -> dict:
     before = _snapshot_files(repo, _candidate_adapter_paths(repo))
     backup = _backup(repo, ownership, "update", _candidate_adapter_paths(repo))
     preserve_root = repo / ".harness-recovery" / f"preserve-{uuid.uuid4().hex}"
-    preserved = _copy_preserved(repo, preserve_root)
+    preserved = _copy_preserved(repo, preserve_root, refresh_defaults=True)
+    reference_conflicts = [
+        rel for rel in preserved
+        if rel.startswith(".agents/skills/android-harness/references/")
+        and (kit / "agents" / Path(rel).relative_to(".agents")).is_file()
+        and _hash_or_none(repo / rel) != _hash_or_none(kit / "agents" / Path(rel).relative_to(".agents"))
+    ]
     old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
     journal = {
         "schema_version": 1,
@@ -432,6 +447,7 @@ def update(repo: Path, kit: Path) -> dict:
         "from_version": current_version,
         "to_version": target_version,
         "backup": str(backup),
+        "preserved_reference_conflicts": reference_conflicts,
         "started_at": utc_now(),
     }
     journal_path = repo / ".harness-setup" / "update-journal.json"
@@ -459,7 +475,9 @@ def update(repo: Path, kit: Path) -> dict:
         raise
     finally:
         shutil.rmtree(preserve_root, ignore_errors=True)
-    return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup), "app_snapshot_verified": True}
+    if reference_conflicts:
+        print("[WARN] Preserved project references differ from the updated defaults; reconcile guidance: " + ", ".join(reference_conflicts))
+    return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup), "app_snapshot_verified": True, "preserved_reference_conflicts": reference_conflicts}
 
 
 def replace_legacy(repo: Path, kit: Path) -> dict:

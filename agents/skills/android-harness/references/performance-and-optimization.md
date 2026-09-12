@@ -55,14 +55,8 @@ Peak performance, 60/120 FPS rendering, zero ANRs, and low battery consumption a
 ## 4. Jetpack Compose Recomposition & Jank Optimization
 
 ### State Stability & Immutability
-- Always annotate state data classes with `@Immutable` or `@Stable` from `androidx.compose.runtime`:
-  ```kotlin
-  @Immutable
-  data class FeatureState(
-      val items: List<ItemModel> = emptyList()
-  )
-  ```
-- Use `ImmutableList` (from `kotlinx.collections.immutable`) or wrap `List<T>` to guarantee Compose compiler skips unnecessary recompositions.
+- Diagnose actual recomposition costs before changing stability. Follow [Compose Inspector](../../compose-inspector/SKILL.md) for the annotation contract; absence of `@Immutable` or `@Stable` alone is not a defect.
+- A read-only `List<T>` or wrapper does not prove deep immutability. Check element types and mutation through aliases. Immutable collections may help when already supported by the project, but neither a wrapper nor an annotation guarantees skipping or fixes an incorrect state model.
 
 ### Allocations & Computations in Composables
 - **Never allocate objects inside `@Composable` functions without `remember`**:
@@ -73,7 +67,7 @@ Peak performance, 60/120 FPS rendering, zero ANRs, and low battery consumption a
   // GOOD:
   val formatter = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
   ```
-- **Use `derivedStateOf` for high-frequency state reads**:
+- **Use `derivedStateOf` when the result changes less often than its inputs**, such as this scroll threshold:
   ```kotlin
   val showScrollToTop by remember {
       derivedStateOf { listState.firstVisibleItemIndex > 5 }

@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: read
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -42,6 +44,22 @@ jobs:
 
       - name: Validate release integrity
         run: python scripts_dev/validate_release.py
+
+      - name: Require successful CI and tag validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os, subprocess, sys
+          sys.path.insert(0, "scripts_dev")
+          from release_version import wait_for_workflow
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if not wait_for_workflow("ci.yml", sha):
+              raise SystemExit("CI must pass for the release commit before uploading")
+          if not wait_for_workflow("release-check.yml", sha, branch=os.environ["RELEASE_TAG"]):
+              raise SystemExit("Release validation must pass for the release tag before uploading")
+          PY
 
       - name: Publish package to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

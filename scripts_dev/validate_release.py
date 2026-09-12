@@ -123,6 +123,13 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
     if not re.search(rf'^version\s*=\s*"{re.escape(version)}"\s*$', pyproject, re.MULTILINE):
         errors.append(f"pyproject.toml version does not match agents/VERSION ({version})")
 
+    citation_path = repo_root / "CITATION.cff"
+    citation = citation_path.read_text(encoding="utf-8") if citation_path.is_file() else ""
+    if not re.search(r'^cff-version:[ \t]*[\"\']?1\.2\.0[\"\']?[ \t]*$', citation, re.MULTILINE):
+        errors.append("CITATION.cff cff-version must be the supported schema 1.2.0")
+    if not re.search(rf'^version:[ \t]*[\"\']?{re.escape(version)}[\"\']?[ \t]*$', citation, re.MULTILINE):
+        errors.append("CITATION.cff software version must match agents/VERSION")
+
     changelog = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
     if not re.search(rf"^## \[{re.escape(version)}\]", changelog, re.MULTILINE):
         errors.append(f"Version {version} not found as a CHANGELOG.md release heading")
@@ -180,8 +187,23 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
         checksums = json.loads(checksum_path.read_text(encoding="utf-8"))
         if checksums.get("schema_version") != 1 or checksums.get("algorithm") != "sha256":
             errors.append("agents/release_checksums.json has an unsupported schema")
-        for rel, expected in (checksums.get("files") or {}).items():
+        expected_paths = {
+            path.relative_to(repo_root).as_posix()
+            for path in (repo_root / "agents").rglob("*")
+            if path.is_file() and path != checksum_path
+            and not {"state", "cache", "__pycache__"}.intersection(path.relative_to(repo_root / "agents").parts)
+            and path.suffix not in {".pyc", ".pyo"}
+        }
+        files = checksums.get("files")
+        if not isinstance(files, dict) or not files or set(files) != expected_paths:
+            errors.append("release checksum inventory must cover the complete installable payload")
+        for rel, expected in (files if isinstance(files, dict) else {}).items():
+            if rel not in expected_paths:
+                continue
             path = repo_root / rel
+            if path.is_symlink() or not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                errors.append(f"invalid release checksum entry: {rel}")
+                continue
             if not path.is_file():
                 errors.append(f"release checksum target missing: {rel}")
                 continue

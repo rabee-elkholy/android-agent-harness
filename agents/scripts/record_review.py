@@ -92,9 +92,11 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
         verdict = str(report.get("verdict") or "").upper()
         if verdict not in VALID_VERDICTS:
             raise ValidationError(f"reviewer {reviewer} returned malformed verdict")
-        report_findings = report.get("findings") or []
+        report_findings = report.get("findings", [])
         if not isinstance(report_findings, list):
             raise ValidationError(f"reviewer {reviewer} findings must be a list")
+        if verdict == "FINDINGS" and not report_findings:
+            raise ValidationError(f"reviewer {reviewer} FINDINGS requires a non-empty findings list")
         if verdict == "PASS" and report_findings:
             raise ValidationError(f"reviewer {reviewer} claims PASS with findings")
         for finding in report_findings:

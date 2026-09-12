@@ -4,7 +4,7 @@ Follow `.agents/rules/harness-rules.md`. Setup fills checkout facts from Gradle/
 
 ## Checkout facts (this file only)
 
-- Product, `applicationId`, launcher, assemble task, and debug APK: `.agents/scripts/_product.py`
+- Product, `applicationId`, launcher, configured assemble task, and variant artifacts: `.agents/scripts/_product.py`
 - Source roots: classic `app/src/main` or KMP `androidMain` — use what exists on disk
 - Locales: the `values` / `values-*` folders that exist
 
