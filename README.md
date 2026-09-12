@@ -196,7 +196,19 @@ The installer configures `.agents` in your project and registers `.git/info/excl
 
 ## Task Lifecycle & Workflows
 
-A standard task follows an explicit workflow:
+### The Basic Workflow
+
+1. **discovery-and-scoping** — *Activates before writing code.* Interrogates project architecture in read-only mode, explores alternatives, and binds exact target modules and surfaces.
+2. **plan-authority-and-approval** — *Activates with drafted plan.* Hashes scope, risks, and tests into an immutable contract. Implementation authority remains physically locked until explicit human sign-off.
+3. **mutation-guard-and-isolation** — *Activates upon approval.* Enforces OS-level interception: blocks raw Gradle/ADB commands, protects generated source directories, and leaves Git staging to the developer.
+4. **adaptive-skill-routing** — *Activates on code changes.* Classifies 15+ Android surfaces (Room, Compose, Coroutines, Security) and routes specialized engineering skills with token-budget protection.
+5. **test-driven-development** — *Activates during implementation.* Enforces red-green-refactor cycles, isolates new regressions from pre-existing baseline test failures, and verifies unit test evidence.
+6. **specialist-reviewer-squad** — *Activates between tasks.* Dispatches up to 5 isolated specialist subagents (Security, Bug, ANR/Perf, Regression, Conventions) scoped strictly to modified diffs.
+7. **tamper-evident-verification** — *Activates when work completes.* Re-verifies Git branch, repository identity, and APK artifact-set hashes against append-only cryptographic evidence.
+
+**Deterministic state machines, not prompt suggestions. Proof before delivery.**
+
+### Execution Sequence
 
 ```bash
 # 1. Draft a task plan (Read-Only)
