@@ -36,7 +36,7 @@ try:
     from _product import DEVICE_TARGET_POLICY  # type: ignore[attr-defined]  # noqa: E402
 except ImportError:  # Backward compatibility with pre-v1.0.2 installations.
     DEVICE_TARGET_POLICY = "allow" if ALLOW_EMULATOR else "physical-only"
-from _repo_files import REPO, adb_serial_is_emulator, first_adb_serial  # noqa: E402
+from _repo_files import REPO, adb_serial_is_emulator, first_adb_serial, matching_adb_serials  # noqa: E402
 from _variants import apk_relative, resolve_or_raise  # noqa: E402
 from artifact_set import build_artifact_set, verify_artifact_set  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
@@ -95,12 +95,24 @@ def record_device(
 
 def require_serial(explicit: str | None) -> str:
     policy = str(DEVICE_TARGET_POLICY or ("allow" if ALLOW_EMULATOR else "physical-only"))
-    serial = explicit or first_adb_serial(policy=policy)
-    if not serial:
-        verdict = no_device_verdict()
-        record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
-        emit_env_failure(verdict, "run_device.py")
-        sys.exit(EXIT_ENV)
+    if explicit:
+        serial = explicit
+    else:
+        matches = matching_adb_serials(policy=policy)
+        if not matches:
+            verdict = no_device_verdict()
+            record_device("require-serial", "ENV", EXIT_ENV, None, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_device.py")
+            sys.exit(EXIT_ENV)
+        if len(matches) > 1:
+            verdict = FailureVerdict(
+                CLASS_ENV,
+                f"Multiple matching target devices detected ({', '.join(matches)}). Specify device explicitly via --serial <serial>.",
+            )
+            record_device("require-serial", "ENV", EXIT_ENV, None, verdict.env_class, verdict.reason)
+            emit_env_failure(verdict, "run_device.py")
+            sys.exit(EXIT_ENV)
+        serial = matches[0]
     is_emulator = adb_serial_is_emulator(serial)
     if policy == "physical-only" and is_emulator:
         verdict = FailureVerdict(
@@ -142,9 +154,7 @@ def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
             return bool(record and str(record.get("status") or "") == "PASS")
         except Exception:
             return False
-    gate_res = read_gate_result(gate_name)
-    return bool(gate_res and str(gate_res.get("status") or "") == "PASS")
-
+    return False
 
 
 def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
@@ -167,22 +177,41 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
         task_id = str(active.get("task_id") or "")
         state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
         current_path = state / "tasks" / task_id / "current-run.json"
-        if current_path.is_file():
-            try:
-                from _vnext_common import read_json
-                current_run = read_json(current_path)
-                policy_path = Path(str(current_run.get("policy") or ""))
-                if policy_path.is_file():
-                    policy = read_json(policy_path)
-                    required_gates = set(policy.get("gates") or [])
-                    if "preflight" in required_gates and not _gate_passed(state, current_run, "preflight"):
-                        live_print("[FAIL] Pipeline order violation: preflight_check must pass before device deployment.", err=True)
-                        return EXIT_ENV
-                    if "unit_tests" in required_gates and not _gate_passed(state, current_run, "unit_tests"):
-                        live_print("[FAIL] Pipeline order violation: run_tests_gate must pass before device deployment.", err=True)
-                        return EXIT_ENV
-            except Exception:
-                pass
+        if not current_path.is_file():
+            live_print(
+                "[FAIL] Verification run is not initialized. Run 'python .agents/scripts/workflow.py prepare-verification' first.",
+                err=True,
+            )
+            return EXIT_ENV
+        try:
+            from _vnext_common import read_json
+            current_run = read_json(current_path)
+            run_id = str(current_run.get("run_id") or "")
+            expected_run_id = str(active.get("verification_run_id") or "")
+            if not run_id or (expected_run_id and run_id != expected_run_id):
+                live_print(
+                    f"[FAIL] Verification run mismatch: active task expects run '{expected_run_id}', but current-run is '{run_id}'.",
+                    err=True,
+                )
+                return EXIT_ENV
+            policy_path = Path(str(current_run.get("policy") or ""))
+            if not policy_path.is_file():
+                live_print(
+                    f"[FAIL] Verification policy artifact is missing: {policy_path}.",
+                    err=True,
+                )
+                return EXIT_ENV
+            policy = read_json(policy_path)
+            required_gates = set(policy.get("gates") or [])
+            if "preflight" in required_gates and not _gate_passed(state, current_run, "preflight"):
+                live_print("[FAIL] Pipeline order violation: preflight_check must pass before device deployment.", err=True)
+                return EXIT_ENV
+            if "unit_tests" in required_gates and not _gate_passed(state, current_run, "unit_tests"):
+                live_print("[FAIL] Pipeline order violation: run_tests_gate must pass before device deployment.", err=True)
+                return EXIT_ENV
+        except Exception as exc:
+            live_print(f"[FAIL] Failed to verify device prerequisites: {exc}", err=True)
+            return EXIT_ENV
     return None
 
 

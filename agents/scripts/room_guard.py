@@ -6,8 +6,10 @@ or when fallbackToDestructiveMigration is still present on that database.
 """
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -245,29 +247,45 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
             continue
         databases.append((path, parse_database_source(text, _rel(path), root)))
 
-    affected: list[tuple[Path, DatabaseDecl, str]] = []
+    affected: list[tuple[Path, DatabaseDecl, DatabaseDecl | None, str]] = []
     for path, decl in databases:
         reasons = []
         if decl.rel in changed_rels:
             reasons.append("database file changed")
-        hit = sorted(decl.entity_names & changed_types)
+        old_text = git_head_text(decl.rel, root)
+        old_decl = parse_database_source(old_text, decl.rel, root) if old_text else None
+
+        all_entities = set(decl.entity_names)
+        if old_decl:
+            all_entities.update(old_decl.entity_names)
+            if old_decl.entity_names != decl.entity_names:
+                reasons.append("entities membership changed")
+
+        hit = sorted(all_entities & changed_types)
         if hit:
             reasons.append("entities changed: " + ", ".join(hit))
+
+        candidate_files = find_candidate_migration_files(path, changed_src, root)
+        candidate_rels = {_rel(p) for p in candidate_files}
+        if candidate_rels & changed_rels:
+            reasons.append("candidate migration files changed")
+
         if reasons:
-            affected.append((path, decl, "; ".join(reasons)))
+            affected.append((path, decl, old_decl, "; ".join(reasons)))
 
     if not affected:
         return True, "No Room @Database or mapped @Entity changes in the working tree."
 
     failures: list[str] = []
     no_baseline = False
-    for path, new_decl, why in affected:
-        old_text = git_head_text(new_decl.rel, root)
-        old_decl = parse_database_source(old_text, new_decl.rel, root) if old_text else None
+    for path, new_decl, old_decl, why in affected:
         old_ver = old_decl.version if old_decl else None
         new_ver = new_decl.version
-        entity_hit = bool(new_decl.entity_names & changed_types)
-        if old_text is None:
+        all_entities = set(new_decl.entity_names)
+        if old_decl:
+            all_entities.update(old_decl.entity_names)
+        entity_hit = bool(all_entities & changed_types) or (old_decl is not None and old_decl.entity_names != new_decl.entity_names)
+        if old_decl is None:
             no_baseline = True
 
         if new_ver is None:
@@ -290,8 +308,6 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
                 try:
                     c_text = c_path.read_text(encoding="utf-8", errors="replace")
                     candidate_texts.append(c_text)
-                    for a, b in MIGRATION_RE.findall(c_text):
-                        all_migs.add((int(a), int(b)))
                     for a, b in AUTO_MIGRATION_RE.findall(c_text):
                         all_migs.add((int(a), int(b)))
                     add_blocks = ADD_MIGRATIONS_RE.findall(c_text)
@@ -304,6 +320,42 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
                 except Exception:
                     continue
 
+            body = path.read_text(encoding="utf-8", errors="replace")
+            all_bodies = [body] + candidate_texts
+
+            # Check for migration variables in candidate files and only credit registered ones
+            for b_text in all_bodies:
+                var_matches = re.findall(
+                    r"(?:val|var)\s+([A-Za-z0-9_]+)\s*(?::\s*Migration)?\s*=\s*(?:object\s*:\s*)?Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)",
+                    b_text,
+                )
+                for var_name, a_str, b_str in var_matches:
+                    edge = (int(a_str), int(b_str))
+                    if old_ver <= edge[0] < edge[1] <= new_ver:
+                        if var_name in registered_tokens or var_name in str(new_decl.registered):
+                            all_migs.add(edge)
+                        elif not any(var_name in f for f in failures):
+                            failures.append(
+                                f"{new_decl.rel}: migration variable '{var_name}' ({edge[0]} -> {edge[1]}) is defined but not registered in addMigrations(...)."
+                            )
+
+                # Check named convention MIGRATION_A_B
+                for a_str, b_str in re.findall(r"\bMIGRATION_(\d+)_(\d+)\b", b_text):
+                    edge = (int(a_str), int(b_str))
+                    if old_ver <= edge[0] < edge[1] <= new_ver:
+                        c_name = f"MIGRATION_{edge[0]}_{edge[1]}"
+                        if c_name in registered_tokens or c_name in str(new_decl.registered):
+                            all_migs.add(edge)
+                        elif not any(c_name in f for f in failures):
+                            failures.append(
+                                f"{new_decl.rel}: {c_name} exists but is not passed to addMigrations(...)."
+                            )
+
+                # Direct inline Migration(a, b) calls inside addMigrations
+                for add_block in ADD_MIGRATIONS_RE.findall(b_text):
+                    for a_str, b_str in MIGRATION_RE.findall(add_block):
+                        all_migs.add((int(a_str), int(b_str)))
+
             if not is_migration_path_covered(old_ver, new_ver, frozenset(all_migs)):
                 failures.append(
                     f"{new_decl.rel}: version {old_ver} -> {new_ver} but valid migration path is missing."
@@ -312,22 +364,6 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
                 failures.append(
                     f"{new_decl.rel}: version bumped but addMigrations(...) or autoMigrations is missing."
                 )
-            expected_name = f"MIGRATION_{old_ver}_{new_ver}"
-            body = path.read_text(encoding="utf-8", errors="replace")
-            all_bodies = [body] + candidate_texts
-            for b_text in all_bodies:
-                if expected_name in b_text and expected_name not in registered_tokens and expected_name not in str(all_migs):
-                    failures.append(
-                        f"{new_decl.rel}: {expected_name} exists but is not passed to addMigrations(...)."
-                    )
-                    break
-            for b_text in all_bodies:
-                var_matches = re.findall(rf"(?:val|var)\s+([A-Za-z0-9_]+)\s*(?::\s*Migration)?\s*=\s*(?:object\s*:\s*)?Migration\s*\(\s*{old_ver}\s*,\s*{new_ver}\s*\)", b_text)
-                for var_name in var_matches:
-                    if var_name not in registered_tokens and not any(var_name in f for f in failures):
-                        failures.append(
-                            f"{new_decl.rel}: migration variable '{var_name}' ({old_ver} -> {new_ver}) is defined but not registered in addMigrations(...)."
-                        )
 
 
 
@@ -339,11 +375,28 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
 
     if failures:
         return False, " ".join(failures)
-    names = ", ".join(d.rel for _, d, _ in affected)
+    names = ", ".join(item[1].rel for item in affected)
     baseline_note = (
         " [WARN] no git baseline available (no commits?); version/migration comparison skipped."
         if no_baseline
         else ""
     )
     return True, f"Room migration gate passed for: {names}.{baseline_note}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Room migration and schema safety check.")
+    parser.add_argument("--repo", default=None, help="Repository root path.")
+    args = parser.parse_args()
+    repo_path = Path(args.repo).resolve() if args.repo else REPO
+    passed, msg = check_room_working_tree(repo=repo_path)
+    if not passed:
+        print(f"[FAIL] {msg}", file=sys.stderr)
+        return 1
+    print(f"[PASS] {msg}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 

@@ -95,10 +95,10 @@ def changed_files(repo: Path | None = None, *, include_untracked: bool = True) -
             )
         elif line.startswith("2 "):
             # 2 <xy> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path> -> next chunk is origPath
-            parts = line.split(" ", 8)
-            if len(parts) < 9:
+            parts = line.split(" ", 9)
+            if len(parts) < 10:
                 continue
-            rel_path = parts[8]
+            rel_path = parts[9]
             orig_rel_path = ""
             if idx < len(entries):
                 orig_rel_path = entries[idx].decode("utf-8", errors="replace")
@@ -249,10 +249,10 @@ def adb_serial_is_emulator(serial: str) -> bool:
         return serial.startswith(("localhost:", "127.0.0.1:"))
 
 
-def first_adb_serial(*, allow_emulator: bool = True, policy: str | None = None) -> str | None:
+def matching_adb_serials(*, allow_emulator: bool = True, policy: str | None = None) -> list[str]:
     target_policy = policy or ("allow" if allow_emulator else "physical-only")
     if target_policy not in {"allow", "physical-only", "emulator-only"}:
-        return None
+        return []
     try:
         proc = subprocess.run(
             ["adb", "devices"],
@@ -263,24 +263,28 @@ def first_adb_serial(*, allow_emulator: bool = True, policy: str | None = None) 
             check=False,
         )
     except Exception:
-        return None
-    physical: str | None = None
-    emulator: str | None = None
+        return []
+    physical: list[str] = []
+    emulator: list[str] = []
     for line in (proc.stdout or "").splitlines()[1:]:
         parts = line.split()
         if len(parts) < 2 or parts[1] != "device":
             continue
         serial = parts[0]
-        is_emu = adb_serial_is_emulator(serial)
-        if is_emu:
-            emulator = emulator or serial
-            continue
-        physical = physical or serial
+        if adb_serial_is_emulator(serial):
+            emulator.append(serial)
+        else:
+            physical.append(serial)
     if target_policy == "physical-only":
         return physical
     if target_policy == "emulator-only":
         return emulator
-    return physical or emulator
+    return physical if physical else emulator
+
+
+def first_adb_serial(*, allow_emulator: bool = True, policy: str | None = None) -> str | None:
+    matches = matching_adb_serials(allow_emulator=allow_emulator, policy=policy)
+    return matches[0] if matches else None
 
 
 def first_physical_adb_serial() -> str | None:

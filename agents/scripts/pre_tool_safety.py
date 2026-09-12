@@ -142,7 +142,7 @@ def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
         return False, "File mutation escapes the approved repository.", False
     if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
         return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
-    if EPHEMERAL_GENERATED_RE.search(relative):
+    if EPHEMERAL_GENERATED_RE.search(relative) and "/src/" not in f"/{relative.lower()}":
         return False, f"Cannot mutate generated build output '{relative}'. Generated code is diagnostic evidence only; edit the source entity/DAO/contract or generator configuration instead.", False
     return True, relative, False
 

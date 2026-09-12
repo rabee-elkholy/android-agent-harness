@@ -13,6 +13,7 @@ Do NOT guess code fixes. Mandatory sequence for ALL bug, crash, or regression fi
    - *Code / Test*: Failing deterministic unit/integration test, assertion failure, compiler error, lint violation.
    - *Runtime / Android*: Logcat excerpt, crash stacktrace, ANR trace, lifecycle reproduction, permission denial, DB migration error.
    - *Logic / State*: Invalid StateFlow/LiveData transition, race condition, wrong Coroutine dispatcher/scope.
+   - *Comparative Analysis*: Compare working vs. broken execution paths or historical commits to isolate the exact point of divergence.
 2. **Formulate Explicit Hypothesis**: Identify the most likely root cause at the producer level.
 3. **Plan Targeted Mutation**: Make the minimal fix directly addressing the root cause.
 4. **Verify**: Prove the original failure is resolved and no regressions are introduced.

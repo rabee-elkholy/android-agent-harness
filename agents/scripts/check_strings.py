@@ -153,10 +153,16 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
                 res[name] = {"tag": tag, "items": items, "placeholders": sorted(set(placeholders))}
             elif tag == "string-array":
                 items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
-                placeholders = []
-                for it in items:
-                    placeholders.extend(_extract_placeholders(it))
-                res[name] = {"tag": tag, "items": items, "placeholders": sorted(set(placeholders))}
+                item_placeholders = [_extract_placeholders(it) for it in items]
+                all_placeholders = []
+                for phs in item_placeholders:
+                    all_placeholders.extend(phs)
+                res[name] = {
+                    "tag": tag,
+                    "items": items,
+                    "placeholders": sorted(set(all_placeholders)),
+                    "item_placeholders": item_placeholders,
+                }
     return res, duplicates
 
 
@@ -291,6 +297,23 @@ def _extract_keys_from_xml_lines(lines: list[str]) -> set[str]:
     return keys
 
 
+def _extract_touched_keys_from_xml(content: str, modified_lines: set[int]) -> set[str]:
+    keys = set()
+    current_key = None
+    key_pattern = re.compile(r'<(?:string|plurals|string-array)\s+[^>]*name="([^"]+)"')
+    closing_pattern = re.compile(r'</(?:string|plurals|string-array)>|/>')
+
+    for line_idx, line in enumerate(content.splitlines(), 1):
+        m = key_pattern.search(line)
+        if m:
+            current_key = m.group(1)
+        if line_idx in modified_lines and current_key:
+            keys.add(current_key)
+        if closing_pattern.search(line):
+            current_key = None
+    return keys
+
+
 def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
     """Returns (map of base_strings_path -> set of touched keys, any_string_file_changed)."""
     touched_by_base: dict[Path, set[str]] = {}
@@ -354,6 +377,42 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
                 and not (line.startswith("+++") or line.startswith("---"))
             ]
             keys = _extract_keys_from_xml_lines(diff_lines)
+
+            # Map modified line numbers to enclosing parent tag (for plurals/arrays/multiline strings)
+            hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+            new_lines: set[int] = set()
+            old_lines: set[int] = set()
+            for line in proc.stdout.splitlines():
+                m = hunk_re.match(line)
+                if m:
+                    old_start = int(m.group(1))
+                    old_count = int(m.group(2)) if m.group(2) is not None else 1
+                    new_start = int(m.group(3))
+                    new_count = int(m.group(4)) if m.group(4) is not None else 1
+                    for l in range(new_start, new_start + max(1, new_count)):
+                        new_lines.add(l)
+                    for l in range(old_start, old_start + max(1, old_count)):
+                        old_lines.add(l)
+
+            if changed.exists and new_lines:
+                try:
+                    content = changed.read_text(encoding="utf-8", errors="replace")
+                    keys.update(_extract_touched_keys_from_xml(content, new_lines))
+                except Exception:
+                    pass
+            if old_lines:
+                proc_head = subprocess.run(
+                    ["git", "show", f"HEAD:{rel}"],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                if proc_head.returncode == 0:
+                    keys.update(_extract_touched_keys_from_xml(proc_head.stdout, old_lines))
+
             touched_by_base[base_file].update(keys)
 
     return touched_by_base, any_changed
@@ -504,12 +563,29 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
             placeholder_mismatches = []
             common_keys = (base_keys & loc_keys) if args.all else (touched_keys & base_keys & loc_keys)
             for key in sorted(common_keys):
-                base_ph = base_data[key].get("placeholders", [])
-                loc_ph = loc_data[key].get("placeholders", [])
-                if base_ph != loc_ph:
-                    placeholder_mismatches.append(
-                        f"   - key '{key}': base has {base_ph}, {loc_rel} has {loc_ph}"
-                    )
+                base_info = base_data[key]
+                loc_info = loc_data[key]
+                tag = base_info.get("tag")
+                if tag == "string-array":
+                    base_item_phs = base_info.get("item_placeholders", [])
+                    loc_item_phs = loc_info.get("item_placeholders", [])
+                    if len(base_item_phs) != len(loc_item_phs):
+                        placeholder_mismatches.append(
+                            f"   - key '{key}': item count mismatch ({len(base_item_phs)} in base vs {len(loc_item_phs)} in {loc_rel})"
+                        )
+                    else:
+                        for idx, (b_phs, l_phs) in enumerate(zip(base_item_phs, loc_item_phs)):
+                            if b_phs != l_phs:
+                                placeholder_mismatches.append(
+                                    f"   - key '{key}' item[{idx}]: base has {b_phs}, {loc_rel} has {l_phs}"
+                                )
+                else:
+                    base_ph = base_info.get("placeholders", [])
+                    loc_ph = loc_info.get("placeholders", [])
+                    if base_ph != loc_ph:
+                        placeholder_mismatches.append(
+                            f"   - key '{key}': base has {base_ph}, {loc_rel} has {loc_ph}"
+                        )
 
             if placeholder_mismatches:
                 print(f"\n[!] Placeholder format mismatches in {loc_rel} ({len(placeholder_mismatches)}):")

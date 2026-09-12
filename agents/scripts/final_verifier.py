@@ -131,7 +131,10 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     configured_kind = _configured_project_kind()
     if policy.get("project_kind") != configured_kind:
         return _blocked("BLOCKED", ["policy project kind does not match installed configuration"], checks)
-    expected_policy = decide(current_classification, agents_root / "skills", project_kind=configured_kind)
+    task_kind = str(plan.get("task_kind") or "FEATURE")
+    expected_policy = decide(
+        current_classification, agents_root / "skills", project_kind=configured_kind, task_kind=task_kind
+    )
     if int(policy.get("review_round") or 1) > 1:
         basis = policy.get("later_round_source") or {}
         source_run_id = str(basis.get("run_id") or "")
@@ -165,6 +168,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 source_run_id=source_run_id,
                 round_number=int(policy.get("review_round")),
                 project_kind=configured_kind,
+                task_kind=task_kind,
             )
         except (ValidationError, OSError, ValueError, TypeError) as exc:
             return _blocked("BLOCKED", [f"later-round policy source is invalid: {exc}"], checks)

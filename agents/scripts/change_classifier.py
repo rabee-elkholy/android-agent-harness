@@ -18,7 +18,7 @@ SCHEMA_VERSION = 1
 SEVERITY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 CRITICAL_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
 HIGH_SURFACES = {"ROOM_SCHEMA", "MANIFEST_PERMISSION", "BUILD_CONFIG", "PUBLIC_API", "NATIVE_CODE"}
-DEVICE_SURFACES = {"COMPOSE_UI", "XML_UI", "DEVICE_API"}
+DEVICE_SURFACES = {"COMPOSE_UI", "XML_UI", "NAVIGATION", "DEVICE_API"}
 
 PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("BILLING", re.compile(r"(?i)billingclient|purchase|subscription|productdetails"), "BILLING_PATTERN"),
@@ -58,9 +58,48 @@ def _head_text(repo: Path, relative: str) -> str:
 
 
 HUNK_LINE_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-DECL_RE = re.compile(r"\b(?:class|interface|object|fun|suspend\s+fun)\s+([A-Za-z0-9_]+)")
+DECL_RE = re.compile(
+    r"\b(?:class|interface|object|enum\s+class|fun|suspend\s+fun)\s+([A-Za-z0-9_]+)|"
+    r"\b(?:public|protected|private|static|final|synchronized|\s)*\s*(?:void|[A-Za-z0-9_<>\[\]]+)\s+([A-Za-z0-9_]+)\s*\([^)]*\)\s*(?:throws\s+[A-Za-z0-9_,\s]+)?\s*\{?"
+)
 CLASS_DECL_RE = re.compile(r"\b(?:class|interface|object)\s+([A-Za-z0-9_]+)")
 FUN_DECL_RE = re.compile(r"\b(?:fun|suspend\s+fun)\s+([A-Za-z0-9_]+)")
+
+
+def _strip_code_line(line: str, in_block: bool) -> tuple[str, bool]:
+    res = []
+    i = 0
+    n = len(line)
+    while i < n:
+        if in_block:
+            end = line.find("*/", i)
+            if end != -1:
+                in_block = False
+                i = end + 2
+            else:
+                break
+        elif line[i:i+2] == "/*":
+            in_block = True
+            i += 2
+        elif line[i:i+2] == "//":
+            break
+        elif line[i] in ('"', "'"):
+            q = line[i]
+            if line[i:i+3] == '"""':
+                q = '"""'
+            i += len(q)
+            while i < n:
+                if q == '"""' and line[i:i+3] == '"""':
+                    i += 3
+                    break
+                elif q != '"""' and line[i] == q and (i == 0 or line[i-1] != '\\'):
+                    i += 1
+                    break
+                i += 1
+        else:
+            res.append(line[i])
+            i += 1
+    return "".join(res), in_block
 
 
 def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -> str:
@@ -68,50 +107,93 @@ def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -
     if not text or not modified_line_numbers:
         return ""
     lines = text.splitlines()
+    scopes_by_line: dict[int, list[str]] = {}
+    scope_stack: list[tuple[str, int]] = []
+    current_brace_depth = 0
+    current_paren_depth = 0
+    in_block = False
+    pending_header: list[str] = []
+    active_param_header: str = ""
+    param_header_depth: int = 0
+
+    for idx, line in enumerate(lines, 1):
+        clean, in_block = _strip_code_line(line, in_block)
+        stripped = line.strip()
+        if stripped.startswith("@"):
+            pending_header.append(line)
+        elif DECL_RE.search(clean):
+            pending_header.append(line)
+
+        for char in clean:
+            if char == "(":
+                if not active_param_header and any(DECL_RE.search(l) for l in pending_header):
+                    active_param_header = "\n".join(pending_header)
+                    param_header_depth = current_paren_depth
+                current_paren_depth += 1
+            elif char == ")":
+                current_paren_depth = max(0, current_paren_depth - 1)
+                if active_param_header and current_paren_depth <= param_header_depth:
+                    active_param_header = ""
+            elif char == "{":
+                header_str = "\n".join(pending_header) if pending_header else ""
+                scope_stack.append((header_str, current_brace_depth))
+                pending_header = []
+                active_param_header = ""
+                current_brace_depth += 1
+            elif char == "}":
+                current_brace_depth = max(0, current_brace_depth - 1)
+                while scope_stack and scope_stack[-1][1] >= current_brace_depth:
+                    scope_stack.pop()
+
+        if not clean.strip() or ("{" in clean and not pending_header):
+            pass
+        elif not any(DECL_RE.search(l) for l in pending_header):
+            if not stripped.startswith("@"):
+                pending_header = []
+
+        active_headers = [h for h, _ in scope_stack if h]
+        if active_param_header:
+            active_headers.append(active_param_header)
+        scopes_by_line[idx] = active_headers
+
+    emitted: list[str] = []
+    seen: set[str] = set()
+    for l_num in modified_line_numbers:
+        for header in scopes_by_line.get(l_num, []):
+            if header not in seen:
+                seen.add(header)
+                emitted.append(header)
+    return "\n".join(emitted)
+
+
+def _enclosing_xml_context(text: str, modified_line_numbers: list[int]) -> str:
+    """Extract enclosing XML element tag and attributes for modified lines."""
+    if not text or not modified_line_numbers:
+        return ""
+    lines = text.splitlines()
     total = len(lines)
-    blocks: list[str] = []
-    seen_ranges: set[tuple[int, int]] = set()
-
-    for line_num in modified_line_numbers:
-        idx = min(max(0, line_num - 1), total - 1)
-        start_scan = max(0, idx - 100)
-        enclosing_idx = None
-        for cur in range(idx, start_scan - 1, -1):
-            if DECL_RE.search(lines[cur]):
-                enclosing_idx = cur
+    elements: list[str] = []
+    seen: set[str] = set()
+    for l_num in modified_line_numbers:
+        idx = min(max(0, l_num - 1), total - 1)
+        tag_start = None
+        for cur in range(idx, max(0, idx - 40) - 1, -1):
+            line_str = lines[cur].strip()
+            m = re.search(r"<([A-Za-z0-9_-]+)", line_str)
+            if m and not line_str.startswith("<!--") and not line_str.startswith("<?"):
+                tag_start = cur
                 break
-        if enclosing_idx is not None:
-            decl_start = enclosing_idx
-            while decl_start > 0 and lines[decl_start - 1].strip().startswith("@"):
-                decl_start -= 1
-
-            if FUN_DECL_RE.search(lines[enclosing_idx]):
-                class_scan_limit = max(0, idx - 120)
-                for c_cur in range(decl_start - 1, class_scan_limit - 1, -1):
-                    if CLASS_DECL_RE.search(lines[c_cur]):
-                        outer_start = c_cur
-                        while outer_start > 0 and lines[outer_start - 1].strip().startswith("@"):
-                            outer_start -= 1
-                        outer_class_end = c_cur + 1
-                        for scan_fwd in range(c_cur, min(c_cur + 5, total)):
-                            outer_class_end = scan_fwd + 1
-                            if "{" in lines[scan_fwd]:
-                                break
-                        class_range = (outer_start, outer_class_end)
-                        if class_range not in seen_ranges:
-                            seen_ranges.add(class_range)
-                            class_lines = list(lines[outer_start:outer_class_end])
-                            if class_lines and "{" in class_lines[-1]:
-                                class_lines[-1] = class_lines[-1].split("{", 1)[0]
-                            blocks.append("\n".join(class_lines))
-                        break
-
-            r = (decl_start, idx + 1)
-            if r not in seen_ranges:
-                seen_ranges.add(r)
-                blocks.append("\n".join(lines[decl_start:idx + 1]))
-    return "\n".join(blocks)
-
+        if tag_start is not None:
+            tag_lines = []
+            for cur in range(tag_start, min(total, tag_start + 15)):
+                tag_lines.append(lines[cur])
+                if ">" in lines[cur]:
+                    break
+            element_snippet = "\n".join(tag_lines)
+            if element_snippet not in seen:
+                seen.add(element_snippet)
+                elements.append(element_snippet)
+    return "\n".join(elements)
 
 
 def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
@@ -150,8 +232,12 @@ def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
             lines.append(line[1:])
     diff_text = "\n".join(lines)
     context_text = ""
-    if changed.exists and Path(changed.rel_posix.lower()).suffix in (".kt", ".java") and line_nums:
-        context_text = _enclosing_structural_context(_read_text(changed.path), line_nums)
+    if changed.exists and line_nums:
+        suffix = Path(changed.rel_posix.lower()).suffix
+        if suffix in (".kt", ".java"):
+            context_text = _enclosing_structural_context(_read_text(changed.path), line_nums)
+        elif suffix == ".xml":
+            context_text = _enclosing_xml_context(_read_text(changed.path), line_nums)
     return diff_text, context_text
 
 
@@ -211,17 +297,22 @@ def classify(repo: Path) -> dict:
                 _add(found, "RESOURCE_UI", rel, "VALUES_RESOURCE")
         if "/res/layout" in f"/{lower}" and suffix == ".xml":
             _add(found, "XML_UI", rel, "LAYOUT_RESOURCE")
+        if "/res/navigation" in f"/{lower}" and suffix == ".xml":
+            _add(found, "NAVIGATION", rel, "NAVIGATION_GRAPH")
         if "/res/" in f"/{lower}" and suffix not in (".md", ".txt"):
             _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
         if suffix in (".kt", ".kts") and ("@composable" in full_text.lower() or "androidx.compose" in full_text.lower()):
             _add(found, "COMPOSE_UI", rel, "COMPOSE_PATTERN")
+        if suffix in (".kt", ".java") and not test_path and re.search(r"\b(NavHost|NavController|findNavController|rememberNavController)\b|navGraphBuilder|popUpTo\(", diff_text):
+            _add(found, "NAVIGATION", rel, "NAVIGATION_CALL")
         if suffix in (".kt", ".java") and not test_path:
             _add(found, "BUSINESS_LOGIC", rel, "SOURCE_CHANGE")
         if suffix in (".gradle", ".kts", ".toml", ".properties") or Path(lower).name in ("gradlew", "gradlew.bat"):
             _add(found, "BUILD_CONFIG", rel, "BUILD_FILE")
         if "androidmanifest.xml" in lower:
-            manifest_has_perm = bool(re.search(r"uses-permission|android:exported|provider|intent-filter", diff_text, re.I))
-            manifest_has_comp = bool(re.search(r"\b(?:service|receiver|uses-feature)\b", diff_text, re.I))
+            combined_manifest = diff_text + "\n" + context_text
+            manifest_has_perm = bool(re.search(r"uses-permission|android\.permission\.|android:exported|provider|intent-filter", combined_manifest, re.I))
+            manifest_has_comp = bool(re.search(r"\b(?:service|receiver|uses-feature)\b", combined_manifest, re.I))
             if manifest_has_perm:
                 _add(found, "MANIFEST_PERMISSION", rel, "MANIFEST_PERMISSION_CHANGE")
             if manifest_has_comp:
@@ -239,7 +330,7 @@ def classify(repo: Path) -> dict:
             _add(found, "SECURITY", rel, "NETWORK_SECURITY_CONFIG")
         if Path(lower).name in ("consumer-rules.pro", "proguard-rules.pro"):
             _add(found, "BUILD_CONFIG", rel, "PROGUARD_RULES")
-        if Path(lower).name == "baseline-prof.txt":
+        if Path(lower).name in ("baseline-prof.txt", "startup-prof.txt"):
             _add(found, "BUILD_CONFIG", rel, "BASELINE_PROFILE")
         for surface, pattern, reason in PATTERNS:
 

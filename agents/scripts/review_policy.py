@@ -19,7 +19,7 @@ FIVE_REVIEWERS = {
     "perf-anr-guardian-agent", "regression-impact-reviewer-agent",
 }
 DEVICE_SURFACES = {
-    "COMPOSE_UI", "XML_UI", "RESOURCE_UI", "DEVICE_API", "MANIFEST_PERMISSION",
+    "COMPOSE_UI", "XML_UI", "RESOURCE_UI", "NAVIGATION", "DEVICE_API", "MANIFEST_PERMISSION",
     "ROOM_SCHEMA", "BILLING", "AUTH",
 }
 TEST_SURFACES = {
@@ -35,6 +35,7 @@ ROUTING = {
     "COMPOSE_UI": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
     "XML_UI": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
     "RESOURCE_UI": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
+    "NAVIGATION": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
     "COROUTINES": {"bug-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
     "NETWORK": {"bug-reviewer-agent", "security-reviewer-agent", "regression-impact-reviewer-agent"},
     "ROOM_SCHEMA": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},

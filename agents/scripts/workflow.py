@@ -27,7 +27,7 @@ from plan_authority import (  # noqa: E402
     save_plan,
 )
 from review_policy import decide, decide_later_round  # noqa: E402
-from evidence_store import EvidenceStore  # noqa: E402
+from evidence_store import EvidenceStore, StateLock  # noqa: E402
 from _verification_recipes import get_verification_recipes  # noqa: E402
 
 
@@ -185,33 +185,37 @@ def record_debug_evidence(args: argparse.Namespace) -> dict:
     directory = task_dir(repo, args.task_id)
     directory.mkdir(parents=True, exist_ok=True)
     evidence_path = directory / "debug-evidence.json"
-    entries = []
-    if evidence_path.is_file():
-        try:
-            content = read_json(evidence_path)
-            if isinstance(content, dict) and isinstance(content.get("entries"), list):
-                entries = content["entries"]
-            elif isinstance(content, list):
-                entries = content
-        except Exception:
-            entries = []
 
-    entry = {
-        "kind": args.kind,
-        "reference": args.reference,
-        "hypothesis": getattr(args, "hypothesis", None) or "",
-        "risk": getattr(args, "risk", None) or "",
-        "recorded_at": utc_now(),
-    }
-    entries.append(entry)
-    payload = {
-        "task_id": args.task_id,
-        "plan_sha256": plan.get("plan_sha256"),
-        "status": plan.get("status"),
-        "entries": entries,
-    }
-    atomic_write_json(evidence_path, payload)
-    return payload
+    with StateLock(directory / ".lock"):
+        entries = []
+        if evidence_path.is_file():
+            try:
+                content = read_json(evidence_path)
+                if isinstance(content, dict) and isinstance(content.get("entries"), list):
+                    entries = content["entries"]
+                elif isinstance(content, list):
+                    entries = content
+                else:
+                    raise ValidationError(f"corrupt debug evidence payload in {evidence_path}")
+            except Exception as exc:
+                raise ValidationError(f"cannot read existing debug evidence: {exc}")
+
+        entry = {
+            "kind": args.kind,
+            "reference": args.reference,
+            "hypothesis": getattr(args, "hypothesis", None) or "",
+            "risk": getattr(args, "risk", None) or "",
+            "recorded_at": utc_now(),
+        }
+        entries.append(entry)
+        payload = {
+            "task_id": args.task_id,
+            "plan_sha256": plan.get("plan_sha256"),
+            "status": plan.get("status"),
+            "entries": entries,
+        }
+        atomic_write_json(evidence_path, payload)
+        return payload
 
 
 def prepare_verification(args: argparse.Namespace) -> dict:

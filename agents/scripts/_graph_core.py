@@ -1195,6 +1195,8 @@ class GraphEngine:
         self.graph = DependencyGraph()
         self.file_hashes: dict[str, str] = {}
         self.symbol_to_node_id: dict[str, str] = {}
+        self.fqn_to_node_id: dict[str, str] = {}
+        self.symbol_to_node_ids: dict[str, list[str]] = {}
         self.healed_log: list[str] = []
 
     def compute_file_hash(self, path: Path) -> str:
@@ -1230,11 +1232,20 @@ class GraphEngine:
 
     def _rebuild_symbol_index(self) -> None:
         self.symbol_to_node_id.clear()
+        self.fqn_to_node_id.clear()
+        self.symbol_to_node_ids.clear()
         for node in self.graph.nodes.values():
+            self.fqn_to_node_id[node.id] = node.id
+            if node.package:
+                self.fqn_to_node_id[f"{node.package}.{node.name}"] = node.id
+                for decl in node.declarations:
+                    self.fqn_to_node_id[f"{node.package}.{decl}"] = node.id
             if node.name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
+                self.symbol_to_node_ids.setdefault(node.name, []).append(node.id)
                 self.symbol_to_node_id[node.name] = node.id
             for decl in node.declarations:
                 if decl.lower() not in KOTLIN_RESERVED_DECLARATIONS:
+                    self.symbol_to_node_ids.setdefault(decl, []).append(node.id)
                     self.symbol_to_node_id[decl] = node.id
 
     def sync(self, force_full: bool = False) -> dict[str, Any]:
@@ -1349,11 +1360,14 @@ class GraphEngine:
                     continue
 
                 for imp in node.imports:
-                    target_sym = imp.split(".")[-1]
-                    if target_sym in self.symbol_to_node_id:
-                        target_id = self.symbol_to_node_id[target_sym]
-                        if target_id != node.id:
-                            self.graph.add_edge(node.id, target_id, kind=EdgeKind.DEPENDS_ON.value)
+                    target_id = self.fqn_to_node_id.get(imp) or (imp if imp in self.graph.nodes else None)
+                    if not target_id:
+                        target_sym = imp.split(".")[-1]
+                        candidates = self.symbol_to_node_ids.get(target_sym, [])
+                        if len(candidates) == 1:
+                            target_id = candidates[0]
+                    if target_id and target_id != node.id:
+                        self.graph.add_edge(node.id, target_id, kind=EdgeKind.DEPENDS_ON.value)
 
             for xnode, refs in xml_connections:
                 for ref in refs:

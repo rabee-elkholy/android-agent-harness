@@ -8,7 +8,7 @@ kernel-major: 1
 # Test-Driven Development (TDD) Skill
 
 ## 1. Core Principle: Red-Green-Refactor
-Production code is only written in response to a failing test that defines its requirements or reproduces a defect.
+Production code is only written in response to a failing test that defines its requirements or reproduces a defect with a meaningful seam. For untestable UI/platform configs or when empirical reproduction is genuinely bounded (`EVIDENCE_LIMITED`), document evidence and risk boundaries rather than fabricating artificial test stubs.
 
 ---
 
@@ -41,7 +41,7 @@ Production code is only written in response to a failing test that defines its r
 ---
 
 ## 3. Test Quality Invariants (Mandatory for Pre-Review Gate)
-1. **Assertion Depth**: Every `@Test` method must have at least $\ge 2$ meaningful assertions (`assertEquals`, `assertTrue`, `assertNull`). Trivial checks (`assertTrue(true)`) are strictly prohibited.
+1. **Assertion Quality**: Assert on observable state, return values, or side-effects with meaningful assertions (`assertEquals`, `assertTrue`, `assertNull`). Trivial tautologies (`assertTrue(true)`) are strictly prohibited.
 2. **Coroutines & Turbine**: Use `runTest` with `StandardTestDispatcher` or `app.cash.turbine:turbine` for testing Flows and Channels.
 3. **Mock Isolation**: Use pure Fakes or explicit `coEvery`/`every` definitions with `relaxed = false` for critical domain assertions. Never leak mock state across tests; reset in `@After`.
 4. **Zero Placeholder Tests**: Never commit empty test stubs or `TODO()` test bodies.

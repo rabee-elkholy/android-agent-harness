@@ -42,6 +42,12 @@ VERIFICATION_RECIPES: dict[str, list[str]] = {
         "Confirm notification actions and foreground channel behavior.",
         "Return to app and stop flow normally; verify notification dismisses.",
     ],
+    "DEVICE_API": [
+        "Exercise hardware or platform API interaction flow on active target.",
+        "Verify runtime permission state, device availability, and success callback.",
+        "Test failure or edge condition (e.g. sensor unavailable, connection drop).",
+        "Confirm resources are released when exiting screen or backgrounding app.",
+    ],
 }
 
 
@@ -57,8 +63,6 @@ def get_verification_recipes(surfaces: list[str]) -> list[dict[str, Any]]:
         elif surface == "RESOURCE_UI":
             if "XML_UI" not in surfaces and "COMPOSE_UI" not in surfaces:
                 target_keys.append("XML_UI")
-        elif surface == "DEVICE_API":
-            target_keys.append("FOREGROUND_SERVICE")
 
         for key in target_keys:
             if key in VERIFICATION_RECIPES and key not in seen_surfaces:

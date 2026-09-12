@@ -226,6 +226,13 @@ class AndroidScenariosSelftest(unittest.TestCase):
 
     # --- Scenario 07: Missing Whole Locale Resource File ---
     def test_scenario_07_missing_whole_locale_file(self) -> None:
+        base_strings = self.repo / "app/src/main/res/values/strings.xml"
+        ar_strings = self.repo / "app/src/main/res/values-ar/strings.xml"
+        _write_file(base_strings, '<resources><string name="app_name">App</string></resources>\n')
+        _write_file(ar_strings, '<resources><string name="app_name">تطبيق</string></resources>\n')
+        _run_git(self.repo, "add", ".")
+        _run_git(self.repo, "commit", "-qm", "initial strings")
+
         base_plurals = self.repo / "app/src/main/res/values/plurals.xml"
         # Only base plural added, no localized plurals file
         _write_file(
@@ -240,6 +247,12 @@ class AndroidScenariosSelftest(unittest.TestCase):
 
         classification = classify(self.repo)
         self.assertIn("LOCALIZATION", classification["surfaces"])
+
+        script = SCRIPTS / "check_strings.py"
+        env = {**os.environ, "HARNESS_REPO": str(self.repo)}
+        res = subprocess.run([sys.executable, str(script)], cwd=str(self.repo), capture_output=True, text=True, env=env, check=False)
+        self.assertNotEqual(0, res.returncode, "check_strings should fail on missing localized plural resource")
+        self.assertIn("items", res.stdout + res.stderr)
 
     # --- Scenario 08: Room Entity Field Type Change ---
     def test_scenario_08_room_entity_field_type_change(self) -> None:
@@ -301,7 +314,7 @@ class AndroidScenariosSelftest(unittest.TestCase):
         _run_git(self.repo, "add", ".")
         _run_git(self.repo, "commit", "-qm", "add db")
 
-        # Mutate database version to create an uncommitted Room diff
+        # Mutate database version to create an uncommitted Room diff without migration
         _write_file(
             db_file,
             "package com.example\nimport androidx.room.Database\nimport androidx.room.RoomDatabase\n\n"
@@ -311,6 +324,32 @@ class AndroidScenariosSelftest(unittest.TestCase):
 
         classification = classify(self.repo)
         self.assertIn("ROOM_SCHEMA", classification["surfaces"])
+
+        # Execute room_guard.py to verify it catches missing migration path 2 -> 3
+        script = SCRIPTS / "room_guard.py"
+        env = {**os.environ, "HARNESS_REPO": str(self.repo)}
+        res_missing = subprocess.run([sys.executable, str(script)], cwd=str(self.repo), capture_output=True, text=True, env=env, check=False)
+        self.assertNotEqual(0, res_missing.returncode, "room_guard should reject database version bump without migration")
+
+        # Add valid migration and builder registration across files
+        mig_file = self.repo / "app/src/main/kotlin/com/example/Migrations.kt"
+        _write_file(
+            mig_file,
+            "package com.example\nimport androidx.room.migration.Migration\n"
+            "val MIGRATION_2_3 = object : Migration(2, 3) {}\n",
+        )
+        _write_file(
+            db_file,
+            "package com.example\nimport androidx.room.Database\nimport androidx.room.RoomDatabase\nimport androidx.room.Room\n\n"
+            "@Database(entities = [], version = 3)\n"
+            "abstract class AppDatabase : RoomDatabase() {\n"
+            "    fun build(ctx: android.content.Context) = Room.databaseBuilder(ctx, AppDatabase::class.java, \"app.db\")\n"
+            "        .addMigrations(MIGRATION_2_3)\n"
+            "        .build()\n"
+            "}\n",
+        )
+        res_valid = subprocess.run([sys.executable, str(script)], cwd=str(self.repo), capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(0, res_valid.returncode, res_valid.stdout + res_valid.stderr)
 
     # --- Scenario 11: Billing Callback Logic Edit Without Billing Keyword in Diff ---
     def test_scenario_11_billing_callback_logic_edit(self) -> None:
@@ -518,6 +557,16 @@ class AndroidScenariosSelftest(unittest.TestCase):
         self.assertEqual(1, len(renamed))
         self.assertEqual("R", renamed[0]["status"])
         self.assertEqual(old_path, renamed[0]["old_path"])
+        self.assertEqual(new_path, renamed[0]["path"])
+        self.assertFalse(renamed[0]["path"].startswith("R100"))
+
+        from _repo_files import changed_files
+        changes = changed_files(self.repo)
+        rf = next(c for c in changes if c.status == "R")
+        self.assertEqual(new_path, rf.rel_posix)
+        self.assertEqual(old_path, rf.old_rel_posix)
+        self.assertFalse(rf.rel_posix.startswith("R100"))
+
         classification = classify(self.repo)
         self.assertTrue(classification["has_delete_or_rename"])
 
@@ -782,6 +831,77 @@ class AndroidScenariosSelftest(unittest.TestCase):
         self.assertTrue(current_run_file.is_file())
         saved_run = read_json(current_run_file)
         self.assertIn("verification_recipes", saved_run)
+
+    # --- Phase 2C: End-to-End BUG Task Final Verification ---
+    def test_scenario_phase2c_e2e_bug_final_verification(self) -> None:
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification
+        from final_verifier import verify
+
+        fix_file = self.repo / "app/src/main/kotlin/com/example/Fix.kt"
+        _write_file(fix_file, "package com.example\nfun bugFix() = true\n")
+
+        args = argparse.Namespace(
+            repo=str(self.repo),
+            task_id="TASK-BUG-E2E",
+            outcome="Fix NPE in profile",
+            kind="BUG",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":app",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        )
+        draft(args)
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id="TASK-BUG-E2E",
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id="TASK-BUG-E2E"))
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="TASK-BUG-E2E"))
+        self.assertIn("run_id", prep_res)
+        plan_file = self.repo / ".agents" / "state" / "tasks" / "TASK-BUG-E2E" / "plan.json"
+        saved_plan = read_json(plan_file)
+        self.assertEqual("VERIFYING", saved_plan["status"])
+
+        ver_res = verify(
+            self.repo,
+            plan_path=plan_file,
+            policy_path=Path(prep_res["policy"]),
+            manifest_path=Path(prep_res["manifest"]),
+            state_root=self.repo / ".agents" / "state",
+            run_id=prep_res["run_id"],
+        )
+        self.assertNotIn("policy artifact does not match deterministic policy evaluation", ver_res.get("blocked_by", []))
+
+    # --- Scenario: Multiple Matching Physical Devices Disambiguation ---
+    def test_scenario_multiple_matching_physical_devices(self) -> None:
+        from unittest import mock
+        from _repo_files import matching_adb_serials
+        from run_device import require_serial
+
+        devices = subprocess.CompletedProcess([], 0, "List of devices attached\nPHONE_A\tdevice\nPHONE_B\tdevice\n", "")
+        probe_a = subprocess.CompletedProcess([], 0, "0\n", "")
+        probe_b = subprocess.CompletedProcess([], 0, "0\n", "")
+
+        with mock.patch("_repo_files.subprocess.run", side_effect=[devices, probe_a, probe_b]):
+            matches = matching_adb_serials(policy="physical-only")
+            self.assertEqual(["PHONE_A", "PHONE_B"], matches)
+
+        with mock.patch("run_device.matching_adb_serials", return_value=["PHONE_A", "PHONE_B"]):
+            with self.assertRaises(SystemExit) as cm:
+                require_serial(None)
+            self.assertEqual(EXIT_ENV, cm.exception.code)
+
+        with mock.patch("run_device.adb_serial_is_emulator", return_value=False):
+            with mock.patch("run_device.DEVICE_TARGET_POLICY", "physical-only"):
+                self.assertEqual("PHONE_B", require_serial("PHONE_B"))
 
 
 if __name__ == "__main__":

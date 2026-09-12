@@ -151,7 +151,8 @@ def tag_exists_locally(tag_name: str) -> bool:
     return bool(res.returncode == 0 and tag_name in res.stdout.split())
 
 
-def tag_exists_remotely(tag_name: str) -> bool:
+def tag_remote_status(tag_name: str) -> str:
+    """Return 'PRESENT', 'ABSENT', or 'UNKNOWN'."""
     try:
         res = subprocess.run(
             ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"],
@@ -161,16 +162,41 @@ def tag_exists_remotely(tag_name: str) -> bool:
             check=False,
             timeout=10,
         )
-        return bool(res.returncode == 0 and res.stdout.strip())
+        if res.returncode == 0:
+            return "PRESENT" if res.stdout.strip() else "ABSENT"
+        return "UNKNOWN"
     except Exception:
-        return False
+        return "UNKNOWN"
+
+
+def github_release_status(tag_name: str) -> str:
+    """Return 'PRESENT', 'ABSENT', or 'UNKNOWN'."""
+    if not shutil.which("gh"):
+        return "UNKNOWN"
+    try:
+        res = subprocess.run(
+            ["gh", "release", "view", tag_name],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if res.returncode == 0:
+            return "PRESENT"
+        if "release not found" in (res.stderr or "").lower() or res.returncode == 1:
+            return "ABSENT"
+        return "UNKNOWN"
+    except Exception:
+        return "UNKNOWN"
+
+
+def tag_exists_remotely(tag_name: str) -> bool:
+    return tag_remote_status(tag_name) == "PRESENT"
 
 
 def github_release_exists(tag_name: str) -> bool:
-    if not shutil.which("gh"):
-        return False
-    res = subprocess.run(["gh", "release", "view", tag_name], cwd=ROOT, capture_output=True, text=True, check=False)
-    return res.returncode == 0
+    return github_release_status(tag_name) == "PRESENT"
 
 
 
@@ -231,8 +257,23 @@ def main(argv: list[str] | None = None) -> int:
         if tag_exists_locally(tag_name):
             print(f"[ERROR] Tag '{tag_name}' already exists locally. Release tags are immutable. Increment the patch version.")
             return 1
-        if not args.dry_run and not args.no_push and tag_exists_remotely(tag_name):
-            print(f"[ERROR] Tag '{tag_name}' already exists on remote origin. Release tags are immutable. Increment the patch version.")
+        if not args.dry_run and not args.no_push:
+            remote_tag_state = tag_remote_status(tag_name)
+            if remote_tag_state == "PRESENT":
+                print(f"[ERROR] Tag '{tag_name}' already exists on remote origin. Release tags are immutable. Increment the patch version.")
+                return 1
+            elif remote_tag_state == "UNKNOWN":
+                print(f"[ERROR] Could not reliably verify remote tag status for '{tag_name}' on origin. Preflight check failed closed.")
+                return 1
+
+            gh_release_state = github_release_status(tag_name)
+            if gh_release_state == "PRESENT":
+                print(f"[ERROR] GitHub release '{tag_name}' already exists. Published releases are immutable. Increment the patch version.")
+                return 1
+    else:
+        gh_release_state = github_release_status(tag_name)
+        if gh_release_state == "PRESENT":
+            print(f"[ERROR] Cannot overwrite published GitHub release '{tag_name}'. Release tags are immutable once published.")
             return 1
 
     print(f"[*] Release target: v{target_version} (current: v{current_version})")
@@ -287,15 +328,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("  [SUCCESS] All hook self-tests passed (0 failures).")
 
-        if validate_release and not args.dry_run:
-            print("  + Running validate_release suite...")
-            val_errors = validate_release(ROOT, target_version)
-            if val_errors:
-                print("[FAIL] Release validation failed:")
-                for err in val_errors:
-                    print(f"  - {err}")
-                return 1
-            print("  [SUCCESS] Release validation passed.")
+    if validate_release and not args.dry_run:
+        print("  + Running validate_release suite...")
+        val_errors = validate_release(ROOT, target_version)
+        if val_errors:
+            print("[FAIL] Release validation failed:")
+            for err in val_errors:
+                print(f"  - {err}")
+            return 1
+        print("  [SUCCESS] Release validation passed.")
 
         # Verify PyPI build & metadata
         try:

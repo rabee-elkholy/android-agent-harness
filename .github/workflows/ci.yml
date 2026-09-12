@@ -55,6 +55,10 @@ jobs:
           python agents/scripts/_baseline_selftest.py
           python agents/scripts/_graph_selftest.py
 
+      - name: Run Android scenario regression matrix
+        run: |
+          python agents/scripts/_android_scenarios_selftest.py
+
       - name: Compile Python sources
         run: |
           python -m compileall -q agents/scripts agents/mcp/zoho_sprints harness_cli.py

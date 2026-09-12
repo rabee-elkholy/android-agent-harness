@@ -66,7 +66,7 @@ def is_delivery_relevant(relative: str) -> bool:
     if first in ROOT_EXCLUDED or any(f"/{part}/" in framed for part in NESTED_EXCLUDED):
         return False
     name = lowered.rpartition("/")[2]
-    if name in ROOT_BUILD_FILES:
+    if name in ROOT_BUILD_FILES or name in ("baseline-prof.txt", "startup-prof.txt"):
         return True
     if lowered.endswith(("gradle-wrapper.jar", "gradle-wrapper.properties")):
         return True

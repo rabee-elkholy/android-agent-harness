@@ -109,7 +109,7 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
 
         lines.append("\n### Reviewer Call-Chain Guidance:")
         lines.append("- Inspect any identified callers or contract files directly with `view_file` (maximum 2 hops).")
-        lines.append("- Do NOT run unanchored repository-wide searches; all relevant callers and layer mappings are pre-computed above.")
+        lines.append("- Topology guidance is advisory; inspect callers and related contracts directly when verifying cross-component impact.")
         lines.append("")
         return "\n".join(lines)
     except Exception as exc:

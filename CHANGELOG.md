@@ -5,6 +5,26 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.14] - 2026-09-12
+
+### Audit Findings Hardening, FQN Resolution, Multi-Device Disambiguation, and Verification Precision
+
+- **BUG Task Policy Evaluation Alignment (F01, `final_verifier.py`)**: Passed `task_kind` (`BUG` vs `FEATURE`) to deterministic policy evaluation and later-round recalculation in `final_verifier.py`, ensuring bug tasks properly evaluate policy without mismatch.
+- **Git Porcelain v2 Rename Token Parsing (F02, `_repo_files.py`)**: Updated porcelain v2 parsing to use 9 split limits (`line.split(" ", 9)`), correctly extracting destination paths and stripping rename similarity score tokens (e.g. `R100`).
+- **Device Prerequisite Strictness & Active Run Boundary (F03, `run_device.py`)**: Enforced immutable `EvidenceStore` verification and strict `current-run.json` checks in `run_device.py`, failing closed with `EXIT_ENV` when run files are missing, corrupt, or mismatched.
+- **Brace-Balanced & Kotlin Parameter Scope Extraction (F04, F05, `change_classifier.py`)**: Replaced upward sliding regex with a brace-balanced structural scope parser, correctly scoping Kotlin data classes, long methods (>150 lines), and multiline XML elements without false escalation or missing enclosing scopes.
+- **Room Migration Completeness & Entity Lifecycle Hardening (F06, F07, `room_guard.py`)**: Stored historical HEAD declarations to detect entity deletion and membership shifts, requiring database version increments. Verified that all intermediate migration edges are explicitly registered in `addMigrations(...)` before granting approval.
+- **Localization Array & Plural Hierarchy Checking (F08, `check_strings.py`)**: Mapped diff hunks to enclosing `<plurals>` and `<string-array>` tags and checked item-level placeholder consistency across localized collections.
+- **Checked-in Generated Source Exemption (F10, `pre_tool_safety.py`)**: Allowed edits to checked-in generated sources under `/src/` while strictly keeping ephemeral build directories protected from direct host writes.
+- **Release Automation Preflight Provenance & Hardening (F11, `release_version.py`, `publish-pypi.yml`)**: Added tri-state remote tag status checking (`PRESENT`, `ABSENT`, `UNKNOWN`) and GitHub release validation before mutation. Removed `skip-existing: true` in PyPI publishing workflow.
+- **Scenario Matrix CI Integration & Guard Hardening (F12, `ci.yml`, `_android_scenarios_selftest.py`)**: Added `_android_scenarios_selftest.py` into GitHub Actions CI test matrix, and strengthened Scenarios 07, 10, 20, 2C, and multi-device checks with direct guard execution.
+- **Baseline and Startup Profile Coverage (F13, `delivery_manifest.py`, `change_classifier.py`)**: Included `baseline-prof.txt` and `startup-prof.txt` in delivery manifest relevance checks and classified them under `BUILD_CONFIG`.
+- **Accurate Delivery Snapshot Guidance (F14, `harness-rules.md`)**: Clarified working tree snapshot proof boundaries in documentation.
+- **Graph FQN Import Resolution & Advisory Call-Chain Guidance (F15, `_graph_core.py`, `review_package.py`)**: Resolved exact FQN imports first in graph engine, preventing short name collisions, and updated reviewer call-chain guidance.
+- **Navigation Surface Routing & Dedicated Device API Recipe (F17, `change_classifier.py`, `review_policy.py`, `_verification_recipes.py`)**: Added `NAVIGATION` classification for navigation graph resources and navigation APIs, routed it to appropriate reviewers and device requirements, and added dedicated `DEVICE_API` verification recipes.
+- **StateLock for Debug Evidence & TDD Assertion Realignment (F18, `workflow.py`, `SKILL.md`)**: Guarded `record_debug_evidence` with `StateLock` and validation against file corruption, and updated TDD/debugging skill instructions to focus on meaningful seams.
+- **Multiple Physical Device Disambiguation (F20, `_repo_files.py`, `run_device.py`)**: Added `matching_adb_serials` and fail-closed actionable error in `require_serial` when multiple matching target devices are connected without an explicit `--serial`.
+
 ## [1.0.13] - 2026-09-12
 
 ### Stability-First Android Specialization, Systematic Debugging, Generated-Code Protection, and Deterministic Verification Recipes
