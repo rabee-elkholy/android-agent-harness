@@ -62,6 +62,9 @@ jobs:
       - name: Run release safety regressions
         run: python agents/scripts/_release_safety_selftest.py
 
+      - name: Run critical safety regressions
+        run: python agents/scripts/_critical_safety_selftest.py
+
       - name: Compile Python sources
         run: |
           python -m compileall -q agents/scripts agents/mcp/zoho_sprints harness_cli.py

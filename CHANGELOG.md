@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.19] - 2026-09-13
+
+### Critical Safety Hardening, Tamper-Proof Checksums, Lock Atomicity, and SemVer Routing
+
+- **Classifier Coverage Verification (`change_classifier.py`)**: Added per-file classification coverage check in `classify()`. Any delivery-relevant file not covered by a classified surface is tagged as `UNKNOWN`, preventing doc or test changes from masking unclassified changes.
+- **Room Embedded & Entity Hierarchy Resolution (`change_classifier.py`)**: Added `_room_schema_types(repo)` helper to recursively resolve `@Database` entities and nested `@Embedded` types across files. Kotlin and Java changes matching these types are deterministically tagged as `ROOM_SCHEMA`, enforcing migration checks.
+- **Kit Checksum Schema & Inventory Integrity (`harness_cli.py`, `lifecycle.py`)**: Enforced top-level JSON schema validation, non-empty file inventories, and presence of mandatory anchor files (`agents/VERSION`, `agents/scripts/lifecycle.py`) in `_verify_kit_checksums()` and `_validate_kit()`.
+- **Skill Router SemVer & Kernel Major Validation (`skill_router.py`)**: Enforced SemVer 2.0.0 regex compliance (including pre-release tags) and integer parsing for `kernel-major` metadata. Missing or malformed skill metadata immediately blocks routing with `BLOCKED`.
+- **Final Verifier Repository Identity & Branch Integrity (`final_verifier.py`)**: Validates repository identity fields (`root_sha256`, `git_common_dir_sha256`, and `branch`) against `recorded_manifest`, failing closed with `STALE` if the branch drifts or repository changes during verification.
+- **Atomic Nonce-Backed Stale Lock Reclaim & Spin-Free Backoff (`evidence_store.py`)**: Stored unique random `nonce` in `StateLock`, verified `nonce` and `pid` in `__exit__`, added atomic stale lock validation in `_try_remove_stale_lock()`, and eliminated CPU busy-spins by backing off with `time.sleep(0.05)` when lock release is delayed.
+- **Critical Safety Regression Suite (`_critical_safety_selftest.py`)**: Added 18 comprehensive unit tests covering all audit findings and positive neighboring invariants.
+- **Open Source Showcase & Documentation Overhaul (`README.md`)**: Rebuilt project README with comprehensive architectural breakdowns, multi-host guides, realistic developer guarantees, and failure mode comparisons.
+
 ## [1.0.18] - 2026-09-12
 
 ### Stability-First Guidance, Safe Upgrades, and Verified Releases

@@ -143,6 +143,24 @@ def run_adb(serial: str, adb_args: list[str], label: str) -> tuple[int, str]:
     return code, log
 
 
+def resolve_target_user(serial: str, requested: str | None) -> str:
+    value = str(requested) if requested is not None else "current"
+    if value == "current":
+        try:
+            result = subprocess.run(
+                ["adb", "-s", serial, "shell", "am", "get-current-user"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=10.0,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise HarnessError("cannot resolve the current Android user") from exc
+        if result.returncode != 0:
+            raise HarnessError("cannot resolve the current Android user")
+        value = result.stdout.strip()
+    if not value.isascii() or not value.isdecimal():
+        raise HarnessError("target user must resolve to one numeric Android user id")
+    return str(int(value))
+
+
 def _read_harness_version(repo: Path) -> str:
     for candidate in (
         repo / ".agents" / "VERSION",
@@ -321,7 +339,7 @@ def main() -> int:
 
     artifact_set = None
     apk_paths: list[Path] = []
-    if args.action in ("install", "install-start"):
+    if args.action in ("install", "install-start", "start"):
         try:
             assemble_record = read_gate_result(gate_artifact_name(_task)) or {}
             recorded = assemble_record.get("artifact_set")
@@ -357,12 +375,30 @@ def main() -> int:
             return EXIT_ENV
     artifact_set_sha = str((artifact_set or {}).get("artifact_set_sha256") or "")
     actual_application_id = str((artifact_set or {}).get("application_id") or APPLICATION_ID)
-    target_user = str(args.user) if args.user is not None else "current"
+    try:
+        target_user = resolve_target_user(serial, args.user)
+    except HarnessError as exc:
+        record_device(args.action, "ENV", EXIT_ENV, serial, "ENV", str(exc))
+        live_print(f"[FAIL] {exc}", err=True)
+        return EXIT_ENV
+    target_activity = ""
+    if args.action in ("start", "install-start"):
+        target_activity = args.activity
+        if target_activity == DEFAULT_ACTIVITY and "/" in target_activity:
+            original_package, activity_class = target_activity.split("/", 1)
+            if activity_class.startswith("."):
+                activity_class = original_package + activity_class
+            target_activity = actual_application_id + "/" + activity_class
+        elif "/" not in target_activity:
+            activity_class = target_activity if target_activity.startswith(".") or "." in target_activity else "." + target_activity
+            target_activity = actual_application_id + "/" + activity_class
+        if target_activity.split("/", 1)[0] != actual_application_id:
+            record_device("start", "FAIL", 1, serial, "CODE", "activity package differs from assembled application id")
+            return 1
     preexisting_package: bool | None = None
     if args.action in ("install", "install-start"):
         probe_args = ["adb", "-s", serial, "shell", "pm", "path"]
-        if args.user is not None:
-            probe_args.extend(["--user", str(args.user)])
+        probe_args.extend(["--user", target_user])
         probe_args.append(actual_application_id)
         try:
             probe = subprocess.run(
@@ -372,21 +408,17 @@ def main() -> int:
             preexisting_package = probe.returncode == 0 and "package:" in (probe.stdout or "")
         except (OSError, subprocess.TimeoutExpired):
             preexisting_package = None
-    if args.action == "start" and not artifact_set_sha:
+    if args.action == "start":
         prior_install = read_gate_result("device_install") or {}
-        prior_hash = str(prior_install.get("artifact_set_sha256") or "")
-        assemble_record = read_gate_result(gate_artifact_name(_task)) or {}
-        recorded = assemble_record.get("artifact_set")
-        try:
-            if isinstance(recorded, dict):
-                verify_artifact_set(REPO, recorded)
-                artifact_set = recorded
-                artifact_set_sha = str(recorded.get("artifact_set_sha256") or "")
-        except HarnessError:
-            artifact_set_sha = ""
-        if not artifact_set_sha or artifact_set_sha != prior_hash:
-            live_print("[FAIL] Start requires install evidence for the active artifact set.", err=True)
-            record_device("start", "FAIL", 1, serial, "CODE", "missing install evidence")
+        expected = {
+            "status": "PASS", "artifact_set_sha256": artifact_set_sha,
+            "application_id": actual_application_id, "target_user": target_user,
+            "serial_sha256": sha256_bytes(serial.encode("utf-8")),
+            **{field: assemble_record.get(field) for field in ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256")},
+        }
+        if not artifact_set_sha or any(not value or prior_install.get(field) != value for field, value in expected.items()):
+            live_print("[FAIL] Start requires passing install evidence for the same artifact, device, user, application and snapshot.", err=True)
+            record_device("start", "FAIL", 1, serial, "CODE", "install identity mismatch")
             return 1
 
     if args.action in ("install", "install-start"):
@@ -405,8 +437,7 @@ def main() -> int:
         install_cmd = ["install-multiple" if len(apk_paths) > 1 else "install", "-r"]
         if args.grant_runtime_permissions:
             install_cmd.append("-g")
-        if args.user is not None:
-            install_cmd.extend(["--user", str(args.user)])
+        install_cmd.extend(["--user", target_user])
         install_cmd.extend(str(apk) for apk in apk_paths)
         code, log = run_adb(serial, install_cmd, "adb install")
         if not adb_result_ok(code, log):
@@ -422,17 +453,10 @@ def main() -> int:
         live_print("[+] Install finished")
 
     if args.action in ("start", "install-start"):
-        target_activity = args.activity
-        if target_activity == DEFAULT_ACTIVITY and "/" in target_activity:
-            target_activity = actual_application_id + "/" + target_activity.split("/", 1)[1]
-        if "/" not in target_activity:
-            target_activity = (
-                f"{actual_application_id}/{target_activity if target_activity.startswith('.') else '.' + target_activity}"
-            )
         live_print(f"[*] Launching target Activity: {target_activity}")
         code, log = run_adb(
             serial,
-            ["shell", "am", "start", "-n", target_activity],
+            ["shell", "am", "start", "--user", target_user, "-n", target_activity],
             "am start",
         )
         if not adb_result_ok(code, log):
@@ -442,7 +466,7 @@ def main() -> int:
             record_device("start", "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason, artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha, application_id=actual_application_id, target_user=target_user)
             emit_env_failure(verdict, "run_device.py", serial=serial)
             return exit_for(verdict)
-        record_device("start", "PASS", 0, serial, artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha, application_id=actual_application_id, target_user=target_user)
+        record_device("start", "EMERGENCY_UNVERIFIED" if args.force else "PASS", 0, serial, artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha, application_id=actual_application_id, target_user=target_user)
         live_print(f"[+] Launched {target_activity}")
         try:
             state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"

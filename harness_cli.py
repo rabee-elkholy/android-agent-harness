@@ -107,7 +107,15 @@ def _verify_kit_checksums(kit: Path) -> None:
         manifest = json.loads(checksum_file.read_text(encoding="utf-8"))
     except Exception as exc:
         raise SystemExit(f"[ERROR] Kit release checksums manifest corrupt: {exc}")
-    files = manifest.get("files") or {}
+    if not isinstance(manifest, dict):
+        raise SystemExit("[ERROR] Kit release checksums manifest has an unsupported schema")
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        raise SystemExit("[ERROR] Kit release checksums manifest files inventory is empty or malformed")
+    core_files = {"agents/VERSION", "agents/scripts/lifecycle.py"}
+    missing_core = core_files - set(files)
+    if missing_core:
+        raise SystemExit(f"[ERROR] Kit release checksums manifest missing core files: {', '.join(sorted(missing_core))}")
     for rel, expected in files.items():
         rel_path = Path(rel)
         if rel_path.is_absolute() or ".." in rel_path.parts:
@@ -392,53 +400,46 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"  engine kit : {kit}")
     print("==================================================")
     answers_arg = getattr(args, "answers_json", None)
-    temp_to_clean: Path | None = None
+    answers_source: Path | None = None
     if answers_arg:
-        p = Path(answers_arg).resolve()
+        p = Path(answers_arg).absolute()
         if p.is_symlink() or not p.is_file():
             raise SystemExit(f"[ERROR] --answers-json path is missing or a symlink: {answers_arg}")
-        temp_to_clean = p
+        answers_source = p
 
-    try:
-        if answers_arg:
-            wizard_args = ["write", "--repo", str(repo), "--answers-json", str(temp_to_clean)]
-            if args.lang:
-                wizard_args.extend(["--lang", args.lang])
-            code = run_engine_script(kit, "setup_wizard.py", wizard_args)
-        else:
-            lang_args = ["--lang", args.lang] if args.lang else []
-            code = run_engine_script(
-                kit,
-                "setup_wizard.py",
-                ["--repo", str(repo), *lang_args],
-            )
-        if code != 0:
-            print("[!] Setup wizard did not complete; nothing was installed.")
-            return code
-        answers = repo / ".harness-setup" / "answers.json"
-        if not answers.is_file():
-            print("[!] answers.json missing after wizard; rerun init.")
-            return 1
-        print("[*] Installing the vNext engine into the target app...")
-        lifecycle_action = "replace-legacy" if getattr(args, "replace_legacy", False) else "install"
-        port_code = run_engine_script(
+    if answers_arg:
+        wizard_args = ["write", "--repo", str(repo), "--answers-json", str(answers_source)]
+        if args.lang:
+            wizard_args.extend(["--lang", args.lang])
+        code = run_engine_script(kit, "setup_wizard.py", wizard_args)
+    else:
+        lang_args = ["--lang", args.lang] if args.lang else []
+        code = run_engine_script(
             kit,
-            "lifecycle.py",
-            [lifecycle_action, "--repo", str(repo), "--kit", str(kit)],
+            "setup_wizard.py",
+            ["--repo", str(repo), *lang_args],
         )
-        if port_code != 0:
-            print("[!] Engine port reported failures; review doctor output above.")
-            return port_code
-        print()
-        print("[SUCCESS] Android Agent Harness installed; run doctor for local validation.")
-        print(f"[VERIFY] Run anytime: android-harness doctor --repo \"{repo}\"")
-        return 0
-    finally:
-        if temp_to_clean and temp_to_clean.is_file():
-            try:
-                temp_to_clean.unlink(missing_ok=True)
-            except OSError:
-                pass
+    if code != 0:
+        print("[!] Setup wizard did not complete; nothing was installed.")
+        return code
+    answers = repo / ".harness-setup" / "answers.json"
+    if not answers.is_file():
+        print("[!] answers.json missing after wizard; rerun init.")
+        return 1
+    print("[*] Installing the vNext engine into the target app...")
+    lifecycle_action = "replace-legacy" if getattr(args, "replace_legacy", False) else "install"
+    port_code = run_engine_script(
+        kit,
+        "lifecycle.py",
+        [lifecycle_action, "--repo", str(repo), "--kit", str(kit)],
+    )
+    if port_code != 0:
+        print("[!] Engine port reported failures; review doctor output above.")
+        return port_code
+    print()
+    print("[SUCCESS] Android Agent Harness installed; run doctor for local validation.")
+    print(f"[VERIFY] Run anytime: android-harness doctor --repo \"{repo}\"")
+    return 0
 
 
 def cmd_update(args: argparse.Namespace) -> int:
@@ -474,41 +475,43 @@ def cmd_update(args: argparse.Namespace) -> int:
         repo = find_repo(args.repo)
         answers = repo / ".harness-setup" / "answers.json"
         answers_arg = getattr(args, "answers_json", None)
-        temp_answers = Path(answers_arg).resolve() if answers_arg else None
+        temp_answers = Path(answers_arg).absolute() if answers_arg else None
         old_answers = answers.read_bytes() if answers.is_file() else None
-        if temp_answers:
-            if temp_answers.is_symlink() or not temp_answers.is_file():
-                raise SystemExit(f"[ERROR] --answers-json path is missing or a symlink: {answers_arg}")
-            wizard_code = run_engine_script(
-                kit, "setup_wizard.py",
-                ["write", "--repo", str(repo), "--answers-json", str(temp_answers)],
-            )
-            if wizard_code != 0:
-                temp_answers.unlink(missing_ok=True)
-                return wizard_code
-        if answers.is_file():
-            print("[*] Applying a compatible vNext engine update to the app checkout...")
-            port_code = run_engine_script(
-                kit,
-                "lifecycle.py",
-                ["update", "--repo", str(repo), "--kit", str(kit)],
-            )
-            if port_code != 0:
-                if temp_answers:
-                    if old_answers is None:
-                        answers.unlink(missing_ok=True)
-                    else:
-                        answers.write_bytes(old_answers)
-                    temp_answers.unlink(missing_ok=True)
-                print(
-                    f"[FAIL] App checkout update failed with exit code {port_code}; "
-                    "success was not recorded."
-                )
-                return port_code
+        sys.path.insert(0, str(_script_root(kit)))
+        from lifecycle import require_update_idle
+        try:
+            require_update_idle(repo)
+        except RuntimeError as exc:
+            print(f"[FAIL] {exc}")
+            return 1
+        completed = False
+        try:
             if temp_answers:
-                temp_answers.unlink(missing_ok=True)
-            print("[SUCCESS] App checkout updated and verified.")
-            return 0
+                if temp_answers.is_symlink() or not temp_answers.is_file():
+                    raise SystemExit(f"[ERROR] --answers-json path is missing or a symlink: {answers_arg}")
+                wizard_code = run_engine_script(
+                    kit, "setup_wizard.py",
+                    ["write", "--repo", str(repo), "--answers-json", str(temp_answers)],
+                )
+                if wizard_code != 0:
+                    return wizard_code
+            if answers.is_file():
+                print("[*] Applying a compatible vNext engine update to the app checkout...")
+                port_code = run_engine_script(
+                    kit, "lifecycle.py", ["update", "--repo", str(repo), "--kit", str(kit)],
+                )
+                if port_code != 0:
+                    print(f"[FAIL] App checkout update failed with exit code {port_code}; success was not recorded.")
+                    return port_code
+                completed = True
+                print("[SUCCESS] App checkout updated and verified.")
+                return 0
+        finally:
+            if temp_answers and not completed:
+                if old_answers is None:
+                    answers.unlink(missing_ok=True)
+                else:
+                    answers.write_bytes(old_answers)
     print("[NEXT] Port the new engine into your app checkout:")
     print(f"       paste {_prompt_url(new_version, 'install-or-update-prompt.md')}")
     print("       in a NEW strong-model chat opened at the Android project root.")
@@ -612,7 +615,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_vnext_selftest.py", "_hook_selftest.py", "_security_selftest.py",
             "_zoho_selftest.py", "_baseline_selftest.py", "_graph_selftest.py",
             "_adb_core_selftest.py", "_env_codes_selftest.py", "_performance_selftest.py",
-            "_android_scenarios_selftest.py", "_release_safety_selftest.py",
+            "_android_scenarios_selftest.py", "_release_safety_selftest.py", "_critical_safety_selftest.py",
         )
         for script in scripts:
             code = run_engine_script(kit, script, [])

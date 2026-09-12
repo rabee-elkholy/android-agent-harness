@@ -175,7 +175,7 @@ class ChatInstallationLifecycleTests(RepoCase):
         self.assertEqual(0, code)
         self.assertTrue((self.repo / ".agents").is_dir())
         self.assertTrue((self.repo / ".harness-setup" / "answers.json").is_file())
-        self.assertFalse(temp_answers.exists())
+        self.assertTrue(temp_answers.exists())
 
     def test_chat_same_major_update_applies_new_answers_without_refresh(self) -> None:
         write(self.repo / ".harness-setup/answers.json", json.dumps({
@@ -192,7 +192,7 @@ class ChatInstallationLifecycleTests(RepoCase):
             answers_json=str(temp_answers),
         ))
         self.assertEqual(0, code)
-        self.assertFalse(temp_answers.exists())
+        self.assertTrue(temp_answers.exists())
         answers = json.loads((self.repo / ".harness-setup/answers.json").read_text(encoding="utf-8"))
         self.assertEqual("emulator-only", answers["device_policy"])
 
@@ -214,7 +214,7 @@ class ChatInstallationLifecycleTests(RepoCase):
         except (OSError, NotImplementedError):
             pass
 
-    def test_temporary_answers_file_is_cleaned_up_on_failure(self) -> None:
+    def test_caller_answers_file_is_preserved_on_failure(self) -> None:
         temp_answers = self.repo / "fail_answers.json"
         write(temp_answers, json.dumps({"unknown_key_fail": True}))
         args = Namespace(
@@ -225,7 +225,7 @@ class ChatInstallationLifecycleTests(RepoCase):
         )
         code = harness_cli.cmd_init(args)
         self.assertNotEqual(0, code)
-        self.assertFalse(temp_answers.exists())
+        self.assertTrue(temp_answers.exists())
 
     def test_pre_execution_checksums_verifier_rejects_tampered_kit(self) -> None:
         temp_kit_dir = tempfile.TemporaryDirectory()
@@ -838,9 +838,9 @@ class ArtifactAndVerifierTests(RepoCase):
 class LifecycleTests(RepoCase):
     def test_safe_harness_cli_inspection_commands_need_no_active_plan(self) -> None:
         for command in (
-            "python C:/kit/harness_cli.py version",
-            "python C:/kit/harness_cli.py doctor --repo .",
-            "python C:/kit/harness_cli.py --help",
+            f'python "{KIT.as_posix()}/harness_cli.py" version',
+            f'python "{KIT.as_posix()}/harness_cli.py" doctor --repo .',
+            f'python "{KIT.as_posix()}/harness_cli.py" --help',
         ):
             self.assertTrue(command_allowed(self.repo, command)[0], command)
 

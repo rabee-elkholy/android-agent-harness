@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -36,19 +37,31 @@ ROUTES = {
 }
 
 
-def _metadata(skill_file: Path) -> dict[str, str | int]:
-    version = "1.0.0"
-    compatible_major = KERNEL_COMPATIBLE_MAJOR
+def _metadata(skill_file: Path) -> tuple[dict[str, str | int] | None, str | None]:
+    version = None
+    compatible_major = None
     try:
-        for line in skill_file.read_text(encoding="utf-8", errors="replace").splitlines()[:30]:
+        lines = skill_file.read_text(encoding="utf-8", errors="replace").splitlines()[:30]
+        for line in lines:
             lowered = line.lower().strip()
             if lowered.startswith("version:"):
-                version = line.split(":", 1)[1].strip().strip('"\'')
+                val = line.split(":", 1)[1].strip().strip('"\'')
+                if not re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", val):
+                    return None, f"invalid version format '{val}'"
+                version = val
             elif lowered.startswith("kernel-major:"):
-                compatible_major = int(line.split(":", 1)[1].strip())
-    except (OSError, ValueError):
-        pass
-    return {"version": version, "kernel_major": compatible_major}
+                val = line.split(":", 1)[1].strip().strip('"\'')
+                try:
+                    compatible_major = int(val)
+                except ValueError:
+                    return None, f"invalid kernel-major integer '{val}'"
+    except OSError as exc:
+        return None, f"cannot read skill file: {exc}"
+    if version is None:
+        return None, "missing required 'version' field"
+    if compatible_major is None:
+        return None, "missing required 'kernel-major' field"
+    return {"version": version, "kernel_major": compatible_major}, None
 
 
 def route(skills_root: Path, surfaces: list[str], *, kernel_major: int = KERNEL_COMPATIBLE_MAJOR, task_kind: str = "FEATURE") -> dict:
@@ -69,7 +82,10 @@ def route(skills_root: Path, surfaces: list[str], *, kernel_major: int = KERNEL_
             errors.append(f"duplicate mandatory skill path: {skill_id}")
             continue
         seen_paths.add(resolved)
-        meta = _metadata(skill_file)
+        meta, meta_error = _metadata(skill_file)
+        if meta is None:
+            errors.append(f"malformed skill metadata in {skill_id}: {meta_error}")
+            continue
         if int(meta["kernel_major"]) != kernel_major:
             errors.append(
                 f"incompatible skill {skill_id}: kernel major {meta['kernel_major']} != {kernel_major}"

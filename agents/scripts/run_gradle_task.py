@@ -96,8 +96,29 @@ def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
     return [str(wrapper), *gradle_args]
 
 
-def run_gradle(task_args: list[str]) -> int:
+def test_failure_only(task: str, raw_log: str) -> bool:
+    """Attribute a nonzero exit to one test task, never to another build failure."""
+    failures = re.findall(r"Execution failed for task ['\"]([^'\"]+)['\"]", raw_log)
+    failed_tasks = re.findall(r"(?m)^> Task (\S+) FAILED\s*$", raw_log)
+    sections = re.findall(r"(?ms)^\* What went wrong:\s*\n(.*?)(?=^\* |\Z)", raw_log)
+    if len(sections) != 1 or re.search(r"Build completed with (?:[2-9]|\d{2,}) failures", raw_log):
+        return False
+    details = [line.strip() for line in sections[0].splitlines() if line.strip()]
+    if len(details) != 2 or not details[0].startswith("Execution failed for task ") or not details[1].startswith("> There were failing tests"):
+        return False
+    expected = ":" + task.strip(":")
+    return (
+        bool(failures) and all(":" + item.strip(":") == expected for item in failures + failed_tasks)
+        and "There were failing tests" in raw_log
+        and not parse_compiler_errors(raw_log)
+    )
+
+
+def run_gradle(task_args: list[str], *, outcome: dict | None = None) -> int:
     enable_line_buffered_stdio()
+    if outcome is not None:
+        outcome.clear()
+        outcome["test_failure_only"] = False
     gradle_args = with_plain_console(task_args)
     task_label = task_args[0] if task_args else "gradle"
     artifact_name = gate_artifact_name(task_label)
@@ -162,6 +183,8 @@ def run_gradle(task_args: list[str]) -> int:
             emit_env_failure(verdict, "run_gradle_task.py")
             return EXIT_ENV
         record("FAIL", code, verdict.env_class, verdict.reason)
+        if outcome is not None:
+            outcome["test_failure_only"] = test_failure_only(task_label, raw_log)
 
     if code == 0:
         artifact_set = None

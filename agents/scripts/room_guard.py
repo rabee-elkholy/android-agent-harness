@@ -236,6 +236,24 @@ def find_candidate_migration_files(db_path: Path, changed_src: list[Path], repo:
 
 
 
+def registered_migration_edges(bodies: list[str], database: str, other_databases: set[str]) -> frozenset[tuple[int, int]]:
+    """Collect registered paths without assuming every database starts at version 1."""
+    texts = []
+    for text in bodies:
+        builders = set(re.findall(r"databaseBuilder\s*\([^,]+,\s*([A-Za-z0-9_]+)(?:::class|\.class)", text))
+        if builders and database not in builders:
+            continue
+        if any(re.search(rf"\b{re.escape(other)}\b", text) for other in other_databases) and not re.search(rf"\b{re.escape(database)}\b", text):
+            continue
+        texts.append(text)
+    blocks = [block for text in texts for block in _extract_add_migrations_blocks(text, database)]
+    registered = {token for block in blocks for token in IDENT_RE.findall(block)}
+    edges = {(int(a), int(b)) for text in texts for a, b in AUTO_MIGRATION_RE.findall(text)}
+    edges.update((int(a), int(b)) for block in blocks for a, b in MIGRATION_RE.findall(block))
+    edges.update((int(a), int(b)) for text in texts for name, a, b in KT_VAR_RE.findall(text) + JAVA_VAR_RE.findall(text) if name in registered)
+    return frozenset(edges)
+
+
 def iter_database_files(repo: Path | None = None) -> list[Path]:
     root = repo or REPO
     skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
@@ -303,6 +321,11 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
 
         candidate_files = find_candidate_migration_files(path, changed_src, root)
         candidate_rels = {_rel(p) for p in candidate_files}
+        for deleted in paths:
+            if deleted.suffix in (".kt", ".java") and not deleted.is_file():
+                previous = git_head_text(_rel(deleted), root) or ""
+                if "Migration" in previous or "databaseBuilder" in previous:
+                    candidate_rels.add(_rel(deleted))
         if candidate_rels & changed_rels:
             reasons.append("candidate migration files changed")
 
@@ -335,6 +358,17 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
             )
 
         other_db_classes = {d.class_name for _, d in databases if d.class_name and d.class_name != new_decl.class_name}
+
+        if old_ver is not None:
+            sources = set(find_candidate_migration_files(path, changed_src, root)) | {path}
+            sources.update(p for p in paths if p.suffix in (".kt", ".java"))
+            old_bodies = [text for p in sources if (text := git_head_text(_rel(p), root))]
+            new_bodies = [p.read_text(encoding="utf-8", errors="replace") for p in sources if p.is_file()]
+            historical = registered_migration_edges(old_bodies, new_decl.class_name, other_db_classes)
+            current_edges = registered_migration_edges(new_bodies, new_decl.class_name, other_db_classes)
+            for start in sorted({a for a, b in historical if a < b <= old_ver}):
+                if is_migration_path_covered(start, old_ver, historical) and not is_migration_path_covered(start, new_ver, current_edges):
+                    failures.append(f"{new_decl.rel}: previously supported migration from version {start} no longer reaches version {new_ver}.")
 
         should_check_migrations = False
         target_start = 1
@@ -474,4 +508,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -2,51 +2,126 @@
 from __future__ import annotations
 
 import re
+import os
 from pathlib import Path
 
 from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-READ_ONLY_COMMANDS = (
-    re.compile(r"^\s*(?:git\s+)?(?:status|diff|log|show|ls-files|rev-parse)\b", re.I),
-    re.compile(r"^\s*git\s+(?:-C\s+(?:\"[^\"]+\"|\S+)\s+)?(?:status|diff|log|show|ls-files|rev-parse|symbolic-ref|check-ignore|describe)\b", re.I),
-    re.compile(r"^\s*(?:rg|grep|sed|head|tail|ls|pwd|wc)\b", re.I),
-    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*(?:project_graph|harness_doctor|change_classifier|review_policy|delivery_manifest)\.py\"|\S*(?:project_graph|harness_doctor|change_classifier|review_policy|delivery_manifest)\.py)\b(?!.*--output)", re.I),
-    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*setup_wizard\.py\"|\S*setup_wizard\.py)\s+questions\b", re.I),
-    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*harness_cli\.py\"|\S*harness_cli\.py)\s+(?:version|doctor|explain)\b", re.I),
-    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+\S+\.py\b.*(?:\s--help|\s-h)\s*$", re.I),
-    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*harness_cli\.py\"|\S*harness_cli\.py)(?:\s+\w+)?\s+--help\s*$", re.I),
-)
-VERIFY_COMMANDS = re.compile(
-    r"(?:run_gradle_task|run_tests_gate|preflight_check|review_package|record_review|final_verifier|final_verdict|check_strings|room_guard|perf_guard|fast_kt_lint|run_device|capture_screen|logcat_doctor)\.py|workflow\.py\s+(?:verify|complete)\b|harness_cli\.py\s+verify\b",
-    re.I,
-)
-BOOTSTRAP_WORKFLOW = re.compile(
-    r"(?:workflow\.py|android-harness\s+task)\s+(?:draft|begin|status|approve|deliver|debug-evidence)\b",
-    re.I,
-)
-LIFECYCLE_COMMANDS = (
-    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*harness_cli\.py\"|\S*harness_cli\.py)\s+(?:init|update|uninstall)\b", re.I),
-    re.compile(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:\"[^\"]*setup_wizard\.py\"|\S*setup_wizard\.py)\s+write\b", re.I),
-    re.compile(r"^\s*git\s+clone\s+.*(?:\.android-harness|kit-stage)", re.I),
-)
-SHELL_LAUNDERING = re.compile(r"`|\$\(|[<>]|(?<!\|)\|(?!\|)")
+INSPECTION_SCRIPTS = {"project_graph", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest"}
+VERIFICATION_SCRIPTS = {
+    "run_gradle_task", "run_tests_gate", "preflight_check", "review_package",
+    "record_review", "final_verifier", "final_verdict", "check_strings",
+    "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
+}
+BOOTSTRAP_ACTIONS = {"draft", "begin", "status", "approve", "approve-sensitive", "deliver", "debug-evidence"}
+SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 
-def _is_read_only(command: str) -> bool:
-    # Prefix matching must never bless a later mutating segment.
-    if SHELL_LAUNDERING.search(command):
+def _tokens(command: str) -> list[str]:
+    # Windows paths must retain backslashes. Reject ambiguous shell syntax;
+    # these exemptions are intentionally narrower than a general shell parser.
+    import shlex
+    try:
+        values = shlex.split(command, posix=False)
+    except ValueError:
+        return []
+    return [value[1:-1] if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'" else value for value in values]
+
+
+def _trusted_script(path: str, repo: Path | str, name: str) -> bool:
+    root = Path(repo).resolve()
+    script = Path(path)
+    resolved = (script if script.is_absolute() else root / script).resolve()
+    here = Path(__file__).resolve().parent
+    if name != "harness_cli.py" and resolved in {root / ".agents/scripts" / name, here / name}:
+        return True
+    if name == "harness_cli.py" and here.parent.name == "agents" and resolved == here.parents[1] / name:
+        return True
+    configured = os.environ.get("HARNESS_KIT", "").strip()
+    if configured:
+        kit = Path(configured).expanduser().resolve()
+        expected = kit / name if name == "harness_cli.py" else kit / "agents/scripts" / name
+        if resolved == expected:
+            return True
+    # Installer entry points also live in the user's pinned kit cache. Resolve
+    # first so traversal and symlinks cannot escape the expected script path.
+    cache = (Path.home() / ".android-harness").resolve()
+    try:
+        parts = resolved.relative_to(cache).parts
+    except ValueError:
         return False
-    segments = [item.strip() for item in re.split(r"(?:&&|\|\||;|\r?\n)", command) if item.strip()]
-    return bool(segments) and all(any(pattern.search(item) for pattern in READ_ONLY_COMMANDS) for item in segments)
-
-
-def _is_lifecycle_command(command: str) -> bool:
-    if SHELL_LAUNDERING.search(command):
+    if not parts or not (parts[0] == "kit" or parts[0].startswith("kit-stage-")):
         return False
-    segments = [item.strip() for item in re.split(r"(?:&&|\|\||;|\r?\n)", command) if item.strip()]
-    return bool(segments) and all(any(pattern.search(item) for pattern in LIFECYCLE_COMMANDS) for item in segments)
+    expected = (name,) if name == "harness_cli.py" else ("agents", "scripts", name)
+    return parts[1:] == expected
+
+
+def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
+    tokens = _tokens(command)
+    if not tokens:
+        return "", []
+    executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", executable):
+        if len(tokens) < 2:
+            return "", []
+        path = tokens[1].replace("\\", "/")
+        name = path.rsplit("/", 1)[-1]
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard"}
+        if not _trusted_script(path, repo, name):
+            return "", []
+        if name == "harness_cli.py":
+            return "harness_cli", tokens[2:]
+        if name.endswith(".py") and name[:-3] in known:
+            return name[:-3], tokens[2:]
+        return "", []
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "android-harness"}:
+        return executable, tokens[1:]
+    return "", []
+
+
+def _is_read_only(command: str, repo: Path | str = ".") -> bool:
+    name, args = _entry(command, repo)
+    if name == "git":
+        if args[:1] == ["-C"] and len(args) >= 3:
+            args = args[2:]
+        if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe"}:
+            return False
+        if any(arg.startswith(("--output", "--ext-diff", "--textconv")) for arg in args[1:]):
+            return False
+        if args[0] == "symbolic-ref":
+            return len(args) == 2 and not args[1].startswith("-")
+        return True
+    if name in {"rg", "grep", "head", "tail", "ls", "pwd", "wc"}:
+        return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
+    if name in INSPECTION_SCRIPTS:
+        return not any(arg.startswith("--out") for arg in args)
+    if name == "setup_wizard" and args[:1] == ["questions"]:
+        return True
+    if name == "harness_cli" and args[:1] in (["version"], ["doctor"], ["explain"]):
+        return True
+    # Only known harness parsers implement help without running arbitrary code.
+    return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli"} and bool(args) and args[-1] in {"--help", "-h"}
+
+
+def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
+    name, args = _entry(command, repo)
+    return (
+        name == "harness_cli" and args[:1] in (["init"], ["update"], ["uninstall"])
+        or name == "setup_wizard" and args[:1] == ["write"]
+        or name == "git" and args[:1] == ["clone"] and len(args) >= 3
+        and ("/.android-harness/" in args[-1].replace("\\", "/") or Path(args[-1]).name.startswith("kit-stage"))
+    )
+
+
+def _workflow_action(command: str, repo: Path | str = ".") -> str:
+    name, args = _entry(command, repo)
+    if name == "workflow":
+        return args[0] if args else ""
+    if name in {"android-harness", "harness_cli"} and args[:1] == ["task"]:
+        return args[1] if len(args) > 1 else ""
+    return ""
 
 
 def _state_root(repo: Path | str) -> Path:
@@ -86,11 +161,15 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, "empty command"
     if SHELL_LAUNDERING.search(normalized):
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
-    if BOOTSTRAP_WORKFLOW.search(normalized):
+    segments = [item.strip() for item in re.split(r"(?:&&|\|\||;|\r?\n)", normalized) if item.strip()]
+    if len(segments) > 1:
+        decisions = [command_allowed(repo, item) for item in segments]
+        return next((decision for decision in decisions if not decision[0]), (True, "every command segment is authorized"))
+    if _workflow_action(normalized, repo) in BOOTSTRAP_ACTIONS:
         return True, "task-authority workflow command"
-    if _is_read_only(normalized):
+    if _is_read_only(normalized, repo):
         return True, "read-only inspection command"
-    if _is_lifecycle_command(normalized):
+    if _is_lifecycle_command(normalized, repo):
         return True, "harness lifecycle engine command"
     try:
         plan = active_plan(repo)
@@ -105,8 +184,10 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         except ValidationError as exc:
             return False, str(exc)
         return True, f"command authorized by approved plan {plan.get('plan_id')}"
-    if status == "VERIFYING" and VERIFY_COMMANDS.search(normalized):
+    entry, arguments = _entry(normalized, repo)
+    action = _workflow_action(normalized, repo)
+    if status == "VERIFYING" and (entry in VERIFICATION_SCRIPTS or action in {"verify", "complete"} or (entry == "harness_cli" and arguments[:1] == ["verify"])):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
-    if status in ("VERIFYING", "BLOCKED") and re.search(r"(?:workflow\.py|(?:android-harness|harness_cli\.py)\s+task)\s+resume\b", normalized, re.I):
+    if status in ("VERIFYING", "BLOCKED") and action == "resume":
         return True, f"resume authorized for {status.lower()} plan {plan.get('plan_id')}"
     return False, f"command is not allowed while plan status is {status or 'missing'}"

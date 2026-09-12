@@ -32,12 +32,15 @@ def response_to_report(repo: Path, task_id: str, reviewer: str, response_path: P
     manifest = read_json(Path(current["manifest"]))
     package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
     package_sha = sha256_file(package)
-    text = response_path.read_text(encoding="utf-8", errors="replace")
-    footer = re.search(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\s*$", text.strip())
+    text = response_path.read_text(encoding="utf-8", errors="replace").strip()
+    footer = re.search(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\s*$", text)
     if not footer or footer.group(1).lower() != package_sha[:12]:
         raise ValidationError(f"reviewer {reviewer} response has no matching evidence footer")
     pass_token = PASS_TOKENS.get(reviewer)
-    clean = bool(pass_token and re.search(rf"(?m)^\s*{re.escape(pass_token)}\s*$", text))
+    body = text[:footer.start()].strip()
+    clean = bool(pass_token and body == pass_token and int(footer.group(2)) == 0)
+    if pass_token and re.search(rf"\b{re.escape(pass_token)}\b", body) and not clean:
+        raise ValidationError(f"reviewer {reviewer} PASS must contain only its verdict token and a cites=0 evidence footer; use a structured report for additional content")
     return {
         "schema_version": 1,
         "reviewer": reviewer,

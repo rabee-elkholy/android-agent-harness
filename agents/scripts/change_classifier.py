@@ -57,6 +57,22 @@ def _head_text(repo: Path, relative: str) -> str:
     return proc.stdout if proc.returncode == 0 and len(proc.stdout) <= 2 * 1024 * 1024 else ""
 
 
+def _room_schema_types(repo: Path) -> set[str]:
+    types: set[str] = set()
+    try:
+        from room_guard import iter_database_files, parse_database_source
+        for db_path in iter_database_files(repo):
+            try:
+                text = db_path.read_text(encoding="utf-8", errors="replace")
+                decl = parse_database_source(text, db_path.relative_to(repo).as_posix(), repo)
+                types.update(decl.entity_names)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return types
+
+
 HUNK_LINE_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 DECL_RE = re.compile(
     r"\b(?:class|interface|object|enum\s+class|fun|suspend\s+fun)\s+([A-Za-z0-9_]+)|"
@@ -306,6 +322,7 @@ def classify(repo: Path) -> dict:
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
     changes = changed_files(root, include_untracked=True)
+    room_types = _room_schema_types(root)
     for changed in changes:
         rel = changed.rel_posix
         if not is_delivery_relevant(rel) and not (changed.old_rel_posix and is_delivery_relevant(changed.old_rel_posix)):
@@ -335,6 +352,14 @@ def classify(repo: Path) -> dict:
             _add(found, "NAVIGATION", rel, "NAVIGATION_CALL")
         if suffix in (".kt", ".java") and not test_path:
             _add(found, "BUSINESS_LOGIC", rel, "SOURCE_CHANGE")
+        if suffix in (".kt", ".java") and not test_path and room_types:
+            try:
+                from room_guard import declared_type_names
+                types_in_file = {Path(rel).stem} | declared_type_names(full_text)
+                if types_in_file & room_types:
+                    _add(found, "ROOM_SCHEMA", rel, "ROOM_ENTITY_OR_EMBEDDED_TYPE")
+            except Exception:
+                pass
         if suffix in (".gradle", ".kts", ".toml", ".properties") or Path(lower).name in ("gradlew", "gradlew.bat"):
             _add(found, "BUILD_CONFIG", rel, "BUILD_FILE")
         if "androidmanifest.xml" in lower:
@@ -375,12 +400,12 @@ def classify(repo: Path) -> dict:
 
     non_docs = set(found) - {"DOCS", "TEST_ONLY"}
     relevant_changes = [item for item in changes if is_delivery_relevant(item.rel_posix) or (item.old_rel_posix and is_delivery_relevant(item.old_rel_posix))]
-    if not found and relevant_changes:
-        _add(found, "UNKNOWN", relevant_changes[0].rel_posix, "UNCLASSIFIED_CHANGE")
-    elif "TEST_ONLY" in found and not non_docs:
-        pass
-    elif "DOCS" in found and not non_docs:
-        pass
+    classified_files = {path for info in found.values() for path in info.get("files", ())}
+    for item in relevant_changes:
+        rel = item.rel_posix
+        old_rel = item.old_rel_posix
+        if rel not in classified_files and (not old_rel or old_rel not in classified_files):
+            _add(found, "UNKNOWN", rel, "UNCLASSIFIED_CHANGE")
 
     surfaces = sorted(found)
     if set(surfaces) & CRITICAL_SURFACES:

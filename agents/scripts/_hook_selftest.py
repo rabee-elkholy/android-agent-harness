@@ -197,6 +197,7 @@ class HookTests(unittest.TestCase):
             'python "C:/Users/test/.android-harness/kit/harness_cli.py" doctor --install-check --repo . --kit "C:/Users/test/.android-harness/kit" --json',
         )
         for command in commands:
+            command = command.replace("C:/Users/test", Path.home().as_posix())
             with self.subTest(command=command):
                 self.assertEqual("allow", self.call("run_command", {"CommandLine": command})["decision"])
 

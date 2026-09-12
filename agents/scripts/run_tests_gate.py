@@ -128,7 +128,8 @@ def main(argv=None) -> int:
     task = args.task or _unit_test_task()
     live_print(f"[*] Unit-test gate: {task}")
     reports_before = report_signatures(REPO, task)
-    code = run_gradle([task])
+    outcome: dict = {}
+    code = run_gradle([task], outcome=outcome)
     if code == EXIT_ENV:
         write_gate_result("unit_tests", {
             "schema_version": 2,
@@ -151,7 +152,10 @@ def main(argv=None) -> int:
     failed = collect_task_failures(REPO, task)
     summary = collect_test_summary(REPO, task)
     reports_after = report_signatures(REPO, task)
-    fresh_reports = any(reports_before.get(path) != signature for path, signature in reports_after.items())
+    failing_paths = [path.resolve().as_posix() for path in report_paths(REPO, task) if parse_report(path)]
+    fresh_failures = bool(failing_paths) and all(
+        path in reports_after and reports_before.get(path) != reports_after[path] for path in failing_paths
+    )
     if code == 0 and summary["executed"] == 0:
         write_gate_result("unit_tests", {
             "schema_version": 2,
@@ -165,7 +169,7 @@ def main(argv=None) -> int:
         })
         live_print("[FAIL] Unit-test gate blocked: zero tests were executed.", err=True)
         return 1
-    if code != 0 and (not failed or not fresh_reports):
+    if code != 0 and (not failed or not fresh_failures or not outcome.get("test_failure_only")):
         write_gate_result("unit_tests", {
             "schema_version": 2,
             "producer": "run_tests_gate",
@@ -173,7 +177,7 @@ def main(argv=None) -> int:
             "exit_code": code,
             "env_class": "",
             "git_sha": head,
-            "detail": "unit-test Gradle failed without fresh failing-test reports; stale reports cannot satisfy the gate",
+            "detail": "Gradle failure is not attributable exclusively to fresh failing-test reports for this task; stale reports and unrelated build failures cannot satisfy the gate",
             **summary,
         })
         live_print(f"[FAIL] Unit-test gate blocked: gradle exited {code} (build/compilation failure).", err=True)

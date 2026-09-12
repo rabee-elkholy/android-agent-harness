@@ -72,12 +72,25 @@ def _validate_kit(kit: Path) -> tuple[Path, str]:
     if _version_tuple(version)[0] != ARCHITECTURE_MAJOR:
         raise ValidationError(f"kit v{version} is not architecture major {ARCHITECTURE_MAJOR}")
     checksum_file = root / "agents" / "release_checksums.json"
-    if checksum_file.is_file():
-        checksums = read_json(checksum_file)
-        for rel, expected in (checksums.get("files") or {}).items():
-            path = root / str(rel)
-            if not path.is_file() or sha256_file(path) != expected:
-                raise ValidationError(f"kit release checksum mismatch: {rel}")
+    if not checksum_file.is_file() or checksum_file.is_symlink():
+        raise ValidationError("kit release checksums manifest missing or symlink")
+    checksums = read_json(checksum_file)
+    if not isinstance(checksums, dict):
+        raise ValidationError("kit release checksums manifest has an unsupported schema")
+    files = checksums.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValidationError("kit release checksums manifest files inventory is empty or malformed")
+    core_files = {"agents/VERSION", "agents/scripts/lifecycle.py"}
+    missing_core = core_files - set(files)
+    if missing_core:
+        raise ValidationError(f"kit release checksums manifest missing core files: {', '.join(sorted(missing_core))}")
+    for rel, expected in files.items():
+        rel_path = Path(str(rel))
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            raise ValidationError(f"suspicious path in release checksums: {rel}")
+        path = root / rel_path
+        if not path.is_file() or path.is_symlink() or sha256_file(path) != expected:
+            raise ValidationError(f"kit release checksum mismatch: {rel}")
     return root, version
 
 
@@ -410,8 +423,32 @@ def install(repo: Path, kit: Path) -> dict:
     return {"status": "PASS", "action": "install", "version": version, "ownership": ownership, "backup": str(backup), "app_snapshot_verified": True}
 
 
+def require_update_idle(repo: Path) -> None:
+    """Retained terminal pointers are history; uncertain or live tasks block update."""
+    root = repo.resolve()
+    state = root / ".agents/state"
+    pointer = state / "active-task.json"
+    if not pointer.exists() and not pointer.is_symlink():
+        return
+    active = read_json(pointer)
+    task_id = str(active.get("task_id") or "")
+    reference = str(active.get("plan_path") or "")
+    if not task_id or not reference:
+        raise ValidationError("active task identity is incomplete; update refused")
+    path = Path(reference)
+    path = (path if path.is_absolute() else root / path).resolve()
+    if state.resolve() not in path.parents:
+        raise ValidationError("active plan path escapes harness state; update refused")
+    plan = read_json(path)
+    if plan.get("task_id") != task_id:
+        raise ValidationError("active task identity mismatch; update refused")
+    if plan.get("status") not in {"CANCELLED", "DELIVERED"}:
+        raise ValidationError("compatible update refused while an active task exists; finish or cancel the task before updating")
+
+
 def update(repo: Path, kit: Path) -> dict:
     repo = _validate_repo(repo)
+    require_update_idle(repo)
     kit, target_version = _validate_kit(kit)
     ownership = _read_ownership(repo)
     current_version = str(ownership.get("harness_version") or "")
@@ -455,6 +492,8 @@ def update(repo: Path, kit: Path) -> dict:
     try:
         os.replace(repo / ".agents", old_agents)
         _install_engine(repo, kit, answers)
+        if (old_agents / "state").is_dir():
+            shutil.copytree(old_agents / "state", repo / ".agents/state", dirs_exist_ok=True)
         _restore_preserved(repo, preserve_root, preserved)
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)

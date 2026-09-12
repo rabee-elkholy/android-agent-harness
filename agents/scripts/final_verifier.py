@@ -139,6 +139,35 @@ def validate_policy_artifact(
     return expected_policy, None, "PASS"
 
 
+def device_chain_errors(assemble: dict | None, install: dict | None, launch: dict | None) -> list[str]:
+    reasons: list[str] = []
+    if install or launch:
+        assemble_evidence = (assemble or {}).get("evidence") or {}
+        assembled_hash = str(
+            assemble_evidence.get("artifact_set_sha256")
+            or (assemble_evidence.get("artifact_set") or {}).get("artifact_set_sha256")
+            or ""
+        )
+        installed_hash = str(((install or {}).get("evidence") or {}).get("artifact_set_sha256") or "")
+        launched_hash = str(((launch or {}).get("evidence") or {}).get("artifact_set_sha256") or "")
+        if not assembled_hash or assembled_hash != installed_hash or installed_hash != launched_hash:
+            reasons.append("assemble/install/launch artifact-set chain mismatch")
+        install_evidence = (install or {}).get("evidence") or {}
+        launch_evidence = (launch or {}).get("evidence") or {}
+        for field in ("serial_sha256", "target_user", "application_id"):
+            if not install_evidence.get(field) or install_evidence.get(field) != launch_evidence.get(field):
+                reasons.append(f"install/launch target identity mismatch: {field}")
+        user = str(install_evidence.get("target_user") or "")
+        if not user.isascii() or not user.isdecimal():
+            reasons.append("install/launch must identify a numeric Android user")
+        application_id = (assemble_evidence.get("artifact_set") or {}).get("application_id")
+        if not application_id or application_id != install_evidence.get("application_id"):
+            reasons.append("assemble/install application id mismatch")
+        if launch_evidence.get("install_reference") != installed_hash:
+            reasons.append("launch install reference mismatch")
+    return reasons
+
+
 def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Path, state_root: Path, run_id: str) -> dict:
     checks: list[dict] = []
     reasons: list[str] = []
@@ -181,6 +210,11 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     for field in ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256"):
         if current.get(field) != recorded_manifest.get(field):
             reasons.append(f"current {field} does not match the delivery manifest")
+    rec_repo = recorded_manifest.get("repository") or {}
+    cur_repo = current.get("repository") or {}
+    for repo_field in ("root_sha256", "git_common_dir_sha256", "branch"):
+        if cur_repo.get(repo_field) != rec_repo.get(repo_field):
+            reasons.append(f"current repository {repo_field} does not match the delivery manifest")
     if reasons:
         return _blocked("STALE", reasons, checks)
 
@@ -321,17 +355,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             install = record
         else:
             launch = record
-    if install or launch:
-        assemble_evidence = (assemble or {}).get("evidence") or {}
-        assembled_hash = str(
-            assemble_evidence.get("artifact_set_sha256")
-            or (assemble_evidence.get("artifact_set") or {}).get("artifact_set_sha256")
-            or ""
-        )
-        installed_hash = str(((install or {}).get("evidence") or {}).get("artifact_set_sha256") or "")
-        launched_hash = str(((launch or {}).get("evidence") or {}).get("artifact_set_sha256") or "")
-        if not assembled_hash or assembled_hash != installed_hash or installed_hash != launched_hash:
-            reasons.append("assemble/install/launch artifact-set chain mismatch")
+    reasons.extend(device_chain_errors(assemble, install, launch))
     if assemble:
         artifact_set = ((assemble.get("evidence") or {}).get("artifact_set"))
         if artifact_set:

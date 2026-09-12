@@ -86,34 +86,58 @@ class StateLock(AbstractContextManager):
         self.path = state_root / ".write.lock"
         self.timeout_seconds = timeout_seconds
         self.acquired = False
+        self.nonce: str | None = None
 
-    def _owner_live(self) -> bool:
+    def _owner_live(self) -> tuple[bool, dict | None]:
         try:
             owner = read_json(self.path)
             pid = int(owner.get("pid") or 0)
             marker = str(owner.get("process_marker") or "")
             if not _pid_alive(pid):
-                return False
+                return False, owner
             current = _process_marker(pid)
-            return not (marker and current and marker != current)
+            live = not (marker and current and marker != current)
+            return live, owner
         except (ValidationError, ValueError, TypeError):
             # A just-created lock can be observed before its JSON payload has
             # been flushed. Treat recent unreadable locks as owned instead of
             # racing to unlink another writer's lock.
             try:
-                return (time.time() - self.path.stat().st_mtime) < max(2.0, self.timeout_seconds)
+                if (time.time() - self.path.stat().st_mtime) < max(2.0, self.timeout_seconds):
+                    return True, None
+                return False, None
             except OSError:
-                return False
+                return False, None
+
+    def _try_remove_stale_lock(self, observed_owner: dict | None) -> bool:
+        try:
+            if not self.path.exists():
+                return True
+            if observed_owner and "nonce" in observed_owner:
+                current = read_json(self.path)
+                if current.get("nonce") != observed_owner.get("nonce"):
+                    return False
+            elif observed_owner is None:
+                try:
+                    read_json(self.path)
+                    return False
+                except (ValidationError, ValueError, TypeError):
+                    pass
+            self.path.unlink()
+            return True
+        except (OSError, ValidationError, ValueError, TypeError):
+            return False
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.timeout_seconds
         while True:
+            nonce = uuid.uuid4().hex
             payload = {
                 "pid": os.getpid(),
                 "process_marker": _process_marker(os.getpid()),
                 "created_at": utc_now(),
-                "nonce": uuid.uuid4().hex,
+                "nonce": nonce,
             }
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -121,24 +145,23 @@ class StateLock(AbstractContextManager):
                     json.dump(payload, handle, sort_keys=True)
                     handle.flush()
                     os.fsync(handle.fileno())
+                self.nonce = nonce
                 self.acquired = True
                 return self
             except FileExistsError:
-                if not self._owner_live():
-                    try:
-                        self.path.unlink()
-                    except FileNotFoundError:
-                        pass
+                live, observed = self._owner_live()
+                if not live and self._try_remove_stale_lock(observed):
                     continue
                 if time.monotonic() >= deadline:
-                    raise ValidationError("state lock is owned by a live process")
+                    reason = "state lock is owned by a live process" if live else "could not clear stale state lock"
+                    raise ValidationError(reason)
                 time.sleep(0.05)
 
     def __exit__(self, exc_type, exc, tb):
         if self.acquired:
             try:
                 owner = read_json(self.path)
-                if int(owner.get("pid") or 0) == os.getpid():
+                if int(owner.get("pid") or 0) == os.getpid() and (not self.nonce or owner.get("nonce") == self.nonce):
                     self.path.unlink(missing_ok=True)
             except (ValidationError, OSError, ValueError, TypeError):
                 pass
