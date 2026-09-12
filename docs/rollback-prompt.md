@@ -1,8 +1,8 @@
 # Remove or recover Android Agent Harness
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.19/docs/rollback-prompt.md`
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.20/docs/rollback-prompt.md`
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness`
-> **Kit version**: `v1.0.19` — **SHA-256**: `b896d6b7d9758ed4649c2a6f5db2c663d5f760c493adfa54202c49754f84717b` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.20` — **SHA-256**: `b896d6b7d9758ed4649c2a6f5db2c663d5f760c493adfa54202c49754f84717b` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.

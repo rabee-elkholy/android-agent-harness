@@ -5,6 +5,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.20] - 2026-09-13
+
+### Showcase Expansion, The Basic Workflow, and Full AI Host Matrix
+
+- **Deterministic Quality Guardians Showcase (`README.md`)**: Documented the full suite of purpose-built Android tools: Adaptive Localization Guard (`check_strings.py`), Room Schema & Embedded Drift Guard (`room_guard.py`), Baseline Regression Isolation (`baseline_capture.py`), ANR Risk Analyzer (`perf_guard.py`), Intelligent Compiler Diagnostics (`gradle_error_parser.py`), Hardware Observability & Visual Evidence (`capture_screen.py`, `logcat_doctor.py`), and Universal Multi-Module Graph (`project_graph.py`).
+- **The Basic Workflow Framework (`README.md`)**: Introduced the 7-stage deterministic execution sequence (discovery-and-scoping, plan-authority, mutation-guard, adaptive-routing, TDD, specialist-reviewer-squad, tamper-evident-verification) modeling the Superpowers methodology with deterministic OS-level guarantees.
+- **Complete AI Host Support Matrix (`README.md`)**: Explicitly integrated OpenAI Codex and GitHub Copilot alongside Google Antigravity, Claude Code, Cursor, Windsurf, and Roo Code.
+- **Hero & Navigation Typography Refinement (`README.md`)**: Streamlined README header hero, slogan typography, and interactive anchor navigation.
+
 ## [1.0.19] - 2026-09-13
 
 ### Critical Safety Hardening, Tamper-Proof Checksums, Lock Atomicity, and SemVer Routing
