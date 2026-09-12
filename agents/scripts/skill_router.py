@@ -51,8 +51,11 @@ def _metadata(skill_file: Path) -> dict[str, str | int]:
     return {"version": version, "kernel_major": compatible_major}
 
 
-def route(skills_root: Path, surfaces: list[str], *, kernel_major: int = KERNEL_COMPATIBLE_MAJOR) -> dict:
-    selected_ids = sorted({skill for surface in surfaces for skill in ROUTES.get(surface, ())})
+def route(skills_root: Path, surfaces: list[str], *, kernel_major: int = KERNEL_COMPATIBLE_MAJOR, task_kind: str = "FEATURE") -> dict:
+    selected_set = {skill for surface in surfaces for skill in ROUTES.get(surface, ())}
+    if str(task_kind or "").upper() == "BUG":
+        selected_set.add("systematic-debugging")
+    selected_ids = sorted(selected_set)
     selected: list[dict] = []
     errors: list[str] = []
     seen_paths: set[Path] = set()

@@ -70,6 +70,20 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("write_to_file", {})["decision"])
         self.assertEqual("deny", self.call("write_to_file", {"TargetFile": "../outside.kt"})["decision"])
 
+    def test_generated_code_write_is_denied_while_source_is_allowed(self):
+        self.activate()
+        # Ephemeral build generated paths are denied
+        res = self.call("write_to_file", {"TargetFile": "app/build/generated/ksp/debug/kotlin/UserDao_Impl.kt"})
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("diagnostic evidence only", res["reason"])
+
+        res2 = self.call("replace_file_content", {"TargetFile": "build/intermediates/dummy.txt"})
+        self.assertEqual("deny", res2["decision"])
+
+        # Checked-in source files (even if containing 'generated') are allowed
+        res3 = self.call("write_to_file", {"TargetFile": "app/src/main/generated/User.kt"})
+        self.assertEqual("allow", res3["decision"])
+
     def test_verification_reviewer_roster_is_exact(self):
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"

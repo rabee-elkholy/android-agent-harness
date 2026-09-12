@@ -220,8 +220,15 @@ def classify(repo: Path) -> dict:
         if suffix in (".gradle", ".kts", ".toml", ".properties") or Path(lower).name in ("gradlew", "gradlew.bat"):
             _add(found, "BUILD_CONFIG", rel, "BUILD_FILE")
         if "androidmanifest.xml" in lower:
-            surface = "MANIFEST_PERMISSION" if re.search(r"uses-permission|android:exported|provider|intent-filter", diff_text, re.I) else "BUILD_CONFIG"
-            _add(found, surface, rel, "MANIFEST_CHANGE")
+            manifest_has_perm = bool(re.search(r"uses-permission|android:exported|provider|intent-filter", diff_text, re.I))
+            manifest_has_comp = bool(re.search(r"\b(?:service|receiver|uses-feature)\b", diff_text, re.I))
+            if manifest_has_perm:
+                _add(found, "MANIFEST_PERMISSION", rel, "MANIFEST_PERMISSION_CHANGE")
+            if manifest_has_comp:
+                _add(found, "DEVICE_API", rel, "MANIFEST_COMPONENT_CHANGE")
+                _add(found, "BUILD_CONFIG", rel, "MANIFEST_CHANGE")
+            if not manifest_has_perm and not manifest_has_comp:
+                _add(found, "BUILD_CONFIG", rel, "MANIFEST_CHANGE")
         if suffix in (".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".so"):
             _add(found, "NATIVE_CODE", rel, "NATIVE_OR_AIDL_CHANGE")
         if test_path:

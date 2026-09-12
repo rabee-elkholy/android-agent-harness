@@ -23,7 +23,7 @@ VERIFY_COMMANDS = re.compile(
     re.I,
 )
 BOOTSTRAP_WORKFLOW = re.compile(
-    r"(?:workflow\.py|android-harness\s+task)\s+(?:draft|begin|status|approve|deliver)\b",
+    r"(?:workflow\.py|android-harness\s+task)\s+(?:draft|begin|status|approve|deliver|debug-evidence)\b",
     re.I,
 )
 LIFECYCLE_COMMANDS = (

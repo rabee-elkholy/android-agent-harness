@@ -41,6 +41,7 @@ from _variants import apk_relative, resolve_or_raise  # noqa: E402
 from artifact_set import build_artifact_set, verify_artifact_set  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
 from _vnext_common import HarnessError, sha256_bytes  # noqa: E402
+from _verification_recipes import VERIFICATION_RECIPES, get_verification_recipes  # noqa: E402
 
 DEFAULT_ACTIVITY = LAUNCHER
 ADB_ERROR_MARKERS = (
@@ -360,6 +361,29 @@ def main() -> int:
             return exit_for(verdict)
         record_device("start", "PASS", 0, serial, artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha, application_id=actual_application_id, target_user=target_user)
         live_print(f"[+] Launched {target_activity}")
+        try:
+            state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+            from mutation_guard import active_plan
+            from _vnext_common import read_json
+            active = active_plan(REPO)
+            task_id = str(active.get("task_id") or "")
+            current_path = state / "tasks" / task_id / "current-run.json"
+            if current_path.is_file():
+                current_run = read_json(current_path)
+                recipes = current_run.get("verification_recipes") or []
+                if not recipes:
+                    policy_path = Path(str(current_run.get("policy") or ""))
+                    if policy_path.is_file():
+                        policy = read_json(policy_path)
+                        recipes = get_verification_recipes(policy.get("surfaces") or [])
+                if recipes:
+                    live_print("\n[*] Recommended verification steps:")
+                    for recipe in recipes:
+                        live_print(f"  [{recipe['surface']}]:")
+                        for step in recipe["steps"]:
+                            live_print(f"    - {step}")
+        except Exception:
+            pass
 
     return 0
 

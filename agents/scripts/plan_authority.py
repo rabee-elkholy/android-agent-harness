@@ -71,6 +71,9 @@ SURFACE_ALIASES: dict[str, list[str]] = {
     "SENSITIVE_DATA": ["SENSITIVE_DATA"],
     "COROUTINES": ["COROUTINES"],
     "DEVICE_API": ["DEVICE_API"],
+    "NAVIGATION": ["NAVIGATION"],
+    "NAV": ["NAVIGATION"],
+    "FOREGROUND_SERVICE": ["DEVICE_API"],
 }
 
 DEFAULT_APP_SURFACES: list[str] = [
@@ -122,6 +125,7 @@ def plan_payload(plan: dict) -> dict:
         "schema_version": plan.get("schema_version"),
         "plan_id": plan.get("plan_id"),
         "task_id": plan["task_id"],
+        "task_kind": plan.get("task_kind") or "FEATURE",
         "requested_outcome": plan["requested_outcome"],
         "expected_surfaces": sorted(plan.get("expected_surfaces") or []),
         "expected_modules": sorted(module_id(item) for item in (plan.get("expected_modules") or [])),
@@ -144,6 +148,7 @@ def create_plan(
     task_id: str,
     requested_outcome: str,
     expected_surfaces: list[str],
+    task_kind: str = "FEATURE",
     expected_modules: list[str] | None = None,
     expected_files: list[str] | None = None,
     test_strategy: str = "",
@@ -165,6 +170,7 @@ def create_plan(
         "schema_version": SCHEMA_VERSION,
         "plan_id": uuid.uuid4().hex,
         "task_id": task_id,
+        "task_kind": str(task_kind or "FEATURE").upper(),
         "created_at": utc_now(),
         "status": "AWAITING_DEVELOPER_APPROVAL",
         "requested_outcome": requested_outcome.strip(),

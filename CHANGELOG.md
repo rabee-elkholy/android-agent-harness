@@ -5,6 +5,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.13] - 2026-09-12
+
+### Stability-First Android Specialization, Systematic Debugging, Generated-Code Protection, and Deterministic Verification Recipes
+
+- **30-Scenario Android Regression Test Matrix (`_android_scenarios_selftest.py`)**: Implemented a comprehensive, deterministic 30-scenario regression test matrix (plus scenario 15b, Phase 2C, and Phase 3 verification suites, total 33 tests) covering edge cases across Android lifecycles, ViewModel logic, Compose UI, multi-module graphs, Room migrations, AIDL preservation, baseline failure normalization, wireless ADB timeouts, stale gate blocking, and non-destructive Git invariants. Integrated directly into `harness_cli.py selftest`.
+- **Ephemeral Generated-Code Write Barrier (`pre_tool_safety.py`)**: Added deterministic protection denying host file-modifying tools on ephemeral Gradle build outputs (`build/generated`, `build/intermediates`, `generated/source`, `generated/ksp`, `generated/kapt`) while ensuring checked-in generated sources (`src/**/generated`) remain fully editable.
+- **Semantic AndroidManifest Path Floors (`change_classifier.py`)**: Differentiated Android manifest diffs by semantic impact: `uses-permission`, `android:exported`, sensitive `provider`, and `intent-filter` trigger `MANIFEST_PERMISSION` (HIGH severity, physical device verification); background components (`service`, `receiver`, `uses-feature`) map to `DEVICE_API` and `BUILD_CONFIG`; generic manifest tweaks default to `BUILD_CONFIG`. Preserved AIDL strictly as `NATIVE_CODE`.
+- **Lightweight Systematic Debugging & Out-of-Band Debug Evidence (`workflow.py`, `plan_authority.py`, `mutation_guard.py`, `SKILL.md`)**: Added `--kind AUTO|BUG|FEATURE|REFACTOR` to `workflow.py draft` with automatic detection of bug/crash markers and routing of `systematic-debugging`. Added `workflow.py debug-evidence` subcommand to capture empirical reproduction references, hypotheses, and risks into `debug-evidence.json` inside the task state directory during implementation, strictly preserving the immutability of `plan.json` and its approved `plan_sha256`. Added `EVIDENCE_LIMITED` escape hatch in `systematic-debugging` skill. Whitelisted `debug-evidence` in `mutation_guard.py`.
+- **Deterministic Manual Verification Recipes (`_verification_recipes.py`, `run_device.py`, `workflow.py`)**: Added deterministic 3–5 step manual testing recipes for `COMPOSE_UI`, `XML_UI`, `NAVIGATION`, `ROOM_SCHEMA`, `MANIFEST_PERMISSION`, and `FOREGROUND_SERVICE`. Pure logic changes (`BUSINESS_LOGIC`) receive zero device recipe ceremony. Integrated recipes into `prepare_verification` (`current-run.json`) and `run_device.py` to display recommended steps upon app launch.
+
 ## [1.0.12] - 2026-09-11
 
 ### Release Immutability, Scoped Overrides, Device Prerequisite Strictness, Context Window Expansion, and Resilient Resource Guards

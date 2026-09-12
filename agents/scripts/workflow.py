@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -27,6 +28,7 @@ from plan_authority import (  # noqa: E402
 )
 from review_policy import decide, decide_later_round  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
+from _verification_recipes import get_verification_recipes  # noqa: E402
 
 
 SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
@@ -123,12 +125,24 @@ def draft(args: argparse.Namespace) -> dict:
         expected = list(classification.get("surfaces") or [])
     if not expected and not classification.get("changed_files"):
         expected = list(DEFAULT_APP_SURFACES)
+    raw_kind = str(getattr(args, "kind", None) or "AUTO").strip().upper()
+    if raw_kind not in {"AUTO", "BUG", "FEATURE", "REFACTOR"}:
+        raw_kind = "AUTO"
+    if raw_kind == "AUTO":
+        text_to_scan = f"{args.outcome or ''} {args.expected_surfaces or ''}".lower()
+        if re.search(r"\b(?:bug|crash|fix|regression|error|fault|anr|issue|exception)\b", text_to_scan):
+            resolved_kind = "BUG"
+        else:
+            resolved_kind = "FEATURE"
+    else:
+        resolved_kind = raw_kind
     policy_input = dict(classification)
     policy_input["surfaces"] = expected
-    preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo))
+    preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo), task_kind=resolved_kind)
     plan = create_plan(
         repo,
         task_id=args.task_id,
+        task_kind=resolved_kind,
         requested_outcome=args.outcome,
         expected_surfaces=expected,
         expected_modules=[module_id(item) for item in (args.expected_modules or "").split(",") if item.strip()],
@@ -164,6 +178,42 @@ def begin_task(args: argparse.Namespace) -> dict:
     return plan
 
 
+def record_debug_evidence(args: argparse.Namespace) -> dict:
+    """Record debug evidence for a task outside plan.json to preserve plan hash immutability."""
+    repo = Path(args.repo).resolve()
+    plan = _load_plan(repo, args.task_id)
+    directory = task_dir(repo, args.task_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    evidence_path = directory / "debug-evidence.json"
+    entries = []
+    if evidence_path.is_file():
+        try:
+            content = read_json(evidence_path)
+            if isinstance(content, dict) and isinstance(content.get("entries"), list):
+                entries = content["entries"]
+            elif isinstance(content, list):
+                entries = content
+        except Exception:
+            entries = []
+
+    entry = {
+        "kind": args.kind,
+        "reference": args.reference,
+        "hypothesis": getattr(args, "hypothesis", None) or "",
+        "risk": getattr(args, "risk", None) or "",
+        "recorded_at": utc_now(),
+    }
+    entries.append(entry)
+    payload = {
+        "task_id": args.task_id,
+        "plan_sha256": plan.get("plan_sha256"),
+        "status": plan.get("status"),
+        "entries": entries,
+    }
+    atomic_write_json(evidence_path, payload)
+    return payload
+
+
 def prepare_verification(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
@@ -196,6 +246,7 @@ def prepare_verification(args: argparse.Namespace) -> dict:
             source_run_id=str(previous_current["run_id"]),
             round_number=completed_rounds + 1,
             project_kind=project_kind(repo),
+            task_kind=str(plan.get("task_kind") or "FEATURE"),
         )
         calls_used = int(plan.get("review_calls_used") or 0)
         if calls_used + int(policy.get("estimated_calls_this_round") or 0) > int(policy.get("model_call_budget") or 0):
@@ -207,7 +258,7 @@ def prepare_verification(args: argparse.Namespace) -> dict:
             }
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
     else:
-        policy = decide(classification, skills_root(repo), project_kind=project_kind(repo))
+        policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"))
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest))
     if drift:
         plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
@@ -227,6 +278,7 @@ def prepare_verification(args: argparse.Namespace) -> dict:
     plan["status"] = "VERIFYING"
     plan["verification_run_id"] = run_id
     save_plan(_plan_path(repo, args.task_id), plan)
+    recipes = get_verification_recipes(policy.get("surfaces") or [])
     current = {
         "task_id": args.task_id,
         "run_id": run_id,
@@ -234,6 +286,7 @@ def prepare_verification(args: argparse.Namespace) -> dict:
         "policy": str(policy_path),
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "change_set_sha256": manifest["change_set_sha256"],
+        "verification_recipes": recipes,
         "created_at": utc_now(),
     }
     atomic_write_json(directory / "current-run.json", current)
@@ -363,6 +416,12 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--task-id", required=True)
     command = sub.add_parser("draft", parents=[common])
     command.add_argument("--outcome", required=True)
+    command.add_argument(
+        "--kind",
+        choices=("AUTO", "BUG", "FEATURE", "REFACTOR", "auto", "bug", "feature", "refactor"),
+        default="AUTO",
+        help="Task kind classification: AUTO, BUG, FEATURE, or REFACTOR",
+    )
     command.add_argument("--expected-surfaces")
     command.add_argument("--expected-modules")
     command.add_argument("--test-strategy")
@@ -386,6 +445,12 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
     command.set_defaults(handler=record_sensitive_approval)
     sub.add_parser("begin", parents=[common]).set_defaults(handler=begin_task)
+    command = sub.add_parser("debug-evidence", parents=[common])
+    command.add_argument("--kind", required=True, help="Evidence category (e.g. reproduction, logcat, stacktrace, test_failure, limited)")
+    command.add_argument("--reference", required=True, help="Path, URI, or description of the concrete evidence")
+    command.add_argument("--hypothesis", default="", help="Root cause hypothesis")
+    command.add_argument("--risk", default="", help="Potential risks or side effects")
+    command.set_defaults(handler=record_debug_evidence)
     sub.add_parser("prepare-verification", parents=[common]).set_defaults(handler=prepare_verification)
     sub.add_parser("verify", parents=[common]).set_defaults(handler=verify_task)
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)
@@ -403,6 +468,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "prepare-verification":
         print(f"HARNESS_RUN_ID={result['run_id']}")
         print(f"HARNESS_DELIVERY_SNAPSHOT={result['delivery_snapshot_sha256']}")
+        if result.get("verification_recipes"):
+            print("VERIFICATION_RECIPES:")
+            for recipe in result["verification_recipes"]:
+                print(f"  [{recipe['surface']}]:")
+                for step in recipe["steps"]:
+                    print(f"    - {step}")
+    elif args.action == "debug-evidence":
+        print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")
     elif args.action == "verify":
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.json:

@@ -339,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
         "CITATION.cff",
         "CHANGELOG.md",
         "README.md",
+        "harness_cli.py",
         "docs/",
         "scripts_dev/",
     ]

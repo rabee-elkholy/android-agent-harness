@@ -35,6 +35,10 @@ ZOHO_MUTATION_TOOLS = {
 PROTECTED_ROOTS = (
     ".agents", "agents/scripts", "agents/state", ".harness-setup/ownership-v1.json",
 )
+EPHEMERAL_GENERATED_RE = re.compile(
+    r"(?:^|/)build/(?:generated|intermediates)/|(?:^|/)generated/(?:source|ksp|kapt)/",
+    re.I,
+)
 
 # These stay denied even during approved implementation: they cross the local
 # development boundary or make recovery materially harder.
@@ -138,6 +142,8 @@ def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
         return False, "File mutation escapes the approved repository.", False
     if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
         return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
+    if EPHEMERAL_GENERATED_RE.search(relative):
+        return False, f"Cannot mutate generated build output '{relative}'. Generated code is diagnostic evidence only; edit the source entity/DAO/contract or generator configuration instead.", False
     return True, relative, False
 
 

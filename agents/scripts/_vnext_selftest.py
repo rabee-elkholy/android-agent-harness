@@ -887,6 +887,14 @@ class LifecycleTests(RepoCase):
                         dest = checkout / rel
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         dest.write_bytes((KIT / rel).read_bytes())
+            proc_untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=str(KIT), capture_output=True, text=True, check=False)
+            if proc_untracked.returncode == 0:
+                for line in proc_untracked.stdout.splitlines():
+                    rel = line.strip()
+                    if rel and (KIT / rel).is_file():
+                        dest = checkout / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_bytes((KIT / rel).read_bytes())
             _validate_kit(checkout)
             release = subprocess.run(
                 [sys.executable, str(checkout / "scripts_dev/validate_release.py")],

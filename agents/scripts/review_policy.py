@@ -76,7 +76,7 @@ def _micro_eligible(classification: dict) -> bool:
     )
 
 
-def decide(classification: dict, skills_root: Path, *, project_kind: str = "application") -> dict:
+def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE") -> dict:
     surfaces = set(classification.get("surfaces") or [])
     severity = str(classification.get("severity") or "HIGH")
     reviewers: set[str] = set()
@@ -105,7 +105,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     if device_required:
         gates.add("device")
 
-    skills = route(skills_root, sorted(surfaces))
+    skills = route(skills_root, sorted(surfaces), task_kind=task_kind)
     call_budget = _configured_model_call_budget()
     status = "NO_DELIVERY_CHANGES" if not surfaces else "USER_DECISION_REQUIRED" if "UNKNOWN" in surfaces else skills["status"]
     if len(reviewers) > call_budget:
@@ -145,9 +145,10 @@ def decide_later_round(
     source_run_id: str,
     round_number: int,
     project_kind: str = "application",
+    task_kind: str = "FEATURE",
 ) -> dict:
     """Narrow a later round while retaining tamper-evident prior PASS coverage."""
-    result = decide(classification, skills_root, project_kind=project_kind)
+    result = decide(classification, skills_root, project_kind=project_kind, task_kind=task_kind)
     current_required = set(result.get("reviewers") or [])
     previous_required = set(previous_policy.get("reviewers") or [])
     owners = set(finding_owners) & previous_required
