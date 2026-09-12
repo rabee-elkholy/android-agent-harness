@@ -20,6 +20,7 @@
   <a href="#core-guarantees">Guarantees</a> &bull;
   <a href="#why-this-exists-the-problem-with-raw-ai-agents">Why This Exists</a> &bull;
   <a href="#architecture--how-it-works">Architecture</a> &bull;
+  <a href="#deterministic-android-quality-guardians">Android Guardians</a> &bull;
   <a href="#quickstart">Quickstart</a> &bull;
   <a href="#task-lifecycle--workflows">Workflows</a> &bull;
   <a href="#supported-ai-hosts--enforcement-tiers">Supported Hosts</a> &bull;
@@ -100,6 +101,57 @@ When required by policy, isolated specialist subagents are dispatched:
 
 ### 5. Final Read-Only Verification
 `final_verifier.py` recalculates the active delivery snapshot, repository identity, and Git branch. It independently verifies that all required evidence records are present, valid, untampered, and passing. The verifier is strictly read-only: it can confirm or reject delivery, but cannot write success state itself.
+
+---
+
+## Deterministic Android Quality Guardians
+
+Beyond LLM reviews, the harness equips your workflow with purpose-built, deterministic static analyzers, hardware bridges, and diagnostics specifically engineered for Android development:
+
+### 1. Adaptive Localization & String Guard (`check_strings.py`)
+- **Diff-Scoped Resource Inspection**: Analyzes touched string resources across all locale directories (`values/strings.xml`, `values-ar/`, `values-es/`, etc.).
+- **Placeholder Parity**: Catches subtle format-string mismatches (e.g., base defines `Hello %s (%d)` while a translated string has `%d (%s)`), preventing runtime `UnknownFormatConversionException` crashes.
+- **Key Synchronization & Plural Parity**: Detects missing translated keys and plural quantity mismatches (`zero`, `one`, `two`, `few`, `many`, `other`).
+- **Hardcoded String Detection**: Flags raw unextracted strings introduced in layout XML or Compose UI.
+
+### 2. Room Database & Schema Migration Guard (`room_guard.py`)
+- **Deep Recursive Schema Traversal**: Parses `@Database` declarations and resolves all entity classes, relations, and nested `@Embedded` data classes across separate files.
+- **Strict Migration Enforcement**: When entities change, verifies that an explicit `Migration(start, end)` or `AutoMigration` path is declared and registered in `addMigrations()`.
+- **Destructive Migration Shield**: Blocks silent data wipes caused by accidental `fallbackToDestructiveMigration()` calls in production code.
+
+### 3. Smart Test Regression Isolation (`baseline_capture.py` & `run_tests_gate.py`)
+- **Baseline vs. Regression Disambiguation**: In real-world enterprise codebases, some legacy tests may already be broken. The harness captures a pre-task baseline of existing failures.
+- **Zero-Block Progress**: The gate fails **only** if the AI agent's changes introduce a *new* test regression or compilation error, preventing legacy technical debt from paralyzing modern agentic development.
+
+### 4. Performance & ANR Risk Analyzer (`perf_guard.py`)
+- **Main-Thread I/O Detection**: Scans modified code for synchronous disk access, SQLite operations, SharedPreferences commits, or network calls executing on the UI thread.
+- **Dispatcher Governance**: Enforces structured concurrency guidelines (`Dispatchers.IO`, `Dispatchers.Default`) and catches unconfined or global `CoroutineScope` antipatterns.
+- **Compose Recomposition Safeguards**: Identifies unstable parameters, un-remembered state allocations, and infinite recomposition loops.
+
+### 5. Intelligent Compiler Diagnostics (`gradle_error_parser.py`)
+- **Actionable Diagnostic Extraction**: Filters hundreds of lines of Gradle and Kotlin daemon noise to pinpoint the exact failure: file path, line number, and error message.
+- **Annotation Processor & KSP Awareness**: Accurately parses complex Dagger/Hilt missing dependency injection bindings and Room KSP schema generation failures into clear guidance for the AI agent.
+
+### 6. Hardware Observability & Visual Evidence (`capture_screen.py` & `logcat_doctor.py`)
+- **Automated Visual UI Snapshots**: Automatically captures screenshots from physical devices or emulators upon task completion and saves them as review artifacts.
+- **Live Crash & ANR Capture**: Monitors Android Logcat during app launch and device testing, extracting fatal exception stack traces, uncaught exceptions, and native tombstone traces directly into the verification report.
+- **Physical Device Priority**: Automatically resolves connected hardware, prioritizing physical test devices over emulators to validate real-world Android performance.
+
+### 7. Universal Multi-Module Project Graph (`project_graph.py`)
+- **Topology-Aware Scoping**: Discovers module dependencies across modern multi-module architectures (`:core:network`, `:feature:auth`, `:app`).
+- **Targeted Build Execution**: Directs Gradle to compile and test only the modules affected by the current change, saving minutes of build time on large projects.
+
+### 8. Native Slash Command Packs (`.agents/command-packs/`)
+- Pre-installed prompt commands for all major AI coding hosts (Claude Code, OpenAI Codex, GitHub Copilot, and Gemini CLI):
+  - `/deliver` — End-to-end implementation with verification.
+  - `/debug` — Hypothesis-driven defect reproduction and fix.
+  - `/doctor` — Instant environment and toolchain diagnosis.
+  - `/preflight` — Rapid static lint, strings, and Room check.
+  - `/perf-audit` — Dedicated ANR and memory leak inspection.
+
+### 9. Project Management & Issue Tracker Governance (`pm_policy.py`)
+- **Zoho Sprints & GitHub Projects Integration**: Provides agents with structured, read-only context on active tasks and sprints.
+- **Zero Rogue Mutations**: Ticket status updates, comments, and time-logging mutations are locked behind explicit `--external-write` authorization and human confirmation.
 
 ---
 
