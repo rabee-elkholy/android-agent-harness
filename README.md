@@ -1,25 +1,30 @@
+<div align="center">
+
 # Android Agent Harness
 
-<div align="center">
+### Deterministic Android Engineering for the AI Era
+
+<p align="center">
+  <b>Turn AI coding assistants into an uncompromising senior Android engineering team.</b><br>
+  Deterministic local governance &bull; Tamper-evident verification &bull; Zero external dependencies
+</p>
 
 [![Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?color=blue&label=release)](https://github.com/rabee-elkholy/android-agent-harness/releases)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/github/license/rabee-elkholy/android-agent-harness.svg)](LICENSE)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-zero%20(stdlib%20only)-success.svg)](#zero-dependency-standard-library-runtime)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](#supported-environments)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-zero%20(stdlib%20only)-success.svg)](#zero-dependencies)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](#prerequisites)
 [![Tests](https://img.shields.io/badge/tests-154%20deterministic%20passed-brightgreen.svg)](#verification--selftest)
 
-**Deterministic local governance, proportional verification, and zero-compromise safety for AI-assisted Android development.**
-
-*Autonomous AI speed with deterministic human authority — the zero-dependency, tamper-evident quality harness for Android engineering.*
-
-[Guarantees](#core-guarantees) •
-[Why This Exists](#why-this-exists-the-problem-with-raw-ai-agents) •
-[Architecture](#architecture--how-it-works) •
-[Quickstart](#quickstart) •
-[Workflows](#task-lifecycle--workflows) •
-[Supported AI Hosts](#supported-ai-hosts--enforcement-tiers) •
-[CLI Reference](#cli-reference)
+<p align="center">
+  <a href="#core-guarantees">Guarantees</a> &bull;
+  <a href="#why-this-exists-the-problem-with-raw-ai-agents">Why This Exists</a> &bull;
+  <a href="#architecture--how-it-works">Architecture</a> &bull;
+  <a href="#quickstart">Quickstart</a> &bull;
+  <a href="#task-lifecycle--workflows">Workflows</a> &bull;
+  <a href="#supported-ai-hosts--enforcement-tiers">Supported Hosts</a> &bull;
+  <a href="#cli-reference">CLI Reference</a>
+</p>
 
 </div>
 
