@@ -903,6 +903,140 @@ class AndroidScenariosSelftest(unittest.TestCase):
             with mock.patch("run_device.DEVICE_TARGET_POLICY", "physical-only"):
                 self.assertEqual("PHONE_B", require_serial("PHONE_B"))
 
+    # --- Scenario R01: Structural Parser Scope Isolation ---
+    def test_scenario_r01_structural_context_scoping(self) -> None:
+        code1 = "class Mixed {\n fun purchaseItem() = true\n fun harmless() {\n  val count = 2\n }\n}\n"
+        ctx1 = _enclosing_structural_context(code1, [4])
+        self.assertNotIn("purchaseItem", ctx1)
+        self.assertIn("fun harmless() {", ctx1)
+
+        code2 = "class Mixed { val purchaseStatus = false\n fun harmless() {\n  val count = 2\n }\n}\n"
+        ctx2 = _enclosing_structural_context(code2, [3])
+        self.assertNotIn("purchaseStatus", ctx2)
+        self.assertIn("class Mixed {", ctx2)
+
+        code3 = "class Mixed {\n fun purchaseItem() {\n val message = \"\"\"\n }\n \"\"\"\n val accepted = true\n }\n}\n"
+        ctx3 = _enclosing_structural_context(code3, [6])
+        self.assertIn("purchaseItem", ctx3)
+
+    # --- Scenario R02: Manifest Label Edit No False Permission Escalation ---
+    def test_scenario_r02_manifest_label_only_no_permission_escalation(self) -> None:
+        manifest_file = self.repo / "app/src/main/AndroidManifest.xml"
+        before = manifest_file.read_text(encoding="utf-8")
+        after = before.replace('android:label="ScenarioApp"', 'android:label="UpdatedApp"')
+        _write_file(manifest_file, after)
+        c = classify(self.repo)
+        p = decide(c, self.skills_root)
+        self.assertNotIn("MANIFEST_PERMISSION", c["surfaces"])
+        self.assertIn("BUILD_CONFIG", c["surfaces"])
+        self.assertFalse(p["device_required"])
+
+    # --- Scenario R03: Generated Code Denial Under Build and Generated Paths ---
+    def test_scenario_r03_pre_tool_safety_generated_build_outputs(self) -> None:
+        import pre_tool_safety
+        from unittest import mock
+        with mock.patch.object(pre_tool_safety, "REPO", self.repo):
+            for path in [
+                "app/build/generated/ksp/src/Foo.kt",
+                "src/androidApp/build/generated/ksp/Foo.kt",
+                "app/src/main/generated/ksp/Foo.kt",
+            ]:
+                safe, msg, _ = pre_tool_safety._safe_target(path)
+                self.assertFalse(safe, f"Path {path} should be rejected as generated build output.")
+                self.assertIn("Cannot mutate generated build output", msg)
+
+    # --- Scenario R04: Room Multi-DB, Java, Inline, and Broken Registration ---
+    def test_scenario_r04_room_hardening_matrix(self) -> None:
+        from room_guard import check_room_working_tree
+        p = self.repo / "app/src/main/kotlin/com/example"
+        db = "@Database(entities = [], version = 1)\nabstract class AppDatabase : RoomDatabase()\n"
+        _write_file(p / "AppDatabase.kt", db)
+        _run_git(self.repo, "add", ".")
+        _run_git(self.repo, "commit", "-qm", "baseline room")
+
+        # 1. Valid alternative unused migration
+        _write_file(p / "AppDatabase.kt", db.replace("version = 1", "version = 3"))
+        _write_file(p / "DataSetup.kt", 'val direct = object : Migration(1, 3) {}\nval unused = object : Migration(1, 2) {}\nfun setup() = Room.databaseBuilder(ctx, AppDatabase::class.java, "app").addMigrations(direct)\n')
+        passed, msg = check_room_working_tree(repo=self.repo)
+        self.assertTrue(passed, f"Valid alternative unused migration should pass: {msg}")
+
+        # 2. Java external registered migration
+        _write_file(p / "AppDatabase.kt", db.replace("version = 1", "version = 2"))
+        _write_file(p / "DbSetup.java", 'class DbSetup {\n static final Migration STEP = new Migration(1, 2) {\n public void migrate(SupportSQLiteDatabase db) {}\n };\n Object setup() { return Room.databaseBuilder(ctx, AppDatabase.class, "app").addMigrations(STEP).build(); }\n}\n')
+        _write_file(p / "DataSetup.kt", "")
+        passed, msg = check_room_working_tree(repo=self.repo)
+        self.assertTrue(passed, f"Java external registered migration should pass: {msg}")
+
+        # 3. Inline migration
+        _write_file(p / "DbSetup.java", "")
+        _write_file(p / "DataSetup.kt", 'fun setup() = Room.databaseBuilder(ctx, AppDatabase::class.java, "app").addMigrations(object : Migration(1, 2) {})\n')
+        passed, msg = check_room_working_tree(repo=self.repo)
+        self.assertTrue(passed, f"Inline registered migration should pass: {msg}")
+
+        # 4. Cross-db contamination rejection
+        _write_file(p / "AppDatabase.kt", db.replace("version = 1", "version = 3"))
+        _write_file(p / "OtherDatabaseModule.kt", 'val first = object : Migration(1, 2) {}\nval second = object : Migration(2, 3) {}\nfun setup() = Room.databaseBuilder(ctx, OtherDatabase::class.java, "other").addMigrations(first, second)\n')
+        _write_file(p / "DataSetup.kt", "")
+        passed, msg = check_room_working_tree(repo=self.repo)
+        self.assertFalse(passed, "Cross-db migrations must not satisfy AppDatabase bump.")
+
+    # --- Scenario R05: Device Prerequisite Safety ---
+    def test_scenario_r05_device_prerequisites_safety(self) -> None:
+        import argparse
+        import run_device
+        from unittest import mock
+        from evidence_store import EvidenceStore
+        from _vnext_common import atomic_write_json
+
+        state = self.repo / ".agents/state"
+        d = state / "tasks/TASK-DEV-1"
+        d.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(state / "active-task.json", {"task_id": "TASK-DEV-1", "plan_path": str(d / "plan.json")})
+        atomic_write_json(d / "plan.json", {"task_id": "TASK-DEV-1", "status": "VERIFYING", "verification_run_id": "current"})
+        atomic_write_json(d / "policy.json", {"gates": ["preflight", "unit_tests"]})
+        # Mismatched task ID
+        atomic_write_json(d / "current-run.json", {"task_id": "OTHER", "run_id": "current", "delivery_snapshot_sha256": "snap1", "policy": str(d / "policy.json")})
+
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+            self.assertEqual(EXIT_ENV, code)
+
+        # Missing snapshot
+        atomic_write_json(d / "current-run.json", {"task_id": "TASK-DEV-1", "run_id": "current", "policy": str(d / "policy.json")})
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+            self.assertEqual(EXIT_ENV, code)
+
+    # --- Scenario R06: Release Automation Server Error Fail Closed ---
+    def test_scenario_r06_release_automation_error_handling(self) -> None:
+        import importlib.util
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("release_mod", KIT / "scripts_dev/release_version.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        with mock.patch.object(mod.shutil, "which", return_value="/fake/gh"), \
+             mock.patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "HTTP 500 Internal Server Error")):
+            status = mod.github_release_status("v9.9.9")
+            self.assertEqual("UNKNOWN", status)
+
+    # --- Scenario R07: Localization Multiline Tag Recognition ---
+    def test_scenario_r07_localization_multiline_tag(self) -> None:
+        import check_strings
+        b = self.repo / "app/src/main/res/values/strings.xml"
+        a = self.repo / "app/src/main/res/values-ar/strings.xml"
+        xml = '<resources>\n<string\n name="hello">\nHello %s\n</string>\n</resources>\n'
+        _write_file(b, xml)
+        _write_file(a, xml)
+        _run_git(self.repo, "add", ".")
+        _run_git(self.repo, "commit", "-qm", "baseline strings")
+
+        # Mutate base with multiline tag to %d
+        _write_file(b, xml.replace("%s", "%d"))
+        code = check_strings.main([], repo=self.repo)
+        self.assertEqual(1, code, "Diff-scoped check must catch placeholder mismatch on multiline opening tag.")
+
 
 if __name__ == "__main__":
     unittest.main()
+

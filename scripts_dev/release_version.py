@@ -184,7 +184,8 @@ def github_release_status(tag_name: str) -> str:
         )
         if res.returncode == 0:
             return "PRESENT"
-        if "release not found" in (res.stderr or "").lower() or res.returncode == 1:
+        stderr = (res.stderr or "").lower()
+        if "release not found" in stderr or "not found" in stderr or "404" in stderr:
             return "ABSENT"
         return "UNKNOWN"
     except Exception:
@@ -269,6 +270,9 @@ def main(argv: list[str] | None = None) -> int:
             gh_release_state = github_release_status(tag_name)
             if gh_release_state == "PRESENT":
                 print(f"[ERROR] GitHub release '{tag_name}' already exists. Published releases are immutable. Increment the patch version.")
+                return 1
+            elif gh_release_state == "UNKNOWN":
+                print(f"[ERROR] Could not reliably verify GitHub release status for '{tag_name}'. Preflight check failed closed.")
                 return 1
     else:
         gh_release_state = github_release_status(tag_name)
@@ -388,10 +392,14 @@ def main(argv: list[str] | None = None) -> int:
 
     commit_msg = f"release: v{target_version}"
     res_commit = run_cmd(["git", "commit", "-m", commit_msg], check=False)
+    combined_commit_out = (res_commit.stdout or "") + "\n" + (res_commit.stderr or "")
     if res_commit.returncode == 0:
         print(f"  + Created commit: {commit_msg}")
+    elif "nothing to commit" in combined_commit_out.lower() or "working tree clean" in combined_commit_out.lower():
+        print("  + Working tree already clean, no new commit needed.")
     else:
-        print(f"  + Working tree already clean or commit skipped ({res_commit.stderr.strip()})")
+        print(f"[FAIL] Git commit failed with code {res_commit.returncode}:\n{combined_commit_out.strip()}")
+        return 1
 
     tag_name = f"v{target_version}"
     tag_cmd = ["git", "tag", "-f", tag_name] if args.allow_tag_overwrite else ["git", "tag", tag_name]

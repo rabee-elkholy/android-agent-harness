@@ -149,9 +149,19 @@ def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
     if snapshot and run_id:
         try:
             from evidence_store import EvidenceStore
+            from final_verifier import ALLOWED_PRODUCERS
+            from _harness_version import HARNESS_VERSION
             store = EvidenceStore(state_root)
             record = store.read(snapshot, run_id, gate_name)
-            return bool(record and str(record.get("status") or "") == "PASS")
+            if not record or str(record.get("status") or "") != "PASS":
+                return False
+            producer = str(record.get("producer") or "")
+            if producer not in ALLOWED_PRODUCERS.get(gate_name, set()):
+                return False
+            harness_ver = str(record.get("harness_version") or "")
+            if harness_ver and harness_ver != HARNESS_VERSION:
+                return False
+            return True
         except Exception:
             return False
     return False
@@ -186,6 +196,20 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
         try:
             from _vnext_common import read_json
             current_run = read_json(current_path)
+            current_task_id = str(current_run.get("task_id") or "")
+            if not current_task_id or current_task_id != task_id:
+                live_print(
+                    f"[FAIL] Verification run task mismatch: active task expects '{task_id}', but current-run is '{current_task_id}'.",
+                    err=True,
+                )
+                return EXIT_ENV
+            snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
+            if not snapshot:
+                live_print(
+                    "[FAIL] Verification run is missing delivery_snapshot_sha256.",
+                    err=True,
+                )
+                return EXIT_ENV
             run_id = str(current_run.get("run_id") or "")
             expected_run_id = str(active.get("verification_run_id") or "")
             if not run_id or (expected_run_id and run_id != expected_run_id):

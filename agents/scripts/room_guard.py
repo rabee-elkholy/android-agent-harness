@@ -29,10 +29,37 @@ TYPE_DECL_RE = re.compile(
 IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 ADD_MIGRATIONS_KW = frozenset({"addMigrations"})
 
+KT_VAR_RE = re.compile(
+    r"(?:val|var)\s+([A-Za-z0-9_]+)\s*(?::\s*Migration)?\s*=\s*(?:object\s*:\s*)?Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)"
+)
+JAVA_VAR_RE = re.compile(
+    r"(?:(?:public|protected|private|static|final)\s+)*Migration\s+([A-Za-z0-9_]+)\s*=\s*new\s+Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)"
+)
+
+
+def _extract_add_migrations_blocks(text: str) -> list[str]:
+    blocks = []
+    for m in re.finditer(r"\baddMigrations\s*\(", text):
+        start = m.end()
+        depth = 1
+        i = start
+        n = len(text)
+        while i < n and depth > 0:
+            c = text[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            i += 1
+        if depth == 0:
+            blocks.append(text[start : i - 1])
+    return blocks
+
 
 @dataclass(frozen=True)
 class DatabaseDecl:
     rel: str
+    class_name: str
     version: int | None
     entity_names: frozenset[str]
     migrations: frozenset[tuple[int, int]]
@@ -131,6 +158,8 @@ def parse_database_source(text: str, rel: str = "", repo: Path | None = None) ->
     root = repo or REPO
     version_match = VERSION_RE.search(text)
     version = int(version_match.group(1)) if version_match else None
+    class_match = re.search(r"\bclass\s+([A-Za-z0-9_]+)", text)
+    class_name = class_match.group(1) if class_match else ""
     db_ann = re.search(r"@Database\s*\((.*?)\)\s*(?:@|\babstract\b)", text, re.DOTALL)
     header = db_ann.group(1) if db_ann else text.split("abstract class", 1)[0]
     raw_entities = frozenset(ENTITY_REF_RE.findall(header))
@@ -143,13 +172,14 @@ def parse_database_source(text: str, rel: str = "", repo: Path | None = None) ->
     )
     all_migrations = frozenset(manual_migrations | auto_migrations)
     registered: set[str] = set()
-    add_blocks = ADD_MIGRATIONS_RE.findall(text)
+    add_blocks = _extract_add_migrations_blocks(text)
     for block in add_blocks:
         for token in IDENT_RE.findall(block):
             if token not in ADD_MIGRATIONS_KW:
                 registered.add(token)
     return DatabaseDecl(
         rel=rel,
+        class_name=class_name,
         version=version,
         entity_names=entities,
         migrations=all_migrations,
@@ -298,7 +328,18 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
                 f"Increment version and add Migration({old_ver}, {old_ver + 1}) or AutoMigration."
             )
 
+        other_db_classes = {d.class_name for _, d in databases if d.class_name and d.class_name != new_decl.class_name}
+
+        should_check_migrations = False
+        target_start = 1
         if old_ver is not None and new_ver > old_ver:
+            should_check_migrations = True
+            target_start = old_ver
+        elif "candidate migration files changed" in why and new_ver is not None and new_ver > 1:
+            should_check_migrations = True
+            target_start = 1
+
+        if should_check_migrations:
             all_migs = set(new_decl.migrations)
             has_add_migs = new_decl.has_add_migrations
             registered_tokens = set(new_decl.registered)
@@ -307,10 +348,18 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
             for c_path in candidate_files:
                 try:
                     c_text = c_path.read_text(encoding="utf-8", errors="replace")
+                    # If this candidate file has databaseBuilder calls for other databases and not this database, skip it
+                    builder_dbs = set(re.findall(r"databaseBuilder\s*\([^,]+,\s*([A-Za-z0-9_]+)(?:::class|\.class)", c_text))
+                    if builder_dbs and new_decl.class_name not in builder_dbs:
+                        continue
+                    # If this candidate file references another known database and does NOT reference this database, skip it
+                    if other_db_classes and any(re.search(rf"\b{re.escape(odb)}\b", c_text) for odb in other_db_classes):
+                        if not (new_decl.class_name and re.search(rf"\b{re.escape(new_decl.class_name)}\b", c_text)):
+                            continue
                     candidate_texts.append(c_text)
                     for a, b in AUTO_MIGRATION_RE.findall(c_text):
                         all_migs.add((int(a), int(b)))
-                    add_blocks = ADD_MIGRATIONS_RE.findall(c_text)
+                    add_blocks = _extract_add_migrations_blocks(c_text)
                     if add_blocks:
                         has_add_migs = True
                         for block in add_blocks:
@@ -323,43 +372,44 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
             body = path.read_text(encoding="utf-8", errors="replace")
             all_bodies = [body] + candidate_texts
 
-            # Check for migration variables in candidate files and only credit registered ones
+            unregistered_candidates: list[tuple[str, int, int]] = []
+            # Check for migration variables in candidate files and credit registered ones
             for b_text in all_bodies:
-                var_matches = re.findall(
-                    r"(?:val|var)\s+([A-Za-z0-9_]+)\s*(?::\s*Migration)?\s*=\s*(?:object\s*:\s*)?Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)",
-                    b_text,
-                )
+                var_matches = KT_VAR_RE.findall(b_text) + JAVA_VAR_RE.findall(b_text)
                 for var_name, a_str, b_str in var_matches:
                     edge = (int(a_str), int(b_str))
-                    if old_ver <= edge[0] < edge[1] <= new_ver:
+                    if target_start <= edge[0] < edge[1] <= new_ver:
                         if var_name in registered_tokens or var_name in str(new_decl.registered):
                             all_migs.add(edge)
-                        elif not any(var_name in f for f in failures):
-                            failures.append(
-                                f"{new_decl.rel}: migration variable '{var_name}' ({edge[0]} -> {edge[1]}) is defined but not registered in addMigrations(...)."
-                            )
+                        else:
+                            unregistered_candidates.append((var_name, edge[0], edge[1]))
 
                 # Check named convention MIGRATION_A_B
                 for a_str, b_str in re.findall(r"\bMIGRATION_(\d+)_(\d+)\b", b_text):
                     edge = (int(a_str), int(b_str))
-                    if old_ver <= edge[0] < edge[1] <= new_ver:
+                    if target_start <= edge[0] < edge[1] <= new_ver:
                         c_name = f"MIGRATION_{edge[0]}_{edge[1]}"
                         if c_name in registered_tokens or c_name in str(new_decl.registered):
                             all_migs.add(edge)
-                        elif not any(c_name in f for f in failures):
-                            failures.append(
-                                f"{new_decl.rel}: {c_name} exists but is not passed to addMigrations(...)."
-                            )
+                        else:
+                            unregistered_candidates.append((c_name, edge[0], edge[1]))
 
                 # Direct inline Migration(a, b) calls inside addMigrations
-                for add_block in ADD_MIGRATIONS_RE.findall(b_text):
+                for add_block in _extract_add_migrations_blocks(b_text):
                     for a_str, b_str in MIGRATION_RE.findall(add_block):
                         all_migs.add((int(a_str), int(b_str)))
 
-            if not is_migration_path_covered(old_ver, new_ver, frozenset(all_migs)):
-                failures.append(
-                    f"{new_decl.rel}: version {old_ver} -> {new_ver} but valid migration path is missing."
-                )
+            if not is_migration_path_covered(target_start, new_ver, frozenset(all_migs)):
+                if unregistered_candidates:
+                    for var_name, a_val, b_val in unregistered_candidates:
+                        if not any(var_name in f for f in failures):
+                            failures.append(
+                                f"{new_decl.rel}: migration variable '{var_name}' ({a_val} -> {b_val}) is defined but not registered in addMigrations(...)."
+                            )
+                else:
+                    failures.append(
+                        f"{new_decl.rel}: version {target_start} -> {new_ver} but valid migration path is missing."
+                    )
             if not has_add_migs:
                 failures.append(
                     f"{new_decl.rel}: version bumped but addMigrations(...) or autoMigrations is missing."

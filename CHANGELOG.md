@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.15] - 2026-09-12
+
+### Structural Lexical Scoping, Manifest Floor Precision, Room Isolation, and Release Safety Hardening
+
+- **Structural Scope Isolation & Raw String Support (R01, `change_classifier.py`)**: Added multiline triple-quoted raw string (`"""` / `'''`) tracking across lines in `_strip_code_line`. Reset declaration headers on new declarations to prevent expression-body functions from leaking into sibling declarations, and trimmed header lines on `{` to prevent same-line class body properties from contaminating class scope.
+- **Manifest Component Attribute Precision (R02, `change_classifier.py`)**: Refined `MANIFEST_PERMISSION` and `DEVICE_API` classification to inspect diff text and enclosing element tags rather than entire enclosing component context, preventing label-only edits on exported `<activity>` components from falsely requiring physical devices.
+- **Generated Build Output Mutation Barrier (R03, `pre_tool_safety.py`)**: Removed overly broad `/src/` exemption from ephemeral generated code checking, strictly rejecting file mutation tools on generated build outputs under `build/generated/`, `build/intermediates/`, and `generated/(source|ksp|kapt)/`.
+- **Room Multi-Database Isolation, Java Variables & Inline Migration Parsing (R04, `room_guard.py`)**: Isolated candidate migration files and `addMigrations(...)` to the database referenced by their `Room.databaseBuilder` call, preventing cross-database contamination. Added parsing for Java `Migration` fields (`new Migration(...)`), added balanced-parenthesis extraction for inline `object : Migration(...)` calls in `addMigrations`, permitted valid unused alternative migrations when a complete migration path is registered, and enforced migration verification on candidate file edits.
+- **Device Prerequisite Strictness & Producer Verification (R05, `run_device.py`)**: Enforced matching `task_id` between active task and `current-run.json`, required present `delivery_snapshot_sha256`, and validated evidence record producers against `ALLOWED_PRODUCERS` and `HARNESS_VERSION`.
+- **Release Automation Server Error Safety & Tag Assertion (R06, `release_version.py`, `publish-pypi.yml`)**: Differentiated HTTP 404 from HTTP 500 / network errors in `github_release_status` to fail closed (`UNKNOWN`), halted release script on git commit errors, and asserted release tag matches package version in GitHub Actions PyPI publishing workflow.
+- **Localization Multiline Tag Recognition (R07, `check_strings.py`)**: Implemented multiline element interval matching in `_extract_touched_keys_from_xml` to accurately extract touched keys when `<string`, `<plurals>`, or `<string-array>` opening tags span multiple lines.
+- **Regression Matrix Suite Expansion (R08, `_android_scenarios_selftest.py`)**: Added comprehensive regression tests locking R01–R07 invariants into the 42-test scenario matrix suite.
+
 ## [1.0.14] - 2026-09-12
 
 ### Audit Findings Hardening, FQN Resolution, Multi-Device Disambiguation, and Verification Precision

@@ -66,7 +66,7 @@ CLASS_DECL_RE = re.compile(r"\b(?:class|interface|object)\s+([A-Za-z0-9_]+)")
 FUN_DECL_RE = re.compile(r"\b(?:fun|suspend\s+fun)\s+([A-Za-z0-9_]+)")
 
 
-def _strip_code_line(line: str, in_block: bool) -> tuple[str, bool]:
+def _strip_code_line(line: str, in_block: bool, in_triple: str | None = None) -> tuple[str, bool, str | None]:
     res = []
     i = 0
     n = len(line)
@@ -78,28 +78,39 @@ def _strip_code_line(line: str, in_block: bool) -> tuple[str, bool]:
                 i = end + 2
             else:
                 break
+        elif in_triple:
+            end = line.find(in_triple, i)
+            if end != -1:
+                q_len = len(in_triple)
+                in_triple = None
+                i = end + q_len
+            else:
+                break
         elif line[i:i+2] == "/*":
             in_block = True
             i += 2
         elif line[i:i+2] == "//":
             break
+        elif line[i:i+3] in ('"""', "'''"):
+            q3 = line[i:i+3]
+            end = line.find(q3, i + 3)
+            if end != -1:
+                i = end + 3
+            else:
+                in_triple = q3
+                break
         elif line[i] in ('"', "'"):
             q = line[i]
-            if line[i:i+3] == '"""':
-                q = '"""'
-            i += len(q)
+            i += 1
             while i < n:
-                if q == '"""' and line[i:i+3] == '"""':
-                    i += 3
-                    break
-                elif q != '"""' and line[i] == q and (i == 0 or line[i-1] != '\\'):
+                if line[i] == q and (i == 0 or line[i-1] != '\\'):
                     i += 1
                     break
                 i += 1
         else:
             res.append(line[i])
             i += 1
-    return "".join(res), in_block
+    return "".join(res), in_block, in_triple
 
 
 def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -> str:
@@ -112,17 +123,24 @@ def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -
     current_brace_depth = 0
     current_paren_depth = 0
     in_block = False
+    in_triple = None
     pending_header: list[str] = []
     active_param_header: str = ""
     param_header_depth: int = 0
 
     for idx, line in enumerate(lines, 1):
-        clean, in_block = _strip_code_line(line, in_block)
+        clean, in_block, in_triple = _strip_code_line(line, in_block, in_triple)
         stripped = line.strip()
         if stripped.startswith("@"):
             pending_header.append(line)
         elif DECL_RE.search(clean):
-            pending_header.append(line)
+            annos = []
+            for h_line in reversed(pending_header):
+                if h_line.strip().startswith("@"):
+                    annos.insert(0, h_line)
+                else:
+                    break
+            pending_header = annos + [line]
 
         for char in clean:
             if char == "(":
@@ -135,7 +153,17 @@ def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -
                 if active_param_header and current_paren_depth <= param_header_depth:
                     active_param_header = ""
             elif char == "{":
-                header_str = "\n".join(pending_header) if pending_header else ""
+                if pending_header:
+                    last = pending_header[-1]
+                    idx_brace = last.find("{")
+                    if idx_brace != -1:
+                        trimmed_last = last[:idx_brace + 1].rstrip()
+                        h_lines = pending_header[:-1] + ([trimmed_last] if trimmed_last else [])
+                    else:
+                        h_lines = pending_header
+                    header_str = "\n".join(h_lines)
+                else:
+                    header_str = ""
                 scope_stack.append((header_str, current_brace_depth))
                 pending_header = []
                 active_param_header = ""
@@ -310,9 +338,14 @@ def classify(repo: Path) -> dict:
         if suffix in (".gradle", ".kts", ".toml", ".properties") or Path(lower).name in ("gradlew", "gradlew.bat"):
             _add(found, "BUILD_CONFIG", rel, "BUILD_FILE")
         if "androidmanifest.xml" in lower:
-            combined_manifest = diff_text + "\n" + context_text
-            manifest_has_perm = bool(re.search(r"uses-permission|android\.permission\.|android:exported|provider|intent-filter", combined_manifest, re.I))
-            manifest_has_comp = bool(re.search(r"\b(?:service|receiver|uses-feature)\b", combined_manifest, re.I))
+            manifest_has_perm = bool(
+                re.search(r"uses-permission|android\.permission\.|android:exported|provider|intent-filter", diff_text, re.I)
+                or re.search(r"<(?:uses-permission|permission|permission-tree|permission-group|provider|intent-filter)\b", context_text, re.I)
+            )
+            manifest_has_comp = bool(
+                re.search(r"\b(?:service|receiver|uses-feature)\b", diff_text, re.I)
+                or re.search(r"<(?:service|receiver|uses-feature)\b", context_text, re.I)
+            )
             if manifest_has_perm:
                 _add(found, "MANIFEST_PERMISSION", rel, "MANIFEST_PERMISSION_CHANGE")
             if manifest_has_comp:

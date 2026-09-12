@@ -290,27 +290,43 @@ def _get_modified_lines_map(files: list[Path], repo: Path, cached: bool = False)
 
 def _extract_keys_from_xml_lines(lines: list[str]) -> set[str]:
     keys = set()
-    key_pattern = re.compile(r'<(?:string|plurals|string-array)\s+[^>]*name="([^"]+)"')
-    for line in lines:
-        for match in key_pattern.finditer(line):
-            keys.add(match.group(1))
+    text = "\n".join(lines)
+    for m in re.finditer(r'<(?:string|plurals|string-array)\b[^>]*?\bname\s*=\s*["\']([^"\']+)["\']', text, re.DOTALL):
+        keys.add(m.group(1))
     return keys
 
 
 def _extract_touched_keys_from_xml(content: str, modified_lines: set[int]) -> set[str]:
     keys = set()
-    current_key = None
-    key_pattern = re.compile(r'<(?:string|plurals|string-array)\s+[^>]*name="([^"]+)"')
-    closing_pattern = re.compile(r'</(?:string|plurals|string-array)>|/>')
+    if not content or not modified_lines:
+        return keys
 
-    for line_idx, line in enumerate(content.splitlines(), 1):
-        m = key_pattern.search(line)
-        if m:
-            current_key = m.group(1)
-        if line_idx in modified_lines and current_key:
-            keys.add(current_key)
-        if closing_pattern.search(line):
-            current_key = None
+    elem_re = re.compile(
+        r'<(string|plurals|string-array)\b([^>]*?)(?:/>|>(.*?)</\1>)',
+        re.DOTALL
+    )
+    name_re = re.compile(r'\bname\s*=\s*["\']([^"\']+)["\']')
+
+    line_starts = [0]
+    for idx, ch in enumerate(content):
+        if ch == '\n':
+            line_starts.append(idx + 1)
+
+    import bisect
+    def char_to_line(char_idx: int) -> int:
+        return bisect.bisect_right(line_starts, char_idx)
+
+    for m in elem_re.finditer(content):
+        attrs = m.group(2)
+        nm = name_re.search(attrs)
+        if not nm:
+            continue
+        key_name = nm.group(1)
+        start_line = char_to_line(m.start())
+        end_line = char_to_line(m.end())
+        if any(start_line <= l_num <= end_line for l_num in modified_lines):
+            keys.add(key_name)
+
     return keys
 
 
