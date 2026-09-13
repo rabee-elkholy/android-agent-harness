@@ -89,6 +89,16 @@ CODE_SURFACES: set[str] = {
     "BUSINESS_LOGIC", "COMPOSE_UI", "XML_UI", "NETWORK",
     "PERSISTENCE", "DEVICE_API", "NAVIGATION", "ROOM_SCHEMA",
 }
+COMPANION_SURFACES: set[str] = {"NAVIGATION", "RESOURCE_UI", "XML_UI", "COMPOSE_UI"}
+
+OUTCOME_SURFACE_KEYWORDS: dict[str, set[str]] = {
+    "BILLING": {"billing", "payment", "subscription", "purchase", "revenuecat", "in-app purchase", "iap", "paywall"},
+    "AUTH": {"auth", "login", "signup", "signin", "token", "credential", "oauth", "password", "biometric", "session"},
+    "NETWORK": {"network", "api", "endpoint", "http", "retrofit", "fetch", "download", "upload", "rest", "backend"},
+    "ROOM_SCHEMA": {"database", "room", "migration", "dao", "entity", "schema", "table"},
+    "PERSISTENCE": {"database", "room", "datastore", "sharedpreferences", "pref", "cache", "persistence"},
+    "NAVIGATION": {"navigation", "nav", "route", "destination", "screen", "fragment"},
+}
 
 
 def normalize_expected_surfaces(raw_surfaces: list[str] | None) -> list[str]:
@@ -267,10 +277,21 @@ def check_material_drift(plan: dict, actual_surfaces: list[str], actual_modules:
     unplanned_surfaces -= NON_DRIFTING_SURFACES
     if "COROUTINES" in unplanned_surfaces and (expected_surfaces & CODE_SURFACES):
         unplanned_surfaces.remove("COROUTINES")
+    if expected_surfaces & CODE_SURFACES:
+        unplanned_surfaces -= COMPANION_SURFACES
+
+    outcome = str(plan.get("requested_outcome") or "").lower()
+    for surface, keywords in OUTCOME_SURFACE_KEYWORDS.items():
+        if surface in unplanned_surfaces and any(kw in outcome for kw in keywords):
+            unplanned_surfaces.remove(surface)
+
+    unplanned_modules = actual_module_set - expected_modules
+    if not expected_modules:
+        unplanned_modules.discard(":app")
 
     return sorted(
         [f"surface:{item}" for item in unplanned_surfaces]
-        + [f"module{item}" if item.startswith(":") else f"module:{item}" for item in actual_module_set - expected_modules]
+        + [f"module{item}" if item.startswith(":") else f"module:{item}" for item in unplanned_modules]
     )
 
 

@@ -709,6 +709,33 @@ class AuthorityAndEvidenceTests(RepoCase):
         self.assertEqual(["surface:BILLING"], check_material_drift(plan, ["BUSINESS_LOGIC", "BILLING"]))
         self.assertEqual(["surface:SECURITY"], check_material_drift(plan, ["BUSINESS_LOGIC", "SECURITY"]))
 
+    def test_material_drift_outcome_matching_and_companion_surfaces(self) -> None:
+        payment_plan = create_plan(
+            self.repo,
+            task_id="payment-plan",
+            requested_outcome="Revert payment redesign and A/B test",
+            expected_surfaces=["BUSINESS_LOGIC"],
+        )
+        self.assertEqual([], check_material_drift(payment_plan, ["BUSINESS_LOGIC", "BILLING"]))
+        self.assertEqual([], check_material_drift(payment_plan, ["BUSINESS_LOGIC", "NAVIGATION", "RESOURCE_UI"]))
+
+        auth_plan = create_plan(
+            self.repo,
+            task_id="auth-plan",
+            requested_outcome="Fix user login authentication flow",
+            expected_surfaces=["BUSINESS_LOGIC"],
+        )
+        self.assertEqual([], check_material_drift(auth_plan, ["BUSINESS_LOGIC", "AUTH"]))
+
+        code_plan = create_plan(
+            self.repo,
+            task_id="code-plan",
+            requested_outcome="Implement profile screen",
+            expected_surfaces=["BUSINESS_LOGIC", "COMPOSE_UI"],
+        )
+        self.assertEqual([], check_material_drift(code_plan, ["BUSINESS_LOGIC", "NAVIGATION", "RESOURCE_UI", "XML_UI"]))
+        self.assertEqual([], check_material_drift(code_plan, ["BUSINESS_LOGIC"], [":app"]))
+
     def test_pipeline_gates_ordered_by_execution_priority(self) -> None:
         classification = {
             "classification_sha256": "0" * 64,

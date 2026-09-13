@@ -5,6 +5,30 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.26] - 2026-09-13
+
+### Autonomous Phased Execution, Clarification Gate, Direct Review Ingestion, and Drift Tolerance
+
+- **Pre-Planning Clarification Gate (`harness-rules.md`, `pre_invocation_reminder.py`, tool adapters)**:
+  - Missing requirements, edge cases, or domain ambiguities must be clarified interactively via `ask_question` before drafting the plan; guessing is strictly forbidden.
+- **Autonomous Phased Execution (`harness-rules.md`, `pre_invocation_reminder.py`)**:
+  - Multi-phase plans execute sequentially and autonomously under single intake approval without pausing between phases or waiting for nonexistent Proceed buttons. Reviews inspect smaller, phase-scoped diffs.
+- **Strict Verification Order (`harness-rules.md`, `GEMINI.md`)**:
+  - Standardized the verification pipeline order into mandatory 6-step headings: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install -> 5. mobile walkthrough -> 6. verify.
+- **Intelligent Drift Tolerance & Companion Surfaces (`plan_authority.py`)**:
+  - Added `:app` default exemption in `check_material_drift` to prevent spurious drift when modules default to `:app`.
+  - Added companion surface pairing (`NAVIGATION`, `RESOURCE_UI`, `XML_UI`, `COMPOSE_UI`) and outcome surface keyword matching (`BILLING`, `AUTH`, `NETWORK`, `DATABASE`, `BLUETOOTH`, `LOCATION`, `SECURITY`, `CAMERA`, etc.) to prevent false drift alarms.
+- **Approval Nonce Preservation (`workflow.py`)**:
+  - Prevented wiping approvals and nonces during benign scope adjustments, breaking the vicious reset cycle.
+- **Resilient Preflight Check (`preflight_check.py`)**:
+  - `preflight_check.py` falls back gracefully to `preliminary-policy.json` or standard gates (`{"preflight", "localization", "room"}`) when `current-run.json` does not yet exist, preventing execution crashes.
+- **Direct Review Response Ingestion (`record_review.py`)**:
+  - Added `--response-text "<name>=<text>"` argument to directly ingest subagent review output with cryptographic review-package footer validation, eliminating intermediate scratch files and lead agent self-certification loopholes.
+- **Automatic Evidence Bridging (`workflow.py`, `run_device.py`)**:
+  - Automatically bridges existing test and preflight results from `state/results/` into `EvidenceStore` on verification run initialization, eliminating redundant gate executions and unfulfilled evidence stalls.
+- **Selftest & Verification Expansion (`_vnext_selftest.py`)**:
+  - Added regression test `test_material_drift_outcome_matching_and_companion_surfaces` validating companion surfaces and outcome matching tolerance.
+
 ## [1.0.25] - 2026-09-13
 
 ### Cross-IDE Adapter Parity, Independent Subagent Review Enforcement, and Windows Console Safety

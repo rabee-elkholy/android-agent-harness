@@ -26,15 +26,15 @@ PASS_TOKENS = {
 }
 
 
-def response_to_report(repo: Path, task_id: str, reviewer: str, response_path: Path) -> dict:
+def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, response_sha256: str) -> dict:
     directory = task_dir(repo, task_id)
     current = read_json(directory / "current-run.json")
     manifest = read_json(Path(current["manifest"]))
     package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
     package_sha = sha256_file(package)
-    text = response_path.read_text(encoding="utf-8", errors="replace").strip()
+    text = text.strip()
     footer = re.search(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\s*$", text)
-    if not footer or footer.group(1).lower() != package_sha[:12]:
+    if not footer or footer.group(1).lower() != package_sha[:12].lower():
         raise ValidationError(f"reviewer {reviewer} response has no matching evidence footer")
     pass_token = PASS_TOKENS.get(reviewer)
     body = text[:footer.start()].strip()
@@ -51,10 +51,20 @@ def response_to_report(repo: Path, task_id: str, reviewer: str, response_path: P
         "findings": [] if clean else [{
             "severity": "HIGH",
             "message": "Reviewer reported blocking findings; consult the immutable response identity.",
-            "response_sha256": sha256_file(response_path),
+            "response_sha256": response_sha256,
             "reported_citations": int(footer.group(2)),
         }],
     }
+
+
+def response_to_report(repo: Path, task_id: str, reviewer: str, response_path: Path) -> dict:
+    text = response_path.read_text(encoding="utf-8", errors="replace")
+    return _parse_response_text(repo, task_id, reviewer, text, sha256_file(response_path))
+
+
+def response_text_to_report(repo: Path, task_id: str, reviewer: str, text: str) -> dict:
+    from _vnext_common import sha256_bytes
+    return _parse_response_text(repo, task_id, reviewer, text, sha256_bytes(text.encode("utf-8")))
 
 
 def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
@@ -211,6 +221,7 @@ def main() -> int:
     parser.add_argument("--task", required=True)
     parser.add_argument("--report", action="append", default=[])
     parser.add_argument("--response", action="append", default=[], metavar="REVIEWER=PATH", help="Ingest an unchanged reviewer response with its evidence footer")
+    parser.add_argument("--response-text", action="append", default=[], metavar="REVIEWER=TEXT", help="Ingest an unchanged reviewer response text with its evidence footer")
     parser.add_argument("--verdict", action="append", default=[], metavar="[REVIEWER=]VERDICT", help="Record a reviewer verdict directly (e.g. bug-reviewer-agent=PASS, or PASS with --reviewer)")
     parser.add_argument("--reviewer", help="Reviewer name when recording a single verdict with --verdict")
     parser.add_argument("--evidence-pkg", default="", help="Optional package SHA prefix to validate against active review package")
@@ -297,6 +308,15 @@ def main() -> int:
             rep["provenance"] = "reviewer_response_footer"
             (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        for item in args.response_text:
+            reviewer, sep, raw_text = item.partition("=")
+            if not sep:
+                raise ValidationError("--response-text must be REVIEWER=TEXT")
+            unescaped_text = raw_text.replace("\\n", "\n")
+            rep = response_text_to_report(repo, args.task, reviewer.strip(), unescaped_text)
+            rep["provenance"] = "reviewer_response_text"
+            (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+
         verdict_items = list(args.verdict)
         if verdict_items:
             severity = str(policy.get("severity") or "").upper()
@@ -336,7 +356,7 @@ def main() -> int:
 
         staged_files = sorted(staging_dir.glob("*.json"))
         if not staged_files:
-            raise ValidationError("at least one --report, --response, or --verdict is required")
+            raise ValidationError("at least one --report, --response, --response-text, or --verdict is required")
 
         staged_names = {p.stem for p in staged_files}
         missing = required - staged_names
