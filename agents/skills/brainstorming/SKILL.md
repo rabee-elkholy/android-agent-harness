@@ -1,19 +1,34 @@
 ---
 name: brainstorming
-description: Use before planning non-trivial features, new screens, or major refactors to explore architectural trade-offs, compare 2-3 design options, assess complexity/risks, and gather requirements before writing an implementation plan.
+description: Use when planning architectural tasks, multi-module restructuring, new system integrations, or exploring trade-offs between design options.
 ---
 
 # Brainstorming & Architecture Exploration Skill
 
-## 1. Purpose & Trigger
-Activate this skill before committing to an implementation plan whenever the task involves:
-- Adding a new feature, screen, or system integration.
-- Major refactoring of existing presentation, domain, or data layers.
-- Architectural design decisions with multiple viable technical paths.
+## 1. Purpose & Planning Depth
+Planning depth is advisory and categorizes tasks into two levels:
+- **BOUNDED (Default)**: Normal bug fixes, targeted UI tweaks, single-screen features, small repository methods, or isolated Room migrations. These tasks skip architectural design ceremony and proceed directly to the standard implementation plan.
+- **ARCHITECTURAL**: Multi-module restructuring, public API redesigns, persistence or networking layer swaps, major authentication redesigns, or app-wide state pattern migrations.
+
+For `ARCHITECTURAL` tasks, activate this skill to author a concise **Design-Lite** section inside the single `implementation_plan.md` artifact before requesting approval.
+
+> [!IMPORTANT]
+> **Single Approval Invariant**: The Design-Lite exploration does NOT create an extra approval round. The single interactive **Proceed** button on `implementation_plan.md` authorizes both the chosen design approach and the implementation plan.
 
 ---
 
-## 2. Four-Phase Brainstorming Methodology
+## 2. Design-Lite Structure (ARCHITECTURAL Tasks)
+When authoring an architectural plan, include a concise section with:
+1. **Goal & Constraints**: What must change and what non-negotiable boundaries exist.
+2. **Current Architecture**: The existing pattern, module topology, or contract.
+3. **Option A (Minimal / Evolutionary)**: Smallest blast radius, builds on existing code structure.
+4. **Option B (Idiomatic Target Architecture)**: Clean separation of concerns, target patterns.
+5. **Trade-offs**: Pros/cons, blast radius, migration complexity, token/build impact.
+6. **Selected Approach & Rationale**: Why this approach was chosen.
+
+---
+
+## 3. Four-Phase Brainstorming Methodology
 
 ### Phase 1: Requirements & Constraints Probing
 1. Identify underspecified requirements, hidden assumptions, and edge cases.

@@ -1,6 +1,6 @@
 ---
 name: git-pr-automator
-description: Use when the developer asks for a commit message or PR summary. The agent never commits or opens PRs.
+description: Use when preparing a conventional commit message, pull request summary, or release change notes for developer review.
 ---
 
 # Git notes (developer-owned)

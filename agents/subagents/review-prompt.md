@@ -1,6 +1,6 @@
-# Round-1 reviewer user prompt (all 5 leaves)
+# Round-1 reviewer user prompt (policy-selected reviewers)
 
-Copy the same Prompt into every entry of a **single** `invoke_subagent` `Subagents` array. Do not invoke `code-review-guard-agent`. Do not narrate the intended fix.
+Copy the prompt into each subagent entry for the reviewers selected by the current run policy. Do not invoke `code-review-guard-agent`. Do not narrate the intended fix.
 
 ```
 HARNESS_REVIEW_PACKAGE=[PATH from python .agents/scripts/review_package.py]
@@ -14,7 +14,7 @@ Examine the review package and its embedded ARCHITECTURAL GRAPH & BLAST RADIUS T
 High-signal only: BLOCKER / MAJOR. Drop MINOR/NIT. Cite a project rule when the finding is architectural.
 
 Output exactly one of:
-- BUG_PASS / CONVENTION_PASS / SECURITY_PASS / PERF_PASS / REGRESSION_PASS (your leaf)
+- BUG_PASS / CONVENTION_PASS / SECURITY_PASS / PERF_PASS / REGRESSION_PASS / TEST_PASS (your role token)
 - or Findings with file:line, evidence, and a fix snippet.
 
 End your reply with the evidence footer:

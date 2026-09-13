@@ -124,6 +124,15 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
         raise ValidationError("review model-call budget exceeded; developer decision is required")
     blocking = [item for item in findings if str(item.get("severity") or "").upper() in ("BLOCKER", "MAJOR", "CRITICAL", "HIGH")]
     status = "FAIL" if blocking else "PASS"
+    validations: list[dict] = []
+    val_path = directory / "finding-validations.json"
+    if val_path.is_file():
+        try:
+            val_data = read_json(val_path)
+            if isinstance(val_data, dict) and isinstance(val_data.get("validations"), list):
+                validations = val_data["validations"]
+        except Exception:
+            pass
     evidence_path = EvidenceStore(state_root(repo)).write(
         snapshot=manifest["delivery_snapshot_sha256"],
         run_id=current["run_id"],
@@ -138,6 +147,7 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
             "reports": report_identities,
             "findings": findings,
             "blocking_findings": blocking,
+            "finding_validations": validations,
             "is_truncated": False,
             "round": round_number,
         },

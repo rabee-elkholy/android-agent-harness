@@ -218,6 +218,57 @@ def record_debug_evidence(args: argparse.Namespace) -> dict:
         return payload
 
 
+VALID_FINDING_STATES = {"CONFIRMED", "FALSE_POSITIVE", "NEEDS_CONTEXT", "NOT_REPRODUCIBLE"}
+
+
+def record_finding_validation(args: argparse.Namespace) -> dict:
+    """Record validation of a reviewer finding outside plan.json under state lock."""
+    repo = Path(args.repo).resolve()
+    plan = _load_plan(repo, args.task_id)
+    directory = task_dir(repo, args.task_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    validation_path = directory / "finding-validations.json"
+
+    status = str(args.status or "").strip().upper()
+    if status not in VALID_FINDING_STATES:
+        raise ValidationError(f"invalid finding status '{status}'; must be one of {sorted(VALID_FINDING_STATES)}")
+
+    reason = str(getattr(args, "reason", "") or "").strip()
+    evidence_ref = str(getattr(args, "evidence_reference", "") or "").strip()
+    if status == "FALSE_POSITIVE" and not reason:
+        raise ValidationError("FALSE_POSITIVE status requires a non-empty technical reason")
+
+    with StateLock(directory / ".lock"):
+        validations = []
+        if validation_path.is_file():
+            try:
+                content = read_json(validation_path)
+                if isinstance(content, dict) and isinstance(content.get("validations"), list):
+                    validations = content["validations"]
+                elif isinstance(content, list):
+                    validations = content
+                else:
+                    raise ValidationError(f"corrupt finding validations payload in {validation_path}")
+            except Exception as exc:
+                raise ValidationError(f"cannot read existing finding validations: {exc}")
+
+        entry = {
+            "finding_id": str(args.finding_id).strip(),
+            "status": status,
+            "reason": reason,
+            "evidence_reference": evidence_ref,
+            "recorded_at": utc_now(),
+        }
+        validations.append(entry)
+        payload = {
+            "task_id": args.task_id,
+            "plan_sha256": plan.get("plan_sha256"),
+            "validations": validations,
+        }
+        atomic_write_json(validation_path, payload)
+        return payload
+
+
 def prepare_verification(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
@@ -455,6 +506,12 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--hypothesis", default="", help="Root cause hypothesis")
     command.add_argument("--risk", default="", help="Potential risks or side effects")
     command.set_defaults(handler=record_debug_evidence)
+    command = sub.add_parser("validate-finding", parents=[common])
+    command.add_argument("--finding-id", required=True, help="Identifier of the reviewer finding")
+    command.add_argument("--status", choices=("CONFIRMED", "FALSE_POSITIVE", "NEEDS_CONTEXT", "NOT_REPRODUCIBLE"), required=True, help="Validation verdict of the technical claim")
+    command.add_argument("--reason", default="", help="Concise technical explanation (mandatory for FALSE_POSITIVE)")
+    command.add_argument("--evidence-reference", default="", help="File:line or package reference")
+    command.set_defaults(handler=record_finding_validation)
     sub.add_parser("prepare-verification", parents=[common]).set_defaults(handler=prepare_verification)
     sub.add_parser("verify", parents=[common]).set_defaults(handler=verify_task)
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)
@@ -480,6 +537,8 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    - {step}")
     elif args.action == "debug-evidence":
         print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")
+    elif args.action == "validate-finding":
+        print(f"FINDING_VALIDATION_RECORDED={len(result.get('validations', []))}")
     elif args.action == "verify":
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.json:

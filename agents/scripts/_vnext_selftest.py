@@ -1609,6 +1609,119 @@ class EndToEndWorkflowTests(RepoCase):
             code = _check_device_prerequisites(args)
             self.assertEqual(30, code)
 
+    def test_device_prereq_blocks_tampered_rehashed_policy(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+
+        task_id = "test-device-prereq-rehash"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Logic change", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/Logic.kt", "package com.fixture\nclass Logic { fun exec() = 42 }\n")
+        current = prepare_verification(Namespace(**common))
+
+        policy_file = Path(current["policy"])
+        policy_data = json.loads(policy_file.read_text(encoding="utf-8"))
+        self.assertIn("unit_tests", policy_data.get("gates", []))
+        policy_data["gates"] = [g for g in policy_data["gates"] if g != "unit_tests"]
+
+        clean_policy = {k: v for k, v in policy_data.items() if k != "policy_sha256"}
+        from _vnext_common import canonical_sha256
+        policy_data["policy_sha256"] = canonical_sha256(clean_policy)
+        policy_file.write_text(json.dumps(policy_data, indent=2), encoding="utf-8")
+
+        from run_device import _check_device_prerequisites
+        import argparse
+        args = argparse.Namespace(action="install", force=False)
+        with mock.patch("run_device.REPO", self.repo):
+            code = _check_device_prerequisites(args)
+            self.assertEqual(30, code)
+
+    def test_finding_validation_lifecycle_and_invariants(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+
+        task_id = "test-finding-val-task"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Refactor", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", external_write=[], force=False,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/Worker.kt", "package com.fixture\nclass Worker {}\n")
+        current = prepare_verification(Namespace(**common))
+
+        from workflow import record_finding_validation
+        with self.assertRaises(ValidationError) as ctx:
+            record_finding_validation(Namespace(**common, finding_id="F-1", status="BOGUS_STATUS", reason="test", evidence_reference=""))
+        self.assertIn("invalid finding status", str(ctx.exception))
+
+        with self.assertRaises(ValidationError) as ctx:
+            record_finding_validation(Namespace(**common, finding_id="F-1", status="FALSE_POSITIVE", reason="", evidence_reference=""))
+        self.assertIn("requires a non-empty technical reason", str(ctx.exception))
+
+        res = record_finding_validation(Namespace(
+            **common, finding_id="SEC-1", status="FALSE_POSITIVE",
+            reason="Token only held transiently in request header",
+            evidence_reference="Worker.kt:2",
+        ))
+        self.assertEqual(1, len(res["validations"]))
+        self.assertEqual("FALSE_POSITIVE", res["validations"][0]["status"])
+
+        res2 = record_finding_validation(Namespace(
+            **common, finding_id="BUG-1", status="CONFIRMED",
+            reason="Missing null check",
+            evidence_reference="Worker.kt:3",
+        ))
+        self.assertEqual(2, len(res2["validations"]))
+
+        from review_package import build_package
+        pkg_path, meta = build_package(self.repo, task_id)
+        pkg_text = pkg_path.read_text(encoding="utf-8")
+        self.assertIn("## LEAD AGENT FINDING VALIDATIONS", pkg_text)
+        self.assertIn("SEC-1", pkg_text)
+        self.assertIn("FALSE_POSITIVE", pkg_text)
+
+        from record_review import ingest, verdict_to_report
+        run_id = current["run_id"]
+        stage_dir = self.repo / f".agents/tasks/{task_id}/staged-reviews/{run_id}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        rep = verdict_to_report(self.repo, task_id, "bug-reviewer-agent", "FINDINGS", message="Critical bug", severity="HIGH", evidence_pkg=meta["package_sha256"][:12])
+        rep_file = stage_dir / "bug-reviewer-agent.json"
+        rep_file.write_text(json.dumps(rep), encoding="utf-8")
+        rep_reg = verdict_to_report(self.repo, task_id, "regression-impact-reviewer-agent", "PASS", evidence_pkg=meta["package_sha256"][:12])
+        rep_reg_file = stage_dir / "regression-impact-reviewer-agent.json"
+        rep_reg_file.write_text(json.dumps(rep_reg), encoding="utf-8")
+
+        ev_path = ingest(self.repo, task_id, [rep_file, rep_reg_file])
+        ev_data = read_json(ev_path)
+        self.assertEqual("FAIL", ev_data["status"])
+        self.assertEqual(1, len(ev_data["evidence"]["blocking_findings"]))
+        self.assertEqual(2, len(ev_data["evidence"]["finding_validations"]))
+
     def test_classifier_detects_sensitive_outer_class_long_function(self) -> None:
         class_lines = ["package com.fixture", "import com.android.billingclient.api.BillingClient", "@BillingClient", "class PaymentHandler {"]
         for i in range(60):

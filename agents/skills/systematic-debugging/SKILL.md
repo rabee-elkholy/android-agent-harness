@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: Use when diagnosing Android app bugs, crashes, regressions, or unexpected UI behavior. Requires explicit evidence and hypotheses before code changes.
+description: Use when diagnosing Android app bugs, crashes, regressions, unexpected state, or inconsistent runtime behavior.
 version: 1.2.0
 kernel-major: 1
 ---

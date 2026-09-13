@@ -5,6 +5,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.21] - 2026-09-13
+
+### Superpowers Skill Hardening, Reviewer Finding Validation, and Documentation Precision
+
+- **Reviewer Finding Validation (`workflow.py`, `record_review.py`, `review_package.py`)**: Introduced technical validation protocol for reviewer findings (`CONFIRMED`, `FALSE_POSITIVE`, `NEEDS_CONTEXT`, `NOT_REPRODUCIBLE`). Mandatory technical rationale required for `FALSE_POSITIVE` findings; embedded validations in review packages to inform re-review without creating final verifier bypass loopholes.
+- **Deterministic Policy Rehash Tamper Lock (`_vnext_selftest.py`)**: Added deterministic regression lock verifying that tampering with policy gates fails closed even if the canonical policy hash is recalculated.
+- **Architectural Design-Lite (`brainstorming/SKILL.md`, `harness-rules.md`)**: Defined advisory planning depth (`BOUNDED` vs `ARCHITECTURAL`). Bounded tasks proceed with standard low-friction plans; architectural tasks embed a concise trade-off design section into the single approved implementation plan without introducing extra approval checkpoints.
+- **Skill Description Hygiene (`agents/skills/`)**: Refactored frontmatter descriptions across all skills to state exact triggering conditions rather than summarizing procedural workflows, preventing shallow LLM execution.
+- **Reviewer Prompts & Adaptive Policy Alignment (`review-prompt.md`, `re-review-prompt.md`, `test-quality-reviewer-agent.json`)**: Removed hardcoded "all 5 leaves" assumptions, added `TEST_PASS` token support, and refined coroutines async review criteria to eliminate false-positive flags when virtual time advancement is not required.
+- **Developer-Side Skill Pressure Testing (`scripts_dev/skill_evals/`)**: Added standalone behavioral evaluation suite and test runner with realistic development pressure cases, fully isolated from runtime selftests and client task budgets.
+- **Documentation Precision & Open-Source Credibility (`README.md`)**: Replaced overclaiming terminology with exact engineering descriptions (`deterministic host-level interception`, `Tamper-Evident Snapshot-Bound Evidence`), added "What This Is Not", comparison with rules files, and an end-to-end Room schema migration walkthrough.
+
 ## [1.0.20] - 2026-09-13
 
 ### Showcase Expansion, The Basic Workflow, and Full AI Host Matrix

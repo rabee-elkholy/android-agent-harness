@@ -1,6 +1,6 @@
 ---
 name: android-security-billing
-description: Android security, authentication, sensitive-data, cryptography, and Play Billing guidance.
+description: Use when implementing, modifying, or reviewing Android authentication, cryptography, sensitive data handling, or Google Play Billing flows.
 version: 1.0.0
 kernel-major: 1
 ---

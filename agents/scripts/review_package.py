@@ -146,6 +146,23 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
             extras.append(f"\n## NEW UNTRACKED FILE {rel}\n")
             extras.append(path.read_text(encoding="utf-8", errors="replace"))
             extras.append("\n")
+    validations_path = task_dir(repo, task_id) / "finding-validations.json"
+    if validations_path.is_file():
+        try:
+            val_data = read_json(validations_path)
+            items = val_data.get("validations") or []
+            if items:
+                v_lines = ["\n## LEAD AGENT FINDING VALIDATIONS\n"]
+                for item in items:
+                    fid = item.get("finding_id", "unspecified")
+                    st = item.get("status", "unspecified")
+                    re_msg = item.get("reason", "")
+                    ref = item.get("evidence_reference", "")
+                    v_lines.append(f"- Finding `{fid}`: **{st}** | Reason: {re_msg} (Ref: {ref})")
+                v_lines.append("\n")
+                extras.append("\n".join(v_lines))
+        except Exception:
+            pass
     metadata = {
         "schema_version": 1,
         "task_id": task_id,

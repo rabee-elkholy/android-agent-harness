@@ -1,6 +1,6 @@
 ---
 name: kotlin-coroutines-expert
-description: "Expert patterns for Kotlin Coroutines and Flow, covering structured concurrency, error handling, and testing in this Android app."
+description: Use when implementing, refactoring, or reviewing Kotlin Coroutines, asynchronous Flows, threading dispatchers, and structured concurrency in Android.
 version: 1.0.0
 kernel-major: 1
 ---
