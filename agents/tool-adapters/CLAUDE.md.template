@@ -6,7 +6,7 @@
 
 ## Reviewers
 
-Run only the reviewer roles selected by `.agents/scripts/review_policy.py` against the same immutable review package. Agent files are generated under `.claude/agents/`. Missing required coverage or malformed output blocks delivery.
+Run only the reviewer roles selected by `.agents/scripts/review_policy.py` against the same immutable review package. Agent files are generated under `.claude/agents/`. Reviewers must be invoked as independent subagents; the lead agent is strictly forbidden from self-certifying reviews or using `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes. Missing required coverage or malformed output blocks delivery.
 
 On-demand specialists (`.claude/agents/`):
 - `qa-diagnostics-agent` (Logcat crash forensics)
@@ -14,6 +14,7 @@ On-demand specialists (`.claude/agents/`):
 - `test-quality-reviewer-agent` (Unit & UI test quality audits)
 
 Device: {{DEVICE_POLICY}}
+- Mobile Verification Walkthrough: After every device installation (`run_device.py install-start`), the agent MUST output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking the developer for sign-off. Never ask if it passed without detailing how to navigate to and test the specific modified feature.
 
 {{GIT_POLICY}}
 

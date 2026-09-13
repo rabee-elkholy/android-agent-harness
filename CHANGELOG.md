@@ -5,6 +5,26 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.25] - 2026-09-13
+
+### Cross-IDE Adapter Parity, Independent Subagent Review Enforcement, and Windows Console Safety
+
+- **Cross-IDE Adapter Parity (`agents/tool-adapters/*`, `GEMINI.md`)**:
+  - Propagated the mandatory **Mobile Verification Walkthrough** rule across all agent tool adapters (`AGENTS.md.template`, `GEMINI.md.template`, `CLAUDE.md.template`, `copilot-instructions.md.template`, `CODEX.md.template`, `cursor-android-harness.mdc.template`, `windsurf-android-harness.md.template`, `continue-android-harness.md.template`, `QWEN.md.template`, `github-instructions.md.template`) and root instructions.
+  - Mandated that whenever an APK is installed or started on a device, the agent must output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking the developer for verification. Strictly forbade asking "Did it pass" without detailed navigation and test instructions.
+  - Added explicit independent reviewer requirements across all adapter templates, strictly prohibiting lead agents from self-certifying reviews or manufacturing `--verdict PASS` tokens on HIGH/CRITICAL or sensitive changes.
+- **Immediate Reviewer Bypassing Denial (`record_review.py`)**:
+  - Prohibited direct `--verdict` recording on `HIGH` or `CRITICAL` severity tasks or sensitive surfaces directly at the CLI level with `ValidationError`. The lead agent cannot fabricate review approvals; evaluations must come from independent reviewer reports or responses.
+- **Workflow & Classifier Live Streaming (`workflow.py`, `change_classifier.py`, `_live_process.py`)**:
+  - Added line-buffered stdio (`enable_line_buffered_stdio`) to `workflow.py` and `change_classifier.py` so background task outputs stream in real-time without buffering stalls.
+  - Wrapped `draft`, `prepare_verification`, and `verify_task` in `step_progress` markers.
+  - Replaced unicode emojis in `_live_process.py` and `scripts_dev/release_version.py` with ASCII markers (`[IN PROGRESS]`, `[DONE]`, `[FAIL]`) and added fallback encoding protection in `live_print` to eliminate `UnicodeEncodeError` on Windows consoles (cp1252).
+- **Documentation Cleanup**:
+  - Removed obsolete, unreferenced, and temporary documents (`docs/conflicts-and-edgecases-report.md`, `docs/root-cause-analysis-and-hardening-plan.md`, `docs/stability-first-dogfooding.md`, and untracked root handoff notes).
+- **Selftest Expansion (`_vnext_selftest.py`)**:
+  - Added `test_all_tool_adapters_contain_mobile_walkthrough_and_independent_review_rules` to ensure future adapters and templates never regress on walkthrough or review rules.
+  - Updated `test_final_verifier_rejects_lead_agent_recorded_verdict_on_high_severity` to assert CLI rejection on HIGH severity and test defense-in-depth verifier rejection.
+
 ## [1.0.24] - 2026-09-13
 
 ### Real-Time Step Progress Across All Harness Scripts

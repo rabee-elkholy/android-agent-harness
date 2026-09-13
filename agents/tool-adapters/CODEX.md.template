@@ -4,5 +4,7 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. Codex reads `AGENTS.md`
 
 - Python: `{{PY}}`
 - Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- Independent Reviews: Reviewer roles selected by policy must be run independently; lead agent self-certification via `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes is strictly prohibited.
 - Device: {{DEVICE_POLICY}}
+- Mobile Verification Walkthrough: After every device installation (`run_device.py install-start`), the agent MUST output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking for verification. Never ask if it passed without full test instructions.
 - {{GIT_POLICY}}

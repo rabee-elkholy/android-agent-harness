@@ -31,14 +31,14 @@ sys.path.insert(0, str(ROOT / "scripts_dev"))
 
 @contextlib.contextmanager
 def step_progress(name: str):  # type: ignore[return]
-    """Print ⏳/✅/❌ real-time step markers."""
-    print(f"⏳ [IN PROGRESS] {name}", flush=True)
+    """Print step progress markers."""
+    print(f"[IN PROGRESS] {name}", flush=True)
     t0 = time.time()
     try:
         yield
-        print(f"✅ [DONE] {name} ({time.time() - t0:.1f}s)", flush=True)
+        print(f"[DONE] {name} ({time.time() - t0:.1f}s)", flush=True)
     except Exception:
-        print(f"❌ [FAIL] {name}", flush=True)
+        print(f"[FAIL] {name}", flush=True)
         raise
 
 try:

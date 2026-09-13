@@ -489,13 +489,21 @@ def main() -> int:
                     recipes = get_verification_recipes([], fallback=True)
                 if recipes:
                     live_print("\n" + "=" * 60)
-                    live_print("[MANDATORY MOBILE TEST WALKTHROUGH]")
-                    live_print("Follow these manual steps on the device/emulator to verify:")
+                    live_print("[MANDATORY MOBILE TEST WALKTHROUGH REQUIRED IN CHAT]")
+                    live_print("The agent MUST now output a custom, numbered walkthrough in chat:")
+                    live_print(f"  1. Navigation Path: Path from {target_activity} to the modified feature/screen")
+                    live_print("  2. Preconditions: Required login state, flags, or test data")
+                    live_print("  3. User Actions: Concrete taps, inputs, and screens to interact with")
+                    live_print("  4. Expected Results: What the user should see and experience on screen")
+                    live_print("  5. Edge Cases: Rotation, cancellations, back navigation")
+                    live_print("-" * 60)
+                    live_print("Surface verification recipes:")
                     for recipe in recipes:
                         live_print(f"  [{recipe['surface']}]:")
                         for idx, step in enumerate(recipe["steps"], 1):
-                            live_print(f"    {idx}. {step}")
-                    live_print("=" * 60 + "\n")
+                            live_print(f"    - {step}")
+                    live_print("=" * 60)
+                    live_print("[!] CRITICAL: DO NOT simply ask 'Did it pass' without first explaining the 5 test steps above in chat!\n")
         except Exception:
             pass
 

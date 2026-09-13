@@ -5,7 +5,9 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 - Run harness scripts with `{{PY}}` (never assume `python3` on Windows).
 - Use the central policy to select only the required reviewers and gates, then bind their evidence to the final snapshot.
 - Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- Independent Reviews: Required reviewer roles must be evaluated independently; lead agents must never self-certify reviews with `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes.
 - Device: {{DEVICE_POLICY}}
+- Mobile Verification Walkthrough: After every device installation (`run_device.py install-start`), the agent MUST output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking the developer for verification. Never ask if it passed without detailing test steps.
 - {{GIT_POLICY}}
 - Safety enforcement: this repo registers a Copilot `preToolUse` hook
   (`.github/hooks/android-harness-pre-tool-use.json`) that deterministically denies

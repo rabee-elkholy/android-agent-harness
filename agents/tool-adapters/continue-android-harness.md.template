@@ -7,8 +7,9 @@ alwaysApply: true
 
 Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 
-Use `{{PY}}` for `.agents/scripts/*`. Follow the central adaptive policy and load its selected skills. Delivery requires one matching read-only verifier result.
+Use `{{PY}}` for `.agents/scripts/*`. Follow the central adaptive policy and load its selected skills. Delivery requires one matching read-only verifier result. Reviewers selected by policy must be evaluated independently; lead agents must never self-certify with `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes.
 
 Device: {{DEVICE_POLICY}}
+- Mobile Verification Walkthrough: After every device installation (`run_device.py install-start`), the agent MUST output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking the developer for verification. Never ask if it passed without full test instructions.
 
 {{GIT_POLICY}}

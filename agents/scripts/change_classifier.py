@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
 from _repo_files import ChangedFile, changed_files  # noqa: E402
 from _vnext_common import canonical_sha256  # noqa: E402
 from delivery_manifest import is_delivery_relevant  # noqa: E402
@@ -454,14 +455,17 @@ def classify(repo: Path) -> dict:
 
 
 def main() -> int:
+    enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    result = classify(Path(args.repo))
     if args.json:
+        result = classify(Path(args.repo))
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
+        with step_progress("Classifying changes & surfaces"):
+            result = classify(Path(args.repo))
         print(f"SURFACES={','.join(result['surfaces']) or 'NONE'}")
         print(f"SEVERITY={result['severity']}")
         print(f"CONFIDENCE={result['confidence']}")

@@ -8,6 +8,7 @@ Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules
 
 - Run harness scripts with `{{PY}}`
 - Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
-- After non-trivial work, obtain `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS` before assemble
+- After non-trivial work, obtain `BUG_PASS` `CONVENTION_PASS` `SECURITY_PASS` `PERF_PASS` `REGRESSION_PASS` before assemble via independent reviewers; self-certification by the lead agent is forbidden.
 - Device: {{DEVICE_POLICY}}
+- Mobile Verification Walkthrough: After device installation (`run_device.py install-start`), the agent MUST output a complete, numbered test walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat before asking for verification.
 - {{GIT_POLICY}}

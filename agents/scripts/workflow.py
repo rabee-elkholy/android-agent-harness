@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
 from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, utc_now, validate_id  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
@@ -118,7 +119,8 @@ def draft(args: argparse.Namespace) -> dict:
             raise
         except Exception:
             pass
-    classification = classify(repo)
+    with step_progress("Classifying changed surfaces"):
+        classification = classify(repo)
     raw_expected = [item.strip() for item in (args.expected_surfaces or "").split(",") if item.strip()]
     expected = normalize_expected_surfaces(raw_expected)
     if not expected:
@@ -138,7 +140,8 @@ def draft(args: argparse.Namespace) -> dict:
         resolved_kind = raw_kind
     policy_input = dict(classification)
     policy_input["surfaces"] = expected
-    preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo), task_kind=resolved_kind)
+    with step_progress("Evaluating routing policy"):
+        preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo), task_kind=resolved_kind)
     plan = create_plan(
         repo,
         task_id=args.task_id,
@@ -274,8 +277,10 @@ def prepare_verification(args: argparse.Namespace) -> dict:
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("verification preparation requires an IMPLEMENTING plan")
-    manifest = build_manifest(repo)
-    classification = classify(repo)
+    with step_progress("Building delivery manifest & snapshot"):
+        manifest = build_manifest(repo)
+    with step_progress("Classifying changed surfaces"):
+        classification = classify(repo)
     completed_rounds = int(plan.get("review_rounds") or 0)
     if completed_rounds:
         previous_current = read_json(task_dir(repo, args.task_id) / "current-run.json")
@@ -394,14 +399,15 @@ def record_sensitive_approval(args: argparse.Namespace) -> dict:
 def verify_task(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     current = read_json(task_dir(repo, args.task_id) / "current-run.json")
-    return verify(
-        repo,
-        plan_path=_plan_path(repo, args.task_id),
-        policy_path=Path(current["policy"]),
-        manifest_path=Path(current["manifest"]),
-        state_root=state_root(repo),
-        run_id=str(current["run_id"]),
-    )
+    with step_progress("Executing deterministic verification checks"):
+        return verify(
+            repo,
+            plan_path=_plan_path(repo, args.task_id),
+            policy_path=Path(current["policy"]),
+            manifest_path=Path(current["manifest"]),
+            state_root=state_root(repo),
+            run_id=str(current["run_id"]),
+        )
 
 
 def complete(args: argparse.Namespace) -> dict:
@@ -464,6 +470,7 @@ def status(args: argparse.Namespace) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     common = argparse.ArgumentParser(add_help=False)

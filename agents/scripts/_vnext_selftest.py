@@ -142,6 +142,28 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn("never generate redundant plan artifacts or stall for nonexistent UI buttons", agents_tpl)
         self.assertIn("Follow-ups and technical fixes within active scope require immediate execution", agents_root)
 
+    def test_all_tool_adapters_contain_mobile_walkthrough_and_independent_review_rules(self) -> None:
+        templates_dir = KIT / "agents" / "tool-adapters"
+        adapters = [
+            "AGENTS.md.template",
+            "GEMINI.md.template",
+            "CLAUDE.md.template",
+            "copilot-instructions.md.template",
+            "CODEX.md.template",
+            "cursor-android-harness.mdc.template",
+            "windsurf-android-harness.md.template",
+            "continue-android-harness.md.template",
+            "QWEN.md.template",
+            "github-instructions.md.template",
+        ]
+        for adapter_name in adapters:
+            content = (templates_dir / adapter_name).read_text(encoding="utf-8")
+            self.assertIn("Mobile Verification Walkthrough", content, f"Missing walkthrough in {adapter_name}")
+            self.assertTrue(
+                "record_review.py --verdict PASS" in content or "self-certification" in content,
+                f"Missing independent review rule in {adapter_name}",
+            )
+
     def test_pre_invocation_reminder_anti_stalling_directives(self) -> None:
         reminder_script = (KIT / "agents" / "scripts" / "pre_invocation_reminder.py").read_text(encoding="utf-8")
         self.assertIn("Do not create new plans or ask for Proceed", reminder_script)
@@ -1998,13 +2020,36 @@ class EndToEndWorkflowTests(RepoCase):
         pkg_sha = sha256_file(package)
         policy = read_json(Path(current["policy"]))
         self.assertEqual("HIGH", policy["severity"])
-        # Record review using --verdict (which marks provenance as lead_agent_recorded_verdict)
+        # Record review using --verdict is rejected immediately by record_review.py on HIGH severity
         for rev in policy["reviewers"]:
             proc = subprocess.run(
                 [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--reviewer", rev, "--verdict", "PASS", "--evidence-pkg", pkg_sha[:12]],
                 cwd=self.repo, capture_output=True, text=True, check=False,
             )
-            self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+            self.assertEqual(1, proc.returncode, proc.stderr + proc.stdout)
+            self.assertIn("strictly prohibited", proc.stderr)
+
+        store = EvidenceStore(state_root(self.repo))
+        harness_ver = (self.repo / ".agents/VERSION").read_text(encoding="utf-8").strip()
+        store.write(
+            snapshot=current["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="reviews",
+            producer="review_orchestrator",
+            harness_version=harness_ver,
+            change_set=current["change_set_sha256"],
+            status="PASS",
+            evidence={
+                "package_sha256": pkg_sha,
+                "reviewers": policy["reviewers"],
+                "reports": [
+                    {"reviewer": rev, "verdict": "PASS", "provenance": "lead_agent_recorded_verdict"}
+                    for rev in policy["reviewers"]
+                ],
+                "findings": [],
+                "blocking_findings": [],
+            },
+        )
 
         from final_verifier import verify
         result = verify(

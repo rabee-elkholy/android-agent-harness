@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
-from workflow import state_root, task_dir  # noqa: E402
+from workflow import SENSITIVE_SURFACES, state_root, task_dir  # noqa: E402
 
 
 VALID_VERDICTS = {"PASS", "FINDINGS"}
@@ -298,6 +298,15 @@ def main() -> int:
             (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         verdict_items = list(args.verdict)
+        if verdict_items:
+            severity = str(policy.get("severity") or "").upper()
+            sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+            if severity in ("HIGH", "CRITICAL") or sensitive:
+                surface_label = f" on sensitive surfaces ({', '.join(sensitive)})" if sensitive else ""
+                raise ValidationError(
+                    f"Direct --verdict recording is strictly prohibited for {severity} severity changes{surface_label}. "
+                    f"You MUST invoke specialist subagents via invoke_subagent and ingest their authentic output via --response or --report."
+                )
         if args.reviewer and verdict_items:
             v_val = verdict_items[-1]
             if "=" in v_val:
