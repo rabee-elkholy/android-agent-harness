@@ -27,7 +27,7 @@ from _gate_results import (  # noqa: E402
     gate_artifact_name,
     write_gate_result,
 )
-from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
+from _live_process import enable_line_buffered_stdio, live_print, run_streaming, step_progress  # noqa: E402
 from _variants import resolve_or_raise  # noqa: E402
 from gradle_error_parser import format_errors, parse_compiler_errors  # noqa: E402
 from artifact_set import build_artifact_set, resolve_artifacts  # noqa: E402
@@ -160,14 +160,15 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None) -> int:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
 
-    code, raw_log, echoed = run_streaming(
-        gradle_cmd,
-        cwd=str(REPO_ROOT),
-        env=env,
-        heartbeat_sec=10.0,
-        should_echo=should_echo_gradle,
-        label="gradle",
-    )
+    with step_progress(f"Gradle: {task_label}"):
+        code, raw_log, echoed = run_streaming(
+            gradle_cmd,
+            cwd=str(REPO_ROOT),
+            env=env,
+            heartbeat_sec=10.0,
+            should_echo=should_echo_gradle,
+            label="gradle",
+        )
 
     important_lines = list(echoed)
     for line in raw_log.splitlines():

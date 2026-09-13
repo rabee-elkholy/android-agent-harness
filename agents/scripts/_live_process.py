@@ -6,6 +6,7 @@ for minutes even while the process is working.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -29,6 +30,20 @@ def enable_line_buffered_stdio() -> None:
 def live_print(msg: str, *, err: bool = False) -> None:
     stream = sys.stderr if err else sys.stdout
     print(msg, file=stream, flush=True)
+
+
+@contextlib.contextmanager
+def step_progress(name: str):  # type: ignore[return]
+    """Context manager that prints ⏳/✅/❌ step progress markers with elapsed time."""
+    live_print(f"⏳ [IN PROGRESS] {name}")
+    t0 = time.time()
+    try:
+        yield
+        elapsed = time.time() - t0
+        live_print(f"✅ [DONE] {name} ({elapsed:.1f}s)")
+    except Exception:
+        live_print(f"❌ [FAIL] {name}")
+        raise
 
 
 def run_streaming(

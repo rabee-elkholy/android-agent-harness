@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _gate_results import current_head_sha, write_gate_result  # noqa: E402
-from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
+from _live_process import enable_line_buffered_stdio, live_print, run_streaming, step_progress  # noqa: E402
 from _repo_files import REPO, changed_paths, working_tree_fingerprint  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
 from change_classifier import classify  # noqa: E402
@@ -23,14 +23,14 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
 def run_step(title: str, script_name: str) -> int:
-    live_print(f"\n{title}")
-    code, _, _ = run_streaming(
-        [sys.executable, str(SCRIPTS_DIR / script_name)],
-        cwd=str(REPO),
-        heartbeat_sec=10.0,
-        should_echo=lambda line: bool(line.strip()),
-        label=script_name,
-    )
+    with step_progress(title):
+        code, _, _ = run_streaming(
+            [sys.executable, str(SCRIPTS_DIR / script_name)],
+            cwd=str(REPO),
+            heartbeat_sec=10.0,
+            should_echo=lambda line: bool(line.strip()),
+            label=script_name,
+        )
     return code
 
 
@@ -54,18 +54,22 @@ def main() -> int:
             live_print(f"[FAIL] Active verification policy unavailable: {exc}", err=True)
             return 1
     skip_hook = diagnostic or "--skip-hook-selftest" in sys.argv or os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1"
-    hook_code = 0 if skip_hook else run_step("0. Checking harness hook selftest (cached)...", "ensure_hook_selftest.py")
-    str_code = run_step("1. Checking String Parity...", "check_strings.py") if "localization" in selected_gates else 0
+    hook_code = 0 if skip_hook else run_step("0. Hook selftest (cached)", "ensure_hook_selftest.py")
+    str_code = run_step("1. String parity", "check_strings.py") if "localization" in selected_gates else 0
 
-    live_print("\n2. Checking Room Database Migrations...")
+    import time as _time
+    live_print("⏳ [IN PROGRESS] 2. Room Database Migrations")
+    _t2 = _time.time()
     db_ok, db_msg = check_room_working_tree() if "room" in selected_gates else (True, "not required by policy")
     live_print(f"[{'OK' if db_ok else 'FAIL'}] {db_msg}")
+    live_print(f"{'✅ [DONE]' if db_ok else '❌ [FAIL]'} 2. Room Database Migrations ({_time.time() - _t2:.1f}s)")
 
-    lint_code = run_step("3. Checking Kotlin Syntax & Architectural Rules (Fast Lint)...", "fast_kt_lint.py") if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
+    lint_code = run_step("3. Kotlin Syntax & Architectural Rules (Fast Lint)", "fast_kt_lint.py") if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
 
-    live_print("\n4. Checking approved plan authority...")
     classification = classify(REPO)
     risk_tier_name = classification["severity"]
+    live_print("⏳ [IN PROGRESS] 4. Approved plan authority")
+    _t4 = _time.time()
     if diagnostic:
         risk_ok, risk_msg = True, "diagnostic mode; task approval is checked only during delivery preflight"
     elif os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
@@ -84,6 +88,7 @@ def main() -> int:
         except ValidationError as exc:
             risk_ok, risk_msg = False, str(exc)
     live_print(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
+    live_print(f"{'✅ [DONE]' if risk_ok else '❌ [FAIL]'} 4. Approved plan authority ({_time.time() - _t4:.1f}s)")
 
     live_print("\n==================================================")
     overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok

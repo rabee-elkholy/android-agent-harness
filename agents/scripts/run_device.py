@@ -24,7 +24,7 @@ from _env_codes import (  # noqa: E402
     no_device_verdict,
 )
 from _gate_results import current_head_sha, gate_artifact_name, read_gate_result, write_gate_result  # noqa: E402
-from _live_process import enable_line_buffered_stdio, live_print, run_streaming  # noqa: E402
+from _live_process import enable_line_buffered_stdio, live_print, run_streaming, step_progress  # noqa: E402
 from _product import (  # noqa: E402
     ALLOW_EMULATOR,
     APPLICATION_ID,
@@ -439,7 +439,8 @@ def main() -> int:
             install_cmd.append("-g")
         install_cmd.extend(["--user", target_user])
         install_cmd.extend(str(apk) for apk in apk_paths)
-        code, log = run_adb(serial, install_cmd, "adb install")
+        with step_progress("Installing APK on device"):
+            code, log = run_adb(serial, install_cmd, "adb install")
         if not adb_result_ok(code, log):
             code = code or 1
             verdict = classify_adb_failure(code, log)
@@ -454,11 +455,12 @@ def main() -> int:
 
     if args.action in ("start", "install-start"):
         live_print(f"[*] Launching target Activity: {target_activity}")
-        code, log = run_adb(
-            serial,
-            ["shell", "am", "start", "--user", target_user, "-n", target_activity],
-            "am start",
-        )
+        with step_progress(f"Launching activity: {target_activity}"):
+            code, log = run_adb(
+                serial,
+                ["shell", "am", "start", "--user", target_user, "-n", target_activity],
+                "am start",
+            )
         if not adb_result_ok(code, log):
             code = code or 1
             verdict = classify_adb_failure(code, log)

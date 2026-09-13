@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -26,6 +27,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts_dev"))
+
+
+@contextlib.contextmanager
+def step_progress(name: str):  # type: ignore[return]
+    """Print ⏳/✅/❌ real-time step markers."""
+    print(f"⏳ [IN PROGRESS] {name}", flush=True)
+    t0 = time.time()
+    try:
+        yield
+        print(f"✅ [DONE] {name} ({time.time() - t0:.1f}s)", flush=True)
+    except Exception:
+        print(f"❌ [FAIL] {name}", flush=True)
+        raise
 
 try:
     from pin_prompt_docs import fill_checksums, pin_urls
@@ -273,6 +287,15 @@ def publish_release(tag: str, title: str, notes: str) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Ensure stdout/stderr use UTF-8 so emoji progress markers render on Windows
+    import os as _os
+    _os.environ["PYTHONIOENCODING"] = "utf-8"
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+            except Exception:
+                pass
     parser = argparse.ArgumentParser(
         description="Unified one-command release automation for android-agent-harness."
     )
@@ -373,115 +396,111 @@ def main(argv: list[str] | None = None) -> int:
             if not args.dry_run:
                 return 1
 
-    # Step 2: Version bumping
-    print("\n[1/5] Updating version files...")
-    if not args.dry_run:
-        for log_line in update_version_files(target_version):
-            print(f"  + {log_line}")
-    else:
-        print(f"  [dry-run] Would update agents/VERSION, pyproject.toml, CITATION.cff, _hook_selftest.py to {target_version}")
+    # Step 1: Version bumping
+    with step_progress(f"[1/5] Updating version files → {target_version}"):
+        if not args.dry_run:
+            for log_line in update_version_files(target_version):
+                print(f"  + {log_line}")
+        else:
+            print(f"  [dry-run] Would update agents/VERSION, pyproject.toml, CITATION.cff, _hook_selftest.py to {target_version}")
 
-    # Step 3: URL Pinning & Cryptographic Hashes
-    print("\n[2/5] Pinning prompt URLs & computing SHA-256 tamper-evident hashes...")
-    if not args.dry_run:
-        if pin_urls and fill_checksums:
-            pin_logs = pin_urls(target_version)
-            checksum_logs = fill_checksums(target_version)
-            for line in pin_logs + checksum_logs:
-                print(f"  + {line}")
-        if generate_checksums:
-            generate_checksums()
-            print("  + Generated agents/release_checksums.json")
-    else:
-        print(f"  [dry-run] Would pin URLs to v{target_version} and compute prompt hashes.")
+    # Step 2: URL Pinning & Cryptographic Hashes
+    with step_progress("[2/5] Pinning prompt URLs & computing SHA-256 hashes"):
+        if not args.dry_run:
+            if pin_urls and fill_checksums:
+                pin_logs = pin_urls(target_version)
+                checksum_logs = fill_checksums(target_version)
+                for line in pin_logs + checksum_logs:
+                    print(f"  + {line}")
+            if generate_checksums:
+                generate_checksums()
+                print("  + Generated agents/release_checksums.json")
+        else:
+            print(f"  [dry-run] Would pin URLs to v{target_version} and compute prompt hashes.")
 
-    # Step 4: Run Tests
+    # Step 3: Run Tests
     if not args.skip_tests:
-        print("\n[3/5] Running complete deterministic selftest suite...")
-        selftest_cmd = [sys.executable, str(ROOT / "harness_cli.py"), "selftest", "--kit", str(ROOT)]
-        env = dict(os.environ)
-        env["_IN_HOOK_SELFTEST"] = "1"
-        res = subprocess.run(selftest_cmd, cwd=ROOT, capture_output=True, text=True, env=env)
-        if res.returncode != 0:
-            print(f"[FAIL] Selftest failed with return code {res.returncode}:")
-            print(res.stdout[-1500:])
-            print(res.stderr[-1500:])
-            return 1
+        with step_progress("[3/5] Running complete deterministic selftest suite"):
+            selftest_cmd = [sys.executable, str(ROOT / "harness_cli.py"), "selftest", "--kit", str(ROOT)]
+            env = dict(os.environ)
+            env["_IN_HOOK_SELFTEST"] = "1"
+            # Stream output in real-time instead of capturing silently
+            res = subprocess.run(selftest_cmd, cwd=ROOT, text=True, env=env)
+            if res.returncode != 0:
+                print(f"[FAIL] Selftest failed with return code {res.returncode}.")
+                raise RuntimeError(f"selftest exited {res.returncode}")
         print("  [SUCCESS] All deterministic self-tests passed (0 failures).")
 
-    if validate_release and not args.dry_run:
-        print("  + Running validate_release suite...")
-        val_errors = validate_release(ROOT, target_version)
-        if val_errors:
-            print("[FAIL] Release validation failed:")
-            for err in val_errors:
-                print(f"  - {err}")
-            return 1
-        print("  [SUCCESS] Release validation passed.")
-
-        if not verify_packaging():
-            return 1
-
+        if validate_release and not args.dry_run:
+            with step_progress("[3b/5] Running release validation & packaging check"):
+                val_errors = validate_release(ROOT, target_version)
+                if val_errors:
+                    print("[FAIL] Release validation failed:")
+                    for err in val_errors:
+                        print(f"  - {err}")
+                    raise RuntimeError("release validation failed")
+                if not verify_packaging():
+                    raise RuntimeError("packaging check failed")
     else:
         print("\n[3/5] Skipping tests (--skip-tests).")
 
-    # Step 5: Git & GitHub Release
+    # Step 4: Extract changelog notes
     title, notes = extract_changelog_notes(target_version)
-    print(f"\n[4/5] Extracted release notes ({len(notes)} chars):")
-    print(f"  Title: {title}")
+    with step_progress(f"[4/5] Extracting release notes for {target_version}"):
+        print(f"  Title: {title}")
+        print(f"  Body: {len(notes)} chars")
 
     if args.dry_run:
         print("\n[5/5] [dry-run] Release preparation complete. Would commit, tag, push, and create GitHub release.")
         return 0
 
-    print("\n[5/5] Committing, tagging, and publishing release...")
-    stage_paths = [
-        ".gitignore",
-        ".github/",
-        "agents/",
-        "AGENTS.md",
-        "GEMINI.md",
-        "pyproject.toml",
-        "CITATION.cff",
-        "CHANGELOG.md",
-        "README.md",
-        "harness_cli.py",
-        "docs/",
-        "scripts_dev/",
-    ]
-    run_cmd(["git", "add", *stage_paths])
+    with step_progress("[5/5] Committing, tagging, and publishing release"):
+        stage_paths = [
+            ".gitignore",
+            ".github/",
+            "agents/",
+            "AGENTS.md",
+            "GEMINI.md",
+            "pyproject.toml",
+            "CITATION.cff",
+            "CHANGELOG.md",
+            "README.md",
+            "harness_cli.py",
+            "docs/",
+            "scripts_dev/",
+        ]
+        run_cmd(["git", "add", *stage_paths])
 
-    commit_msg = f"release: v{target_version}"
-    res_commit = run_cmd(["git", "commit", "-m", commit_msg], check=False)
-    combined_commit_out = (res_commit.stdout or "") + "\n" + (res_commit.stderr or "")
-    if res_commit.returncode == 0:
-        print(f"  + Created commit: {commit_msg}")
-    elif "nothing to commit" in combined_commit_out.lower() or "working tree clean" in combined_commit_out.lower():
-        print("  + Working tree already clean, no new commit needed.")
-    else:
-        print(f"[FAIL] Git commit failed with code {res_commit.returncode}:\n{combined_commit_out.strip()}")
-        return 1
+        commit_msg = f"release: v{target_version}"
+        res_commit = run_cmd(["git", "commit", "-m", commit_msg], check=False)
+        combined_commit_out = (res_commit.stdout or "") + "\n" + (res_commit.stderr or "")
+        if res_commit.returncode == 0:
+            print(f"  + Created commit: {commit_msg}")
+        elif "nothing to commit" in combined_commit_out.lower() or "working tree clean" in combined_commit_out.lower():
+            print("  + Working tree already clean, no new commit needed.")
+        else:
+            print(f"[FAIL] Git commit failed with code {res_commit.returncode}:\n{combined_commit_out.strip()}")
+            return 1
 
-    sha = run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip()
-    if args.no_push:
-        print(f"[OK] Release commit {sha} prepared locally; tagging requires successful CI.")
-        return 0
-    run_cmd(["git", "push", "origin", "HEAD:refs/heads/main"])
-    if not wait_for_workflow("ci.yml", sha):
-        return 1
-    if run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip() != sha:
-        print("[FAIL] HEAD changed during verification; release stopped.")
-        return 1
-    run_cmd(["git", "tag", tag_name, sha])
-    run_cmd(["git", "push", "origin", f"refs/tags/{tag_name}"])
-    if not wait_for_workflow("release-check.yml", sha, branch=tag_name):
-        return 1
-    if github_release_status(tag_name) != "ABSENT":
-        print("[FAIL] Release exists or its absence could not be verified.")
-        return 1
-    if not publish_release(tag_name, title, notes):
-        return 1
-
+        sha = run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip()
+        if args.no_push:
+            print(f"[OK] Release commit {sha} prepared locally; tagging requires successful CI.")
+            return 0
+        run_cmd(["git", "push", "origin", "HEAD:refs/heads/main"])
+        if not wait_for_workflow("ci.yml", sha):
+            return 1
+        if run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip() != sha:
+            print("[FAIL] HEAD changed during verification; release stopped.")
+            return 1
+        run_cmd(["git", "tag", tag_name, sha])
+        run_cmd(["git", "push", "origin", f"refs/tags/{tag_name}"])
+        if not wait_for_workflow("release-check.yml", sha, branch=tag_name):
+            return 1
+        if github_release_status(tag_name) != "ABSENT":
+            print("[FAIL] Release exists or its absence could not be verified.")
+            return 1
+        if not publish_release(tag_name, title, notes):
+            return 1
 
     print(f"\n==================================================")
     print(f"[SUCCESS] Release v{target_version} completed successfully!")

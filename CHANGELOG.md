@@ -5,6 +5,19 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.24] - 2026-09-13
+
+### Real-Time Step Progress Across All Harness Scripts
+
+- **`_live_process.py` — `step_progress` Context Manager**: Added a new `step_progress(name)` context manager that prints `⏳ [IN PROGRESS] <step>` when a step starts and `✅ [DONE] <step> (Xs)` or `❌ [FAIL] <step>` when it finishes. Available to all harness scripts via `from _live_process import step_progress`.
+- **`preflight_check.py`**: All five preflight steps (hook selftest, string parity, Room migrations, Fast Lint, plan authority) now emit real-time progress markers. Room and plan authority use inline `⏳`/`✅`/`❌` prints (boolean steps not wrapped in subprocess).
+- **`run_tests_gate.py`**: The Gradle unit-test invocation is wrapped in `step_progress` so agents see `⏳ [IN PROGRESS] Running unit tests: <task>` immediately and `✅ [DONE]` or `❌ [FAIL]` with elapsed time once Gradle finishes.
+- **`run_gradle_task.py`**: The `run_streaming` Gradle invocation is wrapped in `step_progress(f"Gradle: {task_label}")`, providing a top-level progress marker around every Gradle execution.
+- **`run_device.py`**: APK install (`Installing APK on device`) and activity launch (`Launching activity: <activity>`) are each wrapped with `step_progress`, giving live confirmation of device operations.
+- **`harness_cli.py` selftest**: Each of the 12 selftest suites is reported with `⏳ [IN PROGRESS] [N/12] selftest: <name>` and `✅ [DONE]` with elapsed time. A final `✅ All 12 selftest suites passed.` summary is printed. The step_progress module is dynamically loaded from the kit's `_live_process.py` so `harness_cli.py` retains zero runtime dependencies.
+- **`scripts_dev/release_version.py`**: All five release steps are wrapped with `step_progress`. The selftest step (step 3) now streams output in real-time (removed `capture_output=True`) so silent waits during test runs are eliminated.
+- **`_vnext_selftest.py`**: Fixed `test_diagnostic_preflight_needs_no_task_and_writes_no_evidence` to use `encoding="utf-8", errors="replace"` in its `subprocess.run` call, preventing `UnicodeDecodeError` on Windows when the preflight output contains emoji progress markers.
+
 ## [1.0.23] - 2026-09-13
 
 ### Universal Mobile Test Walkthroughs, UI Component Classification, and Review Provenance Hardening

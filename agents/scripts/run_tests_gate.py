@@ -27,7 +27,7 @@ from baseline_capture import (  # noqa: E402
 )
 from _env_codes import EXIT_ENV  # noqa: E402
 from _gate_results import current_head_sha, write_gate_result  # noqa: E402
-from _live_process import enable_line_buffered_stdio, live_print  # noqa: E402
+from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
 from _repo_files import REPO  # noqa: E402
 
 
@@ -129,7 +129,8 @@ def main(argv=None) -> int:
     live_print(f"[*] Unit-test gate: {task}")
     reports_before = report_signatures(REPO, task)
     outcome: dict = {}
-    code = run_gradle([task], outcome=outcome)
+    with step_progress(f"Running unit tests: {task}"):
+        code = run_gradle([task], outcome=outcome)
     if code == EXIT_ENV:
         write_gate_result("unit_tests", {
             "schema_version": 2,

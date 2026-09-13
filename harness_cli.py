@@ -610,6 +610,14 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     prev_cwd = Path.cwd()
     os.chdir(kit)
+    # Import step_progress from the kit's _live_process module
+    import importlib.util as _ilu
+    _lp_path = _script_root(kit) / "_live_process.py"
+    _lp_spec = _ilu.spec_from_file_location("_live_process", str(_lp_path))
+    _lp_mod = _ilu.module_from_spec(_lp_spec)  # type: ignore[arg-type]
+    _lp_spec.loader.exec_module(_lp_mod)  # type: ignore[union-attr]
+    _step = _lp_mod.step_progress
+    _live = _lp_mod.live_print
     try:
         scripts = (
             "_vnext_selftest.py", "_hook_selftest.py", "_security_selftest.py",
@@ -617,10 +625,14 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_adb_core_selftest.py", "_env_codes_selftest.py", "_performance_selftest.py",
             "_android_scenarios_selftest.py", "_release_safety_selftest.py", "_critical_safety_selftest.py",
         )
-        for script in scripts:
-            code = run_engine_script(kit, script, [])
+        total = len(scripts)
+        for idx, script in enumerate(scripts, 1):
+            label = script.replace("_selftest.py", "").lstrip("_")
+            with _step(f"[{idx}/{total}] selftest: {label}"):
+                code = run_engine_script(kit, script, [])
             if code != 0:
                 return code
+        _live(f"\n✅ All {total} selftest suites passed.")
         return 0
     finally:
         os.chdir(prev_cwd)
