@@ -141,6 +141,9 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
 
             if elem.get("translatable") == "false":
                 continue
+            tools_ignore = elem.get("{http://schemas.android.com/tools}ignore") or elem.get("tools:ignore") or elem.get("ignore") or ""
+            if "MissingTranslation" in tools_ignore or elem.get("l10n-todo") == "true":
+                continue
             if tag == "string":
                 text = "".join(elem.itertext()).strip()
                 placeholders = [] if elem.get("formatted") == "false" else _extract_placeholders(text)

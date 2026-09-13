@@ -5,6 +5,40 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.28] - 2026-09-13
+
+### Infrastructure Immutability, Trojan Source Shield, Room SQLite Safety, and Production Android DX
+
+- **Infrastructure Immutability & Supply Chain Protection**:
+  - **Git, Gradle & IDE Root Immutability (`pre_tool_safety.py`)**: Added `.git`, `.gradle`, and `.idea` to `PROTECTED_ROOTS`, closing Git hook hijacking (`.git/hooks/`) and configuration tampering vectors.
+  - **Gradle Wrapper Tampering Protection (`pre_tool_safety.py`)**: Added immutable protection for `gradlew`, `gradlew.bat`, and `gradle/wrapper/` in client repositories, closing wrapper poisoning and supply-chain execution escapes.
+  - **Subagent Concurrency & Burst Bound (`pre_tool_safety.py`)**: Bounded batch subagent invocations to maximum 5 in `_handle_subagent`, preventing fork bombs and recursive token exhaustion during implementation.
+
+- **Trojan Source, Secret Shield & Production Android DX Architecture**:
+  - **Trojan Source & Invisible Unicode Guard (`fast_kt_lint.py`)**: Added detection for bidirectional unicode formatting control characters (`\u202A`–`\u202E`, `\u2066`–`\u2069`) and zero-width spaces (`\u200B`), stopping invisible visual logic deception (CVE-2021-42574).
+  - **Preflight Secret Shield (`fast_kt_lint.py`)**: Added preflight detection for hardcoded credentials (Google API keys, OpenAI/Anthropic keys, Stripe live keys, GitHub PATs, AWS keys, PEM private keys) with automatic test directory and fixture exemptions.
+  - **Room Migration NOT NULL SQLite Safety Guard (`room_guard.py`)**: Added detection for `ALTER TABLE ... ADD COLUMN ... NOT NULL` without a `DEFAULT` clause in Room migrations, preventing runtime `SQLiteException` crashes on existing user database upgrades.
+  - **Fragment ViewBinding Memory Leak Guard (`fast_kt_lint.py`)**: Added automatic detection for Fragment classes with `_binding` fields that fail to set `_binding = null` in `onDestroyView()`, stopping Android View hierarchy memory leaks.
+  - **Insecure Cleartext Traffic Guard (`fast_kt_lint.py`)**: Added detection for unencrypted `http://` URLs in production source code, with safe localhost and emulator loopback (`10.0.2.2`) whitelisting.
+
+## [1.0.27] - 2026-09-13
+
+### Adversarial Hard Attack Hardening, MCP Interception, and Production Android DX
+
+- **Adversarial Hard Attack Hardening & Tool Interception**:
+  - **Lazy MCP Tool Interception (`agents/hooks.json`, `pre_tool_safety.py`)**: Added `call_mcp_tool` to `PreToolUse` hooks. Unwraps `ServerName`, `ToolName`, and `Arguments` to block MCP-based evasion vectors (such as unauthorized Notion mutations, Firebase deployments, or unapproved Zoho tracker changes), requiring plan authorization and idempotency tokens for tracker writes while allowing safe read queries.
+  - **Root Agent Adapter Immutability (`pre_tool_safety.py`, `change_classifier.py`)**: Added `IMMUTABLE_ADAPTER_FILES` protecting root governance files (`agents.md`, `gemini.md`, `claude.md`, `copilot-instructions.md`, `.cursorrules`, `.windsurfrules`, etc.) from runtime prompt rule poisoning. Classified adapter changes under `HARNESS_CONFIG` (high surface).
+  - **Inline Interpreter Execution Denial (`mutation_guard.py`, `pre_tool_safety.py`)**: Strictly blocks raw inline code executions (`python -c`, `py -c`, `node -e`, and unvetted `python -m`) during implementation to prevent arbitrary code execution escapes.
+  - **Dynamic Reflection & Loading Detection (`change_classifier.py`)**: Added detection for `Class.forName(...)` loading sensitive packages (`billingclient`, `biometric`, `auth`, `crypto`, `security`), classifying changes under `SECURITY` to prevent hidden reflection attacks.
+
+- **Production Android Developer Experience (DX) Enhancements**:
+  - **Smart Compose `@Preview` Awareness (`fast_kt_lint.py`)**: Added `is_stateful_container_only` detection. Stateful composables accepting ViewModel parameters (e.g. `: OrderViewModel = hiltViewModel()`) are exempt from fatal `@Preview` enforcement, eliminating Android Studio preview crashes and dummy ViewModel boilerplate.
+  - **Generalized Bidirectional Multi-Locale Check (`fast_kt_lint.py`)**: Generalized locale checks to detect whether RTL (`ar`, `he`, `fa`, `ur`, `iw`) and LTR languages both exist in `SUPPORTED_LOCALES`, enforcing bidirectional previews only when necessary and seamlessly supporting any number of languages (3, 4, or more).
+  - **Sprint Localization Grace Period (`check_strings.py`)**: Supported `tools:ignore="MissingTranslation"`, `l10n-todo="true"`, and `translatable="false"` XML attributes in string parity checks, treating work-in-progress translations as non-fatal warnings rather than hard preflight blockers.
+  - **Selective Submodule Testing (`run_tests_gate.py`)**: Added `resolve_target_task()` to execute isolated Gradle test tasks (e.g. `:feature:auth:testDebugUnitTest`) when changes are confined to a single submodule, cutting verification latency from minutes to seconds.
+  - **Developer Diagnostic Whitelist (`mutation_guard.py`)**: Whitelisted non-mutating developer diagnostic commands (`adb logcat`, `adb shell getprop`, `gradle dependencies`, `gradle tasks`, `gradle projects`, `gradle properties`, `gradle help`, `git status/diff/log/show`) without requiring prior plan authorization.
+  - **Emergency Developer Override Support (`record_review.py`, `final_verifier.py`)**: Permitted review overrides on `HIGH`/`CRITICAL` or sensitive surfaces when executed with `--source developer_terminal`, providing a human escape hatch for subagent API rate-limit outages without compromising unattended security.
+
 ## [1.0.26] - 2026-09-13
 
 ### Autonomous Phased Execution, Clarification Gate, Direct Review Ingestion, and Drift Tolerance

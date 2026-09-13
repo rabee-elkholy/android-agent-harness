@@ -34,6 +34,7 @@ ZOHO_MUTATION_TOOLS = {
 }
 PROTECTED_ROOTS = (
     ".agents", "agents/scripts", "agents/state", ".harness-setup/ownership-v1.json",
+    ".git", ".gradle", ".idea",
 )
 EPHEMERAL_GENERATED_RE = re.compile(
     r"(?:^|/)build/(?:generated|intermediates)/|^generated/(?:source|ksp|kapt)/",
@@ -58,9 +59,15 @@ DANGEROUS = (
     ("harness_device_emergency", re.compile(r"run_device\.py\b(?:(?=.*\s--force\b)|(?=.*\s--grant-runtime-permissions\b)|\s+uninstall\b)", re.I)),
     ("live_network", re.compile(r"\b(?:curl|wget|invoke-webrequest|invoke-restmethod)\b|urllib\.request|requests\.(?:get|post|put|patch|delete)\s*\(", re.I)),
     ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
+    ("inline_interpreter", re.compile(r"\b(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-c|-m\s+(?!compileall\b))\b|\bnode(?:\.exe)?\s+-e\b|\bperl(?:\.exe)?\s+-e\b|\bruby(?:\.exe)?\s+-e\b", re.I)),
 )
-RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?gradlew(?:\.bat)?\s+", re.I)
+RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", re.I)
 ALLOWED_GRADLE_WRAPPER = re.compile(r"(?:run_gradle_task|run_tests_gate)\.py\b", re.I)
+IMMUTABLE_ADAPTER_FILES = frozenset({
+    "agents.md", "gemini.md", "claude.md", "copilot-instructions.md",
+    ".cursorrules", ".windsurfrules", "continue-android-harness.md",
+    "codex.md", "qwen.md", "github-instructions.md",
+})
 
 
 def _audit_path() -> Path:
@@ -142,6 +149,17 @@ def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
         return False, "File mutation escapes the approved repository.", False
     if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
         return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
+    is_kit_dev = (REPO / "harness_cli.py").is_file() and (REPO / "scripts_dev").is_dir()
+    if not is_kit_dev:
+        rel_lower = relative.lower()
+        rel_name = Path(relative).name.lower()
+        if (
+            rel_name in IMMUTABLE_ADAPTER_FILES
+            or rel_lower.startswith(".github/workflows/")
+            or rel_name in {"gradlew", "gradlew.bat"}
+            or rel_lower.startswith("gradle/wrapper/")
+        ):
+            return False, "Root harness instructions, agent adapters, CI workflows, and Gradle wrappers are developer-owned and immutable during task execution.", False
     if EPHEMERAL_GENERATED_RE.search(relative):
         return False, f"Cannot mutate generated build output '{relative}'. Generated code is diagnostic evidence only; edit the source entity/DAO/contract or generator configuration instead.", False
     return True, relative, False
@@ -176,6 +194,10 @@ def _handle_subagent(name: str, args: dict) -> None:
         plan = active_plan(REPO)
         status = str(plan.get("status") or "")
         if status == "IMPLEMENTING":
+            raw_subs = args.get("Subagents") or args.get("subagents") or []
+            if isinstance(raw_subs, list) and len(raw_subs) > 5:
+                emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
+                return
             emit("allow", "On-demand specialist action is inside the approved implementation.", tool=name)
             return
         if status != "VERIFYING":
@@ -190,12 +212,20 @@ def _handle_subagent(name: str, args: dict) -> None:
         policy = read_json(Path(current["policy"]))
         expected = set(policy.get("reviewers") or [])
         raw_subs = args.get("Subagents") or args.get("subagents") or []
-        actual = {
-            str(item.get("TypeName") or item.get("typeName") or item.get("name") or "")
-            for item in raw_subs if isinstance(item, dict)
-        }
-        if actual != expected:
-            emit("deny", f"Reviewer roster mismatch: expected {sorted(expected)}, got {sorted(actual)}.", tool=name)
+        actual = set()
+        for item in raw_subs:
+            if not isinstance(item, dict):
+                continue
+            r_role = str(item.get("Role") or item.get("role") or "").strip()
+            r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
+            if r_role in expected:
+                actual.add(r_role)
+            elif r_type in expected:
+                actual.add(r_type)
+            else:
+                actual.add(r_role or r_type)
+        if not actual or not (actual <= expected):
+            emit("deny", f"Reviewer roster mismatch: expected subset of {sorted(expected)}, got unexpected {sorted(actual - expected)}.", tool=name)
             return
         if any(str(item.get("model") or "inherit").lower() not in {"", "inherit"} for item in raw_subs if isinstance(item, dict)):
             emit("deny", "Reviewer model escalation requires explicit central-policy authorization.", tool=name)
@@ -237,6 +267,36 @@ def _handle_zoho_mutation(name: str, args: dict) -> None:
         emit("allow", "Zoho mutation is plan-bound and idempotency-bound.", tool=name)
     except Exception as exc:
         emit("deny", f"Zoho mutation authorization failed closed: {exc}", tool=name)
+
+
+def _handle_mcp_tool(name: str, args: dict) -> None:
+    server = str(args.get("ServerName") or args.get("server_name") or args.get("server") or "").lower().strip()
+    tool_name = str(args.get("ToolName") or args.get("tool_name") or args.get("tool") or "").strip()
+    raw_tool_args = args.get("Arguments") or args.get("arguments") or args.get("args") or {}
+    if isinstance(raw_tool_args, str):
+        try:
+            tool_args = json.loads(raw_tool_args)
+        except Exception:
+            tool_args = {}
+    elif isinstance(raw_tool_args, dict):
+        tool_args = raw_tool_args
+    else:
+        tool_args = {}
+
+    tool_lower = tool_name.lower()
+    if "zoho" in server or "zoho" in tool_lower:
+        if tool_lower in ZOHO_MUTATION_TOOLS or any(act in tool_lower for act in ("create", "update", "delete", "close", "add_comment")):
+            _handle_zoho_mutation(tool_name, tool_args)
+            return
+        emit("allow", "Read-only Zoho inspection is allowed.", tool=name)
+        return
+
+    mutating_kw = ("create", "update", "delete", "patch", "post", "put", "deploy", "write", "mutate", "drop")
+    if any(kw in tool_lower for kw in mutating_kw):
+        emit("deny", f"External MCP write operation '{tool_name}' on server '{server}' is not authorized by the active approved plan.", tool=name)
+        return
+
+    emit("allow", "Read-only MCP tool execution is outside the mutation boundary.", tool=name)
 
 
 def _is_targeted_search_path(target: str) -> bool:
@@ -325,7 +385,7 @@ def _handle_search(name: str, args: dict) -> None:
             if audit_file.exists():
                 lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
                 records = [json.loads(line) for line in lines if line.strip()]
-                for rec in reversed(records[-20:]):
+                for rec in reversed(records):
                     if rec.get("tool") == "run_command" and "project_graph executed" in rec.get("reason", "").lower() and rec.get("decision") == "allow":
                         has_run_graph = True
                         break
@@ -381,6 +441,9 @@ def main() -> None:
             return
         if name in ZOHO_MUTATION_TOOLS:
             _handle_zoho_mutation(name, args)
+            return
+        if name in ("call_mcp_tool", "mcp_tool"):
+            _handle_mcp_tool(name, args)
             return
         emit("allow", "Tool is outside the harness mutation boundary.", tool=name)
     except json.JSONDecodeError:

@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -259,8 +260,10 @@ def _external_inputs(repo: Path) -> list[dict[str, str | int | bool]]:
                 stripped = line.strip()
                 if stripped and not stripped.startswith("#") and "=" in stripped:
                     key, value = stripped.split("=", 1)
-                    keys.append(key.strip())
-                    normalized_lines.append(f"{key.strip()}={value.strip()}")
+                    k_clean = key.strip()
+                    keys.append(k_clean)
+                    val_clean = re.sub(r"/+", "/", value.strip().replace("\\:", ":").replace("\\", "/"))
+                    normalized_lines.append(f"{k_clean}={val_clean}")
             result.append({
                 "path": rel,
                 "ignored": True,

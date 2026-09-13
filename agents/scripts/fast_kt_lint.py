@@ -59,6 +59,21 @@ PREVIEW_SURFACE_SUFFIXES = (
     "Banner.kt",
 )
 
+BIDI_TROJAN_PATTERN = re.compile(r"[\u202A-\u202E\u2066-\u2069\u200B]")
+SECRET_PATTERNS = (
+    ("Google API Key", re.compile(r"\bAIza[0-9A-Za-z-_]{35}\b")),
+    ("OpenAI/Anthropic Key", re.compile(r"\b(?:sk-[a-zA-Z0-9]{20,}|sk-proj-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,})\b")),
+    ("Stripe Secret Key", re.compile(r"\b(?:sk|rk)_live_[0-9a-zA-Z]{24,}\b")),
+    ("GitHub Personal Access Token", re.compile(r"\bghp_[0-9a-zA-Z]{36}\b")),
+    ("AWS Access Key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("Private Key", re.compile(r"-----BEGIN (?:RSA )?PRIVATE KEY-----")),
+)
+CLEARTEXT_URL_PATTERN = re.compile(r'"http://([^"/]+)(?:/[^"]*)?"')
+CLEARTEXT_WHITELIST_HOSTS = {
+    "localhost", "127.0.0.1", "10.0.2.2",
+    "schemas.android.com", "schemas.xmlsoap.org", "w3.org", "www.w3.org",
+}
+
 FEATURE_CROSS_IMPORT_PATTERN = re.compile(
     r"^\s*import\s+([a-zA-Z0-9_.]*\.(?:features|feature)\.([A-Za-z0-9_]+))(\.|$)"
 )
@@ -94,12 +109,33 @@ def _in_string_or_comment(line: str, index: int) -> bool:
     return in_string
 
 
-def is_preview_surface(filename: str) -> bool:
-    return filename.endswith(PREVIEW_SURFACE_SUFFIXES)
+def is_preview_surface(filename: str, text: str = "") -> bool:
+    if filename.endswith(PREVIEW_SURFACE_SUFFIXES):
+        return True
+    if text:
+        if re.search(r"\b(?:Scaffold|ModalNavigationDrawer)\s*\(", text) and "@Composable" in text:
+            return True
+        if re.search(r"@(?:Destination|Route)\b", text):
+            return True
+    return False
 
 
 def requires_state_previews(filename: str) -> bool:
     return filename.endswith("Screen.kt")
+
+
+def is_stateful_container_only(text: str) -> bool:
+    funcs = list(re.finditer(r"@Composable\s*(?:(?:inline|private|public|internal)\s+)*fun\s+(\w+)\s*\((.*?)\)", text, re.DOTALL))
+    if not funcs:
+        return False
+    for m in funcs:
+        fn_name = m.group(1)
+        params = m.group(2).lower()
+        if "viewmodel" not in params and "hiltviewmodel" not in params:
+            return False
+        if fn_name.endswith(("Content", "Stateless", "Preview", "Item", "Row", "Card", "Header", "Footer")):
+            return False
+    return True
 
 
 def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) -> dict[Path, set[int] | None]:
@@ -163,7 +199,7 @@ def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) 
 def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[dict]:
     issues = []
     posix = file_path.as_posix().lower()
-    is_test = "/src/test/" in posix or "/androidtest/" in posix
+    is_test = "/src/test/" in posix or "/androidtest/" in posix or posix.endswith("test.kt")
 
     try:
         text = file_path.read_text(encoding="utf-8", errors="replace")
@@ -219,6 +255,36 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
         # Line-level checks apply ONLY to added/modified lines in diff-scoped mode
         if not is_line_modified:
             continue
+
+        if BIDI_TROJAN_PATTERN.search(line):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "TROJAN_SOURCE_BIDI",
+                "msg": f"Invisible Bidi control / Trojan Source character detected in code: '{trimmed}'. Invisible directional formatting characters are prohibited (CVE-2021-42574).",
+            })
+
+        if not is_test:
+            for sec_name, sec_re in SECRET_PATTERNS:
+                if sec_re.search(line):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "type": "HARDCODED_SECRET",
+                        "msg": f"Hardcoded credential detected ({sec_name}). Store credentials in local.properties or secure build configuration.",
+                    })
+                    break
+
+            for m_url in CLEARTEXT_URL_PATTERN.finditer(line):
+                host = m_url.group(1).lower().split(":")[0]
+                if host not in CLEARTEXT_WHITELIST_HOSTS and not any(host.endswith("." + wh) for wh in CLEARTEXT_WHITELIST_HOSTS):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "type": "INSECURE_CLEARTEXT_TRAFFIC",
+                        "msg": f"Insecure cleartext HTTP URL detected: '{m_url.group(0)}'. Use HTTPS to prevent MITM attacks or configure network_security_config.xml.",
+                    })
+                    break
 
         if WILDCARD_IMPORT_PATTERN.match(trimmed):
             issues.append({
@@ -348,27 +414,45 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
             "msg": "Fragment / Activity class is missing '@AndroidEntryPoint' for Hilt dependency injection.",
         })
 
-    if has_compose_function_in_diff and is_preview_surface(file_path.name):
-        is_dual_locale = "ar" in SUPPORTED_LOCALES and "en" in SUPPORTED_LOCALES
-        extra = " plus Loading/Empty/Error." if requires_state_previews(file_path.name) else "."
-        if is_dual_locale:
-            if not PREVIEW_AR.search(text) or not PREVIEW_EN.search(text):
+    if not is_test and has_compose_function_in_diff and is_preview_surface(file_path.name, text):
+        if not is_stateful_container_only(text):
+            has_rtl = any(loc in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
+            has_ltr = any(loc not in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
+            needs_bidirectional = has_rtl and has_ltr
+            extra = " plus Loading/Empty/Error." if requires_state_previews(file_path.name) else "."
+            if needs_bidirectional:
+                if not PREVIEW_AR.search(text) or not PREVIEW_EN.search(text):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": 1,
+                        "type": "MISSING_COMPOSE_PREVIEW",
+                        "msg": (
+                            f"'{file_path.name}' needs dual-locale @Preview "
+                            f"(locale=\"ar\" and locale=\"en\"){extra}"
+                        ),
+                    })
+            else:
+                if not PREVIEW_EN.search(text) and "@Preview" not in text:
+                    issues.append({
+                        "file": str(file_path),
+                        "line": 1,
+                        "type": "MISSING_COMPOSE_PREVIEW",
+                        "msg": f"'{file_path.name}' needs @Preview composable function{extra}",
+                    })
+
+    is_fragment = bool(re.search(r"class\s+\w+[^{]*:\s*(?:BaseFragment|Fragment|DialogFragment|BottomSheetDialogFragment)\b", text))
+    if is_fragment and not is_test:
+        binding_decl = re.search(r"private\s+var\s+(_binding\w*)\s*:\s*[A-Za-z0-9_]+Binding\?\s*=\s*null", text)
+        if binding_decl:
+            var_name = binding_decl.group(1)
+            ondestroy_match = re.search(r"override\s+fun\s+onDestroyView\s*\([^)]*\)\s*\{([^}]*)\}", text, re.DOTALL)
+            nullified = ondestroy_match and (f"{var_name} = null" in ondestroy_match.group(1) or f"{var_name}=null" in ondestroy_match.group(1))
+            if not nullified:
                 issues.append({
                     "file": str(file_path),
                     "line": 1,
-                    "type": "MISSING_COMPOSE_PREVIEW",
-                    "msg": (
-                        f"'{file_path.name}' needs dual-locale @Preview "
-                        f"(locale=\"ar\" and locale=\"en\"){extra}"
-                    ),
-                })
-        else:
-            if not PREVIEW_EN.search(text) and "@Preview" not in text:
-                issues.append({
-                    "file": str(file_path),
-                    "line": 1,
-                    "type": "MISSING_COMPOSE_PREVIEW",
-                    "msg": f"'{file_path.name}' needs @Preview composable function{extra}",
+                    "type": "VIEWBINDING_MEMORY_LEAK",
+                    "msg": f"Fragment ViewBinding memory leak: '{var_name}' is declared but not set to null in onDestroyView(). Set '{var_name} = null' in onDestroyView() to prevent retaining the View hierarchy.",
                 })
 
     return issues

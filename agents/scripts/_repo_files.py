@@ -234,6 +234,8 @@ def has_non_doc_code_changes() -> bool:
 def adb_serial_is_emulator(serial: str) -> bool:
     if serial.startswith("emulator-"):
         return True
+    if serial.startswith(("localhost:", "127.0.0.1:", "[::1]:")):
+        return True
     try:
         probe = subprocess.run(
             ["adb", "-s", serial, "shell", "getprop", "ro.kernel.qemu"],

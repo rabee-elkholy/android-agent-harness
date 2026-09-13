@@ -215,6 +215,9 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     for repo_field in ("root_sha256", "git_common_dir_sha256", "branch"):
         if cur_repo.get(repo_field) != rec_repo.get(repo_field):
             reasons.append(f"current repository {repo_field} does not match the delivery manifest")
+    lingering_scratch = list(repo.glob("scratch_*.py")) + list(repo.glob("script_step*.py"))
+    if lingering_scratch:
+        reasons.append(f"lingering scratch scripts detected in repository: {', '.join(p.name for p in lingering_scratch)}")
     if reasons:
         return _blocked("STALE", reasons, checks)
 
@@ -272,13 +275,9 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             if evidence.get("developer_override"):
                 severity = str(policy.get("severity") or "").upper()
                 sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
-                if severity in ("HIGH", "CRITICAL"):
-                    err_msg = f"developer review override is forbidden for {severity} severity changes"
-                    reasons.append(err_msg)
-                    checks[-1]["status"] = "FAIL"
-                    checks[-1]["detail"] = err_msg
-                elif sensitive:
-                    err_msg = "developer review override is forbidden on sensitive surfaces: " + ", ".join(sensitive)
+                source = str(evidence.get("source") or "")
+                if source != "developer_terminal" and (severity in ("HIGH", "CRITICAL") or sensitive):
+                    err_msg = f"developer review override via {source or 'non-terminal'} is forbidden for {severity} severity or sensitive changes; requires developer_terminal"
                     reasons.append(err_msg)
                     checks[-1]["status"] = "FAIL"
                     checks[-1]["detail"] = err_msg

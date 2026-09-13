@@ -116,16 +116,44 @@ def classify_failures(failed: list[dict], baseline: dict | None) -> tuple[list[d
     return new_regressions, ignored, len(known)
 
 
+def resolve_target_task(repo: Path, requested_task: str | None) -> str:
+    if requested_task:
+        return requested_task
+    from baseline_capture import _unit_test_task
+    default_task = _unit_test_task()
+    try:
+        from _repo_files import changed_paths
+        changed = changed_paths(repo=repo)
+        if not changed:
+            return default_task
+        root_build_names = {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "libs.versions.toml"}
+        if any(p.name in root_build_names or p.parent == repo for p in changed if p.suffix in {".gradle", ".kts", ".toml", ".properties"}):
+            return default_task
+        mods = set()
+        for p in changed:
+            rel = p.relative_to(repo).as_posix()
+            if "/src/" in rel:
+                mod_path = rel.split("/src/")[0]
+                mod_name = ":" + mod_path.replace("/", ":") if mod_path and mod_path != "." else ":app"
+                mods.add(mod_name)
+        if len(mods) == 1 and ":app" not in mods:
+            single_mod = list(mods)[0]
+            task_suffix = default_task.split(":")[-1] if ":" in default_task else "testDebugUnitTest"
+            return f"{single_mod}:{task_suffix}"
+    except Exception:
+        pass
+    return default_task
+
+
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Baseline-aware unit-test delivery gate")
     parser.add_argument("task", nargs="?", default=None, help="Gradle unit-test task (default: _product UNIT_TEST_TASK)")
     args = parser.parse_args(argv)
 
-    from baseline_capture import _unit_test_task
     from run_gradle_task import run_gradle
 
-    task = args.task or _unit_test_task()
+    task = resolve_target_task(REPO, args.task)
     live_print(f"[*] Unit-test gate: {task}")
     reports_before = report_signatures(REPO, task)
     outcome: dict = {}

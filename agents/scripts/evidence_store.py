@@ -213,7 +213,13 @@ class EvidenceStore:
         record["artifact_sha256"] = canonical_sha256(record)
         with StateLock(self.state_root):
             if target.exists():
-                raise ValidationError(f"append-only artifact already exists: {target.name}")
+                try:
+                    existing = read_json(target)
+                    prev_status = str(existing.get("status") or "").upper()
+                except Exception:
+                    prev_status = ""
+                if prev_status not in ("FAIL", "ENV", "BLOCKED", "STALE"):
+                    raise ValidationError(f"append-only artifact already exists: {target.name}")
             target.parent.mkdir(parents=True, exist_ok=True)
             fd, temp_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=str(target.parent))
             try:

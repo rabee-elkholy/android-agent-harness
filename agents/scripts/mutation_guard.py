@@ -15,7 +15,7 @@ VERIFICATION_SCRIPTS = {
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
 }
-BOOTSTRAP_ACTIONS = {"draft", "begin", "status", "approve", "approve-sensitive", "deliver", "debug-evidence"}
+BOOTSTRAP_ACTIONS = {"draft", "begin", "status", "approve", "approve-sensitive", "deliver", "debug-evidence", "recover-stale"}
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 
@@ -76,7 +76,9 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[2:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "android-harness"}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "android-harness", "adb"}:
+        return executable, tokens[1:]
+    if executable in {"gradlew", "gradlew.bat", "gradle"}:
         return executable, tokens[1:]
     return "", []
 
@@ -93,6 +95,17 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         if args[0] == "symbolic-ref":
             return len(args) == 2 and not args[1].startswith("-")
         return True
+    if name == "adb":
+        if not args:
+            return False
+        sub = args[0].lower()
+        if sub in {"logcat", "devices", "version", "help"}:
+            return not any(arg.startswith(("-f", "--filename")) for arg in args)
+        if sub == "shell" and len(args) >= 2 and args[1].lower() in {"getprop", "dumpsys"}:
+            return True
+        return False
+    if name in {"gradlew", "gradlew.bat", "gradle"}:
+        return bool(args) and args[0].lower() in {"dependencies", "tasks", "projects", "properties", "help", "--help", "-h"}
     if name in {"rg", "grep", "head", "tail", "ls", "pwd", "wc"}:
         return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
     if name in INSPECTION_SCRIPTS:
@@ -179,6 +192,12 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "IMPLEMENTING":
         if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I):
             return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
+        if re.search(r"\b(?:del(?:\s+\/[a-z]+)*\s|rmdir\b|rm\s+-rf\b|powershell\b.*-file\b|bash\s+\S+\.sh\b)", normalized, re.I):
+            return False, "Destructive filesystem or external script commands are blocked during implementation."
+        if re.search(r"\b(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-c|-m\s+(?!compileall\b))\b", normalized, re.I):
+            return False, "Inline Python execution (-c/-m) is blocked; only audited harness scripts may run."
+        if re.search(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", normalized, re.I):
+            return False, "Raw Gradle execution is blocked; use the harness Gradle wrapper or test gate."
         try:
             require_mutation(plan)
         except ValidationError as exc:

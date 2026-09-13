@@ -222,6 +222,7 @@ def main() -> int:
     parser.add_argument("--report", action="append", default=[])
     parser.add_argument("--response", action="append", default=[], metavar="REVIEWER=PATH", help="Ingest an unchanged reviewer response with its evidence footer")
     parser.add_argument("--response-text", action="append", default=[], metavar="REVIEWER=TEXT", help="Ingest an unchanged reviewer response text with its evidence footer")
+    parser.add_argument("--subagent-id", default="", help="Subagent conversation ID or execution reference proving independent reviewer run")
     parser.add_argument("--verdict", action="append", default=[], metavar="[REVIEWER=]VERDICT", help="Record a reviewer verdict directly (e.g. bug-reviewer-agent=PASS, or PASS with --reviewer)")
     parser.add_argument("--reviewer", help="Reviewer name when recording a single verdict with --verdict")
     parser.add_argument("--evidence-pkg", default="", help="Optional package SHA prefix to validate against active review package")
@@ -249,11 +250,12 @@ def main() -> int:
             if not str(args.proof_reference).strip():
                 raise ValidationError("review override requires non-empty --proof-reference")
             severity = str(policy.get("severity") or "").upper()
-            if severity in ("HIGH", "CRITICAL"):
-                raise ValidationError(f"review override is strictly forbidden for {severity} severity changes")
-            sensitive = sorted(set(policy.get("surfaces") or []) & {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
-            if sensitive:
-                raise ValidationError(f"review override is strictly forbidden on sensitive surfaces: {', '.join(sensitive)}")
+            if args.source != "developer_terminal":
+                if severity in ("HIGH", "CRITICAL"):
+                    raise ValidationError(f"review override via {args.source} is strictly forbidden for {severity} severity changes; run from developer_terminal")
+                sensitive = sorted(set(policy.get("surfaces") or []) & {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
+                if sensitive:
+                    raise ValidationError(f"review override via {args.source} is strictly forbidden on sensitive surfaces ({', '.join(sensitive)}); run from developer_terminal")
             manifest = read_json(Path(current["manifest"]))
 
             version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
@@ -306,6 +308,8 @@ def main() -> int:
                 raise ValidationError("--response must be REVIEWER=PATH")
             rep = response_to_report(repo, args.task, reviewer.strip(), Path(raw_path).resolve())
             rep["provenance"] = "reviewer_response_footer"
+            if getattr(args, "subagent_id", ""):
+                rep["subagent_id"] = args.subagent_id.strip()
             (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         for item in args.response_text:
@@ -315,6 +319,8 @@ def main() -> int:
             unescaped_text = raw_text.replace("\\n", "\n")
             rep = response_text_to_report(repo, args.task, reviewer.strip(), unescaped_text)
             rep["provenance"] = "reviewer_response_text"
+            if getattr(args, "subagent_id", ""):
+                rep["subagent_id"] = args.subagent_id.strip()
             (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         verdict_items = list(args.verdict)

@@ -138,6 +138,11 @@ def git_text(repo: Path, *args: str) -> str:
     return git(repo, *args).decode("utf-8", errors="replace").strip()
 
 
+def _norm_path_str(p: Path) -> str:
+    resolved = str(p.resolve())
+    return os.path.normcase(resolved) if os.name == "nt" else resolved
+
+
 def repository_identity(repo: Path) -> dict[str, str]:
     identity_lines = git_text(repo, "rev-parse", "--show-toplevel", "--git-common-dir", "HEAD").splitlines()
     if len(identity_lines) != 3:
@@ -156,8 +161,8 @@ def repository_identity(repo: Path) -> dict[str, str]:
     except OSError as exc:
         raise HarnessError(f"cannot execute Git: {exc}") from exc
     return {
-        "root_sha256": sha256_bytes(str(root).encode("utf-8")),
-        "git_common_dir_sha256": sha256_bytes(str(common).encode("utf-8")),
+        "root_sha256": sha256_bytes(_norm_path_str(root).encode("utf-8")),
+        "git_common_dir_sha256": sha256_bytes(_norm_path_str(common).encode("utf-8")),
         "head": head,
         "branch": branch,
     }

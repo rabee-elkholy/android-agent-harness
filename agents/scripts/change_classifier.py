@@ -18,19 +18,19 @@ from delivery_manifest import is_delivery_relevant  # noqa: E402
 SCHEMA_VERSION = 1
 SEVERITY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 CRITICAL_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
-HIGH_SURFACES = {"ROOM_SCHEMA", "MANIFEST_PERMISSION", "BUILD_CONFIG", "PUBLIC_API", "NATIVE_CODE"}
+HIGH_SURFACES = {"ROOM_SCHEMA", "MANIFEST_PERMISSION", "BUILD_CONFIG", "PUBLIC_API", "NATIVE_CODE", "HARNESS_CONFIG"}
 DEVICE_SURFACES = {"COMPOSE_UI", "XML_UI", "NAVIGATION", "DEVICE_API"}
 
 PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
-    ("BILLING", re.compile(r"(?i)billingclient|purchase|subscription|productdetails"), "BILLING_PATTERN"),
-    ("AUTH", re.compile(r"(?i)oauth|authentication|authorization|login|sign.?in|jwt"), "AUTH_PATTERN"),
-    ("CRYPTO", re.compile(r"(?i)cipher|keystore|secretkey|encrypt|decrypt|messageDigest"), "CRYPTO_PATTERN"),
-    ("SENSITIVE_DATA", re.compile(r"(?i)access.?token|refresh.?token|password|biometric|health.?data|location"), "SENSITIVE_PATTERN"),
+    ("BILLING", re.compile(r"(?i)billingclient|purchase|subscription|productdetails|com\.android\.billingclient"), "BILLING_PATTERN"),
+    ("AUTH", re.compile(r"(?i)oauth|authentication|authorization|login|sign.?in|jwt|androidx\.biometric|com\.google\.android\.gms\.auth"), "AUTH_PATTERN"),
+    ("CRYPTO", re.compile(r"(?i)cipher|keystore|secretkey|encrypt|decrypt|messageDigest|javax\.crypto|java\.security\.(?:KeyStore|MessageDigest)"), "CRYPTO_PATTERN"),
+    ("SENSITIVE_DATA", re.compile(r"(?i)access.?token|refresh.?token|password|biometric|health.?data|location|androidx\.security\.crypto"), "SENSITIVE_PATTERN"),
     ("COROUTINES", re.compile(r"\b(suspend|CoroutineScope|Dispatchers\.|Flow<|StateFlow|SharedFlow|launch\s*\{|async\s*\{)"), "COROUTINE_PATTERN"),
     ("ROOM_SCHEMA", re.compile(r"@(Database|Entity|Embedded|Relation)|AutoMigration|Migration\s*\("), "ROOM_PATTERN"),
     ("PERSISTENCE", re.compile(r"(?i)datastore|sqldelight|sqlite(database|openhelper)?|realm(configuration)?"), "PERSISTENCE_PATTERN"),
     ("NETWORK", re.compile(r"(?i)retrofit|okhttp|ktor|httpclient|@GET\b|@POST\b|websocket"), "NETWORK_PATTERN"),
-    ("SECURITY", re.compile(r"(?i)networksecurityconfig|certificatepinner|trustmanager|hostnameverifier|x509certificate"), "SECURITY_PATTERN"),
+    ("SECURITY", re.compile(r"(?i)networksecurityconfig|certificatepinner|trustmanager|hostnameverifier|x509certificate|androidx\.security|Class\.forName\s*\(\s*[\"']?(?:[^\"']*\.)?(?:billingclient|biometric|auth|crypto|security)"), "SECURITY_PATTERN"),
     ("DEVICE_API", re.compile(r"(?i)bluetooth|sensor|locationmanager|camera|notificationmanager|foregroundservice"), "DEVICE_API_PATTERN"),
 )
 
@@ -347,7 +347,9 @@ def classify(repo: Path) -> dict:
         before_rel = changed.old_rel_posix or rel
         full_text = (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel)
         test_path = "/test/" in f"/{lower}" or "/androidtest/" in f"/{lower}" or lower.endswith(("test.kt", "test.java"))
-        if suffix in (".md", ".txt", ".rst"):
+        if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
+            _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
+        elif suffix in (".md", ".txt", ".rst"):
             _add(found, "DOCS", rel, "DOCUMENTATION_PATH")
         if "/res/values" in f"/{lower}" and suffix == ".xml":
             if Path(lower).name in ("strings.xml", "plurals.xml", "arrays.xml"):

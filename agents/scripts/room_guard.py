@@ -21,6 +21,10 @@ AUTO_MIGRATION_RE = re.compile(r"AutoMigration\s*\(\s*(?:from\s*=\s*)?(\d+)\s*,\
 ENTITY_REF_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)(?:::class|\.class)")
 EMBEDDED_TYPE_RE = re.compile(r"@Embedded(?:\([^)]*\))?\s+(?:val|var)\s+\w+\s*:\s*([A-Z][A-Za-z0-9_]*)")
 DESTRUCTIVE_RE = re.compile(r"fallbackToDestructiveMigration(?:OnDowngrade)?\s*\(")
+NOT_NULL_NO_DEFAULT_RE = re.compile(
+    r"ALTER\s+TABLE\s+([A-Za-z0-9_`\"']+)\s+ADD\s+(?:COLUMN\s+)?([A-Za-z0-9_`\"']+)\s+[^;\"'\n\r]*\bNOT\s+NULL\b(?![^;\"'\n\r]*\bDEFAULT\b)",
+    re.I,
+)
 ADD_MIGRATIONS_RE = re.compile(r"addMigrations\s*\((.*?)\)", re.DOTALL)
 TYPE_DECL_RE = re.compile(
     r"\b(?:(?:public|internal|private|protected|open|abstract|inner|data|sealed|annotation|static|final)\s+)*"
@@ -457,6 +461,15 @@ def check_room_working_tree(modified_rels: list[str] | None = None, repo: Path |
                     for add_block in _extract_add_migrations_blocks(b_text, target_db_class=new_decl.class_name):
                         for a_str, b_str in MIGRATION_RE.findall(add_block):
                             all_migs.add((int(a_str), int(b_str)))
+
+                    # Check SQLite NOT NULL without DEFAULT
+                    for sql_m in NOT_NULL_NO_DEFAULT_RE.finditer(b_text):
+                        tbl = sql_m.group(1).strip("`\"'")
+                        col = sql_m.group(2).strip("`\"'")
+                        failures.append(
+                            f"{new_decl.rel}: migration contains 'ALTER TABLE {tbl} ADD COLUMN {col} ... NOT NULL' without a DEFAULT clause. "
+                            f"SQLite requires a DEFAULT value when adding a NOT NULL column to an existing table to avoid runtime SQLiteException."
+                        )
 
                 if not is_migration_path_covered(target_start, new_ver, frozenset(all_migs)):
                     if unregistered_candidates:

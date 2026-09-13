@@ -474,7 +474,35 @@ def cancel(args: argparse.Namespace) -> dict:
     plan["execution_nonce"] = None
     plan["cancelled_at"] = utc_now()
     save_plan(_plan_path(repo, args.task_id), plan)
+    active_path = state_root(repo) / "active-task.json"
+    if active_path.is_file():
+        try:
+            active = read_json(active_path)
+            if str(active.get("task_id") or "") == args.task_id:
+                active_path.unlink(missing_ok=True)
+        except Exception:
+            pass
     return plan
+
+
+def recover_stale(args: argparse.Namespace) -> dict:
+    repo = Path(args.repo).resolve()
+    active_path = state_root(repo) / "active-task.json"
+    if active_path.is_file():
+        try:
+            active = read_json(active_path)
+            tid = str(active.get("task_id") or getattr(args, "task_id", "") or "")
+            if tid:
+                plan = _load_plan(repo, tid)
+                plan["status"] = "CANCELLED"
+                plan["approval"] = None
+                plan["execution_nonce"] = None
+                plan["cancelled_at"] = utc_now()
+                save_plan(_plan_path(repo, tid), plan)
+        except Exception:
+            pass
+        active_path.unlink(missing_ok=True)
+    return {"status": "RECOVERED", "cleared_active_task": True}
 
 
 def resume(args: argparse.Namespace) -> dict:
@@ -567,6 +595,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
     sub.add_parser("status", parents=[common]).set_defaults(handler=status)
+    command = sub.add_parser("recover-stale")
+    command.add_argument("--repo", required=True)
+    command.add_argument("--task-id", default="")
+    command.set_defaults(handler=recover_stale)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
