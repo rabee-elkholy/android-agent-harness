@@ -483,12 +483,17 @@ def main() -> int:
                     if policy_path.is_file():
                         policy = read_json(policy_path)
                         recipes = get_verification_recipes(policy.get("surfaces") or [])
+                if not recipes:
+                    recipes = get_verification_recipes([], fallback=True)
                 if recipes:
-                    live_print("\n[*] Recommended verification steps:")
+                    live_print("\n" + "=" * 60)
+                    live_print("[MANDATORY MOBILE TEST WALKTHROUGH]")
+                    live_print("Follow these manual steps on the device/emulator to verify:")
                     for recipe in recipes:
                         live_print(f"  [{recipe['surface']}]:")
-                        for step in recipe["steps"]:
-                            live_print(f"    - {step}")
+                        for idx, step in enumerate(recipe["steps"], 1):
+                            live_print(f"    {idx}. {step}")
+                    live_print("=" * 60 + "\n")
         except Exception:
             pass
 

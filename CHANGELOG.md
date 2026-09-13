@@ -5,6 +5,21 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.23] - 2026-09-13
+
+### Universal Mobile Test Walkthroughs, UI Component Classification, and Review Provenance Hardening
+
+- **View UI Component Classification (`change_classifier.py`)**: Added deterministic regex recognition for Android View UI components (`Fragment`, `DialogFragment`, `BottomSheetDialogFragment`, `Activity`, `AppCompatActivity`, `RecyclerView.Adapter`, `RecyclerView.ViewHolder`, `ListAdapter`, `ViewBinding`, and view inflation methods) in Kotlin/Java files. Modifying Fragments and Adapters without touching XML layout files now correctly classifies as `XML_UI`, triggering the physical device gate and preventing UI code from being disguised as pure business logic.
+- **Mandatory Mobile Test Walkthrough Banner (`run_device.py`)**: Enhanced device execution output upon APK install/launch to format and display an unmissable `[MANDATORY MOBILE TEST WALKTHROUGH]` block containing concrete, numbered manual verification steps for the developer on their target device or emulator.
+- **Universal Verification Recipes & Fallback (`_verification_recipes.py`, `run_device.py`)**: Added comprehensive verification recipe fallback (`APPLICATION_FALLBACK_RECIPE`) ensuring that whenever an application is deployed or launched on a device, actionable, numbered test steps are always generated regardless of surface categorization.
+- **Review Provenance Hardening & Self-Review Block (`record_review.py`, `final_verifier.py`)**:
+  - Enforced mandatory `--evidence-pkg <sha12>` when recording reviewer verdicts with `--verdict`, validating strictly against the active `review-package.md` hash.
+  - In `final_verifier.py`, strictly prohibited `lead_agent_recorded_verdict` self-certification on `HIGH` or `CRITICAL` severity tasks and sensitive surfaces (`BILLING`, `AUTH`, `SECURITY`, `SENSITIVE_DATA`, `CRYPTO`). Independent specialist reviewer execution (`reviewer_response_footer` or `structured_report`) is required.
+- **Developer Governance & Agent Rules Alignment (`harness-rules.md`, `deliver.md`, `GEMINI.md`)**:
+  - Mandated that after every device deployment (`run_device.py install-start`), the agent must output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat and invoke `ask_question` for developer sign-off before completing the task.
+  - Strictly forbade lead agents from bypassing subagent execution during verification.
+- **Comprehensive Selftest Coverage (`_vnext_selftest.py`)**: Added deterministic regression tests verifying Fragment/Adapter classification as `XML_UI`, non-empty verification recipes and fallback, mandatory evidence package validation, and rejection of self-certified reviews on high-severity changes.
+
 ## [1.0.22] - 2026-09-13
 
 ### Skill Subset Authorization, Benign Scope Drift Exemption, and Windows Test Isolation

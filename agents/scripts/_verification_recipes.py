@@ -50,8 +50,14 @@ VERIFICATION_RECIPES: dict[str, list[str]] = {
     ],
 }
 
+APPLICATION_FALLBACK_RECIPE: list[str] = [
+    "Launch the target activity on device/emulator.",
+    "Navigate through the modified user journey and exercise the new or updated logic.",
+    "Confirm visual stability, responsiveness, and lack of crashes or logcat errors.",
+]
 
-def get_verification_recipes(surfaces: list[str]) -> list[dict[str, Any]]:
+
+def get_verification_recipes(surfaces: list[str], *, fallback: bool = False) -> list[dict[str, Any]]:
     """Return deterministic 3-6 step verification recipes for relevant Android surfaces."""
     seen_surfaces: set[str] = set()
     result: list[dict[str, Any]] = []
@@ -71,4 +77,9 @@ def get_verification_recipes(surfaces: list[str]) -> list[dict[str, Any]]:
                     "surface": key,
                     "steps": list(VERIFICATION_RECIPES[key]),
                 })
+    if not result and fallback:
+        result.append({
+            "surface": "APPLICATION",
+            "steps": list(APPLICATION_FALLBACK_RECIPE),
+        })
     return result

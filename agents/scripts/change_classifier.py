@@ -33,6 +33,19 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("DEVICE_API", re.compile(r"(?i)bluetooth|sensor|locationmanager|camera|notificationmanager|foregroundservice"), "DEVICE_API_PATTERN"),
 )
 
+VIEW_UI_RE = re.compile(
+    r"\b("
+    r"(?:androidx\.fragment\.app\.)?Fragment\b|"
+    r"(?:DialogFragment|BottomSheetDialogFragment|ListFragment)\b|"
+    r"(?:AppCompatActivity|ComponentActivity|FragmentActivity|android\.app\.Activity)\b|"
+    r"(?:RecyclerView\.(?:Adapter|ViewHolder)|ListAdapter|BaseAdapter|ArrayAdapter|PagerAdapter)\b|"
+    r"(?:onCreateViewHolder|onBindViewHolder|getItemCount)\b|"
+    r"(?:ViewBinding|DataBindingUtil|LayoutInflater)\b|"
+    r"(?:findViewById|setOnClickListener|setContentView)\b|"
+    r":\s*(?:Fragment|AppCompatActivity|ComponentActivity|RecyclerView\.Adapter|ListAdapter)\b"
+    r")"
+)
+
 
 def _add(result: dict, surface: str, path: str, reason: str) -> None:
     result.setdefault(surface, {"files": set(), "reasons": set()})
@@ -348,6 +361,8 @@ def classify(repo: Path) -> dict:
             _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
         if suffix in (".kt", ".kts") and ("@composable" in full_text.lower() or "androidx.compose" in full_text.lower()):
             _add(found, "COMPOSE_UI", rel, "COMPOSE_PATTERN")
+        if suffix in (".kt", ".java") and not test_path and VIEW_UI_RE.search(full_text):
+            _add(found, "XML_UI", rel, "VIEW_UI_COMPONENT")
         if suffix in (".kt", ".java") and not test_path and re.search(r"\b(NavHost|NavController|findNavController|rememberNavController)\b|navGraphBuilder|popUpTo\(", diff_text):
             _add(found, "NAVIGATION", rel, "NAVIGATION_CALL")
         if suffix in (".kt", ".java") and not test_path:

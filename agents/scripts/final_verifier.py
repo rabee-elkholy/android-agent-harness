@@ -298,6 +298,19 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     reasons.append("truncated review cannot approve delivery")
                 if evidence.get("blocking_findings"):
                     reasons.append("review contains unresolved blocking findings")
+                severity = str(policy.get("severity") or "").upper()
+                sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+                if severity in ("HIGH", "CRITICAL") or sensitive:
+                    for rep in evidence.get("reports") or []:
+                        if str(rep.get("provenance") or "") == "lead_agent_recorded_verdict":
+                            err_msg = (
+                                f"reviewer {rep.get('reviewer')} self-certified by lead agent without "
+                                f"independent reviewer response is forbidden for {severity} severity changes"
+                            )
+                            reasons.append(err_msg)
+                            checks[-1]["status"] = "FAIL"
+                            checks[-1]["detail"] = err_msg
+                            break
 
     for carried in policy.get("carried_reviews") or []:
         reviewer = str(carried.get("reviewer") or "")

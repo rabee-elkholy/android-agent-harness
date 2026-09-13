@@ -179,10 +179,11 @@ def verdict_to_report(
     if not package.is_file():
         raise ValidationError("immutable review package is missing")
     package_sha = sha256_file(package)
-    if evidence_pkg:
-        clean_pkg = evidence_pkg.strip().lower()
-        if not package_sha[:12].startswith(clean_pkg) and not clean_pkg.startswith(package_sha[:12]):
-            raise ValidationError(f"evidence package sha prefix mismatch: {clean_pkg} != {package_sha[:12]}")
+    if not evidence_pkg or not str(evidence_pkg).strip():
+        raise ValidationError(f"reviewer {reviewer} verdict requires non-empty --evidence-pkg matching active review package")
+    clean_pkg = evidence_pkg.strip().lower()
+    if not package_sha[:12].startswith(clean_pkg) and not clean_pkg.startswith(package_sha[:12]):
+        raise ValidationError(f"evidence package sha prefix mismatch: {clean_pkg} != {package_sha[:12]}")
     v_upper = verdict.strip().upper()
     if v_upper not in VALID_VERDICTS:
         raise ValidationError(f"invalid verdict {verdict}; must be PASS or FINDINGS")

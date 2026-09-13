@@ -1890,6 +1890,133 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertTrue(passed, msg)
 
 
+    def test_fragment_and_adapter_classified_as_xml_ui(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        # Fragment file
+        write(self.repo / "app/src/main/kotlin/EventsFragment.kt", (
+            "package com.fixture\n"
+            "import androidx.fragment.app.Fragment\n"
+            "class EventsFragment : Fragment() {\n"
+            "    fun setup() {}\n"
+            "}\n"
+        ))
+        classification = classify(self.repo)
+        self.assertIn("XML_UI", classification["surfaces"])
+        policy = decide(classification, self.repo / ".agents/skills", project_kind="application")
+        self.assertTrue(policy["device_required"])
+        self.assertIn("device", policy["gates"])
+
+        # Adapter file
+        write(self.repo / "app/src/main/kotlin/EventsAdapter.kt", (
+            "package com.fixture\n"
+            "import androidx.recyclerview.widget.RecyclerView\n"
+            "class EventsAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {\n"
+            "    override fun getItemCount(): Int = 0\n"
+            "}\n"
+        ))
+        classification2 = classify(self.repo)
+        self.assertIn("XML_UI", classification2["surfaces"])
+
+    def test_verification_recipes_covers_all_surfaces_and_fallback(self) -> None:
+        from _verification_recipes import get_verification_recipes
+        # Check device surfaces
+        for surface in ("COMPOSE_UI", "XML_UI", "NAVIGATION", "ROOM_SCHEMA", "MANIFEST_PERMISSION", "FOREGROUND_SERVICE", "DEVICE_API"):
+            recipes = get_verification_recipes([surface])
+            self.assertTrue(len(recipes) > 0, f"Expected recipes for {surface}")
+            self.assertEqual(surface, recipes[0]["surface"])
+            self.assertTrue(len(recipes[0]["steps"]) >= 3)
+        # Check pure logic has no recipe by default (verified by Scenario 31)
+        self.assertEqual([], get_verification_recipes(["BUSINESS_LOGIC"]))
+        # Check fallback for empty surfaces when fallback=True
+        fallback = get_verification_recipes([], fallback=True)
+        self.assertTrue(len(fallback) > 0)
+        self.assertEqual("APPLICATION", fallback[0]["surface"])
+
+    def test_record_review_verdict_requires_evidence_pkg(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "test-verdict-req-pkg"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(
+            **common, outcome="Test review CLI pkg req", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", force=True,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/Logic.kt", "internal class SimpleLogic\n")
+        current = prepare_verification(Namespace(**common))
+        package, _ = build_package(self.repo, task_id)
+        # Omission of --evidence-pkg must fail
+        proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--reviewer", "bug-reviewer-agent", "--verdict", "PASS"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("requires non-empty --evidence-pkg", proc.stderr + proc.stdout)
+
+    def test_final_verifier_rejects_lead_agent_recorded_verdict_on_high_severity(self) -> None:
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "test-high-self-review-reject"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        # ROOM_SCHEMA is HIGH severity
+        draft(Namespace(
+            **common, outcome="Room schema change", expected_surfaces="ROOM_SCHEMA,BUSINESS_LOGIC",
+            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+            risks="", rollback="Restore", force=True,
+        ))
+        record_approval(Namespace(
+            **common, source="conversation", proof_reference="chat-approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/DbEntity.kt", "package com.fixture\nimport androidx.room.Entity\n@Entity\ndata class DbEntity(val id: Int)\n")
+        current = prepare_verification(Namespace(**common))
+        package, _ = build_package(self.repo, task_id)
+        pkg_sha = sha256_file(package)
+        policy = read_json(Path(current["policy"]))
+        self.assertEqual("HIGH", policy["severity"])
+        # Record review using --verdict (which marks provenance as lead_agent_recorded_verdict)
+        for rev in policy["reviewers"]:
+            proc = subprocess.run(
+                [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--reviewer", rev, "--verdict", "PASS", "--evidence-pkg", pkg_sha[:12]],
+                cwd=self.repo, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+
+        from final_verifier import verify
+        result = verify(
+            self.repo,
+            plan_path=self.repo / f".agents/state/tasks/{task_id}/plan.json",
+            policy_path=Path(current["policy"]),
+            manifest_path=Path(current["manifest"]),
+            state_root=state_root(self.repo),
+            run_id=current["run_id"],
+        )
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertTrue(any("self-certified by lead agent" in b for b in result["blocked_by"]), result["blocked_by"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
