@@ -654,6 +654,19 @@ class AuthorityAndEvidenceTests(RepoCase):
         self.assertEqual([], check_material_drift(plan, ["BUSINESS_LOGIC", "COMPOSE_UI"]))
         self.assertEqual(["surface:BILLING"], check_material_drift(plan, ["BUSINESS_LOGIC", "BILLING"]))
 
+    def test_material_drift_exempts_benign_and_code_scoped_coroutines(self) -> None:
+        code_plan = create_plan(self.repo, task_id="task-code", requested_outcome="Logic", expected_surfaces=["BUSINESS_LOGIC"])
+        self.assertEqual([], check_material_drift(code_plan, ["BUSINESS_LOGIC", "TEST_ONLY"]))
+        self.assertEqual([], check_material_drift(code_plan, ["BUSINESS_LOGIC", "DOCS"]))
+        self.assertEqual([], check_material_drift(code_plan, ["BUSINESS_LOGIC", "COROUTINES"]))
+        self.assertEqual([], check_material_drift(code_plan, ["BUSINESS_LOGIC", "COROUTINES", "TEST_ONLY"]))
+        self.assertEqual(["surface:BILLING"], check_material_drift(code_plan, ["BUSINESS_LOGIC", "BILLING"]))
+        self.assertEqual(["surface:SECURITY"], check_material_drift(code_plan, ["BUSINESS_LOGIC", "SECURITY"]))
+
+        strings_plan = create_plan(self.repo, task_id="task-str", requested_outcome="Strings", expected_surfaces=["LOCALIZATION"])
+        self.assertEqual([], check_material_drift(strings_plan, ["LOCALIZATION", "TEST_ONLY"]))
+        self.assertEqual(["surface:COROUTINES"], check_material_drift(strings_plan, ["LOCALIZATION", "COROUTINES"]))
+
     def test_clean_repo_draft_defaults_to_app_surfaces_without_drift(self) -> None:
         import argparse
         args = argparse.Namespace(
@@ -833,6 +846,74 @@ class ArtifactAndVerifierTests(RepoCase):
         verify(self.repo, plan_path=plan_path, policy_path=policy_path, manifest_path=manifest_path, state_root=state, run_id="run-verify")
         after = {path.relative_to(state).as_posix(): sha256_file(path) for path in state.rglob("*.json")}
         self.assertEqual(before, after)
+
+    def test_verify_permits_approved_skill_subsets_and_benign_skills(self) -> None:
+        broad_policy = decide({
+            "classification_sha256": "preliminary", "surfaces": ["BUSINESS_LOGIC", "COMPOSE_UI"],
+            "severity": "MEDIUM", "confidence": "HIGH", "changed_files": 2,
+        }, KIT / "agents" / "skills")
+        plan = create_plan(
+            self.repo, task_id="verify-subset", requested_outcome="Logic and UI",
+            expected_surfaces=["BUSINESS_LOGIC", "COMPOSE_UI"], expected_modules=[":app"],
+            skills=broad_policy["skills"]["skills"],
+        )
+        plan = approve(plan, source="conversation", proof_reference="msg-subset", enforcement_tier="RULE_ENFORCED")
+        plan = begin(self.repo, plan)
+        write(self.repo / "app/src/main/kotlin/A.kt", "internal class ChangedSubset\n")
+        manifest = build_manifest(self.repo)
+        classification = classify(self.repo)
+        policy = decide(classification, KIT / "agents" / "skills")
+        plan["status"] = "VERIFYING"
+        directory = self.repo / ".agents/state/tasks/verify-subset"
+        directory.mkdir(parents=True)
+        plan_path, policy_path, manifest_path = directory / "plan.json", directory / "policy.json", directory / "manifest.json"
+        save_plan(plan_path, plan)
+        atomic_write_json(policy_path, policy)
+        atomic_write_json(manifest_path, manifest)
+        state = self.repo / ".agents/state"
+        store = EvidenceStore(state)
+        common = dict(snapshot=manifest["delivery_snapshot_sha256"], run_id="run-subset", harness_version=HARNESS_VERSION, change_set=manifest["change_set_sha256"])
+        store.write(**common, name="unit_tests", producer="run_tests_gate", status="PASS", evidence={"executed": 2})
+        store.write(**common, name="preflight", producer="preflight_check", status="PASS", evidence={})
+        store.write(**common, name="assemble", producer="run_gradle_task", status="PASS", evidence={"artifact_set_sha256": "f" * 64})
+        store.write(**common, name="reviews", producer="review_orchestrator", status="PASS", evidence={"reviewers": policy["reviewers"], "is_truncated": False, "blocking_findings": []})
+
+        # Subset verification passes because planned skills authorized compose-inspector even if not used
+        result = verify(self.repo, plan_path=plan_path, policy_path=policy_path, manifest_path=manifest_path, state_root=state, run_id="run-subset")
+        self.assertEqual("APPROVED", result["status"], result)
+
+        # But if policy deterministically required compose-inspector because code has @Composable,
+        # while the approved plan only authorized android-harness:
+        write(self.repo / "app/src/main/kotlin/A.kt", "import androidx.compose.runtime.Composable\n@Composable fun UI() {}\n")
+        manifest2 = build_manifest(self.repo)
+        classification2 = classify(self.repo)
+        policy2 = decide(classification2, KIT / "agents" / "skills")
+        self.assertIn("compose-inspector", [s["id"] for s in policy2["skills"]["skills"]])
+        policy_path2 = directory / "policy2.json"
+        manifest_path2 = directory / "manifest2.json"
+        atomic_write_json(policy_path2, policy2)
+        atomic_write_json(manifest_path2, manifest2)
+
+        # Plan has expected_surfaces covering COMPOSE_UI (no surface drift), but plan["skills"] was restricted to android-harness
+        restricted_skills_plan = create_plan(
+            self.repo, task_id="verify-subset", requested_outcome="Logic and UI",
+            expected_surfaces=["BUSINESS_LOGIC", "COMPOSE_UI"], expected_modules=[":app"],
+            skills=[s for s in broad_policy["skills"]["skills"] if s["id"] == "android-harness"],
+        )
+        restricted_skills_plan = approve(restricted_skills_plan, source="conversation", proof_reference="msg-restricted", enforcement_tier="RULE_ENFORCED")
+        restricted_skills_plan = begin(self.repo, restricted_skills_plan)
+        restricted_skills_plan["status"] = "VERIFYING"
+        save_plan(plan_path, restricted_skills_plan)
+
+        common2 = dict(snapshot=manifest2["delivery_snapshot_sha256"], run_id="run-compose", harness_version=HARNESS_VERSION, change_set=manifest2["change_set_sha256"])
+        store.write(**common2, name="unit_tests", producer="run_tests_gate", status="PASS", evidence={"executed": 2})
+        store.write(**common2, name="preflight", producer="preflight_check", status="PASS", evidence={})
+        store.write(**common2, name="assemble", producer="run_gradle_task", status="PASS", evidence={"artifact_set_sha256": "f" * 64})
+        store.write(**common2, name="reviews", producer="review_orchestrator", status="PASS", evidence={"reviewers": policy2["reviewers"], "is_truncated": False, "blocking_findings": []})
+
+        result = verify(self.repo, plan_path=plan_path, policy_path=policy_path2, manifest_path=manifest_path2, state_root=state, run_id="run-compose")
+        self.assertEqual("PLAN_APPROVAL_REQUIRED", result["status"], result)
+        self.assertTrue(any("compose-inspector" in b for b in result["blocked_by"]))
 
 
 class LifecycleTests(RepoCase):

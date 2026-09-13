@@ -51,11 +51,14 @@ class ZohoTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.ledger = Path(self.temp.name) / "operations.json"
-        self.env = mock.patch.dict(os.environ, {"ANDROID_HARNESS_ZOHO_LEDGER": str(self.ledger)})
-        self.env.start()
+        self._prev_ledger = os.environ.get("ANDROID_HARNESS_ZOHO_LEDGER")
+        os.environ["ANDROID_HARNESS_ZOHO_LEDGER"] = str(self.ledger)
 
     def tearDown(self):
-        self.env.stop()
+        if self._prev_ledger is None:
+            os.environ.pop("ANDROID_HARNESS_ZOHO_LEDGER", None)
+        else:
+            os.environ["ANDROID_HARNESS_ZOHO_LEDGER"] = self._prev_ledger
         self.temp.cleanup()
 
     def test_tool_names_remain_compatible(self):

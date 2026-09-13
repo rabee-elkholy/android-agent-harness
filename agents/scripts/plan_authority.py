@@ -79,9 +79,16 @@ SURFACE_ALIASES: dict[str, list[str]] = {
 DEFAULT_APP_SURFACES: list[str] = [
     "BUSINESS_LOGIC",
     "COMPOSE_UI",
+    "COROUTINES",
     "XML_UI",
     "RESOURCE_UI",
 ]
+
+NON_DRIFTING_SURFACES: set[str] = {"TEST_ONLY", "DOCS"}
+CODE_SURFACES: set[str] = {
+    "BUSINESS_LOGIC", "COMPOSE_UI", "XML_UI", "NETWORK",
+    "PERSISTENCE", "DEVICE_API", "NAVIGATION", "ROOM_SCHEMA",
+}
 
 
 def normalize_expected_surfaces(raw_surfaces: list[str] | None) -> list[str]:
@@ -255,8 +262,14 @@ def check_material_drift(plan: dict, actual_surfaces: list[str], actual_modules:
     actual_surface_set = set(normalize_expected_surfaces(actual_surfaces))
     expected_modules = set(plan.get("expected_modules") or [])
     actual_module_set = set(actual_modules or [])
+
+    unplanned_surfaces = actual_surface_set - expected_surfaces
+    unplanned_surfaces -= NON_DRIFTING_SURFACES
+    if "COROUTINES" in unplanned_surfaces and (expected_surfaces & CODE_SURFACES):
+        unplanned_surfaces.remove("COROUTINES")
+
     return sorted(
-        [f"surface:{item}" for item in actual_surface_set - expected_surfaces]
+        [f"surface:{item}" for item in unplanned_surfaces]
         + [f"module{item}" if item.startswith(":") else f"module:{item}" for item in actual_module_set - expected_modules]
     )
 

@@ -228,9 +228,19 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         return _blocked(block_status, [policy_error], checks)
     agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
     planned_skills = {(item.get("id"), item.get("sha256")) for item in plan.get("skills") or []}
+    planned_ids = {item.get("id") for item in plan.get("skills") or []}
     selected_skills = {(item.get("id"), item.get("sha256")) for item in (policy.get("skills") or {}).get("skills") or []}
-    if planned_skills != selected_skills:
-        return _blocked("PLAN_APPROVAL_REQUIRED", ["mandatory skill selection drifted from the approved plan"], checks)
+    benign_skills = {"android-harness", "test-driven-development", "kotlin-coroutines-expert"}
+    missing_skills = set()
+    for skill_id, sha in selected_skills:
+        if (skill_id, sha) in planned_skills:
+            continue
+        if skill_id not in planned_ids and skill_id in benign_skills:
+            continue
+        missing_skills.add(skill_id)
+    if missing_skills:
+        missing_ids = sorted(missing_skills)
+        return _blocked("PLAN_APPROVAL_REQUIRED", [f"mandatory skill selection drifted from the approved plan: {', '.join(missing_ids)}"], checks)
     for skill in (policy.get("skills") or {}).get("skills") or []:
         path = agents_root / str(skill.get("path") or "")
         if not path.is_file() or sha256_file(path) != skill.get("sha256"):

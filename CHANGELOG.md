@@ -5,6 +5,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.22] - 2026-09-13
+
+### Skill Subset Authorization, Benign Scope Drift Exemption, and Windows Test Isolation
+
+- **Subset Skill Matching in Final Verifier (`final_verifier.py`)**: Replaced strict set equality (`planned_skills != selected_skills`) with authorization subset matching. Approved tasks can safely utilize a subset of planned skills without triggering spurious `PLAN_APPROVAL_REQUIRED` locks when implementation surfaces require fewer tools than initially anticipated.
+- **Benign Engineering Skills & Test Autonomy (`final_verifier.py`, `plan_authority.py`)**: Exempted unit/instrumented tests (`TEST_ONLY`) and documentation (`DOCS`) from material scope drift. Writing unit tests to verify implementation changes no longer triggers unplanned surface locks or forces plan re-drafting.
+- **Code-Scoped Coroutines Alignment (`plan_authority.py`)**: Recognized standard Kotlin structured concurrency (`COROUTINES`) as a natural implementation technique when code surfaces (`BUSINESS_LOGIC`, `COMPOSE_UI`, etc.) are approved. Added `COROUTINES` to `DEFAULT_APP_SURFACES` to align default scaffolding with modern Android development.
+- **Strict Invariant & Sensitive Boundary Preservation**: Maintained 100% strict verification and approval enforcement on critical surfaces (`BILLING`, `AUTH`, `SECURITY`, `SENSITIVE_DATA`, `CRYPTO`), architecture boundaries (`ROOM_SCHEMA`, `MANIFEST_PERMISSION`, `BUILD_CONFIG`, `NATIVE_CODE`, `PUBLIC_API`), module boundaries, and cryptographic skill file hashes.
+- **Windows Environment Variable Isolation in Zoho Selftest (`_zoho_selftest.py`)**: Replaced global `mock.patch.dict(os.environ)` with targeted setting and unsetting of `ANDROID_HARNESS_ZOHO_LEDGER` to prevent Windows / Python 3.14 `ValueError` when host environment metadata exceeds 32,767 characters.
+- **Comprehensive Selftest Coverage (`_vnext_selftest.py`)**: Added deterministic regression tests verifying subset skill acceptance, unapproved skill gating, benign test exemptions, and code-scoped coroutines.
+
 ## [1.0.21] - 2026-09-13
 
 ### Superpowers Skill Hardening, Reviewer Finding Validation, and Documentation Precision
