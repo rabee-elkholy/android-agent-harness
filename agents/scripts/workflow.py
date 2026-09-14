@@ -145,6 +145,7 @@ def draft(args: argparse.Namespace) -> dict:
         repo,
         task_id=args.task_id,
         task_kind=resolved_kind,
+        planning_depth=str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper(),
         requested_outcome=args.outcome,
         expected_surfaces=expected,
         expected_modules=[module_id(item) for item in (args.expected_modules or "").split(",") if item.strip()],
@@ -368,6 +369,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "policy": str(policy_path),
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "change_set_sha256": manifest["change_set_sha256"],
+        "external_inputs_sha256": manifest.get("external_inputs_sha256") or "",
         "verification_recipes": recipes,
         "created_at": utc_now(),
     }
@@ -631,6 +633,11 @@ def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None)
     manifest = build_manifest(repo)
     for key in ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256"):
         curr_val = current.get(key)
+        if not curr_val and key == "external_inputs_sha256" and current.get("manifest"):
+            try:
+                curr_val = read_json(Path(current["manifest"])).get("external_inputs_sha256")
+            except Exception:
+                pass
         live_val = manifest.get(key)
         if curr_val and live_val and curr_val != live_val:
             raise ValidationError(
@@ -645,17 +652,29 @@ def deliver_task(
     *,
     allow_dirty_tree: bool = False,
     require_clean_tree: bool | None = None,
+    source: str | None = None,
 ) -> dict:
     if isinstance(args_or_repo, (str, Path)):
         repo = Path(args_or_repo).resolve()
         tid = str(task_id or "")
+        auth_source = source or os.environ.get("HARNESS_AUTHORITY_SOURCE")
+        is_dirty_override = bool(allow_dirty_tree)
+        if is_dirty_override and auth_source != "developer_terminal":
+            raise ValidationError(
+                "Dirty-tree delivery override requires explicit developer terminal authority via '--source developer_terminal'."
+            )
         clean = require_clean_tree if require_clean_tree is not None else (not allow_dirty_tree)
     else:
         args = args_or_repo
         repo = Path(args.repo).resolve()
         tid = str(args.task_id)
-        allow_dirty = getattr(args, "allow_dirty_tree", False)
-        clean = require_clean_tree if require_clean_tree is not None else (not allow_dirty)
+        auth_source = getattr(args, "source", None) or os.environ.get("HARNESS_AUTHORITY_SOURCE")
+        is_dirty_override = bool(getattr(args, "allow_dirty_tree", False) or getattr(args, "developer_allow_dirty_tree", False))
+        if is_dirty_override and auth_source != "developer_terminal":
+            raise ValidationError(
+                "Dirty-tree delivery override requires explicit developer terminal authority via '--source developer_terminal'."
+            )
+        clean = require_clean_tree if require_clean_tree is not None else (not is_dirty_override)
     plan, _ = finalize_ready_delivery(repo, tid, require_clean_tree=clean)
     return plan
 
@@ -678,6 +697,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=("AUTO", "BUG", "FEATURE", "REFACTOR", "auto", "bug", "feature", "refactor"),
         default="AUTO",
         help="Task kind classification: AUTO, BUG, FEATURE, or REFACTOR",
+    )
+    command.add_argument(
+        "--planning-depth",
+        choices=("BOUNDED", "ARCHITECTURAL", "bounded", "architectural"),
+        default="BOUNDED",
+        help="Planning depth scope: BOUNDED (default) or ARCHITECTURAL",
     )
     command.add_argument("--expected-surfaces")
     command.add_argument("--expected-modules")
@@ -719,6 +744,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)
     command = sub.add_parser("deliver", parents=[common])
     command.add_argument("--allow-dirty-tree", action="store_true", help="Explicit developer override to deliver while verified task files remain uncommitted")
+    command.add_argument("--developer-allow-dirty-tree", action="store_true", help="Explicit developer-terminal override to deliver while verified task files remain uncommitted")
+    command.add_argument("--source", choices=("developer_terminal", "host_native", "conversation"), default=None, help="Authority source for delivery override")
     command.set_defaults(handler=deliver_task)
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)

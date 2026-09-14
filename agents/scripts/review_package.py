@@ -245,14 +245,20 @@ def generate_task_brief(
     })
     changed_paths = [str(item.get("path") or "") for item in changes if item.get("path")]
 
+    req_outcome = plan.get('requested_outcome') or plan.get('outcome') or 'Approved implementation changes'
+    task_kind = str(plan.get('task_kind') or plan.get('kind') or 'FEATURE').upper()
+    expected_surfaces = plan.get('expected_surfaces') or policy.get('surfaces') or []
+    expected_modules = plan.get('expected_modules') or []
+
     brief_lines = [
         f"# LEAN TASK BRIEF: {role_info['title']} (`{reviewer}`)",
         f"**Task ID**: {task_id} | **Run ID**: {metadata.get('run_id')} | **Package SHA**: `{pkg_sha12}`",
         "",
         "## 1. Approved Objective & Scope",
-        f"- **Outcome**: {plan.get('outcome') or 'Approved implementation changes'}",
-        f"- **Task Kind**: {plan.get('kind') or 'FEATURE'}",
-        f"- **Expected Surfaces**: {', '.join(policy.get('surfaces') or [])}",
+        f"- **Outcome**: {req_outcome}",
+        f"- **Task Kind**: {task_kind}",
+        f"- **Expected Surfaces**: {', '.join(expected_surfaces) or 'NONE'}",
+        f"- **Expected Modules**: {', '.join(expected_modules) or 'NONE'}",
         "",
         "## 2. Reviewer Specialty & Directives",
         f"- **Role Focus**: {role_info['focus']}",

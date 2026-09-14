@@ -4,6 +4,25 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.0.31] - 2026-09-14
+
+### Airtight Authority Safeguards, Reviewer Portability, and Defect Binding
+
+- **Universal Model Portability & Global Kill Switch (`review_execution.py`, `pre_tool_safety.py`)**:
+  - Decoupled model resolution completely: core has zero hardcoded model providers. Default mapping is `inherit` with explicit host route configuration.
+  - Enforced `ALLOW_MODEL_ESCALATION=False` as a true global kill switch forcing all reviewers to `inherit`.
+  - Protected `~/.android-harness` from model tool mutations.
+- **Strict Human Authority Barriers (`run_device.py`, `workflow.py`, `pre_tool_safety.py`)**:
+  - Restricted device verification sign-off (`run_device.py signoff`) to `--source developer_terminal` or trusted host token for `PASS` verdicts; denied from model tool invocations in `pre_tool_safety.py`.
+  - Restricted dirty-tree delivery override (`--allow-dirty-tree`) to `--source developer_terminal` and denied from model tool invocations.
+- **Architectural Planning Depth & Spec Routing (`plan_authority.py`, `workflow.py`, `final_verifier.py`)**:
+  - Made `planning_depth` (`BOUNDED` vs `ARCHITECTURAL`) an authoritative, hashed field in `plan.json` (`plan_sha256`), deterministically routing `spec-compliance-agent`.
+- **Authoritative Task Briefs & Freshness Assertions (`review_package.py`, `workflow.py`)**:
+  - Pinned lean task briefs to authoritative `requested_outcome`, `task_kind`, expected modules, and expected surfaces.
+  - Persisted `external_inputs_sha256` in `current-run.json` and validated across run lifecycles.
+- **Empirical Defect Binding & Exact Artifact Chains (`final_verifier.py`, `run_device.py`)**:
+  - Bound RED defect names and fingerprints to GREEN verification for `BUG` tasks; unresolved defects remaining in `new_regressions` fail verification.
+  - Enforced exact artifact set chain validation across `assemble == install == launch == signoff`.
 
 ## [1.0.30] - 2026-09-14
 

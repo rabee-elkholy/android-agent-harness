@@ -41,6 +41,41 @@ def _configured_project_kind() -> str:
     return value if value in ("application", "library") else "application"
 
 
+def verify_task(repo: Path, task_id: str) -> dict:
+    from workflow import task_dir, state_root
+    directory = task_dir(repo, task_id)
+    current = read_json(directory / "current-run.json")
+    manifest_p = current.get("manifest")
+    if manifest_p and Path(manifest_p).exists():
+        manifest_path = Path(manifest_p)
+    elif (directory / f"manifest-{current.get('run_id')}.json").exists():
+        manifest_path = directory / f"manifest-{current.get('run_id')}.json"
+    elif (directory / "manifest.json").exists():
+        manifest_path = directory / "manifest.json"
+    else:
+        manifest_path = Path(manifest_p) if manifest_p else (directory / "manifest.json")
+
+    policy_p = current.get("policy")
+    if policy_p and Path(policy_p).exists():
+        policy_path = Path(policy_p)
+    elif (directory / f"policy-{current.get('run_id')}.json").exists():
+        policy_path = directory / f"policy-{current.get('run_id')}.json"
+    elif (directory / "policy.json").exists():
+        policy_path = directory / "policy.json"
+    else:
+        policy_path = Path(policy_p) if policy_p else (directory / "policy.json")
+
+    return verify(
+        repo,
+        plan_path=directory / "plan.json",
+        policy_path=policy_path,
+        manifest_path=manifest_path,
+        state_root=state_root(repo),
+        run_id=str(current["run_id"]),
+    )
+
+
+
 def _blocked(status: str, reasons: list[str], checks: list[dict]) -> dict:
     return {"schema_version": 1, "status": status, "blocked_by": reasons, "checks": checks}
 
@@ -280,6 +315,17 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             art_err = None
             if not signoff_ev.get("proof_reference_sha256") and not signoff_ev.get("proof_reference"):
                 art_err = "device sign-off proof reference is missing"
+            # Exact artifact chain validation: assemble == install == signoff
+            install_rec, _ = _validate_artifact(store, snapshot, change_set, run_id, "device_install", harness_version)
+            if install_rec:
+                install_ev = install_rec.get("evidence") or {}
+                inst_sha = str(install_ev.get("artifact_set_sha256") or "")
+                sign_sha = str(signoff_ev.get("artifact_set_sha256") or "")
+                if inst_sha and sign_sha and inst_sha != sign_sha:
+                    art_err = f"device sign-off artifact mismatch: signoff ({sign_sha[:12]}) != device_install ({inst_sha[:12]})"
+            appr_source = str(signoff_ev.get("approval_source") or "")
+            if appr_source and appr_source not in ("developer_terminal", "host_native", "conversation"):
+                art_err = f"untrusted device signoff approval source: '{appr_source}'"
             if art_err:
                 checks.append({"name": "device_signoff", "status": "FAIL", "detail": art_err})
                 reasons.append(art_err)
@@ -290,27 +336,61 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     if is_bug:
         debug_ev_path = task_directory / "debug-evidence.json"
         has_repro = False
+        repro_defect_ids: set[str] = set()
+        repro_classes: set[str] = set()
         if debug_ev_path.is_file():
             try:
                 c = read_json(debug_ev_path)
-                has_repro = any(e.get("kind") in ("reproduction", "red_evidence", "failing_test") for e in c.get("entries", []))
+                for e in c.get("entries", []):
+                    kind = str(e.get("kind") or "").lower()
+                    if kind in ("reproduction", "red_evidence", "failing_test"):
+                        has_repro = True
+                        if e.get("test_name"):
+                            repro_defect_ids.add(str(e.get("test_name")))
+                        if e.get("fingerprint"):
+                            repro_defect_ids.add(str(e.get("fingerprint")))
+                    elif kind in ("manual_repro", "device_repro", "log_repro"):
+                        has_repro = True
+                        repro_classes.add(kind.upper())
             except Exception:
                 pass
-        if not has_repro:
-            try:
-                red_rec, red_err = _validate_artifact(store, snapshot, change_set, run_id, "red_evidence", harness_version)
-                if red_err is None and str(red_rec.get("status") or "").upper() == "PASS":
-                    has_repro = True
-            except Exception:
-                pass
-        if has_repro:
-            checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present for BUG task"})
-        elif plan.get("test_strategy") in ("none", ""):
-            checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable RED reproduction not required (test_strategy=none)"})
-        else:
-            err_msg = "applicable BUG task requires bound RED reproduction/failing-test evidence before fix"
-            checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
-            reasons.append(err_msg)
+        try:
+            red_rec, red_err = _validate_artifact(store, snapshot, change_set, run_id, "red_evidence", harness_version)
+            if red_err is None and str(red_rec.get("status") or "").upper() == "PASS":
+                has_repro = True
+                rev = red_rec.get("evidence") or {}
+                for t in rev.get("failed_tests") or []:
+                    if isinstance(t, dict):
+                        if t.get("test_name"):
+                            repro_defect_ids.add(str(t.get("test_name")))
+                        if t.get("fingerprint"):
+                            repro_defect_ids.add(str(t.get("fingerprint")))
+        except Exception:
+            pass
+
+        # Validate that defects captured in RED do not remain failing in GREEN
+        failed_binding = False
+        if repro_defect_ids:
+            unit_test_rec, ut_err = _validate_artifact(store, snapshot, change_set, run_id, "unit_tests", harness_version)
+            if unit_test_rec and ut_err is None:
+                ut_ev = unit_test_rec.get("evidence") or {}
+                new_regs = set(ut_ev.get("new_regressions") or [])
+                still_failing = repro_defect_ids & new_regs
+                if still_failing:
+                    failed_binding = True
+                    err_msg = f"RED defect(s) still failing in GREEN verification: {', '.join(sorted(still_failing))}"
+                    checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+                    reasons.append(err_msg)
+
+        if not failed_binding:
+            if has_repro:
+                checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present and resolved for BUG task"})
+            elif plan.get("test_strategy") in ("none", "") and (repro_classes or not any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE") for s in (policy.get("surfaces") or []))):
+                checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable test-bound RED reproduction exempted (non-code surface or alternate reproduction declared)"})
+            else:
+                err_msg = "applicable BUG task requires bound RED reproduction/failing-test evidence before fix"
+                checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+                reasons.append(err_msg)
 
     reviewers = set(policy.get("reviewers") or [])
     review_record: dict | None = None

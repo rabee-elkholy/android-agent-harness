@@ -270,15 +270,21 @@ def reviewer_capability_for(
     return CAPABILITY_STANDARD, "MEDIUM"
 
 
-def review_execution_requirements(policy: dict, plan: dict | None = None, round_number: int | None = None) -> dict:
+def review_execution_requirements(
+    policy: dict,
+    plan: dict | None = None,
+    round_number: int | None = None,
+    changed_modules_count: int | None = None,
+) -> dict:
     """Derive the full execution profile mapping for all required reviewers in a policy."""
     surfaces = policy.get("surfaces") or []
     severity = policy.get("severity") or "HIGH"
     reviewers = policy.get("reviewers") or []
     finding_owners = set((policy.get("later_round_source") or {}).get("finding_owners") or [])
     planning_depth = str((plan or {}).get("planning_depth") or "BOUNDED")
-    changed_modules = (plan or {}).get("changed_modules") or []
-    changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
+    if changed_modules_count is None:
+        raw_modules = (plan or {}).get("changed_modules") or []
+        changed_modules_count = len(raw_modules) if isinstance(raw_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
 
     if round_number is None:
         round_number = int(policy.get("review_round") or (((plan or {}).get("review_rounds") or 0) + 1))

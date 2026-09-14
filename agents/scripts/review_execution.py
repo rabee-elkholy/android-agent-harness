@@ -47,13 +47,12 @@ def load_host_model_routes(host: str) -> dict[str, str]:
     try:
         from _product import HOST_MODEL_ROUTES
         if isinstance(HOST_MODEL_ROUTES, dict) and host_key in HOST_MODEL_ROUTES:
-            return HOST_MODEL_ROUTES[host_key]
+            return {str(k).upper(): str(v) for k, v in HOST_MODEL_ROUTES[host_key].items()}
     except Exception:
         pass
 
-    if host_key == "antigravity":
-        return {"STANDARD": "inherit", "STRONG": "pro"}
-
+    # Core default: no exact provider/model literal is required by core.
+    # Unknown host or missing route config -> empty mapping -> inherit
     return {}
 
 
@@ -75,32 +74,60 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
     except Exception:
         allow_escalation = False
 
+    env_escalation = os.environ.get("HARNESS_ALLOW_MODEL_ESCALATION")
+    if env_escalation is not None:
+        allow_escalation = env_escalation.strip().lower() in ("1", "true", "yes", "on")
+
+    # Derive actual changed modules from immutable manifest
+    module_count = 1
+    manifest_path = Path(current.get("manifest") or "")
+    if manifest_path.is_file():
+        try:
+            from plan_authority import changed_modules
+            manifest_data = read_json(manifest_path)
+            modules = changed_modules(repo, manifest_data)
+            module_count = max(1, len(modules))
+        except Exception:
+            pass
+
     round_number = int(policy.get("review_round") or (((plan or {}).get("review_rounds") or 0) + 1))
-    requirements = review_execution_requirements(policy, plan=plan, round_number=round_number)
+    requirements = review_execution_requirements(
+        policy,
+        plan=plan,
+        round_number=round_number,
+        changed_modules_count=module_count,
+    )
     host_routes = load_host_model_routes(host)
+    run_id = str(current.get("run_id") or "")
+    pkg_dir = directory / f"review-{run_id}"
 
     resolved_reviewers = {}
     for rev, req in requirements.get("reviewers", {}).items():
         cap = req["requested_capability"]
         pref_model = "inherit"
-        res_status = "STANDARD_MAPPING"
+        res_status = "INHERIT_FALLBACK"
 
-        if cap == CAPABILITY_STRONG:
-            if allow_escalation and host_routes.get("STRONG"):
-                pref_model = host_routes["STRONG"]
-                res_status = "TRUSTED_MAPPING"
-            else:
-                pref_model = "inherit"
-                res_status = "INHERIT_FALLBACK"
+        # Global Kill Switch: when escalation is disabled, ALL reviewers unconditionally inherit
+        if not allow_escalation:
+            pref_model = "inherit"
+            res_status = "INHERIT_FALLBACK"
+        elif cap == CAPABILITY_STRONG and host_routes.get("STRONG"):
+            pref_model = host_routes["STRONG"]
+            res_status = "TRUSTED_MAPPING" if pref_model != "inherit" else "INHERIT_FALLBACK"
+        elif cap == CAPABILITY_STANDARD and host_routes.get("STANDARD"):
+            pref_model = host_routes["STANDARD"]
+            res_status = "TRUSTED_MAPPING" if pref_model != "inherit" else "STANDARD_MAPPING"
         else:
-            pref_model = host_routes.get("STANDARD", "inherit")
-            res_status = "STANDARD_MAPPING" if pref_model == "inherit" else "TRUSTED_MAPPING"
+            pref_model = "inherit"
+            res_status = "STANDARD_MAPPING" if cap == CAPABILITY_STANDARD else "INHERIT_FALLBACK"
 
+        brief_file = str(pkg_dir / f"brief-{rev}.md") if (pkg_dir / f"brief-{rev}.md").is_file() else (str(pkg_dir / "review-package.md") if (pkg_dir / "review-package.md").is_file() else "")
         resolved_reviewers[rev] = {
             **req,
             "preferred_model": pref_model,
             "fallback_model": "inherit",
             "resolution": res_status,
+            "brief_path": brief_file,
         }
 
     return {
@@ -109,6 +136,7 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
         "round_number": round_number,
         "host": host,
         "allow_model_escalation": allow_escalation,
+        "package_dir": str(pkg_dir) if pkg_dir.is_dir() else "",
         "reviewers": resolved_reviewers,
     }
 

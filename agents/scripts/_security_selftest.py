@@ -1,6 +1,7 @@
 """Adversarial, offline security checks for vNext boundaries and bridges."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -513,11 +514,12 @@ class SecurityTests(unittest.TestCase):
             self.assertEqual("inherit", prof_default["reviewers"]["security-reviewer-agent"]["preferred_model"])
             self.assertEqual("inherit", prof_default["reviewers"]["convention-reviewer-agent"]["preferred_model"])
 
-        # When ALLOW_MODEL_ESCALATION is True: security-reviewer on AUTH escalates to pro
+        # When ALLOW_MODEL_ESCALATION is True: security-reviewer on AUTH escalates to pro when trusted route configured
         with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True):
-            prof_escalated = resolve_execution_profile(self.repo, task_id, host="antigravity")
-            self.assertEqual("pro", prof_escalated["reviewers"]["security-reviewer-agent"]["preferred_model"])
-            self.assertEqual("inherit", prof_escalated["reviewers"]["convention-reviewer-agent"]["preferred_model"])
+            with mock.patch("review_execution.load_host_model_routes", return_value={"STRONG": "pro"}):
+                prof_escalated = resolve_execution_profile(self.repo, task_id, host="antigravity")
+                self.assertEqual("pro", prof_escalated["reviewers"]["security-reviewer-agent"]["preferred_model"])
+                self.assertEqual("inherit", prof_escalated["reviewers"]["convention-reviewer-agent"]["preferred_model"])
 
     def test_DELIVERY_CLEAN_001(self):
         """DELIVERY-CLEAN-001: normal workflow deliver with dirty verified task files -> DENY"""
@@ -992,6 +994,322 @@ class SecurityTests(unittest.TestCase):
         )
         self.assertEqual([], later["carried_reviews"])
         self.assertEqual(set(previous["reviewers"]), set(later["reviewers"]))
+
+    def test_AUTH_SIGNOFF_001_model_call_denied(self):
+        """AUTH-SIGNOFF-001: lead agent cannot invoke device signoff directly through model tool call"""
+        from pre_tool_safety import DANGEROUS
+        signoff_rule = next((pattern for code, pattern in DANGEROUS if code == "signoff_authority"), None)
+        self.assertIsNotNone(signoff_rule)
+        self.assertTrue(signoff_rule.search("python .agents/scripts/run_device.py signoff --task-id T1 --proof-reference ok --verdict PASS"))
+        self.assertTrue(signoff_rule.search("python run_device.py signoff --task-id T1"))
+
+    def test_AUTH_SIGNOFF_002_freeform_proof_without_authority_denied(self):
+        """AUTH-SIGNOFF-002: free-form proof reference without developer_terminal authority returns failure"""
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="T-SIGNOFF-FAIL", proof_reference="looks great to me",
+            verdict="PASS", source=None, approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+            self.assertEqual(1, code)
+
+    def test_AUTH_DELIVER_001_dirty_override_denied(self):
+        """AUTH-DELIVER-001: model dirty-tree delivery override is denied by hook and requires developer_terminal"""
+        from pre_tool_safety import DANGEROUS
+        override_rule = next((pattern for code, pattern in DANGEROUS if code == "dirty_tree_delivery_override"), None)
+        self.assertIsNotNone(override_rule)
+        self.assertTrue(override_rule.search("python .agents/scripts/workflow.py deliver --repo . --task-id T1 --allow-dirty-tree"))
+        self.assertTrue(override_rule.search("python .agents/scripts/workflow.py deliver --repo . --task-id T1 --developer-allow-dirty-tree"))
+
+        from workflow import deliver_task, ValidationError
+        args = argparse.Namespace(repo=str(self.repo), task_id="T1", allow_dirty_tree=True, source=None)
+        with self.assertRaises(ValidationError) as ctx:
+            deliver_task(args)
+        self.assertIn("Dirty-tree delivery override requires explicit developer terminal authority", str(ctx.exception))
+
+    def test_MODEL_KILL_001_global_kill_switch_forces_inherit(self):
+        """MODEL-KILL-001: when ALLOW_MODEL_ESCALATION=False, every reviewer unconditionally resolves to inherit"""
+        from review_execution import resolve_execution_profile
+        task_id = "T-KILL-SWITCH"
+        task_d = self.repo / f"agents/state/tasks/{task_id}"
+        task_d.mkdir(parents=True, exist_ok=True)
+        (task_d / "plan.json").write_text(json.dumps({
+            "task_id": task_id, "status": "VERIFYING", "review_rounds": 0, "planning_depth": "BOUNDED",
+        }), encoding="utf-8")
+        policy_p = task_d / "policy.json"
+        policy_p.write_text(json.dumps({
+            "surfaces": ["AUTH", "SECURITY"], "severity": "HIGH",
+            "reviewers": ["security-reviewer-agent", "bug-reviewer-agent"],
+        }), encoding="utf-8")
+        (task_d / "current-run.json").write_text(json.dumps({
+            "task_id": task_id, "run_id": "r-kill", "policy": str(policy_p),
+            "delivery_snapshot_sha256": "snap1", "change_set_sha256": "cs1",
+        }), encoding="utf-8")
+
+        with mock.patch("review_execution.load_host_model_routes", return_value={"STRONG": "pro", "STANDARD": "flash"}):
+            with mock.patch.dict("os.environ", {"HARNESS_ALLOW_MODEL_ESCALATION": "0"}):
+                prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+                self.assertFalse(prof["allow_model_escalation"])
+                for rev, info in prof["reviewers"].items():
+                    self.assertEqual("inherit", info["preferred_model"], f"{rev} must inherit when kill switch active")
+                    self.assertEqual("INHERIT_FALLBACK", info["resolution"])
+
+    def test_MODEL_NAME_001_core_requires_no_provider_literals(self):
+        """MODEL-NAME-001: core review_execution requires no hardcoded provider/model literals"""
+        from review_execution import load_host_model_routes
+        routes = load_host_model_routes("unknown_or_empty_host")
+        self.assertEqual({}, routes)
+        # Even for antigravity without local config, core default is empty
+        ag_routes = load_host_model_routes("antigravity")
+        # In absence of ~/.android-harness/model_routes.json, returns empty
+        if not (Path.home() / ".android-harness" / "model_routes.json").is_file():
+            self.assertEqual({}, ag_routes)
+
+    def test_MODEL_CONFIG_001_model_cannot_write_route_config(self):
+        """MODEL-CONFIG-001: model file tools cannot write to user-level harness config or model routes"""
+        from pre_tool_safety import _safe_target
+        user_routes = str(Path.home() / ".android-harness" / "model_routes.json")
+        allowed, reason, _ = _safe_target(user_routes)
+        self.assertFalse(allowed)
+        self.assertIn("developer-owned and immutable", reason)
+
+    def test_SPEC_PROD_001_architectural_reaches_spec_reviewer(self):
+        """SPEC-PROD-001: architectural task reaches spec reviewer through normal lifecycle and planning_depth"""
+        from plan_authority import create_plan
+        from review_policy import decide
+        plan = create_plan(
+            self.repo, task_id="T-ARCH-SPEC", requested_outcome="Complete modular migration",
+            expected_surfaces=["BUSINESS_LOGIC", "NAVIGATION"], planning_depth="ARCHITECTURAL",
+        )
+        self.assertEqual("ARCHITECTURAL", plan.get("planning_depth"))
+        self.assertIn("planning_depth", plan)
+
+        policy = decide(
+            {"surfaces": ["BUSINESS_LOGIC", "NAVIGATION"], "severity": "HIGH", "changed_files": 10, "changed_lines": 300},
+            SCRIPTS.parent / "skills",
+            plan={"planning_depth": "ARCHITECTURAL"},
+        )
+        self.assertIn("spec-compliance-agent", policy["reviewers"])
+
+    def test_BRIEF_SCHEMA_001_uses_authoritative_plan_fields(self):
+        """BRIEF-SCHEMA-001: generate_task_brief uses requested_outcome, task_kind, and expected_modules"""
+        from review_package import generate_task_brief
+        pkg_dir = self.repo / "agents/state/pkg_test"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "requested_outcome": "Strictly implement user login flow",
+            "task_kind": "BUG",
+            "expected_modules": [":app", ":feature:auth"],
+            "expected_surfaces": ["AUTH", "BUSINESS_LOGIC"],
+        }
+        policy = {"surfaces": ["AUTH", "BUSINESS_LOGIC"]}
+        metadata = {"package_sha256": "1234567890abcdef" * 4, "run_id": "r1"}
+        brief_p = generate_task_brief(
+            self.repo, "T-BRIEF", "bug-reviewer-agent", pkg_dir,
+            metadata, plan, policy, [{"path": "app/Login.kt"}],
+        )
+        content = brief_p.read_text(encoding="utf-8")
+        self.assertIn("Strictly implement user login flow", content)
+        self.assertIn("**Task Kind**: BUG", content)
+        self.assertIn(":feature:auth", content)
+
+    def test_FRESH_EXT_001_external_input_drift_blocks(self):
+        """FRESH-EXT-001: external-input drift triggers STALE before review"""
+        from workflow import assert_active_run_fresh, ValidationError
+        task_id = "T-FRESH-EXT"
+        task_d = self.repo / f"agents/state/tasks/{task_id}"
+        task_d.mkdir(parents=True, exist_ok=True)
+        (task_d / "plan.json").write_text(json.dumps({"task_id": task_id, "status": "VERIFYING"}), encoding="utf-8")
+        from delivery_manifest import build_manifest
+        m = build_manifest(self.repo)
+        (task_d / "current-run.json").write_text(json.dumps({
+            "task_id": task_id, "run_id": "r1",
+            "delivery_snapshot_sha256": m["delivery_snapshot_sha256"],
+            "change_set_sha256": m["change_set_sha256"],
+            "external_inputs_sha256": "drifted_external_input_hash",
+        }), encoding="utf-8")
+        with self.assertRaises(ValidationError) as ctx:
+            assert_active_run_fresh(self.repo, task_id)
+        self.assertIn("STALE: repository external_inputs_sha256 modified", str(ctx.exception))
+
+    def test_REDGREEN_ID_001_defect_binding(self):
+        """REDGREEN-ID-001: failing test in RED that is resolved in GREEN passes, while unresolved fails"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify_task
+        from evidence_store import EvidenceStore
+
+        version_file = SCRIPTS.parent / "VERSION"
+        version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+        store = EvidenceStore(state_root(self.repo))
+
+        test_file = self.repo / "app/src/test/kotlin/com/example/LoginTest.kt"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("package com.example\nclass LoginTest {}\n", encoding="utf-8")
+
+        # Case A: Resolved in GREEN -> PASS
+        task_id_a = "t-rg-a"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_a,
+            outcome="Fix login defect A",
+            kind="BUG",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_a,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id_a))
+        prep_a = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_a))
+
+        task_a_dir = state_root(self.repo) / "tasks" / task_id_a
+        (task_a_dir / "debug-evidence.json").write_text(json.dumps({
+            "entries": [{"kind": "failing_test", "test_name": "com.example.LoginTest.testBadPassword"}],
+        }), encoding="utf-8")
+
+        store.write(
+            snapshot=prep_a["delivery_snapshot_sha256"],
+            run_id=prep_a["run_id"],
+            name="unit_tests",
+            producer="run_tests_gate",
+            harness_version=version,
+            change_set=prep_a["change_set_sha256"],
+            status="PASS",
+            evidence={"executed": 5, "failed": 0, "new_regressions": []},
+        )
+        res_a = verify_task(self.repo, task_id_a)
+        red_check_a = next((c for c in res_a["checks"] if c["name"] == "red_evidence"), None)
+        self.assertIsNotNone(red_check_a)
+        self.assertEqual("PASS", red_check_a["status"])
+
+        # Case B: Still failing in GREEN (in new_regressions) -> FAIL
+        task_id_b = "t-rg-b"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_b,
+            outcome="Fix login defect B",
+            kind="BUG",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_b,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id_b))
+        prep_b = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_b))
+
+        task_b_dir = state_root(self.repo) / "tasks" / task_id_b
+        (task_b_dir / "debug-evidence.json").write_text(json.dumps({
+            "entries": [{"kind": "failing_test", "test_name": "com.example.LoginTest.testBadPassword"}],
+        }), encoding="utf-8")
+
+        store.write(
+            snapshot=prep_b["delivery_snapshot_sha256"],
+            run_id=prep_b["run_id"],
+            name="unit_tests",
+            producer="run_tests_gate",
+            harness_version=version,
+            change_set=prep_b["change_set_sha256"],
+            status="PASS",
+            evidence={"executed": 5, "failed": 1, "new_regressions": ["com.example.LoginTest.testBadPassword"]},
+        )
+        res_b = verify_task(self.repo, task_id_b)
+        red_check_b = next((c for c in res_b["checks"] if c["name"] == "red_evidence"), None)
+        self.assertIsNotNone(red_check_b)
+        self.assertEqual("FAIL", red_check_b["status"])
+        self.assertIn("RED defect(s) still failing in GREEN verification", red_check_b["detail"])
+
+    def test_DEVICE_CHAIN_001_artifact_set_mismatch_fails(self):
+        """DEVICE-CHAIN-001: final_verifier rejects signoff if artifact_set_sha256 differs from device_install"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify_task
+        from evidence_store import EvidenceStore
+
+        task_id = "t-dev-chain"
+        ui_file = self.repo / "app/src/main/kotlin/com/example/UI.kt"
+        ui_file.parent.mkdir(parents=True, exist_ok=True)
+        ui_file.write_text("package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun MainView() {}\n", encoding="utf-8")
+
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Add UI component",
+            kind="FEATURE",
+            expected_surfaces="COMPOSE_UI,BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="launch",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+
+        store = EvidenceStore(state_root(self.repo))
+        version_file = SCRIPTS.parent / "VERSION"
+        version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+
+        snap = prep_res["delivery_snapshot_sha256"]
+        cs = prep_res["change_set_sha256"]
+        run_id = prep_res["run_id"]
+
+        store.write(
+            snapshot=snap, run_id=run_id, name="device_install", producer="run_device",
+            harness_version=version, change_set=cs, status="PASS",
+            evidence={"artifact_set_sha256": "artifact_hash_A"},
+        )
+        store.write(
+            snapshot=snap, run_id=run_id, name="device_launch", producer="run_device",
+            harness_version=version, change_set=cs, status="PASS",
+            evidence={"artifact_set_sha256": "artifact_hash_A"},
+        )
+        # Signoff recorded for a different artifact hash B
+        store.write(
+            snapshot=snap, run_id=run_id, name="device_signoff", producer="developer_approval",
+            harness_version=version, change_set=cs, status="PASS",
+            evidence={
+                "artifact_set_sha256": "artifact_hash_B_mismatch",
+                "proof_reference": "ok", "proof_reference_sha256": "proof",
+                "approval_source": "developer_terminal",
+            },
+        )
+        res = verify_task(self.repo, task_id)
+        signoff_chk = next((c for c in res["checks"] if c["name"] == "device_signoff"), None)
+        self.assertIsNotNone(signoff_chk)
+        self.assertEqual("FAIL", signoff_chk["status"])
+        self.assertIn("device sign-off artifact mismatch", signoff_chk["detail"])
 
 
 if __name__ == "__main__":

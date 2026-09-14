@@ -348,7 +348,8 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
 def _handle_signoff(args: argparse.Namespace) -> int:
     import os
     from mutation_guard import active_plan
-    from _vnext_common import read_json, canonical_sha256
+    from _vnext_common import read_json, canonical_sha256, ValidationError
+    from workflow import assert_active_run_fresh
     task_id = args.task_id
     if not task_id:
         try:
@@ -359,40 +360,74 @@ def _handle_signoff(args: argparse.Namespace) -> int:
     if not task_id:
         live_print("[FAIL] --task-id is required for device sign-off.", err=True)
         return 1
-    state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
-    current_path = state / "tasks" / task_id / "current-run.json"
-    if not current_path.is_file():
-        live_print(f"[FAIL] Verification run is not initialized for task '{task_id}'. Run prepare-verification first.", err=True)
-        return 1
-    current_run = read_json(current_path)
-    snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
-    run_id = str(current_run.get("run_id") or "")
-    change_set = str(current_run.get("change_set_sha256") or "")
-    plan_path = state / "tasks" / task_id / "plan.json"
-    plan = read_json(plan_path) if plan_path.is_file() else {}
+
+    # Invariant: human device sign-off must not be self-certified by the implementation agent
+    verdict = str(args.verdict or "PASS").upper()
+    source = getattr(args, "source", None) or os.environ.get("HARNESS_AUTHORITY_SOURCE")
+    if verdict == "PASS":
+        if not source or source not in ("developer_terminal", "host_native", "conversation"):
+            live_print(
+                "[FAIL] Device sign-off with verdict PASS requires explicit developer authority via "
+                "--source developer_terminal or host-native approval.",
+                err=True,
+            )
+            return 1
+        if source == "conversation" and not getattr(args, "approval_token", None):
+            live_print("[FAIL] Conversation device signoff requires a trusted host approval token.", err=True)
+            return 1
 
     proof_ref = str(args.proof_reference or "").strip()
     if not proof_ref:
         live_print("[FAIL] --proof-reference is required for device sign-off.", err=True)
         return 1
 
+    state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+    try:
+        current_run = assert_active_run_fresh(REPO, task_id)
+    except Exception as exc:
+        live_print(f"[FAIL] Active run freshness check failed for device sign-off: {exc}", err=True)
+        return 1
+
+    snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
+    run_id = str(current_run.get("run_id") or "")
+    change_set = str(current_run.get("change_set_sha256") or "")
+    plan_path = state / "tasks" / task_id / "plan.json"
+    plan = read_json(plan_path) if plan_path.is_file() else {}
+
     from evidence_store import EvidenceStore
     store = EvidenceStore(state)
     harness_version = _read_harness_version(REPO)
 
-    art_set_sha = ""
-    for name in ("device_install", "assemble"):
-        try:
-            rec = store.read(snapshot, run_id, name)
-            ev = rec.get("evidence") or {}
-            sha = str(ev.get("artifact_set_sha256") or (ev.get("artifact_set") or {}).get("artifact_set_sha256") or "")
-            if sha:
-                art_set_sha = sha
-                break
-        except Exception:
-            pass
+    # Artifact chain validation: device_install evidence must exist for this run
+    install_sha = ""
+    install_ev = {}
+    try:
+        rec_inst = store.read(snapshot, run_id, "device_install")
+        install_ev = rec_inst.get("evidence") or {}
+        install_sha = str(install_ev.get("artifact_set_sha256") or "")
+    except Exception:
+        pass
 
-    verdict = str(args.verdict or "PASS").upper()
+    if verdict == "PASS" and not install_sha:
+        live_print(f"[FAIL] Device sign-off requires prior successful device_install evidence for run {run_id[:12]}.", err=True)
+        return 1
+
+    assemble_sha = ""
+    try:
+        rec_asm = store.read(snapshot, run_id, "assemble")
+        assemble_ev = rec_asm.get("evidence") or {}
+        assemble_sha = str(assemble_ev.get("artifact_set_sha256") or (assemble_ev.get("artifact_set") or {}).get("artifact_set_sha256") or "")
+    except Exception:
+        pass
+
+    if assemble_sha and install_sha and assemble_sha != install_sha:
+        live_print(
+            f"[FAIL] Device sign-off artifact set mismatch: assemble ({assemble_sha[:12]}) != device_install ({install_sha[:12]}).",
+            err=True,
+        )
+        return 1
+
+    final_art_sha = install_sha or assemble_sha
     store.write(
         snapshot=snapshot,
         run_id=run_id,
@@ -401,17 +436,21 @@ def _handle_signoff(args: argparse.Namespace) -> int:
         harness_version=harness_version,
         change_set=change_set,
         status=verdict,
-        exit_code=0 if verdict == "PASS" else 1,
         evidence={
             "task_id": task_id,
             "plan_sha256": plan.get("plan_sha256") or "",
             "run_id": run_id,
             "delivery_snapshot_sha256": snapshot,
             "change_set_sha256": change_set,
-            "artifact_set_sha256": art_set_sha,
+            "artifact_set_sha256": final_art_sha,
+            "approval_source": source or "developer_terminal",
+            "enforcement_tier": "HARD_ENFORCED",
             "proof_reference": proof_ref,
             "proof_reference_sha256": canonical_sha256(proof_ref),
             "verdict": verdict,
+            "target_user": str(install_ev.get("user") or getattr(args, "user", None) or "0"),
+            "serial_hash": str(install_ev.get("serial_hash") or ""),
+            "application_id": str(install_ev.get("application_id") or APPLICATION_ID),
             "signer": os.environ.get("USERNAME") or os.environ.get("USER") or "developer",
         },
     )
@@ -439,6 +478,8 @@ def main() -> int:
     parser.add_argument("--task-id", default=None, help="Task ID for signoff")
     parser.add_argument("--proof-reference", default=None, help="Proof reference / reason for signoff")
     parser.add_argument("--verdict", choices=["PASS", "FAIL"], default="PASS", help="Signoff verdict")
+    parser.add_argument("--source", choices=["developer_terminal", "host_native", "conversation"], default=None, help="Authority source for signoff")
+    parser.add_argument("--approval-token", default=None, help="Trusted approval token from developer prompt")
     args = parser.parse_args()
 
     prereq_err = _check_device_prerequisites(args)

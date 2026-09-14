@@ -71,6 +71,8 @@ DANGEROUS = (
     ("inline_interpreter", re.compile(r"\b(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-c|-m\s+(?!compileall\b))\b|\bnode(?:\.exe)?\s+-e\b|\bperl(?:\.exe)?\s+-e\b|\bruby(?:\.exe)?\s+-e\b", re.I)),
     ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli\.py)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
     ("review_override_provenance", re.compile(r"record_review\.py\b.*--override-reviews\b.*--source\s+developer_terminal\b", re.I)),
+    ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
+    ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
 )
 RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", re.I)
 ALLOWED_GRADLE_WRAPPER = re.compile(r"(?:run_gradle_task|run_tests_gate)\.py\b", re.I)
@@ -149,6 +151,9 @@ def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
         return False, "Mutating file tool did not expose a target path; refusing an unscoped write.", False
     raw = Path(raw_target).expanduser()
     resolved = raw.resolve() if raw.is_absolute() else (REPO / raw).resolve()
+    user_harness = (Path.home() / ".android-harness").resolve()
+    if resolved == user_harness or user_harness in resolved.parents:
+        return False, "User-level Android Harness configuration and model routes are developer-owned and immutable to model file tools.", False
     try:
         relative = resolved.relative_to(REPO.resolve()).as_posix()
     except ValueError:
