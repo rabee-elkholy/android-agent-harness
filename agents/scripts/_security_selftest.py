@@ -7,9 +7,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
 ENGINE = SCRIPTS / "pre_tool_safety.py"
 CLAUDE = SCRIPTS / "cc_pre_tool_safety.py"
 COPILOT = SCRIPTS / "copilot_pre_tool_safety.py"
@@ -20,6 +22,9 @@ class SecurityTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp.name)
         subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
         state = self.repo / "agents/state/tasks/t"
         state.mkdir(parents=True)
         plan = {"plan_id": "p", "status": "IMPLEMENTING", "execution_nonce": "n", "approval": {"single_use_nonce": "n"}}
@@ -440,10 +445,19 @@ class SecurityTests(unittest.TestCase):
         plan_file.write_text(json.dumps(plan), encoding="utf-8")
 
         policy = {"reviewers": ["security", "correctness"], "surfaces": ["AUTH", "BUSINESS_LOGIC"]}
-        policy_file = self.repo / "policy.json"
+        policy_file = self.repo / f"agents/state/tasks/{task_id}/policy.json"
         policy_file.write_text(json.dumps(policy), encoding="utf-8")
+        from delivery_manifest import build_manifest
+        manifest = build_manifest(self.repo)
         current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
-        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+        current_file.write_text(json.dumps({
+            "task_id": task_id,
+            "policy": str(policy_file),
+            "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+            "change_set_sha256": manifest["change_set_sha256"],
+            "external_inputs_sha256": manifest["external_inputs_sha256"],
+            "run_id": "r1",
+        }), encoding="utf-8")
 
         proc = subprocess.run(
             [sys.executable, str(SCRIPTS / "record_review.py"), "--repo", str(self.repo), "--task", task_id, "--override-reviews", "--source", "developer_terminal", "--proof-reference", "bypassed"],
@@ -505,25 +519,293 @@ class SecurityTests(unittest.TestCase):
             self.assertEqual("pro", prof_escalated["reviewers"]["security-reviewer-agent"]["preferred_model"])
             self.assertEqual("inherit", prof_escalated["reviewers"]["convention-reviewer-agent"]["preferred_model"])
 
-    def test_spec_compliance_reviewer_routing(self):
-        # SPEC-001: Spec compliance reviewer routed for ARCHITECTURAL planning depth
-        sys.path.insert(0, str(SCRIPTS))
+    def test_DELIVERY_CLEAN_001(self):
+        """DELIVERY-CLEAN-001: normal workflow deliver with dirty verified task files -> DENY"""
+        from workflow import deliver_task
+        from _vnext_common import ValidationError
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_delivery_snapshot_sha256"] = "clean_snap"
+        plan["expected_files"] = ["app/src/main/Dirty.kt"]
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        dirty = self.repo / "app/src/main/Dirty.kt"
+        dirty.parent.mkdir(parents=True, exist_ok=True)
+        dirty.write_text("// uncommitted", encoding="utf-8")
+
+        with self.assertRaises(ValidationError) as ctx:
+            deliver_task(self.repo, task_id, require_clean_tree=True)
+        self.assertIn("with dirty working tree", str(ctx.exception))
+
+    def test_HEAD_LINEAGE_001(self):
+        """HEAD-LINEAGE-001: HEAD changes after begin and before prepare-verification -> BLOCK"""
+        from workflow import prepare_verification
+        from _vnext_common import ValidationError
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "IMPLEMENTING"
+        plan["repository"] = {"head": "0123456789abcdef0123456789abcdef01234567", "branch": "main"}
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        class DummyArgs:
+            task_id = "t"
+            force = False
+
+        with self.assertRaises(ValidationError) as ctx:
+            prepare_verification(self.repo, DummyArgs())
+        self.assertIn("lineage mismatch", str(ctx.exception))
+
+    def test_DRIFT_EARLY_001(self):
+        """DRIFT-EARLY-001: material surface/module drift -> no new verification run"""
+        from workflow import prepare_verification
+        from _vnext_common import ValidationError, git_text
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
+        head = git_text(self.repo, "rev-parse", "HEAD")
+        branch = git_text(self.repo, "rev-parse", "--abbrev-ref", "HEAD")
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "IMPLEMENTING"
+        plan["surfaces"] = ["DOCS"]
+        plan["expected_surfaces"] = ["DOCS"]
+        plan["modules"] = [":app"]
+        plan["expected_modules"] = [":app"]
+        plan["repository"] = {"head": head, "branch": branch}
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        auth_file = self.repo / "app/src/main/Auth.kt"
+        auth_file.parent.mkdir(parents=True, exist_ok=True)
+        auth_file.write_text("class AuthManager { val token: String = \"\" }", encoding="utf-8")
+
+        class DummyArgs:
+            task_id = "t"
+            force = False
+
+        with self.assertRaises(ValidationError) as ctx:
+            prepare_verification(self.repo, DummyArgs())
+        self.assertIn("PLAN_APPROVAL_REQUIRED: material drift detected", str(ctx.exception))
+        current_p = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
+        self.assertFalse(current_p.exists())
+
+    def test_REVIEW_FRESH_001(self):
+        """REVIEW-FRESH-001: repo changes after package freeze -> package generation/ingestion STALE"""
+        from workflow import assert_active_run_fresh
+        from _vnext_common import ValidationError
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "VERIFYING"
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
+        current_file.write_text(json.dumps({
+            "task_id": task_id,
+            "status": "VERIFYING",
+            "run_id": "r1",
+            "delivery_snapshot_sha256": "old_snapshot",
+            "change_set_sha256": "old_cs",
+            "external_inputs_sha256": "old_ext",
+            "manifest": str(self.repo / "agents/state/manifest.json"),
+            "policy": str(self.repo / "policy.json"),
+        }), encoding="utf-8")
+
+        with self.assertRaises(ValidationError) as ctx:
+            assert_active_run_fresh(self.repo, task_id)
+        self.assertIn("stale", str(ctx.exception).lower())
+
+    def test_OVERRIDE_SENSITIVE_001(self):
+        """OVERRIDE-SENSITIVE-001: all paths reject sensitive semantic-review override"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify
+        from evidence_store import EvidenceStore
+
+        task_id = "t-override-sens"
+        auth_file = self.repo / "app/src/main/kotlin/com/example/Auth.kt"
+        auth_file.parent.mkdir(parents=True, exist_ok=True)
+        auth_file.write_text("package com.example\nclass AuthenticationManager { val token = \"\" }\n", encoding="utf-8")
+
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Add auth storage",
+            kind="FEATURE",
+            expected_surfaces="AUTH,BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        plan_file = state_root(self.repo) / "tasks" / task_id / "plan.json"
+
+        store = EvidenceStore(state_root(self.repo))
+        version_file = SCRIPTS.parent / "VERSION"
+        harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+        store.write(
+            snapshot=prep_res["delivery_snapshot_sha256"],
+            run_id=prep_res["run_id"],
+            name="reviews",
+            producer="developer_approval",
+            harness_version=harness_version,
+            change_set=prep_res["change_set_sha256"],
+            status="PASS",
+            evidence={
+                "developer_override": True,
+                "source": "developer_terminal",
+                "proof_reference_sha256": "p" * 64,
+            },
+        )
+
+        res = verify(
+            self.repo,
+            plan_path=plan_file,
+            policy_path=Path(prep_res["policy"]),
+            manifest_path=Path(prep_res["manifest"]),
+            state_root=state_root(self.repo),
+            run_id=prep_res["run_id"],
+        )
+        self.assertEqual("BLOCKED", res["status"])
+        self.assertTrue(any("forbidden for sensitive changes" in r for r in res.get("blocked_by", [])))
+
+    def test_SPEC_001(self):
+        """SPEC-001: architectural task routes a real installed spec reviewer"""
         from review_policy import decide
+        spec_subagent_path = SCRIPTS.parent / "subagents" / "spec-compliance-agent.json"
+        self.assertTrue(spec_subagent_path.is_file(), "spec-compliance-agent.json must exist")
+        subagent_data = json.loads(spec_subagent_path.read_text(encoding="utf-8"))
+        self.assertEqual("spec-compliance-agent", subagent_data.get("name"))
 
         skills_root = SCRIPTS.parent / "skills"
-        cls_bounded = {"surfaces": ["BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 1, "planning_depth": "BOUNDED"}
-        pol_bounded = decide(cls_bounded, skills_root)
-        self.assertNotIn("spec-compliance-agent", pol_bounded["reviewers"])
-
         cls_arch = {"surfaces": ["BUSINESS_LOGIC"], "severity": "HIGH", "changed_files": 4, "planning_depth": "ARCHITECTURAL"}
-        pol_arch = decide(cls_arch, skills_root)
-        self.assertIn("spec-compliance-agent", pol_arch["reviewers"])
+        policy = decide(cls_arch, skills_root)
+        self.assertIn("spec-compliance-agent", policy["reviewers"])
 
-    def test_lean_task_brief_generation(self):
-        # BRIEF-001: Lean brief files generated with role focus and package sha
-        sys.path.insert(0, str(SCRIPTS))
+    def test_SPEC_002(self):
+        """SPEC-002: clean spec reviewer response parses as PASS"""
+        from record_review import parse_verdict
+        report = parse_verdict(
+            "spec-compliance-agent",
+            "SPEC_PASS\nEVIDENCE pkg=abcdef123456 cites=0"
+        )
+        self.assertEqual("PASS", report.get("verdict"))
+
+    def test_MODEL_ROUND_001(self):
+        """MODEL-ROUND-001: round 2 finding owner can deterministically promote capability"""
+        from review_policy import reviewer_capability_for, CAPABILITY_STRONG
+        cap, reas = reviewer_capability_for("bug-reviewer-agent", ["BUSINESS_LOGIC"], severity="HIGH", round_number=2, is_finding_owner=True)
+        self.assertEqual(CAPABILITY_STRONG, cap)
+        self.assertEqual("HIGH", reas)
+
+    def test_MODEL_ROUND_002(self):
+        """MODEL-ROUND-002: non-empty carried_reviews (dicts) cannot crash model resolver"""
+        from review_policy import review_execution_requirements
+        policy = {
+            "surfaces": ["BUSINESS_LOGIC"],
+            "severity": "HIGH",
+            "reviewers": ["bug-reviewer-agent"],
+            "carried_reviews": [{"reviewer": "convention-reviewer-agent", "source_snapshot": "abc"}],
+            "later_round_source": {"finding_owners": ["bug-reviewer-agent"]},
+            "review_round": 2,
+        }
+        reqs = review_execution_requirements(policy)
+        self.assertIn("bug-reviewer-agent", reqs["reviewers"])
+
+    def test_MODEL_ROUND_003(self):
+        """MODEL-ROUND-003: round 3 core judgment reviewer requests STRONG"""
+        from review_policy import reviewer_capability_for, CAPABILITY_STRONG
+        for r in ("bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"):
+            cap, reas = reviewer_capability_for(r, ["BUSINESS_LOGIC"], severity="MEDIUM", round_number=3)
+            self.assertEqual(CAPABILITY_STRONG, cap, f"{r} must be STRONG in round 3")
+            self.assertEqual("HIGH", reas)
+
+    def test_MODEL_PORTABILITY_001(self):
+        """MODEL-PORTABILITY-001: unknown host -> inherit"""
+        from review_execution import resolve_execution_profile
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "VERIFYING"
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps({"reviewers": ["security-reviewer-agent"], "surfaces": ["AUTH"]}), encoding="utf-8")
+        current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+
+        prof = resolve_execution_profile(self.repo, task_id, host="unknown_platform_host")
+        self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+
+    def test_MODEL_PORTABILITY_002(self):
+        """MODEL-PORTABILITY-002: missing local route -> inherit"""
+        from review_execution import resolve_execution_profile
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "VERIFYING"
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps({"reviewers": ["security-reviewer-agent"], "surfaces": ["AUTH"]}), encoding="utf-8")
+        current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+
+        env_routes = json.dumps({"antigravity": {"STANDARD": "inherit"}})
+        with mock.patch.dict(os.environ, {"HARNESS_MODEL_ROUTES": env_routes}):
+            prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+            self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+
+    def test_MODEL_AUTH_001(self):
+        """MODEL-AUTH-001: main agent cannot invent arbitrary explicit model"""
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "VERIFYING"
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "surfaces": ["BUSINESS_LOGIC"]}), encoding="utf-8")
+        current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+
+        proc = subprocess.run(
+            [sys.executable, str(ENGINE)],
+            input=json.dumps({"toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Model": "unapproved-mega-model"}]}}}),
+            capture_output=True, text=True, env=self.env, check=False, timeout=15,
+        )
+        data = json.loads(proc.stdout)
+        self.assertEqual("deny", data["decision"])
+        self.assertIn("Reviewer model escalation", data["reason"])
+
+    def test_MODEL_HASH_001(self):
+        """MODEL-HASH-001: changing exact host model route does not change authoritative policy hash"""
+        from review_policy import decide
+        skills_root = SCRIPTS.parent / "skills"
+        cls = {"surfaces": ["AUTH", "SECURITY"], "severity": "HIGH", "changed_files": 2}
+        p1 = decide(cls, skills_root)
+        with mock.patch.dict(os.environ, {"HARNESS_MODEL_ROUTES": json.dumps({"antigravity": {"STRONG": "other-model"}})}):
+            p2 = decide(cls, skills_root)
+        self.assertEqual(p1["policy_sha256"], p2["policy_sha256"])
+
+    def test_BRIEF_001(self):
+        """BRIEF-001: reviewer dispatch receives lean brief and immutable package reference"""
         from review_package import generate_task_brief
-
         pkg_dir = self.repo / "test_pkg_dir"
         pkg_dir.mkdir(parents=True, exist_ok=True)
         meta = {"run_id": "run-99", "package_sha256": "abcdef1234567890abcdef"}
@@ -537,6 +819,179 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("LEAN TASK BRIEF: Security Specialist", text)
         self.assertIn("abcdef123456", text)
         self.assertIn("Auth.kt", text)
+        self.assertIn("review-package.md", text)
+
+    def test_REDGREEN_001(self):
+        """REDGREEN-001: applicable BUG cannot claim enforced RED->GREEN without bound RED evidence"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify
+
+        task_id = "t-redgreen"
+        fix_file = self.repo / "app/src/main/kotlin/com/example/Fix.kt"
+        fix_file.parent.mkdir(parents=True, exist_ok=True)
+        fix_file.write_text("package com.example\nfun bugFix() = true\n", encoding="utf-8")
+
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Fix NPE in profile",
+            kind="BUG",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        plan_file = state_root(self.repo) / "tasks" / task_id / "plan.json"
+
+        res = verify(
+            self.repo,
+            plan_path=plan_file,
+            policy_path=Path(prep_res["policy"]),
+            manifest_path=Path(prep_res["manifest"]),
+            state_root=state_root(self.repo),
+            run_id=prep_res["run_id"],
+        )
+        self.assertEqual("BLOCKED", res["status"])
+        self.assertTrue(any("requires bound RED" in r for r in res.get("blocked_by", [])))
+
+    def test_DEVICE_SIGNOFF_001(self):
+        """DEVICE-SIGNOFF-001: device-required task cannot complete without current-run developer PASS"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify
+
+        task_id = "t-device-signoff"
+        ui_file = self.repo / "app/src/main/kotlin/com/example/Ui.kt"
+        ui_file.parent.mkdir(parents=True, exist_ok=True)
+        ui_file.write_text("package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun MainView() {}\n", encoding="utf-8")
+
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Add compose UI screen",
+            kind="FEATURE",
+            expected_surfaces="COMPOSE_UI,BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit",
+            device_strategy="physical-only",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        plan_file = state_root(self.repo) / "tasks" / task_id / "plan.json"
+
+        res = verify(
+            self.repo,
+            plan_path=plan_file,
+            policy_path=Path(prep_res["policy"]),
+            manifest_path=Path(prep_res["manifest"]),
+            state_root=state_root(self.repo),
+            run_id=prep_res["run_id"],
+        )
+        self.assertEqual("BLOCKED", res["status"])
+        self.assertTrue(any("device verification sign-off is required" in r for r in res.get("blocked_by", [])))
+
+    def test_DEVICE_SIGNOFF_002(self):
+        """DEVICE-SIGNOFF-002: post-signoff source/artifact change invalidates old PASS"""
+        from evidence_store import EvidenceStore
+        from final_verifier import _validate_artifact
+
+        state = self.repo / "agents/state"
+        store = EvidenceStore(state)
+        old_snapshot = "s1" * 32
+        old_cs = "c1" * 32
+        run_id = "r1"
+
+        store.write(
+            snapshot=old_snapshot, run_id=run_id, name="device_signoff", producer="developer_approval",
+            harness_version="1.0.0", change_set=old_cs, status="PASS",
+            evidence={"proof_reference": "tested", "proof_reference_sha256": "p" * 64}
+        )
+
+        new_cs = "c2" * 32
+        rec, err = _validate_artifact(store, old_snapshot, new_cs, run_id, "device_signoff", "1.0.0")
+        self.assertIsNotNone(err)
+        self.assertIn("change-set mismatch", err)
+
+    def test_ORDER_001(self):
+        """ORDER-001: missing reviewer evidence blocks run_device.py install/start"""
+        from run_device import _check_device_prerequisites
+        import argparse
+
+        task_id = "t"
+        state = self.repo / "agents/state"
+        task_d = state / "tasks" / task_id
+        task_d.mkdir(parents=True, exist_ok=True)
+
+        plan = {
+            "task_id": task_id, "status": "VERIFYING", "verification_run_id": "r1",
+            "surfaces": ["COMPOSE_UI"], "modules": [":app"], "plan_sha256": "p" * 64,
+        }
+        (task_d / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+        from _vnext_common import canonical_sha256
+        policy = {
+            "schema_version": 1, "surfaces": ["COMPOSE_UI"], "severity": "MEDIUM",
+            "status": "PASS", "reviewers": ["bug-reviewer-agent"],
+            "gates": ["preflight", "device"], "device_required": True,
+            "project_kind": "application", "classification_sha256": "cls",
+        }
+        policy["policy_sha256"] = canonical_sha256(policy)
+        policy_path = task_d / "policy.json"
+        policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+        (task_d / "current-run.json").write_text(json.dumps({
+            "task_id": task_id, "policy": str(policy_path),
+            "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs",
+        }), encoding="utf-8")
+
+        args = argparse.Namespace(action="install", force=False)
+        with mock.patch("run_device.REPO", self.repo):
+            code = _check_device_prerequisites(args)
+            self.assertIsNotNone(code)
+            self.assertNotEqual(0, code)
+
+    def test_REVIEW_RERUN_001(self):
+        """REVIEW-RERUN-001: post-review production-code fix invalidates prior required reviewer PASS coverage"""
+        from review_policy import decide, decide_later_round
+        skills_root = SCRIPTS.parent / "skills"
+        prior_cls = {"surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 2, "changed_lines": 10}
+        previous = decide(prior_cls, skills_root)
+
+        fixed_cls = {"surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 2, "changed_lines": 15}
+        later = decide_later_round(
+            fixed_cls, skills_root, previous_policy=previous,
+            finding_owners=["bug-reviewer-agent"],
+            passed_reviewers=["convention-reviewer-agent", "regression-impact-reviewer-agent"],
+            source_snapshot="s1" * 32, source_change_set="cs1" * 32,
+            current_change_set="cs2" * 32, source_run_id="r1", round_number=2,
+        )
+        self.assertEqual([], later["carried_reviews"])
+        self.assertEqual(set(previous["reviewers"]), set(later["reviewers"]))
 
 
 if __name__ == "__main__":

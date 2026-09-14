@@ -77,7 +77,7 @@ def _micro_eligible(classification: dict) -> bool:
     )
 
 
-def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE") -> dict:
+def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE", plan: dict | None = None) -> dict:
     surfaces = set(classification.get("surfaces") or [])
     severity = str(classification.get("severity") or "HIGH")
     reviewers: set[str] = set()
@@ -87,7 +87,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         reviewers = set(FIVE_REVIEWERS)
     if "TEST_ONLY" in surfaces:
         reviewers.add("test-quality-reviewer-agent")
-    planning_depth = str(classification.get("planning_depth") or "BOUNDED").upper()
+    planning_depth = str(classification.get("planning_depth") or (plan or {}).get("planning_depth") or "BOUNDED").upper()
     if planning_depth == "ARCHITECTURAL" and not _micro_eligible(classification) and "UNKNOWN" not in surfaces:
         reviewers.add("spec-compliance-agent")
     micro = _micro_eligible(classification)
@@ -150,9 +150,11 @@ def decide_later_round(
     round_number: int,
     project_kind: str = "application",
     task_kind: str = "FEATURE",
+    current_change_set: str | None = None,
+    plan: dict | None = None,
 ) -> dict:
     """Narrow a later round while retaining tamper-evident prior PASS coverage."""
-    result = decide(classification, skills_root, project_kind=project_kind, task_kind=task_kind)
+    result = decide(classification, skills_root, project_kind=project_kind, task_kind=task_kind, plan=plan)
     current_required = set(result.get("reviewers") or [])
     previous_required = set(previous_policy.get("reviewers") or [])
     owners = set(finding_owners) & previous_required
@@ -167,6 +169,15 @@ def decide_later_round(
     allowed = current_required | owners | {"regression-impact-reviewer-agent", "test-quality-reviewer-agent"}
     rerun &= allowed
     carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
+
+    # Finding L / REVIEW-RERUN-001: Any post-review production-code mutation
+    # invalidates prior required reviewer PASS coverage.
+    prod_surfaces = set(result.get("surfaces") or []) - {"TEST_ONLY", "DOCS"}
+    current_cs = current_change_set or classification.get("change_set_sha256")
+    if current_cs and current_cs != source_change_set and prod_surfaces:
+        carried = []
+        rerun = set(current_required)
+
     result["reviewers"] = sorted(rerun)
     result["review_status"] = "REQUIRED" if rerun else "NONE"
     result["review_round"] = round_number
@@ -216,6 +227,7 @@ def reviewer_capability_for(
     round_number: int = 1,
     is_finding_owner: bool = False,
     planning_depth: str = "BOUNDED",
+    changed_modules_count: int = 1,
 ) -> tuple[str, str]:
     """Derive abstract capability (STANDARD or STRONG) and reasoning effort (MEDIUM or HIGH).
 
@@ -231,12 +243,14 @@ def reviewer_capability_for(
 
     # Rule 2: Performance reviewer
     elif reviewer == "perf-anr-guardian-agent":
-        if sev_upper == "CRITICAL" or (sev_upper == "HIGH" and surfaces_set & {"NATIVE_CODE", "DEVICE_API"}):
+        if sev_upper == "CRITICAL" or (sev_upper == "HIGH" and surfaces_set & {"NATIVE_CODE", "DEVICE_API", "COROUTINES"}):
             return CAPABILITY_STRONG, "HIGH"
 
     # Rule 3: Regression reviewer
     elif reviewer == "regression-impact-reviewer-agent":
         if sev_upper == "CRITICAL" or (sev_upper == "HIGH" and surfaces_set & {"PUBLIC_API", "ROOM_SCHEMA", "BUILD_CONFIG"}):
+            return CAPABILITY_STRONG, "HIGH"
+        if "NAVIGATION" in surfaces_set and changed_modules_count > 1:
             return CAPABILITY_STRONG, "HIGH"
 
     # Rule 4: Bug reviewer
@@ -256,13 +270,18 @@ def reviewer_capability_for(
     return CAPABILITY_STANDARD, "MEDIUM"
 
 
-def review_execution_requirements(policy: dict, plan: dict | None = None, round_number: int = 1) -> dict:
+def review_execution_requirements(policy: dict, plan: dict | None = None, round_number: int | None = None) -> dict:
     """Derive the full execution profile mapping for all required reviewers in a policy."""
     surfaces = policy.get("surfaces") or []
     severity = policy.get("severity") or "HIGH"
     reviewers = policy.get("reviewers") or []
-    finding_owners = set(policy.get("carried_reviews") or [])
-    planning_depth = str(plan.get("planning_depth") or "BOUNDED") if plan else "BOUNDED"
+    finding_owners = set((policy.get("later_round_source") or {}).get("finding_owners") or [])
+    planning_depth = str((plan or {}).get("planning_depth") or "BOUNDED")
+    changed_modules = (plan or {}).get("changed_modules") or []
+    changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
+
+    if round_number is None:
+        round_number = int(policy.get("review_round") or (((plan or {}).get("review_rounds") or 0) + 1))
 
     requirements = {}
     for r in reviewers:
@@ -273,6 +292,7 @@ def review_execution_requirements(policy: dict, plan: dict | None = None, round_
             round_number=round_number,
             is_finding_owner=(r in finding_owners),
             planning_depth=planning_depth,
+            changed_modules_count=changed_modules_count,
         )
         requirements[r] = {
             "requested_capability": cap,

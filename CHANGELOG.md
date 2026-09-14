@@ -5,6 +5,28 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.30] - 2026-09-14
+
+### Airtight Post-Implementation Audit Hardening, Pipeline Order Enforcement, and Spec Governance
+
+- **Abstract Capability Decoupling & Honest Routing (`review_execution.py`, `review_policy.py`)**:
+  - Decoupled model selection from hardcoded model names into abstract capability tiers: `STANDARD` reviewers strictly map to `"inherit"` (preserving parent context, zero escalation overhead), while `STRONG` reviewers map to host-specific deep reasoning models (`pro` for Gemini/Antigravity, `opus` for Claude Code, `o3` for Codex) guarded by `ALLOW_MODEL_ESCALATION` and environment variable overrides (`AGENT_HARNESS_MODEL_<HOST>_STRONG`, `AGENT_HARNESS_MODEL_STRONG`).
+  - Added full capability routing: `HIGH` severity with `COROUTINES` and `NAVIGATION` with multi-module diffs escalate to `STRONG`.
+- **Pipeline Order & Verification Barriers (`run_device.py`, `final_verifier.py`, `workflow.py`)**:
+  - **ORDER-001 Enforcement**: Device installation and activity launching strictly require verified passing review evidence before physical/emulator execution can proceed.
+  - **Early Material Drift Halting**: `prepare_verification` halts immediately with an actionable error if material code drift is detected, preventing wasteful compilation and review runs on stale plans.
+  - **Delivery Clean Working Tree by Default (DELIVERY-CLEAN-001)**: `deliver_task` strictly enforces a clean git working tree before finalizing task delivery, with an explicit `--allow-dirty-tree` escape hatch for test automation.
+  - **Lineage & Run-ID Barrier**: Verification run transitions validate that current HEAD and branch match the run lineage, preventing cross-branch tampered execution states.
+- **Spec-Compliance Governance & Review Lifecycle (`spec-compliance-agent.json`, `record_review.py`, `review_policy.py`)**:
+  - Created canonical subagent specification `agents/subagents/spec-compliance-agent.json` declaring specialized acceptance criteria validation.
+  - Added first-class `SPEC_PASS` and `SPEC_FAIL` tokens in `record_review.py` verdict parser.
+  - Fixed dictionary vs set handling for `finding_owners` in policy re-evaluations.
+  - Plan-aware review routing in both initial and subsequent rounds.
+  - **REVIEW-RERUN-001**: Any production file modification occurring after reviews strictly invalidates previous review passes, enforcing comprehensive re-review.
+- **Empirical Defect Reproduction & Device Sign-Off (`run_tests_gate.py`, `run_device.py`, `final_verifier.py`)**:
+  - Enforced mandatory failing test evidence (`red_evidence`) for all normalized `task_kind == "BUG"` tasks before accepting green test results. Added `--capture-red` flag to `run_tests_gate.py`.
+  - Implemented `run_device.py signoff` command to cryptographically record verified human/automated UI walkthroughs, enforced by `final_verifier.py` whenever `device_required=True`.
+
 ## [1.0.29] - 2026-09-14
 
 ### Comprehensive Security Hardening, Reviewer Model Routing, Lean Task Briefs, and Spec-Compliance Governance

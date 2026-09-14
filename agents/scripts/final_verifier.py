@@ -25,7 +25,7 @@ ALLOWED_PRODUCERS = {
     "assemble": {"run_gradle_task"},
     "device_install": {"run_device"},
     "device_launch": {"run_device"},
-    "device_signoff": {"developer_approval", "ask_question"},
+    "device_signoff": {"developer_approval", "ask_question", "run_device"},
     "reviews": {"review_orchestrator", "developer_approval"},
     "sensitive_approval": {"developer_approval"},
     "red_evidence": {"run_tests_gate", "workflow", "developer_approval"},
@@ -78,6 +78,7 @@ def validate_policy_artifact(
     policy: dict,
     state_root: Path,
     policy_path: Path,
+    current_change_set: str | None = None,
 ) -> tuple[dict | None, str | None, str]:
     """Validate policy artifact integrity, status, classification freshness, and deterministic rules."""
     if policy.get("classification_sha256") is None or policy.get("policy_sha256") != canonical_sha256(
@@ -97,7 +98,7 @@ def validate_policy_artifact(
         return None, "policy project kind does not match installed configuration", "BLOCKED"
     task_kind = str(plan.get("task_kind") or "FEATURE")
     expected_policy = decide(
-        current_classification, agents_root / "skills", project_kind=configured_kind, task_kind=task_kind
+        current_classification, agents_root / "skills", project_kind=configured_kind, task_kind=task_kind, plan=plan
     )
     if int(policy.get("review_round") or 1) > 1:
         basis = policy.get("later_round_source") or {}
@@ -133,6 +134,8 @@ def validate_policy_artifact(
                 round_number=int(policy.get("review_round")),
                 project_kind=configured_kind,
                 task_kind=task_kind,
+                current_change_set=current_change_set,
+                plan=plan,
             )
         except (ValidationError, OSError, ValueError, TypeError) as exc:
             return None, f"later-round policy source is invalid: {exc}", "BLOCKED"
@@ -223,11 +226,14 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     if reasons:
         return _blocked("STALE", reasons, checks)
 
+    task_directory = plan_path.parent
+    snapshot = str(current["delivery_snapshot_sha256"])
+    change_set = str(current["change_set_sha256"])
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest))
     if drift:
         return _blocked("PLAN_APPROVAL_REQUIRED", ["material plan drift: " + ", ".join(drift)], checks)
     expected_policy, policy_error, block_status = validate_policy_artifact(
-        repo, plan, policy, state_root, policy_path
+        repo, plan, policy, state_root, policy_path, current_change_set=change_set
     )
     if policy_error:
         return _blocked(block_status, [policy_error], checks)
@@ -251,8 +257,6 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         if not path.is_file() or sha256_file(path) != skill.get("sha256"):
             return _blocked("STALE", [f"mandatory skill changed or is missing: {skill.get('id')}"], checks)
 
-    snapshot = str(current["delivery_snapshot_sha256"])
-    change_set = str(current["change_set_sha256"])
     version_file = agents_root / "VERSION"
     harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
     store = EvidenceStore(state_root)
@@ -265,7 +269,25 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         if error:
             reasons.append(error)
 
-    if str(plan.get("kind") or "").upper() == "BUG":
+    if policy.get("device_required") or "device" in (policy.get("gates") or []):
+        signoff_rec, signoff_err = _validate_artifact(store, snapshot, change_set, run_id, "device_signoff", harness_version)
+        if signoff_err:
+            checks.append({"name": "device_signoff", "status": "FAIL", "detail": f"device verification sign-off is required: {signoff_err}"})
+            reasons.append(f"device verification sign-off is required: {signoff_err}")
+        else:
+            signoff_ev = signoff_rec.get("evidence") or {}
+            signoff_detail = "bound developer device signoff PASS"
+            art_err = None
+            if not signoff_ev.get("proof_reference_sha256") and not signoff_ev.get("proof_reference"):
+                art_err = "device sign-off proof reference is missing"
+            if art_err:
+                checks.append({"name": "device_signoff", "status": "FAIL", "detail": art_err})
+                reasons.append(art_err)
+            else:
+                checks.append({"name": "device_signoff", "status": "PASS", "detail": signoff_detail})
+
+    is_bug = str(plan.get("task_kind") or plan.get("kind") or "").upper() == "BUG"
+    if is_bug:
         debug_ev_path = task_directory / "debug-evidence.json"
         has_repro = False
         if debug_ev_path.is_file():
@@ -274,10 +296,21 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 has_repro = any(e.get("kind") in ("reproduction", "red_evidence", "failing_test") for e in c.get("entries", []))
             except Exception:
                 pass
+        if not has_repro:
+            try:
+                red_rec, red_err = _validate_artifact(store, snapshot, change_set, run_id, "red_evidence", harness_version)
+                if red_err is None and str(red_rec.get("status") or "").upper() == "PASS":
+                    has_repro = True
+            except Exception:
+                pass
         if has_repro:
             checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present for BUG task"})
-        elif "unit_tests" in (policy.get("gates") or []) and plan.get("test_strategy") not in ("none", ""):
-            checks.append({"name": "red_evidence", "status": "PASS", "detail": "advisory: bug task verified without separate pre-fix RED recording"})
+        elif plan.get("test_strategy") in ("none", ""):
+            checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable RED reproduction not required (test_strategy=none)"})
+        else:
+            err_msg = "applicable BUG task requires bound RED reproduction/failing-test evidence before fix"
+            checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+            reasons.append(err_msg)
 
     reviewers = set(policy.get("reviewers") or [])
     review_record: dict | None = None
@@ -292,8 +325,13 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 severity = str(policy.get("severity") or "").upper()
                 sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
                 source = str(evidence.get("source") or "")
-                if source != "developer_terminal" and (severity in ("HIGH", "CRITICAL") or sensitive):
-                    err_msg = f"developer review override via {source or 'non-terminal'} is forbidden for {severity} severity or sensitive changes; requires developer_terminal"
+                if sensitive:
+                    err_msg = f"developer review override is strictly forbidden for sensitive changes ({', '.join(sensitive)})"
+                    reasons.append(err_msg)
+                    checks[-1]["status"] = "FAIL"
+                    checks[-1]["detail"] = err_msg
+                elif source != "developer_terminal" and severity in ("HIGH", "CRITICAL"):
+                    err_msg = f"developer review override via {source or 'non-terminal'} is forbidden for {severity} severity changes; requires developer_terminal"
                     reasons.append(err_msg)
                     checks[-1]["status"] = "FAIL"
                     checks[-1]["detail"] = err_msg

@@ -149,6 +149,7 @@ def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Baseline-aware unit-test delivery gate")
     parser.add_argument("task", nargs="?", default=None, help="Gradle unit-test task (default: _product UNIT_TEST_TASK)")
+    parser.add_argument("--capture-red", action="store_true", help="Record failing test reproduction evidence as RED evidence for BUG tasks")
     args = parser.parse_args(argv)
 
     from run_gradle_task import run_gradle
@@ -179,6 +180,56 @@ def main(argv=None) -> int:
         live_print(advisory, err=True)
 
     failed = collect_task_failures(REPO, task)
+    if getattr(args, "capture_red", False) and failed:
+        repro_entries = [
+            {
+                "kind": "failing_test",
+                "test_name": item.get("test_name"),
+                "message": item.get("message"),
+                "fingerprint": item.get("fingerprint"),
+            }
+            for item in failed
+        ]
+        try:
+            from mutation_guard import active_plan
+            from _vnext_common import read_json, write_json
+            plan = active_plan(REPO)
+            task_id = str(plan.get("task_id") or "")
+            if task_id:
+                state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+                task_d = state / "tasks" / task_id
+                task_d.mkdir(parents=True, exist_ok=True)
+                debug_file = task_d / "debug-evidence.json"
+                existing_entries = []
+                if debug_file.is_file():
+                    try:
+                        existing_entries = read_json(debug_file).get("entries", [])
+                    except Exception:
+                        pass
+                combined = existing_entries + repro_entries
+                write_json(debug_file, {"schema_version": 1, "task_id": task_id, "entries": combined})
+                live_print(f"[+] Recorded {len(repro_entries)} RED test reproduction entries in debug-evidence.json")
+                current_p = task_d / "current-run.json"
+                if current_p.is_file():
+                    try:
+                        from evidence_store import EvidenceStore
+                        store = EvidenceStore(state)
+                        current_run = read_json(current_p)
+                        store.write(
+                            snapshot=str(current_run["delivery_snapshot_sha256"]),
+                            run_id=str(current_run["run_id"]),
+                            name="red_evidence",
+                            producer="run_tests_gate",
+                            harness_version=str(current_run.get("harness_version") or "1.0.0"),
+                            change_set=str(current_run.get("change_set_sha256") or ""),
+                            status="PASS",
+                            exit_code=0,
+                            evidence={"failed_tests": repro_entries, "total_failed": len(failed)},
+                        )
+                    except Exception:
+                        pass
+        except Exception as exc:
+            live_print(f"[!] Warning: could not write RED evidence: {exc}", err=True)
     summary = collect_test_summary(REPO, task)
     reports_after = report_signatures(REPO, task)
     failing_paths = [path.resolve().as_posix() for path in report_paths(REPO, task) if parse_report(path)]

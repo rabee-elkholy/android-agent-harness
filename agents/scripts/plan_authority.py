@@ -143,7 +143,7 @@ def plan_payload(plan: dict) -> dict:
         "plan_id": plan.get("plan_id"),
         "task_id": plan["task_id"],
         "task_kind": plan.get("task_kind") or "FEATURE",
-        "requested_outcome": plan["requested_outcome"],
+        "requested_outcome": plan.get("requested_outcome") or plan.get("outcome") or "",
         "expected_surfaces": sorted(plan.get("expected_surfaces") or []),
         "expected_modules": sorted(module_id(item) for item in (plan.get("expected_modules") or [])),
         "expected_files": sorted(plan.get("expected_files") or []),

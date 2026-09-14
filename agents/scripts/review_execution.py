@@ -9,13 +9,52 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, read_json
-from review_policy import review_execution_requirements
+from review_policy import CAPABILITY_STANDARD, CAPABILITY_STRONG, review_execution_requirements
 from workflow import state_root, task_dir
 
-ANTIGRAVITY_MODEL_MAP = {
-    "STANDARD": "flash",
-    "STRONG": "pro",
-}
+
+def load_host_model_routes(host: str) -> dict[str, str]:
+    """Load trusted host model mapping from local config or environment.
+
+    Fallback is empty dict (meaning all capabilities resolve to 'inherit').
+    """
+    host_key = host.lower().strip()
+    env_routes = os.environ.get("HARNESS_MODEL_ROUTES")
+    if env_routes:
+        try:
+            if env_routes.strip().startswith("{"):
+                data = json.loads(env_routes)
+                if host_key in data and isinstance(data[host_key], dict):
+                    return data[host_key]
+            else:
+                p = Path(env_routes)
+                if p.is_file():
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    if host_key in data and isinstance(data[host_key], dict):
+                        return data[host_key]
+        except Exception:
+            pass
+
+    user_file = Path.home() / ".android-harness" / "model_routes.json"
+    if user_file.is_file():
+        try:
+            data = json.loads(user_file.read_text(encoding="utf-8"))
+            if host_key in data and isinstance(data[host_key], dict):
+                return data[host_key]
+        except Exception:
+            pass
+
+    try:
+        from _product import HOST_MODEL_ROUTES
+        if isinstance(HOST_MODEL_ROUTES, dict) and host_key in HOST_MODEL_ROUTES:
+            return HOST_MODEL_ROUTES[host_key]
+    except Exception:
+        pass
+
+    if host_key == "antigravity":
+        return {"STANDARD": "inherit", "STRONG": "pro"}
+
+    return {}
 
 
 def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity") -> dict:
@@ -36,20 +75,26 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
     except Exception:
         allow_escalation = False
 
-    requirements = review_execution_requirements(policy, plan=plan)
+    round_number = int(policy.get("review_round") or (((plan or {}).get("review_rounds") or 0) + 1))
+    requirements = review_execution_requirements(policy, plan=plan, round_number=round_number)
+    host_routes = load_host_model_routes(host)
+
     resolved_reviewers = {}
     for rev, req in requirements.get("reviewers", {}).items():
         cap = req["requested_capability"]
-        if host.lower() == "antigravity":
-            if allow_escalation and cap == "STRONG":
-                pref_model = ANTIGRAVITY_MODEL_MAP.get("STRONG", "pro")
+        pref_model = "inherit"
+        res_status = "STANDARD_MAPPING"
+
+        if cap == CAPABILITY_STRONG:
+            if allow_escalation and host_routes.get("STRONG"):
+                pref_model = host_routes["STRONG"]
                 res_status = "TRUSTED_MAPPING"
             else:
                 pref_model = "inherit"
-                res_status = "INHERIT_FALLBACK" if cap == "STRONG" else "STANDARD_MAPPING"
+                res_status = "INHERIT_FALLBACK"
         else:
-            pref_model = "inherit"
-            res_status = "INHERIT_FALLBACK"
+            pref_model = host_routes.get("STANDARD", "inherit")
+            res_status = "STANDARD_MAPPING" if pref_model == "inherit" else "TRUSTED_MAPPING"
 
         resolved_reviewers[rev] = {
             **req,
@@ -61,6 +106,7 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
     return {
         "schema_version": 1,
         "task_id": task_id,
+        "round_number": round_number,
         "host": host,
         "allow_model_escalation": allow_escalation,
         "reviewers": resolved_reviewers,

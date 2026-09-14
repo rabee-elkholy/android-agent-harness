@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, atomic_write_bytes, canonical_sha256, read_json, sha256_file, utc_now  # noqa: E402
-from workflow import state_root, task_dir  # noqa: E402
+from workflow import assert_active_run_fresh, state_root, task_dir  # noqa: E402
 
 
 HEADER = "# ANDROID_HARNESS_REVIEW_PACKAGE_VNEXT"
@@ -117,11 +117,9 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
 
 
 def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
+    current = assert_active_run_fresh(repo, task_id)
     directory = task_dir(repo, task_id)
     plan = read_json(directory / "plan.json")
-    current = read_json(directory / "current-run.json")
-    if plan.get("status") != "VERIFYING":
-        raise ValidationError("review packaging requires a VERIFYING plan")
     manifest = read_json(Path(current["manifest"]))
     policy = read_json(Path(current["policy"]))
     changes = manifest.get("changes") or []

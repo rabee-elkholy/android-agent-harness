@@ -232,7 +232,7 @@ def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
 
 
 def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
-    if getattr(args, "force", False) or args.action == "uninstall":
+    if getattr(args, "force", False) or args.action in ("uninstall", "signoff"):
         return None
     try:
         from mutation_guard import active_plan
@@ -315,16 +315,114 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
             if "unit_tests" in required_gates and not _gate_passed(state, current_run, "unit_tests"):
                 live_print("[FAIL] Pipeline order violation: run_tests_gate must pass before device deployment.", err=True)
                 return EXIT_ENV
+            reviewers = list(expected_policy.get("reviewers") or [])
+            if reviewers:
+                try:
+                    from evidence_store import EvidenceStore
+                    from final_verifier import _validate_artifact
+                    store = EvidenceStore(state)
+                    harness_version = _read_harness_version(REPO)
+                    change_set = str(current_run.get("change_set_sha256") or "")
+                    rev_record, rev_error = _validate_artifact(store, snapshot, change_set, run_id, "reviews", harness_version)
+                    if rev_error is not None:
+                        live_print(f"[FAIL] Pipeline order violation: required reviews must pass before device deployment ({rev_error}).", err=True)
+                        return EXIT_ENV
+                    rev_ev = rev_record.get("evidence") or {}
+                    if not rev_ev.get("developer_override"):
+                        covered = set(rev_ev.get("reviewers") or [])
+                        if not set(reviewers) <= covered:
+                            live_print("[FAIL] Pipeline order violation: required reviewer coverage is incomplete before device deployment.", err=True)
+                            return EXIT_ENV
+                        if rev_ev.get("blocking_findings"):
+                            live_print("[FAIL] Pipeline order violation: reviews contain unresolved blocking findings before device deployment.", err=True)
+                            return EXIT_ENV
+                except Exception as exc:
+                    live_print(f"[FAIL] Pipeline order violation: required reviews check failed: {exc}", err=True)
+                    return EXIT_ENV
         except Exception as exc:
             live_print(f"[FAIL] Failed to verify device prerequisites: {exc}", err=True)
             return EXIT_ENV
     return None
 
 
+def _handle_signoff(args: argparse.Namespace) -> int:
+    import os
+    from mutation_guard import active_plan
+    from _vnext_common import read_json, canonical_sha256
+    task_id = args.task_id
+    if not task_id:
+        try:
+            active = active_plan(REPO)
+            task_id = str(active.get("task_id") or "")
+        except Exception:
+            task_id = ""
+    if not task_id:
+        live_print("[FAIL] --task-id is required for device sign-off.", err=True)
+        return 1
+    state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+    current_path = state / "tasks" / task_id / "current-run.json"
+    if not current_path.is_file():
+        live_print(f"[FAIL] Verification run is not initialized for task '{task_id}'. Run prepare-verification first.", err=True)
+        return 1
+    current_run = read_json(current_path)
+    snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
+    run_id = str(current_run.get("run_id") or "")
+    change_set = str(current_run.get("change_set_sha256") or "")
+    plan_path = state / "tasks" / task_id / "plan.json"
+    plan = read_json(plan_path) if plan_path.is_file() else {}
+
+    proof_ref = str(args.proof_reference or "").strip()
+    if not proof_ref:
+        live_print("[FAIL] --proof-reference is required for device sign-off.", err=True)
+        return 1
+
+    from evidence_store import EvidenceStore
+    store = EvidenceStore(state)
+    harness_version = _read_harness_version(REPO)
+
+    art_set_sha = ""
+    for name in ("device_install", "assemble"):
+        try:
+            rec = store.read(snapshot, run_id, name)
+            ev = rec.get("evidence") or {}
+            sha = str(ev.get("artifact_set_sha256") or (ev.get("artifact_set") or {}).get("artifact_set_sha256") or "")
+            if sha:
+                art_set_sha = sha
+                break
+        except Exception:
+            pass
+
+    verdict = str(args.verdict or "PASS").upper()
+    store.write(
+        snapshot=snapshot,
+        run_id=run_id,
+        name="device_signoff",
+        producer="developer_approval",
+        harness_version=harness_version,
+        change_set=change_set,
+        status=verdict,
+        exit_code=0 if verdict == "PASS" else 1,
+        evidence={
+            "task_id": task_id,
+            "plan_sha256": plan.get("plan_sha256") or "",
+            "run_id": run_id,
+            "delivery_snapshot_sha256": snapshot,
+            "change_set_sha256": change_set,
+            "artifact_set_sha256": art_set_sha,
+            "proof_reference": proof_ref,
+            "proof_reference_sha256": canonical_sha256(proof_ref),
+            "verdict": verdict,
+            "signer": os.environ.get("USERNAME") or os.environ.get("USER") or "developer",
+        },
+    )
+    live_print(f"[SUCCESS] Device sign-off recorded: verdict={verdict} for task {task_id} (run {run_id[:12]})")
+    return 0 if verdict == "PASS" else 1
+
+
 def main() -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
-    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall"])
+    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff"])
     parser.add_argument("-s", "--serial", default=None, help="Physical device serial")
     parser.add_argument(
         "--flavor",
@@ -338,11 +436,17 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="Bypass APK freshness check (emergency manual use only)")
     parser.add_argument("--grant-runtime-permissions", action="store_true", help="Explicitly grant requested runtime permissions during install")
     parser.add_argument("--confirm-destructive", action="store_true", help="Required for uninstall")
+    parser.add_argument("--task-id", default=None, help="Task ID for signoff")
+    parser.add_argument("--proof-reference", default=None, help="Proof reference / reason for signoff")
+    parser.add_argument("--verdict", choices=["PASS", "FAIL"], default="PASS", help="Signoff verdict")
     args = parser.parse_args()
 
     prereq_err = _check_device_prerequisites(args)
     if prereq_err is not None:
         return prereq_err
+
+    if args.action == "signoff":
+        return _handle_signoff(args)
 
     try:
         active_flavor, _task = resolve_or_raise(args.flavor)

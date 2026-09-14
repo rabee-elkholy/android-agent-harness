@@ -1466,6 +1466,13 @@ class EndToEndWorkflowTests(RepoCase):
         store.write(**evidence_common, name="reviews", producer="review_orchestrator", evidence={"reviewers": policy.get("reviewers") or [], "is_truncated": False, "blocking_findings": []})
         complete(Namespace(**common))
 
+        # DELIVERY-CLEAN-001: deliver_task requires clean tree unless explicitly allowed
+        with self.assertRaises(ValidationError):
+            deliver_task(Namespace(**common))
+
+        run_git(self.repo, "add", "app/src/main/kotlin/Deliv.kt")
+        run_git(self.repo, "commit", "-m", "deliver commit")
+
         res = deliver_task(Namespace(**common))
         self.assertEqual("DELIVERED", res["status"])
         self.assertIn("delivered_at", res)

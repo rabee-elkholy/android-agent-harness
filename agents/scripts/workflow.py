@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
-from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, utc_now, validate_id  # noqa: E402
+from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, repository_identity, utc_now, validate_id  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
 from final_verifier import verify  # noqa: E402
@@ -271,11 +271,32 @@ def record_finding_validation(args: argparse.Namespace) -> dict:
         return payload
 
 
-def prepare_verification(args: argparse.Namespace) -> dict:
-    repo = Path(args.repo).resolve()
+def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_or_args: Any = None) -> dict:
+    if isinstance(args_or_repo, (str, Path)):
+        repo = Path(args_or_repo).resolve()
+        if hasattr(task_id_or_args, "task_id"):
+            args = task_id_or_args
+        else:
+            args = argparse.Namespace(repo=str(repo), task_id=str(task_id_or_args or ""), force=False)
+    else:
+        args = args_or_repo
+        repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("verification preparation requires an IMPLEMENTING plan")
+    base_repo = plan.get("repository") or {}
+    if base_repo:
+        current_identity = repository_identity(repo)
+        if base_repo.get("branch") and current_identity.get("branch") != base_repo.get("branch"):
+            raise ValidationError(
+                f"HEAD/branch lineage mismatch: repository branch changed from '{base_repo.get('branch')}' "
+                f"to '{current_identity.get('branch')}' after task approval"
+            )
+        if base_repo.get("head") and current_identity.get("head") != base_repo.get("head"):
+            raise ValidationError(
+                f"HEAD/branch lineage mismatch: repository HEAD commit changed from '{base_repo.get('head')[:12]}' "
+                f"to '{current_identity.get('head')[:12]}' after task approval"
+            )
     with step_progress("Building delivery manifest & snapshot"):
         manifest = build_manifest(repo)
     with step_progress("Classifying changed surfaces"):
@@ -306,6 +327,8 @@ def prepare_verification(args: argparse.Namespace) -> dict:
             round_number=completed_rounds + 1,
             project_kind=project_kind(repo),
             task_kind=str(plan.get("task_kind") or "FEATURE"),
+            current_change_set=str(manifest["change_set_sha256"]),
+            plan=plan,
         )
         calls_used = int(plan.get("review_calls_used") or 0)
         if calls_used + int(policy.get("estimated_calls_this_round") or 0) > int(policy.get("model_call_budget") or 0):
@@ -317,11 +340,15 @@ def prepare_verification(args: argparse.Namespace) -> dict:
             }
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
     else:
-        policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"))
+        policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest))
     if drift:
         plan["material_drift"] = drift
         save_plan(_plan_path(repo, args.task_id), plan)
+        raise ValidationError(
+            f"PLAN_APPROVAL_REQUIRED: material drift detected: {', '.join(str(k) for k in drift)}. "
+            "Reconciliation and plan approval are required before verification run can begin."
+        )
     if policy.get("status") != "PASS":
         raise ValidationError(f"policy preparation blocked: {policy.get('status')}")
     run_id = f"run-{uuid.uuid4().hex}"
@@ -560,7 +587,7 @@ def finalize_ready_delivery(
         dirty = _find_uncommitted_task_files(repo, task_id, plan)
         if dirty:
             raise ValidationError(
-                f"cannot deliver task '{task_id}' while verified task files remain uncommitted: {', '.join(sorted(dirty))}"
+                f"cannot deliver task '{task_id}' with dirty working tree; verified task files remain uncommitted: {', '.join(sorted(dirty))}"
             )
 
     ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
@@ -586,9 +613,50 @@ def finalize_ready_delivery(
     return plan, True
 
 
-def deliver_task(args: argparse.Namespace) -> dict:
-    repo = Path(args.repo).resolve()
-    plan, _ = finalize_ready_delivery(repo, args.task_id)
+def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None) -> dict:
+    """Validate that the active verification run is fresh and matches current repository state."""
+    plan = _load_plan(repo, task_id)
+    if plan.get("status") != "VERIFYING":
+        raise ValidationError(f"task '{task_id}' is in status '{plan.get('status')}', not VERIFYING")
+    directory = task_dir(repo, task_id)
+    current_path = directory / "current-run.json"
+    if not current_path.is_file():
+        raise ValidationError(f"task '{task_id}' verification run is not initialized")
+    current = read_json(current_path)
+    if str(current.get("task_id") or "") != task_id:
+        raise ValidationError(f"current-run task mismatch: expected '{task_id}', found '{current.get('task_id')}'")
+    active_run_id = str(current.get("run_id") or "")
+    if run_id and active_run_id != run_id:
+        raise ValidationError(f"verification run mismatch: expected run '{run_id}', found '{active_run_id}'")
+    manifest = build_manifest(repo)
+    for key in ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256"):
+        curr_val = current.get(key)
+        live_val = manifest.get(key)
+        if curr_val and live_val and curr_val != live_val:
+            raise ValidationError(
+                f"STALE: repository {key} modified after verification freeze: {curr_val[:12]} != live {live_val[:12]}"
+            )
+    return current
+
+
+def deliver_task(
+    args_or_repo: argparse.Namespace | Path | str,
+    task_id: str | None = None,
+    *,
+    allow_dirty_tree: bool = False,
+    require_clean_tree: bool | None = None,
+) -> dict:
+    if isinstance(args_or_repo, (str, Path)):
+        repo = Path(args_or_repo).resolve()
+        tid = str(task_id or "")
+        clean = require_clean_tree if require_clean_tree is not None else (not allow_dirty_tree)
+    else:
+        args = args_or_repo
+        repo = Path(args.repo).resolve()
+        tid = str(args.task_id)
+        allow_dirty = getattr(args, "allow_dirty_tree", False)
+        clean = require_clean_tree if require_clean_tree is not None else (not allow_dirty)
+    plan, _ = finalize_ready_delivery(repo, tid, require_clean_tree=clean)
     return plan
 
 
@@ -649,7 +717,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("prepare-verification", parents=[common]).set_defaults(handler=prepare_verification)
     sub.add_parser("verify", parents=[common]).set_defaults(handler=verify_task)
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)
-    sub.add_parser("deliver", parents=[common]).set_defaults(handler=deliver_task)
+    command = sub.add_parser("deliver", parents=[common])
+    command.add_argument("--allow-dirty-tree", action="store_true", help="Explicit developer override to deliver while verified task files remain uncommitted")
+    command.set_defaults(handler=deliver_task)
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
     sub.add_parser("status", parents=[common]).set_defaults(handler=status)

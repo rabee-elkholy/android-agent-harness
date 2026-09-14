@@ -1059,7 +1059,6 @@ class AndroidScenariosSelftest(unittest.TestCase):
             self.assertEqual(EXIT_ENV, code)
             self.assertIn("run_tests_gate must pass", str(output.call_args_list))
 
-        # 3. Supply valid unit_tests evidence -> prerequisites pass (None)
         EvidenceStore(state).write(
             snapshot=current["delivery_snapshot_sha256"],
             run_id=current["run_id"],
@@ -1069,6 +1068,16 @@ class AndroidScenariosSelftest(unittest.TestCase):
             change_set=current["change_set_sha256"],
             status="PASS",
             evidence={},
+        )
+        EvidenceStore(state).write(
+            snapshot=current["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="reviews",
+            producer="review_orchestrator",
+            harness_version=harness_version,
+            change_set=current["change_set_sha256"],
+            status="PASS",
+            evidence={"reviewers": policy_data.get("reviewers") or [], "is_truncated": False, "blocking_findings": []},
         )
         with mock.patch.object(run_device, "REPO", self.repo):
             code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))

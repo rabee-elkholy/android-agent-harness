@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
-from workflow import SENSITIVE_SURFACES, state_root, task_dir  # noqa: E402
+from workflow import SENSITIVE_SURFACES, assert_active_run_fresh, state_root, task_dir  # noqa: E402
 
 
 VALID_VERDICTS = {"PASS", "FINDINGS"}
@@ -23,7 +23,20 @@ PASS_TOKENS = {
     "perf-anr-guardian-agent": "PERF_PASS",
     "regression-impact-reviewer-agent": "REGRESSION_PASS",
     "test-quality-reviewer-agent": "TEST_PASS",
+    "spec-compliance-agent": "SPEC_PASS",
 }
+
+
+def parse_verdict(reviewer: str, text: str) -> dict:
+    """Helper to parse raw reviewer text verdict without repository state."""
+    text = text.strip()
+    footer = re.search(r"EVIDENCE\s+pkg=([0-9a-fA-F]{12})\s+cites=(\d+)\s*$", text)
+    if not footer:
+        return {"verdict": "FAIL", "reason": "missing evidence footer"}
+    pass_token = PASS_TOKENS.get(reviewer)
+    body = text[:footer.start()].strip()
+    clean = bool(pass_token and body == pass_token and int(footer.group(2)) == 0)
+    return {"verdict": "PASS" if clean else "FINDINGS", "cites": int(footer.group(2))}
 
 
 def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, response_sha256: str) -> dict:
@@ -237,8 +250,8 @@ def main() -> int:
     try:
         repo = Path(args.repo).resolve()
         task_directory = task_dir(repo, args.task)
+        current = assert_active_run_fresh(repo, args.task)
         plan = read_json(task_directory / "plan.json")
-        current = read_json(task_directory / "current-run.json")
         policy = read_json(Path(current["policy"]))
         required = set(policy.get("reviewers") or [])
         staging_dir = task_directory / "staged-reviews" / str(current["run_id"])
