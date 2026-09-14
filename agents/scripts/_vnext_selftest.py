@@ -2199,6 +2199,70 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertFalse(safe_override)
         self.assertIn("developer-owned", detail_override)
 
+    def test_corrective_patch_v1034_matrix(self) -> None:
+        from doctor.engine import HarnessDoctor
+        from mutation_guard import command_allowed
+        from project_context import (
+            extract_project_facts,
+            render_project_context,
+            write_project_context,
+        )
+
+        # 1. Canonical read-only commands allowed, generate/refresh mutation-controlled, internal script denied
+        kit_cli = (KIT / "harness_cli.py").as_posix()
+        self.assertTrue(command_allowed(self.repo, f'python "{kit_cli}" context preview')[0])
+        self.assertTrue(command_allowed(self.repo, f'python "{kit_cli}" context status')[0])
+        self.assertTrue(command_allowed(self.repo, "android-harness context preview")[0])
+        self.assertTrue(command_allowed(self.repo, "android-harness context status")[0])
+
+        self.assertFalse(command_allowed(self.repo, f'python "{kit_cli}" context generate')[0])
+        self.assertFalse(command_allowed(self.repo, f'python "{kit_cli}" context refresh')[0])
+        self.assertFalse(command_allowed(self.repo, "android-harness context generate")[0])
+        self.assertFalse(command_allowed(self.repo, "android-harness context refresh")[0])
+        self.assertFalse(command_allowed(self.repo, "python .agents/scripts/generate_project_context.py preview")[0])
+
+        # 2. ViewModel resolution: multiple BaseViewModels => UNRESOLVED, primary = None (no name guessing)
+        write(self.repo / "app/src/main/kotlin/BaseViewModel.kt", "package com.fixture\nimport androidx.lifecycle.ViewModel\nabstract class BaseViewModel : ViewModel()\n")
+        write(self.repo / "app/src/main/kotlin/MVIViewModel.kt", "package com.fixture\nimport androidx.lifecycle.ViewModel\nabstract class MVIViewModel : ViewModel()\n")
+        facts = extract_project_facts(self.repo)["facts"]
+        self.assertEqual("UNRESOLVED", facts["view_models"]["resolution"])
+        self.assertIsNone(facts["view_models"]["primary"])
+        self.assertEqual(2, len(facts["view_models"]["candidates"]))
+
+        # 3. >800 Kotlin files scan: files beyond 800 are scanned and indexed
+        for i in range(850):
+            write(self.repo / f"app/src/main/kotlin/pkg{i}/Stub{i}.kt", f"package com.fixture.pkg{i}\nclass Stub{i}\n")
+        write(self.repo / "app/src/main/kotlin/pkg999/ZSpecialDao.kt", "package com.fixture.pkg999\nimport androidx.room.Dao\n@Dao\ninterface ZSpecialDao\n")
+        facts_large = extract_project_facts(self.repo)["facts"]
+        dao_symbols = [d["symbol"] for d in facts_large["persistence"]["room_daos"]]
+        self.assertIn("ZSpecialDao", dao_symbols)
+
+        # 4. Unknown UI framework: when no Compose and no XML layout evidence exists
+        facts_clean = extract_project_facts(self.repo)["facts"]
+        self.assertEqual("unknown", facts_clean["ui"]["framework"])
+        views = render_project_context(facts_clean)
+        self.assertIn("UI Paradigm**: UNKNOWN / no UI framework evidence detected", views["ui.md"])
+
+        # 5. Doctor rendering consistency failure on tampered markdown view
+        facts_payload = extract_project_facts(self.repo)
+        write_project_context(self.repo, facts_payload)
+        doc = HarnessDoctor(self.repo, run_selftest=False)
+        doc.check_project_context()
+        self.assertTrue(any(c.name == "Project Context Rendering Consistency" and c.status == "PASS" for c in doc.results))
+
+        # Tamper with architecture.md
+        arch_file = self.repo / ".agents" / "project-context" / "architecture.md"
+        arch_file.write_text("# Tampered Content\n", encoding="utf-8")
+        doc_tampered = HarnessDoctor(self.repo, run_selftest=False)
+        doc_tampered.check_project_context()
+        self.assertTrue(any(c.name == "Project Context Rendering Consistency" and c.status == "FAIL" for c in doc_tampered.results))
+
+        # 6. write_project_context preserves existing project-notes.md
+        notes_file = self.repo / ".agents" / "project-context" / "project-notes.md"
+        notes_file.write_text("# Custom Developer Notes Preserved\n", encoding="utf-8")
+        write_project_context(self.repo, facts_payload)
+        self.assertEqual("# Custom Developer Notes Preserved\n", notes_file.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

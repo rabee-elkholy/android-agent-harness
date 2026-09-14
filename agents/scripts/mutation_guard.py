@@ -116,16 +116,19 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return not any(arg.startswith("--out") for arg in args)
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
-    if name == "harness_cli" and args[:1] in (["version"], ["doctor"], ["explain"]):
-        return True
+    if name in {"harness_cli", "android-harness"}:
+        if args[:1] in (["version"], ["doctor"], ["explain"]):
+            return True
+        if args[:2] in (["context", "preview"], ["context", "status"]):
+            return True
     # Only known harness parsers implement help without running arbitrary code.
-    return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli"} and bool(args) and args[-1] in {"--help", "-h"}
+    return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "android-harness"} and bool(args) and args[-1] in {"--help", "-h"}
 
 
 def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     return (
-        name == "harness_cli" and args[:1] in (["init"], ["update"], ["uninstall"])
+        name in {"harness_cli", "android-harness"} and args[:1] in (["init"], ["update"], ["uninstall"])
         or name == "setup_wizard" and args[:1] == ["write"]
         or name == "git" and args[:1] == ["clone"] and len(args) >= 3
         and ("/.android-harness/" in args[-1].replace("\\", "/") or Path(args[-1]).name.startswith("kit-stage"))

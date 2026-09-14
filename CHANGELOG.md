@@ -4,6 +4,32 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.34] - 2026-09-14
+
+### Project Context Corrective Patch & Architectural Engine Hardening
+
+- **Canonical Read-Only Command Safety (`mutation_guard.py`)**:
+  - Whitelisted canonical `context preview` and `context status` subcommands under public command interfaces (`harness_cli`, `android-harness`) without lowering security boundaries.
+  - Kept `context generate` and `context refresh` mutation-controlled, requiring an authorized plan and approved phase.
+  - Kept internal engine scripts (`generate_project_context.py`) strictly unexposed to arbitrary execution.
+- **Strict ViewModel Resolution Contract (`project_context.py`)**:
+  - Eliminated heuristic name guessing (`BaseViewModel` preference) when multiple candidates exist.
+  - Contract strictly enforced: exactly 1 candidate resolves to `RESOLVED` with primary assigned; 0 candidates resolves to `NONE`; >1 candidates resolves to `UNRESOLVED` with `primary = None` and all candidates listed.
+- **Uncapped Deterministic Kotlin File Scanning (`project_context.py`)**:
+  - Removed arbitrary 800-file cutoff (`max_kt_files = 800`) across project scans.
+  - Hardened scan enumeration to index all Kotlin source files, deterministic sorting by repository-relative path, and skipping ignored directories (`.agents`, `build`, `dist`, `out`, `.git`, `.gradle`).
+- **Crash-Safe Staged Atomic Writes (`project_context.py`)**:
+  - Implemented staging-directory atomic replacement pattern ensuring generated markdown views are replaced first, and `project-facts.json` is replaced last as the single authoritative commit point.
+  - Guaranteed `project-notes.md` is strictly preserved and never overwritten on refresh or generation.
+- **Doctor View Consistency Verification (`doctor/engine.py`)**:
+  - Added line-by-line verification in `check_project_context()` re-rendering `project-facts.json` and comparing against markdown views on disk.
+  - Surfaces `Project Context Rendering Consistency: FAIL` if any derived view is modified or out-of-sync with facts.
+- **Neutral UI Framework Fallback (`project_context.py`)**:
+  - Avoided defaulting to Compose when no UI evidence is present; projects lacking both Compose and XML layout evidence are classified as `"unknown"` and rendered as `UNKNOWN / no UI framework evidence detected`.
+- **Prompt Contract & Size Hardening (`docs/install-or-update-prompt.md`)**:
+  - Refined Phase 3.5 confirmation options to `Flag incorrect detection / review before continuing`, strictly instructing that AI models must not auto-mutate facts or notes.
+  - Enforced compact prompt size under 4096 bytes (4072 bytes) with updated cryptographic SHA-256 integrity verification.
+
 ## [1.0.33] - 2026-09-14
 
 ### Automated Architectural Discovery, Project Context Derivation, and Interactive Preview

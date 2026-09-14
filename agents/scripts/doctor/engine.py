@@ -689,6 +689,22 @@ class HarnessDoctor:
             self.log(category, "Project Context Views", "FAIL", f"Missing rendered context views: {', '.join(missing_views)}")
         else:
             self.log(category, "Project Context Views", "PASS", f"All {len(required_views)} rendered architectural views verified.")
+            try:
+                sys.path.insert(0, str(self.agents_dir / "scripts"))
+                from project_context import render_project_context
+                rendered = render_project_context(data)
+                mismatches = []
+                for v in required_views:
+                    expected = rendered.get(v, "").replace("\r\n", "\n").strip()
+                    actual = (context_dir / v).read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n").strip()
+                    if expected != actual:
+                        mismatches.append(v)
+                if mismatches:
+                    self.log(category, "Project Context Rendering Consistency", "FAIL", f"Rendered views do not match project-facts.json: {', '.join(mismatches)}")
+                else:
+                    self.log(category, "Project Context Rendering Consistency", "PASS", "All rendered views are strictly consistent with project-facts.json.")
+            except Exception as exc:
+                self.log(category, "Project Context Rendering Consistency", "FAIL", f"Could not verify view rendering consistency: {exc}")
 
         try:
             sys.path.insert(0, str(self.agents_dir / "scripts"))
