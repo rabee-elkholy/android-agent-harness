@@ -52,7 +52,7 @@
     "agents/scripts/_variants.py": "9e7b8c3a813936e99118efc41288a950a5171cfe719c4e8cd1b5234960a26dcb",
     "agents/scripts/_verification_recipes.py": "ad8b6dad0b18bb562e0261d4dd6563b666e4954c8f49ec652f17e2557483f33e",
     "agents/scripts/_vnext_common.py": "e425466db01bd10763673ce6d8e0d710ebe028bed3c84f46022c5bf35e232936",
-    "agents/scripts/_vnext_selftest.py": "3bab1ba58f8b6c225e0b6828de8da2509ba2124f87035e26e1bc35185abe381d",
+    "agents/scripts/_vnext_selftest.py": "570f5a73069a714266e9b07c81eeef27eadf26e93dfb23d090a12b2b3aea6d99",
     "agents/scripts/_zoho_selftest.py": "46c1a48c211495f7096d35fa2aade8b79c1870b69908812810a5dfbf490de5b7",
     "agents/scripts/artifact_set.py": "a24249e21c65909eb110fa6b8a743f7e3984736272bce71c3c1640fb7c0dca6a",
     "agents/scripts/baseline_capture.py": "805675d731895f6ca5a54799ddf1bf98cae9a12f3705f3979cb004b18fdc9604",

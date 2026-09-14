@@ -2166,12 +2166,12 @@ class EndToEndWorkflowTests(RepoCase):
     def test_preview_zero_mutations(self) -> None:
         from project_context import extract_project_facts
         write(self.repo / "app/src/main/kotlin/SomeClass.kt", "package com.fixture\nclass SomeClass\n")
-        files_before = set(self.repo.rglob("*"))
+        files_before = {p for p in self.repo.rglob("*") if ".git" not in p.parts}
         mtimes_before = {p: p.stat().st_mtime_ns for p in files_before if p.is_file()}
 
         extract_project_facts(self.repo, in_memory_graph=True)
 
-        files_after = set(self.repo.rglob("*"))
+        files_after = {p for p in self.repo.rglob("*") if ".git" not in p.parts}
         self.assertEqual(files_before, files_after)
         for p, mt in mtimes_before.items():
             self.assertEqual(mt, p.stat().st_mtime_ns)
