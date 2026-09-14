@@ -9,7 +9,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"project_graph", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest"}
+INSPECTION_SCRIPTS = {"project_graph", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -66,6 +66,8 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
     if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", executable):
         if len(tokens) < 2:
             return "", []
+        if tokens[1] == "-m" and len(tokens) >= 3 and tokens[2] == "compileall":
+            return "compileall", tokens[3:]
         path = tokens[1].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
         known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard"}
@@ -76,7 +78,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[2:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "android-harness", "adb"}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb"}:
         return executable, tokens[1:]
     if executable in {"gradlew", "gradlew.bat", "gradle"}:
         return executable, tokens[1:]
@@ -106,8 +108,10 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return False
     if name in {"gradlew", "gradlew.bat", "gradle"}:
         return bool(args) and args[0].lower() in {"dependencies", "tasks", "projects", "properties", "help", "--help", "-h"}
-    if name in {"rg", "grep", "head", "tail", "ls", "pwd", "wc"}:
+    if name in {"rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat"}:
         return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
+    if name == "compileall":
+        return True
     if name in INSPECTION_SCRIPTS:
         return not any(arg.startswith("--out") for arg in args)
     if name == "setup_wizard" and args[:1] == ["questions"]:
@@ -189,6 +193,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     except ValidationError as exc:
         return False, f"mutation requires an active approved plan: {exc}"
     status = str(plan.get("status") or "")
+    entry, arguments = _entry(normalized, repo)
+    action = _workflow_action(normalized, repo)
     if status == "IMPLEMENTING":
         if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I):
             return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
@@ -198,13 +204,14 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
             return False, "Inline Python execution (-c/-m) is blocked; only audited harness scripts may run."
         if re.search(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", normalized, re.I):
             return False, "Raw Gradle execution is blocked; use the harness Gradle wrapper or test gate."
+        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "compileall"}
+        if entry not in allowed_implementing_entries:
+            return False, "Arbitrary shell mutation commands are blocked during IMPLEMENTING. File modifications must use host file-edit tools where protected roots are enforced."
         try:
             require_mutation(plan)
         except ValidationError as exc:
             return False, str(exc)
         return True, f"command authorized by approved plan {plan.get('plan_id')}"
-    entry, arguments = _entry(normalized, repo)
-    action = _workflow_action(normalized, repo)
     if status == "VERIFYING" and (entry in VERIFICATION_SCRIPTS or action in {"verify", "complete"} or (entry == "harness_cli" and arguments[:1] == ["verify"])):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     if status in ("VERIFYING", "BLOCKED") and action == "resume":

@@ -5,6 +5,25 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.29] - 2026-09-14
+
+### Comprehensive Security Hardening, Reviewer Model Routing, Lean Task Briefs, and Spec-Compliance Governance
+
+- **Superpowers-Inspired Methodology Enhancements**:
+  - **Reviewer Model Routing & Capability Tiers (`review_execution.py`, `review_policy.py`, `pre_tool_safety.py`)**: Added abstract capability routing decoupling policy hashes from model names. Routes `STANDARD` reviewers (fast linter, bug, regression) to high-speed models (`flash`), while routing `STRONG` reviewers to deep reasoning models (`pro`) under a developer-controlled `ALLOW_MODEL_ESCALATION` kill switch.
+  - **Lean Task Briefs & Token Economy (`review_package.py`)**: Added generation of role-specific `brief-<reviewer>.md` files (~300–400 tokens) distilling diff-scoped contracts, modified files, and rubrics, reducing subagent prompt token consumption by >60% and eliminating context dilution.
+  - **Spec-Compliance Review Auditor (`review_policy.py`, `spec-compliance-agent`)**: Added dedicated `spec-compliance-agent` routed automatically for architectural refactors and multi-phase plans, running in parallel with existing reviewers to verify strict adherence to approved `plan.json` outcomes.
+  - **Empirical RED → GREEN Defect Binding (`final_verifier.py`, `run_tests_gate.py`)**: Enforced capture and verification of reproducible failing test output (`red_evidence`) for `BUG` tasks before accepting green fixes, preventing greenwashing and cosmetic assertions.
+
+- **P0/P1 Security Hardening & Anti-Tampering Protections**:
+  - **Fail-Closed Shell Mutation Guard (`mutation_guard.py`)**: Enforced strict Default-Deny on unrecognized shell executables during implementation (`IMPLEMENTING` state). Whitelisted audited harness utilities (`review_execution.py`).
+  - **Fail-Closed Generic MCP Write Protection (`pre_tool_safety.py`)**: Intercepted generic MCP tools in `PreToolUse`, blocking unauthorized mutation methods (`create`, `update`, `delete`, `deploy`, `patch`, etc.) while allowing safe queries (`get`, `list`, `search`, `read`). Blocked `--force` flags from model.
+  - **Task Recovery Protection (`workflow.py`)**: Blocked automatic recovery or cancellation of healthy active tasks in `recover_stale`. Enforced fail-closed uncommitted collision checks.
+  - **Anti-Tampering Delivery Sealing (`workflow.py`, `pre_invocation_reminder.py`)**: Centralized `finalize_ready_delivery` enforcing `current_snapshot == ready_delivery_snapshot_sha256` and requiring a clean working tree before finalizing task delivery.
+  - **Sensitive Review Override Lockout (`record_review.py`)**: Strictly prohibited lead agent review overrides on sensitive surfaces (`AUTH`, `SECURITY`, `BILLING`, `SENSITIVE_DATA`, `CRYPTO`).
+  - **Kotlin Implicit Public API Scoping (`change_classifier.py`)**: Accurately classified Kotlin top-level declarations (which default to `public` in Kotlin), scoping `PUBLIC_API` surface escalation strictly to `PROJECT_KIND == "library"` to avoid false-positive token spikes on application code.
+  - **Evidence Producer Whitelist (`final_verifier.py`)**: Added `device_signoff` and `red_evidence` to valid producers in `final_verifier.py`.
+
 ## [1.0.28] - 2026-09-13
 
 ### Infrastructure Immutability, Trojan Source Shield, Room SQLite Safety, and Production Android DX

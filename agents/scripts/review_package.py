@@ -187,8 +187,98 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     atomic_write_bytes(package_path, content.encode("utf-8"))
     metadata["package_path"] = str(package_path)
     metadata["package_sha256"] = sha256_file(package_path)
+
+    briefs = {}
+    for rev in metadata["required_reviewers"]:
+        b_path = generate_task_brief(repo, task_id, rev, package_dir, metadata, plan, policy, changes)
+        briefs[rev] = str(b_path)
+    metadata["briefs"] = briefs
     metadata["metadata_sha256"] = canonical_sha256({key: value for key, value in metadata.items() if key != "metadata_sha256"})
     return package_path, metadata
+
+
+REVIEWER_ROLES = {
+    "bug-reviewer-agent": {
+        "title": "Bug & Logic Reviewer",
+        "focus": "Logic defects, null-safety, unhandled exceptions, race conditions, and incorrect state mutations.",
+    },
+    "security-reviewer-agent": {
+        "title": "Security Specialist",
+        "focus": "Vulnerabilities, auth tokens, plaintext storage, cryptographic flaws, insecure network protocols, and export safety.",
+    },
+    "perf-anr-guardian-agent": {
+        "title": "Performance & ANR Guardian",
+        "focus": "Main-thread blocking, coroutine dispatch issues, excessive allocations, and memory leaks.",
+    },
+    "convention-reviewer-agent": {
+        "title": "Android Conventions & Architecture",
+        "focus": "Android architectural layer boundaries, ViewModel separation, dependency injection, and clean naming.",
+    },
+    "regression-impact-reviewer-agent": {
+        "title": "Regression & Blast-Radius Impact",
+        "focus": "Breaking contract changes, modified public declarations, impact on upstream callers and downstream dependents.",
+    },
+    "test-quality-reviewer-agent": {
+        "title": "Test Quality Specialist",
+        "focus": "Test coverage completeness, assertion depth, meaningful failure verification, and avoidance of dummy assertions.",
+    },
+    "spec-compliance-agent": {
+        "title": "Specification Compliance Specialist",
+        "focus": "Fidelity to approved plan, fulfillment of acceptance criteria, preservation of required behavior, and absence of scope creep.",
+    },
+}
+
+
+def generate_task_brief(
+    repo: Path,
+    task_id: str,
+    reviewer: str,
+    package_dir: Path,
+    metadata: dict,
+    plan: dict,
+    policy: dict,
+    changes: list[dict],
+) -> Path:
+    """Generate a lean, role-focused task brief for one subagent reviewer."""
+    pkg_sha12 = str(metadata.get("package_sha256") or "")[:12]
+    role_info = REVIEWER_ROLES.get(reviewer, {
+        "title": reviewer,
+        "focus": "Comprehensive code and architecture evaluation within your domain.",
+    })
+    changed_paths = [str(item.get("path") or "") for item in changes if item.get("path")]
+
+    brief_lines = [
+        f"# LEAN TASK BRIEF: {role_info['title']} (`{reviewer}`)",
+        f"**Task ID**: {task_id} | **Run ID**: {metadata.get('run_id')} | **Package SHA**: `{pkg_sha12}`",
+        "",
+        "## 1. Approved Objective & Scope",
+        f"- **Outcome**: {plan.get('outcome') or 'Approved implementation changes'}",
+        f"- **Task Kind**: {plan.get('kind') or 'FEATURE'}",
+        f"- **Expected Surfaces**: {', '.join(policy.get('surfaces') or [])}",
+        "",
+        "## 2. Reviewer Specialty & Directives",
+        f"- **Role Focus**: {role_info['focus']}",
+        "- **Target Changed Paths**:",
+    ]
+    for p in changed_paths[:20]:
+        brief_lines.append(f"  * `{p}`")
+    if len(changed_paths) > 20:
+        brief_lines.append(f"  * *(and {len(changed_paths) - 20} more files; see complete package)*")
+
+    brief_lines.extend([
+        "",
+        "## 3. Review Package Reference",
+        "The full immutable package with unified git diff and architectural topology is at:",
+        f"`{package_dir / 'review-package.md'}`",
+        "",
+        "## 4. Evidence Reporting Protocol",
+        "Your final output MUST end with the required deterministic evidence footer:",
+        f"```text\nEVIDENCE pkg={pkg_sha12} cites=<citation_count>\n```",
+    ])
+
+    brief_path = package_dir / f"brief-{reviewer}.md"
+    atomic_write_bytes(brief_path, "\n".join(brief_lines).encode("utf-8"))
+    return brief_path
 
 
 def main() -> int:

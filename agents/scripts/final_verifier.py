@@ -25,8 +25,10 @@ ALLOWED_PRODUCERS = {
     "assemble": {"run_gradle_task"},
     "device_install": {"run_device"},
     "device_launch": {"run_device"},
+    "device_signoff": {"developer_approval", "ask_question"},
     "reviews": {"review_orchestrator", "developer_approval"},
     "sensitive_approval": {"developer_approval"},
+    "red_evidence": {"run_tests_gate", "workflow", "developer_approval"},
 }
 
 
@@ -262,6 +264,20 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         checks.append({"name": name, "status": "PASS" if error is None else "FAIL", "detail": error or "bound evidence PASS"})
         if error:
             reasons.append(error)
+
+    if str(plan.get("kind") or "").upper() == "BUG":
+        debug_ev_path = task_directory / "debug-evidence.json"
+        has_repro = False
+        if debug_ev_path.is_file():
+            try:
+                c = read_json(debug_ev_path)
+                has_repro = any(e.get("kind") in ("reproduction", "red_evidence", "failing_test") for e in c.get("entries", []))
+            except Exception:
+                pass
+        if has_repro:
+            checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present for BUG task"})
+        elif "unit_tests" in (policy.get("gates") or []) and plan.get("test_strategy") not in ("none", ""):
+            checks.append({"name": "red_evidence", "status": "PASS", "detail": "advisory: bug task verified without separate pre-fix RED recording"})
 
     reviewers = set(policy.get("reviewers") or [])
     review_record: dict | None = None

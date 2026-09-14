@@ -40,17 +40,9 @@ def _message() -> str:
         next_step = "Fix recorded findings with workflow.py resume, or request developer decision at the round cap."
     elif status == "READY_FOR_DELIVERY":
         try:
-            from workflow import _find_uncommitted_task_files, state_root
-            from plan_authority import deliver as deliver_plan, save_plan
-            dirty = _find_uncommitted_task_files(REPO, task_id, plan)
-            if not dirty:
-                plan = deliver_plan(plan)
-                task_plan_path = state_root(REPO) / "tasks" / task_id / "plan.json"
-                if task_plan_path.is_file():
-                    save_plan(task_plan_path, plan)
-                active_file = state_root(REPO) / "active-task.json"
-                if active_file.is_file():
-                    active_file.unlink(missing_ok=True)
+            from workflow import finalize_ready_delivery
+            plan, delivered = finalize_ready_delivery(REPO, task_id, plan, require_clean_tree=True)
+            if delivered:
                 return (
                     "Android Harness: discovery MUST start with `python .agents/scripts/project_graph.py --feature <name>` "
                     "or `--find <Symbol>` before inspecting files. Unanchored grep cascades are forbidden. "

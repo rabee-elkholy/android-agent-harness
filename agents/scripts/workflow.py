@@ -66,23 +66,22 @@ def _load_plan(repo: Path, task_id: str) -> dict:
 
 
 def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[str]:
-    try:
-        manifest = build_manifest(repo)
-        current_changes = {str(c.get("path") or "") for c in (manifest.get("changes") or [])}
-        if not current_changes:
-            return []
-        task_current = task_dir(repo, task_id) / "current-run.json"
-        if task_current.is_file():
-            run_info = read_json(task_current)
-            run_manifest_path = Path(str(run_info.get("manifest") or ""))
-            if run_manifest_path.is_file():
-                run_manifest = read_json(run_manifest_path)
-                task_files = {str(c.get("path") or "") for c in (run_manifest.get("changes") or [])}
-                return sorted(task_files & current_changes)
-        expected = set(plan.get("expected_files") or [])
-        return sorted(expected & current_changes)
-    except Exception:
+    manifest = build_manifest(repo)
+    current_changes = {str(c.get("path") or "") for c in (manifest.get("changes") or [])}
+    if not current_changes:
         return []
+    task_current = task_dir(repo, task_id) / "current-run.json"
+    if task_current.is_file():
+        run_info = read_json(task_current)
+        run_manifest_path = Path(str(run_info.get("manifest") or ""))
+        if not run_manifest_path.is_absolute():
+            run_manifest_path = repo / run_manifest_path
+        if run_manifest_path.is_file():
+            run_manifest = read_json(run_manifest_path)
+            task_files = {str(c.get("path") or "") for c in (run_manifest.get("changes") or [])}
+            return sorted(task_files & current_changes)
+    expected = set(plan.get("expected_files") or [])
+    return sorted(expected & current_changes)
 
 
 def draft(args: argparse.Namespace) -> dict:
@@ -106,19 +105,19 @@ def draft(args: argparse.Namespace) -> dict:
                                 f"previous task '{prev_id}' is READY_FOR_DELIVERY with uncommitted changes: "
                                 f"{', '.join(sorted(dirty))}. Commit or stash them before starting a new task, or pass --force."
                             )
-                        prev_plan = deliver_plan(prev_plan)
-                        save_plan(prev_plan_path, prev_plan)
-                        active_path.unlink(missing_ok=True)
+                        if not dirty or getattr(args, "force", False):
+                            finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=False)
                     elif prev_status in ("IMPLEMENTING", "VERIFYING", "APPROVED"):
                         if not getattr(args, "force", False):
                             raise ValidationError(
                                 f"active task '{prev_id}' is currently {prev_status}. "
                                 f"Complete or cancel it first via 'workflow.py cancel', or pass --force."
                             )
+                        active_path.unlink(missing_ok=True)
         except ValidationError:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            raise ValidationError(f"failed to verify prior task collision safety: {exc}")
     with step_progress("Classifying changed surfaces"):
         classification = classify(repo)
     raw_expected = [item.strip() for item in (args.expected_surfaces or "").split(",") if item.strip()]
@@ -488,21 +487,39 @@ def cancel(args: argparse.Namespace) -> dict:
 def recover_stale(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     active_path = state_root(repo) / "active-task.json"
-    if active_path.is_file():
-        try:
-            active = read_json(active_path)
-            tid = str(active.get("task_id") or getattr(args, "task_id", "") or "")
-            if tid:
-                plan = _load_plan(repo, tid)
-                plan["status"] = "CANCELLED"
-                plan["approval"] = None
-                plan["execution_nonce"] = None
-                plan["cancelled_at"] = utc_now()
-                save_plan(_plan_path(repo, tid), plan)
-        except Exception:
-            pass
+    if not active_path.is_file():
+        return {"status": "NOOP", "cleared_active_task": False, "message": "no active task to recover"}
+    try:
+        active = read_json(active_path)
+    except Exception:
         active_path.unlink(missing_ok=True)
-    return {"status": "RECOVERED", "cleared_active_task": True}
+        return {"status": "RECOVERED", "cleared_active_task": True, "reason": "corrupt_active_task_json"}
+
+    tid = str(active.get("task_id") or getattr(args, "task_id", "") or "")
+    if not tid:
+        active_path.unlink(missing_ok=True)
+        return {"status": "RECOVERED", "cleared_active_task": True, "reason": "missing_task_id"}
+
+    plan_path = _plan_path(repo, tid)
+    if not plan_path.is_file():
+        active_path.unlink(missing_ok=True)
+        return {"status": "RECOVERED", "cleared_active_task": True, "reason": "missing_plan_file"}
+
+    try:
+        plan = read_json(plan_path)
+    except Exception:
+        active_path.unlink(missing_ok=True)
+        return {"status": "RECOVERED", "cleared_active_task": True, "reason": "corrupt_plan_json"}
+
+    status_val = str(plan.get("status") or "")
+    if status_val in ("APPROVED", "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
+        raise ValidationError(
+            f"Cannot auto-recover healthy active task '{tid}' in status '{status_val}'. "
+            f"To cancel active work, the developer must use explicit 'workflow.py cancel'."
+        )
+
+    active_path.unlink(missing_ok=True)
+    return {"status": "RECOVERED", "cleared_active_task": True, "reason": f"cleared_terminal_task_status_{status_val}"}
 
 
 def resume(args: argparse.Namespace) -> dict:
@@ -518,19 +535,60 @@ def resume(args: argparse.Namespace) -> dict:
     return plan
 
 
-def deliver_task(args: argparse.Namespace) -> dict:
-    repo = Path(args.repo).resolve()
-    plan = _load_plan(repo, args.task_id)
+def finalize_ready_delivery(
+    repo: Path,
+    task_id: str,
+    plan: dict | None = None,
+    *,
+    require_clean_tree: bool = False,
+) -> tuple[dict, bool]:
+    """Centralized delivery finalizer.
+
+    Validates:
+    1. Task is in READY_FOR_DELIVERY.
+    2. If require_clean_tree is True, no verified task files remain dirty/uncommitted in the working tree.
+    3. If ready_delivery_snapshot_sha256 is present, the current repository delivery snapshot must match.
+
+    Only then marks plan DELIVERED and clears active-task.json.
+    """
+    if plan is None:
+        plan = _load_plan(repo, task_id)
+    if plan.get("status") != "READY_FOR_DELIVERY":
+        raise ValidationError(f"task '{task_id}' is in status '{plan.get('status')}', not READY_FOR_DELIVERY")
+
+    if require_clean_tree:
+        dirty = _find_uncommitted_task_files(repo, task_id, plan)
+        if dirty:
+            raise ValidationError(
+                f"cannot deliver task '{task_id}' while verified task files remain uncommitted: {', '.join(sorted(dirty))}"
+            )
+
+    ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
+    if ready_snapshot:
+        manifest = build_manifest(repo)
+        current_snapshot = manifest["delivery_snapshot_sha256"]
+        if current_snapshot != ready_snapshot:
+            raise ValidationError(
+                f"delivery snapshot mismatch: current repository ({current_snapshot[:12]}) "
+                f"differs from verified ready snapshot ({ready_snapshot[:12]}). Content was modified after verification."
+            )
+
     plan = deliver_plan(plan)
-    save_plan(_plan_path(repo, args.task_id), plan)
+    save_plan(_plan_path(repo, task_id), plan)
     active_path = state_root(repo) / "active-task.json"
     if active_path.is_file():
         try:
             active = read_json(active_path)
-            if str(active.get("task_id") or "") == args.task_id:
+            if str(active.get("task_id") or "") == task_id:
                 active_path.unlink(missing_ok=True)
         except Exception:
-            pass
+            active_path.unlink(missing_ok=True)
+    return plan, True
+
+
+def deliver_task(args: argparse.Namespace) -> dict:
+    repo = Path(args.repo).resolve()
+    plan, _ = finalize_ready_delivery(repo, args.task_id)
     return plan
 
 

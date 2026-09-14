@@ -37,12 +37,16 @@
 
 1. **Deterministic Human Authority**: AI agents are strictly restricted to *read-only* discovery and planning. Implementation cannot begin without explicit developer approval recorded in `plan.json`.
 2. **Zero Autonomous Git Mutations**: In client Android applications, the agent **never** stages, commits, resets, or pushes code. All modifications remain unstaged for the developer to inspect and commit.
-3. **Deterministic Multi-Label Surface Classification**: Inspects Git diffs across 15+ Android-specific surfaces (`ROOM_SCHEMA`, `COMPOSE_UI`, `XML_UI`, `NAVIGATION`, `BILLING`, `AUTH`, `CRYPTO`, `BUILD_CONFIG`, `MANIFEST_PERMISSION`, etc.). Unclassified delivery-relevant changes are tagged `UNKNOWN` to prevent masking.
-4. **Proportional Adaptive Review & Token Protection**: Eliminates runaway LLM costs. Micro-changes (simple docs, localized strings) bypass semantic reviewers. High and critical changes trigger up to five core specialist reviewer agents (plus a conditional test-quality reviewer) within a strict caller budget.
-5. **Tamper-Evident Snapshot-Bound Evidence Store**: Build results, test executions, and reviews produce append-only, tamper-evident evidence bound to the exact `delivery_snapshot_sha256`, repository identity, run ID, and Git branch.
-6. **Unified APK Artifact-Set Integrity**: Multi-APK and split-APK builds are verified as a single cohesive artifact set. The exact hash is enforced across assemble, install, and device launch.
-7. **Attributed Test Execution**: Separates newly introduced regressions from pre-existing baseline test failures, preventing false-positive gate failures.
-8. **Zero Python Runtime Dependencies**: 100% Python standard library (`pathlib`, `json`, `hashlib`, `subprocess`, `argparse`). No `pip install`, zero third-party package supply-chain risks, and seamless operation across Windows, macOS, and Linux.
+3. **Fail-Closed Shell & MCP Mutation Guard**: Blocks arbitrary shell execution (`rm`, `sed`, `powershell`, unauthorized executables) and unrecognized MCP tool writes during implementation. Only whitelisted inspection commands, audited harness scripts, and host file tools are permitted.
+4. **Deterministic Multi-Label Surface Classification**: Inspects Git diffs across 15+ Android-specific surfaces (`ROOM_SCHEMA`, `COMPOSE_UI`, `XML_UI`, `NAVIGATION`, `BILLING`, `AUTH`, `CRYPTO`, `BUILD_CONFIG`, `MANIFEST_PERMISSION`, etc.). Kotlin implicit public APIs are scoped to library projects to prevent token thrashing on application code.
+5. **Lean Task Briefs & Token Economy**: Generates role-focused, lightweight briefs (~300–400 tokens) for subagents instead of dumping entire repositories, reducing prompt token consumption by >60% and eliminating context dilution.
+6. **Abstract Reviewer Routing & Capability Tiers**: Decouples policy hashes from model names, routing `STANDARD` vs `STRONG` reviewer requirements with native Antigravity support (`flash` vs `pro`) under developer-controlled escalation guards.
+7. **Empirical RED → GREEN Defect Binding**: For bug tasks, empirically captures reproducible failing test output (`red_evidence`) before validating the green fix, guaranteeing that regressions are meaningfully exercised.
+8. **Dedicated Spec-Compliance Review**: Automatically inspects architectural and multi-phase tasks to ensure strict fidelity to approved acceptance criteria, preventing AI hallucinations and scope creep.
+9. **Tamper-Evident Snapshot-Bound Evidence Store**: Build results, test executions, and reviews produce append-only, tamper-evident evidence bound to the exact `delivery_snapshot_sha256`, repository identity, run ID, and Git branch. Anti-tampering delivery sealing guarantees code integrity after verification.
+10. **Unified APK Artifact-Set Integrity**: Multi-APK and split-APK builds are verified as a single cohesive artifact set. The exact hash is enforced across assemble, install, and device launch.
+11. **Attributed Test Execution**: Separates newly introduced regressions from pre-existing baseline test failures, preventing false-positive gate failures.
+12. **Zero Python Runtime Dependencies**: 100% Python standard library (`pathlib`, `json`, `hashlib`, `subprocess`, `argparse`). No `pip install`, zero third-party package supply-chain risks, and seamless operation across Windows, macOS, and Linux.
 
 ---
 
@@ -54,7 +58,10 @@ AI coding assistants (Claude Code, Gemini CLI, Cursor, Windsurf, Roo Code) are p
 | :--- | :--- |
 | **Silent Database Corruption**<br>Agents modify Room entity fields without declaring migrations or testing schema compatibility. | **Deterministic Room Guard** recursively parses `@Database`, entities, and `@Embedded` classes across files, blocking delivery unless valid migration paths are proven. |
 | **Masked Regressions via Mixed Diffs**<br>An agent touches a critical class and a doc file simultaneously, tricking naive classifiers into treating the change as low-risk. | **Full-Coverage Classifier** inspects every delivery-relevant file. Any unclassified file is tagged `UNKNOWN`, forcing human decision rather than auto-approval. |
-| **Runaway Token Costs**<br>Dispatching 5+ reviewer agents on a trivial one-line string update wastes millions of tokens. | **Adaptive Policy Matrix** dynamically selects reviewers based on actual change severity (Micro, Low, Medium, High, Critical). |
+| **Runaway Token Costs & Context Dilution**<br>Agents dump entire repositories into subagent prompts, causing context dilution and burning millions of tokens on simple tasks. | **Lean Task Briefs** (`brief-<reviewer>.md`) distill diff-scoped contracts, touched files, and rubrics into ~300–400 tokens, slashing token consumption by >60%. |
+| **Model Mismatch & Over-billing**<br>Using heavyweight models for trivial syntax checks or weak models for mission-critical security audits. | **Abstract Reviewer Routing** (`review_execution.py`) dynamically maps `STANDARD` vs `STRONG` roles to optimal models (`flash` vs `pro`) under developer escalation guards. |
+| **"Greenwashing" & Untested Bug Fixes**<br>Agents report a bug resolved without proving a test ever failed, risking placebo assertions. | **Empirical RED → GREEN Defect Binding** (`red_evidence`) captures reproducible failing test output before validating the green fix. |
+| **Architectural Scope Drift**<br>Agents deviate from agreed designs and acceptance criteria during multi-phase autonomous execution. | **Spec-Compliance Auditor** (`spec-compliance-agent`) automatically audits architectural and multi-phase tasks against approved `plan.json` outcomes. |
 | **Git History Destruction**<br>Agents perform unexpected `git reset`, create untracked commits, or rebase active branches. | **Host Enforcement Hooks** block autonomous `git add`, `git commit`, `git push`, and `git reset` commands in client applications. |
 | **Stale / Cross-Run Evidence Forgery**<br>An agent re-uses previous test output or verifies code on branch A that was built on branch B. | **Snapshot-Bound Evidence** ties all evidence to repository identity, snapshot SHA-256, active branch, and single-use nonces. |
 | **Device & Emulator Inconsistencies**<br>Agents install an APK to one device/user and launch on another, or launch outdated builds. | **Device Chain Verifier** ensures exact matching of artifact SHA-256, device serial SHA-256, and numeric Android user ID. |
@@ -83,7 +90,7 @@ Android Agent Harness is not:
 Open your Android project in your AI coding agent (Antigravity, Gemini CLI, Claude Code, Cursor, Windsurf, or Roo Code), and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.28/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.29/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent will:
@@ -98,7 +105,7 @@ Run directly from your command line:
 
 ```bash
 # Clone the pinned harness release
-git clone --depth 1 --branch v1.0.28 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
+git clone --depth 1 --branch v1.0.29 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 # Initialize inside your Android project
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/android-project --kit ~/.android-harness/kit
@@ -130,11 +137,11 @@ stateDiagram-v2
 
 1. **discovery-and-scoping** — *Activates before writing code.* Interrogates project architecture in read-only mode, explores alternatives, and binds exact target modules and surfaces.
 2. **plan-authority-and-approval** — *Activates with drafted plan.* Hashes scope, risks, and tests into an immutable contract. Implementation authority remains deterministically locked by local harness enforcement until explicit developer approval.
-3. **mutation-guard-and-isolation** — *Activates upon approval.* Enforces deterministic host-level interception: blocks raw Gradle/ADB commands, protects generated source directories, and leaves Git staging to the developer.
-4. **adaptive-skill-routing** — *Activates on code changes.* Classifies 15+ Android surfaces (Room, Compose, Coroutines, Security) and routes specialized engineering skills with token-budget protection.
-5. **test-driven-development** — *Activates during implementation.* Applies policy-routed TDD for meaningful behavioral changes, isolates new regressions from pre-existing baseline test failures, and verifies unit test evidence.
-6. **specialist-reviewer-squad** — *Activates during verification.* Dispatches up to 5 isolated specialist subagents (plus test-quality when policy dictates) scoped strictly to modified diffs.
-7. **tamper-evident-verification** — *Activates when work completes.* Re-verifies Git branch, repository identity, and APK artifact-set hashes against append-only cryptographic evidence.
+3. **mutation-guard-and-isolation** — *Activates upon approval.* Enforces deterministic host-level interception: blocks arbitrary shell executables, raw Gradle/ADB commands, unauthorized MCP tool writes, protects generated source directories, and leaves Git staging to the developer.
+4. **adaptive-skill-routing** — *Activates on code changes.* Classifies 15+ Android surfaces (Room, Compose, Coroutines, Security) and routes specialized engineering skills. Kotlin implicit public APIs are scoped to library projects to eliminate token-wasting false alarms.
+5. **test-driven-development** — *Activates during implementation.* Applies policy-routed TDD for meaningful behavioral changes, captures empirical RED → GREEN defect evidence (`red_evidence`) for bug tasks, isolates new regressions from baseline failures, and verifies unit test evidence.
+6. **specialist-reviewer-squad** — *Activates during verification.* Generates role-targeted Lean Task Briefs (`brief-<reviewer>.md`) and dispatches isolated specialist subagents (including `spec-compliance-agent` for architectural refactors) using abstract model capability routing (`flash`/`pro`).
+7. **tamper-evident-verification** — *Activates when work completes.* Re-verifies Git branch, repository identity, and APK artifact-set hashes against append-only cryptographic evidence, sealing delivery only when the active tree matches the verified snapshot.
 
 **Deterministic state machines, not prompt suggestions. Proof before delivery.**
 
@@ -268,6 +275,22 @@ Beyond LLM reviews, the harness equips your workflow with purpose-built, determi
 - **Zoho Sprints & GitHub Projects Integration**: Provides agents with structured, read-only context on active tasks and sprints.
 - **Zero Rogue Mutations**: Ticket status updates, comments, and time-logging mutations are locked behind explicit `--external-write` authorization and human confirmation.
 
+### 10. Lean Task Briefs & Token Economy (`review_package.py`)
+- **Diff-Scoped Brief Generation**: Replaces full-repository context dumps with role-specific `brief-<reviewer>.md` files (~300–400 tokens) detailing touched files, API contracts, and evaluation rubrics.
+- **Token Reduction**: Slashes prompt token consumption for subagents by >60%, preventing context dilution and model distraction.
+
+### 11. Abstract Reviewer Model Router (`review_execution.py`)
+- **Capability Tiers**: Maps reviewer roles to abstract requirements (`STANDARD` vs `STRONG`), decoupling policy hashes from specific provider model identifiers.
+- **Targeted Model Assignment**: Routes fast subagents (e.g., fast linter, bug, regression) to high-speed models (`flash`), while routing critical security checks to deep models (`pro`) under developer-controlled escalation guards (`ALLOW_MODEL_ESCALATION`).
+
+### 12. Spec-Compliance Auditor (`spec-compliance-agent`)
+- **Plan Fidelity Verification**: Automatically selected by policy for architectural refactors and multi-phase tasks.
+- **Drift Prevention**: Compares the final implementation against approved acceptance criteria and planned outcomes in `plan.json`, blocking delivery on unauthorized scope creep.
+
+### 13. Empirical Defect Evidence Binder (`final_verifier.py` & `run_tests_gate.py`)
+- **RED → GREEN Proof Chain**: For bug tasks, empirically captures reproducible failing test execution evidence (`red_evidence`) before validating the green fix.
+- **Anti-Greenwashing**: Guarantees that regression tests meaningfully reproduce the defect, preventing cosmetic assertions that pass regardless of actual behavior.
+
 ---
 
 ## Supported AI Hosts & Enforcement Tiers
@@ -276,7 +299,7 @@ The harness is host-agnostic and adapts to the security model of your coding env
 
 | AI Host | Integration Mechanism | Enforcement Level | Protection Capabilities |
 | :--- | :--- | :---: | :--- |
-| **Google Antigravity / Gemini CLI** | Native `agents/hooks.json` | **Hard Enforced** | Pre-command execution interceptor blocks unauthorized commands, raw Gradle/ADB, and Git mutations. |
+| **Google Antigravity / Gemini CLI** | Native `agents/hooks.json` | **Hard Enforced** | Pre-command & pre-tool execution interceptors block unauthorized shell commands, raw Gradle/ADB, Git mutations, generic MCP write tools, and enforce subagent model routing. |
 | **Claude Code** | Custom Tool Hooks & Settings | **Hard Enforced** | Native pre-tool execution hooks intercept file modifications and bash commands before execution. |
 | **GitHub Copilot** | `.github/prompts` & PreToolUse bridge | **Hard Enforced** (where hook supported) | Native prompt command packs with pre-tool mutation guards. |
 | **OpenAI Codex** | `AGENTS.md`, `CODEX.md`, `.codex/prompts` | **Rule Enforced** | Native slash-command prompt packs and instruction-enforced boundaries blocking unauthorized mutations and raw Gradle. |

@@ -87,6 +87,9 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         reviewers = set(FIVE_REVIEWERS)
     if "TEST_ONLY" in surfaces:
         reviewers.add("test-quality-reviewer-agent")
+    planning_depth = str(classification.get("planning_depth") or "BOUNDED").upper()
+    if planning_depth == "ARCHITECTURAL" and not _micro_eligible(classification) and "UNKNOWN" not in surfaces:
+        reviewers.add("spec-compliance-agent")
     micro = _micro_eligible(classification)
     if micro:
         reviewers.clear()
@@ -200,6 +203,88 @@ def decide_later_round(
     result["carried_reviews"] = [by_reviewer[key] for key in sorted(by_reviewer)]
     result["policy_sha256"] = canonical_sha256({key: value for key, value in result.items() if key != "policy_sha256"})
     return result
+
+
+CAPABILITY_STANDARD = "STANDARD"
+CAPABILITY_STRONG = "STRONG"
+
+
+def reviewer_capability_for(
+    reviewer: str,
+    surfaces: list[str] | set[str],
+    severity: str = "HIGH",
+    round_number: int = 1,
+    is_finding_owner: bool = False,
+    planning_depth: str = "BOUNDED",
+) -> tuple[str, str]:
+    """Derive abstract capability (STANDARD or STRONG) and reasoning effort (MEDIUM or HIGH).
+
+    Pure deterministic helper per Section 19.6.
+    """
+    surfaces_set = set(surfaces)
+    sev_upper = str(severity or "HIGH").upper()
+
+    # Rule 1: Security reviewer
+    if reviewer == "security-reviewer-agent":
+        if surfaces_set & {"AUTH", "BILLING", "SECURITY", "SENSITIVE_DATA", "CRYPTO", "NATIVE_CODE"} or sev_upper == "CRITICAL":
+            return CAPABILITY_STRONG, "HIGH"
+
+    # Rule 2: Performance reviewer
+    elif reviewer == "perf-anr-guardian-agent":
+        if sev_upper == "CRITICAL" or (sev_upper == "HIGH" and surfaces_set & {"NATIVE_CODE", "DEVICE_API"}):
+            return CAPABILITY_STRONG, "HIGH"
+
+    # Rule 3: Regression reviewer
+    elif reviewer == "regression-impact-reviewer-agent":
+        if sev_upper == "CRITICAL" or (sev_upper == "HIGH" and surfaces_set & {"PUBLIC_API", "ROOM_SCHEMA", "BUILD_CONFIG"}):
+            return CAPABILITY_STRONG, "HIGH"
+
+    # Rule 4: Bug reviewer
+    elif reviewer == "bug-reviewer-agent":
+        if sev_upper == "CRITICAL" or (round_number > 1 and is_finding_owner):
+            return CAPABILITY_STRONG, "HIGH"
+
+    # Rule 5: Spec compliance reviewer
+    elif reviewer == "spec-compliance-agent":
+        if str(planning_depth or "").upper() == "ARCHITECTURAL" or sev_upper in ("HIGH", "CRITICAL"):
+            return CAPABILITY_STRONG, "HIGH"
+
+    # Round 3 escalation for core judgment reviewers
+    if round_number >= 3 and reviewer in {"bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"}:
+        return CAPABILITY_STRONG, "HIGH"
+
+    return CAPABILITY_STANDARD, "MEDIUM"
+
+
+def review_execution_requirements(policy: dict, plan: dict | None = None, round_number: int = 1) -> dict:
+    """Derive the full execution profile mapping for all required reviewers in a policy."""
+    surfaces = policy.get("surfaces") or []
+    severity = policy.get("severity") or "HIGH"
+    reviewers = policy.get("reviewers") or []
+    finding_owners = set(policy.get("carried_reviews") or [])
+    planning_depth = str(plan.get("planning_depth") or "BOUNDED") if plan else "BOUNDED"
+
+    requirements = {}
+    for r in reviewers:
+        cap, reas = reviewer_capability_for(
+            r,
+            surfaces=surfaces,
+            severity=severity,
+            round_number=round_number,
+            is_finding_owner=(r in finding_owners),
+            planning_depth=planning_depth,
+        )
+        requirements[r] = {
+            "requested_capability": cap,
+            "requested_reasoning": reas,
+            "diversity": "PREFERRED" if cap == CAPABILITY_STRONG else "NONE",
+            "context": "ISOLATED_PREFERRED",
+        }
+    return {
+        "schema_version": 1,
+        "round_number": round_number,
+        "reviewers": requirements,
+    }
 
 
 def main() -> int:

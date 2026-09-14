@@ -400,8 +400,29 @@ def classify(repo: Path) -> dict:
             _add(found, "NATIVE_CODE", rel, "NATIVE_OR_AIDL_CHANGE")
         if test_path:
             _add(found, "TEST_ONLY", rel, "TEST_CHANGE")
-        if not test_path and re.search(r"\b(public|protected)\s+(class|interface|fun|static|abstract)\b", diff_text):
-            _add(found, "PUBLIC_API", rel, "PUBLIC_DECLARATION")
+        if not test_path:
+            has_explicit_public = bool(re.search(r"\b(public|protected)\s+(class|interface|object|fun|static|abstract)\b", diff_text))
+            has_implicit_public = False
+            if suffix in (".kt", ".kts"):
+                for line in diff_text.splitlines():
+                    stripped = line.strip()
+                    code_part = stripped[1:].strip() if stripped.startswith(("+", "-")) else stripped
+                    if re.match(r"^(?:(?:open|abstract|final|sealed|data|value|enum)\s+)*(?:class|interface|object|fun)\s+[A-Za-z0-9_]+", code_part):
+                        if not re.match(r"^(?:private|internal)\b", code_part):
+                            has_implicit_public = True
+                            break
+
+            is_library = False
+            try:
+                from _product import PROJECT_KIND
+                is_library = (str(PROJECT_KIND or "").lower() == "library")
+            except Exception:
+                pass
+
+            if has_explicit_public:
+                _add(found, "PUBLIC_API", rel, "PUBLIC_DECLARATION")
+            elif is_library and has_implicit_public:
+                _add(found, "PUBLIC_API", rel, "IMPLICIT_PUBLIC_LIBRARY_API")
         if "network_security_config" in lower and suffix == ".xml":
             _add(found, "SECURITY", rel, "NETWORK_SECURITY_CONFIG")
         if Path(lower).name in ("consumer-rules.pro", "proguard-rules.pro"):

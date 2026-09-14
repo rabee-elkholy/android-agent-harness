@@ -1,6 +1,6 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.28` — **SHA-256**: `4d0cbcc3c1f8420d36d1889964173e6d29d92b2ef8614c39448beec79a237d26` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.29` — **SHA-256**: `cac0a66c9731456277270c79040b021b5cc8fa8de5a47ee61c47cd099a70b70a` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
@@ -15,13 +15,13 @@ Do not mutate, download, build, install, or remove.
    - **Clean Install**: no `.agents` and no v1 ownership.
    - **Same-Major Update**: `.harness-setup/ownership-v1.json` has architecture major 1.
    - **Legacy Replacement**: `.agents` exists without v1 ownership.
-3. `<kit-dir>` is `%USERPROFILE%\.android-harness\kit` (Windows) or `~/.android-harness/kit`. Reuse only at detached `v1.0.28` with matching version and checksum `files`.
+3. `<kit-dir>` is `%USERPROFILE%\.android-harness\kit` (Windows) or `~/.android-harness/kit`. Reuse only at detached `v1.0.29` with matching version and checksum `files`.
 
 ## Phase 2: Kit bootstrap approval
 If cache is invalid, show expanded staging, kit, rollback paths and commands:
 
 ```text
-git clone --depth 1 --branch v1.0.28 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
+git clone --depth 1 --branch v1.0.29 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
 git -C <staging-dir> describe --tags --exact-match
 python <staging-dir>/harness_cli.py version --kit <staging-dir>
 ```

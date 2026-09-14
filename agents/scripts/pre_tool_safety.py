@@ -32,6 +32,15 @@ ZOHO_MUTATION_TOOLS = {
     "zoho_create_task", "zoho_update_task_status", "zoho_add_comment",
     "zoho_update_task_description",
 }
+KNOWN_MCP_READ_PREFIXES = (
+    "get_", "list_", "read_", "search_", "fetch_", "query_", "check_", "inspect_",
+    "api-get-", "api-retrieve-", "api-query-", "developerknowledge_",
+)
+KNOWN_MCP_MUTATION_KEYWORDS = (
+    "create", "update", "delete", "patch", "post", "put", "deploy", "write",
+    "mutate", "drop", "send", "publish", "archive", "grant", "merge", "assign",
+    "close", "trigger", "resolve", "execute", "destroy", "set_", "add_", "remove_",
+)
 PROTECTED_ROOTS = (
     ".agents", "agents/scripts", "agents/state", ".harness-setup/ownership-v1.json",
     ".git", ".gradle", ".idea",
@@ -60,6 +69,8 @@ DANGEROUS = (
     ("live_network", re.compile(r"\b(?:curl|wget|invoke-webrequest|invoke-restmethod)\b|urllib\.request|requests\.(?:get|post|put|patch|delete)\s*\(", re.I)),
     ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
     ("inline_interpreter", re.compile(r"\b(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-c|-m\s+(?!compileall\b))\b|\bnode(?:\.exe)?\s+-e\b|\bperl(?:\.exe)?\s+-e\b|\bruby(?:\.exe)?\s+-e\b", re.I)),
+    ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli\.py)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
+    ("review_override_provenance", re.compile(r"record_review\.py\b.*--override-reviews\b.*--source\s+developer_terminal\b", re.I)),
 )
 RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", re.I)
 ALLOWED_GRADLE_WRAPPER = re.compile(r"(?:run_gradle_task|run_tests_gate)\.py\b", re.I)
@@ -227,9 +238,26 @@ def _handle_subagent(name: str, args: dict) -> None:
         if not actual or not (actual <= expected):
             emit("deny", f"Reviewer roster mismatch: expected subset of {sorted(expected)}, got unexpected {sorted(actual - expected)}.", tool=name)
             return
-        if any(str(item.get("model") or "inherit").lower() not in {"", "inherit"} for item in raw_subs if isinstance(item, dict)):
-            emit("deny", "Reviewer model escalation requires explicit central-policy authorization.", tool=name)
-            return
+        try:
+            from review_execution import resolve_execution_profile
+            profile = resolve_execution_profile(REPO, str(active["task_id"]), host="antigravity")
+            reviewer_routes = profile.get("reviewers", {})
+        except Exception:
+            reviewer_routes = {}
+
+        for item in raw_subs:
+            if not isinstance(item, dict):
+                continue
+            r_role = str(item.get("Role") or item.get("role") or "").strip()
+            r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
+            key = r_role if r_role in reviewer_routes else r_type
+            req_model = str(item.get("Model") or item.get("model") or "inherit").lower().strip()
+            if req_model in {"", "inherit"}:
+                continue
+            allowed_model = reviewer_routes.get(key, {}).get("preferred_model", "inherit").lower().strip()
+            if req_model != allowed_model:
+                emit("deny", f"Reviewer model escalation for '{key}' ({req_model}) requires explicit central-policy authorization (allowed: {allowed_model}).", tool=name)
+                return
         if int(plan.get("review_rounds") or 0) >= int(policy.get("max_review_rounds") or 3):
             emit("deny", "Review round cap reached; developer decision is required.", tool=name)
             return
@@ -291,12 +319,15 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
         emit("allow", "Read-only Zoho inspection is allowed.", tool=name)
         return
 
-    mutating_kw = ("create", "update", "delete", "patch", "post", "put", "deploy", "write", "mutate", "drop")
-    if any(kw in tool_lower for kw in mutating_kw):
-        emit("deny", f"External MCP write operation '{tool_name}' on server '{server}' is not authorized by the active approved plan.", tool=name)
+    is_read = (
+        any(tool_lower.startswith(p) for p in KNOWN_MCP_READ_PREFIXES)
+        and not any(kw in tool_lower for kw in KNOWN_MCP_MUTATION_KEYWORDS)
+    )
+    if is_read:
+        emit("allow", f"Read-only MCP tool execution '{tool_name}' is allowed.", tool=name)
         return
 
-    emit("allow", "Read-only MCP tool execution is outside the mutation boundary.", tool=name)
+    emit("deny", f"External MCP operation '{tool_name}' on server '{server}' is not registered as read-only and is not authorized by the active approved plan.", tool=name)
 
 
 def _is_targeted_search_path(target: str) -> bool:

@@ -403,5 +403,143 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse(bool(NOT_NULL_NO_DEFAULT_RE.search(good_sql)), "Should not match when DEFAULT is present")
 
 
+    def test_generic_shell_mutation_bypass_denied(self):
+        # SEC-CMD-001: Model attempts to run unapproved executables during IMPLEMENTING
+        for cmd in ("node mutate.js", "bash -c 'rm -rf *'", "powershell Remove-Item file.txt", "perl script.pl", "sed -i 's/a/b/' file.kt"):
+            with self.subTest(command=cmd):
+                self.assertEqual("deny", self.engine(cmd)["decision"])
+
+    def test_generic_mcp_unrecognized_tool_fails_closed(self):
+        # SEC-MCP-001: Unrecognized MCP tool must fail closed as write mutation
+        proc = subprocess.run(
+            [sys.executable, str(ENGINE)],
+            input=json.dumps({"toolCall": {"name": "call_mcp_tool", "args": {"ServerName": "custom-server", "ToolName": "delete_entry", "Arguments": {}}}}),
+            capture_output=True, text=True, env=self.env, check=False, timeout=15,
+        )
+        res = json.loads(proc.stdout)
+        self.assertEqual("deny", res["decision"])
+
+    def test_recover_stale_active_task_protection(self):
+        # AUTH-RECOVER-001: Healthy active task cannot be wiped by recover_stale
+        sys.path.insert(0, str(SCRIPTS))
+        from workflow import recover_stale
+        import argparse
+        from _vnext_common import ValidationError
+        args = argparse.Namespace(repo=str(self.repo))
+        with self.assertRaises(ValidationError) as ctx:
+            recover_stale(args)
+        self.assertIn("cannot auto-recover healthy active task", str(ctx.exception).lower())
+
+    def test_review_override_forbidden_on_sensitive_surfaces(self):
+        # SENS-REV-001: Sensitive surfaces strictly prohibit review override
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["expected_surfaces"] = ["AUTH", "BUSINESS_LOGIC"]
+        plan["status"] = "VERIFYING"
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        policy = {"reviewers": ["security", "correctness"], "surfaces": ["AUTH", "BUSINESS_LOGIC"]}
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps(policy), encoding="utf-8")
+        current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_review.py"), "--repo", str(self.repo), "--task", task_id, "--override-reviews", "--source", "developer_terminal", "--proof-reference", "bypassed"],
+            capture_output=True, text=True, env=self.env, check=False, timeout=15,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("strictly forbidden on sensitive surfaces", proc.stderr.lower())
+
+    def test_kotlin_implicit_public_scoped_to_library(self):
+        # KOTLIN-API-001: Implicit public declarations in Kotlin do not trigger PUBLIC_API in application projects
+        sys.path.insert(0, str(SCRIPTS))
+        import change_classifier
+        from unittest import mock
+
+        src = self.repo / "app/src/main/kotlin/com/example/MyService.kt"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("package com.example\n\nclass MyService {\n    fun doWork(): Int = 42\n}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+
+        # In application project: no PUBLIC_API
+        import _product
+        with mock.patch.object(_product, "PROJECT_KIND", "application"):
+            res_app = change_classifier.classify(self.repo)
+            self.assertNotIn("PUBLIC_API", res_app["surfaces"])
+
+        # In library project: triggers PUBLIC_API
+        with mock.patch.object(_product, "PROJECT_KIND", "library"):
+            res_lib = change_classifier.classify(self.repo)
+            self.assertIn("PUBLIC_API", res_lib["surfaces"])
+
+    def test_review_execution_profile_and_antigravity_routing(self):
+        # ROUTE-001: Reviewer capability and model routing resolution
+        sys.path.insert(0, str(SCRIPTS))
+        from review_execution import resolve_execution_profile
+        from unittest import mock
+        import _product
+
+        task_id = "t"
+        plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["status"] = "VERIFYING"
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps(policy), encoding="utf-8")
+        current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+
+        # When ALLOW_MODEL_ESCALATION is False (default)
+        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", False):
+            prof_default = resolve_execution_profile(self.repo, task_id, host="antigravity")
+            self.assertEqual("inherit", prof_default["reviewers"]["security-reviewer-agent"]["preferred_model"])
+            self.assertEqual("inherit", prof_default["reviewers"]["convention-reviewer-agent"]["preferred_model"])
+
+        # When ALLOW_MODEL_ESCALATION is True: security-reviewer on AUTH escalates to pro
+        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True):
+            prof_escalated = resolve_execution_profile(self.repo, task_id, host="antigravity")
+            self.assertEqual("pro", prof_escalated["reviewers"]["security-reviewer-agent"]["preferred_model"])
+            self.assertEqual("inherit", prof_escalated["reviewers"]["convention-reviewer-agent"]["preferred_model"])
+
+    def test_spec_compliance_reviewer_routing(self):
+        # SPEC-001: Spec compliance reviewer routed for ARCHITECTURAL planning depth
+        sys.path.insert(0, str(SCRIPTS))
+        from review_policy import decide
+
+        skills_root = SCRIPTS.parent / "skills"
+        cls_bounded = {"surfaces": ["BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 1, "planning_depth": "BOUNDED"}
+        pol_bounded = decide(cls_bounded, skills_root)
+        self.assertNotIn("spec-compliance-agent", pol_bounded["reviewers"])
+
+        cls_arch = {"surfaces": ["BUSINESS_LOGIC"], "severity": "HIGH", "changed_files": 4, "planning_depth": "ARCHITECTURAL"}
+        pol_arch = decide(cls_arch, skills_root)
+        self.assertIn("spec-compliance-agent", pol_arch["reviewers"])
+
+    def test_lean_task_brief_generation(self):
+        # BRIEF-001: Lean brief files generated with role focus and package sha
+        sys.path.insert(0, str(SCRIPTS))
+        from review_package import generate_task_brief
+
+        pkg_dir = self.repo / "test_pkg_dir"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        meta = {"run_id": "run-99", "package_sha256": "abcdef1234567890abcdef"}
+        plan = {"outcome": "Implement secure auth storage", "kind": "FEATURE"}
+        policy = {"surfaces": ["AUTH", "SECURITY"]}
+        changes = [{"path": "app/src/main/Auth.kt"}]
+
+        brief_path = generate_task_brief(self.repo, "t1", "security-reviewer-agent", pkg_dir, meta, plan, policy, changes)
+        self.assertTrue(brief_path.is_file())
+        text = brief_path.read_text(encoding="utf-8")
+        self.assertIn("LEAN TASK BRIEF: Security Specialist", text)
+        self.assertIn("abcdef123456", text)
+        self.assertIn("Auth.kt", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+

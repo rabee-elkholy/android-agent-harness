@@ -249,13 +249,13 @@ def main() -> int:
                 raise ValidationError("review override requires a VERIFYING plan")
             if not str(args.proof_reference).strip():
                 raise ValidationError("review override requires non-empty --proof-reference")
+            sensitive = sorted(set(policy.get("surfaces") or []) & {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
+            if sensitive:
+                raise ValidationError(f"review override is strictly forbidden on sensitive surfaces ({', '.join(sensitive)})")
             severity = str(policy.get("severity") or "").upper()
             if args.source != "developer_terminal":
                 if severity in ("HIGH", "CRITICAL"):
                     raise ValidationError(f"review override via {args.source} is strictly forbidden for {severity} severity changes; run from developer_terminal")
-                sensitive = sorted(set(policy.get("surfaces") or []) & {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
-                if sensitive:
-                    raise ValidationError(f"review override via {args.source} is strictly forbidden on sensitive surfaces ({', '.join(sensitive)}); run from developer_terminal")
             manifest = read_json(Path(current["manifest"]))
 
             version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
