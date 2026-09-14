@@ -4,6 +4,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.35] - 2026-09-14
+
+### Project Context Hygiene Bounding & Candidate Preview Polish
+
+- **Project Context Hygiene Bounding (`doctor/engine.py`)**:
+  - Bound home directory leak detection pattern with negative lookbehind `(?<![a-zA-Z0-9_/-])/(?:Users|home)/[a-zA-Z0-9_-]+/`.
+  - Prevents false-positive leak reports on legitimate relative repository package paths and feature modules containing `home` (such as `features/home/homeFragment/...`).
+- **Base ViewModel Candidate Preview Visibility (`generate_project_context.py`)**:
+  - Enhanced `context preview` CLI output when BaseViewModel resolution is `UNRESOLVED` to explicitly display candidate symbol names (e.g. `BaseVM Resolution : UNRESOLVED (candidates: MVIViewModel, StateViewModel)`) instead of merely showing candidate count.
+
 ## [1.0.34] - 2026-09-14
 
 ### Project Context Corrective Patch & Architectural Engine Hardening

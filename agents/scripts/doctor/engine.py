@@ -675,7 +675,7 @@ class HarnessDoctor:
             leaks.append(f"Absolute user home path detected: {user_home}")
         if re.search(r"[A-Za-z]:[/\\]Users[/\\]", raw_text, re.I):
             leaks.append("Absolute user path detected in facts JSON.")
-        if re.search(r"/(?:Users|home)/[a-zA-Z0-9_-]+/", raw_text):
+        if re.search(r"(?<![a-zA-Z0-9_/-])/(?:Users|home)/[a-zA-Z0-9_-]+/", raw_text):
             leaks.append("Absolute home directory detected in facts JSON.")
 
         if leaks:

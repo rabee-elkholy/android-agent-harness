@@ -41,7 +41,11 @@ def cmd_preview(args: argparse.Namespace) -> int:
         print(f"  Primary BaseVM    : {primary_vm.get('symbol')} ({primary_vm.get('path')})")
     else:
         cands = vm.get("candidates") or []
-        print(f"  BaseVM Resolution : {vm.get('resolution')} ({len(cands)} candidate(s))")
+        if cands:
+            cand_names = ", ".join(c.get("symbol", "") for c in cands)
+            print(f"  BaseVM Resolution : {vm.get('resolution')} (candidates: {cand_names})")
+        else:
+            print(f"  BaseVM Resolution : {vm.get('resolution')} (0 candidates)")
 
     dbs = pers.get("room_databases") or []
     if dbs:
