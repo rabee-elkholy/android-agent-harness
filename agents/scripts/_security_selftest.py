@@ -26,6 +26,10 @@ class SecurityTests(unittest.TestCase):
         subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
         subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
+        version_file = SCRIPTS.parent / "VERSION"
+        version_str = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.32"
+        (self.repo / "agents").mkdir(parents=True, exist_ok=True)
+        (self.repo / "agents" / "VERSION").write_text(f"{version_str}\n", encoding="utf-8")
         state = self.repo / "agents/state/tasks/t"
         state.mkdir(parents=True)
         plan = {"plan_id": "p", "status": "IMPLEMENTING", "execution_nonce": "n", "approval": {"single_use_nonce": "n"}}
@@ -1310,6 +1314,286 @@ class SecurityTests(unittest.TestCase):
         self.assertIsNotNone(signoff_chk)
         self.assertEqual("FAIL", signoff_chk["status"])
         self.assertIn("device sign-off artifact mismatch", signoff_chk["detail"])
+
+    def test_PLAN_LEGACY_001_dual_validation(self):
+        """PLAN-LEGACY-001: active legacy plan without planning_depth passes dual hash validation"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify_task
+        from plan_authority import legacy_plan_payload, validate_plan_hash
+        from _vnext_common import canonical_sha256, read_json
+
+        task_id = "t-plan-legacy"
+        legacy_file = self.repo / "app/src/main/kotlin/com/example/Legacy.kt"
+        legacy_file.parent.mkdir(parents=True, exist_ok=True)
+        legacy_file.write_text("package com.example\nclass Legacy {}\n", encoding="utf-8")
+
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Legacy task outcome",
+            kind="FEATURE",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        plan_path = state_root(self.repo) / "tasks" / task_id / "plan.json"
+        plan = read_json(plan_path)
+        # Strip planning_depth to simulate a pre-v1.0.31 plan
+        plan.pop("planning_depth", None)
+        legacy_hash = canonical_sha256(legacy_plan_payload(plan))
+        plan["plan_sha256"] = legacy_hash
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        valid, computed_hash = validate_plan_hash(plan)
+        self.assertTrue(valid)
+        self.assertEqual(legacy_hash, computed_hash)
+
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approved legacy",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        # Ensure approval recorded the legacy hash
+        plan = read_json(plan_path)
+        self.assertEqual(legacy_hash, plan["approval"]["plan_sha256"])
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        res = verify_task(self.repo, task_id)
+        # Verify plan hash check did not fail
+        self.assertNotIn("plan or approval hash mismatch", res.get("blocked_by") or [])
+
+    def test_BRIEF_RESOLVER_001_path_binding(self):
+        """BRIEF-RESOLVER-001: review_execution resolves brief-<rev>.md from state/runs/<snap>/<run>/"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification
+        from review_package import build_package
+        from review_execution import resolve_execution_profile
+
+        task_id = "t-brief-resolve"
+        code_file = self.repo / "app/src/main/kotlin/com/example/BriefTest.kt"
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        code_file.write_text("package com.example\nclass BriefTest {}\n", encoding="utf-8")
+
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Brief path binding test",
+            kind="FEATURE",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+
+        pkg_path, metadata = build_package(self.repo, task_id)
+        self.assertTrue(pkg_path.is_file())
+
+        exec_meta = resolve_execution_profile(self.repo, task_id, host="antigravity")
+        self.assertTrue(exec_meta["package_dir"])
+        for rev_name, r_info in exec_meta["reviewers"].items():
+            self.assertTrue(r_info["brief_path"], f"brief_path empty for {rev_name}")
+            self.assertTrue(Path(r_info["brief_path"]).is_file(), f"brief file does not exist: {r_info['brief_path']}")
+            self.assertIn(f"brief-{rev_name}.md", r_info["brief_path"])
+
+    def test_SIGNOFF_PROVENANCE_001_tier_and_identity(self):
+        """SIGNOFF-PROVENANCE-001: device signoff validates tier consistency and target identity matching"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify_task
+        from evidence_store import EvidenceStore
+
+        task_id = "t-signoff-prov"
+        ui_file = self.repo / "app/src/main/kotlin/com/example/ProvUI.kt"
+        ui_file.parent.mkdir(parents=True, exist_ok=True)
+        ui_file.write_text("package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun ProvView() {}\n", encoding="utf-8")
+
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Device identity test",
+            kind="FEATURE",
+            expected_surfaces="COMPOSE_UI,BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="launch",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+
+        store = EvidenceStore(state_root(self.repo))
+        version_file = SCRIPTS.parent / "VERSION"
+        version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+        snap = prep_res["delivery_snapshot_sha256"]
+        cs = prep_res["change_set_sha256"]
+        run_id = prep_res["run_id"]
+
+        store.write(
+            snapshot=snap, run_id=run_id, name="device_install", producer="run_device",
+            harness_version=version, change_set=cs, status="PASS",
+            evidence={"artifact_set_sha256": "art1", "target_user": "0", "serial_sha256": "ser1"},
+        )
+        store.write(
+            snapshot=snap, run_id=run_id, name="device_launch", producer="run_device",
+            harness_version=version, change_set=cs, status="PASS",
+            evidence={"artifact_set_sha256": "art1", "target_user": "0", "serial_sha256": "ser1", "install_reference": "art1"},
+        )
+
+        # Case A: signoff overclaims HARD_ENFORCED with developer_terminal -> FAIL
+        store.write(
+            snapshot=snap, run_id=run_id, name="device_signoff", producer="developer_approval",
+            harness_version=version, change_set=cs, status="PASS",
+            evidence={
+                "artifact_set_sha256": "art1",
+                "proof_reference": "signed off", "proof_reference_sha256": "p",
+                "approval_source": "developer_terminal",
+                "enforcement_tier": "HARD_ENFORCED",
+                "target_user": "0", "serial_sha256": "ser1",
+            },
+        )
+        res = verify_task(self.repo, task_id)
+        chk = next((c for c in res["checks"] if c["name"] == "device_signoff"), None)
+        self.assertIsNotNone(chk)
+        self.assertEqual("FAIL", chk["status"])
+        self.assertIn("enforcement tier overclaims its source", chk["detail"])
+
+    def test_REDGREEN_EXEC_001_executed_test_required(self):
+        """REDGREEN-EXEC-001: RED defect must be executed in GREEN run, not just absent from regressions"""
+        import argparse
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from final_verifier import verify_task
+        from evidence_store import EvidenceStore
+
+        version_file = SCRIPTS.parent / "VERSION"
+        version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+        store = EvidenceStore(state_root(self.repo))
+
+        test_file = self.repo / "app/src/test/kotlin/com/example/AuthTest.kt"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("package com.example\nclass AuthTest {}\n", encoding="utf-8")
+
+        # Task 1: GREEN ran only OtherTest (RED target NOT executed) -> FAIL
+        task_id_1 = "t-rg-exec-fail"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_1,
+            outcome="Fix defect 1",
+            kind="BUG",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_1,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id_1))
+        prep_1 = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_1))
+
+        (state_root(self.repo) / "tasks" / task_id_1 / "debug-evidence.json").write_text(json.dumps({
+            "entries": [{"kind": "failing_test", "test_name": "com.example.AuthTest.testTokenExpiry"}],
+        }), encoding="utf-8")
+
+        # GREEN run ran unrelated test only
+        store.write(
+            snapshot=prep_1["delivery_snapshot_sha256"],
+            run_id=prep_1["run_id"],
+            name="unit_tests",
+            producer="run_tests_gate",
+            harness_version=version,
+            change_set=prep_1["change_set_sha256"],
+            status="PASS",
+            evidence={"executed": 1, "failed": 0, "new_regressions": [], "executed_tests": ["com.example.OtherTest.testUnrelated"]},
+        )
+        res1 = verify_task(self.repo, task_id_1)
+        chk1 = next((c for c in res1["checks"] if c["name"] == "red_evidence"), None)
+        self.assertIsNotNone(chk1)
+        self.assertEqual("FAIL", chk1["status"])
+        self.assertIn("not executed in GREEN verification run", chk1["detail"])
+
+        # Task 2: GREEN ran AuthTest.testTokenExpiry -> PASS
+        task_id_2 = "t-rg-exec-pass"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_2,
+            outcome="Fix defect 2",
+            kind="BUG",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id_2,
+            source="conversation",
+            proof_reference="approved",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id_2))
+        prep_2 = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_2))
+
+        (state_root(self.repo) / "tasks" / task_id_2 / "debug-evidence.json").write_text(json.dumps({
+            "entries": [{"kind": "failing_test", "test_name": "com.example.AuthTest.testTokenExpiry"}],
+        }), encoding="utf-8")
+
+        store.write(
+            snapshot=prep_2["delivery_snapshot_sha256"],
+            run_id=prep_2["run_id"],
+            name="unit_tests",
+            producer="run_tests_gate",
+            harness_version=version,
+            change_set=prep_2["change_set_sha256"],
+            status="PASS",
+            evidence={"executed": 1, "failed": 0, "new_regressions": [], "executed_tests": ["com.example.AuthTest.testTokenExpiry"]},
+        )
+        res2 = verify_task(self.repo, task_id_2)
+        chk2 = next((c for c in res2["checks"] if c["name"] == "red_evidence"), None)
+        self.assertIsNotNone(chk2)
+        self.assertEqual("PASS", chk2["status"])
 
 
 if __name__ == "__main__":

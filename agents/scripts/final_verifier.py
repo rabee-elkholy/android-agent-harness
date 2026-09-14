@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_f
 from delivery_manifest import build_manifest  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
-from plan_authority import changed_modules, check_material_drift, plan_payload  # noqa: E402
+from plan_authority import changed_modules, check_material_drift, plan_payload, validate_plan_hash  # noqa: E402
 from artifact_set import verify_artifact_set  # noqa: E402
 from review_policy import decide, decide_later_round  # noqa: E402
 
@@ -218,9 +218,11 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     except ValidationError as exc:
         return _blocked("BLOCKED", [str(exc)], checks)
 
-    expected_plan_hash = canonical_sha256(plan_payload(plan))
+    valid_plan, expected_plan_hash = validate_plan_hash(
+        plan, plan.get("plan_sha256"), payload_fn=plan_payload, hash_fn=canonical_sha256
+    )
     approval = plan.get("approval") or {}
-    if plan.get("plan_sha256") != expected_plan_hash or approval.get("plan_sha256") != expected_plan_hash:
+    if not valid_plan or approval.get("plan_sha256") != expected_plan_hash:
         return _blocked("PLAN_APPROVAL_REQUIRED", ["plan or approval hash mismatch"], checks)
     if not plan.get("execution_nonce") or plan.get("execution_nonce") != approval.get("single_use_nonce"):
         return _blocked("PLAN_APPROVAL_REQUIRED", ["approval was not consumed by this task run"], checks)
@@ -315,7 +317,16 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             art_err = None
             if not signoff_ev.get("proof_reference_sha256") and not signoff_ev.get("proof_reference"):
                 art_err = "device sign-off proof reference is missing"
-            # Exact artifact chain validation: assemble == install == signoff
+            appr_source = str(signoff_ev.get("approval_source") or "")
+            appr_tier = str(signoff_ev.get("enforcement_tier") or "")
+            if appr_source and appr_source not in ("developer_terminal", "host_native", "conversation"):
+                art_err = f"untrusted device signoff approval source: '{appr_source}'"
+            elif appr_tier and appr_tier not in ("HARD_ENFORCED", "RULE_ENFORCED"):
+                art_err = f"unsupported device signoff enforcement tier: '{appr_tier}'"
+            elif appr_tier == "HARD_ENFORCED" and appr_source != "host_native":
+                art_err = "device signoff enforcement tier overclaims its source (HARD_ENFORCED requires host_native)"
+
+            # Exact artifact chain & device identity validation: assemble == install == signoff
             install_rec, _ = _validate_artifact(store, snapshot, change_set, run_id, "device_install", harness_version)
             if install_rec:
                 install_ev = install_rec.get("evidence") or {}
@@ -323,9 +334,14 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 sign_sha = str(signoff_ev.get("artifact_set_sha256") or "")
                 if inst_sha and sign_sha and inst_sha != sign_sha:
                     art_err = f"device sign-off artifact mismatch: signoff ({sign_sha[:12]}) != device_install ({inst_sha[:12]})"
-            appr_source = str(signoff_ev.get("approval_source") or "")
-            if appr_source and appr_source not in ("developer_terminal", "host_native", "conversation"):
-                art_err = f"untrusted device signoff approval source: '{appr_source}'"
+                inst_user = str(install_ev.get("target_user") or install_ev.get("user") or "")
+                sign_user = str(signoff_ev.get("target_user") or signoff_ev.get("user") or "")
+                if inst_user and sign_user and inst_user != sign_user:
+                    art_err = f"device sign-off target user mismatch: signoff ({sign_user}) != device_install ({inst_user})"
+                inst_serial = str(install_ev.get("serial_sha256") or install_ev.get("serial_hash") or "")
+                sign_serial = str(signoff_ev.get("serial_sha256") or signoff_ev.get("serial_hash") or "")
+                if inst_serial and sign_serial and inst_serial != sign_serial:
+                    art_err = f"device sign-off serial mismatch: signoff ({sign_serial[:12]}) != device_install ({inst_serial[:12]})"
             if art_err:
                 checks.append({"name": "device_signoff", "status": "FAIL", "detail": art_err})
                 reasons.append(art_err)
@@ -368,7 +384,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         except Exception:
             pass
 
-        # Validate that defects captured in RED do not remain failing in GREEN
+        # Validate that defects captured in RED do not remain failing in GREEN and were executed
         failed_binding = False
         if repro_defect_ids:
             unit_test_rec, ut_err = _validate_artifact(store, snapshot, change_set, run_id, "unit_tests", harness_version)
@@ -381,6 +397,30 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     err_msg = f"RED defect(s) still failing in GREEN verification: {', '.join(sorted(still_failing))}"
                     checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
                     reasons.append(err_msg)
+
+                executed_tests = ut_ev.get("executed_tests")
+                if not failed_binding and executed_tests is not None and isinstance(executed_tests, list):
+                    executed_set = set(executed_tests)
+                    executed_clean = {t.replace("#", ".").strip() for t in executed_set}
+                    executed_methods = {t.split(".")[-1] for t in executed_clean if "." in t}
+                    executed_classes = {".".join(t.split(".")[:-1]) for t in executed_clean if "." in t}
+
+                    def _was_executed(defect_id: str) -> bool:
+                        d_clean = defect_id.replace("#", ".").strip()
+                        if d_clean in executed_clean or defect_id in executed_set:
+                            return True
+                        if any(d_clean.endswith(f".{ex}") or ex.endswith(f".{d_clean}") for ex in executed_clean):
+                            return True
+                        if d_clean in executed_methods or d_clean in executed_classes:
+                            return True
+                        return False
+
+                    executed_any = any(_was_executed(did) for did in repro_defect_ids)
+                    if not executed_any:
+                        failed_binding = True
+                        err_msg = f"RED defect(s) not executed in GREEN verification run: {', '.join(sorted(repro_defect_ids))}"
+                        checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+                        reasons.append(err_msg)
 
         if not failed_binding:
             if has_repro:

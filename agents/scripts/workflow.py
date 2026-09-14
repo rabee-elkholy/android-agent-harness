@@ -411,8 +411,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                             harness_version=str(res_data.get("harness_version") or h_ver),
                             change_set=manifest["change_set_sha256"],
                             status="PASS",
-                            exit_code=int(res_data.get("exit_code") or 0),
-                            detail=str(res_data.get("detail") or "bridged from pre-verification gate execution"),
+                            evidence=res_data,
                         )
                 except Exception:
                     pass

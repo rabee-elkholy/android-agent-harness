@@ -99,7 +99,16 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
     )
     host_routes = load_host_model_routes(host)
     run_id = str(current.get("run_id") or "")
-    pkg_dir = directory / f"review-{run_id}"
+    snapshot = str(current.get("delivery_snapshot_sha256") or "")
+    st_root = state_root(repo)
+
+    candidate_pkg_dirs = []
+    if snapshot and run_id:
+        candidate_pkg_dirs.append(st_root / "runs" / snapshot / run_id)
+    candidate_pkg_dirs.append(directory / f"review-{run_id}")
+    candidate_pkg_dirs.append(directory)
+
+    active_pkg_dir = next((d for d in candidate_pkg_dirs if d.is_dir()), candidate_pkg_dirs[0])
 
     resolved_reviewers = {}
     for rev, req in requirements.get("reviewers", {}).items():
@@ -121,7 +130,13 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
             pref_model = "inherit"
             res_status = "STANDARD_MAPPING" if cap == CAPABILITY_STANDARD else "INHERIT_FALLBACK"
 
-        brief_file = str(pkg_dir / f"brief-{rev}.md") if (pkg_dir / f"brief-{rev}.md").is_file() else (str(pkg_dir / "review-package.md") if (pkg_dir / "review-package.md").is_file() else "")
+        brief_candidates = [
+            d / f"brief-{rev}.md" for d in candidate_pkg_dirs
+        ] + [
+            d / "review-package.md" for d in candidate_pkg_dirs
+        ]
+        brief_file = next((str(p) for p in brief_candidates if p.is_file()), "")
+
         resolved_reviewers[rev] = {
             **req,
             "preferred_model": pref_model,
@@ -136,18 +151,18 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
         "round_number": round_number,
         "host": host,
         "allow_model_escalation": allow_escalation,
-        "package_dir": str(pkg_dir) if pkg_dir.is_dir() else "",
+        "package_dir": str(active_pkg_dir) if active_pkg_dir.is_dir() else "",
         "reviewers": resolved_reviewers,
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", default=os.environ.get("HARNESS_TASK_ID"))
     parser.add_argument("--host", default="antigravity", help="Target host environment")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.task:
         print("[FAIL] --task or HARNESS_TASK_ID is required", file=sys.stderr)
         return 1

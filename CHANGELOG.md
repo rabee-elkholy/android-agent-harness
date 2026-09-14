@@ -3,7 +3,26 @@
 All notable changes to the **Android Agent Harness** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.0.32] - 2026-09-14
+
+### Backward Compatibility, Empirical Test Execution Binding, and Sign-Off Provenance Hardening
+
+- **Dual Plan Hash Validation (`plan_authority.py`, `final_verifier.py`)**:
+  - Added backward compatibility for active tasks created pre-v1.0.31 without `planning_depth` in `plan.json`.
+  - Implemented `validate_plan_hash()` supporting both current payload and legacy payload (omitting `planning_depth`) when `planning_depth` was omitted from the plan.
+  - Made `plan_payload` safely access `plan.get("task_id")` and supported customizable `payload_fn` / `hash_fn` hooks.
+- **Authoritative Lean Brief Resolution (`review_execution.py`)**:
+  - Connected reviewer execution profile resolver directly to immutable package directories in `state_root(repo) / "runs" / snapshot / run_id`.
+  - Resolved `brief-<reviewer>.md` paths for dispatched subagent reviewers, falling back cleanly to `review-package.md`.
+- **Device Sign-Off Provenance & Identity Enforcement (`run_device.py`, `final_verifier.py`)**:
+  - Enforced strict tier-source consistency (`HARD_ENFORCED` only for `host_native`; `RULE_ENFORCED` for `developer_terminal`).
+  - Asserts exact device identity matching (`target_user` and `serial_sha256`) between `device_install` and `device_signoff`.
+- **Empirical RED → GREEN Test Execution Binding (`run_tests_gate.py`, `final_verifier.py`)**:
+  - Recorded `executed_tests` identity list in unit-test gate evidence.
+  - Asserted that failing test targets from RED defect reproduction are explicitly present in the executed test list of the GREEN run (`RED target ∈ GREEN executed AND not failed`), preventing skipped or phantom test passes.
+- **Resilient Harness State Resolution (`_graph_core.py`)**:
+  - Ensured `resolve_cache_file` accurately distinguishes kit layout from installed target applications based on `.agents/scripts` presence, preventing accidental `.agents` directory creation.
+
 ## [1.0.31] - 2026-09-14
 
 ### Airtight Authority Safeguards, Reviewer Portability, and Defect Binding

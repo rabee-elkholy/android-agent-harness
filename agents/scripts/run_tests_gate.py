@@ -60,6 +60,27 @@ def collect_test_summary(repo: Path, task: str) -> dict[str, int]:
     return totals
 
 
+def collect_executed_tests(repo: Path, task: str) -> list[str]:
+    names: set[str] = set()
+    for report in report_paths(repo, task):
+        try:
+            root = ET.fromstring(report.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+        for case in root.iter("testcase"):
+            classname = str(case.get("classname") or "").strip()
+            name = str(case.get("name") or "").strip()
+            if classname and name:
+                names.add(f"{classname}#{name}")
+                names.add(f"{classname}.{name}")
+                names.add(name)
+            elif name:
+                names.add(name)
+            elif classname:
+                names.add(classname)
+    return sorted(names)
+
+
 def collect_task_failures(repo: Path, task: str) -> list[dict]:
     entries: dict[str, dict] = {}
     for report in report_paths(repo, task):
@@ -231,6 +252,7 @@ def main(argv=None) -> int:
         except Exception as exc:
             live_print(f"[!] Warning: could not write RED evidence: {exc}", err=True)
     summary = collect_test_summary(REPO, task)
+    summary["executed_tests"] = collect_executed_tests(REPO, task)
     reports_after = report_signatures(REPO, task)
     failing_paths = [path.resolve().as_posix() for path in report_paths(REPO, task) if parse_report(path)]
     fresh_failures = bool(failing_paths) and all(

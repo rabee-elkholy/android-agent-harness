@@ -1181,7 +1181,7 @@ def parse_subagent_file(path: Path, repo: Path) -> GraphNode | None:
 
 def resolve_cache_file(repo: Path) -> Path:
     """Resolve cache location based on layout (raw kit vs installed app)."""
-    if (repo / "agents" / "VERSION").is_file() and not (repo / ".agents").is_dir():
+    if (repo / "agents" / "VERSION").is_file() and not (repo / ".agents" / "scripts").is_dir():
         return repo / "agents" / "cache" / "project_graph.json"
     return repo / ".agents" / "cache" / "project_graph.json"
 

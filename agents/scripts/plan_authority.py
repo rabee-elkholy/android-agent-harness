@@ -141,7 +141,7 @@ def plan_payload(plan: dict) -> dict:
     return {
         "schema_version": plan.get("schema_version"),
         "plan_id": plan.get("plan_id"),
-        "task_id": plan["task_id"],
+        "task_id": plan.get("task_id"),
         "task_kind": plan.get("task_kind") or "FEATURE",
         "planning_depth": str(plan.get("planning_depth") or "BOUNDED").upper(),
         "requested_outcome": plan.get("requested_outcome") or plan.get("outcome") or "",
@@ -158,6 +158,29 @@ def plan_payload(plan: dict) -> dict:
         "base_change_set_sha256": plan.get("base_change_set_sha256"),
         "repository": plan.get("repository"),
     }
+
+
+def legacy_plan_payload(plan: dict, payload_fn=None) -> dict:
+    fn = payload_fn or plan_payload
+    payload = fn(plan)
+    payload.pop("planning_depth", None)
+    return payload
+
+
+def validate_plan_hash(plan: dict, target_hash: str | None = None, payload_fn=None, hash_fn=None) -> tuple[bool, str]:
+    fn = payload_fn or plan_payload
+    h_fn = hash_fn or canonical_sha256
+    target = str(target_hash or plan.get("plan_sha256") or "")
+    current_hash = h_fn(fn(plan))
+    if target and target == current_hash:
+        return True, current_hash
+    # Dual validation for active legacy tasks (created pre-v1.0.31 without planning_depth in plan.json)
+    if "planning_depth" not in plan:
+        legacy_hash = h_fn(legacy_plan_payload(plan, payload_fn=fn))
+        if target and target == legacy_hash:
+            return True, legacy_hash
+    return False, current_hash
+
 
 
 def create_plan(
@@ -224,8 +247,8 @@ def approve(plan: dict, *, source: str, proof_reference: str, enforcement_tier: 
         raise ValidationError("only non-synthesizable host-native approval proof may be HARD_ENFORCED")
     if not str(proof_reference).strip():
         raise ValidationError("approval proof reference must not be empty")
-    expected = canonical_sha256(plan_payload(plan))
-    if plan.get("plan_sha256") != expected:
+    valid, expected = validate_plan_hash(plan, plan.get("plan_sha256"))
+    if not valid:
         raise ValidationError("plan content changed after its hash was created")
     plan["status"] = "APPROVED"
     plan["approval"] = {
@@ -319,7 +342,8 @@ def main() -> int:
     if args.check:
         if plan.get("status") not in STATES:
             raise SystemExit("[FAIL] invalid plan status")
-        if canonical_sha256(plan_payload(plan)) != plan.get("plan_sha256"):
+        valid, _ = validate_plan_hash(plan)
+        if not valid:
             raise SystemExit("[FAIL] plan hash mismatch")
     print(json.dumps(plan, ensure_ascii=False, indent=2))
     return 0
