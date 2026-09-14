@@ -546,6 +546,15 @@ def cmd_task(args: argparse.Namespace) -> int:
     return run_engine_script(kit, "workflow.py", task_args)
 
 
+def cmd_context(args: argparse.Namespace) -> int:
+    kit = ensure_kit(args.kit)
+    repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
+    cli_args = [args.subaction, "--repo", str(repo)]
+    if getattr(args, "json", False):
+        cli_args.append("--json")
+    return run_engine_script(kit, "generate_project_context.py", cli_args, capture=getattr(args, "json", False))
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
@@ -763,6 +772,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.set_defaults(func=cmd_preflight)
+
+    sp = sub.add_parser("context", help="Inspect, preview, or refresh derived project context.")
+    sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh"), help="Context action.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
+    sp.add_argument("--json", action="store_true", help="Format output as JSON.")
+    sp.set_defaults(func=cmd_context)
 
     sp = sub.add_parser("selftest", help="Run the kit hook selftest suite in the kit checkout.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")

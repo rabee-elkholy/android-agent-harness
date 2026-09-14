@@ -3,6 +3,30 @@
 All notable changes to the **Android Agent Harness** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+
+## [1.0.33] - 2026-09-14
+
+### Automated Architectural Discovery, Project Context Derivation, and Interactive Preview
+
+- **Automated Architectural Discovery Engine (`project_context.py`, `generate_project_context.py`)**:
+  - Implemented zero-dependency, standard-library-only discovery engine analyzing target Android codebases for dependency injection frameworks (Hilt, Koin), ViewModel base classes and state holders, Room databases and DAOs, DataStore preferences, UI paradigms (Compose, XML layouts, Hybrid), XML navigation graphs, and technical capabilities (networking, location, maps, sensors, health connect, billing, audio, camera, bluetooth).
+  - Generates structured, schema-validated `project-facts.json` along with stable, timestamp-independent cryptographic fingerprint (`context_fingerprint_sha256`) omitting volatile source hashes.
+  - Generates derived markdown representations: `architecture.md`, `ui.md`, `persistence.md`, and `conventions.md`.
+- **Dual-Layer Architecture & Developer Sovereignty (`lifecycle.py`, `pre_tool_safety.py`)**:
+  - Established a strict separation between kit-owned, universal guidance (`.agents/skills/android-harness/references/`) and project-derived context (`.agents/project-context/`).
+  - Created `.agents/project-context/project-notes.md` as a developer-owned override file, preserved across updates and uninstall-restore cycles.
+  - Added mutation barriers in `pre_tool_safety.py` prohibiting AI agent tools from modifying developer notes or legacy overrides.
+- **Previous-Baseline Legacy Migration (`lifecycle.py`)**:
+  - Enhanced `update()` and `replace_legacy()` to compare installed generic references against the *previous installed baseline* checksums (`release_checksums.json` / `ownership-v1.json`).
+  - Genuinely customized references are automatically migrated into `.agents/project-context/legacy-overrides/` without causing update conflict failures or overwriting upstream updates.
+- **Read-Only Context Preview in Installation & Update Prompts (`docs/install-or-update-prompt.md`)**:
+  - Added Phase 3.5: Read-only project context preview running `harness_cli.py context preview --repo <app-root>` before lifecycle changes.
+  - Requires interactive user confirmation via `ask_question` to approve discovered architectural facts before proceeding to Phase 4.
+  - Enforced compact prompt size under 4096 bytes with verified SHA-256 integrity verification.
+- **CLI Commands & Doctor Engine Integration (`harness_cli.py`, `doctor/engine.py`)**:
+  - Added `android-harness context {preview,generate,status,refresh}` CLI subcommands with optional `--json` output.
+  - Integrated `check_project_context()` into `harness doctor` ensuring schema validity, view rendering, zero secret/PII leaks, and context freshness.
+
 ## [1.0.32] - 2026-09-14
 
 ### Backward Compatibility, Empirical Test Execution Binding, and Sign-Off Provenance Hardening

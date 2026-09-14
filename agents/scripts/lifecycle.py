@@ -35,7 +35,8 @@ INTERNAL_EXCLUDE_PATTERNS = (
     ".harness-recovery/",
 )
 PRESERVE_GLOBS = (
-    ".agents/skills/android-harness/references/*.md",
+    ".agents/project-context/project-notes.md",
+    ".agents/project-context/legacy-overrides/*",
     ".agents/mcp/zoho_sprints/workflow_defaults.json",
 )
 
@@ -215,26 +216,57 @@ def subprocess_git(repo: Path, *args: str) -> str:
     return (proc.stdout or "").strip()
 
 
+def _migrate_legacy_references(repo: Path, recovery: Path) -> list[str]:
+    """Migrates genuinely customized legacy references into .agents/project-context/legacy-overrides."""
+    migrated: list[str] = []
+    refs_dir = repo / ".agents" / "skills" / "android-harness" / "references"
+    if not refs_dir.is_dir():
+        return migrated
+    inventory = repo / ".agents" / "release_checksums.json"
+    defaults = read_json(inventory).get("files") or {} if inventory.is_file() else {}
+    ownership_file = repo / OWNERSHIP_RELATIVE
+    ownership_entries = {}
+    if ownership_file.is_file():
+        try:
+            for entry in read_json(ownership_file).get("entries") or []:
+                p = entry.get("path")
+                h = entry.get("post_install_sha256")
+                if p and h:
+                    ownership_entries[p] = h
+        except Exception:
+            pass
+    overrides_dir = recovery / ".agents" / "project-context" / "legacy-overrides"
+    for ref_file in refs_dir.glob("*.md"):
+        if not ref_file.is_file():
+            continue
+        curr_hash = _hash_or_none(ref_file)
+        rel_key = f"agents/skills/android-harness/references/{ref_file.name}"
+        rel_managed = f".agents/skills/android-harness/references/{ref_file.name}"
+        orig_hash = defaults.get(rel_key) or ownership_entries.get(rel_managed)
+        # If baseline hash is absent (legacy replacement) or hash differs from previous installed baseline:
+        if orig_hash is None or curr_hash != orig_hash:
+            overrides_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ref_file, overrides_dir / ref_file.name)
+            rel_path = f".agents/project-context/legacy-overrides/{ref_file.name}"
+            migrated.append(rel_path)
+    return migrated
+
+
 def _copy_preserved(repo: Path, recovery: Path, *, refresh_defaults: bool = False) -> list[str]:
     preserved: list[str] = []
-    defaults = {}
-    if refresh_defaults:
-        inventory = repo / ".agents/release_checksums.json"
-        if inventory.is_file():
-            defaults = read_json(inventory).get("files") or {}
     for pattern in PRESERVE_GLOBS:
         for source in repo.glob(pattern):
             if not source.is_file():
                 continue
             rel = source.relative_to(repo)
-            if refresh_defaults and rel.as_posix().startswith(".agents/skills/android-harness/references/"):
-                original_hash = defaults.get("agents/" + source.relative_to(repo / ".agents").as_posix())
-                if original_hash and _hash_or_none(source) == original_hash:
-                    continue
             target = recovery / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
             preserved.append(rel.as_posix())
+    migrated = _migrate_legacy_references(repo, recovery)
+    for m in migrated:
+        if m not in preserved:
+            preserved.append(m)
     return preserved
 
 
@@ -250,7 +282,10 @@ def _legacy_preserved_paths(kit: Path, preserved: list[str]) -> list[str]:
     """Keep project-specific legacy references without replacing current kit files."""
     result: list[str] = []
     for rel in preserved:
-        if rel == ".agents/mcp/zoho_sprints/workflow_defaults.json":
+        if (
+            rel == ".agents/mcp/zoho_sprints/workflow_defaults.json"
+            or rel.startswith(".agents/project-context/")
+        ):
             result.append(rel)
             continue
         kit_rel = Path(rel).relative_to(".agents")
@@ -377,12 +412,21 @@ def _install_engine(repo: Path, kit: Path, answers: dict) -> None:
         (state / ".gitkeep").touch()
         os.replace(staging / ".agents", repo / ".agents")
         _configure(repo, kit, answers)
+        from project_context import extract_project_facts, render_project_context, write_project_context
+        facts_payload = extract_project_facts(repo, in_memory_graph=True)
+        views = render_project_context(facts_payload)
+        write_project_context(repo, facts_payload, views)
         for source in (repo / ".agents" / "scripts").rglob("*.py"):
             try:
                 compile(source.read_bytes(), str(source), "exec")
             except (OSError, SyntaxError) as exc:
                 raise ValidationError(f"installed Python script failed syntax validation: {source.name}") from exc
-        for required_path in (repo / ".agents" / "VERSION", repo / ".agents" / "rules" / "harness-rules.md", repo / ".agents" / "scripts" / "_product.py"):
+        for required_path in (
+            repo / ".agents" / "VERSION",
+            repo / ".agents" / "rules" / "harness-rules.md",
+            repo / ".agents" / "scripts" / "_product.py",
+            repo / ".agents" / "project-context" / "project-facts.json",
+        ):
             if not required_path.is_file():
                 raise ValidationError(f"installed harness is incomplete: {required_path.relative_to(repo)}")
     finally:
@@ -457,11 +501,14 @@ def update(repo: Path, kit: Path) -> dict:
     if _version_tuple(target_version) < _version_tuple(current_version):
         raise ValidationError("downgrade refused: compatible downgrade metadata is unavailable")
     conflicts = []
+    legacy_ref_prefix = ".agents/skills/android-harness/references/"
     for entry in ownership.get("entries") or []:
         rel = str(entry.get("path") or "")
         path = repo / rel
         current_hash = _hash_or_none(path)
         if current_hash != entry.get("post_install_sha256") and not any(Path(rel).match(pattern) for pattern in PRESERVE_GLOBS):
+            if rel.startswith(legacy_ref_prefix):
+                continue
             conflicts.append(rel)
     if conflicts:
         raise ValidationError("user-modified managed files require clean recovery: " + ", ".join(conflicts[:10]))
@@ -471,11 +518,9 @@ def update(repo: Path, kit: Path) -> dict:
     backup = _backup(repo, ownership, "update", _candidate_adapter_paths(repo))
     preserve_root = repo / ".harness-recovery" / f"preserve-{uuid.uuid4().hex}"
     preserved = _copy_preserved(repo, preserve_root, refresh_defaults=True)
-    reference_conflicts = [
+    legacy_migrated = [
         rel for rel in preserved
-        if rel.startswith(".agents/skills/android-harness/references/")
-        and (kit / "agents" / Path(rel).relative_to(".agents")).is_file()
-        and _hash_or_none(repo / rel) != _hash_or_none(kit / "agents" / Path(rel).relative_to(".agents"))
+        if rel.startswith(".agents/project-context/legacy-overrides/")
     ]
     old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
     journal = {
@@ -484,7 +529,7 @@ def update(repo: Path, kit: Path) -> dict:
         "from_version": current_version,
         "to_version": target_version,
         "backup": str(backup),
-        "preserved_reference_conflicts": reference_conflicts,
+        "legacy_reference_migrated": legacy_migrated,
         "started_at": utc_now(),
     }
     journal_path = repo / ".harness-setup" / "update-journal.json"
@@ -514,9 +559,9 @@ def update(repo: Path, kit: Path) -> dict:
         raise
     finally:
         shutil.rmtree(preserve_root, ignore_errors=True)
-    if reference_conflicts:
-        print("[WARN] Preserved project references differ from the updated defaults; reconcile guidance: " + ", ".join(reference_conflicts))
-    return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup), "app_snapshot_verified": True, "preserved_reference_conflicts": reference_conflicts}
+    if legacy_migrated:
+        print("[MIGRATE] Preserved legacy reference customizations in .agents/project-context/legacy-overrides/: " + ", ".join(Path(m).name for m in legacy_migrated))
+    return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup), "app_snapshot_verified": True, "legacy_reference_migrated": legacy_migrated}
 
 
 def replace_legacy(repo: Path, kit: Path) -> dict:

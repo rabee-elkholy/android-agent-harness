@@ -88,11 +88,11 @@ class ReleaseSafetyTests(unittest.TestCase):
                 (target / "agents/release_checksums.json").write_text(json.dumps(inventory), encoding="utf-8")
                 result = lifecycle.update(fixture.repo, target)
                 self.assertEqual("Updated default guidance.\n", (fixture.repo / ".agents" / rel).read_text())
-                self.assertEqual("Project-specific test guidance.\n", custom.read_text())
-                self.assertIn(".agents/" + tailored_rel.as_posix(), result["preserved_reference_conflicts"])
-                # Repeating an update must not silently hide the unresolved conflict.
-                repeated = lifecycle.update(fixture.repo, target)
-                self.assertIn(".agents/" + tailored_rel.as_posix(), repeated["preserved_reference_conflicts"])
+                override = fixture.repo / ".agents/project-context/legacy-overrides/test-quality-guidelines.md"
+                self.assertTrue(override.is_file())
+                self.assertEqual("Project-specific test guidance.\n", override.read_text())
+                self.assertEqual("Updated test default.\n", custom.read_text())
+                self.assertIn(".agents/project-context/legacy-overrides/test-quality-guidelines.md", result["legacy_reference_migrated"])
         finally:
             fixture.tearDown()
 

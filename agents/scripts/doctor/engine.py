@@ -643,6 +643,69 @@ class HarnessDoctor:
         else:
             self.log(category, "Domain Reference Indexing", "WARN", "daily-scenarios.md missing; reference routing disabled.")
 
+        self.check_project_context(is_install_check=False)
+
+    def check_project_context(self, is_install_check: bool = False) -> None:
+        category = "6. Skills & Workflows"
+        if self.is_raw_kit:
+            self.log(category, "Project Context", "PASS", "Kit repository template mode (project context derived on client Android checkouts).")
+            return
+
+        context_dir = self.agents_dir / "project-context"
+        facts_file = context_dir / "project-facts.json"
+        if not facts_file.is_file():
+            self.log(category, "Project Context Facts", "FAIL", f"Missing project-facts.json at {facts_file}.")
+            return
+
+        try:
+            data = json.loads(facts_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.log(category, "Project Context Facts", "FAIL", f"Invalid JSON in project-facts.json: {exc}")
+            return
+
+        schema_ver = data.get("schema_version")
+        if not schema_ver:
+            self.log(category, "Project Context Schema", "FAIL", "project-facts.json missing 'schema_version'.")
+            return
+
+        raw_text = facts_file.read_text(encoding="utf-8", errors="ignore")
+        leaks = []
+        user_home = str(Path.home()).replace("\\", "/")
+        if user_home.lower() in raw_text.lower():
+            leaks.append(f"Absolute user home path detected: {user_home}")
+        if re.search(r"[A-Za-z]:[/\\]Users[/\\]", raw_text, re.I):
+            leaks.append("Absolute user path detected in facts JSON.")
+        if re.search(r"/(?:Users|home)/[a-zA-Z0-9_-]+/", raw_text):
+            leaks.append("Absolute home directory detected in facts JSON.")
+
+        if leaks:
+            self.log(category, "Project Context Hygiene", "FAIL", f"Found {len(leaks)} hygiene violation(s) in project-facts.json.", details=leaks)
+        else:
+            self.log(category, "Project Context Hygiene", "PASS", "Zero absolute paths or credentials in project-facts.json.")
+
+        required_views = ("architecture.md", "ui.md", "persistence.md", "conventions.md")
+        missing_views = [v for v in required_views if not (context_dir / v).is_file()]
+        if missing_views:
+            self.log(category, "Project Context Views", "FAIL", f"Missing rendered context views: {', '.join(missing_views)}")
+        else:
+            self.log(category, "Project Context Views", "PASS", f"All {len(required_views)} rendered architectural views verified.")
+
+        try:
+            sys.path.insert(0, str(self.agents_dir / "scripts"))
+            from project_context import project_context_status
+            status_res = project_context_status(self.repo)
+            curr_status = status_res.get("status")
+            if curr_status == "CURRENT":
+                self.log(category, "Project Context Freshness", "PASS", "Project context fingerprint matches codebase architecture.")
+            else:
+                msg = status_res.get("message", "Project context is stale.")
+                if is_install_check:
+                    self.log(category, "Project Context Freshness", "FAIL", f"Freshness verification failed post-install: {msg}")
+                else:
+                    self.log(category, "Project Context Freshness", "WARN", msg, details=status_res.get("diff", {}).get("details"))
+        except Exception as exc:
+            self.log(category, "Project Context Freshness", "WARN", f"Could not verify context freshness: {exc}")
+
     def check_tool_adapters(self) -> None:
         category = "7. Multi-IDE Tool Adapters"
         if self.is_raw_kit:
@@ -898,5 +961,6 @@ class HarnessDoctor:
         self.check_file_structure()
         self.check_product_config()
         self.check_template_leaks()
+        self.check_project_context(is_install_check=True)
         self.check_tool_adapters()
         return self.results

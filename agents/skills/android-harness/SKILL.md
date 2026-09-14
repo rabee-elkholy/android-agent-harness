@@ -7,17 +7,23 @@ kernel-major: 1
 
 # Android harness (domain knowledge)
 
-Setup fills product-specific references. Do not cite a stub file as if this app shipped that domain.
+Deterministic architecture facts are derived during setup into `.agents/project-context/`.
 
-## References
+## Authoritative Truth Resolution Hierarchy
+1. **Current source evidence**, when inspected directly in checkout files.
+2. **Generated project facts**: `.agents/project-context/project-facts.json` and rendered views (`architecture.md`, `ui.md`, `persistence.md`, `conventions.md`).
+3. **Developer notes**: `.agents/project-context/project-notes.md` (domain intent & unresolved conventions). Developer notes clarify ambiguities or override generic assumptions, but may NOT contradict deterministic source facts.
+4. **Generic Android guidelines**: Kit-owned reference rules below.
 
-- [**Architecture & Patterns**](./references/architecture-guidelines.md): match this checkout's DI, navigation, and ViewModel base.
-- [**UI Layout & Theming**](./references/ui-layout-and-theming.md): Compose & XML UI, theme tokens, `@Preview`, strings.
-- [**Database & Persistence**](./references/database-and-persistence.md): Room & SQLite migrations, DataStore, schema integrity.
-- [**Performance & Optimization**](./references/performance-and-optimization.md): main-thread safety, leaks, Compose jank, WakeLocks.
-- [**Test Quality Guidelines**](./references/test-quality-guidelines.md): unit test depth, Coroutine test dispatchers, Turbine streams.
-- [**Daily work notes**](./references/daily-scenarios.md): checkout facts after setup.
-- [**Automated skills**](./references/automated-skills.md): adaptive, evidence-bound delivery gates.
+## Task Guidance & Routing
+- **Architecture / DI / ViewModel**: Read `../../project-context/architecture.md`, then [Architecture & Patterns](./references/architecture-guidelines.md).
+- **UI / Layout / Theming**: Read `../../project-context/ui.md`, then [UI Layout & Theming](./references/ui-layout-and-theming.md).
+- **Database / Persistence**: Read `../../project-context/persistence.md`, then [Database & Persistence](./references/database-and-persistence.md).
+- **Conventions & Capabilities**: Read `../../project-context/conventions.md`.
+- **Performance & Optimization**: [Performance & Optimization](./references/performance-and-optimization.md).
+- **Test Quality Guidelines**: [Test Quality Guidelines](./references/test-quality-guidelines.md).
+- **Daily work notes**: [Daily work notes](./references/daily-scenarios.md).
+- **Automated skills**: [Automated skills](./references/automated-skills.md).
 
 Zoho Sprints (when enabled): `.agents/workflows/zoho-sprints.md`. Mutate only on `update zoho`.
 

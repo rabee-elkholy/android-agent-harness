@@ -1,65 +1,57 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.32` — **SHA-256**: `b1cfbf14755cb4bfa9480a6f3603d6f4d7f43c8739d9d7e76ff3e6f4ba44eca6` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.33` — **SHA-256**: `84cd3ab16971fa118cd521ea43f49f4a129df76661d409325ebcda2e453e80f9` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
-Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.
-If truncated, STOP. Never bypass hooks or use floating `main`. Speak developer's language; keep files in English.
-Run all commands directly; never demand terminal execution. Universally use `ask_question` for all approvals and decisions.
+Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with. If truncated, STOP. Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
 
 ## Phase 1: Read-only discovery
 Do not mutate, download, build, install, or remove.
-
 1. Require root `gradlew` or `gradlew.bat`; otherwise STOP.
 2. Select one lifecycle:
    - **Clean Install**: no `.agents` and no v1 ownership.
    - **Same-Major Update**: `.harness-setup/ownership-v1.json` has architecture major 1.
    - **Legacy Replacement**: `.agents` exists without v1 ownership.
-3. `<kit-dir>` is `%USERPROFILE%\.android-harness\kit` (Windows) or `~/.android-harness/kit`. Reuse only at detached `v1.0.32` with matching version and checksum `files`.
+3. `<kit-dir>` is `%USERPROFILE%\.android-harness\kit` (Windows) or `~/.android-harness/kit`. Reuse only at detached `v1.0.33` with matching version and checksum `files`.
 
 ## Phase 2: Kit bootstrap approval
-If cache is invalid, show expanded staging, kit, rollback paths and commands:
-
+If cache is invalid, show staging, kit, rollback paths and commands:
 ```text
-git clone --depth 1 --branch v1.0.32 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
+git clone --depth 1 --branch v1.0.33 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>
 git -C <staging-dir> describe --tags --exact-match
 python <staging-dir>/harness_cli.py version --kit <staging-dir>
 ```
-
-Verified staging atomically replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
-
-**STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.** This permits only displayed cache operations, not app installation/removal. After approval verify tag, version, checksum `files`, symlinks, and path boundaries before importing code; promote with rollback. Never improvise a downloader.
+Staging atomically replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
+**STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.** Permits cache operations only, not app installation/removal. Verify tag, version, checksum `files`, symlinks; promote with rollback.
 
 ## Phase 3: Authoritative interview
-Run once:
+Run: `python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>`
+The setup wizard payload is the sole interview authority. Ask **only** the questions returned. Respect options and `recommended`/`previous` (1 per question).
 
-```text
-python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>
-```
-
-The setup wizard payload is the sole interview authority. Show `auto_blurb`. Ask **only** the questions returned. Respect dependencies/options and `recommended`/`previous`; show one recommendation per single-choice question. Do not repeat discovery.
+## Phase 3.5: Read-only project context preview
+Run in read-only mode (zero mutations to repo or graph cache):
+`python <kit-dir>/harness_cli.py context preview --repo <app-root>`
+Show discovered DI, ViewModel base, Room, UI theme, capabilities, and any legacy overrides.
+Confirm via `ask_question`: "Do you confirm the discovered project architecture context?"
+- `(Recommended) Confirm discovered project context`
+- `Flag incorrect detection / add project notes`
+Flags become developer notes or refine answers before proceeding. Confirms context only; does NOT authorize repo mutation.
 
 ## Phase 4: Lifecycle approval and execution
-Show lifecycle, immutable tag, cache/target paths, adapters, preserved references/defaults, and the one exact expanded command below. State that the CLI snapshots all non-harness app files and rolls back if any changes.
-
-**STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.** Bootstrap approval is not lifecycle approval. Before approval, do not create answers, install, update, or remove anything.
-
-After approval, create `<temp-answers>.json` in the OS temp directory, outside `<app-root>`, then run one path:
-
+Show lifecycle, tag, paths, preserved files, and command below. CLI snapshots non-harness files and rolls back on change.
+**STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.** Bootstrap and context confirmation are not lifecycle approval. Before approval, do not mutate anything.
+After approval, create `<temp-answers>.json` outside `<app-root>`, then run one path:
 ```text
 Clean Install: python <kit-dir>/harness_cli.py init --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json
 Same-Major Update: python <kit-dir>/harness_cli.py update --no-refresh --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json
 Legacy Replacement: python <kit-dir>/harness_cli.py init --replace-legacy --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json
 ```
-
-Legacy replacement is atomic; never uninstall separately. It keeps tailored references and Zoho `workflow_defaults.json`. Caller answers are retained. Updates preserve history and require no active task.
+Legacy replacement is atomic; keeps `project-notes.md`, migrates legacy customizations to `legacy-overrides/`, retains Zoho `workflow_defaults.json`.
 
 ## Phase 5: Verification
 Run in foreground without timers:
-
 ```text
 python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json
 python <kit-dir>/harness_cli.py version --kit <kit-dir>
 ```
-
-On failure report recovery. On success show version, lifecycle, checks, preserved files, and `0` changed app files; then say: “Android Agent Harness is successfully configured. Open a NEW chat at the project root.”
+On failure report recovery. On success show version, lifecycle, checks, and `0` changed app files; then say: “Android Agent Harness is successfully configured. Open a NEW chat at the project root.”

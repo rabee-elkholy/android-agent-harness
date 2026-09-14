@@ -1061,7 +1061,9 @@ class LifecycleTests(RepoCase):
         write(reference, reference.read_text(encoding="utf-8") + "\nProject-tailored rule.\n")
         updated = update(self.repo, KIT)
         self.assertEqual("PASS", updated["status"])
-        self.assertIn("Project-tailored rule.", reference.read_text(encoding="utf-8"))
+        legacy_override = self.repo / ".agents/project-context/legacy-overrides/architecture-guidelines.md"
+        self.assertTrue(legacy_override.is_file())
+        self.assertIn("Project-tailored rule.", legacy_override.read_text(encoding="utf-8"))
         preview = uninstall(self.repo)
         self.assertEqual("DRY_RUN", preview["status"])
         removed = uninstall(self.repo, apply=True)
@@ -1084,7 +1086,9 @@ class LifecycleTests(RepoCase):
         write(defaults, '{"project":"fixture"}\n')
         result = replace_legacy(self.repo, KIT)
         self.assertEqual("PASS", result["status"])
-        self.assertEqual("Project-specific ads policy.\n", custom.read_text(encoding="utf-8"))
+        legacy_custom = self.repo / ".agents/project-context/legacy-overrides/ads-project-policy.md"
+        self.assertTrue(legacy_custom.is_file())
+        self.assertEqual("Project-specific ads policy.\n", legacy_custom.read_text(encoding="utf-8"))
         self.assertEqual('{"project":"fixture"}\n', defaults.read_text(encoding="utf-8"))
         self.assertTrue((self.repo / OWNERSHIP_RELATIVE).is_file())
 
@@ -1166,6 +1170,22 @@ class LifecycleTests(RepoCase):
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         self.assertIn("diagnostic mode", proc.stdout)
         self.assertFalse((self.repo / ".agents/state/results").exists())
+
+    def test_install_generates_project_context(self) -> None:
+        self._answers()
+        result = install(self.repo, KIT)
+        self.assertEqual("PASS", result["status"])
+        context_dir = self.repo / ".agents" / "project-context"
+        self.assertTrue((context_dir / "project-facts.json").is_file())
+        self.assertTrue((context_dir / "architecture.md").is_file())
+        self.assertTrue((context_dir / "ui.md").is_file())
+        self.assertTrue((context_dir / "persistence.md").is_file())
+        self.assertTrue((context_dir / "conventions.md").is_file())
+        self.assertTrue((context_dir / "project-notes.md").is_file())
+
+        facts = json.loads((context_dir / "project-facts.json").read_text(encoding="utf-8"))
+        self.assertEqual(1, facts["schema_version"])
+        self.assertTrue(facts["context_fingerprint_sha256"])
 
 
 class EndToEndWorkflowTests(RepoCase):
@@ -2096,6 +2116,88 @@ class EndToEndWorkflowTests(RepoCase):
         )
         self.assertEqual("BLOCKED", result["status"])
         self.assertTrue(any("self-certified by lead agent" in b for b in result["blocked_by"]), result["blocked_by"])
+
+    def test_project_context_extraction(self) -> None:
+        from project_context import extract_project_facts, render_project_context
+        write(self.repo / "app/build.gradle.kts", 'plugins { id("com.google.dagger.hilt.android") }\ndependencies { implementation("androidx.room:room-runtime:2.6.1") }\n')
+        write(self.repo / "app/src/main/kotlin/AppDatabase.kt", 'package com.fixture\nimport androidx.room.Database\nimport androidx.room.RoomDatabase\n@Database(entities = [User::class], version = 2)\nabstract class AppDatabase : RoomDatabase()\n')
+        write(self.repo / "app/src/main/kotlin/UserDao.kt", 'package com.fixture\nimport androidx.room.Dao\n@Dao\ninterface UserDao\n')
+        write(self.repo / "app/src/main/kotlin/BaseViewModel.kt", 'package com.fixture\nimport androidx.lifecycle.ViewModel\nabstract class BaseViewModel<S, E> : ViewModel()\n')
+        write(self.repo / "app/src/main/kotlin/Theme.kt", 'package com.fixture.ui\nimport androidx.compose.runtime.Composable\n@Composable fun AppTheme() {}\n')
+        write(self.repo / "app/src/main/kotlin/Network.kt", 'package com.fixture.net\nimport retrofit2.Retrofit\ninterface ApiService\n')
+
+        facts_payload = extract_project_facts(self.repo)
+        facts = facts_payload["facts"]
+        self.assertEqual("hilt", facts["di"]["framework"])
+        self.assertEqual("RESOLVED", facts["view_models"]["resolution"])
+        self.assertEqual("BaseViewModel", facts["view_models"]["primary"]["symbol"])
+        self.assertEqual("<S, E>", facts["view_models"]["primary"]["generics"])
+        self.assertEqual(1, len(facts["persistence"]["room_databases"]))
+        self.assertEqual("AppDatabase", facts["persistence"]["room_databases"][0]["symbol"])
+        self.assertEqual(2, facts["persistence"]["room_databases"][0]["version"])
+        self.assertEqual(1, len(facts["ui"]["themes"]))
+        self.assertEqual("AppTheme", facts["ui"]["themes"][0]["symbol"])
+        self.assertTrue(facts["capabilities"]["networking"]["detected"])
+
+        views = render_project_context(facts_payload)
+        self.assertIn("HILT", views["architecture.md"])
+        self.assertIn("BaseViewModel", views["architecture.md"])
+        self.assertIn("AppDatabase", views["persistence.md"])
+        self.assertIn("AppTheme", views["ui.md"])
+        self.assertIn("Networking", views["conventions.md"])
+
+    def test_unresolved_base_viewmodels(self) -> None:
+        from project_context import extract_project_facts
+        write(self.repo / "app/src/main/kotlin/FirstVM.kt", 'package com.fixture\nimport androidx.lifecycle.ViewModel\nabstract class FirstVM : ViewModel()\n')
+        write(self.repo / "app/src/main/kotlin/SecondVM.kt", 'package com.fixture\nimport androidx.lifecycle.ViewModel\nabstract class SecondVM : ViewModel()\n')
+        facts = extract_project_facts(self.repo)["facts"]
+        self.assertEqual("UNRESOLVED", facts["view_models"]["resolution"])
+        self.assertIsNone(facts["view_models"]["primary"])
+        self.assertEqual(2, len(facts["view_models"]["candidates"]))
+
+    def test_database_less_project(self) -> None:
+        from project_context import extract_project_facts, render_project_context
+        facts_payload = extract_project_facts(self.repo)
+        facts = facts_payload["facts"]
+        self.assertEqual([], facts["persistence"]["room_databases"])
+        views = render_project_context(facts_payload)
+        self.assertIn("No Room `@Database` classes detected", views["persistence.md"])
+
+    def test_preview_zero_mutations(self) -> None:
+        from project_context import extract_project_facts
+        write(self.repo / "app/src/main/kotlin/SomeClass.kt", "package com.fixture\nclass SomeClass\n")
+        files_before = set(self.repo.rglob("*"))
+        mtimes_before = {p: p.stat().st_mtime_ns for p in files_before if p.is_file()}
+
+        extract_project_facts(self.repo, in_memory_graph=True)
+
+        files_after = set(self.repo.rglob("*"))
+        self.assertEqual(files_before, files_after)
+        for p, mt in mtimes_before.items():
+            self.assertEqual(mt, p.stat().st_mtime_ns)
+
+    def test_fingerprint_stability(self) -> None:
+        from project_context import extract_project_facts
+        write(self.repo / "app/src/main/kotlin/BaseViewModel.kt", 'package com.fixture\nimport androidx.lifecycle.ViewModel\nabstract class BaseViewModel : ViewModel()\n')
+        fp1 = extract_project_facts(self.repo)["context_fingerprint_sha256"]
+
+        write(self.repo / "app/src/main/kotlin/Feature.kt", "package com.fixture\nfun compute() = 42\n")
+        fp2 = extract_project_facts(self.repo)["context_fingerprint_sha256"]
+        self.assertEqual(fp1, fp2)
+
+        write(self.repo / "app/src/main/kotlin/Db.kt", 'package com.fixture\nimport androidx.room.Database\nimport androidx.room.RoomDatabase\n@Database(entities = [], version = 1)\nabstract class Db : RoomDatabase()\n')
+        fp3 = extract_project_facts(self.repo)["context_fingerprint_sha256"]
+        self.assertNotEqual(fp1, fp3)
+
+    def test_mutation_barrier_project_notes(self) -> None:
+        from pre_tool_safety import _safe_target
+        safe, detail, _ = _safe_target(".agents/project-context/project-notes.md")
+        self.assertFalse(safe)
+        self.assertIn("developer-owned", detail)
+
+        safe_override, detail_override, _ = _safe_target(".agents/project-context/legacy-overrides/test.md")
+        self.assertFalse(safe_override)
+        self.assertIn("developer-owned", detail_override)
 
 
 if __name__ == "__main__":
