@@ -4,6 +4,28 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.37] - 2026-09-15
+
+### Harness Execution Boundary & Verification Pipeline Reliability
+
+- **Harness Execution Boundary (`harness-rules.md`, `SKILL.md`, `GEMINI.md`, `AGENTS.md.template`, `GEMINI.md.template`)**:
+  - Enforced strict Harness Execution Boundary prohibiting autonomous agents from recursively reading or inspecting internal harness Python implementation scripts under `.agents/scripts/**`.
+  - Autonomous agents operate strictly through documented CLI interfaces and public command contracts, conserving context window and preventing distraction from client Android application code.
+- **Public Command Contract Reference (`command-contract.md`)**:
+  - Documented complete 9-phase public CLI contract (Discovery, Surface Classifier & Reviewer Policy, Workflow Lifecycle, Preflight Gate, Automated Unit Tests, AI Specialist Reviewers, Assemble & Device Verification, Harness Doctor, and Failure Escape Hatch).
+  - Provided explicit CLI commands, arguments, expected output, and Windows/PowerShell newline escaping guidance.
+- **Strict Verification Sequence & Anti-Premature Build/Deploy Guards**:
+  - Strictly enforced verification order: Step 1 (preflight) -> Step 2 (unit tests) -> Step 3 (routed specialist reviewers) -> Step 4 (assemble & device install) -> Step 5 (mobile walkthrough) -> Step 6 (verify).
+  - Prohibited running `assembleDebug` or `run_device.py install-start` while any AI reviewer subagent is still executing.
+  - Mandated waiting for `run_device.py` to complete with exit code 0 before presenting any mobile verification walkthrough or invoking `ask_question`.
+  - Injected strict anti-hallucination guard forbidding fabrication of device serials (such as `emulator-5554`) when devices are missing or offline.
+  - Added real-time active reminders in `pre_invocation_reminder.py` during `VERIFYING` phase.
+- **Actionable Workflow & Drift Diagnostics (`workflow.py`)**:
+  - Transformed cryptic `material drift` errors into actionable reconciliation instructions (`plan_authority.py reconcile --task <id> --add-target <file>`).
+  - Added clear interactive guidance for `REVIEW_BUDGET_EXHAUSTED` prompting the developer via `ask_question`.
+- **Regression Test Coverage (`_vnext_selftest.py`)**:
+  - Added regression test suite `HarnessExecutionBoundaryTests` (`EXEC-BOUNDARY-001` through `EXEC-BOUNDARY-005`).
+
 ## [1.0.36] - 2026-09-15
 
 ### Evolutionary Architecture Context & Defense-in-Depth Hardening

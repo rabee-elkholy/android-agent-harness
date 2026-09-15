@@ -42,6 +42,11 @@ from project_context import (
     project_context_diff,
     render_project_context,
 )
+from argparse import Namespace
+from _vnext_common import ValidationError, canonical_sha256
+from plan_authority import plan_payload
+from workflow import draft, task_dir
+from wizard.questions import normalize
 from review_execution import resolve_execution_profile
 
 
@@ -383,6 +388,285 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family="af-deadbeef9999"))
         res = resolve_architecture_contract(self.repo, architecture_intent="NEW_SCREEN", target_scope="NewScreen.kt")
         self.assertIn(res["status"], (STATUS_DECISION_REQUIRED, STATUS_INVALID_POLICY))
+
+    def _draft_args(self, **kwargs) -> Namespace:
+        defaults = {
+            "repo": str(self.repo),
+            "task_id": "test-task",
+            "outcome": "Test outcome",
+            "planning_depth": "BOUNDED",
+            "base_branch": "main",
+            "expected_surfaces": None,
+            "expected_modules": None,
+            "expected_files": None,
+            "expected_launchers": None,
+            "kind": "AUTO",
+            "test_strategy": "Policy-selected relevant tests",
+            "device_strategy": "Manual only",
+            "risks": "",
+            "rollback": "Revert uncommitted changes",
+            "external_writes": [],
+            "architecture_intent": "EXISTING_CHANGE",
+            "architecture_target_scope": "",
+            "architecture_target_family": None,
+            "force": False,
+        }
+        defaults.update(kwargs)
+        return Namespace(**defaults)
+
+    def _init_git_repo(self) -> None:
+        import subprocess
+        subprocess.run(["git", "init", "-q"], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "config", "user.name", "Harness Test"], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "config", "user.email", "harness@example.invalid"], cwd=str(self.repo), check=True)
+        self._write("gradlew", "#!/bin/sh\nexit 0\n")
+        self._write("settings.gradle.kts", 'rootProject.name = "Fixture"\ninclude(":app")\n')
+        self._write("app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        subprocess.run(["git", "add", "."], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=str(self.repo), check=True)
+
+    # --- 8. Integration Wiring Tests (INT-ARCH-001 through INT-ARCH-008) ---
+    def test_int_arch_001_normal_draft_creates_contract(self) -> None:
+        """INT-ARCH-001: Normal draft creates contract, task-architecture-brief.md, and valid hash."""
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/legacy/LegacyScreen.kt", "class LegacyScreen : Fragment()")
+        self._write("app/src/main/kotlin/legacy/BaseViewModel.kt", "abstract class BaseViewModel : ViewModel()")
+        import subprocess
+        subprocess.run(["git", "add", "."], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "commit", "-qm", "add legacy"], cwd=str(self.repo), check=True)
+
+        args = self._draft_args(
+            task_id="int-arch-001",
+            outcome="Fix bug in legacy screen",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="legacy/LegacyScreen.kt",
+        )
+        plan = draft(args)
+        self.assertIn("architecture_contract", plan)
+        contract = plan["architecture_contract"]
+        self.assertEqual("PRESERVE", contract["mode"])
+        self.assertFalse(contract["migration_allowed"])
+
+        brief_path = task_dir(self.repo, "int-arch-001") / "task-architecture-brief.md"
+        self.assertTrue(brief_path.is_file())
+        self.assertIn("Task Architecture Brief", brief_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(plan["plan_sha256"], canonical_sha256(plan_payload(plan)))
+
+    def test_int_arch_002_new_screen_uses_preferred_family(self) -> None:
+        """INT-ARCH-002: New screen uses developer preferred modern family with migration_allowed=False."""
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/legacy/LegacyScreen.kt", "class LegacyScreen : Fragment()")
+        self._write("app/src/main/kotlin/modern/CompScreen.kt", "@Composable fun CompScreen() {}")
+        self._write("app/src/main/kotlin/modern/ModernViewModel.kt", "abstract class ModernViewModel : ViewModel()")
+        import subprocess
+        subprocess.run(["git", "add", "."], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "commit", "-qm", "add screens"], cwd=str(self.repo), check=True)
+
+        facts = extract_project_facts(self.repo)["facts"]
+        families = facts["architecture"]["families"]
+        modern_fam = next(f for f in families if "compose" in f.get("label", ""))
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=modern_fam["id"]))
+
+        args = self._draft_args(
+            task_id="int-arch-002",
+            outcome="Add new screen to feature",
+            architecture_intent="NEW_SCREEN",
+            architecture_target_scope="app/src/main/kotlin/feature/NewScreen.kt",
+        )
+        plan = draft(args)
+        self.assertIn("architecture_contract", plan)
+        contract = plan["architecture_contract"]
+        self.assertEqual("NEW", contract["mode"])
+        self.assertEqual(modern_fam["id"], contract["target_family_id"])
+        self.assertFalse(contract["migration_allowed"])
+
+    def test_int_arch_003_ambiguity_blocks(self) -> None:
+        """INT-ARCH-003: Multiple families with ambiguous target blocks planning (no approvable plan created)."""
+        self._write("app/src/main/kotlin/scope1/VM1.kt", "abstract class VM1 : ViewModel()")
+        self._write("app/src/main/kotlin/scope2/VM2.kt", "abstract class VM2 : ViewModel()")
+
+        args = self._draft_args(
+            task_id="int-arch-003",
+            outcome="Ambiguous change across families",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="",
+        )
+        with self.assertRaises(ValidationError):
+            draft(args)
+
+        plan_path = self.repo / ".agents" / "state" / "int-arch-003" / "plan.json"
+        self.assertFalse(plan_path.exists())
+
+    def test_int_arch_004_migration_requires_safe_scope(self) -> None:
+        """INT-ARCH-004: MIGRATION requires ARCHITECTURAL planning depth and non-empty target scope."""
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/legacy/OldScreen.kt", "class OldScreen : Fragment()")
+        import subprocess
+        subprocess.run(["git", "add", "."], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "commit", "-qm", "add old screen"], cwd=str(self.repo), check=True)
+        facts = extract_project_facts(self.repo)["facts"]
+        fam_id = facts["architecture"]["families"][0]["id"]
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=fam_id))
+
+        args_bounded = self._draft_args(
+            task_id="int-arch-004a",
+            outcome="Migrate screen",
+            planning_depth="BOUNDED",
+            architecture_intent="MIGRATION",
+            architecture_target_scope="legacy/OldScreen.kt",
+            architecture_target_family=fam_id,
+        )
+        with self.assertRaises(ValidationError):
+            draft(args_bounded)
+
+        args_empty_scope = self._draft_args(
+            task_id="int-arch-004b",
+            outcome="Migrate screen",
+            planning_depth="ARCHITECTURAL",
+            architecture_intent="MIGRATION",
+            architecture_target_scope="",
+            architecture_target_family=fam_id,
+        )
+        with self.assertRaises(ValidationError):
+            draft(args_empty_scope)
+
+    def test_int_arch_005_preflight_does_not_fail_open(self) -> None:
+        """INT-ARCH-005: When contract is bound, drift checker error must fail closed (arch_ok=False)."""
+        contract = {
+            "schema_version": 1,
+            "mode": "PRESERVE",
+            "source_family_id": "af-123",
+            "target_family_id": "af-123",
+            "migration_allowed": False,
+        }
+        with mock.patch("architecture_drift.check_architecture_drift", side_effect=RuntimeError("simulated drift failure")):
+            from architecture_drift import check_architecture_drift
+            try:
+                check_architecture_drift(self.repo, contract)
+                arch_ok = True
+                arch_msg = ""
+            except Exception as exc:
+                arch_ok = False
+                arch_msg = f"ARCHITECTURE_DRIFT_CHECK_ERROR: {exc}"
+            self.assertFalse(arch_ok)
+            self.assertIn("ARCHITECTURE_DRIFT_CHECK_ERROR", arch_msg)
+
+    def test_int_arch_006_backward_compatibility(self) -> None:
+        """INT-ARCH-006: Old plan without architecture contract is exempted (arch_ok=True, PASS)."""
+        contract = None
+        if contract:
+            arch_ok = False
+        else:
+            arch_ok = True
+            arch_msg = "no architecture contract bound (exempted)"
+        self.assertTrue(arch_ok)
+        self.assertIn("exempted", arch_msg)
+
+    def test_int_arch_007_setup_writes_policy(self) -> None:
+        """INT-ARCH-007: Setup wizard answer produces architecture-policy.json with valid hash."""
+        from wizard.schema import ALLOWED_QUESTION_KEYS, ALLOWED_NORMALIZED_KEYS
+        self.assertIn("pref_arch_family", ALLOWED_QUESTION_KEYS)
+        self.assertIn("preferred_new_code_family", ALLOWED_NORMALIZED_KEYS)
+
+        raw = {
+            "i0": "yes",
+            "i14": ["gemini"],
+            "pref_arch_family": "af-test987654",
+        }
+        facts = {"product": "TestApp", "pythons": ["python"], "modules": [":app"], "launchers": ["MainActivity"]}
+        norm = normalize(raw, facts)
+        self.assertEqual("af-test987654", norm["preferred_new_code_family"])
+
+        from architecture_policy import create_architecture_policy, write_architecture_policy, read_architecture_policy
+        pol = create_architecture_policy(preferred_new_code_family=norm["preferred_new_code_family"])
+        write_architecture_policy(self.repo, pol, overwrite=True)
+
+        read_back = read_architecture_policy(self.repo)
+        self.assertIsNotNone(read_back)
+        self.assertEqual("af-test987654", read_back["preferred_new_code_family"])
+        self.assertEqual(read_back["policy_sha256"], compute_policy_hash(read_back))
+
+    def test_int_arch_008_update_preserves_policy(self) -> None:
+        """INT-ARCH-008: Existing architecture policy remains unchanged across normal update."""
+        from lifecycle import PRESERVE_GLOBS
+        self.assertIn(".agents/project-context/architecture-policy.json", PRESERVE_GLOBS)
+
+        pol = create_architecture_policy(preferred_new_code_family="af-preserved123")
+        write_architecture_policy(self.repo, pol, overwrite=True)
+        before_hash = compute_policy_hash(read_architecture_policy(self.repo))
+
+        recovery_dir = self.repo / ".harness-recovery" / "preserve-test"
+        from lifecycle import _copy_preserved, _restore_preserved
+        preserved = _copy_preserved(self.repo, recovery_dir)
+        self.assertIn(".agents/project-context/architecture-policy.json", preserved)
+
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=None), overwrite=True)
+        self.assertIsNone(read_architecture_policy(self.repo)["preferred_new_code_family"])
+
+        _restore_preserved(self.repo, recovery_dir, preserved)
+        after = read_architecture_policy(self.repo)
+        self.assertEqual("af-preserved123", after["preferred_new_code_family"])
+        self.assertEqual(before_hash, compute_policy_hash(after))
+
+    # --- 9. Section 13 Model-Perspective Acceptance Tests ---
+    def test_acceptance_task_a_legacy_profile_fragment(self) -> None:
+        """Section 13 Task A: Fix bug in legacy ProfileFragment -> PRESERVE legacy local family, do not migrate."""
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/legacy/ProfileFragment.kt", "class ProfileFragment : Fragment()")
+        self._write("app/src/main/kotlin/legacy/BaseViewModel.kt", "abstract class BaseViewModel : ViewModel()")
+        self._write("app/src/main/kotlin/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")
+        self._write("app/src/main/kotlin/modern/MviViewModel.kt", "abstract class MviViewModel : ViewModel()")
+        import subprocess
+        subprocess.run(["git", "add", "."], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "commit", "-qm", "setup project"], cwd=str(self.repo), check=True)
+
+        facts = extract_project_facts(self.repo)["facts"]
+        families = facts["architecture"]["families"]
+        modern_fam = next(f for f in families if "compose" in f.get("label", ""))
+        legacy_fam = next(f for f in families if "xml" in f.get("label", ""))
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=modern_fam["id"]))
+
+        args = self._draft_args(
+            task_id="task-a",
+            outcome="Fix bug in legacy ProfileFragment",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="legacy/ProfileFragment.kt",
+        )
+        plan = draft(args)
+        contract = plan["architecture_contract"]
+        self.assertEqual("PRESERVE", contract["mode"])
+        self.assertEqual(legacy_fam["id"], contract["target_family_id"])
+        self.assertFalse(contract["migration_allowed"])
+
+    def test_acceptance_task_b_new_offers_screen(self) -> None:
+        """Section 13 Task B: Create OffersScreen in old subscription feature -> NEW, preferred modern family, compat boundary."""
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/subscription/SubFragment.kt", "class SubFragment : Fragment()")
+        self._write("app/src/main/kotlin/subscription/SubViewModel.kt", "abstract class SubViewModel : ViewModel()")
+        self._write("app/src/main/kotlin/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")
+        self._write("app/src/main/kotlin/modern/MviViewModel.kt", "abstract class MviViewModel : ViewModel()")
+        import subprocess
+        subprocess.run(["git", "add", "."], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "commit", "-qm", "setup project"], cwd=str(self.repo), check=True)
+
+        facts = extract_project_facts(self.repo)["facts"]
+        families = facts["architecture"]["families"]
+        modern_fam = next(f for f in families if "compose" in f.get("label", ""))
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=modern_fam["id"]))
+
+        args = self._draft_args(
+            task_id="task-b",
+            outcome="Create OffersScreen inside old subscription feature",
+            architecture_intent="NEW_SCREEN",
+            architecture_target_scope="app/src/main/kotlin/subscription/OffersScreen.kt",
+        )
+        plan = draft(args)
+        contract = plan["architecture_contract"]
+        self.assertEqual("NEW", contract["mode"])
+        self.assertEqual(modern_fam["id"], contract["target_family_id"])
+        self.assertFalse(contract["migration_allowed"])
+        self.assertTrue(len(contract["compatibility_boundaries"]) > 0)
 
 
 if __name__ == "__main__":

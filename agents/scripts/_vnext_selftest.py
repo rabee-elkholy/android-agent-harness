@@ -2264,6 +2264,130 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertEqual("# Custom Developer Notes Preserved\n", notes_file.read_text(encoding="utf-8"))
 
 
+class HarnessExecutionBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.rules = (KIT / "agents" / "rules" / "harness-rules.md").read_text(encoding="utf-8")
+        self.skill = (KIT / "agents" / "skills" / "android-harness" / "SKILL.md").read_text(encoding="utf-8")
+        self.contract_path = KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md"
+        self.contract = self.contract_path.read_text(encoding="utf-8") if self.contract_path.is_file() else ""
+        self.daily = (KIT / "agents" / "skills" / "android-harness" / "references" / "daily-scenarios.md").read_text(encoding="utf-8")
+        self.quickstart = (KIT / "docs" / "quickstart.md").read_text(encoding="utf-8")
+
+    def test_exec_boundary_001_authoritative_rule_present(self) -> None:
+        """EXEC-BOUNDARY-001: Ensure authoritative instructions contain Harness Execution Boundary rule."""
+        self.assertIn("HARNESS EXECUTION BOUNDARY", self.rules)
+        self.assertIn(".agents/scripts/**` is an implementation detail", self.rules)
+        self.assertIn("Do not inspect or recursively read harness Python implementation before executing a documented harness command", self.rules)
+        self.assertIn("Use the documented public command contract and its output directly", self.rules)
+        self.assertIn("Application source inspection remains unaffected", self.rules)
+
+        self.assertIn("## Harness Execution Boundary", self.skill)
+        self.assertIn(".agents/scripts/**` is an implementation detail", self.skill)
+        self.assertIn("command-contract.md", self.skill)
+
+    def test_exec_boundary_002_exceptions_documented(self) -> None:
+        """EXEC-BOUNDARY-002: Ensure allowed exceptions are documented across rules, skill, and contract."""
+        for text, name in [(self.rules, "harness-rules.md"), (self.skill, "SKILL.md"), (self.contract, "command-contract.md")]:
+            self.assertTrue(
+                "fails unexpectedly" in text or "command failure" in text or "fails unexpectedly" in text.lower(),
+                f"Missing command failure exception in {name}",
+            )
+            self.assertTrue(
+                "violates the documented contract" in text or "violates" in text,
+                f"Missing contract violation exception in {name}",
+            )
+            self.assertTrue(
+                "Doctor reports" in text or "corruption" in text or "inconsistency" in text,
+                f"Missing Doctor inconsistency exception in {name}",
+            )
+            self.assertTrue(
+                "developer explicitly asks" in text or "explicit" in text,
+                f"Missing developer request exception in {name}",
+            )
+
+    def test_exec_boundary_003_public_command_contract_covers_workflow(self) -> None:
+        """EXEC-BOUNDARY-003: Ensure public command contract covers the minimum normal workflow."""
+        self.assertTrue(self.contract_path.is_file(), "command-contract.md must exist")
+        self.assertGreater(len(self.contract), 500, "command-contract.md should be substantial")
+
+        # Project discovery/graph
+        self.assertIn("project_graph.py", self.contract)
+        self.assertIn("--feature", self.contract)
+        self.assertIn("--find", self.contract)
+
+        # Classification & policy
+        self.assertIn("change_classifier.py", self.contract)
+        self.assertIn("review_policy.py", self.contract)
+
+        # Workflow draft / approval / begin / prepare-verification / resume / complete / deliver / cancel
+        self.assertIn("workflow.py draft", self.contract)
+        self.assertIn("workflow.py approve", self.contract)
+        self.assertIn("workflow.py begin", self.contract)
+        self.assertIn("workflow.py prepare-verification", self.contract)
+        self.assertIn("workflow.py resume", self.contract)
+        self.assertIn("workflow.py verify", self.contract)
+        self.assertIn("workflow.py complete", self.contract)
+
+        # Preflight verification
+        self.assertIn("preflight_check.py", self.contract)
+
+        # Unit tests gate
+        self.assertIn("run_tests_gate.py", self.contract)
+
+        # Verification / review flow
+        self.assertIn("record_review.py", self.contract)
+        self.assertIn("review_package.py", self.contract)
+
+        # Assemble & Device
+        self.assertIn("run_device.py", self.contract)
+        self.assertIn("run_gradle_task.py", self.contract)
+
+        # Status / Doctor
+        self.assertIn("doctor", self.contract)
+
+        # Explicit instruction not to inspect implementation before execution
+        self.assertIn("Do not inspect", self.contract)
+
+    def test_exec_boundary_004_no_eager_script_inspection_directives(self) -> None:
+        """EXEC-BOUNDARY-004: Ensure no normal-task instructions mandate pre-reading internal scripts before execution."""
+        authoritative_docs = [
+            (KIT / "agents" / "rules" / "harness-rules.md", self.rules),
+            (KIT / "agents" / "skills" / "android-harness" / "SKILL.md", self.skill),
+            (KIT / "agents" / "skills" / "android-harness" / "references" / "daily-scenarios.md", self.daily),
+            (KIT / "docs" / "quickstart.md", self.quickstart),
+        ]
+        forbidden_phrases = [
+            "read workflow.py before",
+            "inspect workflow.py before",
+            "open workflow.py before",
+            "read project_graph.py before",
+            "inspect project_graph.py before",
+            "inspect the script before running",
+            "read the implementation before running",
+            "understand how the helper works before running",
+            "inspect harness source before running",
+            "recursively explore .agents/scripts",
+        ]
+        for doc_path, content in authoritative_docs:
+            content_lower = content.lower()
+            for phrase in forbidden_phrases:
+                self.assertNotIn(
+                    phrase,
+                    content_lower,
+                    f"Forbidden eager script inspection directive '{phrase}' found in {doc_path.name}",
+                )
+
+    def test_exec_boundary_005_workflow_guidance_and_walkthrough_timing(self) -> None:
+        """Ensure workflow errors give actionable commands and walkthrough requires completed device install."""
+        workflow_py = (KIT / "agents" / "scripts" / "workflow.py").read_text(encoding="utf-8")
+        self.assertIn("REVIEW_BUDGET_EXHAUSTED", workflow_py)
+        self.assertIn("workflow.py draft --repo . --task-id", workflow_py)
+
+        self.assertIn("Device verification & mobile walkthrough timing", self.rules)
+        self.assertIn("run_device.py install-start", self.rules)
+        self.assertIn("exit code 0", self.rules)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

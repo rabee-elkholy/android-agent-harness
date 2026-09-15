@@ -244,6 +244,52 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             }
         )
 
+    # --- Station 2: Android Architecture & Target Policy ---
+    families = (
+        (d.get("architecture") or {}).get("families")
+        or ((d.get("facts") or {}).get("architecture") or {}).get("families")
+        or d.get("families")
+        or []
+    )
+    if not families and repo and isinstance(repo, Path) and repo.exists():
+        try:
+            from project_context import extract_project_facts
+            extracted = extract_project_facts(repo, in_memory_graph=True)
+            families = (extracted.get("facts") or {}).get("architecture", {}).get("families", [])
+        except Exception:
+            families = []
+
+    if families:
+        high_conf_families = [f for f in families if f.get("confidence") == "HIGH"]
+        single_high_conf = len(high_conf_families) == 1
+        high_conf_id = high_conf_families[0]["id"] if single_high_conf else None
+
+        arch_opts = []
+        for fam in families:
+            fam_id = str(fam.get("id") or "")
+            fam_label = str(fam.get("label") or fam_id)
+            lbl = f"{fam_id} — {fam_label}"
+            if single_high_conf and fam_id == high_conf_id:
+                lbl += " (Recommended)"
+            arch_opts.append({"id": fam_id, "label": lbl})
+
+        none_label = t(lang, "pref_arch_family_none") or "None / decide later"
+        if not single_high_conf:
+            none_label += " (Recommended)"
+        arch_opts.append({"id": "none", "label": none_label})
+
+        qs.append(
+            {
+                "id": "pref_arch_family",
+                "station": 2,
+                "station_title": "Android Architecture & Target Policy",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "pref_arch_family") or "Which architecture family should be preferred for NEW screens and features?",
+                "options": arch_opts,
+            }
+        )
+
     # --- Station 3: Project Management & Task Tracker ---
     qs.append(
         {
@@ -412,6 +458,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dic
         "i20": prev.get("pm_provider"),
         "i22": prev.get("device_verification"),
         "i19": prev.get("flavor") or "default",
+        "pref_arch_family": prev.get("preferred_new_code_family") or prev.get("pref_arch_family"),
     } if prev else {}
     b_details = prev.get("bootstrap_details") or {}
     if isinstance(b_details, dict):
@@ -655,8 +702,15 @@ def normalize(raw: dict, facts: dict) -> dict:
     gemini = raw.get("i12") or auto["gemini_config"]
     if not facts.get("gemini"):
         gemini = "skip"
+    pref_arch = raw.get("pref_arch_family")
+    if pref_arch == "none":
+        pref_family_norm = None
+    elif pref_arch:
+        pref_family_norm = pref_arch
+    else:
+        pref_family_norm = raw.get("preferred_new_code_family") or auto.get("preferred_new_code_family")
     asked = sorted(
-        k for k in raw if isinstance(k, str) and (re.fullmatch(r"i\d+[a-z]?", k) or re.fullmatch(r"b_[a-z]+", k))
+        k for k in raw if isinstance(k, str) and (re.fullmatch(r"i\d+[a-z]?", k) or re.fullmatch(r"b_[a-z]+", k) or k == "pref_arch_family")
     )
     return {
         "schema": SCHEMA,
@@ -681,6 +735,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "architecture": stack if arch_mode in ("discovered", "greenfield_bootstrap") else "kit MVI/Hilt/Room leftovers",
         "architecture_mode": arch_mode,
         "bootstrap_details": bootstrap_details,
+        "preferred_new_code_family": pref_family_norm,
         "di_framework": auto.get("di_framework", "hilt"),
         "ui_framework": auto.get("ui_framework", "compose"),
         "project_structure": auto.get("project_structure", "single_module"),
@@ -733,6 +788,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- I.22 Device verification: {answers.get('device_verification', 'manual_only')}",
+        f"- Preferred new code architecture family: {answers.get('preferred_new_code_family') or '(none)'}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
         f"- Asked in wizard: {', '.join(answers.get('asked') or ['(none recorded)'])}",

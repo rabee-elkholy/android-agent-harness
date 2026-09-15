@@ -161,6 +161,26 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
                 extras.append("\n".join(v_lines))
         except Exception:
             pass
+    contract = plan.get("architecture_contract")
+    if contract:
+        arch_section = [
+            "\n## APPROVED ARCHITECTURE CONTRACT",
+            f"- **Mode**: `{contract.get('mode', 'PRESERVE')}`",
+            f"- **Target Scope**: `{contract.get('target_scope') or 'whole task'}`",
+            f"- **Source Family**: `{contract.get('source_family_id') or 'none'}`",
+            f"- **Target Family**: `{contract.get('target_family_id') or 'none'}`",
+            f"- **Migration Allowed**: `{contract.get('migration_allowed', False)}`",
+        ]
+        compat = contract.get("compatibility_boundaries") or []
+        if compat:
+            arch_section.append(f"- **Compatibility Boundaries**: {', '.join(compat)}")
+        t_dir = task_dir(repo, task_id)
+        brief_file = t_dir / "task-architecture-brief.md"
+        if brief_file.is_file():
+            arch_section.append(f"- **Task Architecture Brief**: [`task-architecture-brief.md`](file:///{brief_file.as_posix()})")
+        arch_section.append("\n")
+        extras.insert(0, "\n".join(arch_section))
+
     metadata = {
         "schema_version": 1,
         "task_id": task_id,
@@ -176,6 +196,14 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         "is_truncated": False,
         "changed_files": len(changes),
     }
+    if contract:
+        metadata["architecture_contract"] = {
+            "mode": contract.get("mode"),
+            "target_scope": contract.get("target_scope"),
+            "source_family_id": contract.get("source_family_id"),
+            "target_family_id": contract.get("target_family_id"),
+            "migration_allowed": contract.get("migration_allowed"),
+        }
     topology = generate_review_topology(repo, paths)
     content = "\n".join((HEADER, "```json", json.dumps(metadata, ensure_ascii=False, indent=2), "```", "", topology, "", "## Git diff", "```diff", diff, "```", *extras))
     package_dir = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"]
@@ -259,11 +287,19 @@ def generate_task_brief(
         f"- **Task Kind**: {task_kind}",
         f"- **Expected Surfaces**: {', '.join(expected_surfaces) or 'NONE'}",
         f"- **Expected Modules**: {', '.join(expected_modules) or 'NONE'}",
+    ]
+    contract = plan.get("architecture_contract")
+    if contract:
+        brief_lines.extend([
+            f"- **Architecture Mode**: `{contract.get('mode', 'PRESERVE')}`",
+            f"- **Architecture Scope**: `{contract.get('target_scope') or 'whole task'}`",
+        ])
+    brief_lines.extend([
         "",
         "## 2. Reviewer Specialty & Directives",
         f"- **Role Focus**: {role_info['focus']}",
         "- **Target Changed Paths**:",
-    ]
+    ])
     for p in changed_paths[:20]:
         brief_lines.append(f"  * `{p}`")
     if len(changed_paths) > 20:

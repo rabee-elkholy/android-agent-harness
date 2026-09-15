@@ -577,6 +577,7 @@ def auto_from_facts(facts: dict) -> dict:
         "zoho_language": "en_titles_ar_comments",
         "pm_provider": DEFAULT_PM_PROVIDER,
         "device_verification": "manual_only",
+        "preferred_new_code_family": None,
     }
 
 

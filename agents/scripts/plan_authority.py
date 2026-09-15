@@ -202,6 +202,7 @@ def create_plan(
     rollback: str = "",
     skills: list[dict] | None = None,
     external_writes: list[str] | None = None,
+    architecture_contract: dict | None = None,
 ) -> dict:
     task_id = validate_id(task_id, "task id")
     if not requested_outcome.strip():
@@ -235,6 +236,8 @@ def create_plan(
         "approval": None,
         "execution_nonce": None,
     }
+    if architecture_contract is not None:
+        record["architecture_contract"] = architecture_contract
     record["plan_sha256"] = canonical_sha256(plan_payload(record))
     return record
 

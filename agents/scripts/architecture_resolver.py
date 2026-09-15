@@ -61,6 +61,14 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
     best_match = None
     longest_prefix = 0
     for f in families:
+        for ex in f.get("exemplars") or []:
+            ex_dir = "/".join(ex.split("/")[:-1])
+            scope_dir = "/".join(norm_scope.split("/")[:-1])
+            if ex_dir and scope_dir:
+                pfx = os.path.commonprefix([ex_dir, scope_dir])
+                if len(pfx) > longest_prefix and "/" in pfx:
+                    longest_prefix = len(pfx)
+                    best_match = f
         for sc in f.get("scopes") or []:
             if norm_scope.startswith(sc) or sc.startswith(norm_scope):
                 if len(sc) > longest_prefix:

@@ -32,8 +32,8 @@ def _message() -> str:
         )
     elif status == "VERIFYING":
         next_step = (
-            "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install -> 5. ask_question device check -> 6. verify. "
-            "Reviewer dispatch is 100% autonomous via subagents; never pause, ask developer, or demand 'Proceed'. "
+            "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (ONLY after all reviewers pass) -> 5. ask_question device check -> 6. verify. "
+            "Reviewer dispatch is 100% autonomous via subagents; never pause, ask developer, or demand 'Proceed'. Never assemble or install on device while reviewers are still executing. "
             "Passing gates bridge automatically into evidence. If fixes needed, run workflow.py resume; never stall on new plans or demand 'Proceed'."
         )
     elif status == "BLOCKED":
@@ -65,7 +65,7 @@ def _compact_message() -> str:
         if status == "IMPLEMENTING":
             return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion."
         if status == "VERIFYING":
-            return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install -> 5. verify. Run workflow.py resume for fixes; do not stall on follow-ups."
+            return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. verify. Run workflow.py resume for fixes; do not stall on follow-ups."
         if status == "READY_FOR_DELIVERY":
             return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close."
         return f"Harness [Task {task_id}: {status}]: Discovery uses `project_graph.py`. Ask developer before guessing missing scenarios."

@@ -1,9 +1,12 @@
 # Daily work notes
  
-Follow `.agents/rules/harness-rules.md`. Setup extracts derived architectural facts into `.agents/project-context/` and product facts into `_product.py`.
+Follow `.agents/rules/harness-rules.md`. Consult [Public Command Contract](./command-contract.md) to operate the harness.
+
+## Harness Execution Boundary
+Installed harness engine source under `.agents/scripts/**` is an implementation detail. Do not inspect or recursively read harness Python scripts before executing documented commands. Follow [Public Command Contract](./command-contract.md) and execute documented commands directly.
 
 ## Checkout facts
-- Product, `applicationId`, launcher, configured assemble task, and variant artifacts: `.agents/scripts/_product.py`
+- Product configuration & variant artifacts: Generated into `.agents/scripts/_product.py` (read by harness commands automatically; see [Public Command Contract](./command-contract.md))
 - Derived architecture facts & component contracts: `.agents/project-context/project-facts.json`
 - Human architectural conventions & notes: `.agents/project-context/project-notes.md`
 - Source roots: classic `app/src/main` or KMP `androidMain` — use what exists on disk

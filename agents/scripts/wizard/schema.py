@@ -47,6 +47,7 @@ ALLOWED_QUESTION_KEYS = {
     "b_db",
     "b_net",
     "b_locales",
+    "pref_arch_family",
 }
 
 ALLOWED_NORMALIZED_KEYS = {
@@ -91,6 +92,7 @@ ALLOWED_NORMALIZED_KEYS = {
     "git_gate",
     "device_verification",
     "asked",
+    "preferred_new_code_family",
 }
 
 def validate_raw_answers(payload: Any) -> list[str]:

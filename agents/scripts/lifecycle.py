@@ -417,6 +417,14 @@ def _install_engine(repo: Path, kit: Path, answers: dict) -> None:
         facts_payload = extract_project_facts(repo, in_memory_graph=True)
         views = render_project_context(facts_payload)
         write_project_context(repo, facts_payload, views)
+        from architecture_policy import create_architecture_policy, write_architecture_policy
+        pref_family = answers.get("preferred_new_code_family")
+        target_family = None if (not pref_family or pref_family == "none") else pref_family
+        write_architecture_policy(
+            repo,
+            create_architecture_policy(preferred_new_code_family=target_family),
+            overwrite=True,
+        )
         for source in (repo / ".agents" / "scripts").rglob("*.py"):
             try:
                 compile(source.read_bytes(), str(source), "exec")
@@ -427,6 +435,7 @@ def _install_engine(repo: Path, kit: Path, answers: dict) -> None:
             repo / ".agents" / "rules" / "harness-rules.md",
             repo / ".agents" / "scripts" / "_product.py",
             repo / ".agents" / "project-context" / "project-facts.json",
+            repo / ".agents" / "project-context" / "architecture-policy.json",
         ):
             if not required_path.is_file():
                 raise ValidationError(f"installed harness is incomplete: {required_path.relative_to(repo)}")
@@ -541,6 +550,16 @@ def update(repo: Path, kit: Path) -> dict:
         if (old_agents / "state").is_dir():
             shutil.copytree(old_agents / "state", repo / ".agents/state", dirs_exist_ok=True)
         _restore_preserved(repo, preserve_root, preserved)
+        pref_family = answers.get("preferred_new_code_family")
+        if pref_family is not None and pref_family != "none":
+            from architecture_policy import read_architecture_policy, compute_policy_hash, write_architecture_policy, create_architecture_policy
+            curr_pol = read_architecture_policy(repo)
+            if curr_pol is None:
+                write_architecture_policy(repo, create_architecture_policy(preferred_new_code_family=pref_family), overwrite=True)
+            elif curr_pol.get("preferred_new_code_family") != pref_family:
+                curr_pol["preferred_new_code_family"] = pref_family
+                curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
+                write_architecture_policy(repo, curr_pol, overwrite=True)
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
         new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)

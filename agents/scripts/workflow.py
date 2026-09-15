@@ -141,6 +141,48 @@ def draft(args: argparse.Namespace) -> dict:
     policy_input["surfaces"] = expected
     with step_progress("Evaluating routing policy"):
         preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo), task_kind=resolved_kind)
+
+    # Resolve Evolutionary Architecture Contract
+    arch_intent = str(getattr(args, "architecture_intent", "EXISTING_CHANGE") or "EXISTING_CHANGE").upper()
+    inferred_target_scope = str(getattr(args, "architecture_target_scope", "") or "").strip()
+    if not inferred_target_scope and arch_intent != "MIGRATION":
+        if getattr(args, "expected_files", None):
+            exp_files = [f.strip() for f in str(args.expected_files).split(",") if f.strip()]
+            if len(exp_files) == 1:
+                inferred_target_scope = exp_files[0]
+        elif classification.get("changed_files") == 1:
+            all_files = sorted(set(p for info in (classification.get("details") or {}).values() for p in info.get("files") or []))
+            if len(all_files) == 1:
+                inferred_target_scope = all_files[0]
+        elif getattr(args, "expected_modules", None):
+            exp_mods = [m.strip() for m in str(args.expected_modules).split(",") if m.strip()]
+            if len(exp_mods) == 1:
+                inferred_target_scope = exp_mods[0]
+
+    from architecture_resolver import (
+        resolve_architecture_contract,
+        STATUS_RESOLVED,
+    )
+    if arch_intent == "MIGRATION":
+        p_depth = str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper()
+        if p_depth != "ARCHITECTURAL":
+            raise ValidationError("architecture migration requires planning_depth=ARCHITECTURAL")
+        if not inferred_target_scope:
+            raise ValidationError("architecture migration requires a non-empty target scope")
+
+    arch_res = resolve_architecture_contract(
+        repo,
+        architecture_intent=arch_intent,
+        target_scope=inferred_target_scope,
+        target_family_id=getattr(args, "architecture_target_family", None),
+        planning_depth=str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper(),
+    )
+    if arch_res["status"] != STATUS_RESOLVED:
+        raise ValidationError(f"architecture contract resolution failed ({arch_res['status']}): {arch_res['message']}")
+
+    arch_contract = arch_res.get("contract")
+    arch_brief = arch_res.get("brief_markdown")
+
     plan = create_plan(
         repo,
         task_id=args.task_id,
@@ -155,9 +197,12 @@ def draft(args: argparse.Namespace) -> dict:
         rollback=args.rollback or "Stop on conflict; preserve developer changes; no automatic Git reset",
         skills=preliminary_policy["skills"]["skills"],
         external_writes=list(getattr(args, "external_write", None) or []),
+        architecture_contract=arch_contract,
     )
     directory = task_dir(repo, args.task_id)
     directory.mkdir(parents=True, exist_ok=True)
+    if arch_brief:
+        (directory / "task-architecture-brief.md").write_text(arch_brief, encoding="utf-8")
     save_plan(directory / "plan.json", plan)
     atomic_write_json(directory / "preliminary-classification.json", classification)
     atomic_write_json(directory / "preliminary-policy.json", preliminary_policy)
@@ -346,11 +391,19 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     if drift:
         plan["material_drift"] = drift
         save_plan(_plan_path(repo, args.task_id), plan)
+        surfaces_str = ",".join(str(s) for s in (policy.get("surfaces") or []))
         raise ValidationError(
             f"PLAN_APPROVAL_REQUIRED: material drift detected: {', '.join(str(k) for k in drift)}. "
-            "Reconciliation and plan approval are required before verification run can begin."
+            "Reconciliation and plan approval are required before verification run can begin. "
+            f"To reconcile, update the plan using: python .agents/scripts/workflow.py draft --repo . --task-id {args.task_id} --expected-surfaces \"{surfaces_str}\" and obtain developer approval."
         )
     if policy.get("status") != "PASS":
+        if policy.get("status") == "USER_DECISION_REQUIRED" and policy.get("budget_blocked"):
+            b = policy["budget_blocked"]
+            raise ValidationError(
+                f"REVIEW_BUDGET_EXHAUSTED: Used {b.get('calls_used')} reviewer calls, requested {b.get('requested')} this round, budget is {b.get('budget')}. "
+                "Prompt developer via ask_question for decision: either approve increasing review budget or approve review override (if non-sensitive)."
+            )
         raise ValidationError(f"policy preparation blocked: {policy.get('status')}")
     run_id = f"run-{uuid.uuid4().hex}"
     directory = task_dir(repo, args.task_id)
@@ -713,6 +766,16 @@ def main(argv: list[str] | None = None) -> int:
         "--external-write", action="append", choices=("zoho_sprints",), default=[],
         help="External mutation explicitly included in the plan presented for approval",
     )
+    command.add_argument(
+        "--architecture-intent",
+        choices=("EXISTING_CHANGE", "NEW_SCREEN", "NEW_FEATURE", "REFACTOR", "MIGRATION",
+                 "existing_change", "new_screen", "new_feature", "refactor", "migration"),
+        default="EXISTING_CHANGE",
+        help="Task architectural intent: EXISTING_CHANGE (default), NEW_SCREEN, NEW_FEATURE, REFACTOR, MIGRATION",
+    )
+    command.add_argument("--architecture-target-scope", default="", help="Target component or screen path for architecture resolution")
+    command.add_argument("--architecture-target-family", default=None, help="Target architecture family ID")
+    command.add_argument("--expected-files", help="Comma-separated expected target files")
     command.add_argument("--force", action="store_true", help="Bypass active task collision barriers")
     command.set_defaults(handler=draft)
     command = sub.add_parser("approve", parents=[common])

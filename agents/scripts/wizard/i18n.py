@@ -256,10 +256,14 @@ T = {
         "b_locales_dual": "Bilingual Arabic (RTL) + English (LTR) with dual-locale previews (Recommended)",
         "b_locales_en": "English only",
         "b_locales_ar": "Arabic only",
+        "pref_arch_family": "Which architecture family should be preferred for NEW screens and features?",
+        "pref_arch_family_none": "None / decide later",
         "no_python": "No working Python 3.10+ on PATH.",
         "need_repo": "Need --repo pointing at an Android checkout with gradlew.",
     },
     "ar": {
+        "pref_arch_family": "ما هي المعمارية المفضلة للشاشات والميزات الجديدة (NEW)؟",
+        "pref_arch_family_none": "لا شيء / التحديد لاحقاً",
         "i18": (
             "ما هي اللغة المفضلة لتحديثات ووصف وتعليقات مهام نظام إدارة المشاريع (Zoho / Jira / Linear / GitHub)؟"
         ),

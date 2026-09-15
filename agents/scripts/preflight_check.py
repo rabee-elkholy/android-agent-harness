@@ -102,14 +102,23 @@ def main() -> int:
     arch_ok = True
     arch_msg = "no architecture contract bound (exempted)"
     if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
+        contract = None
         try:
             plan = active_plan(REPO)
             contract = plan.get("architecture_contract")
-            if contract:
+        except Exception:
+            contract = None
+
+        if contract:
+            try:
                 from architecture_drift import check_architecture_drift
                 arch_ok, arch_msg, _ = check_architecture_drift(REPO, contract)
-        except Exception:
-            arch_ok, arch_msg = True, "architecture drift check exempted"
+            except Exception as exc:
+                arch_ok = False
+                arch_msg = f"ARCHITECTURE_DRIFT_CHECK_ERROR: {exc}"
+        else:
+            arch_ok = True
+            arch_msg = "no architecture contract bound (exempted)"
     live_print(f"[{'OK' if arch_ok else 'FAIL'}] [ARCHITECTURE] {arch_msg}")
     live_print(f"{'✅ [DONE]' if arch_ok else '❌ [FAIL]'} 5. Architecture Drift Check ({_time.time() - _t5:.1f}s)")
 
