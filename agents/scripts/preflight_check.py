@@ -96,8 +96,25 @@ def main() -> int:
     live_print(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
     live_print(f"{'✅ [DONE]' if risk_ok else '❌ [FAIL]'} 4. Approved plan authority ({_time.time() - _t4:.1f}s)")
 
+    # 5. Architecture Drift Verification (Fast Drift Check)
+    live_print("⏳ [IN PROGRESS] 5. Architecture Drift Check")
+    _t5 = _time.time()
+    arch_ok = True
+    arch_msg = "no architecture contract bound (exempted)"
+    if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
+        try:
+            plan = active_plan(REPO)
+            contract = plan.get("architecture_contract")
+            if contract:
+                from architecture_drift import check_architecture_drift
+                arch_ok, arch_msg, _ = check_architecture_drift(REPO, contract)
+        except Exception:
+            arch_ok, arch_msg = True, "architecture drift check exempted"
+    live_print(f"[{'OK' if arch_ok else 'FAIL'}] [ARCHITECTURE] {arch_msg}")
+    live_print(f"{'✅ [DONE]' if arch_ok else '❌ [FAIL]'} 5. Architecture Drift Check ({_time.time() - _t5:.1f}s)")
+
     live_print("\n==================================================")
-    overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok
+    overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok and arch_ok
     common = {
         "schema_version": 2,
         "producer": "preflight_check",
@@ -111,6 +128,7 @@ def main() -> int:
             "room_migrations": db_ok,
             "fast_kt_lint": lint_code,
             "risk_approval": risk_ok,
+            "architecture_drift": arch_ok,
         },
         "detail": "" if overall_pass else "preflight steps failed; see step exit codes",
     }

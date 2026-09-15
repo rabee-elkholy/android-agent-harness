@@ -4,6 +4,35 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.36] - 2026-09-15
+
+### Evolutionary Architecture Context & Defense-in-Depth Hardening
+
+- **Evolutionary Architecture Context & Inventory Engine (`project_context.py`)**:
+  - Upgraded schema to `v2` (`extractor_version: 2.0.0`).
+  - Added Architecture Families discovery (`af-<sha256[:12]>`), multidimensional categorization (UI toolkit, screen host, state holder base, state stream, presentation flow, DI, navigation).
+  - Multi-framework DI detection (`frameworks` list), multi-BaseViewModel support without global collision.
+  - Streaming capability scanning without 2000-char truncation.
+  - Excluded test/sample directories from production architectural facts (`classify_source_path`).
+  - Replaced negative inferences in markdown views with neutral `(NOT_DETECTED)`.
+  - Expanded `project_context_diff` to cover `modules`, `conventions`, and `architecture`.
+- **Developer Evolution Policy (`architecture_policy.py`)**:
+  - Implemented `architecture-policy.json` schema, SHA-256 cryptographic verification, and validation engine.
+  - Added protection in `pre_tool_safety.py` and `lifecycle.py` (`PRESERVE_GLOBS`).
+  - Added Doctor verification check for developer architecture policy.
+- **Deterministic Architecture Resolver (`architecture_resolver.py`)**:
+  - Deterministic intent mapping (`EXISTING_CHANGE` -> `PRESERVE`, `NEW_SCREEN`/`NEW_FEATURE` -> `NEW`, `REFACTOR` -> `REFACTOR`, `MIGRATION` -> `MIGRATE`).
+  - Generates compact, self-contained `task-architecture-brief.md` (100–250 words) with reference exemplars.
+  - Enforces `planning_depth=ARCHITECTURAL` for migrations.
+- **Fast Architecture Drift Verification (`architecture_drift.py`, `preflight_check.py`)**:
+  - Fast Preflight step 5 enforcement of task architecture contracts.
+  - Conservative drift detection supporting compatibility bridges in `NEW` mode (`Fragment` embedding `ComposeView`).
+- **Final Hardening & Defense-in-Depth (`review_execution.py`, `final_verifier.py`)**:
+  - `HARD-001`: One-way escalation kill switch for reviewer models.
+  - `HARD-002`: Bound RED defect evidence plan hash verification.
+  - `HARD-003`: Added `head` commit to frozen repository lineage checks.
+  - `HARD-004` & `HARD-005`: Strict reviewer dispatch contract and canonical model routing schema.
+
 ## [1.0.35] - 2026-09-14
 
 ### Project Context Hygiene Bounding & Candidate Preview Polish

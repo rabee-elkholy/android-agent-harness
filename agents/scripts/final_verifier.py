@@ -254,7 +254,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             reasons.append(f"current {field} does not match the delivery manifest")
     rec_repo = recorded_manifest.get("repository") or {}
     cur_repo = current.get("repository") or {}
-    for repo_field in ("root_sha256", "git_common_dir_sha256", "branch"):
+    for repo_field in ("root_sha256", "git_common_dir_sha256", "branch", "head"):
         if cur_repo.get(repo_field) != rec_repo.get(repo_field):
             reasons.append(f"current repository {repo_field} does not match the delivery manifest")
     lingering_scratch = list(repo.glob("scratch_*.py")) + list(repo.glob("script_step*.py"))
@@ -375,6 +375,12 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             if red_err is None and str(red_rec.get("status") or "").upper() == "PASS":
                 has_repro = True
                 rev = red_rec.get("evidence") or {}
+                red_plan_hash = rev.get("plan_sha256")
+                if red_plan_hash and red_plan_hash != expected_plan_hash:
+                    failed_binding = True
+                    err_msg = "RED defect evidence is bound to a different plan hash"
+                    checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+                    reasons.append(err_msg)
                 for t in rev.get("failed_tests") or []:
                     if isinstance(t, dict):
                         if t.get("test_name"):

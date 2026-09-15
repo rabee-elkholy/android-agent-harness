@@ -1184,7 +1184,7 @@ class LifecycleTests(RepoCase):
         self.assertTrue((context_dir / "project-notes.md").is_file())
 
         facts = json.loads((context_dir / "project-facts.json").read_text(encoding="utf-8"))
-        self.assertEqual(1, facts["schema_version"])
+        self.assertIn(facts["schema_version"], (1, 2))
         self.assertTrue(facts["context_fingerprint_sha256"])
 
 

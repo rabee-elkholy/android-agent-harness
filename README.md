@@ -39,8 +39,8 @@
 2. **Zero Autonomous Git Mutations**: In client Android applications, the agent **never** stages, commits, resets, or pushes code. All modifications remain unstaged for the developer to inspect and commit.
 3. **Fail-Closed Shell & MCP Mutation Guard**: Blocks arbitrary shell execution (`rm`, `sed`, `powershell`, unauthorized executables) and unrecognized MCP tool writes during implementation. Only whitelisted inspection commands, audited harness scripts, and host file tools are permitted.
 4. **Deterministic Multi-Label Surface Classification**: Inspects Git diffs across 15+ Android-specific surfaces (`ROOM_SCHEMA`, `COMPOSE_UI`, `XML_UI`, `NAVIGATION`, `BILLING`, `AUTH`, `CRYPTO`, `BUILD_CONFIG`, `MANIFEST_PERMISSION`, etc.). Kotlin implicit public APIs are scoped to library projects to prevent token thrashing on application code.
-5. **Lean Task Briefs & Token Economy**: Generates role-focused, lightweight briefs (~300–400 tokens) for subagents instead of dumping entire repositories, reducing prompt token consumption by >60% and eliminating context dilution.
-6. **Abstract Reviewer Routing & Capability Tiers**: Decouples policy hashes from model names into abstract capability tiers (`STANDARD` -> `inherit`, `STRONG` -> host-mapped deep reasoning model such as `pro`/`opus` under developer-controlled `ALLOW_MODEL_ESCALATION` kill switch).
+5. **Lean Task Briefs & Focused Context**: Generates role-focused, lightweight briefs for subagents instead of dumping entire repositories, reducing unnecessary reviewer context and eliminating context dilution.
+6. **Abstract Reviewer Routing & Capability Tiers**: Decouples policy hashes from model names into abstract capability tiers (`STANDARD` -> `inherit`, `STRONG` -> host-mapped deep reasoning model under developer-controlled `ALLOW_MODEL_ESCALATION` kill switch).
 7. **Empirical RED → GREEN Defect Binding**: For bug tasks, empirically captures reproducible failing test output (`red_evidence`) before validating the green fix, guaranteeing that regressions are meaningfully exercised.
 8. **Dedicated Spec-Compliance Review**: Automatically inspects architectural and multi-phase tasks to ensure strict fidelity to approved acceptance criteria, preventing AI hallucinations and scope creep.
 9. **Tamper-Evident Snapshot-Bound Evidence Store**: Build results, test executions, and reviews produce append-only, tamper-evident evidence bound to the exact `delivery_snapshot_sha256`, repository identity, run ID, and Git branch. Anti-tampering delivery sealing guarantees code integrity after verification.
@@ -90,7 +90,7 @@ Android Agent Harness is not:
 Open your Android project in your AI coding agent (Antigravity, Gemini CLI, Claude Code, Cursor, Windsurf, or Roo Code), and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.35/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.36/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent will:
@@ -105,7 +105,7 @@ Run directly from your command line:
 
 ```bash
 # Clone the pinned harness release
-git clone --depth 1 --branch v1.0.35 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
+git clone --depth 1 --branch v1.0.36 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 # Initialize inside your Android project
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/android-project --kit ~/.android-harness/kit

@@ -633,6 +633,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_zoho_selftest.py", "_baseline_selftest.py", "_graph_selftest.py",
             "_adb_core_selftest.py", "_env_codes_selftest.py", "_performance_selftest.py",
             "_android_scenarios_selftest.py", "_release_safety_selftest.py", "_critical_safety_selftest.py",
+            "_architecture_selftest.py",
         )
         total = len(scripts)
         for idx, script in enumerate(scripts, 1):

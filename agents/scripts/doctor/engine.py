@@ -722,6 +722,21 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(category, "Project Context Freshness", "WARN", f"Could not verify context freshness: {exc}")
 
+        policy_file = context_dir / "architecture-policy.json"
+        if policy_file.is_file():
+            try:
+                from architecture_policy import validate_architecture_policy
+                pol_data = json.loads(policy_file.read_text(encoding="utf-8"))
+                p_valid, p_msg = validate_architecture_policy(pol_data, facts=data)
+                if p_valid:
+                    self.log(category, "Developer Evolution Policy", "PASS", f"Valid architecture policy (preferred family: {pol_data.get('preferred_new_code_family') or 'none'}).")
+                else:
+                    self.log(category, "Developer Evolution Policy", "FAIL", f"Invalid architecture policy: {p_msg}")
+            except Exception as exc:
+                self.log(category, "Developer Evolution Policy", "FAIL", f"Could not validate architecture policy: {exc}")
+        else:
+            self.log(category, "Developer Evolution Policy", "PASS", "No architecture-policy.json configured (tasks use local screen architecture).")
+
     def check_tool_adapters(self) -> None:
         category = "7. Multi-IDE Tool Adapters"
         if self.is_raw_kit:

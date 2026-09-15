@@ -138,7 +138,7 @@ def changed_modules(repo: Path, manifest: dict) -> list[str]:
 
 
 def plan_payload(plan: dict) -> dict:
-    return {
+    payload = {
         "schema_version": plan.get("schema_version"),
         "plan_id": plan.get("plan_id"),
         "task_id": plan.get("task_id"),
@@ -158,12 +158,16 @@ def plan_payload(plan: dict) -> dict:
         "base_change_set_sha256": plan.get("base_change_set_sha256"),
         "repository": plan.get("repository"),
     }
+    if "architecture_contract" in plan and plan.get("architecture_contract") is not None:
+        payload["architecture_contract"] = plan["architecture_contract"]
+    return payload
 
 
 def legacy_plan_payload(plan: dict, payload_fn=None) -> dict:
     fn = payload_fn or plan_payload
     payload = fn(plan)
     payload.pop("planning_depth", None)
+    payload.pop("architecture_contract", None)
     return payload
 
 
@@ -174,11 +178,10 @@ def validate_plan_hash(plan: dict, target_hash: str | None = None, payload_fn=No
     current_hash = h_fn(fn(plan))
     if target and target == current_hash:
         return True, current_hash
-    # Dual validation for active legacy tasks (created pre-v1.0.31 without planning_depth in plan.json)
-    if "planning_depth" not in plan:
-        legacy_hash = h_fn(legacy_plan_payload(plan, payload_fn=fn))
-        if target and target == legacy_hash:
-            return True, legacy_hash
+    # Dual validation for active legacy tasks (created without planning_depth or architecture_contract)
+    legacy_hash = h_fn(legacy_plan_payload(plan, payload_fn=fn))
+    if target and target == legacy_hash:
+        return True, legacy_hash
     return False, current_hash
 
 

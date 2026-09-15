@@ -54,10 +54,17 @@ def cmd_preview(args: argparse.Namespace) -> int:
     else:
         print("  Room Databases    : None detected")
 
-    print(f"  UI Paradigm       : {ui.get('framework', 'compose').upper()}")
+    print(f"  UI Paradigm       : {ui.get('framework', 'unknown').upper()}")
     themes = ui.get("themes") or []
     if themes:
         print(f"  Compose Themes    : {', '.join(t.get('symbol') for t in themes)}")
+
+    arch = facts.get("architecture") or {}
+    families = arch.get("families") or []
+    if families:
+        print(f"  Architecture Fam. : {len(families)} detected")
+        for fam in families:
+            print(f"    - {fam.get('id')}: {fam.get('label')} (conf: {fam.get('confidence')})")
 
     nav_elems = nav.get("elements") or []
     print(f"  Navigation Routes : {len(nav_elems)} element(s) indexed")

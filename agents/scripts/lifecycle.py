@@ -36,6 +36,7 @@ INTERNAL_EXCLUDE_PATTERNS = (
 )
 PRESERVE_GLOBS = (
     ".agents/project-context/project-notes.md",
+    ".agents/project-context/architecture-policy.json",
     ".agents/project-context/legacy-overrides/*",
     ".agents/mcp/zoho_sprints/workflow_defaults.json",
 )

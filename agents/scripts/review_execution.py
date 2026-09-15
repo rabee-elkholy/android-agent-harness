@@ -13,6 +13,26 @@ from review_policy import CAPABILITY_STANDARD, CAPABILITY_STRONG, review_executi
 from workflow import state_root, task_dir
 
 
+def _extract_routes_for_host(data: dict, host_key: str) -> dict[str, str]:
+    if not isinstance(data, dict):
+        return {}
+    # Support canonical schema: { "schema_version": 1, "hosts": { "antigravity": { "STANDARD": { "model": "..." } } } }
+    hosts_dict = data.get("hosts") if isinstance(data.get("hosts"), dict) else data
+    if host_key not in hosts_dict or not isinstance(hosts_dict[host_key], dict):
+        return {}
+    raw_mapping = hosts_dict[host_key]
+    routes: dict[str, str] = {}
+    for cap, val in raw_mapping.items():
+        cap_key = str(cap).upper().strip()
+        if isinstance(val, dict):
+            m_id = val.get("model")
+            if m_id and isinstance(m_id, str):
+                routes[cap_key] = m_id.strip()
+        elif isinstance(val, str):
+            routes[cap_key] = val.strip()
+    return routes
+
+
 def load_host_model_routes(host: str) -> dict[str, str]:
     """Load trusted host model mapping from local config or environment.
 
@@ -24,14 +44,16 @@ def load_host_model_routes(host: str) -> dict[str, str]:
         try:
             if env_routes.strip().startswith("{"):
                 data = json.loads(env_routes)
-                if host_key in data and isinstance(data[host_key], dict):
-                    return data[host_key]
+                parsed = _extract_routes_for_host(data, host_key)
+                if parsed:
+                    return parsed
             else:
                 p = Path(env_routes)
                 if p.is_file():
                     data = json.loads(p.read_text(encoding="utf-8"))
-                    if host_key in data and isinstance(data[host_key], dict):
-                        return data[host_key]
+                    parsed = _extract_routes_for_host(data, host_key)
+                    if parsed:
+                        return parsed
         except Exception:
             pass
 
@@ -39,15 +61,16 @@ def load_host_model_routes(host: str) -> dict[str, str]:
     if user_file.is_file():
         try:
             data = json.loads(user_file.read_text(encoding="utf-8"))
-            if host_key in data and isinstance(data[host_key], dict):
-                return data[host_key]
+            parsed = _extract_routes_for_host(data, host_key)
+            if parsed:
+                return parsed
         except Exception:
             pass
 
     try:
         from _product import HOST_MODEL_ROUTES
-        if isinstance(HOST_MODEL_ROUTES, dict) and host_key in HOST_MODEL_ROUTES:
-            return {str(k).upper(): str(v) for k, v in HOST_MODEL_ROUTES[host_key].items()}
+        if isinstance(HOST_MODEL_ROUTES, dict):
+            return _extract_routes_for_host({"hosts": HOST_MODEL_ROUTES}, host_key)
     except Exception:
         pass
 
@@ -70,13 +93,20 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
 
     try:
         from _product import ALLOW_MODEL_ESCALATION
-        allow_escalation = bool(ALLOW_MODEL_ESCALATION)
+        product_ceiling = bool(ALLOW_MODEL_ESCALATION)
     except Exception:
-        allow_escalation = False
+        product_ceiling = False
 
-    env_escalation = os.environ.get("HARNESS_ALLOW_MODEL_ESCALATION")
-    if env_escalation is not None:
-        allow_escalation = env_escalation.strip().lower() in ("1", "true", "yes", "on")
+    # HARD-001: Model escalation kill switch is strictly one-way.
+    # If product_ceiling is False, all reviewers resolve to inherit; environment variables can NEVER elevate above it.
+    if not product_ceiling:
+        allow_escalation = False
+    else:
+        env_escalation = os.environ.get("HARNESS_ALLOW_MODEL_ESCALATION")
+        if env_escalation is not None:
+            allow_escalation = env_escalation.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            allow_escalation = True
 
     # Derive actual changed modules from immutable manifest
     module_count = 1
@@ -111,6 +141,9 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
     active_pkg_dir = next((d for d in candidate_pkg_dirs if d.is_dir()), candidate_pkg_dirs[0])
 
     resolved_reviewers = {}
+    review_pkg_file = active_pkg_dir / "review-package.md"
+    review_pkg_str = str(review_pkg_file) if review_pkg_file.is_file() else ""
+
     for rev, req in requirements.get("reviewers", {}).items():
         cap = req["requested_capability"]
         pref_model = "inherit"
@@ -136,13 +169,23 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
             d / "review-package.md" for d in candidate_pkg_dirs
         ]
         brief_file = next((str(p) for p in brief_candidates if p.is_file()), "")
+        brief_text = ""
+        if brief_file:
+            try:
+                brief_text = Path(brief_file).read_text(encoding="utf-8")
+            except Exception:
+                brief_text = ""
 
         resolved_reviewers[rev] = {
             **req,
+            "reviewer_role": rev,
             "preferred_model": pref_model,
             "fallback_model": "inherit",
             "resolution": res_status,
             "brief_path": brief_file,
+            "brief_content": brief_text,
+            "review_package_path": review_pkg_str,
+            "evidence_footer_contract": "EVIDENCE pkg=<sha12> cites=<count>",
         }
 
     return {
