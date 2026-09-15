@@ -123,6 +123,46 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_note(args: argparse.Namespace) -> int:
+    import re
+    repo = Path(args.repo).resolve()
+    context_dir = repo / ".agents" / "project-context"
+    notes_file = context_dir / "project-notes.md"
+    if not context_dir.is_dir():
+        context_dir.mkdir(parents=True, exist_ok=True)
+    text = (getattr(args, "note", None) or getattr(args, "text", None) or "").strip()
+    if not text:
+        print("[ERROR] Note text cannot be empty.")
+        return 1
+    section = (getattr(args, "section", None) or "Domain Conventions & Context").strip()
+    if not notes_file.is_file():
+        initial_content = [
+            "# Human-Authored Project Architectural Notes",
+            "",
+            "> This file is owned and maintained by the project engineering team.",
+            "> When instructed by the developer, AI agents may append or update project notes and conventions here.",
+            "",
+            f"## {section}",
+            f"- {text}",
+            "",
+        ]
+        notes_file.write_text("\n".join(initial_content), encoding="utf-8")
+    else:
+        content = notes_file.read_text(encoding="utf-8")
+        sec_pattern = rf"(##\s+{re.escape(section)}[^\n]*\n)"
+        if re.search(sec_pattern, content):
+            updated = re.sub(sec_pattern, rf"\1- {text}\n", content, count=1)
+        else:
+            updated = content.rstrip() + f"\n\n## {section}\n- {text}\n"
+        notes_file.write_text(updated, encoding="utf-8")
+
+    if getattr(args, "json", False):
+        print(json.dumps({"status": "PASS", "path": str(notes_file), "note": text, "section": section}, ensure_ascii=False))
+    else:
+        print(f"[NOTE] Added note to {notes_file} under section '{section}'")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -143,6 +183,13 @@ def main(argv: list[str] | None = None) -> int:
     p_ref.add_argument("--repo", default=".")
     p_ref.add_argument("--json", action="store_true")
 
+    p_note = sub.add_parser("note")
+    p_note.add_argument("text", nargs="?", default="", help="Note text to append")
+    p_note.add_argument("--note", default="", help="Note text to append")
+    p_note.add_argument("--section", default="Domain Conventions & Context", help="Section header to place note under")
+    p_note.add_argument("--repo", default=".")
+    p_note.add_argument("--json", action="store_true")
+
     args = parser.parse_args(argv)
     if args.command == "preview":
         return cmd_preview(args)
@@ -152,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_status(args)
     if args.command == "refresh":
         return cmd_refresh(args)
+    if args.command == "note":
+        return cmd_note(args)
     return 1
 
 

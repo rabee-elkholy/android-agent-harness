@@ -500,17 +500,27 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
                 "di": matching_vm["di"] if matching_vm else (di_frameworks[0] if di_frameworks else "unknown"),
                 "navigation": sc["nav_type"] if sc["nav_type"] != "unknown" else ("compose_navigation" if sc["ui_toolkit"] == "compose" else "xml_navigation" if nav_elements else "unknown"),
             }
-            sig_str = _canonical_json(dims)
+            core_dims = {
+                "ui_toolkit": sc["ui_toolkit"],
+                "screen_host": sc["screen_host"],
+                "state_holder_base": dims["state_holder_base"],
+                "state_stream": dims["state_stream"],
+                "presentation_flow": dims["presentation_flow"],
+                "di": dims["di"],
+            }
+            sig_str = _canonical_json(core_dims)
             sig_hash = _sha256_text(sig_str)
             fid = f"af-{sig_hash[:12]}"
             if fid not in families_by_sig:
-                label_parts = [dims["ui_toolkit"]]
-                if dims["state_holder_base"] != "unknown":
-                    label_parts.append(dims["state_holder_base"].lower())
-                if dims["state_stream"] != "unknown":
-                    label_parts.append(dims["state_stream"])
-                if dims["di"] != "unknown":
-                    label_parts.append(dims["di"])
+                label_parts = [core_dims["ui_toolkit"]]
+                if core_dims["screen_host"] != "unknown":
+                    label_parts.append(core_dims["screen_host"])
+                if core_dims["state_holder_base"] != "unknown":
+                    label_parts.append(core_dims["state_holder_base"].lower())
+                if core_dims["state_stream"] != "unknown":
+                    label_parts.append(core_dims["state_stream"])
+                if core_dims["di"] != "unknown":
+                    label_parts.append(core_dims["di"])
                 label = "-".join(label_parts) or "android-standard"
                 families_by_sig[fid] = {
                     "id": fid,
@@ -523,6 +533,15 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
                     "evidence": [],
                 }
             fam = families_by_sig[fid]
+            # Coalesce richer dimensions into existing family
+            if fam["dimensions"].get("navigation") == "unknown" and dims["navigation"] != "unknown":
+                fam["dimensions"]["navigation"] = dims["navigation"]
+            if fam["dimensions"].get("input_contract") == "unknown" and dims["input_contract"] != "unknown":
+                fam["dimensions"]["input_contract"] = dims["input_contract"]
+            if fam["dimensions"].get("effect_contract") == "unknown" and dims["effect_contract"] != "unknown":
+                fam["dimensions"]["effect_contract"] = dims["effect_contract"]
+            if matching_vm:
+                fam["confidence"] = "HIGH"
             fam["scopes"].add(sc_scope)
             fam["exemplars"].add(sc["path"])
             if matching_vm:
@@ -551,11 +570,24 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
                 "di": di_frameworks[0] if di_frameworks else "unknown",
                 "navigation": "compose_navigation" if u_toolkit == "compose" else "xml_navigation" if nav_elements else "unknown",
             }
-            sig_str = _canonical_json(dims)
+            core_dims = {
+                "ui_toolkit": u_toolkit,
+                "screen_host": s_host,
+                "state_holder_base": cand_name,
+                "state_stream": s_stream,
+                "presentation_flow": p_flow,
+                "di": dims["di"],
+            }
+            sig_str = _canonical_json(core_dims)
             sig_hash = _sha256_text(sig_str)
             fid = f"af-{sig_hash[:12]}"
             if fid not in families_by_sig:
-                label_parts = [dims["ui_toolkit"], dims["state_holder_base"].lower(), dims["state_stream"]]
+                label_parts = [u_toolkit]
+                if s_host != "unknown":
+                    label_parts.append(s_host)
+                label_parts.append(cand_name.lower())
+                if s_stream != "unknown":
+                    label_parts.append(s_stream)
                 if dims["di"] != "unknown":
                     label_parts.append(dims["di"])
                 label = "-".join(label_parts)
@@ -960,8 +992,7 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
                 "# Human-Authored Project Architectural Notes",
                 "",
                 "> This file is owned and maintained by the project engineering team.",
-                "> The Android Agent Harness preserves this file across updates and NEVER overwrites it.",
-                "> AI models and agents are prohibited from modifying this file directly.",
+                "> When instructed by the developer, AI agents may append or update project notes and conventions here.",
                 "",
                 "## Domain Conventions & Context",
                 "- Add specific team idioms, legacy constraints, or non-obvious architecture requirements here.",

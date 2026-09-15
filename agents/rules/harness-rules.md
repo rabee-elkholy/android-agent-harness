@@ -10,6 +10,7 @@ This file is the always-loaded safety and delivery kernel. It is intentionally s
 ## 1. Developer authority
 
 - Read-only explanation, analysis, and discovery may run without a plan.
+- **Context Management Actions**: When the developer requests to update project context, add or modify domain conventions, architecture notes, or rules (e.g. "add this note to project context", "note that Home screen uses MVI", "record that Fragment hosts are deprecated"), this is an administrative **Context Management Action**, NOT an application code delivery task. Do NOT run `change_classifier.py`, `review_policy.py`, unit test gates, or Gradle tasks. Instead, directly record the note using `python harness_cli.py context note "<note>"` (or `android-harness context note "<note>"`) or edit `.agents/project-context/project-notes.md`. Never draft an application implementation plan or launch build/review verification pipelines for context documentation updates.
 - Every code/configuration write, deletion, build, install, Git mutation, tracker mutation, or publication requires an explicit approved plan.
 - Drafting or presenting a plan never starts implementation. Silence, continuation, and unrelated replies are not approval.
 - Plans use native `implementation_plan.md` artifacts (`RequestFeedback: true`) with the interactive **Proceed** button — do NOT invoke `ask_question` for plan approval. Clicking **Proceed** (or confirming in chat) constitutes explicit developer approval.

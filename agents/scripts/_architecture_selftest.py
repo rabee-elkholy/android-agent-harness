@@ -668,6 +668,70 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertFalse(contract["migration_allowed"])
         self.assertTrue(len(contract["compatibility_boundaries"]) > 0)
 
+    def test_arch_dedup_and_modern_recommendation(self) -> None:
+        from wizard.questions import questions_payload
+        screen_a = (
+            "package com.example\n"
+            "import androidx.compose.runtime.Composable\n"
+            "import androidx.hilt.navigation.compose.hiltViewModel\n"
+            "import kotlinx.coroutines.flow.StateFlow\n"
+            "@Composable\n"
+            "fun AScreen(vm: ScreenAVm = hiltViewModel()) {\n"
+            "    navController.navigate(\"details\")\n"
+            "}\n"
+        )
+        screen_b = (
+            "package com.example\n"
+            "import androidx.compose.runtime.Composable\n"
+            "import androidx.hilt.navigation.compose.hiltViewModel\n"
+            "import kotlinx.coroutines.flow.StateFlow\n"
+            "@Composable\n"
+            "fun BScreen(vm: ScreenBVm = hiltViewModel()) {\n"
+            "    findNavController().navigate(R.id.action_b)\n"
+            "}\n"
+        )
+        (self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "AScreen.kt").write_text(screen_a, encoding="utf-8")
+        (self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "BScreen.kt").write_text(screen_b, encoding="utf-8")
+        legacy_act = (
+            "package com.example\n"
+            "import android.app.Activity\n"
+            "class LegacyActivity : Activity()\n"
+        )
+        (self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "LegacyActivity.kt").write_text(legacy_act, encoding="utf-8")
+
+        facts = extract_project_facts(self.repo)["facts"]
+        families = facts["architecture"]["families"]
+        compose_families = [f for f in families if "compose" in f.get("label", "").lower()]
+        self.assertEqual(1, len(compose_families))
+        self.assertEqual(2, len(compose_families[0]["exemplars"]))
+
+        qs = questions_payload(repo=self.repo, lang="en", facts=facts)
+        arch_q = next((q for q in qs if q["id"] == "pref_arch_family"), None)
+        self.assertIsNotNone(arch_q)
+        self.assertTrue(arch_q["options"][0]["recommended"])
+        self.assertEqual(compose_families[0]["id"], arch_q["options"][0]["id"])
+
+    def test_update_context_mode_question_and_execution(self) -> None:
+        from wizard.questions import questions_payload
+        facts_file = self.repo / ".agents" / "project-context" / "project-facts.json"
+        facts_file.write_text("{}", encoding="utf-8")
+        qs = questions_payload(repo=self.repo, lang="en")
+        ctx_q = next((q for q in qs if q["id"] == "update_context_mode"), None)
+        self.assertIsNotNone(ctx_q)
+        self.assertEqual(2, len(ctx_q["options"]))
+        self.assertEqual("preserve", ctx_q["options"][0]["id"])
+        self.assertEqual("refresh", ctx_q["options"][1]["id"])
+
+    def test_context_note_subcommand(self) -> None:
+        from generate_project_context import cmd_note
+        notes_file = self.repo / ".agents" / "project-context" / "project-notes.md"
+        notes_file.write_text("# Project Notes\n\n## Domain Conventions & Context\n", encoding="utf-8")
+        parser_args = Namespace(repo=self.repo, note="Feature X uses MVI pattern", section="Domain Conventions & Context")
+        ret = cmd_note(parser_args)
+        self.assertEqual(0, ret)
+        content = notes_file.read_text(encoding="utf-8")
+        self.assertIn("- Feature X uses MVI pattern", content)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

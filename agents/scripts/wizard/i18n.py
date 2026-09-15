@@ -258,12 +258,18 @@ T = {
         "b_locales_ar": "Arabic only",
         "pref_arch_family": "Which architecture family should be preferred for NEW screens and features?",
         "pref_arch_family_none": "None / decide later",
+        "update_context_mode": "How should the project context be handled during this update?",
+        "update_context_mode_preserve": "Preserve existing project context (Recommended)",
+        "update_context_mode_refresh": "Regenerate fresh project context from codebase analysis",
         "no_python": "No working Python 3.10+ on PATH.",
         "need_repo": "Need --repo pointing at an Android checkout with gradlew.",
     },
     "ar": {
         "pref_arch_family": "ما هي المعمارية المفضلة للشاشات والميزات الجديدة (NEW)؟",
         "pref_arch_family_none": "لا شيء / التحديد لاحقاً",
+        "update_context_mode": "كيف ترغب في التعامل مع سياق المشروع (Project Context) أثناء هذا التحديث؟",
+        "update_context_mode_preserve": "الاحتفاظ بسياق المشروع الحالي (موصى به)",
+        "update_context_mode_refresh": "إعادة فحص وتوليد سياق جديد من الكود",
         "i18": (
             "ما هي اللغة المفضلة لتحديثات ووصف وتعليقات مهام نظام إدارة المشاريع (Zoho / Jira / Linear / GitHub)؟"
         ),

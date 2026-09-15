@@ -4,6 +4,27 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.38] - 2026-09-15
+
+### Architecture Deduplication, Context Update Mode & Post-Install Context Management
+
+- **Architecture Family Deduplication & Recommendation (`project_context.py`, `wizard/questions.py`)**:
+  - Coalesced architecture family signature on core architectural pillars (`ui_toolkit`, `screen_host`, `state_holder_base`, `state_stream`, `presentation_flow`, `di`), ignoring transient navigation syntax variations across individual screens.
+  - Added `screen_host` to family label (e.g. `compose-composable-...`, `compose-fragment-...`, `xml-fragment-...`), eliminating duplicate ambiguous family labels.
+  - Implemented architecture modernity scoring (`_score_arch`): Jetpack Compose + Composable Host + StateFlow + Hilt automatically scores highest and is marked `(Recommended)` as Option 1 in setup and update interviews.
+  - Enriched family choice prompts (`_format_fam_label`) with human-readable titles, host type, framework details, and real project screen exemplars (e.g. `ArticleCommentsScreen.kt`).
+- **Update Context Handling Mode (`wizard/schema.py`, `wizard/i18n.py`, `wizard/questions.py`, `lifecycle.py`)**:
+  - Added interactive Station 2 question during harness updates: `update_context_mode` (`preserve` vs `refresh`).
+  - Allows developers to choose between preserving the existing extracted project context (`preserve`) or re-extracting project facts and re-rendering markdown views (`refresh`).
+  - Safely preserves developer notes (`project-notes.md`) and architecture policy (`architecture-policy.json`) across context refreshes.
+  - Added full English and Arabic localization for question prompts and option labels.
+- **Post-Install Context Management Actions (`generate_project_context.py`, `harness_cli.py`, `mutation_guard.py`, `pre_tool_safety.py`, Rules & Templates)**:
+  - Added `note` subcommand to CLI: `python harness_cli.py context note "<note>" [--section "<section>"]` (and `android-harness context note "<note>"`).
+  - Permitted developer-directed mutations to `.agents/project-context/project-notes.md` in `pre_tool_safety.py` and `mutation_guard.py` without requiring an active feature delivery task plan.
+  - Updated `harness-rules.md`, `GEMINI.md`, `AGENTS.md.template`, `GEMINI.md.template`, and `android-harness/SKILL.md` to explicitly define **Context Management Actions**: when the developer requests to update project context, add domain conventions, or record architectural notes, agents directly append to `project-notes.md` or execute `context note`, and MUST NOT run `change_classifier.py`, `review_policy.py`, unit tests, or Gradle assemble.
+- **Regression Test Coverage (`_architecture_selftest.py`, `_vnext_selftest.py`)**:
+  - Added comprehensive test suites verifying architecture deduplication, modern recommendation scoring, update context mode questions, context note appending, and mutation barrier permissions.
+
 ## [1.0.37] - 2026-09-15
 
 ### Harness Execution Boundary & Verification Pipeline Reliability

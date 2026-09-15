@@ -245,6 +245,31 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         )
 
     # --- Station 2: Android Architecture & Target Policy ---
+    has_existing_context = bool(
+        repo and isinstance(repo, Path) and (repo / ".agents" / "project-context" / "project-facts.json").is_file()
+    )
+    if has_existing_context:
+        qs.append(
+            {
+                "id": "update_context_mode",
+                "station": 2,
+                "station_title": "Android Architecture & Target Policy",
+                "required": True,
+                "allow_multiple": False,
+                "prompt": t(lang, "update_context_mode") or "How should the project context be handled during this update?",
+                "options": [
+                    {
+                        "id": "preserve",
+                        "label": t(lang, "update_context_mode_preserve") or "Preserve existing project context (Recommended)",
+                    },
+                    {
+                        "id": "refresh",
+                        "label": t(lang, "update_context_mode_refresh") or "Regenerate fresh project context from codebase analysis",
+                    },
+                ],
+            }
+        )
+
     families = (
         (d.get("architecture") or {}).get("families")
         or ((d.get("facts") or {}).get("architecture") or {}).get("families")
@@ -260,21 +285,105 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             families = []
 
     if families:
-        high_conf_families = [f for f in families if f.get("confidence") == "HIGH"]
-        single_high_conf = len(high_conf_families) == 1
-        high_conf_id = high_conf_families[0]["id"] if single_high_conf else None
+        # Score families by architectural modernity to pick the best modern default
+        def _score_arch(fam: dict) -> int:
+            score = 0
+            dims = fam.get("dimensions") or {}
+            ui = dims.get("ui_toolkit") or ""
+            host = dims.get("screen_host") or ""
+            stream = dims.get("state_stream") or ""
+            flow = dims.get("presentation_flow") or ""
+            di = dims.get("di") or ""
+            conf = fam.get("confidence") or ""
+            exs = fam.get("exemplars") or []
+            if ui == "compose":
+                score += 50
+            elif ui == "xml":
+                score += 10
+            if host == "composable":
+                score += 35
+            elif host == "fragment" and ui == "compose":
+                score += 20
+            elif host == "activity":
+                score += 10
+            elif host == "fragment":
+                score += 5
+            if stream == "stateflow":
+                score += 20
+            elif stream == "livedata":
+                score += 5
+            if flow == "unidirectional":
+                score += 15
+            if di == "hilt":
+                score += 10
+            elif di == "koin":
+                score += 8
+            if conf == "HIGH":
+                score += 20
+            elif conf == "MEDIUM":
+                score += 5
+            score += min(15, len(exs) * 3)
+            return score
+
+        def _format_fam_label(fam: dict) -> str:
+            fam_id = str(fam.get("id") or "")
+            dims = fam.get("dimensions") or {}
+            ui = dims.get("ui_toolkit") or ""
+            host = dims.get("screen_host") or ""
+            base = dims.get("state_holder_base") or ""
+            stream = dims.get("state_stream") or ""
+            di = dims.get("di") or ""
+            exs = fam.get("exemplars") or []
+            if ui == "compose" and host == "composable":
+                title = "Jetpack Compose (@Composable)"
+            elif ui == "compose" and host == "fragment":
+                title = "Jetpack Compose in Fragment (Hybrid)"
+            elif ui == "compose" and host == "activity":
+                title = "Jetpack Compose in Activity"
+            elif ui == "xml" and host == "fragment":
+                title = "XML Views (Fragment)"
+            elif ui == "xml" and host == "activity":
+                title = "XML Views (Activity)"
+            else:
+                title = str(fam.get("label") or fam_id)
+            details = []
+            if base and base != "unknown":
+                details.append(base)
+            if stream and stream != "unknown":
+                details.append(stream.capitalize())
+            if di and di != "unknown":
+                details.append(di.capitalize())
+            detail_str = f" ({', '.join(details)})" if details else ""
+            ex_hint = ""
+            if exs:
+                for ex in exs:
+                    name = Path(ex).name
+                    if (name.endswith("Screen.kt") or name.endswith("Fragment.kt") or name.endswith("Activity.kt")) and not name.startswith("Base"):
+                        ex_hint = f" — e.g. {name}"
+                        break
+                if not ex_hint:
+                    for ex in exs:
+                        name = Path(ex).name
+                        if not name.startswith("Base"):
+                            ex_hint = f" — e.g. {name}"
+                            break
+                if not ex_hint and exs:
+                    ex_hint = f" — e.g. {Path(exs[0]).name}"
+            return f"{fam_id} — {title}{detail_str}{ex_hint}"
+
+        sorted_fams = sorted(families, key=_score_arch, reverse=True)
+        best_fam_id = sorted_fams[0]["id"] if (_score_arch(sorted_fams[0]) >= 50) else None
 
         arch_opts = []
-        for fam in families:
+        for fam in sorted_fams:
             fam_id = str(fam.get("id") or "")
-            fam_label = str(fam.get("label") or fam_id)
-            lbl = f"{fam_id} — {fam_label}"
-            if single_high_conf and fam_id == high_conf_id:
+            lbl = _format_fam_label(fam)
+            if fam_id == best_fam_id:
                 lbl += " (Recommended)"
             arch_opts.append({"id": fam_id, "label": lbl})
 
         none_label = t(lang, "pref_arch_family_none") or "None / decide later"
-        if not single_high_conf:
+        if not best_fam_id:
             none_label += " (Recommended)"
         arch_opts.append({"id": "none", "label": none_label})
 
@@ -459,6 +568,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dic
         "i22": prev.get("device_verification"),
         "i19": prev.get("flavor") or "default",
         "pref_arch_family": prev.get("preferred_new_code_family") or prev.get("pref_arch_family"),
+        "update_context_mode": prev.get("update_context_mode") or "preserve",
     } if prev else {}
     b_details = prev.get("bootstrap_details") or {}
     if isinstance(b_details, dict):
@@ -710,7 +820,7 @@ def normalize(raw: dict, facts: dict) -> dict:
     else:
         pref_family_norm = raw.get("preferred_new_code_family") or auto.get("preferred_new_code_family")
     asked = sorted(
-        k for k in raw if isinstance(k, str) and (re.fullmatch(r"i\d+[a-z]?", k) or re.fullmatch(r"b_[a-z]+", k) or k == "pref_arch_family")
+        k for k in raw if isinstance(k, str) and (re.fullmatch(r"i\d+[a-z]?", k) or re.fullmatch(r"b_[a-z]+", k) or k in ("pref_arch_family", "update_context_mode"))
     )
     return {
         "schema": SCHEMA,
@@ -736,6 +846,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "architecture_mode": arch_mode,
         "bootstrap_details": bootstrap_details,
         "preferred_new_code_family": pref_family_norm,
+        "update_context_mode": raw.get("update_context_mode") or "preserve",
         "di_framework": auto.get("di_framework", "hilt"),
         "ui_framework": auto.get("ui_framework", "compose"),
         "project_structure": auto.get("project_structure", "single_module"),

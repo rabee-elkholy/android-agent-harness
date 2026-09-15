@@ -560,6 +560,11 @@ def update(repo: Path, kit: Path) -> dict:
                 curr_pol["preferred_new_code_family"] = pref_family
                 curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
                 write_architecture_policy(repo, curr_pol, overwrite=True)
+        if answers.get("update_context_mode") == "refresh":
+            from project_context import extract_project_facts, render_project_context, write_project_context
+            fresh_facts = extract_project_facts(repo, in_memory_graph=True)
+            fresh_views = render_project_context(fresh_facts)
+            write_project_context(repo, fresh_facts, fresh_views)
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
         new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)

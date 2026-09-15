@@ -2192,8 +2192,8 @@ class EndToEndWorkflowTests(RepoCase):
     def test_mutation_barrier_project_notes(self) -> None:
         from pre_tool_safety import _safe_target
         safe, detail, _ = _safe_target(".agents/project-context/project-notes.md")
-        self.assertFalse(safe)
-        self.assertIn("developer-owned", detail)
+        self.assertTrue(safe)
+        self.assertTrue(detail.replace("\\", "/").endswith(".agents/project-context/project-notes.md"))
 
         safe_override, detail_override, _ = _safe_target(".agents/project-context/legacy-overrides/test.md")
         self.assertFalse(safe_override)
@@ -2214,6 +2214,8 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertTrue(command_allowed(self.repo, f'python "{kit_cli}" context status')[0])
         self.assertTrue(command_allowed(self.repo, "android-harness context preview")[0])
         self.assertTrue(command_allowed(self.repo, "android-harness context status")[0])
+        self.assertTrue(command_allowed(self.repo, f'python "{kit_cli}" context note "Test note"')[0])
+        self.assertTrue(command_allowed(self.repo, 'android-harness context note "Test note"')[0])
 
         self.assertFalse(command_allowed(self.repo, f'python "{kit_cli}" context generate')[0])
         self.assertFalse(command_allowed(self.repo, f'python "{kit_cli}" context refresh')[0])

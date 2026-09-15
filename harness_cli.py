@@ -552,6 +552,12 @@ def cmd_context(args: argparse.Namespace) -> int:
     cli_args = [args.subaction, "--repo", str(repo)]
     if getattr(args, "json", False):
         cli_args.append("--json")
+    if args.subaction == "note":
+        text = getattr(args, "note", None) or getattr(args, "note_text", None)
+        if text:
+            cli_args.append(text)
+        if getattr(args, "section", None):
+            cli_args.extend(["--section", args.section])
     return run_engine_script(kit, "generate_project_context.py", cli_args, capture=getattr(args, "json", False))
 
 
@@ -774,8 +780,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.set_defaults(func=cmd_preflight)
 
-    sp = sub.add_parser("context", help="Inspect, preview, or refresh derived project context.")
-    sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh"), help="Context action.")
+    sp = sub.add_parser("context", help="Inspect, preview, refresh, or add notes to derived project context.")
+    sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note"), help="Context action.")
+    sp.add_argument("note_text", nargs="?", default="", help="Note text to append when subaction is 'note'.")
+    sp.add_argument("--note", default="", help="Note text to append.")
+    sp.add_argument("--section", default="Domain Conventions & Context", help="Section header in project-notes.md.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
     sp.add_argument("--json", action="store_true", help="Format output as JSON.")

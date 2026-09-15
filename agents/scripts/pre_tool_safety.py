@@ -162,9 +162,10 @@ def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
             return True, str(resolved), True
         if _is_ide_artifact(resolved):
             return True, str(resolved), True
-        return False, "File mutation escapes the approved repository.", False
-    if relative in (".agents/project-context/project-notes.md", ".agents/project-context/architecture-policy.json") or relative.startswith(".agents/project-context/legacy-overrides/"):
-        return False, "Project notes, architecture policy, and legacy overrides are developer-owned and immutable to model file tools to prevent context poisoning.", False
+    if relative == ".agents/project-context/project-notes.md":
+        return True, str(resolved), True
+    if relative == ".agents/project-context/architecture-policy.json" or relative.startswith(".agents/project-context/legacy-overrides/"):
+        return False, "Architecture policy and legacy overrides are developer-owned and immutable to model file tools to prevent context poisoning.", False
     if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
         return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
     is_kit_dev = (REPO / "harness_cli.py").is_file() and (REPO / "scripts_dev").is_dir()

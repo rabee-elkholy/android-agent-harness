@@ -48,6 +48,7 @@ ALLOWED_QUESTION_KEYS = {
     "b_net",
     "b_locales",
     "pref_arch_family",
+    "update_context_mode",
 }
 
 ALLOWED_NORMALIZED_KEYS = {
@@ -93,6 +94,7 @@ ALLOWED_NORMALIZED_KEYS = {
     "device_verification",
     "asked",
     "preferred_new_code_family",
+    "update_context_mode",
 }
 
 def validate_raw_answers(payload: Any) -> list[str]:

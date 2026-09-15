@@ -129,6 +129,7 @@ def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     return (
         name in {"harness_cli", "android-harness"} and args[:1] in (["init"], ["update"], ["uninstall"])
+        or name in {"harness_cli", "android-harness"} and args[:2] == ["context", "note"]
         or name == "setup_wizard" and args[:1] == ["write"]
         or name == "git" and args[:1] == ["clone"] and len(args) >= 3
         and ("/.android-harness/" in args[-1].replace("\\", "/") or Path(args[-1]).name.startswith("kit-stage"))
