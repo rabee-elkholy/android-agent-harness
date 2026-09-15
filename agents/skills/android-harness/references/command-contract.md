@@ -227,7 +227,35 @@ python .agents/scripts/harness_doctor.py
 
 ---
 
-## 9. Failure Escape Hatch & Debugging Protocol
+## 9. Diagnostic & Utility Scripts
+
+### Purpose
+Run targeted diagnostic checks, standalone lint/schema validators, crash analysis, or feature scaffolding directly without running the entire preflight suite.
+
+### Commands
+```bash
+# 1. Logcat triage & crash diagnosis (ANRs, FATAL EXCEPTION, stack traces)
+python .agents/scripts/logcat_doctor.py
+
+# 2. Standalone localization & strings parity verification across locales
+python .agents/scripts/check_strings.py
+
+# 3. Standalone fast Kotlin AST linter (naming, coroutine dispatchers, empty catches)
+python .agents/scripts/fast_kt_lint.py
+
+# 4. Standalone Room database schema & migration integrity check
+python .agents/scripts/room_guard.py
+
+# 5. Architecture contract drift check (verifies code adheres to architectural policy)
+python .agents/scripts/architecture_drift.py --repo .
+
+# 6. Feature module / slice scaffolding
+python .agents/scripts/new_feature_scaffold.py --feature <feature_name>
+```
+
+---
+
+## 10. Failure Escape Hatch & Debugging Protocol
 
 Harness source inspection under `.agents/scripts/**` is strictly prohibited during normal development, with exactly **four exceptions**:
 
@@ -245,15 +273,21 @@ When an exception occurs:
 
 ---
 
-## 10. Canonical Command Catalog
+## 11. Canonical Command Catalog
 
-| Step | Canonical Command | Description |
+| Step / Tool | Canonical Command | Description |
 | :--- | :--- | :--- |
 | **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
 | **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
 | **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
 | **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Strings Check** | `python .agents/scripts/check_strings.py` | Standalone strings parity across locales |
+| **Fast Lint** | `python .agents/scripts/fast_kt_lint.py` | Standalone fast Kotlin AST linter |
+| **Room Guard** | `python .agents/scripts/room_guard.py` | Standalone Room schema & migration check |
+| **Arch Drift** | `python .agents/scripts/architecture_drift.py --repo .` | Validate code against architecture contract |
+| **Logcat Doctor** | `python .agents/scripts/logcat_doctor.py` | Triage crashes and runtime exceptions |
+| **Feature Scaffold**| `python .agents/scripts/new_feature_scaffold.py --feature <name>` | Scaffold feature conventions and ViewModel |
 | **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
 | **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
 | **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
@@ -261,5 +295,7 @@ When an exception occurs:
 | **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass) |
 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
 | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
+| **Harness Doctor** | `python harness_cli.py doctor --repo . --json` | Health check harness installation & adapters |
 | **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
 | **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
+

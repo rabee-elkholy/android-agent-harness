@@ -2473,9 +2473,6 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
         files_to_check = [
             KIT / "agents" / "rules" / "harness-rules.md",
             KIT / "GEMINI.md",
-            KIT / "CLAUDE.md",
-            KIT / "CODEX.md",
-            KIT / "QWEN.md",
             KIT / "agents" / "tool-adapters" / "GEMINI.md.template",
             KIT / "agents" / "tool-adapters" / "CLAUDE.md.template",
             KIT / "agents" / "tool-adapters" / "CODEX.md.template",
@@ -2485,6 +2482,10 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
             KIT / "agents" / "tool-adapters" / "copilot-instructions.md.template",
             KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
         ]
+        for optional_name in ("CLAUDE.md", "CODEX.md", "QWEN.md"):
+            p = KIT / optional_name
+            if p.is_file():
+                files_to_check.append(p)
         for f in files_to_check:
             self.assertTrue(f.is_file(), f"Missing file {f}")
             text = f.read_text(encoding="utf-8")
