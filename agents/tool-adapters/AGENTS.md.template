@@ -13,12 +13,31 @@ The compact, authoritative kernel is `.agents/rules/harness-rules.md`. Read it b
 - Run `.agents/scripts/change_classifier.py` and `.agents/scripts/review_policy.py`; load every selected versioned skill.
 - Follow only the gates, reviewers, build, and device checks selected by the central policy.
 - Run `.agents/scripts/workflow.py prepare-verification` after implementation and use its run identity for all evidence. Valid passing preflight and unit tests bridge automatically into evidence.
-- During verification, return to implementation for code fixes using `{{PY}} .agents/scripts/workflow.py resume`; never poll background tasks with `manage_task status`; record reviewer verdicts with `{{PY}} .agents/scripts/record_review.py --response-text "<name>=<text>"`.
+- During verification, return to implementation for code fixes using `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>`; never poll background tasks or subagents (Zero-Polling Invariant); record reviewer verdicts with auto-harvesting `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` or direct text `{{PY}} .agents/scripts/record_review.py --task <id> --response-text "<name>=<text>"`.
 - Reviewers: Run independent reviewer subagents for all roles selected by `.agents/scripts/review_policy.py`. Reviewer dispatch is 100% autonomous; never pause, ask for permission, or demand 'Proceed'. The lead agent is strictly forbidden from self-certifying reviews using `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes; evaluations must come from actual reviewer analysis.
 - Mobile Verification Walkthrough: Whenever an APK is installed on a device or emulator (`run_device.py install` or `run_device.py install-start`), the agent MUST wait for the installation command to finish with exit code 0 before outputting a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat and prompting developer verification via `ask_question`. If the command fails (e.g. `[ENV-FAILURE] no Android device detected`) or is still running in background, wait for completion or report the blocker; NEVER hallucinate device serials (such as `emulator-5554`) or ask for verification prematurely. Never ask "Did it pass" without detailing how to navigate to and test the specific modified feature.
 - Delivery requires the read-only verifier to return `APPROVED` for the same plan, snapshot, change-set, and run.
 - Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `{{PY}} harness_cli.py context note "<note>"` (or edit `.agents/project-context/project-notes.md`).
 - Material scope drift requires a revised plan and new approval. Technical fixes inside approved scope do not require phase stops. Inside active tasks (`IMPLEMENTING`/`VERIFYING`), developer feedback and bug fixes are immediate execution directives: never generate redundant plan artifacts or stall for nonexistent UI buttons; execute, verify, compile, and deploy directly.
+
+## Canonical Command Catalog
+
+| Step | Canonical Command | Description |
+| :--- | :--- | :--- |
+| **Discovery** | `{{PY}} .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
+| **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
+| **Context Note** | `{{PY}} harness_cli.py context note "<note>"` | Record architectural convention/note |
+| **Preflight Gate** | `{{PY}} .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
+| **Unit Tests** | `{{PY}} .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Review Package** | `{{PY}} .agents/scripts/review_package.py` | Generate immutable review package markdown |
+| **Review Harvest** | `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
+| **Review Text** | `{{PY}} .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
+| **Resume Task** | `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
+| **Assemble Debug** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Build debug APK (ONLY after all reviewers pass) |
+| **Device Deploy** | `{{PY}} .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Screen Capture** | `{{PY}} .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
+| **Final Verify** | `{{PY}} .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
+| **Deliver Task** | `{{PY}} .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
 
 ## Environment
 

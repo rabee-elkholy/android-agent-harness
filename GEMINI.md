@@ -12,11 +12,32 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - Multi-Phase Execution: Multi-phase plans execute sequentially and autonomously. Single intake approval covers all phases; never pause or ask developer between phases.
 - Strict Verification Order: The Verification Plan in `implementation_plan.md` MUST use the 6-step headings (1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install -> 5. mobile walkthrough -> 6. verify). The agent MUST wait for ALL routed specialist reviewers (subagents) to finish, record their responses via `record_review.py`, and verify ZERO blocking findings BEFORE running `assembleDebug` or starting device installation. Starting assemble or device deployment while any reviewer subagent is still running is strictly forbidden.
 - Reviewer Dispatch: 100% autonomous. Launch routed reviewers in parallel via subagents immediately; never pause, ask for permission, or demand 'Proceed'.
-- Direct Review Ingestion: Ingest reviewer responses directly with `python .agents/scripts/record_review.py --task <id> --response-text "<name>=<text>"`; do not create intermediate scratch files.
+- Direct Review Ingestion & Harvesting: Ingest reviewer responses via auto-harvesting with `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` or directly with `python .agents/scripts/record_review.py --task <id> --response-text "<name>=<text>"`. Clean reviews with `cites=0` and explanatory prose are recognized as `PASS`. Intermediate scratch files are forbidden.
+- Zero-Polling Invariant: Never poll background tasks or subagents in a loop using `manage_task`, `manage_subagents`, or `schedule`. Yield execution and wait for reactive wakeup messages from the system. Polling loops waste tokens and stall execution.
+- Task Resumption: If a task becomes BLOCKED or fixes are needed during verification, run `python .agents/scripts/workflow.py resume --repo . --task-id <id>` to return to implementation.
 - In client Android apps: The agent must not run `git add`, `commit`, `push`, merge, rebase, stash, or reset. Leave changes unstaged. Draft a Conventional Commit message only. The developer commits. In this kit repository itself (`android-harness-kit` development): The agent may run git operations when instructed by the maintainer.
 - Independent Reviews: Reviewer roles selected by policy MUST be executed via subagents. The lead agent is strictly forbidden from self-certifying reviews using `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes; evaluations must come from actual reviewer runs.
 - Antigravity Planning Lifecycle: The interactive Proceed button appears ONLY on initial task plan approval. Subsequent updates show only Review. Never tell the developer to click 'Proceed' on follow-ups or bug fixes during active tasks; execute, compile, and deploy directly.
 - Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is still running as a background task, wait for completion; never output walkthrough or invoke `ask_question` prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when it is not, and NEVER ask the developer to verify a build that was not installed. When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE invoking `ask_question` for sign-off. Never invoke `ask_question` with just 'Did it pass' without detailing feature navigation.
 - Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `python harness_cli.py context note "<note>"` (or edit `.agents/project-context/project-notes.md`).
+
+## Canonical Command Catalog
+
+| Step | Canonical Command | Description |
+| :--- | :--- | :--- |
+| **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
+| **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
+| **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
+| **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
+| **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
+| **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
+| **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
+| **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
+| **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass) |
+| **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
+| **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
+| **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
 
 Antigravity loads `agents/hooks.json` in this repo. Gemini CLI does not; still honor the five-leaf review before assemble. No `code-review-guard-agent`. No `LGTM`.

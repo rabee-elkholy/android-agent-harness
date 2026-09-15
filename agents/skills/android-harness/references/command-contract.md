@@ -107,6 +107,8 @@ Execute deterministic checks (strings parity, fast Kotlin lint, plan authority, 
 
 ### Command
 ```bash
+python .agents/scripts/preflight.py
+# or
 python .agents/scripts/preflight_check.py
 ```
 
@@ -114,7 +116,7 @@ python .agents/scripts/preflight_check.py
 - Step-by-step PASS/FAIL report for active gates.
 - Exit code: `0` = all checks passed; non-zero = inspect reported failure details in terminal output.
 
-> **Instruction**: Do not inspect `preflight_check.py` before execution.
+> **Instruction**: Do not inspect `preflight.py` or `preflight_check.py` before execution.
 
 ---
 
@@ -147,18 +149,24 @@ Generate immutable review package and record specialist subagent reviews.
 # 1. Generate review package
 python .agents/scripts/review_package.py
 
-# 2. Record subagent review response
+# 2. Auto-harvest subagent review from transcript (preferred):
+python .agents/scripts/record_review.py --task <id> --from-subagent <reviewer_name>=<subagent_conversation_id>
+
+# 3. Direct response text ingestion:
 python .agents/scripts/record_review.py --task <id> --response-text "<reviewer_name>=<response_text>"
-# or with a file:
+
+# 4. Ingest from file:
 python .agents/scripts/record_review.py --task <id> --response <reviewer_name>=<path>
 
-# 3. Developer review override (only if explicitly requested by developer on non-sensitive surfaces)
+# 5. Developer review override (only if explicitly requested by developer on non-sensitive surfaces)
 python .agents/scripts/record_review.py --task <id> --override-reviews --proof-reference "<developer_confirmation>"
 ```
 
 ### Expected Output
 - Ingestion confirmation, evidence hash, and remaining required reviewers count.
-- Exit code: `0` on success.
+- Exit code: `0` on success. Clean reviews with `cites=0` and explanatory prose are recognized as `PASS`.
+
+> **Zero-Polling Invariant**: Never poll background tasks or subagents with `manage_subagents` or `schedule`. Yield execution and wait for reactive messages from the system.
 
 > **Review Budget Exhaustion**: If `prepare-verification` fails with `REVIEW_BUDGET_EXHAUSTED`, do not inspect harness scripts. Prompt developer via `ask_question` for decision: either approve increasing the review call budget or approve a review override (if touching non-sensitive surfaces).
 
@@ -234,3 +242,24 @@ When an exception occurs:
 2. Inspect **only** the specific, directly relevant harness script or helper function.
 3. Do **not** recursively scan unrelated harness scripts.
 4. Return to normal public-contract execution immediately after diagnosing the issue.
+
+---
+
+## 10. Canonical Command Catalog
+
+| Step | Canonical Command | Description |
+| :--- | :--- | :--- |
+| **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
+| **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
+| **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
+| **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
+| **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
+| **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
+| **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
+| **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
+| **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass) |
+| **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
+| **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
+| **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |

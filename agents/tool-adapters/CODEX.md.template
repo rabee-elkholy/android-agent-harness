@@ -5,6 +5,28 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. Codex reads `AGENTS.md`
 - Python: `{{PY}}`
 - Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
 - Independent Reviews: Reviewer roles selected by policy must be run independently; lead agent self-certification via `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes is strictly prohibited.
+- Zero-Polling Invariant: Never poll background tasks or subagents in a loop. Yield execution and wait for reactive messages.
+- Review Ingestion: Ingest reviewer responses with `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` or `--response-text "<name>=<text>"`.
+- Task Resumption: Run `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` if BLOCKED or for fixes.
 - Device: {{DEVICE_POLICY}}
 - Mobile Verification Walkthrough: After every device installation (`run_device.py install-start`), the agent MUST output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking for verification. Never ask if it passed without full test instructions.
 - {{GIT_POLICY}}
+
+## Canonical Command Catalog
+
+| Step | Canonical Command | Description |
+| :--- | :--- | :--- |
+| **Discovery** | `{{PY}} .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
+| **Clarification** | Interactive question with developer before drafting plan |
+| **Context Note** | `{{PY}} harness_cli.py context note "<note>"` | Record architectural convention/note |
+| **Preflight Gate** | `{{PY}} .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
+| **Unit Tests** | `{{PY}} .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Review Package** | `{{PY}} .agents/scripts/review_package.py` | Generate immutable review package markdown |
+| **Review Harvest** | `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
+| **Review Text** | `{{PY}} .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
+| **Resume Task** | `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
+| **Assemble Debug** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Build debug APK (ONLY after all reviewers pass) |
+| **Device Deploy** | `{{PY}} .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Screen Capture** | `{{PY}} .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
+| **Final Verify** | `{{PY}} .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
+| **Deliver Task** | `{{PY}} .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |

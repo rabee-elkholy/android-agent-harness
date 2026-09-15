@@ -11,7 +11,7 @@ from plan_authority import require_mutation
 
 INSPECTION_SCRIPTS = {"project_graph", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution"}
 VERIFICATION_SCRIPTS = {
-    "run_gradle_task", "run_tests_gate", "preflight_check", "review_package",
+    "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
 }
@@ -220,4 +220,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     if status in ("VERIFYING", "BLOCKED") and action == "resume":
         return True, f"resume authorized for {status.lower()} plan {plan.get('plan_id')}"
+    if status == "BLOCKED":
+        blocked = plan.get("blocked_reviewers", [])
+        blocked_str = f" from: {', '.join(blocked)}" if blocked else " due to blocking review findings"
+        return False, (
+            f"Task {plan.get('plan_id')} is BLOCKED{blocked_str}. "
+            f"Fix the reported issues, then resume the plan via: python .agents/scripts/workflow.py resume --repo . --task-id {plan.get('plan_id')}"
+        )
     return False, f"command is not allowed while plan status is {status or 'missing'}"

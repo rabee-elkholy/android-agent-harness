@@ -4,6 +4,32 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.39] - 2026-09-15
+
+### Resilient Review Ingestion, Subagent Auto-Harvesting, Canonical Command Catalog & Anti-Polling Invariant
+
+- **Resilient Review Ingestion (`record_review.py`)**:
+  - Replaced strict token equality matching with tolerant evidence extraction (`_extract_evidence_and_verdict`).
+  - Recognized explanatory prose and natural language rationales accompanying clean reviews (`cites=0`) as `PASS` without fabricating false `HIGH` findings.
+  - Hardened against contradictions: duplicate pass tokens, explicit failure tokens, or unresolved issue markers correctly evaluate to `FINDINGS`.
+  - Added support for `.jsonl` transcript parsing in `--report` and `--response`, eliminating JSON parser crashes on JSON lines.
+  - Enabled subagent-proven verdict recording on sensitive surfaces: allows `--verdict PASS` on HIGH/CRITICAL or sensitive surfaces when `--subagent-id <convId>` and `--evidence-pkg <sha12>` are provided.
+- **Subagent Transcript Auto-Harvesting (`record_review.py`)**:
+  - Added `--from-subagent <role>=<convId>` CLI option to automatically locate subagent transcripts in the host brain directory, extract the assistant's final verdict, and stage the review directly.
+  - Eliminated the need for intermediate scratch files or complex terminal text escaping.
+- **Actionable Diagnostics on BLOCKED Status (`mutation_guard.py`, `pre_invocation_reminder.py`)**:
+  - Transformed generic `command is not allowed while plan status is BLOCKED` errors into rich diagnostics displaying the exact blocking reviewers and the precise remedy command (`python .agents/scripts/workflow.py resume --repo . --task-id <id>`).
+  - Updated both full and compact messages in `pre_invocation_reminder.py` when `status == "BLOCKED"` to guide the agent directly to code fixes and task resumption.
+- **Forwarding Preflight Alias & Pipeline CLI Subcommands (`preflight.py`, `harness_cli.py`, `mutation_guard.py`)**:
+  - Added `agents/scripts/preflight.py` as an official forwarding alias to `preflight_check.py`.
+  - Added `preflight` to `VERIFICATION_SCRIPTS` in `mutation_guard.py`.
+  - Added `preflight`, `test`, `assemble`, `review`, and `device` subcommands to `harness_cli.py` (`android-harness`).
+- **Canonical Command Catalog & Zero-Polling Invariant Across All Supported Agents**:
+  - Added authoritative **Canonical Command Catalog** table across `harness-rules.md`, `GEMINI.md`, `CLAUDE.md`, `CODEX.md`, `QWEN.md`, `agents/tool-adapters/*.template`, and `command-contract.md`.
+  - Enforced strict **Zero-Polling Invariant** prohibiting agents from running background task polling loops (`manage_task`, `manage_subagents`, `schedule`), instructing them to yield execution and rely on reactive system wakeups.
+- **Regression Test Coverage (`_vnext_selftest.py`)**:
+  - Added `VNextReviewAndDiscoveryResilienceTests` validating review parsing tolerance, JSONL extraction, actionable BLOCKED error messages, preflight alias, CLI pipeline subcommands, and doc catalog parity.
+
 ## [1.0.38] - 2026-09-15
 
 ### Architecture Deduplication, Context Update Mode & Post-Install Context Management

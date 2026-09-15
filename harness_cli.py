@@ -16,6 +16,10 @@ Usage:
     android-harness verify --task TASK_ID [--repo PATH] [--kit PATH]
     android-harness doctor [--repo PATH] [--json] [--device] [--kit PATH]
     android-harness preflight [--repo PATH] [--kit PATH]
+    android-harness test [ARGS...] [--repo PATH] [--kit PATH]
+    android-harness assemble [TASK...] [--repo PATH] [--kit PATH]
+    android-harness review [ARGS...] [--repo PATH] [--kit PATH]
+    android-harness device [COMMAND...] [--repo PATH] [--kit PATH]
     android-harness selftest [--kit PATH]
     android-harness version [--kit PATH]
 
@@ -621,6 +625,58 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         os.chdir(prev_cwd)
 
 
+def _dispatch_pipeline_script(args: argparse.Namespace, script_name: str, forward_args: list[str]) -> int:
+    kit = ensure_kit(getattr(args, "kit", None))
+    repo = find_repo(getattr(args, "repo", None)) if getattr(args, "repo", None) else Path.cwd().resolve()
+    installed = repo / ".agents" / "scripts" / script_name
+    prev_cwd = Path.cwd()
+    os.chdir(repo)
+    try:
+        if installed.is_file():
+            return subprocess.run([sys.executable, str(installed), *forward_args], cwd=str(repo), check=False).returncode
+        env = os.environ.copy()
+        env["HARNESS_REPO"] = str(repo)
+        return run_engine_script(kit, script_name, forward_args, env=env)
+    finally:
+        os.chdir(prev_cwd)
+
+
+def cmd_test(args: argparse.Namespace) -> int:
+    """Run test gates (unit/instrumented) via run_tests_gate.py."""
+    forward = list(args.test_args)
+    if forward and forward[0] == "--":
+        forward = forward[1:]
+    return _dispatch_pipeline_script(args, "run_tests_gate.py", forward)
+
+
+def cmd_assemble(args: argparse.Namespace) -> int:
+    """Run Gradle assemble task via run_gradle_task.py."""
+    forward = list(args.gradle_args)
+    if forward and forward[0] == "--":
+        forward = forward[1:]
+    if not forward:
+        forward = [":app:assembleDebug"]
+    return _dispatch_pipeline_script(args, "run_gradle_task.py", forward)
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    """Record reviewer verdicts via record_review.py."""
+    forward = list(args.review_args)
+    if forward and forward[0] == "--":
+        forward = forward[1:]
+    return _dispatch_pipeline_script(args, "record_review.py", forward)
+
+
+def cmd_device(args: argparse.Namespace) -> int:
+    """Deploy or test on device via run_device.py."""
+    forward = list(args.device_args)
+    if forward and forward[0] == "--":
+        forward = forward[1:]
+    if not forward:
+        forward = ["install-start"]
+    return _dispatch_pipeline_script(args, "run_device.py", forward)
+
+
 def cmd_selftest(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     prev_cwd = Path.cwd()
@@ -779,6 +835,30 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.set_defaults(func=cmd_preflight)
+
+    sp = sub.add_parser("test", help="Run test gates (unit/instrumented) via run_tests_gate.py.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("test_args", nargs=argparse.REMAINDER, help="Arguments passed to run_tests_gate.py")
+    sp.set_defaults(func=cmd_test)
+
+    sp = sub.add_parser("assemble", help="Run Gradle assemble via run_gradle_task.py.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("gradle_args", nargs=argparse.REMAINDER, help="Gradle task arguments (default: :app:assembleDebug)")
+    sp.set_defaults(func=cmd_assemble)
+
+    sp = sub.add_parser("review", help="Record reviewer results via record_review.py.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("review_args", nargs=argparse.REMAINDER, help="Arguments passed to record_review.py")
+    sp.set_defaults(func=cmd_review)
+
+    sp = sub.add_parser("device", help="Deploy or inspect device via run_device.py.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("device_args", nargs=argparse.REMAINDER, help="Device arguments (default: install-start)")
+    sp.set_defaults(func=cmd_device)
 
     sp = sub.add_parser("context", help="Inspect, preview, refresh, or add notes to derived project context.")
     sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note"), help="Context action.")

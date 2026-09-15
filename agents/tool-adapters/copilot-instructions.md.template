@@ -6,6 +6,9 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 - Use the central policy to select only the required reviewers and gates, then bind their evidence to the final snapshot.
 - Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
 - Independent Reviews: Required reviewer roles must be evaluated independently; lead agents must never self-certify reviews with `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes.
+- Zero-Polling Invariant: Never poll background tasks or subagents in a loop. Yield execution and wait for reactive messages.
+- Review Ingestion: Ingest reviewer responses with `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` or `--response-text "<name>=<text>"`.
+- Task Resumption: Run `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` if BLOCKED or for fixes.
 - Device: {{DEVICE_POLICY}}
 - Mobile Verification Walkthrough: After every device installation (`run_device.py install-start`), the agent MUST output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking the developer for verification. Never ask if it passed without detailing test steps.
 - {{GIT_POLICY}}
@@ -15,3 +18,22 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
   If the hook file is absent (older checkout, hook support unavailable), treat
   `{{PY}} .agents/scripts/pre_tool_safety.py` as the reference policy: apply the same
   denials yourself before every shell command (best-effort). The hook can hard-enforce covered mutations, but conversational approval remains `RULE_ENFORCED`; read the detected tier from `_product.py` and do not claim cryptographic human separation.
+
+## Canonical Command Catalog
+
+| Step | Canonical Command | Description |
+| :--- | :--- | :--- |
+| **Discovery** | `{{PY}} .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
+| **Clarification** | Interactive question with developer before drafting plan |
+| **Context Note** | `{{PY}} harness_cli.py context note "<note>"` | Record architectural convention/note |
+| **Preflight Gate** | `{{PY}} .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
+| **Unit Tests** | `{{PY}} .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Review Package** | `{{PY}} .agents/scripts/review_package.py` | Generate immutable review package markdown |
+| **Review Harvest** | `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
+| **Review Text** | `{{PY}} .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
+| **Resume Task** | `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
+| **Assemble Debug** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Build debug APK (ONLY after all reviewers pass) |
+| **Device Deploy** | `{{PY}} .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Screen Capture** | `{{PY}} .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
+| **Final Verify** | `{{PY}} .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
+| **Deliver Task** | `{{PY}} .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |

@@ -2390,6 +2390,112 @@ class HarnessExecutionBoundaryTests(unittest.TestCase):
         self.assertIn("exit code 0", self.rules)
 
 
+class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
+    """Tests for review parsing tolerance, JSONL harvesting, actionable BLOCKED errors, and command catalog."""
+
+    def test_extract_evidence_and_verdict_tolerance(self) -> None:
+        from record_review import _extract_evidence_and_verdict
+        pkg = "4f27663ba9eb"
+
+        # 1. Natural language prose with PASS and cites=0 -> PASS
+        text1 = "PASS\nNo ANR risks or main thread blocking.\nEVIDENCE pkg=4f27663ba9eb cites=0"
+        verdict, cites, pkg_out = _extract_evidence_and_verdict("perf-anr-guardian-agent", text1, pkg)
+        self.assertEqual(verdict, "PASS")
+        self.assertEqual(cites, 0)
+        self.assertEqual(pkg_out, pkg)
+
+        # 2. Token PASS with colon in EVIDENCE -> PASS
+        text2 = "BUG_PASS\nAll checks clean.\nEVIDENCE: pkg=4f27663ba9eb cites=0"
+        verdict, cites, pkg_out = _extract_evidence_and_verdict("bug-reviewer-agent", text2, pkg)
+        self.assertEqual(verdict, "PASS")
+        self.assertEqual(cites, 0)
+        self.assertEqual(pkg_out, pkg)
+
+        # 3. Explicit FAIL with findings -> FINDINGS
+        text3 = "VERDICT: FAIL\nFound SQL injection vulnerability.\nEVIDENCE pkg=4f27663ba9eb cites=1"
+        verdict, cites, pkg_out = _extract_evidence_and_verdict("security-reviewer-agent", text3, pkg)
+        self.assertEqual(verdict, "FINDINGS")
+        self.assertEqual(cites, 1)
+
+    def test_extract_transcript_response_jsonl(self) -> None:
+        from record_review import _extract_transcript_response
+        with tempfile.TemporaryDirectory() as td:
+            t_path = Path(td) / "transcript.jsonl"
+            lines = [
+                json.dumps({"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Review this"}),
+                json.dumps({"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "content": "PASS\nEVIDENCE pkg=4f27663ba9eb cites=0"}),
+            ]
+            t_path.write_text("\n".join(lines), encoding="utf-8")
+            content = _extract_transcript_response(t_path)
+            self.assertIn("PASS", content)
+            self.assertIn("EVIDENCE pkg=4f27663ba9eb cites=0", content)
+
+    def test_mutation_guard_actionable_blocked_error(self) -> None:
+        from mutation_guard import command_allowed
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            plan_file = repo / ".agents" / "state" / "active-task.json"
+            plan_file.parent.mkdir(parents=True, exist_ok=True)
+            plan_data = {
+                "plan_id": "test-task",
+                "status": "BLOCKED",
+                "blocked_reviewers": ["bug-reviewer-agent", "security-reviewer-agent"],
+            }
+            plan_file.write_text(json.dumps({
+                "task_id": "test-task",
+                "plan_path": ".agents/state/tasks/test-task/plan.json",
+            }), encoding="utf-8")
+            task_dir = repo / ".agents" / "state" / "tasks" / "test-task"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            (task_dir / "plan.json").write_text(json.dumps(plan_data), encoding="utf-8")
+
+            allowed, reason = command_allowed(repo, "python .agents/scripts/run_gradle_task.py :app:assembleDebug")
+            self.assertFalse(allowed)
+            self.assertIn("Task test-task is BLOCKED", reason)
+            self.assertIn("bug-reviewer-agent, security-reviewer-agent", reason)
+            self.assertIn("workflow.py resume --repo . --task-id test-task", reason)
+
+    def test_preflight_alias_script_exists(self) -> None:
+        script = KIT / "agents" / "scripts" / "preflight.py"
+        self.assertTrue(script.is_file())
+        content = script.read_text(encoding="utf-8")
+        self.assertIn("import preflight_check", content)
+        self.assertIn("preflight_check.main()", content)
+
+    def test_harness_cli_pipeline_subcommands(self) -> None:
+        parser = harness_cli.build_parser()
+        # Test that subcommands are recognized
+        for subcmd in ("preflight", "test", "assemble", "review", "device"):
+            args = parser.parse_args([subcmd])
+            self.assertEqual(args.command, subcmd)
+
+    def test_rules_and_agent_docs_contain_command_catalog_and_anti_polling(self) -> None:
+        files_to_check = [
+            KIT / "agents" / "rules" / "harness-rules.md",
+            KIT / "GEMINI.md",
+            KIT / "CLAUDE.md",
+            KIT / "CODEX.md",
+            KIT / "QWEN.md",
+            KIT / "agents" / "tool-adapters" / "GEMINI.md.template",
+            KIT / "agents" / "tool-adapters" / "CLAUDE.md.template",
+            KIT / "agents" / "tool-adapters" / "CODEX.md.template",
+            KIT / "agents" / "tool-adapters" / "QWEN.md.template",
+            KIT / "agents" / "tool-adapters" / "AGENTS.md.template",
+            KIT / "agents" / "tool-adapters" / "continue-android-harness.md.template",
+            KIT / "agents" / "tool-adapters" / "copilot-instructions.md.template",
+            KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
+        ]
+        for f in files_to_check:
+            self.assertTrue(f.is_file(), f"Missing file {f}")
+            text = f.read_text(encoding="utf-8")
+            self.assertIn("Canonical Command Catalog", text, f"Missing Canonical Command Catalog in {f.name}")
+            self.assertTrue(
+                "Zero-Polling" in text or "never poll" in text.lower(),
+                f"Missing Zero-Polling rule in {f.name}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 

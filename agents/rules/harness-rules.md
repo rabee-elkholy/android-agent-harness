@@ -54,7 +54,7 @@ Use `.agents/scripts/workflow.py` to record lifecycle state. Approval is bound t
 - Never use `git reset`, `stash`, `checkout --`, hidden commits, `assume-unchanged`, or automatic rollback of developer code.
 - Autonomous Phased Execution: Tasks modifying >3 files or multiple architectural layers (e.g. Data, Domain, UI) must be organized into sequential phases with scoped review checkpoints. Initial developer approval covers all phases; the agent MUST execute phases sequentially and autonomously, running fast compilation, preflight, and scoped reviews at each layer boundary without pausing, asking for confirmation, or demanding 'Proceed' between phases. Fail-fast at layer boundaries prevents compounding regressions. Technical fixes inside approved behavior proceed without phase stops. A multi-phase plan does not require repeated approval unless scope materially changes.
 - During verification, if compiler, lint, test failures, or developer critique require code changes, return to implementation using: `python .agents/scripts/workflow.py resume --repo . --task-id <id>`. Do not recreate task drafts, invent new task IDs, or stall waiting for nonexistent UI buttons.
-- Never poll or loop on background task status with `manage_task status`. Yield execution and wait for reactive completion messages.
+- Zero-Polling Invariant: Never poll background tasks or subagents in a loop using `manage_task`, `manage_subagents`, or `schedule`. Yield execution and wait for reactive completion or subagent messages from the system. Polling loops waste tokens and stall progress.
 
 ## 3. Skills and instruction precedence
 
@@ -77,7 +77,7 @@ The central `review_policy.py` is the only gate/reviewer router. Adapters and pr
 
 - Run only the tests, deterministic gates, reviewers, assemble, and device checks required by the final surfaces.
 - Verification follows a strict execution pipeline order, and the Verification Plan in `implementation_plan.md` MUST explicitly use these exact 6-step headings:
-  1. Fast Deterministic Preflight (`python .agents/scripts/preflight_check.py`)
+  1. Fast Deterministic Preflight (`python .agents/scripts/preflight.py` or `preflight_check.py`)
   2. Automated Unit Tests (`python .agents/scripts/run_tests_gate.py`)
   3. AI Specialist Reviewers (`python .agents/scripts/record_review.py`)
   4. Assemble & Device Verification (`python .agents/scripts/run_device.py install-start`)
@@ -91,7 +91,7 @@ The central `review_policy.py` is the only gate/reviewer router. Adapters and pr
 - Documentation and eligible deterministic micro changes may require no semantic reviewer. Record `REVIEW_NOT_REQUIRED_BY_POLICY`; never fabricate reviewer PASS.
 - Normal logic, UI/runtime, coroutine, persistence, build, and sensitive changes use their routed reviewer subsets.
 - Critical/broad changes use the full reviewer set. Test changes add Test Quality review.
-- Reviewer execution is fully automatic and strictly independent: launching the routed specialist reviewers (subagents) during the `VERIFYING` phase is covered by the initial task plan approval. Once preflight and unit tests pass, the agent MUST launch the required reviewers immediately and automatically in a single parallel `invoke_subagent` call; never pause, ask, or wait for developer permission to run reviewers. Self-certifying reviews without invoking subagents (`lead_agent_recorded_verdict`) is strictly forbidden for high-severity or sensitive changes and will cause final verification to fail. When subagents return their responses containing the evidence footer (`EVIDENCE pkg=<sha12> cites=<count>`), the agent records them using `python .agents/scripts/record_review.py --task <id> --response-text "<name>=<text>"` (or `--response <name>=<path>`). Ingesting response text directly via `--response-text` eliminates intermediate scratch files. If recording verdicts directly with `--verdict`, `--evidence-pkg <sha12>` is strictly mandatory and must match the active review package. Review evidence is automatically ingested once all required reviewers are recorded.
+- Reviewer execution is fully automatic and strictly independent: launching the routed specialist reviewers (subagents) during the `VERIFYING` phase is covered by the initial task plan approval. Once preflight and unit tests pass, the agent MUST launch the required reviewers immediately and automatically in a single parallel `invoke_subagent` call; never pause, ask, or wait for developer permission to run reviewers. Self-certifying reviews without invoking subagents (`lead_agent_recorded_verdict`) is strictly forbidden for high-severity or sensitive changes and will cause final verification to fail. When subagents return their responses containing the evidence footer (`EVIDENCE pkg=<sha12> cites=<count>`), the agent records them using automatic transcript harvesting: `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` or directly with `python .agents/scripts/record_review.py --task <id> --response-text "<name>=<text>"`. Explanatory prose accompanying clean reviews (`cites=0`) is fully accepted as `PASS`. If recording verdicts directly with `--verdict`, `--subagent-id <convId>` and `--evidence-pkg <sha12>` are strictly mandatory on high-severity or sensitive changes. Review evidence is automatically ingested once all required reviewers are recorded.
 - Sensitive final delivery requires a second explicit developer approval bound
   to the frozen snapshot, solicited interactively via `ask_question`. Upon developer confirmation, the agent records the approval using:
   `python .agents/scripts/workflow.py approve-sensitive --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED`.
@@ -145,3 +145,25 @@ Always display the detected host tier:
 - `UNSUPPORTED`: minimum safe operation is unavailable.
 
 Never market rule-only behavior as cryptographic, OS-level, or universally unbypassable enforcement.
+
+## 9. Canonical Command Catalog
+
+Do not guess command syntax or inspect harness internal scripts. Always use these canonical commands:
+
+| Step | Canonical Command | Description |
+| :--- | :--- | :--- |
+| **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
+| **Clarification** | `ask_question` tool | Interactive question modal with developer before drafting plan |
+| **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note without running delivery pipeline |
+| **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
+| **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
+| **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
+| **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
+| **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
+| **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass) |
+| **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
+| **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
+| **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
+
