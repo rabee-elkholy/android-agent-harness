@@ -47,6 +47,61 @@ VIEW_UI_RE = re.compile(
     r")"
 )
 
+BUSINESS_TRIGGERS_RE = re.compile(
+    r"\b(?:suspend|CoroutineScope|Dispatchers\.|launch\s*\{|async\s*\{|withContext)\b|"
+    r"\b(?:emit\s*\(|\.update\s*\{|\.value\s*=|setState\s*\(|sendAction|sendEvent|_state\.)|"
+    r"\b(?:viewmodel|repository|usecase|service|interactor|datasource|dao|api)\.|\.invoke\s*\(|"
+    r"\b(?:if|when)\s*\(.*?\b(?:state\.|is|has|can|should|status|type|count|total|amount|user|auth|token|perm)\b|"
+    r"\b(?:UiState|UiAction|UiEffect|Event|Action|Intent)\b|"
+    r"\b(?:validate|validator|sanitize|calculate|compute)\b|"
+    r"\b(?:retrofit|okhttp|ktor|httpclient|datastore|sqldelight|sqlite|realm)\b|"
+    r"\b(?:billingclient|purchase|subscription|productdetails)\b|"
+    r"\b(?:oauth|authentication|authorization|login|sign.?in|jwt|biometric)\b|"
+    r"\b(?:cipher|keystore|secretkey|encrypt|decrypt|access.?token|refresh.?token|password)\b|"
+    r"\b(?:NavHost|NavController|findNavController|rememberNavController|navigate\(|popBackStack\()",
+    re.IGNORECASE,
+)
+
+
+def is_ui_only_kotlin(diff_text: str, context_text: str, full_text: str, rel: str) -> bool:
+    """Deterministically identifies Kotlin edits that alter only UI presentational details.
+
+    UI-only Kotlin edits must:
+    1. Enclose in a UI declaration (@Composable, @Preview, or View/Recycler presentation method).
+    2. Not alter business/domain/state triggers in the changed hunk.
+    3. Not introduce or modify non-UI class/interface declarations.
+    """
+    lower_rel = rel.lower()
+    non_ui_path_markers = (
+        "viewmodel", "repository", "usecase", "interactor", "datasource",
+        "/domain/", "/data/", "/model/", "/network/", "/database/", "/db/"
+    )
+    if any(m in lower_rel for m in non_ui_path_markers):
+        return False
+
+    ctx_check = context_text if context_text.strip() else full_text
+    has_ui_context = bool(
+        re.search(r"@(?:Composable|Preview)\b", ctx_check)
+        or VIEW_UI_RE.search(ctx_check)
+        or re.search(r"\b(?:onCreateViewHolder|onBindViewHolder|getItemCount)\b", ctx_check)
+    )
+    if not has_ui_context:
+        return False
+
+    if not diff_text.strip():
+        return False
+
+    if BUSINESS_TRIGGERS_RE.search(diff_text):
+        return False
+
+    for line in diff_text.splitlines():
+        clean_l = line.strip().lstrip("+-").strip()
+        if re.match(r"^(?:(?:open|abstract|final|sealed|data|value|enum)\s+)*(?:class|interface|object)\b", clean_l):
+            if not re.search(r"@Preview|PreviewParameter", clean_l):
+                return False
+
+    return True
+
 
 def _add(result: dict, surface: str, path: str, reason: str) -> None:
     result.setdefault(surface, {"files": set(), "reasons": set()})
@@ -303,6 +358,7 @@ def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
 def _changed_line_count(repo: Path, changes: list) -> int:
     """Return a conservative diff-size bound without trusting file mtimes."""
     total = 0
+    relevant_paths = {c.rel_posix for c in changes} | {c.old_rel_posix for c in changes if c.old_rel_posix}
     proc = subprocess.run(
         ["git", "diff", "--numstat", "HEAD", "--"], cwd=str(repo),
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
@@ -312,7 +368,10 @@ def _changed_line_count(repo: Path, changes: list) -> int:
             fields = line.split("\t", 2)
             if len(fields) < 3:
                 continue
-            if "=>" not in fields[2] and not is_delivery_relevant(fields[2]):
+            path_in_diff = fields[2]
+            if "=>" not in path_in_diff and not is_delivery_relevant(path_in_diff):
+                continue
+            if path_in_diff not in relevant_paths:
                 continue
             if fields[0] == "-" or fields[1] == "-":
                 total += 100_000
@@ -332,10 +391,29 @@ def _changed_line_count(repo: Path, changes: list) -> int:
     return total
 
 
-def classify(repo: Path) -> dict:
+def classify(repo: Path, task_id: str | None = None, task_changes: list | None = None) -> dict:
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
-    changes = changed_files(root, include_untracked=True)
+    all_changes = changed_files(root, include_untracked=True)
+
+    if task_changes is None and task_id:
+        try:
+            from delivery_manifest import load_task_baseline
+            baseline = load_task_baseline(root, task_id)
+            if baseline and "task_changes" in baseline:
+                task_changes = baseline.get("task_changes")
+        except Exception:
+            pass
+
+    if task_changes is not None:
+        task_paths = {
+            c["path"] if isinstance(c, dict) else (c.rel_posix if hasattr(c, "rel_posix") else str(c))
+            for c in task_changes
+        }
+        changes = [c for c in all_changes if c.rel_posix in task_paths or (c.old_rel_posix and c.old_rel_posix in task_paths)]
+    else:
+        changes = all_changes
+
     room_types = _room_schema_types(root)
     for changed in changes:
         rel = changed.rel_posix
@@ -369,7 +447,10 @@ def classify(repo: Path) -> dict:
         if suffix in (".kt", ".java") and not test_path and re.search(r"\b(NavHost|NavController|findNavController|rememberNavController)\b|navGraphBuilder|popUpTo\(", diff_text):
             _add(found, "NAVIGATION", rel, "NAVIGATION_CALL")
         if suffix in (".kt", ".java") and not test_path:
-            _add(found, "BUSINESS_LOGIC", rel, "SOURCE_CHANGE")
+            if is_ui_only_kotlin(diff_text, context_text, full_text, rel):
+                pass
+            else:
+                _add(found, "BUSINESS_LOGIC", rel, "SOURCE_CHANGE")
         if suffix in (".kt", ".java") and not test_path and room_types:
             try:
                 from room_guard import declared_type_names
@@ -481,14 +562,15 @@ def main() -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
+    parser.add_argument("--task-id", default=None, help="Task ID for baseline-scoped classification")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     if args.json:
-        result = classify(Path(args.repo))
+        result = classify(Path(args.repo), task_id=args.task_id)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         with step_progress("Classifying changes & surfaces"):
-            result = classify(Path(args.repo))
+            result = classify(Path(args.repo), task_id=args.task_id)
         print(f"SURFACES={','.join(result['surfaces']) or 'NONE'}")
         print(f"SEVERITY={result['severity']}")
         print(f"CONFIDENCE={result['confidence']}")

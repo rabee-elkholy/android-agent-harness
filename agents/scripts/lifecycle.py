@@ -37,6 +37,8 @@ INTERNAL_EXCLUDE_PATTERNS = (
 PRESERVE_GLOBS = (
     ".agents/project-context/project-notes.md",
     ".agents/project-context/architecture-policy.json",
+    ".agents/project-context/project-facts.json",
+    ".agents/project-context/views/*",
     ".agents/project-context/legacy-overrides/*",
     ".agents/mcp/zoho_sprints/workflow_defaults.json",
 )
@@ -393,7 +395,7 @@ def _configure(repo: Path, kit: Path, answers: dict) -> None:
     _managed_exclude(repo)
 
 
-def _install_engine(repo: Path, kit: Path, answers: dict) -> None:
+def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool = False) -> None:
     def ignored(_directory: str, names: list[str]) -> set[str]:
         return {name for name in names if name in {"state", "cache", "__pycache__"} or name.endswith((".pyc", ".pyo"))}
 
@@ -413,30 +415,35 @@ def _install_engine(repo: Path, kit: Path, answers: dict) -> None:
         (state / ".gitkeep").touch()
         os.replace(staging / ".agents", repo / ".agents")
         _configure(repo, kit, answers)
-        from project_context import extract_project_facts, render_project_context, write_project_context
-        facts_payload = extract_project_facts(repo, in_memory_graph=True)
-        views = render_project_context(facts_payload)
-        write_project_context(repo, facts_payload, views)
-        from architecture_policy import create_architecture_policy, write_architecture_policy
-        pref_family = answers.get("preferred_new_code_family")
-        target_family = None if (not pref_family or pref_family == "none") else pref_family
-        write_architecture_policy(
-            repo,
-            create_architecture_policy(preferred_new_code_family=target_family),
-            overwrite=True,
-        )
+        if init_context:
+            from project_context import extract_project_facts, render_project_context, write_project_context
+            facts_payload = extract_project_facts(repo, in_memory_graph=True)
+            views = render_project_context(facts_payload)
+            write_project_context(repo, facts_payload, views)
+            from architecture_policy import create_architecture_policy, write_architecture_policy
+            pref_family = answers.get("preferred_new_code_family")
+            target_family = None if (not pref_family or pref_family == "none") else pref_family
+            write_architecture_policy(
+                repo,
+                create_architecture_policy(preferred_new_code_family=target_family),
+                overwrite=True,
+            )
         for source in (repo / ".agents" / "scripts").rglob("*.py"):
             try:
                 compile(source.read_bytes(), str(source), "exec")
             except (OSError, SyntaxError) as exc:
                 raise ValidationError(f"installed Python script failed syntax validation: {source.name}") from exc
-        for required_path in (
+        required_paths = [
             repo / ".agents" / "VERSION",
             repo / ".agents" / "rules" / "harness-rules.md",
             repo / ".agents" / "scripts" / "_product.py",
-            repo / ".agents" / "project-context" / "project-facts.json",
-            repo / ".agents" / "project-context" / "architecture-policy.json",
-        ):
+        ]
+        if init_context:
+            required_paths.extend([
+                repo / ".agents" / "project-context" / "project-facts.json",
+                repo / ".agents" / "project-context" / "architecture-policy.json",
+            ])
+        for required_path in required_paths:
             if not required_path.is_file():
                 raise ValidationError(f"installed harness is incomplete: {required_path.relative_to(repo)}")
     finally:
@@ -453,8 +460,49 @@ def _warm_project_graph(repo: Path) -> None:
         pass
 
 
+def recover_interrupted_update(repo: Path) -> dict | None:
+    journal_path = repo / ".harness-setup" / "update-journal.json"
+    if not journal_path.is_file():
+        return None
+    try:
+        journal = read_json(journal_path)
+    except Exception:
+        return None
+    status = str(journal.get("status") or "")
+    if status in ("COMPLETED", "ROLLED_BACK"):
+        return None
+    prev_dirs = sorted(repo.glob(".agents.previous-*"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    agents_dir = repo / ".agents"
+    is_agents_complete = (
+        agents_dir.is_dir()
+        and (agents_dir / "VERSION").is_file()
+        and (agents_dir / "scripts" / "_product.py").is_file()
+        and (agents_dir / "rules" / "harness-rules.md").is_file()
+    )
+    if is_agents_complete and (repo / OWNERSHIP_RELATIVE).is_file():
+        journal["status"] = "COMPLETED"
+        journal["recovered_at"] = utc_now()
+        atomic_write_json(journal_path, journal)
+        for p in prev_dirs:
+            shutil.rmtree(p, ignore_errors=True)
+        return {"status": "RECOVERED", "action": "completed_new_engine"}
+    if prev_dirs:
+        old = prev_dirs[0]
+        if agents_dir.exists():
+            shutil.rmtree(agents_dir, ignore_errors=True)
+        os.replace(old, agents_dir)
+        journal["status"] = "ROLLED_BACK"
+        journal["recovered_at"] = utc_now()
+        atomic_write_json(journal_path, journal)
+        for p in prev_dirs[1:]:
+            shutil.rmtree(p, ignore_errors=True)
+        return {"status": "RECOVERED", "action": "restored_previous_engine"}
+    return None
+
+
 def install(repo: Path, kit: Path) -> dict:
     repo = _validate_repo(repo)
+    recover_interrupted_update(repo)
     kit, version = _validate_kit(kit)
     if (repo / ".agents").exists() or (repo / OWNERSHIP_RELATIVE).exists():
         raise ValidationError("target already contains a harness; uninstall it before the clean vNext install")
@@ -463,7 +511,7 @@ def install(repo: Path, kit: Path) -> dict:
     before = _snapshot_files(repo, _candidate_adapter_paths(repo))
     backup = _backup(repo, None, "install", _candidate_adapter_paths(repo))
     try:
-        _install_engine(repo, kit, answers)
+        _install_engine(repo, kit, answers, init_context=True)
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
         ownership = _write_ownership(repo, version=version, before=before, backup=backup)
@@ -500,8 +548,10 @@ def require_update_idle(repo: Path) -> None:
         raise ValidationError("compatible update refused while an active task exists; finish or cancel the task before updating")
 
 
-def update(repo: Path, kit: Path) -> dict:
+def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
     repo = _validate_repo(repo)
+    answers = dict(answers or {})
+    recover_interrupted_update(repo)
     require_update_idle(repo)
     kit, target_version = _validate_kit(kit)
     ownership = _read_ownership(repo)
@@ -522,7 +572,10 @@ def update(repo: Path, kit: Path) -> dict:
             conflicts.append(rel)
     if conflicts:
         raise ValidationError("user-modified managed files require clean recovery: " + ", ".join(conflicts[:10]))
-    answers = _load_answers(repo)
+    loaded_answers = _load_answers(repo)
+    if answers:
+        loaded_answers.update(answers)
+    answers = loaded_answers
     app_before = _snapshot_app_files(repo)
     before = _snapshot_files(repo, _candidate_adapter_paths(repo))
     backup = _backup(repo, ownership, "update", _candidate_adapter_paths(repo))
@@ -546,25 +599,43 @@ def update(repo: Path, kit: Path) -> dict:
     atomic_write_json(journal_path, journal)
     try:
         os.replace(repo / ".agents", old_agents)
-        _install_engine(repo, kit, answers)
+        _install_engine(repo, kit, answers, init_context=False)
         if (old_agents / "state").is_dir():
             shutil.copytree(old_agents / "state", repo / ".agents/state", dirs_exist_ok=True)
         _restore_preserved(repo, preserve_root, preserved)
-        pref_family = answers.get("preferred_new_code_family")
-        if pref_family is not None and pref_family != "none":
-            from architecture_policy import read_architecture_policy, compute_policy_hash, write_architecture_policy, create_architecture_policy
-            curr_pol = read_architecture_policy(repo)
-            if curr_pol is None:
-                write_architecture_policy(repo, create_architecture_policy(preferred_new_code_family=pref_family), overwrite=True)
-            elif curr_pol.get("preferred_new_code_family") != pref_family:
-                curr_pol["preferred_new_code_family"] = pref_family
-                curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
-                write_architecture_policy(repo, curr_pol, overwrite=True)
-        if answers.get("update_context_mode") == "refresh":
+
+        mode = str(answers.get("update_context_mode") or "preserve").lower()
+        if mode not in {"preserve", "refresh", "auto"}:
+            mode = "preserve"
+
+        if mode == "preserve":
+            facts_file = repo / ".agents" / "project-context" / "project-facts.json"
+            if not facts_file.is_file():
+                raise ValidationError("CONTEXT_REFRESH_REQUIRED: missing project-facts.json")
+            try:
+                facts = read_json(facts_file)
+                if facts.get("schema_version") not in (1, 2):
+                    raise ValidationError("CONTEXT_REFRESH_REQUIRED: incompatible project-facts.json schema")
+            except Exception as exc:
+                raise ValidationError(f"CONTEXT_REFRESH_REQUIRED: {exc}")
+        elif mode in ("refresh", "auto"):
             from project_context import extract_project_facts, render_project_context, write_project_context
             fresh_facts = extract_project_facts(repo, in_memory_graph=True)
             fresh_views = render_project_context(fresh_facts)
             write_project_context(repo, fresh_facts, fresh_views)
+            from architecture_policy import read_architecture_policy, compute_policy_hash, write_architecture_policy
+            curr_pol = read_architecture_policy(repo)
+            if curr_pol:
+                pref_family = curr_pol.get("preferred_new_code_family") or curr_pol.get("default_family")
+                if pref_family and pref_family != "none":
+                    arch_obj = fresh_facts.get("facts", {}).get("architecture") or fresh_facts.get("architecture") or {}
+                    existing_fam_ids = {f.get("id") for f in arch_obj.get("families") or []}
+                    if pref_family not in existing_fam_ids:
+                        curr_pol["status"] = "ARCHITECTURE_DECISION_REQUIRED"
+                        curr_pol["decision_reason"] = f"previously preferred family '{pref_family}' is no longer detected after refresh"
+                        curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
+                        write_architecture_policy(repo, curr_pol, overwrite=True)
+
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
         new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
@@ -592,6 +663,7 @@ def update(repo: Path, kit: Path) -> dict:
 def replace_legacy(repo: Path, kit: Path) -> dict:
     """Atomically replace a pre-v1 engine in one process with rollback."""
     repo = _validate_repo(repo)
+    recover_interrupted_update(repo)
     kit, target_version = _validate_kit(kit)
     if not (repo / ".agents").is_dir():
         raise ValidationError("legacy replacement requires an existing .agents directory")
@@ -605,9 +677,10 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
     preserve_root = repo / ".harness-recovery" / f"legacy-preserve-{uuid.uuid4().hex}"
     preserved = _legacy_preserved_paths(kit, _copy_preserved(repo, preserve_root))
     old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
+    has_prior_facts = (repo / ".agents" / "project-context" / "project-facts.json").is_file()
     try:
         os.replace(repo / ".agents", old_agents)
-        _install_engine(repo, kit, answers)
+        _install_engine(repo, kit, answers, init_context=(not has_prior_facts))
         _restore_preserved(repo, preserve_root, preserved)
         allowed_adapters = {p.relative_to(repo).as_posix() for p in adapters}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
@@ -633,6 +706,7 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
 
 def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
     repo = _validate_repo(repo)
+    recover_interrupted_update(repo)
     ownership = None
     try:
         ownership = _read_ownership(repo)
@@ -705,6 +779,8 @@ def main(argv: list[str] | None = None) -> int:
         command = sub.add_parser(name)
         command.add_argument("--repo", required=True)
         command.add_argument("--kit", required=True)
+    command = sub.add_parser("recover-interrupted-update")
+    command.add_argument("--repo", required=True)
     command = sub.add_parser("uninstall")
     command.add_argument("--repo", required=True)
     command.add_argument("--apply", action="store_true")
@@ -718,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
             result = update(Path(args.repo), Path(args.kit))
         elif args.action == "replace-legacy":
             result = replace_legacy(Path(args.repo), Path(args.kit))
+        elif args.action == "recover-interrupted-update":
+            result = recover_interrupted_update(Path(args.repo)) or {"status": "PASS", "action": "recover-interrupted-update", "recovered": False}
         else:
             result = uninstall(Path(args.repo), apply=args.apply, legacy=args.legacy)
         print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else f"[{result['status']}] {result['action']}")

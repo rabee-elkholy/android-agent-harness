@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now  # noqa: E402
+from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now, atomic_write_json  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
 from workflow import SENSITIVE_SURFACES, assert_active_run_fresh, state_root, task_dir  # noqa: E402
 
@@ -120,6 +120,156 @@ def _find_subagent_transcript(subagent_id: str) -> Path | None:
     return None
 
 
+def is_blocking_finding(finding: dict, policy: dict | None = None) -> bool:
+    sev = str(finding.get("severity") or "").upper()
+    if sev in ("BLOCKER", "CRITICAL", "HIGH", "MAJOR"):
+        return True
+    if sev == "MEDIUM":
+        if finding.get("is_advisory") or finding.get("advisory"):
+            surfaces = (policy or {}).get("surfaces") or []
+            if set(surfaces) & SENSITIVE_SURFACES:
+                return True
+            return False
+        return True
+    return False
+
+
+def _parse_reviewer_findings(text: str, default_severity: str = "HIGH", response_sha256: str = "") -> list[dict]:
+    clean = text.strip()
+    footer = FOOTER_PATTERN.search(clean)
+    body = clean[:footer.start()].strip() if footer else clean
+    cites = int(footer.group(2)) if (footer and footer.group(2) is not None) else 0
+
+    sev_re = re.compile(r"\b(?:severity[:\s]+)?\[?(CRITICAL|BLOCKER|HIGH|MAJOR|MEDIUM|LOW|INFO)\]?(?:\s*\((advisory)\))?", re.I)
+    file_re = re.compile(r"(?:^|[\s\(\[])([a-zA-Z0-9_\-\./\\]+\.(?:kt|java|xml|gradle|kts))(?::(\d+)(?:-(\d+))?)?", re.I)
+    id_re = re.compile(r"\b(?:FINDING[-_]?([A-Z0-9]+)|ID[:\s]+([A-Z0-9_-]+))\b", re.I)
+
+    pattern = r"\n(?=\s*(?:[-*]|\d+[\.)]|Finding\s+\d+[:\.]?|\[(?:CRITICAL|BLOCKER|HIGH|MAJOR|MEDIUM|LOW|INFO)\]))"
+    raw_chunks = re.split(pattern, body, flags=re.I)
+    chunks = [c.strip() for c in raw_chunks if c.strip()]
+
+    if len(chunks) > 1:
+        first_chunk = chunks[0]
+        is_first_chunk_item = bool(re.match(r"^(?:[-*]|\d+[\.)]|Finding\s+\d+|\[(?:CRITICAL|BLOCKER|HIGH|MAJOR|MEDIUM|LOW|INFO)\])", first_chunk, re.I))
+        if not is_first_chunk_item and not sev_re.search(first_chunk):
+            chunks = chunks[1:]
+    elif chunks and re.match(r"^findings?:?$", chunks[0], re.I):
+        chunks = chunks[1:]
+
+    findings: list[dict] = []
+    if chunks:
+        for idx, chunk in enumerate(chunks):
+            sev_match = sev_re.search(chunk)
+            raw_sev = sev_match.group(1).upper() if sev_match else None
+            inferred = False
+            if raw_sev == "BLOCKER":
+                sev = "CRITICAL"
+            elif raw_sev == "MAJOR":
+                sev = "HIGH"
+            elif raw_sev in VALID_SEVERITIES:
+                sev = raw_sev
+            else:
+                sev = default_severity
+                inferred = True
+
+            is_advisory = bool(re.search(r"\b(?:advisory|non-blocking)\b", chunk, re.I)) or (sev_match and bool(sev_match.group(2)))
+            id_match = id_re.search(chunk)
+            fid = (id_match.group(1) or id_match.group(2)) if id_match else str(idx + 1)
+
+            file_matches = file_re.findall(chunk)
+            citations = []
+            for f_match in file_matches:
+                f_path = f_match[0]
+                line_no = int(f_match[1]) if f_match[1] else None
+                citations.append({"file": f_path, "line": line_no})
+
+            msg = re.sub(r"^(?:[-*]|\d+[\.)]|Finding\s+\d+[:\.]?)\s*", "", chunk, flags=re.I).strip()
+            finding_entry = {
+                "finding_id": fid,
+                "severity": sev,
+                "severity_inferred": inferred,
+                "is_advisory": is_advisory,
+                "message": msg or f"Finding {fid}",
+                "citations": citations,
+                "reported_citations": cites,
+            }
+            if response_sha256:
+                finding_entry["response_sha256"] = response_sha256
+            findings.append(finding_entry)
+    elif body:
+        sev_match = sev_re.search(body)
+        raw_sev = sev_match.group(1).upper() if sev_match else None
+        inferred = False
+        if raw_sev == "BLOCKER":
+            sev = "CRITICAL"
+        elif raw_sev == "MAJOR":
+            sev = "HIGH"
+        elif raw_sev in VALID_SEVERITIES:
+            sev = raw_sev
+        else:
+            sev = default_severity
+            inferred = True
+
+        is_advisory = bool(re.search(r"\b(?:advisory|non-blocking)\b", body, re.I))
+        file_matches = file_re.findall(body)
+        citations = [{"file": m[0], "line": int(m[1]) if m[1] else None} for m in file_matches]
+        finding_entry = {
+            "finding_id": "1",
+            "severity": sev,
+            "severity_inferred": inferred,
+            "is_advisory": is_advisory,
+            "message": body,
+            "citations": citations,
+            "reported_citations": cites,
+        }
+        if response_sha256:
+            finding_entry["response_sha256"] = response_sha256
+        findings.append(finding_entry)
+
+    return findings
+
+
+def _validate_subagent_proof(
+    repo: Path,
+    task_id: str,
+    reviewer: str,
+    subagent_id: str,
+    package_sha: str,
+    run_id: str,
+) -> bool:
+    if not subagent_id or not str(subagent_id).strip():
+        return False
+    clean_id = str(subagent_id).strip()
+    transcript_file = _find_subagent_transcript(clean_id)
+    if not transcript_file or not transcript_file.is_file():
+        return False
+    receipt_file = task_dir(repo, task_id) / "reviewer-dispatches" / f"{reviewer}.json"
+    if not receipt_file.is_file():
+        return False
+    try:
+        receipt = read_json(receipt_file)
+    except Exception:
+        return False
+    if receipt.get("schema_version") != 1:
+        return False
+    if receipt.get("task_id") != task_id or receipt.get("run_id") != run_id or receipt.get("reviewer") != reviewer:
+        return False
+    pkg = str(receipt.get("review_package_sha256") or "").lower()
+    if pkg and package_sha:
+        if not (pkg.startswith(package_sha[:12].lower()) or package_sha[:12].lower().startswith(pkg)):
+            return False
+    expected_data = {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+    if canonical_sha256(expected_data) != receipt.get("receipt_sha256"):
+        return False
+    if not receipt.get("subagent_id"):
+        receipt["subagent_id"] = clean_id
+        receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+        atomic_write_json(receipt_file, receipt)
+    elif receipt.get("subagent_id") != clean_id:
+        return False
+    return True
+
+
 def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, response_sha256: str) -> dict:
     directory = task_dir(repo, task_id)
     current = read_json(directory / "current-run.json")
@@ -134,6 +284,7 @@ def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, res
         raise ValidationError(f"reviewer {reviewer} evidence package mismatch: {pkg_sha} != {package_sha[:12]}")
 
     is_pass = (verdict == "PASS")
+    findings = [] if is_pass else _parse_reviewer_findings(text, default_severity="HIGH", response_sha256=response_sha256)
     return {
         "schema_version": 1,
         "reviewer": reviewer,
@@ -141,12 +292,7 @@ def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, res
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "change_set_sha256": manifest["change_set_sha256"],
         "verdict": "PASS" if is_pass else "FINDINGS",
-        "findings": [] if is_pass else [{
-            "severity": "HIGH",
-            "message": "Reviewer reported blocking findings; consult the immutable response identity.",
-            "response_sha256": response_sha256,
-            "reported_citations": cites,
-        }],
+        "findings": findings,
     }
 
 
@@ -206,8 +352,8 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
             raise ValidationError(f"reviewer {reviewer} findings must be a list")
         if verdict == "FINDINGS" and not report_findings:
             raise ValidationError(f"reviewer {reviewer} FINDINGS requires a non-empty findings list")
-        if verdict == "PASS" and report_findings:
-            raise ValidationError(f"reviewer {reviewer} claims PASS with findings")
+        if verdict == "PASS" and any(is_blocking_finding(f, policy) for f in report_findings):
+            raise ValidationError(f"reviewer {reviewer} claims PASS with blocking findings")
         for finding in report_findings:
             if not isinstance(finding, dict) or str(finding.get("severity") or "").upper() not in VALID_SEVERITIES:
                 raise ValidationError(f"reviewer {reviewer} returned a malformed finding")
@@ -228,7 +374,7 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
     budget = int(policy.get("model_call_budget") or 0)
     if used_calls + len(seen) > budget:
         raise ValidationError("review model-call budget exceeded; developer decision is required")
-    blocking = [item for item in findings if str(item.get("severity") or "").upper() in ("BLOCKER", "MAJOR", "CRITICAL", "HIGH")]
+    blocking = [item for item in findings if is_blocking_finding(item, policy)]
     status = "FAIL" if blocking else "PASS"
     validations: list[dict] = []
     val_path = directory / "finding-validations.json"
@@ -241,6 +387,11 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
             pass
     version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
     harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+    provenances = {str(r.get("provenance") or "") for r in report_identities if r.get("provenance")}
+    overall_provenance = (
+        "subagent_execution" if "subagent_execution" in provenances
+        else next(iter(provenances), "unspecified")
+    )
     evidence_path = EvidenceStore(state_root(repo)).write(
         snapshot=manifest["delivery_snapshot_sha256"],
         run_id=current["run_id"],
@@ -251,6 +402,7 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
         status=status,
         evidence={
             "package_sha256": package_sha,
+            "provenance": overall_provenance,
             "reviewers": sorted(seen),
             "reports": report_identities,
             "findings": findings,
@@ -313,7 +465,7 @@ def verdict_to_report(
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", required=True)
@@ -332,7 +484,7 @@ def main() -> int:
     parser.add_argument("--override-reviews", action="store_true", help="Record explicit developer override of semantic reviewers")
     parser.add_argument("--proof-reference", default="", help="Proof reference for developer override")
     parser.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), default="conversation", help="Source for developer override")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         repo = Path(args.repo).resolve()
         task_directory = task_dir(repo, args.task)
@@ -442,7 +594,13 @@ def main() -> int:
             rep = response_text_to_report(repo, args.task, reviewer.strip(), unescaped_text)
             rep["provenance"] = "reviewer_response_text"
             if getattr(args, "subagent_id", ""):
-                rep["subagent_id"] = args.subagent_id.strip()
+                clean_sub_id = args.subagent_id.strip()
+                rep["subagent_id"] = clean_sub_id
+                manifest = read_json(Path(current["manifest"]))
+                pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+                pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
+                if _validate_subagent_proof(repo, args.task, reviewer.strip(), clean_sub_id, pkg_sha, str(current["run_id"])):
+                    rep["provenance"] = "subagent_execution"
             (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         for item in args.from_subagent:
@@ -459,48 +617,56 @@ def main() -> int:
             rep["provenance"] = "subagent_transcript_harvest"
             rep["subagent_id"] = conv_id
             rep["transcript_path"] = str(transcript_file)
+            receipt_file = task_directory / "reviewer-dispatches" / f"{reviewer}.json"
+            if receipt_file.is_file():
+                try:
+                    rc = read_json(receipt_file)
+                    if not rc.get("subagent_id"):
+                        rc["subagent_id"] = conv_id
+                        rc["receipt_sha256"] = canonical_sha256({k: v for k, v in rc.items() if k != "receipt_sha256"})
+                        atomic_write_json(receipt_file, rc)
+                except Exception:
+                    pass
             (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         verdict_items = list(args.verdict)
-        has_subagent_proof = bool(getattr(args, "subagent_id", "").strip())
+        if args.reviewer and verdict_items and "=" not in verdict_items[-1]:
+            verdict_items = [f"{args.reviewer}={verdict_items[-1]}"]
+
         if verdict_items:
             severity = str(policy.get("severity") or "").upper()
             sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
-            if (severity in ("HIGH", "CRITICAL") or sensitive) and not has_subagent_proof:
-                surface_label = f" on sensitive surfaces ({', '.join(sensitive)})" if sensitive else ""
-                raise ValidationError(
-                    f"Direct self-certified --verdict recording without subagent proof is strictly prohibited for {severity} severity changes{surface_label}. "
-                    f"You MUST invoke specialist subagents via invoke_subagent and pass --subagent-id <conversationId> and --evidence-pkg <sha>, or ingest authentic output via --from-subagent / --response."
-                )
-        if args.reviewer and verdict_items:
-            v_val = verdict_items[-1]
-            if "=" in v_val:
-                r_name, _, v_val = v_val.partition("=")
-            else:
-                r_name = args.reviewer
-            rep = verdict_to_report(
-                repo, args.task, r_name.strip(), v_val.strip(),
-                message=args.message, severity=args.severity,
-                evidence_pkg=args.evidence_pkg, citations=args.citations,
-            )
-            rep["provenance"] = "subagent_execution" if has_subagent_proof else "lead_agent_recorded_verdict"
-            if has_subagent_proof:
-                rep["subagent_id"] = args.subagent_id.strip()
-            (staging_dir / f"{r_name.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
-        elif verdict_items:
+            manifest = read_json(Path(current["manifest"]))
+            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
+
             for item in verdict_items:
                 reviewer, sep, v_val = item.partition("=")
                 if not sep:
                     raise ValidationError("--verdict without --reviewer must be REVIEWER=VERDICT")
+                reviewer = reviewer.strip()
+                v_val = v_val.strip()
+
+                is_proven = _validate_subagent_proof(
+                    repo, args.task, reviewer, getattr(args, "subagent_id", ""), pkg_sha, str(current["run_id"])
+                )
+                if (severity in ("HIGH", "CRITICAL") or sensitive) and not is_proven:
+                    surface_label = f" on sensitive surfaces ({', '.join(sensitive)})" if sensitive else ""
+                    raise ValidationError(
+                        f"Direct self-certified --verdict recording without verified subagent proof (valid transcript and dispatch receipt) "
+                        f"is strictly prohibited for {severity} severity changes{surface_label}. "
+                        f"You MUST invoke specialist subagents via invoke_subagent and pass --subagent-id <conversationId> and --evidence-pkg <sha>, or ingest authentic output via --from-subagent / --response."
+                    )
+
                 rep = verdict_to_report(
-                    repo, args.task, reviewer.strip(), v_val.strip(),
+                    repo, args.task, reviewer, v_val,
                     message=args.message, severity=args.severity,
                     evidence_pkg=args.evidence_pkg, citations=args.citations,
                 )
-                rep["provenance"] = "subagent_execution" if has_subagent_proof else "lead_agent_recorded_verdict"
-                if has_subagent_proof:
+                rep["provenance"] = "subagent_execution" if is_proven else "lead_agent_recorded_verdict"
+                if is_proven:
                     rep["subagent_id"] = args.subagent_id.strip()
-                (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+                (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
         staged_files = sorted(staging_dir.glob("*.json"))

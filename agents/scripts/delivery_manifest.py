@@ -323,6 +323,92 @@ def build_manifest(repo: Path) -> dict:
     }
 
 
+def load_task_baseline(repo: Path, task_id: str | None = None) -> dict | None:
+    root = repo.resolve()
+    tid = task_id
+    if not tid:
+        for state_dir in (root / ".agents" / "state", root / "agents" / "state"):
+            active_file = state_dir / "active-task.json"
+            if active_file.is_file():
+                try:
+                    data = json.loads(active_file.read_text(encoding="utf-8"))
+                    tid = data.get("task_id")
+                    if tid:
+                        break
+                except Exception:
+                    pass
+    if not tid:
+        return None
+    for state_dir in (root / ".agents" / "state", root / "agents" / "state"):
+        baseline_file = state_dir / "tasks" / tid / "task-baseline.json"
+        if baseline_file.is_file():
+            try:
+                return json.loads(baseline_file.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+    return None
+
+
+def build_task_manifest(
+    repo: Path,
+    baseline: dict | list | None = None,
+    expected_files: list[str] | set[str] | None = None,
+) -> dict:
+    manifest = build_manifest(repo)
+    if baseline is None:
+        manifest["task_changes"] = list(manifest.get("changes") or [])
+        manifest["task_change_set_sha256"] = manifest["change_set_sha256"]
+        manifest["task_delta_mode"] = "LEGACY_FULL_WORKTREE"
+        return manifest
+
+    if isinstance(baseline, dict):
+        base_changes = baseline.get("changes") or []
+    else:
+        base_changes = list(baseline)
+
+    base_map: dict[str, dict] = {}
+    for entry in base_changes:
+        p = entry.get("path")
+        if p:
+            base_map[_normal_rel(p)] = entry
+            base_map[p] = entry
+
+    if isinstance(expected_files, str):
+        expected_set = {_normal_rel(p.strip()) for p in expected_files.split(",") if p.strip()}
+    else:
+        expected_set = {_normal_rel(p) for p in (expected_files or []) if p}
+
+    task_changes: list[dict] = []
+    for cur in manifest.get("changes") or []:
+        if cur.get("status") == "U":
+            raise HarnessError(f"Conflicted path in working tree: {cur.get('path')}")
+        path = cur.get("path")
+        norm_path = _normal_rel(path) if path else ""
+        if (norm_path and norm_path in expected_set) or (path and path in expected_set):
+            task_changes.append(cur)
+        elif path not in base_map and norm_path not in base_map:
+            task_changes.append(cur)
+        else:
+            base_entry = base_map.get(norm_path) or base_map.get(path)
+            # Changed if identity, status, or old_path differ
+            if (cur.get("content_identity") != base_entry.get("content_identity") or
+                cur.get("status") != base_entry.get("status") or
+                cur.get("old_path") != base_entry.get("old_path")):
+                task_changes.append(cur)
+
+    if not task_changes and not expected_set and manifest.get("changes"):
+        manifest["task_changes"] = list(manifest.get("changes") or [])
+        manifest["task_change_set_sha256"] = manifest["change_set_sha256"]
+        manifest["task_delta_mode"] = "LEGACY_FULL_WORKTREE"
+        return manifest
+
+    change_identities = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in task_changes]
+    manifest["task_changes"] = task_changes
+    manifest["task_change_set_sha256"] = canonical_sha256(change_identities)
+    manifest["task_delta_mode"] = "TASK_ISOLATED"
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".", help="Git repository root")

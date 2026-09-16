@@ -160,6 +160,8 @@ def plan_payload(plan: dict) -> dict:
     }
     if "architecture_contract" in plan and plan.get("architecture_contract") is not None:
         payload["architecture_contract"] = plan["architecture_contract"]
+    if "phases" in plan and plan.get("phases") is not None:
+        payload["phases"] = plan["phases"]
     return payload
 
 
@@ -168,6 +170,7 @@ def legacy_plan_payload(plan: dict, payload_fn=None) -> dict:
     payload = fn(plan)
     payload.pop("planning_depth", None)
     payload.pop("architecture_contract", None)
+    payload.pop("phases", None)
     return payload
 
 
@@ -203,6 +206,7 @@ def create_plan(
     skills: list[dict] | None = None,
     external_writes: list[str] | None = None,
     architecture_contract: dict | None = None,
+    phases: list[dict] | None = None,
 ) -> dict:
     task_id = validate_id(task_id, "task id")
     if not requested_outcome.strip():
@@ -236,6 +240,8 @@ def create_plan(
         "approval": None,
         "execution_nonce": None,
     }
+    if phases is not None:
+        record["phases"] = phases
     if architecture_contract is not None:
         record["architecture_contract"] = architecture_contract
     record["plan_sha256"] = canonical_sha256(plan_payload(record))
@@ -299,7 +305,12 @@ def require_mutation(plan: dict) -> None:
         raise ValidationError("mutation blocked: approval was not consumed by this task")
 
 
-def check_material_drift(plan: dict, actual_surfaces: list[str], actual_modules: list[str] | None = None) -> list[str]:
+def check_material_drift(
+    plan: dict,
+    actual_surfaces: list[str],
+    actual_modules: list[str] | None = None,
+    actual_files: list[str] | None = None,
+) -> list[str]:
     expected_surfaces = set(normalize_expected_surfaces(plan.get("expected_surfaces") or []))
     actual_surface_set = set(normalize_expected_surfaces(actual_surfaces))
     expected_modules = set(plan.get("expected_modules") or [])
@@ -321,8 +332,27 @@ def check_material_drift(plan: dict, actual_surfaces: list[str], actual_modules:
     if not expected_modules:
         unplanned_modules.discard(":app")
 
+    unplanned_files: set[str] = set()
+    expected_files = set(plan.get("expected_files") or [])
+    if expected_files and actual_files is not None:
+        test_strategy = str(plan.get("test_strategy") or "").lower()
+        adds_tests = any(kw in test_strategy for kw in ("test", "add", "unit", "tdd", "new")) or bool(expected_surfaces & {"TEST_ONLY"})
+        for f in actual_files:
+            f_norm = f.replace("\\", "/").strip("/")
+            if f_norm in expected_files:
+                continue
+            f_lower = f_norm.lower()
+            is_test = "/test/" in f"/{f_lower}" or "/androidtest/" in f"/{f_lower}" or f_lower.endswith(("test.kt", "test.java", "tests.kt"))
+            if is_test and adds_tests:
+                continue
+            is_res = "/res/" in f"/{f_lower}"
+            if is_res and (expected_surfaces & {"RESOURCE_UI", "XML_UI", "LOCALIZATION"}):
+                continue
+            unplanned_files.add(f_norm)
+
     return sorted(
-        [f"surface:{item}" for item in unplanned_surfaces]
+        [f"file:{item}" for item in unplanned_files]
+        + [f"surface:{item}" for item in unplanned_surfaces]
         + [f"module{item}" if item.startswith(":") else f"module:{item}" for item in unplanned_modules]
     )
 

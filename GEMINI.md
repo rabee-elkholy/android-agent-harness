@@ -6,7 +6,7 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - Python: `python`
 - Assemble: `python agents/scripts/run_gradle_task.py :app:assembleDebug`
 - Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.
-- Device: Physical device or emulator. Resolve the serial with `adb devices`. Prefer a physical device when both are connected. Never hardcode a serial.
+- Device: Physical device or emulator. Automatically resolved by `run_device.py`. Prefer a physical device when both are connected. Never hardcode a serial.
 - Discovery: MUST start with `python .agents/scripts/project_graph.py --feature <name>` or `--find <Symbol>` (mandatory even with known commits/files). Unanchored grep cascades are forbidden.
 - Pre-Planning Clarification: Missing requirements, edge cases, or domain ambiguities MUST be clarified interactively via `ask_question` before drafting the plan; guessing is strictly forbidden.
 - Multi-Phase Execution: Multi-phase plans execute sequentially and autonomously. Single intake approval covers all phases; never pause or ask developer between phases.

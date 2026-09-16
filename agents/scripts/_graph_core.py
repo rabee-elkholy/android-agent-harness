@@ -1194,6 +1194,7 @@ class GraphEngine:
         self.cache_file = resolve_cache_file(self.repo)
         self.graph = DependencyGraph()
         self.file_hashes: dict[str, str] = {}
+        self.file_metadata: dict[str, dict[str, Any]] = {}
         self.symbol_to_node_id: dict[str, str] = {}
         self.fqn_to_node_id: dict[str, str] = {}
         self.symbol_to_node_ids: dict[str, list[str]] = {}
@@ -1212,6 +1213,7 @@ class GraphEngine:
         try:
             data = json.loads(self.cache_file.read_text(encoding="utf-8"))
             self.file_hashes = data.get("file_hashes", {})
+            self.file_metadata = data.get("file_metadata", {})
             self.graph = DependencyGraph.from_dict(data.get("graph", {}))
             self._rebuild_symbol_index()
             return True
@@ -1222,8 +1224,9 @@ class GraphEngine:
         try:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             payload = {
-                "version": "1.0.0",
+                "version": "1.1.0",
                 "file_hashes": self.file_hashes,
+                "file_metadata": self.file_metadata,
                 "graph": self.graph.to_dict(),
             }
             self.cache_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -1300,8 +1303,23 @@ class GraphEngine:
         deleted: list[str] = [rel for rel in self.file_hashes if rel not in current_files]
 
         for rel, path in current_files.items():
-            curr_hash = self.compute_file_hash(path)
+            try:
+                st = path.stat()
+                mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+                size = st.st_size
+            except Exception:
+                mtime_ns = 0
+                size = 0
+
+            meta = self.file_metadata.get(rel)
             cached_hash = self.file_hashes.get(rel)
+
+            if meta and meta.get("size") == size and meta.get("mtime_ns") == mtime_ns and cached_hash:
+                curr_hash = cached_hash
+            else:
+                curr_hash = self.compute_file_hash(path)
+                self.file_metadata[rel] = {"size": size, "mtime_ns": mtime_ns, "hash": curr_hash}
+
             if cached_hash is None:
                 added.append(rel)
                 self.file_hashes[rel] = curr_hash
@@ -1311,6 +1329,7 @@ class GraphEngine:
 
         for rel in deleted:
             self.file_hashes.pop(rel, None)
+            self.file_metadata.pop(rel, None)
             nodes_to_remove = [nid for nid, n in self.graph.nodes.items() if n.file_path == rel]
             for nid in nodes_to_remove:
                 self.graph.remove_node(nid)

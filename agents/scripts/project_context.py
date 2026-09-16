@@ -91,6 +91,38 @@ def classify_source_path(rel_path: str) -> str:
     return "MAIN_SOURCE"
 
 
+def resolve_feature_scope(rel_path: str) -> str:
+    """Deterministically resolves a feature/locality scope prefix from a relative file path.
+
+    Precedence:
+    1. Known module + explicit feature path (/feature/<name>/, /features/<name>/)
+    2. Package/path locality under ui/<feature>, presentation/<feature>
+    3. Screen / ViewModel sibling directory (parent directory)
+    4. Module-level fallback
+    """
+    norm = rel_path.replace("\\", "/").strip("/")
+    if not norm:
+        return ""
+    parts = norm.split("/")
+    # 1. Feature module: feature/<name> or features/<name>
+    if len(parts) >= 2 and parts[0].lower() in ("feature", "features"):
+        return f"{parts[0]}/{parts[1]}"
+    for i, part in enumerate(parts[:-1]):
+        if part.lower() in ("feature", "features") and i + 1 < len(parts):
+            return "/".join(parts[: i + 2])
+    # 2. Package/path locality under ui/<feature> or presentation/<feature>
+    for i, part in enumerate(parts[:-1]):
+        if part.lower() in ("ui", "presentation") and i + 1 < len(parts) - 1:
+            return "/".join(parts[: i + 2])
+        elif part.lower() in ("ui", "presentation") and i > 0:
+            return "/".join(parts[:i])
+    # 3. Screen / ViewModel sibling directory (parent directory)
+    if len(parts) > 1:
+        return "/".join(parts[:-1])
+    # 4. Module fallback
+    return parts[0]
+
+
 def parse_settings_modules(settings_text: str) -> list[str]:
     """Deterministically extracts module paths from settings.gradle / settings.gradle.kts.
 
@@ -130,6 +162,177 @@ def _rel_path(path: Path, repo: Path) -> str:
         return path.relative_to(repo).as_posix()
     except ValueError:
         return path.name
+
+
+def _strip_comments_and_strings(text: str) -> str:
+    """Strip //, /* */, and string literals from Kotlin code."""
+    res: list[str] = []
+    i = 0
+    n = len(text)
+    in_block = False
+    in_triple = None
+    while i < n:
+        if in_block:
+            end = text.find("*/", i)
+            if end != -1:
+                in_block = False
+                i = end + 2
+            else:
+                break
+        elif in_triple:
+            end = text.find(in_triple, i)
+            if end != -1:
+                q_len = len(in_triple)
+                in_triple = None
+                i = end + q_len
+            else:
+                break
+        elif text[i:i+2] == "/*":
+            in_block = True
+            i += 2
+        elif text[i:i+2] == "//":
+            end = text.find("\n", i)
+            if end != -1:
+                i = end
+            else:
+                break
+        elif text[i:i+3] in ('"""', "'''"):
+            in_triple = text[i:i+3]
+            i += 3
+        elif text[i] in ('"', "'"):
+            q = text[i]
+            i += 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if text[i] == q:
+                    i += 1
+                    break
+                if text[i] == "\n":
+                    break
+                i += 1
+        else:
+            res.append(text[i])
+            i += 1
+    return "".join(res)
+
+
+def scan_viewmodel_declarations(text: str) -> list[tuple[str, str]]:
+    """Deterministically scan for ViewModel class declarations and their base classes.
+    Handles annotations, constructor injection, multiline declarations, generic classes/bases,
+    and balanced parentheses.
+    Returns list of (class_name, base_class_name).
+    """
+    clean = _strip_comments_and_strings(text)
+    results: list[tuple[str, str]] = []
+    class_iter = re.finditer(r"\bclass\s+([A-Za-z0-9_]+)", clean)
+    for m in class_iter:
+        cls_name = m.group(1)
+        idx = m.end()
+        n = len(clean)
+
+        # Skip generic parameters on class: class Foo<T : Bar>
+        while idx < n and clean[idx].isspace():
+            idx += 1
+        if idx < n and clean[idx] == '<':
+            depth = 0
+            while idx < n:
+                if clean[idx] == '<':
+                    depth += 1
+                elif clean[idx] == '>':
+                    depth -= 1
+                    if depth == 0:
+                        idx += 1
+                        break
+                idx += 1
+
+        # Skip annotations, visibility modifiers, constructor keyword, and primary constructor parameters (...)
+        while idx < n:
+            while idx < n and clean[idx].isspace():
+                idx += 1
+            if idx >= n:
+                break
+            if clean[idx] == '@':
+                idx += 1
+                while idx < n and (clean[idx].isalnum() or clean[idx] in "._"):
+                    idx += 1
+                while idx < n and clean[idx].isspace():
+                    idx += 1
+                if idx < n and clean[idx] == '(':
+                    p_depth = 0
+                    while idx < n:
+                        if clean[idx] == '(':
+                            p_depth += 1
+                        elif clean[idx] == ')':
+                            p_depth -= 1
+                            if p_depth == 0:
+                                idx += 1
+                                break
+                        idx += 1
+                continue
+            if clean[idx:idx+11] == "constructor":
+                idx += 11
+                continue
+            word_match = re.match(r"(?:internal|public|private|protected|actual|expect|open|sealed)\b", clean[idx:])
+            if word_match:
+                idx += len(word_match.group(0))
+                continue
+            if clean[idx] == '(':
+                p_depth = 0
+                while idx < n:
+                    if clean[idx] == '(':
+                        p_depth += 1
+                    elif clean[idx] == ')':
+                        p_depth -= 1
+                        if p_depth == 0:
+                            idx += 1
+                            break
+                    idx += 1
+                continue
+            break
+
+        # Check for colon ':'
+        while idx < n and clean[idx].isspace():
+            idx += 1
+        if idx < n and clean[idx] == ':':
+            idx += 1
+            while idx < n and clean[idx].isspace():
+                idx += 1
+            base_match = re.match(r"([A-Za-z0-9_.]+)", clean[idx:])
+            if base_match:
+                full_base = base_match.group(1)
+                base_name = full_base.split(".")[-1]
+                if cls_name.endswith("ViewModel") or base_name.endswith("ViewModel") or base_name == "ViewModel":
+                    results.append((cls_name, base_name))
+            elif cls_name.endswith("ViewModel"):
+                results.append((cls_name, "ViewModel"))
+        elif cls_name.endswith("ViewModel"):
+            results.append((cls_name, "ViewModel"))
+    return results
+
+
+def resolve_feature_scope(rel_path: str) -> str:
+    norm = rel_path.replace("\\", "/").strip("/")
+    parts = norm.split("/")
+    if not parts:
+        return ""
+    if len(parts) >= 2 and parts[0] in ("feature", "features"):
+        return f"{parts[0]}/{parts[1]}"
+    for i in range(len(parts) - 2):
+        if parts[i] in ("feature", "features"):
+            return "/".join(parts[:i+2])
+    parent_dir = "/".join(parts[:-1]) if len(parts) > 1 else parts[0]
+    parent_parts = parent_dir.split("/")
+    for idx, p in enumerate(parent_parts):
+        if p.lower() in ("ui", "presentation", "screens", "screen", "view", "views") and idx > 0:
+            if idx + 1 < len(parent_parts):
+                return "/".join(parent_parts[:idx+2])
+            else:
+                return "/".join(parent_parts[:idx])
+    if len(parts) > 1:
+        return "/".join(parts[:-1])
+    return parts[0]
 
 
 def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir: Path | None = None) -> dict:
@@ -264,10 +467,8 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
             })
 
         # Concrete ViewModel detection for family resolution
-        vm_match = re.search(r"class\s+([A-Za-z0-9_]+ViewModel)\b(?:\s*<[^>]+>)?\s*:\s*([A-Za-z0-9_]+)", txt)
-        if vm_match:
-            vm_name = vm_match.group(1)
-            vm_base = vm_match.group(2)
+        vm_decls = scan_viewmodel_declarations(txt)
+        for vm_name, vm_base in vm_decls:
             has_stateflow = "StateFlow" in txt or "MutableStateFlow" in txt
             has_livedata = "LiveData" in txt or "MutableLiveData" in txt
             has_rx = any(rx in txt for rx in ("Observable<", "BehaviorSubject", "Flowable", "Single<"))
@@ -366,6 +567,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
                 "screen_host": screen_host,
                 "ui_toolkit": ui_toolkit,
                 "nav_type": nav_type,
+                "text": txt,
             })
 
         # Room Database
@@ -461,32 +663,66 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     # --- 3. Architecture Families Extraction ---
     families_by_sig: dict[str, dict[str, Any]] = {}
 
-    def _scope_of(rel: str) -> str:
-        parts = rel.split("/")
-        if len(parts) >= 2:
-            return "/".join(parts[:2])
-        return parts[0] if parts else ""
-
     # Synthesize families from discovered pairs or standalone bases
     if discovered_screens:
         for sc in discovered_screens:
-            sc_scope = _scope_of(sc["path"])
-            # Find matching ViewModel: prioritize name matching first, then scope fallback
-            sc_stem = sc["name"].replace("Screen", "").replace("Fragment", "").replace("Activity", "").replace("Content", "")
-            matching_vm = next(
-                (v for v in discovered_viewmodels if _scope_of(v["path"]) == sc_scope and (sc_stem and sc_stem in v["name"])),
-                None
-            )
-            if not matching_vm and sc_stem:
-                matching_vm = next(
-                    (v for v in discovered_viewmodels if sc_stem in v["name"]),
-                    None
-                )
-            if not matching_vm:
-                matching_vm = next(
-                    (v for v in discovered_viewmodels if _scope_of(v["path"]) == sc_scope),
-                    None
-                )
+            sc_scope = resolve_feature_scope(sc["path"])
+            sc_stem = re.sub(r"(Screen|Fragment|Activity|Content)$", "", sc["name"])
+            matching_vm = None
+            ambiguous = False
+
+            # Tier 1: exact normalized stem match (Screen stem == ViewModel stem)
+            if sc_stem:
+                t1 = [
+                    v for v in discovered_viewmodels
+                    if re.sub(r"(ViewModel|VM)$", "", v["name"]).lower() == sc_stem.lower()
+                ]
+                if len(t1) == 1:
+                    matching_vm = t1[0]
+                elif len(t1) > 1:
+                    scoped = [v for v in t1 if resolve_feature_scope(v["path"]) == sc_scope]
+                    if len(scoped) == 1:
+                        matching_vm = scoped[0]
+                    else:
+                        ambiguous = True
+
+            # Tier 2: same local feature scope + compatible name
+            if not matching_vm and not ambiguous and sc_stem:
+                t2 = [
+                    v for v in discovered_viewmodels
+                    if resolve_feature_scope(v["path"]) == sc_scope
+                    and (
+                        sc_stem.lower() in re.sub(r"(ViewModel|VM)$", "", v["name"]).lower()
+                        or re.sub(r"(ViewModel|VM)$", "", v["name"]).lower() in sc_stem.lower()
+                    )
+                ]
+                if len(t2) == 1:
+                    matching_vm = t2[0]
+                elif len(t2) > 1:
+                    ambiguous = True
+
+            # Tier 3: graph reference / source text association
+            if not matching_vm and not ambiguous:
+                sc_text = sc.get("text", "")
+                if sc_text:
+                    t3 = [v for v in discovered_viewmodels if v["name"] in sc_text]
+                    if len(t3) == 1:
+                        matching_vm = t3[0]
+                    elif len(t3) > 1:
+                        scoped = [v for v in t3 if resolve_feature_scope(v["path"]) == sc_scope]
+                        if len(scoped) == 1:
+                            matching_vm = scoped[0]
+                        else:
+                            ambiguous = True
+
+            # Tier 4: one and only one candidate in local scope
+            if not matching_vm and not ambiguous:
+                local_vms = [v for v in discovered_viewmodels if resolve_feature_scope(v["path"]) == sc_scope]
+                if len(local_vms) == 1:
+                    matching_vm = local_vms[0]
+                elif len(local_vms) > 1:
+                    ambiguous = True
+
             dims = {
                 "ui_toolkit": sc["ui_toolkit"],
                 "screen_host": sc["screen_host"],
@@ -511,6 +747,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
             sig_str = _canonical_json(core_dims)
             sig_hash = _sha256_text(sig_str)
             fid = f"af-{sig_hash[:12]}"
+            initial_confidence = "HIGH" if matching_vm else ("LOW/AMBIGUOUS" if ambiguous else "MEDIUM")
             if fid not in families_by_sig:
                 label_parts = [core_dims["ui_toolkit"]]
                 if core_dims["screen_host"] != "unknown":
@@ -527,7 +764,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
                     "signature_sha256": sig_hash,
                     "label": label,
                     "dimensions": dims,
-                    "confidence": "HIGH" if matching_vm else "MEDIUM",
+                    "confidence": initial_confidence,
                     "scopes": set(),
                     "exemplars": set(),
                     "evidence": [],
@@ -540,8 +777,10 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
                 fam["dimensions"]["input_contract"] = dims["input_contract"]
             if fam["dimensions"].get("effect_contract") == "unknown" and dims["effect_contract"] != "unknown":
                 fam["dimensions"]["effect_contract"] = dims["effect_contract"]
-            if matching_vm:
+            if matching_vm and fam["confidence"] != "LOW/AMBIGUOUS":
                 fam["confidence"] = "HIGH"
+            elif ambiguous:
+                fam["confidence"] = "LOW/AMBIGUOUS"
             fam["scopes"].add(sc_scope)
             fam["exemplars"].add(sc["path"])
             if matching_vm:
@@ -551,7 +790,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
         candidates_to_use = vm_candidates if vm_candidates else [{"symbol": "ViewModel", "path": ""}]
         for cand in candidates_to_use:
             cand_name = cand["symbol"]
-            cand_scope = _scope_of(cand["path"]) if cand.get("path") else ""
+            cand_scope = resolve_feature_scope(cand["path"]) if cand.get("path") else ""
             is_mvi = "mvi" in cand_name.lower() or "state" in cand_name.lower()
             u_toolkit = "compose" if has_compose else "xml" if has_xml_views else "unknown"
             s_host = "composable" if u_toolkit == "compose" else "fragment" if u_toolkit == "xml" else "unknown"
@@ -965,6 +1204,8 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
             stage_file.write_text(content, encoding="utf-8")
 
         # 2. Write facts to staging
+        if "source_fingerprint" not in facts_payload:
+            facts_payload["source_fingerprint"] = compute_context_fingerprint(repo)
         facts_file_stage = stage_dir / "project-facts.json"
         facts_content = json.dumps(facts_payload, ensure_ascii=False, indent=2) + "\n"
         facts_file_stage.write_text(facts_content, encoding="utf-8")
@@ -1005,3 +1246,56 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
             shutil.rmtree(stage_dir, ignore_errors=True)
 
     return context_dir
+
+
+def compute_context_fingerprint(repo: Path) -> str:
+    """Computes a fast, lightweight structural fingerprint across build and config files."""
+    items: list[tuple[str, int, int]] = []
+    patterns = (
+        "settings.gradle*",
+        "build.gradle*",
+        "gradle/libs.versions.toml",
+        "*/build.gradle*",
+        "**/build.gradle*",
+        "**/AndroidManifest.xml",
+    )
+    seen: set[str] = set()
+    for pattern in patterns:
+        for p in repo.glob(pattern):
+            if not p.is_file():
+                continue
+            try:
+                rel = p.resolve().relative_to(repo.resolve()).as_posix()
+            except ValueError:
+                continue
+            if rel.startswith((".git/", ".agents/", ".gradle/", "build/")):
+                continue
+            if rel in seen:
+                continue
+            seen.add(rel)
+            try:
+                st = p.stat()
+                items.append((rel, st.st_size, getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))))
+            except OSError:
+                pass
+    items.sort()
+    import hashlib
+    raw = ";".join(f"{rel}:{sz}:{mt}" for rel, sz, mt in items)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def is_context_fresh(repo: Path) -> bool:
+    """Cheap check to verify whether project-facts.json is still fresh without re-extracting."""
+    facts_file = repo / ".agents" / "project-context" / "project-facts.json"
+    if not facts_file.is_file():
+        return False
+    try:
+        from _vnext_common import read_json
+        facts = read_json(facts_file)
+        stored_fp = facts.get("source_fingerprint")
+        if not stored_fp:
+            return False
+        curr_fp = compute_context_fingerprint(repo)
+        return stored_fp == curr_fp
+    except Exception:
+        return False

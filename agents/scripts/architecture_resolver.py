@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from project_context import _canonical_json, extract_project_facts, project_context_status
+from project_context import _canonical_json, extract_project_facts, project_context_status, resolve_feature_scope
 
 RESOLVER_SCHEMA_VERSION = 1
 
@@ -57,7 +57,15 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
             if norm_scope in ex or ex in norm_scope:
                 return f
 
-    # 2. Package / feature slice match
+    # 2. Scope match via resolve_feature_scope
+    resolved_scope = resolve_feature_scope(norm_scope)
+    if resolved_scope:
+        for f in families:
+            for sc in f.get("scopes") or []:
+                if sc and (resolved_scope == sc or resolved_scope.startswith(sc) or sc.startswith(resolved_scope)):
+                    return f
+
+    # 3. Package / feature slice match
     best_match = None
     longest_prefix = 0
     for f in families:
@@ -169,24 +177,24 @@ def resolve_architecture_contract(
             target_family = None
 
     elif mode == "NEW":
-        # Requires preferred family from policy
         preferred_id = policy.get("preferred_new_code_family") if policy else None
-        if not preferred_id:
+        target_id = target_family_id or preferred_id
+        if not target_id:
             return {
                 "status": STATUS_DECISION_REQUIRED,
                 "mode": mode,
                 "contract": None,
                 "brief_markdown": None,
-                "message": "No preferred architecture family configured for new code. Developer decision required.",
+                "message": "No preferred or explicit target architecture family configured for new code. Developer decision required.",
             }
-        target_family = _find_family_by_id(families, preferred_id)
+        target_family = _find_family_by_id(families, target_id)
         if not target_family:
             return {
                 "status": STATUS_DECISION_REQUIRED,
                 "mode": mode,
                 "contract": None,
                 "brief_markdown": None,
-                "message": f"Configured preferred family '{preferred_id}' not found in active architecture inventory.",
+                "message": f"Configured architecture family '{target_id}' not found in active architecture inventory.",
             }
         # Check surrounding local scope for compatibility boundary
         surrounding_fam = _find_family_for_scope(families, target_scope)
@@ -228,6 +236,14 @@ def resolve_architecture_contract(
                 "contract": None,
                 "brief_markdown": None,
                 "message": "Explicit target architecture family required for migration.",
+            }
+        if len(families) > 1 and source_family.get("id") == target_family.get("id"):
+            return {
+                "status": STATUS_DECISION_REQUIRED,
+                "mode": mode,
+                "contract": None,
+                "brief_markdown": None,
+                "message": "Source and target architecture families must differ for migration.",
             }
 
     # Build contract

@@ -34,9 +34,10 @@ def run_step(title: str, script_name: str) -> int:
     return code
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
-    diagnostic = "--diagnostic" in sys.argv
+    args_list = sys.argv[1:] if argv is None else argv
+    diagnostic = "--diagnostic" in args_list
     live_print("==================================================")
     live_print("[Preflight] Harness preflight verification")
     live_print("==================================================")

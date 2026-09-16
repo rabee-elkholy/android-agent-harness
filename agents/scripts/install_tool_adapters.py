@@ -38,16 +38,16 @@ SKIP_SUBAGENTS = {
 
 DEVICE_TEXT = {
     "allow": (
-        "Physical device or emulator. Resolve the serial with `adb devices`. "
+        "Physical device or emulator. Automatically resolved by `run_device.py`. "
         "Prefer a physical device when both are connected. Never hardcode a serial."
     ),
     "physical-only": (
         "Physical device only. Do not use an emulator serial. "
-        "Resolve the serial with `adb devices`. Never hardcode a serial."
+        "Automatically resolved by `run_device.py`. Never hardcode a serial."
     ),
     "emulator-only": (
         "Emulator only. Do not use a physical-device serial. "
-        "Resolve the serial with `adb devices`. Never hardcode a serial."
+        "Automatically resolved by `run_device.py`. Never hardcode a serial."
     ),
 }
 

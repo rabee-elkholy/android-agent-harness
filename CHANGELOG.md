@@ -4,6 +4,40 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.40] - 2026-09-16
+
+### Daily Developer Hardening: Public Contract, Task Baseline Isolation, Compose UI Classification, Architecture Evolution & Reviewer Independence
+
+- **Public Command Contract & Architecture Drift CLI (`architecture_drift.py`, `command-contract.md`, Rules & Templates)**:
+  - Created standalone CLI `architecture_drift.py --repo . --task-id <id>` with exit code 0 on pass or exemption and exit code 1 on architectural drift.
+  - Aligned documented command syntax in `command-contract.md`, removing draft formatting artifacts and standardizing flags across all entrypoints.
+  - Replaced legacy `adb devices` instructions with canonical `run_device.py` tooling.
+- **Authority, Remediation & Task Baseline Subtraction (`delivery_manifest.py`, `plan_authority.py`, `mutation_guard.py`, `workflow.py`)**:
+  - Implemented content-identity baseline subtraction via `task-baseline.json` created during `workflow.py draft`, guaranteeing pre-existing developer dirty files are excluded from task review packages and verification delivery manifests (`task_delta_mode: TASK_ISOLATED`).
+  - Added support for multi-phase plan structures in plan authority verification.
+  - Ensured material drift remediation commands use the authoritative `--task-id` instead of internal `plan_id`.
+- **Kotlin UI vs Business Logic Classification (`change_classifier.py`)**:
+  - Distinguished pure Compose UI presentational changes (e.g. padding, colors, layout tweaks) from business logic, classifying them as `COMPOSE_UI` without injecting unwanted `unit_tests` gate requirements unless business triggers (viewModels, useCases, repository calls) are present.
+- **Architecture Intent, Scope Resolution, and Structural Drift (`project_context.py`, `architecture_resolver.py`)**:
+  - Enhanced ViewModel detection with balanced parenthesis parsing and 4-tier Screen-ViewModel matching priority with fallback.
+  - Implemented content fingerprinting for project context freshness (`compute_context_fingerprint`, `is_context_fresh`).
+  - Added target family validation, scope resolution, and multi-family migration boundaries to `architecture_resolver.py`.
+- **BUG RED Evidence Hardening (`run_tests_gate.py`, `final_verifier.py`, `workflow.py`)**:
+  - Hardened BUG workflow to capture schema version 2 `red-evidence.json` before fixes are applied; rejects RED capture if fix modifications occurred; verifies defect test passes in subsequent GREEN run.
+- **Reviewer Independence & Finding Severity (`record_review.py`, `pre_tool_safety.py`)**:
+  - Recorded reviewer dispatch receipts upon subagent launch and verified dispatch receipt plus transcript authenticity before accepting direct verdicts on HIGH/sensitive surfaces.
+  - Preserved reviewer finding severity levels (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`), preventing harmless advisory remarks from blocking delivery while ensuring `HIGH` and `CRITICAL` findings fail-closed.
+- **Phased Execution & Delta Checkpoints (`workflow.py`)**:
+  - Added `checkpoint_phase` subcommand supporting phased feature execution under a single developer approval, validating phase-scoped file and module delta boundaries without unnecessary intermediate device installations.
+- **Lifecycle Preserve/Refresh & Interrupted Update Recovery (`lifecycle.py`)**:
+  - Validated facts schema on `preserve` updates; marked `ARCHITECTURE_DECISION_REQUIRED` when preferred architecture family is absent after `refresh`.
+  - Added atomic crash recovery from `update-journal.json` during interrupted harness updates.
+- **Performance, Audit Schema & Capability-Based Host Tool Safety (`_graph_core.py`, `pre_tool_safety.py`)**:
+  - Added file metadata caching (`size`, `mtime_ns`, `hash`) to AST/graph analysis.
+  - Standardized audit log schema version 1 and implemented capability-based tool safety.
+- **Comprehensive Daily Developer Selftest Suite (`_daily_workflow_selftest.py`, `harness_cli.py`)**:
+  - Added standalone deterministic selftest suite (`_daily_workflow_selftest.py`) covering all 20 daily developer hardening scenarios (Daily-01 to Daily-20) and public contract validations; wired into `harness_cli.py selftest`.
+
 ## [1.0.39] - 2026-09-15
 
 ### Resilient Review Ingestion, Subagent Auto-Harvesting, Canonical Command Catalog & Anti-Polling Invariant

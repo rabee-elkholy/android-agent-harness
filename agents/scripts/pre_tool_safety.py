@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
 from mutation_guard import active_plan, command_allowed, file_mutation_allowed  # noqa: E402
-from _vnext_common import read_json  # noqa: E402
+from _vnext_common import read_json, sha256_file  # noqa: E402
 
 
 MAX_STDIN_BYTES = 5 * 1024 * 1024
@@ -89,16 +89,36 @@ def _audit_path() -> Path:
     return base.with_name("audit_log.jsonl")
 
 
-def _audit(decision: str, reason: str, tool: str, command: str) -> None:
+def _audit(
+    decision: str,
+    reason: str,
+    tool: str,
+    command: str,
+    *,
+    reason_code: str = "",
+    conv_hint: str = "",
+    task_id: str = "",
+) -> None:
     try:
         path = _audit_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+        import time
+        cmd_hash = hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()[:12] if command else ""
+        code = reason_code or ("DENIED" if decision == "deny" else "ALLOWED")
         record = {
+            "schema_version": 1,
+            "ts": time.time(),
             "decision": decision,
             "tool": tool[:80],
+            "reason_code": code,
+            "reason_short": reason[:160],
             "reason": reason[:160],
-            "command_sha256_12": hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()[:12] if command else "",
+            "cmd_sha256_12": cmd_hash,
+            "command_sha256_12": cmd_hash,
+            "conv_hint": conv_hint,
         }
+        if task_id:
+            record["task_id"] = task_id
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -111,8 +131,17 @@ def _audit(decision: str, reason: str, tool: str, command: str) -> None:
         pass
 
 
-def emit(decision: str, reason: str, *, tool: str = "", command: str = "") -> None:
-    _audit(decision, reason, tool, command)
+def emit(
+    decision: str,
+    reason: str,
+    *,
+    tool: str = "",
+    command: str = "",
+    reason_code: str = "",
+    conv_hint: str = "",
+    task_id: str = "",
+) -> None:
+    _audit(decision, reason, tool, command, reason_code=reason_code, conv_hint=conv_hint, task_id=task_id)
     print(json.dumps({"decision": decision, "reason": reason}, ensure_ascii=False))
 
 
@@ -189,23 +218,29 @@ def _handle_stop() -> None:
         plan = active_plan(REPO)
         status = str(plan.get("status") or "")
     except Exception:
-        emit("allow", "No active vNext task requires a delivery stop.", tool="stop")
+        emit("allow", "No active vNext task requires a delivery stop.", tool="stop", reason_code="STOP_IDLE")
         return
-    emit("allow", f"Turn completion permitted for task in status {status or 'unknown'}.", tool="stop")
+    emit("allow", f"Turn completion permitted for task in status {status or 'unknown'}.", tool="stop", reason_code="STOP_ALLOWED")
 
 
 def _handle_command(command: str) -> None:
+    active_tid = ""
+    try:
+        p = active_plan(REPO)
+        active_tid = str(p.get("task_id") or "")
+    except Exception:
+        pass
     for code, pattern in DANGEROUS:
         if pattern.search(command):
-            emit("deny", f"Denied by local safety boundary: {code}.", tool="run_command", command=command)
+            emit("deny", f"Denied by local safety boundary: {code}.", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)
             return
     if RAW_GRADLE.search(command) and not ALLOWED_GRADLE_WRAPPER.search(command):
-        emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command)
+        emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)
         return
     allowed, reason = command_allowed(REPO, command)
     if allowed and re.search(r"project_graph(?:\.py)?\b", command):
         reason = f"project_graph executed: {reason}"
-    emit("allow" if allowed else "deny", reason, tool="run_command", command=command)
+    emit("allow" if allowed else "deny", reason, tool="run_command", command=command, reason_code="HARNESS_COMMAND" if allowed else "COMMAND_MUTATION_GUARD", task_id=active_tid)
 
 
 def _handle_subagent(name: str, args: dict) -> None:
@@ -273,6 +308,36 @@ def _handle_subagent(name: str, args: dict) -> None:
         if used_calls + len(actual) > int(policy.get("model_call_budget") or 0):
             emit("deny", "Reviewer model-call budget reached; developer decision is required.", tool=name)
             return
+
+        # Persist reviewer dispatch receipts for provable independent execution
+        try:
+            task_id = str(active.get("task_id") or "")
+            run_id = str(current.get("run_id") or "")
+            manifest = read_json(Path(current["manifest"]))
+            package_path = state / "runs" / manifest["delivery_snapshot_sha256"] / run_id / "review-package.md"
+            package_sha = sha256_file(package_path) if package_path.is_file() else ""
+            receipts_dir = state / "tasks" / task_id / "reviewer-dispatches"
+            receipts_dir.mkdir(parents=True, exist_ok=True)
+            from _vnext_common import canonical_sha256, utc_now
+            for r in actual:
+                receipt_file = receipts_dir / f"{r}.json"
+                receipt_data = {
+                    "schema_version": 1,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "reviewer": r,
+                    "subagent_id": "",
+                    "review_package_sha256": package_sha,
+                    "dispatched_at": utc_now(),
+                    "host": "antigravity",
+                }
+                receipt_data["receipt_sha256"] = canonical_sha256({
+                    k: v for k, v in receipt_data.items() if k != "receipt_sha256"
+                })
+                receipt_file.write_text(json.dumps(receipt_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
         emit("allow", "Reviewer roster exactly matches the immutable adaptive policy.", tool=name)
     except Exception as exc:
         emit("deny", f"Reviewer policy validation failed closed: {exc}", tool=name)
@@ -424,10 +489,24 @@ def _handle_search(name: str, args: dict) -> None:
             if audit_file.exists():
                 lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
                 records = [json.loads(line) for line in lines if line.strip()]
+                task_id = str(plan.get("task_id") or "")
+                draft_time = 0.0
+                if task_id:
+                    tb_file = REPO / ".agents" / "state" / "tasks" / task_id / "task-baseline.json"
+                    if tb_file.is_file():
+                        draft_time = tb_file.stat().st_mtime
+                import time
+                cutoff = draft_time or (time.time() - 3600.0)
                 for rec in reversed(records):
                     if rec.get("tool") == "run_command" and "project_graph executed" in rec.get("reason", "").lower() and rec.get("decision") == "allow":
-                        has_run_graph = True
-                        break
+                        r_tid = rec.get("task_id")
+                        r_ts = float(rec.get("ts") or 0.0)
+                        if task_id and r_tid == task_id:
+                            has_run_graph = True
+                            break
+                        if r_ts >= cutoff:
+                            has_run_graph = True
+                            break
         except Exception:
             has_run_graph = False
 
@@ -438,10 +517,11 @@ def _handle_search(name: str, args: dict) -> None:
                 "Start by running 'python .agents/scripts/project_graph.py --feature <name>' or '--find <symbol>' "
                 "to inspect the architectural slice, or specify a targeted SearchPath for literal text.",
                 tool=name,
+                reason_code="GRAPH_FIRST_REQUIRED",
             )
             return
 
-    emit("allow", "Search is permitted outside cascade limits.", tool=name)
+    emit("allow", "Search is permitted outside cascade limits.", tool=name, reason_code="SEARCH_ALLOWED")
 
 
 def main() -> None:
@@ -460,13 +540,13 @@ def main() -> None:
         if name in WRITE_TOOLS:
             safe, detail, is_temp = _safe_target(_target(args))
             if not safe:
-                emit("deny", detail, tool=name)
+                emit("deny", detail, tool=name, reason_code="PROTECTED_PATH")
                 return
             if is_temp:
-                emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name)
+                emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
                 return
             allowed, reason = file_mutation_allowed(REPO)
-            emit("allow" if allowed else "deny", reason, tool=name)
+            emit("allow" if allowed else "deny", reason, tool=name, reason_code="FILE_MUTATION_ALLOWED" if allowed else "FILE_MUTATION_GUARD")
             return
         if name == "run_command":
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
@@ -484,7 +564,27 @@ def main() -> None:
         if name in ("call_mcp_tool", "mcp_tool"):
             _handle_mcp_tool(name, args)
             return
-        emit("allow", "Tool is outside the harness mutation boundary.", tool=name)
+
+        # Known read-only tools
+        if name in ("view_file", "list_dir", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
+            emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
+            return
+
+        # Capability-based safety for unknown host tools
+        tgt = _target(args)
+        mutation_verbs = (
+            "write", "edit", "delete", "remove", "move", "rename", "create",
+            "apply", "patch", "execute", "run", "send", "publish", "post",
+            "put", "mutate", "destroy", "drop", "grant", "modify",
+        )
+        has_mutation_verb = any(v in name for v in mutation_verbs)
+        has_mutation_args = bool(tgt and any(k in args for k in ("content", "code", "patch", "replacement", "text", "data")))
+
+        if has_mutation_verb or has_mutation_args:
+            emit("deny", f"Denied unknown mutation-like tool '{name}'; not authorized by harness safety boundary.", tool=name, reason_code="UNKNOWN_MUTATION_TOOL")
+            return
+
+        emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="UNKNOWN_TOOL_READ_ASSUMED")
     except json.JSONDecodeError:
         emit("deny", "Safety hook received invalid JSON.")
     except Exception as exc:

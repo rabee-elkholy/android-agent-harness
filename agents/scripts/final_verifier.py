@@ -351,9 +351,32 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     is_bug = str(plan.get("task_kind") or plan.get("kind") or "").upper() == "BUG"
     if is_bug:
         debug_ev_path = task_directory / "debug-evidence.json"
+        red_ev_path = task_directory / "red-evidence.json"
         has_repro = False
         repro_defect_ids: set[str] = set()
         repro_classes: set[str] = set()
+        failed_binding = False
+
+        if red_ev_path.is_file():
+            try:
+                r2 = read_json(red_ev_path)
+                has_repro = True
+                for t in r2.get("failed_tests") or []:
+                    if isinstance(t, dict):
+                        if t.get("test_id"):
+                            repro_defect_ids.add(str(t.get("test_id")))
+                        if t.get("failure_fingerprint"):
+                            repro_defect_ids.add(str(t.get("failure_fingerprint")))
+                pre_fix_snap = r2.get("pre_fix_delivery_snapshot_sha256")
+                if pre_fix_snap and pre_fix_snap == snapshot:
+                    if any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE", "COMPOSE_UI", "XML_UI") for s in (policy.get("surfaces") or [])):
+                        failed_binding = True
+                        err_msg = "final delivery snapshot matches RED pre-fix snapshot; no code fix was applied"
+                        checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+                        reasons.append(err_msg)
+            except Exception:
+                pass
+
         if debug_ev_path.is_file():
             try:
                 c = read_json(debug_ev_path)
@@ -381,6 +404,13 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     err_msg = "RED defect evidence is bound to a different plan hash"
                     checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
                     reasons.append(err_msg)
+                pre_fix_snap = rev.get("pre_fix_delivery_snapshot_sha256")
+                if pre_fix_snap and pre_fix_snap == snapshot:
+                    if any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE", "COMPOSE_UI", "XML_UI") for s in (policy.get("surfaces") or [])):
+                        failed_binding = True
+                        err_msg = "final delivery snapshot matches RED pre-fix snapshot; no code fix was applied"
+                        checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+                        reasons.append(err_msg)
                 for t in rev.get("failed_tests") or []:
                     if isinstance(t, dict):
                         if t.get("test_name"):
@@ -481,15 +511,39 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
                 if severity in ("HIGH", "CRITICAL") or sensitive:
                     for rep in evidence.get("reports") or []:
-                        if str(rep.get("provenance") or "") == "lead_agent_recorded_verdict":
+                        prov = str(rep.get("provenance") or "")
+                        rev_name = str(rep.get("reviewer") or "")
+                        if prov == "lead_agent_recorded_verdict":
                             err_msg = (
-                                f"reviewer {rep.get('reviewer')} self-certified by lead agent without "
+                                f"reviewer {rev_name} self-certified by lead agent without "
                                 f"independent reviewer response is forbidden for {severity} severity changes"
                             )
                             reasons.append(err_msg)
                             checks[-1]["status"] = "FAIL"
                             checks[-1]["detail"] = err_msg
                             break
+                        if prov == "subagent_execution":
+                            receipt_file = task_directory / "reviewer-dispatches" / f"{rev_name}.json"
+                            if not receipt_file.is_file():
+                                err_msg = f"reviewer {rev_name} provenance claims subagent_execution but dispatch receipt is missing"
+                                reasons.append(err_msg)
+                                checks[-1]["status"] = "FAIL"
+                                checks[-1]["detail"] = err_msg
+                                break
+                            try:
+                                rc = read_json(receipt_file)
+                                if rc.get("schema_version") != 1 or rc.get("reviewer") != rev_name or rc.get("task_id") != plan.get("task_id") or rc.get("run_id") != run_id:
+                                    err_msg = f"reviewer {rev_name} dispatch receipt does not match active task/run"
+                                    reasons.append(err_msg)
+                                    checks[-1]["status"] = "FAIL"
+                                    checks[-1]["detail"] = err_msg
+                                    break
+                            except Exception:
+                                err_msg = f"reviewer {rev_name} dispatch receipt is corrupted"
+                                reasons.append(err_msg)
+                                checks[-1]["status"] = "FAIL"
+                                checks[-1]["detail"] = err_msg
+                                break
 
     for carried in policy.get("carried_reviews") or []:
         reviewer = str(carried.get("reviewer") or "")

@@ -61,7 +61,16 @@ Record task lifecycle state deterministically from intake to final delivery:
 ### Commands
 ```bash
 # 1. Draft task plan
-python .agents/scripts/workflow.py draft --repo . --task-id <id> --plan-file <path_to_plan>
+python .agents/scripts/workflow.py draft \
+  --repo . \
+  --task-id <id> \
+  --outcome "<requested outcome>" \
+  --kind <AUTO|BUG|FEATURE|REFACTOR> \
+  --expected-surfaces "<comma-separated surfaces>" \
+  --expected-modules "<comma-separated modules>" \
+  --expected-files "<comma-separated expected files>" \
+  --architecture-intent <EXISTING_CHANGE|NEW_SCREEN|NEW_FEATURE|REFACTOR|MIGRATION> \
+  --architecture-target-scope "<target scope when applicable>"
 
 # 2. Record developer approval (after explicit developer approval via Proceed button or chat)
 python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED
@@ -92,8 +101,8 @@ python .agents/scripts/workflow.py cancel --repo . --task-id <id>
 - Lifecycle state confirmation message or JSON with task status, run ID, and frozen snapshot hash.
 - Exit code: `0` on success; non-zero if state transition precondition is not satisfied.
 
-> **Material Drift Reconciliation**: If `prepare-verification` reports material drift (e.g. `surface:BUSINESS_LOGIC`), do not inspect harness scripts. Reconcile by updating the plan draft with all active surfaces:
-> `python .agents/scripts/workflow.py draft --repo . --task-id <id> --expected-surfaces "<all_active_surfaces>"`
+> **Material Drift Reconciliation**: If `prepare-verification` reports material drift (e.g. `surface:BUSINESS_LOGIC`), do not inspect harness scripts. Reconcile by updating the plan draft with all active surfaces while preserving the original task outcome and intent:
+> `python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<original_outcome>" --kind <original_kind> --expected-surfaces "<all_active_surfaces>"`
 > and obtain developer approval.
 
 > **Instruction**: Do not inspect `workflow.py` implementation before execution.
@@ -247,7 +256,7 @@ python .agents/scripts/fast_kt_lint.py
 python .agents/scripts/room_guard.py
 
 # 5. Architecture contract drift check (verifies code adheres to architectural policy)
-python .agents/scripts/architecture_drift.py --repo .
+python .agents/scripts/architecture_drift.py --repo . --task-id <id>
 
 # 6. Feature module / slice scaffolding
 python .agents/scripts/new_feature_scaffold.py --feature <feature_name>
@@ -285,7 +294,7 @@ When an exception occurs:
 | **Strings Check** | `python .agents/scripts/check_strings.py` | Standalone strings parity across locales |
 | **Fast Lint** | `python .agents/scripts/fast_kt_lint.py` | Standalone fast Kotlin AST linter |
 | **Room Guard** | `python .agents/scripts/room_guard.py` | Standalone Room schema & migration check |
-| **Arch Drift** | `python .agents/scripts/architecture_drift.py --repo .` | Validate code against architecture contract |
+| **Arch Drift** | `python .agents/scripts/architecture_drift.py --repo . --task-id <id>` | Validate code against architecture contract |
 | **Logcat Doctor** | `python .agents/scripts/logcat_doctor.py` | Triage crashes and runtime exceptions |
 | **Feature Scaffold**| `python .agents/scripts/new_feature_scaffold.py --feature <name>` | Scaffold feature conventions and ViewModel |
 | **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |

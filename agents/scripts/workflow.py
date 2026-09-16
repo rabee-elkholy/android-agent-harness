@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
 from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, repository_identity, utc_now, validate_id  # noqa: E402
 from change_classifier import classify  # noqa: E402
-from delivery_manifest import build_manifest  # noqa: E402
+from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline  # noqa: E402
 from final_verifier import verify  # noqa: E402
 from plan_authority import (  # noqa: E402
     DEFAULT_APP_SURFACES,
@@ -33,6 +33,70 @@ from _verification_recipes import get_verification_recipes  # noqa: E402
 
 
 SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
+
+
+def normalize_expected_files(repo: Path, raw_files: str | list[str] | None) -> list[str]:
+    if not raw_files:
+        return []
+    if isinstance(raw_files, str):
+        items = [f.strip() for f in raw_files.split(",") if f.strip()]
+    else:
+        items = [str(f).strip() for f in raw_files if str(f).strip()]
+    normalized: set[str] = set()
+    for item in items:
+        p_obj = Path(item)
+        if p_obj.is_absolute():
+            raise ValidationError(f"expected-files must be repository-relative: {item}")
+        posix_str = item.replace("\\", "/").strip("/")
+        parts = posix_str.split("/")
+        if ".." in parts:
+            raise ValidationError(f"expected-files traversal not allowed: {item}")
+        if parts[0] in {".agents", ".git", "build", ".gradle", ".harness-backup", ".harness-recovery"}:
+            raise ValidationError(f"protected harness path cannot be an expected application file: {item}")
+        normalized.add(posix_str)
+    return sorted(normalized)
+
+
+def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict, manifest: dict) -> str:
+    surfaces = sorted(set(normalize_expected_surfaces(plan.get("expected_surfaces") or [])) | set(policy.get("surfaces") or []))
+    surfaces_str = ",".join(surfaces)
+
+    modules = sorted(set(plan.get("expected_modules") or []) | set(changed_modules(repo, manifest)))
+    modules_str = ",".join(m.lstrip(":") for m in modules)
+
+    actual_paths = sorted({entry.get("path") for entry in (manifest.get("task_changes") or manifest.get("changes") or []) if entry.get("path")})
+    all_expected_files = sorted(set(plan.get("expected_files") or []) | set(actual_paths))
+    files_str = ",".join(all_expected_files)
+
+    outcome_str = str(plan.get("requested_outcome") or "").replace('"', '\\"')
+    kind_str = str(plan.get("task_kind") or "FEATURE")
+    depth_str = str(plan.get("planning_depth") or "BOUNDED")
+
+    arch_contract = plan.get("architecture_contract") or {}
+    arch_mode = arch_contract.get("mode") or "PRESERVE"
+    INTENT_REVERSE = {"PRESERVE": "EXISTING_CHANGE", "NEW": "NEW_SCREEN", "REFACTOR": "REFACTOR", "MIGRATION": "MIGRATION"}
+    arch_intent = INTENT_REVERSE.get(arch_mode, "EXISTING_CHANGE")
+    arch_scope = arch_contract.get("target_scope") or ""
+    arch_family = arch_contract.get("target_family_id") or ""
+
+    cmd_parts = [
+        f"python .agents/scripts/workflow.py draft --repo . --task-id {task_id}",
+        f'--outcome "{outcome_str}"',
+        f"--kind {kind_str}",
+        f"--planning-depth {depth_str}",
+        f'--expected-surfaces "{surfaces_str}"',
+    ]
+    if modules_str:
+        cmd_parts.append(f'--expected-modules "{modules_str}"')
+    if files_str:
+        cmd_parts.append(f'--expected-files "{files_str}"')
+    cmd_parts.append(f"--architecture-intent {arch_intent}")
+    if arch_scope:
+        cmd_parts.append(f'--architecture-target-scope "{arch_scope}"')
+    if arch_family:
+        cmd_parts.append(f'--architecture-target-family "{arch_family}"')
+
+    return " \\\n  ".join(cmd_parts)
 
 
 def state_root(repo: Path) -> Path:
@@ -145,11 +209,11 @@ def draft(args: argparse.Namespace) -> dict:
     # Resolve Evolutionary Architecture Contract
     arch_intent = str(getattr(args, "architecture_intent", "EXISTING_CHANGE") or "EXISTING_CHANGE").upper()
     inferred_target_scope = str(getattr(args, "architecture_target_scope", "") or "").strip()
+    norm_expected_files = normalize_expected_files(repo, getattr(args, "expected_files", None))
     if not inferred_target_scope and arch_intent != "MIGRATION":
-        if getattr(args, "expected_files", None):
-            exp_files = [f.strip() for f in str(args.expected_files).split(",") if f.strip()]
-            if len(exp_files) == 1:
-                inferred_target_scope = exp_files[0]
+        if norm_expected_files:
+            if len(norm_expected_files) == 1:
+                inferred_target_scope = norm_expected_files[0]
         elif classification.get("changed_files") == 1:
             all_files = sorted(set(p for info in (classification.get("details") or {}).values() for p in info.get("files") or []))
             if len(all_files) == 1:
@@ -183,6 +247,21 @@ def draft(args: argparse.Namespace) -> dict:
     arch_contract = arch_res.get("contract")
     arch_brief = arch_res.get("brief_markdown")
 
+    parsed_phases = None
+    raw_phases = getattr(args, "phases", None)
+    if raw_phases:
+        if isinstance(raw_phases, list):
+            parsed_phases = raw_phases
+        elif isinstance(raw_phases, str):
+            try:
+                p_file = Path(raw_phases)
+                if p_file.is_file():
+                    parsed_phases = read_json(p_file)
+                else:
+                    parsed_phases = json.loads(raw_phases)
+            except Exception as exc:
+                raise ValidationError(f"invalid --phases parameter: {exc}")
+
     plan = create_plan(
         repo,
         task_id=args.task_id,
@@ -191,13 +270,15 @@ def draft(args: argparse.Namespace) -> dict:
         requested_outcome=args.outcome,
         expected_surfaces=expected,
         expected_modules=[module_id(item) for item in (args.expected_modules or "").split(",") if item.strip()],
-        test_strategy=args.test_strategy or "Policy-selected relevant tests",
-        device_strategy=args.device_strategy or "Policy-selected device verification",
-        risks=[item.strip() for item in (args.risks or "").split(",") if item.strip()],
-        rollback=args.rollback or "Stop on conflict; preserve developer changes; no automatic Git reset",
+        expected_files=norm_expected_files,
+        test_strategy=getattr(args, "test_strategy", None) or "Policy-selected relevant tests",
+        device_strategy=getattr(args, "device_strategy", None) or "Policy-selected device verification",
+        risks=[item.strip() for item in (getattr(args, "risks", None) or "").split(",") if item.strip()],
+        rollback=getattr(args, "rollback", None) or "Stop on conflict; preserve developer changes; no automatic Git reset",
         skills=preliminary_policy["skills"]["skills"],
         external_writes=list(getattr(args, "external_write", None) or []),
         architecture_contract=arch_contract,
+        phases=parsed_phases,
     )
     directory = task_dir(repo, args.task_id)
     directory.mkdir(parents=True, exist_ok=True)
@@ -207,6 +288,36 @@ def draft(args: argparse.Namespace) -> dict:
     atomic_write_json(directory / "preliminary-classification.json", classification)
     atomic_write_json(directory / "preliminary-policy.json", preliminary_policy)
     atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(directory / "plan.json"), "updated_at": utc_now()})
+
+    base_man = build_manifest(repo)
+    task_baseline = {
+        "schema_version": 1,
+        "task_id": args.task_id,
+        "repository": plan.get("repository"),
+        "base_delivery_snapshot_sha256": plan.get("base_delivery_snapshot_sha256"),
+        "base_change_set_sha256": plan.get("base_change_set_sha256"),
+        "changes": base_man.get("changes") or [],
+    }
+    task_baseline["baseline_sha256"] = canonical_sha256({
+        "schema_version": task_baseline["schema_version"],
+        "task_id": task_baseline["task_id"],
+        "repository": task_baseline["repository"],
+        "base_delivery_snapshot_sha256": task_baseline["base_delivery_snapshot_sha256"],
+        "base_change_set_sha256": task_baseline["base_change_set_sha256"],
+        "changes": task_baseline["changes"],
+    })
+    atomic_write_json(directory / "task-baseline.json", task_baseline)
+
+    if parsed_phases:
+        atomic_write_json(directory / "phase-state.json", {
+            "current_phase_id": parsed_phases[0]["id"],
+            "completed_phases": [],
+            "phase_checkpoints": {},
+        })
+        p1_dir = directory / "phases" / parsed_phases[0]["id"]
+        p1_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(p1_dir / "baseline.json", task_baseline)
+
     return plan
 
 
@@ -263,6 +374,19 @@ def record_debug_evidence(args: argparse.Namespace) -> dict:
             "entries": entries,
         }
         atomic_write_json(evidence_path, payload)
+        if getattr(args, "kind", "") == "test_failure":
+            manifest = build_manifest(repo)
+            red_artifact = {
+                "schema_version": 2,
+                "task_id": args.task_id,
+                "plan_sha256": plan.get("plan_sha256"),
+                "status": "RED_CAPTURED",
+                "captured_at": utc_now(),
+                "snapshot_sha256": manifest["delivery_snapshot_sha256"],
+                "test_id": args.reference,
+                "fingerprint": canonical_sha256({"reference": args.reference, "hypothesis": getattr(args, "hypothesis", "")}),
+            }
+            atomic_write_json(directory / "red-evidence.json", red_artifact)
         return payload
 
 
@@ -344,9 +468,10 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 f"to '{current_identity.get('head')[:12]}' after task approval"
             )
     with step_progress("Building delivery manifest & snapshot"):
-        manifest = build_manifest(repo)
+        task_baseline = load_task_baseline(repo, args.task_id)
+        manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"))
     with step_progress("Classifying changed surfaces"):
-        classification = classify(repo)
+        classification = classify(repo, task_id=args.task_id, task_changes=manifest.get("task_changes"))
     completed_rounds = int(plan.get("review_rounds") or 0)
     if completed_rounds:
         previous_current = read_json(task_dir(repo, args.task_id) / "current-run.json")
@@ -387,15 +512,16 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
     else:
         policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
-    drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest))
+    actual_task_paths = [c.get("path") for c in (manifest.get("task_changes") or manifest.get("changes") or []) if c.get("path")]
+    drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths)
     if drift:
         plan["material_drift"] = drift
         save_plan(_plan_path(repo, args.task_id), plan)
-        surfaces_str = ",".join(str(s) for s in (policy.get("surfaces") or []))
+        remediation_cmd = build_remediation_command(repo, args.task_id, plan, policy, manifest)
         raise ValidationError(
             f"PLAN_APPROVAL_REQUIRED: material drift detected: {', '.join(str(k) for k in drift)}. "
-            "Reconciliation and plan approval are required before verification run can begin. "
-            f"To reconcile, update the plan using: python .agents/scripts/workflow.py draft --repo . --task-id {args.task_id} --expected-surfaces \"{surfaces_str}\" and obtain developer approval."
+            "Reconciliation and plan approval are required before verification run can begin.\n"
+            f"To reconcile, update the plan using:\n{remediation_cmd}\nand obtain developer approval."
         )
     if policy.get("status") != "PASS":
         if policy.get("status") == "USER_DECISION_REQUIRED" and policy.get("budget_blocked"):
@@ -731,6 +857,104 @@ def deliver_task(
     return plan
 
 
+def checkpoint_phase(args: argparse.Namespace) -> dict:
+    repo = Path(args.repo).resolve()
+    plan = _load_plan(repo, args.task_id)
+    if plan.get("status") != "IMPLEMENTING":
+        raise ValidationError("phase checkpoint requires an IMPLEMENTING plan")
+    phases = plan.get("phases") or []
+    if not phases:
+        raise ValidationError("plan does not define any phases")
+    directory = task_dir(repo, args.task_id)
+    phase_state_file = directory / "phase-state.json"
+    phase_state = read_json(phase_state_file) if phase_state_file.is_file() else {
+        "current_phase_id": phases[0]["id"],
+        "completed_phases": [],
+        "phase_checkpoints": {},
+    }
+    phase_id = getattr(args, "phase_id", None) or phase_state.get("current_phase_id")
+    target_phase = next((p for p in phases if p.get("id") == phase_id), None)
+    if not target_phase:
+        raise ValidationError(f"phase '{phase_id}' not found in plan phases")
+
+    phase_dir = directory / "phases" / phase_id
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    baseline_file = phase_dir / "baseline.json"
+    base_data = read_json(baseline_file) if baseline_file.is_file() else load_task_baseline(repo, args.task_id)
+    manifest = build_task_manifest(repo, base_data, expected_files=target_phase.get("expected_files") or plan.get("expected_files"))
+    phase_changes = manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes") or []
+
+    phase_expected_files = target_phase.get("expected_files")
+    if phase_expected_files:
+        norm_expected = normalize_expected_files(repo, phase_expected_files)
+        for change in phase_changes:
+            change_path = change.get("path", "").replace("\\", "/").strip("/")
+            if change_path.startswith(".agents/"):
+                continue
+            if change_path not in norm_expected:
+                raise ValidationError(f"phase '{phase_id}' modified file outside expected_files: {change_path}")
+
+    phase_expected_modules = target_phase.get("expected_modules")
+    if phase_expected_modules:
+        norm_mods = [m.strip("/:").replace("\\", "/") for m in phase_expected_modules]
+        for change in phase_changes:
+            change_path = change.get("path", "").replace("\\", "/").strip("/")
+            if change_path.startswith(".agents/"):
+                continue
+            mod_match = any(change_path.startswith(m + "/") or change_path == m for m in norm_mods)
+            if not mod_match:
+                raise ValidationError(f"phase '{phase_id}' modified file outside expected_modules: {change_path}")
+
+    try:
+        from architecture_drift import check_architecture_drift
+        passed, msg, viols = check_architecture_drift(repo, plan.get("architecture_contract"))
+        if not passed:
+            raise ValidationError(f"phase checkpoint architecture drift: {msg}")
+    except Exception as exc:
+        if isinstance(exc, ValidationError):
+            raise
+
+    checkpoint_record = {
+        "schema_version": 1,
+        "task_id": args.task_id,
+        "phase_id": phase_id,
+        "status": "PASS",
+        "checkpoint_at": utc_now(),
+        "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+        "task_change_set_sha256": manifest["task_change_set_sha256"],
+        "manifest_delta": phase_changes,
+    }
+    checkpoint_record["checkpoint_sha256"] = canonical_sha256(checkpoint_record)
+    atomic_write_json(phase_dir / "checkpoint.json", checkpoint_record)
+
+    completed = list(phase_state.get("completed_phases") or [])
+    if phase_id not in completed:
+        completed.append(phase_id)
+    phase_state["completed_phases"] = completed
+    phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
+
+    curr_idx = next((i for i, p in enumerate(phases) if p.get("id") == phase_id), -1)
+    if curr_idx != -1 and curr_idx + 1 < len(phases):
+        next_phase = phases[curr_idx + 1]
+        phase_state["current_phase_id"] = next_phase["id"]
+        next_dir = directory / "phases" / next_phase["id"]
+        next_dir.mkdir(parents=True, exist_ok=True)
+        cur_man = build_manifest(repo)
+        next_baseline = {
+            "schema_version": 1,
+            "task_id": args.task_id,
+            "phase_id": next_phase["id"],
+            "repository": plan.get("repository"),
+            "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
+            "base_change_set_sha256": cur_man["change_set_sha256"],
+            "changes": cur_man.get("changes") or [],
+        }
+        next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
+        atomic_write_json(next_dir / "baseline.json", next_baseline)
+    atomic_write_json(phase_state_file, phase_state)
+    return {"status": "PASS", "phase_id": phase_id, "completed_phases": completed, "current_phase_id": phase_state.get("current_phase_id")}
+
+
 def status(args: argparse.Namespace) -> dict:
     return _load_plan(Path(args.repo).resolve(), args.task_id)
 
@@ -776,8 +1000,12 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--architecture-target-scope", default="", help="Target component or screen path for architecture resolution")
     command.add_argument("--architecture-target-family", default=None, help="Target architecture family ID")
     command.add_argument("--expected-files", help="Comma-separated expected target files")
+    command.add_argument("--phases", help="Optional JSON string or file path defining task phases")
     command.add_argument("--force", action="store_true", help="Bypass active task collision barriers")
     command.set_defaults(handler=draft)
+    command = sub.add_parser("checkpoint-phase", parents=[common])
+    command.add_argument("--phase-id", default=None, help="Phase ID to checkpoint")
+    command.set_defaults(handler=checkpoint_phase)
     command = sub.add_parser("approve", parents=[common])
     command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
     command.add_argument("--proof-reference", required=True)
@@ -842,6 +1070,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(f"TASK_STATUS={result.get('status', 'READY')}")
+    if args.action == "draft":
+        return 0 if result.get("status") not in ("BLOCKED", "STALE", "USER_DECISION_REQUIRED") else 1
     return 0 if result.get("status") not in ("BLOCKED", "STALE", "PLAN_APPROVAL_REQUIRED", "USER_DECISION_REQUIRED") else 1
 
 

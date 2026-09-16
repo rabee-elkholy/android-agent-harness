@@ -223,8 +223,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
         blocked_str = f" from: {', '.join(blocked)}" if blocked else " due to blocking review findings"
+        task_id = str(plan.get("task_id") or plan.get("plan_id") or "")
         return False, (
-            f"Task {plan.get('plan_id')} is BLOCKED{blocked_str}. "
-            f"Fix the reported issues, then resume the plan via: python .agents/scripts/workflow.py resume --repo . --task-id {plan.get('plan_id')}"
+            f"Task {task_id} is BLOCKED{blocked_str}. "
+            f"Fix the reported issues, then resume the plan via: python .agents/scripts/workflow.py resume --repo . --task-id {task_id}"
         )
     return False, f"command is not allowed while plan status is {status or 'missing'}"

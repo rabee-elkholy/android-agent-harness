@@ -321,12 +321,12 @@ def generate_task_brief(
     return brief_path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", default=os.environ.get("HARNESS_TASK_ID"))
     parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.task:
         print("[FAIL] --task or HARNESS_TASK_ID is required", file=sys.stderr)
         return 1

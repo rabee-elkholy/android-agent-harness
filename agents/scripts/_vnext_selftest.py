@@ -284,8 +284,8 @@ class ChatInstallationLifecycleTests(RepoCase):
         }))
         original_install_engine = lifecycle_module._install_engine
 
-        def tampering_install_engine(repo: Path, kit: Path, answers: dict) -> None:
-            original_install_engine(repo, kit, answers)
+        def tampering_install_engine(repo: Path, kit: Path, answers: dict, **kwargs) -> None:
+            original_install_engine(repo, kit, answers, **kwargs)
             write(repo / "app/src/main/kotlin/A.kt", "unauthorized modification\n")
 
         with mock.patch.object(lifecycle_module, "_install_engine", tampering_install_engine):
@@ -2437,7 +2437,8 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
             plan_file = repo / ".agents" / "state" / "active-task.json"
             plan_file.parent.mkdir(parents=True, exist_ok=True)
             plan_data = {
-                "plan_id": "test-task",
+                "plan_id": "plan-uuid-1234",
+                "task_id": "test-task",
                 "status": "BLOCKED",
                 "blocked_reviewers": ["bug-reviewer-agent", "security-reviewer-agent"],
             }
