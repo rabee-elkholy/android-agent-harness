@@ -235,7 +235,8 @@ def main(argv=None) -> int:
             pre_red_changes = task_manifest.get("task_changes") or []
 
             def is_test_repro_path(p: str) -> bool:
-                pl = f"/{p.replace('\\', '/').lower().strip('/')}"
+                norm_p = p.replace("\\", "/").lower().strip("/")
+                pl = f"/{norm_p}"
                 if "/src/test/" in pl or "/src/androidtest/" in pl:
                     return True
                 if pl.endswith("test.kt") or pl.endswith("test.java") or pl.endswith("tests.kt") or pl.endswith("tests.java"):

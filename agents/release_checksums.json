@@ -104,7 +104,7 @@
     "agents/scripts/room_guard.py": "5b4eef40a9f30140184a97eb0074b12d95ec04fef6f1ebd6b2e4696bb5697248",
     "agents/scripts/run_device.py": "6bb87c5ef097113a90a3c175d872248a3e9a165f8853c3e9fde823bd69a730bf",
     "agents/scripts/run_gradle_task.py": "14426585fe807677616cf415416ee5da4c82b2314298a572bf8dac27f0607503",
-    "agents/scripts/run_tests_gate.py": "f37b9e608f07592affa7afb58cbcac916703a7345817af46c9b50575fd6a354d",
+    "agents/scripts/run_tests_gate.py": "28d912f3584e41e5b3e1f851486dc8a755b4ae055bbb00ecdcdb790c3578806e",
     "agents/scripts/setup_wizard.py": "2df1acd7368f6231fe4862e5abb7aa64838ad37493c637c30639b64274f1aaf9",
     "agents/scripts/skill_router.py": "dc12fb729419e8ce3ee990ccb3fe0b681931e65b16aad4e60337fb5e4ba4f8b8",
     "agents/scripts/wizard/__init__.py": "bc3e731532f96d9de98ce49c51b9cd969d682b12d1d7fb3779953152730ef60a",
