@@ -42,10 +42,10 @@ python .agents/scripts/review_policy.py --repo . --json
 
 ### Expected Output
 - JSON payload containing:
-  - `surfaces`: List of affected surfaces (e.g. `UI_COMPOSE`, `ROOM`, `BUSINESS_LOGIC`).
-  - `risk_level`: `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL`.
-  - `required_reviewers`: List of specialist reviewer roles.
-  - `required_gates`: List of mandatory deterministic verification gates.
+  - `surfaces`: List of affected surfaces (e.g. `COMPOSE_UI`, `ROOM_SCHEMA`, `BUSINESS_LOGIC`).
+  - `severity`: `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL`.
+  - `reviewers`: List of specialist reviewer roles.
+  - `gates`: List of mandatory deterministic verification gates.
 - Exit code: `0` on success.
 
 > **Instruction**: Do not inspect implementation source of the classifier or policy engine before execution.
@@ -66,11 +66,19 @@ python .agents/scripts/workflow.py draft \
   --task-id <id> \
   --outcome "<requested outcome>" \
   --kind <AUTO|BUG|FEATURE|REFACTOR> \
+  --planning-depth <SHALLOW|STANDARD|DEEP> \
   --expected-surfaces "<comma-separated surfaces>" \
   --expected-modules "<comma-separated modules>" \
   --expected-files "<comma-separated expected files>" \
+  --test-strategy <UNIT_ONLY|DEVICE_ONLY|FULL|NONE> \
+  --device-strategy <EMULATOR_PREFERRED|PHYSICAL_PREFERRED|ANY|NONE> \
+  --risks "<comma-separated risks>" \
+  --rollback "<rollback instructions>" \
+  --external-write "<comma-separated external paths>" \
   --architecture-intent <EXISTING_CHANGE|NEW_SCREEN|NEW_FEATURE|REFACTOR|MIGRATION> \
-  --architecture-target-scope "<target scope when applicable>"
+  --architecture-target-scope "<target scope when applicable>" \
+  --architecture-target-family "<target family id when applicable>" \
+  --phases "<phases json or file path when required>"
 
 # 2. Record developer approval (after explicit developer approval via Proceed button or chat)
 python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED
@@ -78,19 +86,22 @@ python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conv
 # 3. Begin implementation
 python .agents/scripts/workflow.py begin --repo . --task-id <id>
 
-# 4. Prepare verification (freezes review package and initializes run)
+# 4. Advance phase checkpoint (for multi-phase plans; autonomous execution without developer prompt)
+python .agents/scripts/workflow.py checkpoint-phase --repo . --task-id <id>
+
+# 5. Prepare verification (freezes review package and initializes run)
 python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>
 
-# 5. Resume implementation (if verification findings require code fixes)
+# 6. Resume implementation (if verification findings require code fixes)
 python .agents/scripts/workflow.py resume --repo . --task-id <id>
 
-# 6. Read-only verification check
+# 7. Read-only verification check
 python .agents/scripts/workflow.py verify --repo . --task-id <id>
 
-# 7. Complete task (transitions to READY_FOR_DELIVERY)
+# 8. Complete task (transitions to READY_FOR_DELIVERY)
 python .agents/scripts/workflow.py complete --repo . --task-id <id>
 
-# 8. Mark delivered (unlinks active task after Git commit)
+# 9. Mark delivered (unlinks active task after Git commit)
 python .agents/scripts/workflow.py deliver --repo . --task-id <id>
 
 # Cancel task
@@ -134,15 +145,23 @@ python .agents/scripts/preflight_check.py
 ### Purpose
 Run project unit tests (`testDebugUnitTest`) through Gradle Wrapper.
 
-### Command
+### Commands
 ```bash
+# 1. Run unit tests gate (GREEN phase verification)
 python .agents/scripts/run_tests_gate.py
+
+# 2. Capture executable RED failure proof (BUG tasks only, before fixing code)
+python .agents/scripts/run_tests_gate.py --capture-red
 ```
 
 ### Expected Output
-- Execution status of Gradle unit test task.
-- Passed/failed test counts.
-- Exit code: `0` = all tests pass; non-zero = unit test failure.
+- For standard unit test gate: Execution status of Gradle unit test task, passed/failed test counts. Exit code: `0` = all tests pass; non-zero = unit test failure.
+- For `--capture-red`: Schema 3 `red-evidence.json` capturing executed reproduction tests and failure signatures. Exit code: `0` on successful RED capture (real test assertion failure).
+- Preconditions for `--capture-red`:
+  - Active task kind must be `BUG`.
+  - Must occur BEFORE modifying production/application files (enforces pre-RED task-delta check; fails if non-test files are modified).
+  - Requires genuine assertion test failure (exit code 1); compilation failure (exit code 2) or clean pass (exit code 0) is rejected.
+  - Debug evidence or logs cannot substitute for executable RED evidence.
 
 > **Instruction**: Do not inspect test gate script before execution.
 
@@ -192,13 +211,16 @@ Build debug APK and verify application on connected Android physical device or e
 
 ### Commands
 ```bash
-# Assemble APK
+# 1. Check connected device status and target resolution
+python .agents/scripts/run_device.py status
+
+# 2. Assemble APK
 python .agents/scripts/run_gradle_task.py :app:assembleDebug
 
-# Install and launch on target device/emulator
+# 3. Install and launch on target device/emulator
 python .agents/scripts/run_device.py install-start
 
-# Capture screen (optional)
+# 4. Capture screen (optional)
 python .agents/scripts/capture_screen.py
 ```
 
@@ -290,7 +312,9 @@ When an exception occurs:
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
 | **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
 | **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
-| **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate |
+| **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate (GREEN phase) |
+| **Capture RED** | `python .agents/scripts/run_tests_gate.py --capture-red` | Capture executable test failure proof for BUG tasks |
+| **Checkpoint Phase** | `python .agents/scripts/workflow.py checkpoint-phase --repo . --task-id <id>` | Advance multi-phase plan checkpoint autonomously |
 | **Strings Check** | `python .agents/scripts/check_strings.py` | Standalone strings parity across locales |
 | **Fast Lint** | `python .agents/scripts/fast_kt_lint.py` | Standalone fast Kotlin AST linter |
 | **Room Guard** | `python .agents/scripts/room_guard.py` | Standalone Room schema & migration check |
@@ -302,6 +326,7 @@ When an exception occurs:
 | **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
 | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
 | **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass) |
+| **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
 | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
 | **Harness Doctor** | `python harness_cli.py doctor --repo . --json` | Health check harness installation & adapters |

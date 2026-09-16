@@ -26,7 +26,7 @@ ALLOWED_PRODUCERS = {
     "device_install": {"run_device"},
     "device_launch": {"run_device"},
     "device_signoff": {"developer_approval", "ask_question", "run_device"},
-    "reviews": {"review_orchestrator", "developer_approval"},
+    "reviews": {"review_orchestrator", "developer_approval", "developer_override"},
     "sensitive_approval": {"developer_approval"},
     "red_evidence": {"run_tests_gate", "workflow", "developer_approval"},
 }
@@ -75,6 +75,9 @@ def verify_task(repo: Path, task_id: str) -> dict:
     )
 
 
+verify_delivery = verify_task
+
+
 
 def _blocked(status: str, reasons: list[str], checks: list[dict]) -> dict:
     return {"schema_version": 1, "status": status, "blocked_by": reasons, "checks": checks}
@@ -114,6 +117,7 @@ def validate_policy_artifact(
     state_root: Path,
     policy_path: Path,
     current_change_set: str | None = None,
+    task_changes: list[dict] | None = None,
 ) -> tuple[dict | None, str | None, str]:
     """Validate policy artifact integrity, status, classification freshness, and deterministic rules."""
     if policy.get("classification_sha256") is None or policy.get("policy_sha256") != canonical_sha256(
@@ -124,7 +128,7 @@ def validate_policy_artifact(
         return None, "material UNKNOWN surface requires developer decision", "USER_DECISION_REQUIRED"
     if policy.get("status") != "PASS":
         return None, "policy or mandatory skill routing did not pass", "BLOCKED"
-    current_classification = classify(repo)
+    current_classification = classify(repo, task_id=plan.get("task_id"), task_changes=task_changes)
     if current_classification.get("classification_sha256") != policy.get("classification_sha256"):
         return None, "current classification does not match the run policy", "STALE"
     agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
@@ -266,11 +270,12 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     task_directory = plan_path.parent
     snapshot = str(current["delivery_snapshot_sha256"])
     change_set = str(current["change_set_sha256"])
-    drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest))
+    task_changes = recorded_manifest.get("task_changes") if "task_changes" in recorded_manifest else None
+    drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest, task_only=True))
     if drift:
         return _blocked("PLAN_APPROVAL_REQUIRED", ["material plan drift: " + ", ".join(drift)], checks)
     expected_policy, policy_error, block_status = validate_policy_artifact(
-        repo, plan, policy, state_root, policy_path, current_change_set=change_set
+        repo, plan, policy, state_root, policy_path, current_change_set=change_set, task_changes=task_changes
     )
     if policy_error:
         return _blocked(block_status, [policy_error], checks)
@@ -355,12 +360,28 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         has_repro = False
         repro_defect_ids: set[str] = set()
         repro_classes: set[str] = set()
-        failed_binding = False
+        binding_errors: list[str] = []
 
         if red_ev_path.is_file():
             try:
                 r2 = read_json(red_ev_path)
                 has_repro = True
+                if r2.get("schema_version") == 3:
+                    exp_red_hash = canonical_sha256({k: v for k, v in r2.items() if k != "red_sha256"})
+                    if r2.get("red_sha256") != exp_red_hash:
+                        binding_errors.append("RED evidence SHA-256 signature is invalid or corrupted")
+                if r2.get("task_id") and r2.get("task_id") != plan.get("task_id"):
+                    binding_errors.append(f"RED evidence task_id mismatch: {r2.get('task_id')} != {plan.get('task_id')}")
+                if r2.get("plan_sha256") and r2.get("plan_sha256") != expected_plan_hash:
+                    binding_errors.append("RED defect evidence is bound to a different plan hash")
+                base_file = task_directory / "task-baseline.json"
+                if base_file.is_file() and r2.get("baseline_sha256"):
+                    try:
+                        base_data = read_json(base_file)
+                        if r2.get("baseline_sha256") != base_data.get("baseline_sha256"):
+                            binding_errors.append("RED evidence baseline_sha256 does not match task baseline")
+                    except Exception:
+                        pass
                 for t in r2.get("failed_tests") or []:
                     if isinstance(t, dict):
                         if t.get("test_id"):
@@ -370,27 +391,24 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 pre_fix_snap = r2.get("pre_fix_delivery_snapshot_sha256")
                 if pre_fix_snap and pre_fix_snap == snapshot:
                     if any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE", "COMPOSE_UI", "XML_UI") for s in (policy.get("surfaces") or [])):
-                        failed_binding = True
-                        err_msg = "final delivery snapshot matches RED pre-fix snapshot; no code fix was applied"
-                        checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
-                        reasons.append(err_msg)
-            except Exception:
-                pass
+                        binding_errors.append("final delivery snapshot matches RED pre-fix snapshot; no code fix was applied")
+            except Exception as exc:
+                binding_errors.append(f"could not parse red-evidence.json: {exc}")
 
         if debug_ev_path.is_file():
             try:
                 c = read_json(debug_ev_path)
                 for e in c.get("entries", []):
                     kind = str(e.get("kind") or "").lower()
-                    if kind in ("reproduction", "red_evidence", "failing_test"):
-                        has_repro = True
+                    if kind in ("manual_repro", "device_repro", "log_repro"):
+                        repro_classes.add(kind.upper())
+                    elif kind in ("failing_test", "test_failure"):
+                        if e.get("satisfies_executable_red", True):
+                            has_repro = True
                         if e.get("test_name"):
                             repro_defect_ids.add(str(e.get("test_name")))
-                        if e.get("fingerprint"):
-                            repro_defect_ids.add(str(e.get("fingerprint")))
-                    elif kind in ("manual_repro", "device_repro", "log_repro"):
-                        has_repro = True
-                        repro_classes.add(kind.upper())
+                        if e.get("test_id"):
+                            repro_defect_ids.add(str(e.get("test_id")))
             except Exception:
                 pass
         try:
@@ -400,17 +418,11 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 rev = red_rec.get("evidence") or {}
                 red_plan_hash = rev.get("plan_sha256")
                 if red_plan_hash and red_plan_hash != expected_plan_hash:
-                    failed_binding = True
-                    err_msg = "RED defect evidence is bound to a different plan hash"
-                    checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
-                    reasons.append(err_msg)
+                    binding_errors.append("RED defect evidence is bound to a different plan hash")
                 pre_fix_snap = rev.get("pre_fix_delivery_snapshot_sha256")
                 if pre_fix_snap and pre_fix_snap == snapshot:
                     if any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE", "COMPOSE_UI", "XML_UI") for s in (policy.get("surfaces") or [])):
-                        failed_binding = True
-                        err_msg = "final delivery snapshot matches RED pre-fix snapshot; no code fix was applied"
-                        checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
-                        reasons.append(err_msg)
+                        binding_errors.append("final delivery snapshot matches RED pre-fix snapshot; no code fix was applied")
                 for t in rev.get("failed_tests") or []:
                     if isinstance(t, dict):
                         if t.get("test_name"):
@@ -421,7 +433,6 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             pass
 
         # Validate that defects captured in RED do not remain failing in GREEN and were executed
-        failed_binding = False
         if repro_defect_ids:
             unit_test_rec, ut_err = _validate_artifact(store, snapshot, change_set, run_id, "unit_tests", harness_version)
             if unit_test_rec and ut_err is None:
@@ -429,13 +440,10 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 new_regs = set(ut_ev.get("new_regressions") or [])
                 still_failing = repro_defect_ids & new_regs
                 if still_failing:
-                    failed_binding = True
-                    err_msg = f"RED defect(s) still failing in GREEN verification: {', '.join(sorted(still_failing))}"
-                    checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
-                    reasons.append(err_msg)
+                    binding_errors.append(f"RED defect(s) still failing in GREEN verification: {', '.join(sorted(still_failing))}")
 
                 executed_tests = ut_ev.get("executed_tests")
-                if not failed_binding and executed_tests is not None and isinstance(executed_tests, list):
+                if executed_tests is not None and isinstance(executed_tests, list):
                     executed_set = set(executed_tests)
                     executed_clean = {t.replace("#", ".").strip() for t in executed_set}
                     executed_methods = {t.split(".")[-1] for t in executed_clean if "." in t}
@@ -453,20 +461,20 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
 
                     executed_any = any(_was_executed(did) for did in repro_defect_ids)
                     if not executed_any:
-                        failed_binding = True
-                        err_msg = f"RED defect(s) not executed in GREEN verification run: {', '.join(sorted(repro_defect_ids))}"
-                        checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
-                        reasons.append(err_msg)
+                        binding_errors.append(f"RED defect(s) not executed in GREEN verification run: {', '.join(sorted(repro_defect_ids))}")
 
-        if not failed_binding:
-            if has_repro:
-                checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present and resolved for BUG task"})
-            elif plan.get("test_strategy") in ("none", "") and (repro_classes or not any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE") for s in (policy.get("surfaces") or []))):
-                checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable test-bound RED reproduction exempted (non-code surface or alternate reproduction declared)"})
-            else:
-                err_msg = "applicable BUG task requires bound RED reproduction/failing-test evidence before fix"
-                checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
-                reasons.append(err_msg)
+        if binding_errors:
+            for b_err in binding_errors:
+                checks.append({"name": "red_evidence", "status": "FAIL", "detail": b_err})
+                reasons.append(b_err)
+        elif has_repro:
+            checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present and resolved for BUG task"})
+        elif plan.get("test_strategy") in ("none", "") and (repro_classes or not any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE") for s in (policy.get("surfaces") or []))):
+            checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable test-bound RED reproduction exempted (non-code surface or alternate reproduction declared)"})
+        else:
+            err_msg = "missing executable RED test failure evidence: applicable BUG task requires bound RED reproduction/failing-test evidence before fix"
+            checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})
+            reasons.append(err_msg)
 
     reviewers = set(policy.get("reviewers") or [])
     review_record: dict | None = None
@@ -511,18 +519,33 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
                 if severity in ("HIGH", "CRITICAL") or sensitive:
                     for rep in evidence.get("reports") or []:
-                        prov = str(rep.get("provenance") or "")
                         rev_name = str(rep.get("reviewer") or "")
-                        if prov == "lead_agent_recorded_verdict":
+                        if not rep.get("independent_execution_verified"):
                             err_msg = (
-                                f"reviewer {rev_name} self-certified by lead agent without "
-                                f"independent reviewer response is forbidden for {severity} severity changes"
+                                f"reviewer {rev_name} lacks verified independent execution proof "
+                                f"(self-certified by lead agent / independent_execution_verified=false) required for {severity} severity changes"
                             )
                             reasons.append(err_msg)
                             checks[-1]["status"] = "FAIL"
                             checks[-1]["detail"] = err_msg
                             break
-                        if prov == "subagent_execution":
+                        proof = rep.get("execution_proof") or {}
+                        if proof.get("task_id") and (proof.get("task_id") != plan.get("task_id") or proof.get("run_id") != run_id):
+                            err_msg = f"reviewer {rev_name} execution proof task/run mismatch"
+                            reasons.append(err_msg)
+                            checks[-1]["status"] = "FAIL"
+                            checks[-1]["detail"] = err_msg
+                            break
+                        if proof.get("package_sha256"):
+                            pkg = str(proof.get("package_sha256") or "").lower()
+                            exp_pkg = str(evidence.get("package_sha256") or "").lower()
+                            if not (pkg.startswith(exp_pkg[:12]) or exp_pkg[:12].startswith(pkg)):
+                                err_msg = f"reviewer {rev_name} execution proof package hash mismatch"
+                                reasons.append(err_msg)
+                                checks[-1]["status"] = "FAIL"
+                                checks[-1]["detail"] = err_msg
+                                break
+                        if rep.get("provenance") == "subagent_execution" or proof.get("proof_kind") == "ANTIGRAVITY_SUBAGENT_TRANSCRIPT":
                             receipt_file = task_directory / "reviewer-dispatches" / f"{rev_name}.json"
                             if not receipt_file.is_file():
                                 err_msg = f"reviewer {rev_name} provenance claims subagent_execution but dispatch receipt is missing"
@@ -534,6 +557,13 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                                 rc = read_json(receipt_file)
                                 if rc.get("schema_version") != 1 or rc.get("reviewer") != rev_name or rc.get("task_id") != plan.get("task_id") or rc.get("run_id") != run_id:
                                     err_msg = f"reviewer {rev_name} dispatch receipt does not match active task/run"
+                                    reasons.append(err_msg)
+                                    checks[-1]["status"] = "FAIL"
+                                    checks[-1]["detail"] = err_msg
+                                    break
+                                expected_rc_hash = canonical_sha256({k: v for k, v in rc.items() if k != "receipt_sha256"})
+                                if expected_rc_hash != rc.get("receipt_sha256"):
+                                    err_msg = f"reviewer {rev_name} dispatch receipt SHA-256 is invalid"
                                     reasons.append(err_msg)
                                     checks[-1]["status"] = "FAIL"
                                     checks[-1]["detail"] = err_msg

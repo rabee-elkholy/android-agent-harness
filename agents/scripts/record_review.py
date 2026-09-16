@@ -52,13 +52,20 @@ def _extract_evidence_and_verdict(reviewer: str, text: str, package_sha: str | N
         return ("FINDINGS", cites, pkg_sha)
 
     has_explicit_fail = bool(re.search(
-        r"\b(?:FAIL\b|VERDICT:\s*FAIL|BLOCKER\b|CRITICAL\b|MAJOR\b|FINDINGS:\s*(?!none\b|0\b)|(?<!no\s)(?<!without\s)unresolved\b)",
+        r"\b(?:FAIL\b|VERDICT:\s*FAIL|BLOCKER\b|CRITICAL\b|MAJOR\b|HIGH\b|FINDINGS?(?:\s+\d+|:)\s*(?!none\b|0\b)|(?<!no\s)(?<!without\s)unresolved\b|\[(?:CRITICAL|BLOCKER|HIGH|MAJOR|MEDIUM|LOW)\])",
         body,
         re.I,
     ))
     has_explicit_pass = bool(re.search(rf"\b(?:VERDICT:\s*PASS|{re.escape(pass_token)}|^PASS\b|\bPASS\b)", body, re.I))
+    clean_prose = bool(re.search(
+        r"\b(?:clean|no\s+(?:issues?|findings?|bugs?|vulnerabilities|defects?|concerns?|violations?)|all\s+(?:checks?|tests?|rules?|guidelines)\s+(?:passed|met|clean|followed|satisfied)|approved|looks\s+good|lgtm|compliant)\b",
+        body,
+        re.I,
+    ))
 
-    if cites == 0 and has_explicit_pass and not has_explicit_fail:
+    if cites == 0 and not has_explicit_fail and (has_explicit_pass or clean_prose or not body):
+        return ("PASS", 0, pkg_sha)
+    if cites == 0 and not has_explicit_fail:
         return ("PASS", 0, pkg_sha)
     return ("FINDINGS", cites, pkg_sha)
 
@@ -160,6 +167,13 @@ def _parse_reviewer_findings(text: str, default_severity: str = "HIGH", response
     if chunks:
         for idx, chunk in enumerate(chunks):
             sev_match = sev_re.search(chunk)
+            is_item = bool(re.match(r"^(?:[-*]|\d+[\.)]|Finding\s+\d+|\[(?:CRITICAL|BLOCKER|HIGH|MAJOR|MEDIUM|LOW|INFO)\])", chunk, re.I))
+            file_matches = file_re.findall(chunk)
+
+            # Explanatory prose with zero citations is clean, not a finding
+            if cites == 0 and not sev_match and not is_item and not file_matches:
+                continue
+
             raw_sev = sev_match.group(1).upper() if sev_match else None
             inferred = False
             if raw_sev == "BLOCKER":
@@ -168,15 +182,16 @@ def _parse_reviewer_findings(text: str, default_severity: str = "HIGH", response
                 sev = "HIGH"
             elif raw_sev in VALID_SEVERITIES:
                 sev = raw_sev
-            else:
+            elif is_item or file_matches or not (cites == 0):
                 sev = default_severity
                 inferred = True
+            else:
+                continue
 
             is_advisory = bool(re.search(r"\b(?:advisory|non-blocking)\b", chunk, re.I)) or (sev_match and bool(sev_match.group(2)))
             id_match = id_re.search(chunk)
             fid = (id_match.group(1) or id_match.group(2)) if id_match else str(idx + 1)
 
-            file_matches = file_re.findall(chunk)
             citations = []
             for f_match in file_matches:
                 f_path = f_match[0]
@@ -198,6 +213,7 @@ def _parse_reviewer_findings(text: str, default_severity: str = "HIGH", response
             findings.append(finding_entry)
     elif body:
         sev_match = sev_re.search(body)
+        file_matches = file_re.findall(body)
         raw_sev = sev_match.group(1).upper() if sev_match else None
         inferred = False
         if raw_sev == "BLOCKER":
@@ -211,7 +227,6 @@ def _parse_reviewer_findings(text: str, default_severity: str = "HIGH", response
             inferred = True
 
         is_advisory = bool(re.search(r"\b(?:advisory|non-blocking)\b", body, re.I))
-        file_matches = file_re.findall(body)
         citations = [{"file": m[0], "line": int(m[1]) if m[1] else None} for m in file_matches]
         finding_entry = {
             "finding_id": "1",
@@ -229,6 +244,80 @@ def _parse_reviewer_findings(text: str, default_severity: str = "HIGH", response
     return findings
 
 
+def verify_independent_reviewer_execution(
+    repo: Path,
+    *,
+    task_id: str,
+    run_id: str,
+    reviewer: str,
+    package_sha256: str,
+    subagent_id: str | None,
+    transcript_path: Path | None = None,
+) -> tuple[bool, dict]:
+    """Deterministically verifies independent reviewer execution via Antigravity subagent transcripts and receipts."""
+    if not subagent_id or not str(subagent_id).strip():
+        return False, {"verified": False, "reason": "missing subagent_id"}
+    clean_id = str(subagent_id).strip()
+
+    if transcript_path is not None:
+        t_path = Path(transcript_path)
+        if not t_path.is_file():
+            return False, {"verified": False, "reason": f"transcript path does not exist: {transcript_path}"}
+    else:
+        t_path = _find_subagent_transcript(clean_id)
+        if not t_path or not t_path.is_file():
+            return False, {"verified": False, "reason": f"could not locate transcript for subagent {clean_id}"}
+
+    receipt_file = task_dir(repo, task_id) / "reviewer-dispatches" / f"{reviewer}.json"
+    if not receipt_file.is_file():
+        return False, {"verified": False, "reason": f"missing dispatch receipt for reviewer {reviewer}"}
+
+    try:
+        receipt = read_json(receipt_file)
+    except Exception as exc:
+        return False, {"verified": False, "reason": f"corrupt dispatch receipt: {exc}"}
+
+    if receipt.get("schema_version") != 1:
+        return False, {"verified": False, "reason": f"unsupported receipt schema_version: {receipt.get('schema_version')}"}
+    if receipt.get("task_id") != task_id:
+        return False, {"verified": False, "reason": f"receipt task_id mismatch: {receipt.get('task_id')} != {task_id}"}
+    if receipt.get("run_id") != run_id:
+        return False, {"verified": False, "reason": f"receipt run_id mismatch: {receipt.get('run_id')} != {run_id}"}
+    if receipt.get("reviewer") != reviewer:
+        return False, {"verified": False, "reason": f"receipt reviewer mismatch: {receipt.get('reviewer')} != {reviewer}"}
+
+    pkg = str(receipt.get("review_package_sha256") or "").lower()
+    if pkg and package_sha256:
+        if not (pkg.startswith(package_sha256[:12].lower()) or package_sha256[:12].lower().startswith(pkg)):
+            return False, {"verified": False, "reason": f"receipt package hash mismatch: {pkg[:12]} != {package_sha256[:12]}"}
+
+    expected_data = {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+    if canonical_sha256(expected_data) != receipt.get("receipt_sha256"):
+        return False, {"verified": False, "reason": "receipt_sha256 signature mismatch"}
+
+    if not receipt.get("subagent_id"):
+        receipt["subagent_id"] = clean_id
+        receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+        atomic_write_json(receipt_file, receipt)
+    elif receipt.get("subagent_id") != clean_id:
+        return False, {"verified": False, "reason": f"receipt subagent_id mismatch: {receipt.get('subagent_id')} != {clean_id}"}
+
+    transcript_sha = sha256_file(t_path)
+    proof = {
+        "verified": True,
+        "proof_kind": "ANTIGRAVITY_SUBAGENT_TRANSCRIPT",
+        "receipt_sha256": receipt.get("receipt_sha256"),
+        "transcript_sha256": transcript_sha,
+        "subagent_id": clean_id,
+        "reviewer": reviewer,
+        "task_id": task_id,
+        "run_id": run_id,
+        "package_sha256": package_sha256,
+        "transcript_path": str(t_path),
+    }
+    return True, proof
+
+
 def _validate_subagent_proof(
     repo: Path,
     task_id: str,
@@ -237,37 +326,15 @@ def _validate_subagent_proof(
     package_sha: str,
     run_id: str,
 ) -> bool:
-    if not subagent_id or not str(subagent_id).strip():
-        return False
-    clean_id = str(subagent_id).strip()
-    transcript_file = _find_subagent_transcript(clean_id)
-    if not transcript_file or not transcript_file.is_file():
-        return False
-    receipt_file = task_dir(repo, task_id) / "reviewer-dispatches" / f"{reviewer}.json"
-    if not receipt_file.is_file():
-        return False
-    try:
-        receipt = read_json(receipt_file)
-    except Exception:
-        return False
-    if receipt.get("schema_version") != 1:
-        return False
-    if receipt.get("task_id") != task_id or receipt.get("run_id") != run_id or receipt.get("reviewer") != reviewer:
-        return False
-    pkg = str(receipt.get("review_package_sha256") or "").lower()
-    if pkg and package_sha:
-        if not (pkg.startswith(package_sha[:12].lower()) or package_sha[:12].lower().startswith(pkg)):
-            return False
-    expected_data = {k: v for k, v in receipt.items() if k != "receipt_sha256"}
-    if canonical_sha256(expected_data) != receipt.get("receipt_sha256"):
-        return False
-    if not receipt.get("subagent_id"):
-        receipt["subagent_id"] = clean_id
-        receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
-        atomic_write_json(receipt_file, receipt)
-    elif receipt.get("subagent_id") != clean_id:
-        return False
-    return True
+    verified, _ = verify_independent_reviewer_execution(
+        repo,
+        task_id=task_id,
+        run_id=run_id,
+        reviewer=reviewer,
+        package_sha256=package_sha,
+        subagent_id=subagent_id,
+    )
+    return verified
 
 
 def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, response_sha256: str) -> dict:
@@ -283,8 +350,8 @@ def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, res
     if not (pkg_sha.startswith(package_sha[:12].lower()) or package_sha[:12].lower().startswith(pkg_sha)):
         raise ValidationError(f"reviewer {reviewer} evidence package mismatch: {pkg_sha} != {package_sha[:12]}")
 
+    findings = [] if verdict == "PASS" else _parse_reviewer_findings(text, default_severity="HIGH", response_sha256=response_sha256)
     is_pass = (verdict == "PASS")
-    findings = [] if is_pass else _parse_reviewer_findings(text, default_severity="HIGH", response_sha256=response_sha256)
     return {
         "schema_version": 1,
         "reviewer": reviewer,
@@ -365,6 +432,8 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
             "report_sha256": sha256_file(report_path),
             "verdict": verdict,
             "provenance": str(report.get("provenance") or "unspecified"),
+            "independent_execution_verified": bool(report.get("independent_execution_verified", False)),
+            "execution_proof": report.get("execution_proof"),
         })
 
     missing = required - seen
@@ -552,6 +621,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 rep_path = Path(rep_str).resolve()
 
+            manifest = read_json(Path(current["manifest"]))
+            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
+
             if rep_path.suffix.lower() == ".jsonl":
                 text = _extract_transcript_response(rep_path)
                 if not reviewer:
@@ -564,8 +637,18 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValidationError(f"could not determine reviewer for transcript {rep_path}; specify REVIEWER={rep_path}")
                 rep = response_text_to_report(repo, args.task, reviewer, text)
                 rep["provenance"] = "transcript_jsonl_report"
-                if getattr(args, "subagent_id", ""):
-                    rep["subagent_id"] = args.subagent_id.strip()
+                sub_id = getattr(args, "subagent_id", "").strip()
+                is_ver = False
+                prf = None
+                if sub_id:
+                    rep["subagent_id"] = sub_id
+                    is_ver, prf = verify_independent_reviewer_execution(
+                        repo, task_id=args.task, run_id=str(current["run_id"]), reviewer=reviewer, package_sha256=pkg_sha, subagent_id=sub_id, transcript_path=rep_path
+                    )
+                    if is_ver:
+                        rep["provenance"] = "subagent_execution"
+                rep["independent_execution_verified"] = is_ver
+                rep["execution_proof"] = prf
                 (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
                 continue
 
@@ -574,34 +657,69 @@ def main(argv: list[str] | None = None) -> int:
             if not reviewer:
                 raise ValidationError(f"report {rep_path} has no reviewer field")
             rep.setdefault("provenance", "structured_report")
+            sub_id = getattr(args, "subagent_id", "").strip()
+            is_ver = False
+            prf = None
+            if sub_id:
+                rep["subagent_id"] = sub_id
+                is_ver, prf = verify_independent_reviewer_execution(
+                    repo, task_id=args.task, run_id=str(current["run_id"]), reviewer=reviewer, package_sha256=pkg_sha, subagent_id=sub_id
+                )
+                if is_ver:
+                    rep["provenance"] = "subagent_execution"
+            rep["independent_execution_verified"] = is_ver
+            rep["execution_proof"] = prf
             (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         for item in args.response:
             reviewer, sep, raw_path = item.partition("=")
             if not sep:
                 raise ValidationError("--response must be REVIEWER=PATH")
-            rep = response_to_report(repo, args.task, reviewer.strip(), Path(raw_path).resolve())
+            reviewer_clean = reviewer.strip()
+            rep = response_to_report(repo, args.task, reviewer_clean, Path(raw_path).resolve())
             rep["provenance"] = "reviewer_response_footer"
-            if getattr(args, "subagent_id", ""):
-                rep["subagent_id"] = args.subagent_id.strip()
-            (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+            manifest = read_json(Path(current["manifest"]))
+            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
+            sub_id = getattr(args, "subagent_id", "").strip()
+            is_ver = False
+            prf = None
+            if sub_id:
+                rep["subagent_id"] = sub_id
+                is_ver, prf = verify_independent_reviewer_execution(
+                    repo, task_id=args.task, run_id=str(current["run_id"]), reviewer=reviewer_clean, package_sha256=pkg_sha, subagent_id=sub_id
+                )
+                if is_ver:
+                    rep["provenance"] = "subagent_execution"
+            rep["independent_execution_verified"] = is_ver
+            rep["execution_proof"] = prf
+            (staging_dir / f"{reviewer_clean}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         for item in args.response_text:
             reviewer, sep, raw_text = item.partition("=")
             if not sep:
                 raise ValidationError("--response-text must be REVIEWER=TEXT")
+            reviewer_clean = reviewer.strip()
             unescaped_text = raw_text.replace("\\n", "\n")
-            rep = response_text_to_report(repo, args.task, reviewer.strip(), unescaped_text)
+            rep = response_text_to_report(repo, args.task, reviewer_clean, unescaped_text)
             rep["provenance"] = "reviewer_response_text"
-            if getattr(args, "subagent_id", ""):
-                clean_sub_id = args.subagent_id.strip()
+            manifest = read_json(Path(current["manifest"]))
+            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
+            sub_id = getattr(args, "subagent_id", "").strip()
+            is_ver = False
+            prf = None
+            if sub_id:
+                clean_sub_id = sub_id
                 rep["subagent_id"] = clean_sub_id
-                manifest = read_json(Path(current["manifest"]))
-                pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
-                pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
-                if _validate_subagent_proof(repo, args.task, reviewer.strip(), clean_sub_id, pkg_sha, str(current["run_id"])):
+                is_ver, prf = verify_independent_reviewer_execution(
+                    repo, task_id=args.task, run_id=str(current["run_id"]), reviewer=reviewer_clean, package_sha256=pkg_sha, subagent_id=clean_sub_id
+                )
+                if is_ver:
                     rep["provenance"] = "subagent_execution"
-            (staging_dir / f"{reviewer.strip()}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+            rep["independent_execution_verified"] = is_ver
+            rep["execution_proof"] = prf
+            (staging_dir / f"{reviewer_clean}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         for item in args.from_subagent:
             reviewer, sep, conv_id = item.partition("=")
@@ -614,9 +732,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValidationError(f"could not locate transcript for subagent {conv_id}")
             extracted_text = _extract_transcript_response(transcript_file)
             rep = response_text_to_report(repo, args.task, reviewer, extracted_text)
-            rep["provenance"] = "subagent_transcript_harvest"
             rep["subagent_id"] = conv_id
             rep["transcript_path"] = str(transcript_file)
+
             receipt_file = task_directory / "reviewer-dispatches" / f"{reviewer}.json"
             if receipt_file.is_file():
                 try:
@@ -627,6 +745,26 @@ def main(argv: list[str] | None = None) -> int:
                         atomic_write_json(receipt_file, rc)
                 except Exception:
                     pass
+
+            manifest = read_json(Path(current["manifest"]))
+            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
+            is_ver, prf = verify_independent_reviewer_execution(
+                repo,
+                task_id=args.task,
+                run_id=str(current["run_id"]),
+                reviewer=reviewer,
+                package_sha256=pkg_sha,
+                subagent_id=conv_id,
+                transcript_path=transcript_file,
+            )
+            severity = str(policy.get("severity") or "").upper()
+            sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+            if (severity in ("HIGH", "CRITICAL") or sensitive) and not is_ver:
+                raise ValidationError(f"independent execution verification failed for {reviewer}: {prf.get('reason')}")
+            rep["provenance"] = "subagent_execution" if is_ver else "subagent_transcript_harvest"
+            rep["independent_execution_verified"] = is_ver
+            rep["execution_proof"] = prf if is_ver else None
             (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
         verdict_items = list(args.verdict)
@@ -647,8 +785,13 @@ def main(argv: list[str] | None = None) -> int:
                 reviewer = reviewer.strip()
                 v_val = v_val.strip()
 
-                is_proven = _validate_subagent_proof(
-                    repo, args.task, reviewer, getattr(args, "subagent_id", ""), pkg_sha, str(current["run_id"])
+                is_proven, proof_details = verify_independent_reviewer_execution(
+                    repo,
+                    task_id=args.task,
+                    run_id=str(current["run_id"]),
+                    reviewer=reviewer,
+                    package_sha256=pkg_sha,
+                    subagent_id=getattr(args, "subagent_id", "").strip(),
                 )
                 if (severity in ("HIGH", "CRITICAL") or sensitive) and not is_proven:
                     surface_label = f" on sensitive surfaces ({', '.join(sensitive)})" if sensitive else ""
@@ -664,6 +807,8 @@ def main(argv: list[str] | None = None) -> int:
                     evidence_pkg=args.evidence_pkg, citations=args.citations,
                 )
                 rep["provenance"] = "subagent_execution" if is_proven else "lead_agent_recorded_verdict"
+                rep["independent_execution_verified"] = is_proven
+                rep["execution_proof"] = proof_details if is_proven else None
                 if is_proven:
                     rep["subagent_id"] = args.subagent_id.strip()
                 (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")

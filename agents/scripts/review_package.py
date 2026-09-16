@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, atomic_write_bytes, canonical_sha256, read_json, sha256_file, utc_now  # noqa: E402
+from delivery_manifest import build_task_diff
 from workflow import assert_active_run_fresh, state_root, task_dir  # noqa: E402
 
 
@@ -122,10 +123,10 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     plan = read_json(directory / "plan.json")
     manifest = read_json(Path(current["manifest"]))
     policy = read_json(Path(current["policy"]))
-    changes = manifest.get("changes") or []
+    changes = manifest.get("task_changes") if "task_changes" in manifest else (manifest.get("changes") or [])
     paths = sorted({str(item.get("path") or "") for item in changes if item.get("path")} | {str(item.get("old_path") or "") for item in changes if item.get("old_path")})
     secret_paths = {rel for rel in paths if any(marker in rel.lower() for marker in SECRET_PATH_MARKERS)}
-    diff = _git_diff(repo, [rel for rel in paths if rel not in secret_paths])
+    diff = build_task_diff(repo, task_id, manifest)
     extras: list[str] = []
     for rel in sorted(secret_paths):
         extras.append(f"\n## REDACTED FILE {rel}\n[Content redacted because the path may contain secrets.]\n")

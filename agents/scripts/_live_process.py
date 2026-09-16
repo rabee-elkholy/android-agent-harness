@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -15,6 +16,8 @@ import time
 from collections.abc import Callable, Sequence
 
 DEFAULT_HEARTBEAT_SEC = 10.0
+
+_open_step_line: bool = False
 
 
 def enable_line_buffered_stdio() -> None:
@@ -27,27 +30,45 @@ def enable_line_buffered_stdio() -> None:
                 pass
 
 
-def live_print(msg: str, *, err: bool = False) -> None:
+def live_print(msg: str, *, err: bool = False, end: str = "\n") -> None:
+    global _open_step_line
     stream = sys.stderr if err else sys.stdout
+    if _open_step_line and not (msg.startswith("[Done]") or msg.startswith("[Fail]")):
+        try:
+            print("", file=stream, flush=True)
+        except Exception:
+            pass
+        _open_step_line = False
     try:
-        print(msg, file=stream, flush=True)
+        print(msg, file=stream, end=end, flush=True)
     except UnicodeEncodeError:
         encoding = getattr(stream, "encoding", None) or "ascii"
         safe_msg = msg.encode(encoding, errors="replace").decode(encoding)
-        print(safe_msg, file=stream, flush=True)
+        print(safe_msg, file=stream, end=end, flush=True)
+    _open_step_line = (end != "\n")
 
 
 @contextlib.contextmanager
-def step_progress(name: str):  # type: ignore[return]
+def step_progress(name: str, step: int | None = None, total: int | None = None):  # type: ignore[return]
     """Context manager that prints step progress markers with elapsed time."""
-    live_print(f"[IN PROGRESS] {name}")
+    clean_name = name.strip()
+    m = re.match(r"^\[(\d+/\d+)\]\s*(.*)$", clean_name)
+    if m:
+        formatted = f"{m.group(2)} [{m.group(1)}]"
+    elif step is not None and total is not None:
+        formatted = f"{clean_name} [{step}/{total}]"
+    else:
+        formatted = clean_name
+
+    live_print(f"{formatted} ", end="")
     t0 = time.time()
     try:
         yield
         elapsed = time.time() - t0
-        live_print(f"[DONE] {name} ({elapsed:.1f}s)")
+        live_print(f"[Done] ({elapsed:.1f}s)")
     except Exception:
-        live_print(f"[FAIL] {name}")
+        elapsed = time.time() - t0
+        live_print(f"[Fail] ({elapsed:.1f}s)")
         raise
 
 
@@ -148,3 +169,87 @@ def run_streaming(
 
     code = proc.returncode if proc.returncode is not None else 1
     return code, "".join(raw_chunks), echoed
+
+
+def enable_subtask_test_runner() -> None:
+    """Configures unittest to report every test as an indented, formatted subtask."""
+    import unittest
+    import unittest.runner
+
+    class SubtaskTestResult(unittest.TextTestResult):
+        def __init__(self, stream, descriptions, verbosity):
+            super().__init__(stream, descriptions, verbosity)
+            self.dots = False
+            self.showAll = False
+            self.test_idx = 0
+            self.total = 0
+            self._t0 = 0.0
+
+        def startTest(self, test):
+            super().startTest(test)
+            self.test_idx += 1
+            self._t0 = time.time()
+            name = test.id().split(".")[-1]
+            tot_str = f"/{self.total}" if self.total else ""
+            line = f"  {name} [{self.test_idx}{tot_str}] "
+            try:
+                self.stream.write(line)
+            except UnicodeEncodeError:
+                enc = getattr(self.stream, "encoding", None) or "ascii"
+                self.stream.write(line.encode(enc, errors="replace").decode(enc))
+            self.stream.flush()
+
+        def _finish_subtask(self, status: str, el: float) -> None:
+            line = f"[{status}] ({el:.1f}s)\n"
+            try:
+                self.stream.write(line)
+            except UnicodeEncodeError:
+                enc = getattr(self.stream, "encoding", None) or "ascii"
+                self.stream.write(line.encode(enc, errors="replace").decode(enc))
+            self.stream.flush()
+
+        def addSuccess(self, test):
+            super().addSuccess(test)
+            el = time.time() - self._t0
+            self._finish_subtask("Done", el)
+
+        def addFailure(self, test, err):
+            super().addFailure(test, err)
+            el = time.time() - self._t0
+            self._finish_subtask("Fail", el)
+
+        def addError(self, test, err):
+            super().addError(test, err)
+            el = time.time() - self._t0
+            self._finish_subtask("Fail", el)
+
+        def addSkip(self, test, reason):
+            super().addSkip(test, reason)
+            el = time.time() - self._t0
+            self._finish_subtask("Skip", el)
+
+
+    class SubtaskTestRunner(unittest.TextTestRunner):
+        resultclass = SubtaskTestResult
+
+        def __init__(self, *args, **kwargs):
+            kwargs["buffer"] = True
+            super().__init__(*args, **kwargs)
+
+        def _makeResult(self):
+            res = super()._makeResult()
+            res.buffer = True
+            return res
+
+        def run(self, test):
+            self.buffer = True
+            result = self._makeResult()
+            result.total = test.countTestCases()
+            test(result)
+            result.printErrors()
+            return result
+
+    unittest.TextTestRunner = SubtaskTestRunner
+    unittest.runner.TextTestRunner = SubtaskTestRunner
+
+

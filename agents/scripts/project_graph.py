@@ -145,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
                 live_print(f"[*] {heal_msg}")
             if not node:
                 live_print(f"[!] Symbol '{args.find}' not found in code graph.")
+                live_print("[*] Tip: '--find' searches code AST symbols (classes, methods, composables). For feature packages use '--feature <name>', or for UI string resources use '--string <text>'.")
                 return 1
             matches = [node]
 

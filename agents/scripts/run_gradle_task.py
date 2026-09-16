@@ -71,10 +71,11 @@ def with_plain_console(task_args: list[str]) -> list[str]:
     return ["--console=plain", *task_args]
 
 
-def gradle_wrapper() -> Path:
-    """Repo-root wrapper for Windows (`gradlew.bat`) and macOS/Linux (`./gradlew`)."""
-    unix = REPO_ROOT / "gradlew"
-    win = REPO_ROOT / "gradlew.bat"
+def gradle_wrapper(repo: Path | None = None) -> Path:
+    """Repo wrapper for Windows (`gradlew.bat`) and macOS/Linux (`./gradlew`)."""
+    root = Path(repo).resolve() if repo else REPO_ROOT
+    unix = root / "gradlew"
+    win = root / "gradlew.bat"
     if os.name == "nt":
         if win.is_file():
             return win
@@ -85,15 +86,24 @@ def gradle_wrapper() -> Path:
             return unix
         if win.is_file():
             return win
-    raise FileNotFoundError(f"No Gradle wrapper in {REPO_ROOT} (expected gradlew or gradlew.bat)")
+    raise FileNotFoundError(f"No Gradle wrapper in {root} (expected gradlew or gradlew.bat)")
 
 
 def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
     """Run the unix gradlew through bash, falling back to sh, then direct exec."""
+    if os.name == "nt" and wrapper.is_file():
+        try:
+            b = wrapper.read_bytes()
+            if b"\r\n" in b:
+                wrapper.write_bytes(b.replace(b"\r\n", b"\n"))
+        except Exception:
+            pass
+    target = "./gradlew" if wrapper.name == "gradlew" else str(wrapper)
     for shell in ("bash", "sh"):
         if shutil.which(shell):
-            return [shell, str(wrapper), *gradle_args]
+            return [shell, target, *gradle_args]
     return [str(wrapper), *gradle_args]
+
 
 
 def test_failure_only(task: str, raw_log: str) -> bool:
@@ -114,7 +124,7 @@ def test_failure_only(task: str, raw_log: str) -> bool:
     )
 
 
-def run_gradle(task_args: list[str], *, outcome: dict | None = None) -> int:
+def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path | str | None = None) -> int:
     enable_line_buffered_stdio()
     if outcome is not None:
         outcome.clear()
@@ -122,6 +132,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None) -> int:
     gradle_args = with_plain_console(task_args)
     task_label = task_args[0] if task_args else "gradle"
     artifact_name = gate_artifact_name(task_label)
+    run_root = Path(cwd).resolve() if cwd else REPO_ROOT
 
     def record(status: str, exit_code: int, env_class: str = "", detail: str = "", **extra) -> None:
         write_gate_result(artifact_name, {
@@ -136,7 +147,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None) -> int:
         })
 
     try:
-        wrapper = gradle_wrapper()
+        wrapper = gradle_wrapper(run_root)
     except FileNotFoundError as exc:
         live_print(f"[!] {exc}", err=True)
         verdict = FailureVerdict(CLASS_ENV, str(exc))
@@ -163,7 +174,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None) -> int:
     with step_progress(f"Gradle: {task_label}"):
         code, raw_log, echoed = run_streaming(
             gradle_cmd,
-            cwd=str(REPO_ROOT),
+            cwd=str(run_root),
             env=env,
             heartbeat_sec=10.0,
             should_echo=should_echo_gradle,

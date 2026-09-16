@@ -121,13 +121,14 @@ def module_id(value: str) -> str:
     return ":" + ":".join(parts) if parts else ":"
 
 
-def changed_modules(repo: Path, manifest: dict) -> list[str]:
+def changed_modules(repo: Path, manifest: dict, task_only: bool = True) -> list[str]:
     modules = sorted(
         ((module_id(item), module_id(item).lstrip(":").replace(":", "/")) for item in discover_android_modules(repo)),
         key=lambda item: len(item[1]), reverse=True,
     )
     found: set[str] = set()
-    for change in manifest.get("changes") or []:
+    changes = (manifest.get("task_changes") if (task_only and "task_changes" in manifest) else manifest.get("changes")) or []
+    for change in changes:
         for raw in (change.get("path"), change.get("old_path")):
             rel = str(raw or "").strip("/")
             if not rel:

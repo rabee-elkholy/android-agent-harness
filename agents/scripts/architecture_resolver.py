@@ -46,44 +46,115 @@ def _find_family_by_id(families: list[dict[str, Any]], family_id: str | None) ->
     return None
 
 
+def _is_path_prefix(prefix_str: str, full_str: str) -> bool:
+    p_parts = prefix_str.replace("\\", "/").strip("/").split("/")
+    f_parts = full_str.replace("\\", "/").strip("/").split("/")
+    if not p_parts or not f_parts:
+        return False
+    return p_parts == f_parts[:len(p_parts)]
+
+
+def _is_path_component_submatch(sub_path: str, full_path: str) -> bool:
+    s_parts = sub_path.replace("\\", "/").strip("/").split("/")
+    f_parts = full_path.replace("\\", "/").strip("/").split("/")
+    if not s_parts or not f_parts or len(s_parts) > len(f_parts):
+        return False
+    for i in range(len(f_parts) - len(s_parts) + 1):
+        if f_parts[i : i + len(s_parts)] == s_parts:
+            return True
+    return False
+
+
+def _common_path_parts_len(path1: str, path2: str) -> int:
+    parts1 = path1.replace("\\", "/").strip("/").split("/")
+    parts2 = path2.replace("\\", "/").strip("/").split("/")
+    common_len = 0
+    for p1, p2 in zip(parts1, parts2):
+        if p1 == p2:
+            common_len += 1
+        else:
+            break
+    return common_len
+
+
 def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) -> dict[str, Any] | None:
     norm_scope = target_scope.replace("\\", "/").strip("/")
     if not norm_scope:
         return families[0] if len(families) == 1 else None
 
     # 1. Exact exemplar match (screen / component level)
+    exemplar_matches: list[dict[str, Any]] = []
     for f in families:
         for ex in f.get("exemplars") or []:
-            if norm_scope in ex or ex in norm_scope:
-                return f
+            ex_norm = ex.replace("\\", "/").strip("/")
+            if norm_scope == ex_norm or _is_path_prefix(norm_scope, ex_norm) or _is_path_prefix(ex_norm, norm_scope):
+                if f not in exemplar_matches:
+                    exemplar_matches.append(f)
+    if len(exemplar_matches) == 1:
+        return exemplar_matches[0]
+    elif len(exemplar_matches) > 1:
+        return None
 
     # 2. Scope match via resolve_feature_scope
     resolved_scope = resolve_feature_scope(norm_scope)
     if resolved_scope:
+        scope_matches: list[dict[str, Any]] = []
         for f in families:
             for sc in f.get("scopes") or []:
-                if sc and (resolved_scope == sc or resolved_scope.startswith(sc) or sc.startswith(resolved_scope)):
-                    return f
+                sc_norm = sc.replace("\\", "/").strip("/")
+                if sc_norm and (_is_path_prefix(sc_norm, resolved_scope) or _is_path_prefix(resolved_scope, sc_norm)):
+                    if f not in scope_matches:
+                        scope_matches.append(f)
+        if len(scope_matches) == 1:
+            return scope_matches[0]
+        elif len(scope_matches) > 1:
+            return None
 
-    # 3. Package / feature slice match
-    best_match = None
-    longest_prefix = 0
+    # 2.5 Path component submatch (no prefix clash)
+    component_matches: list[dict[str, Any]] = []
     for f in families:
+        matched_f = False
         for ex in f.get("exemplars") or []:
-            ex_dir = "/".join(ex.split("/")[:-1])
-            scope_dir = "/".join(norm_scope.split("/")[:-1])
-            if ex_dir and scope_dir:
-                pfx = os.path.commonprefix([ex_dir, scope_dir])
-                if len(pfx) > longest_prefix and "/" in pfx:
-                    longest_prefix = len(pfx)
-                    best_match = f
-        for sc in f.get("scopes") or []:
-            if norm_scope.startswith(sc) or sc.startswith(norm_scope):
-                if len(sc) > longest_prefix:
-                    longest_prefix = len(sc)
-                    best_match = f
+            if _is_path_component_submatch(norm_scope, ex):
+                matched_f = True
+                break
+        if not matched_f:
+            for sc in f.get("scopes") or []:
+                if _is_path_component_submatch(norm_scope, sc):
+                    matched_f = True
+                    break
+        if matched_f and f not in component_matches:
+            component_matches.append(f)
+    if len(component_matches) == 1:
+        return component_matches[0]
+    elif len(component_matches) > 1:
+        return None
 
-    return best_match
+    # 3. Path component based prefix match
+    best_matches: list[dict[str, Any]] = []
+    max_depth = 0
+    for f in families:
+        f_best_depth = 0
+        for ex in f.get("exemplars") or []:
+            depth = _common_path_parts_len(ex, norm_scope)
+            if depth > f_best_depth:
+                f_best_depth = depth
+        for sc in f.get("scopes") or []:
+            depth = _common_path_parts_len(sc, norm_scope)
+            if depth > f_best_depth:
+                f_best_depth = depth
+
+        if f_best_depth > max_depth:
+            max_depth = f_best_depth
+            best_matches = [f]
+        elif f_best_depth == max_depth and f_best_depth > 0:
+            if f not in best_matches:
+                best_matches.append(f)
+
+    if max_depth > 0 and len(best_matches) == 1:
+        return best_matches[0]
+
+    return None
 
 
 def resolve_architecture_contract(
@@ -93,7 +164,10 @@ def resolve_architecture_contract(
     target_scope: str = "",
     target_family_id: str | None = None,
     planning_depth: str = "BOUNDED",
+    intent: str | None = None,
 ) -> dict[str, Any]:
+    if intent is not None:
+        architecture_intent = intent
     """Deterministically resolves the architecture contract for a task.
 
     Returns a dict with:
@@ -177,8 +251,9 @@ def resolve_architecture_contract(
             target_family = None
 
     elif mode == "NEW":
+        matched_scope_family = _find_family_for_scope(families, target_scope)
         preferred_id = policy.get("preferred_new_code_family") if policy else None
-        target_id = target_family_id or preferred_id
+        target_id = target_family_id or preferred_id or (matched_scope_family.get("id") if matched_scope_family else None)
         if not target_id:
             return {
                 "status": STATUS_DECISION_REQUIRED,
@@ -187,7 +262,7 @@ def resolve_architecture_contract(
                 "brief_markdown": None,
                 "message": "No preferred or explicit target architecture family configured for new code. Developer decision required.",
             }
-        target_family = _find_family_by_id(families, target_id)
+        target_family = matched_scope_family if (matched_scope_family and matched_scope_family.get("id") == target_id) else _find_family_by_id(families, target_id)
         if not target_family:
             return {
                 "status": STATUS_DECISION_REQUIRED,

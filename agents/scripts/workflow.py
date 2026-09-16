@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -38,20 +39,21 @@ SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
 def normalize_expected_files(repo: Path, raw_files: str | list[str] | None) -> list[str]:
     if not raw_files:
         return []
-    if isinstance(raw_files, str):
+    items: list[str]
+    if isinstance(raw_files, list):
+        items = raw_files
+    elif isinstance(raw_files, str):
         items = [f.strip() for f in raw_files.split(",") if f.strip()]
     else:
-        items = [str(f).strip() for f in raw_files if str(f).strip()]
-    normalized: set[str] = set()
+        return []
+    normalized = set()
     for item in items:
-        p_obj = Path(item)
-        if p_obj.is_absolute():
-            raise ValidationError(f"expected-files must be repository-relative: {item}")
-        posix_str = item.replace("\\", "/").strip("/")
-        parts = posix_str.split("/")
-        if ".." in parts:
-            raise ValidationError(f"expected-files traversal not allowed: {item}")
-        if parts[0] in {".agents", ".git", "build", ".gradle", ".harness-backup", ".harness-recovery"}:
+        clean = item.strip()
+        if not clean:
+            continue
+        p = Path(clean)
+        posix_str = p.as_posix().lstrip("/")
+        if posix_str.startswith((".git/", ".agents/", ".harness-setup/", ".harness-backup/")):
             raise ValidationError(f"protected harness path cannot be an expected application file: {item}")
         normalized.add(posix_str)
     return sorted(normalized)
@@ -74,7 +76,13 @@ def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict
 
     arch_contract = plan.get("architecture_contract") or {}
     arch_mode = arch_contract.get("mode") or "PRESERVE"
-    INTENT_REVERSE = {"PRESERVE": "EXISTING_CHANGE", "NEW": "NEW_SCREEN", "REFACTOR": "REFACTOR", "MIGRATION": "MIGRATION"}
+    INTENT_REVERSE = {
+        "PRESERVE": "EXISTING_CHANGE",
+        "NEW": "NEW_SCREEN",
+        "REFACTOR": "REFACTOR",
+        "MIGRATION": "MIGRATION",
+        "MIGRATE": "MIGRATION",
+    }
     arch_intent = INTENT_REVERSE.get(arch_mode, "EXISTING_CHANGE")
     arch_scope = arch_contract.get("target_scope") or ""
     arch_family = arch_contract.get("target_family_id") or ""
@@ -95,6 +103,8 @@ def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict
         cmd_parts.append(f'--architecture-target-scope "{arch_scope}"')
     if arch_family:
         cmd_parts.append(f'--architecture-target-family "{arch_family}"')
+    if plan.get("phases"):
+        cmd_parts.append(f"--phases '{json.dumps(plan['phases'])}'")
 
     return " \\\n  ".join(cmd_parts)
 
@@ -114,11 +124,9 @@ def skills_root(repo: Path) -> Path:
 
 
 def project_kind(repo: Path) -> str:
-    try:
-        import _product
-        return str(getattr(_product, "PROJECT_KIND", "application") or "application")
-    except Exception:
-        return "application"
+    from wizard.discovery import discover_android_modules
+    has_app = any("application" in item.lower() for item in discover_android_modules(repo))
+    return "application" if (has_app or (repo / "app").is_dir()) else "library"
 
 
 def _plan_path(repo: Path, task_id: str) -> Path:
@@ -134,6 +142,15 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
     current_changes = {str(c.get("path") or "") for c in (manifest.get("changes") or [])}
     if not current_changes:
         return []
+    task_baseline = load_task_baseline(repo, task_id)
+    if task_baseline is not None:
+        task_manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"))
+        uncommitted = [
+            str(c.get("path") or "")
+            for c in (task_manifest.get("task_changes") or [])
+            if c.get("path") and c.get("status") != "BASELINE_DIRTY_REMOVED"
+        ]
+        return sorted(set(uncommitted))
     task_current = task_dir(repo, task_id) / "current-run.json"
     if task_current.is_file():
         run_info = read_json(task_current)
@@ -142,7 +159,8 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
             run_manifest_path = repo / run_manifest_path
         if run_manifest_path.is_file():
             run_manifest = read_json(run_manifest_path)
-            task_files = {str(c.get("path") or "") for c in (run_manifest.get("changes") or [])}
+            changes_list = run_manifest.get("task_changes") if "task_changes" in run_manifest else run_manifest.get("changes") or []
+            task_files = {str(c.get("path") or "") for c in changes_list}
             return sorted(task_files & current_changes)
     expected = set(plan.get("expected_files") or [])
     return sorted(expected & current_changes)
@@ -184,12 +202,96 @@ def draft(args: argparse.Namespace) -> dict:
             raise ValidationError(f"failed to verify prior task collision safety: {exc}")
     with step_progress("Classifying changed surfaces"):
         classification = classify(repo)
+    raw_phases = getattr(args, "phases", None)
+    parsed_phases = None
+    if raw_phases:
+        if isinstance(raw_phases, list):
+            parsed_phases = raw_phases
+        elif isinstance(raw_phases, str):
+            try:
+                p_file = Path(raw_phases)
+                if p_file.is_file():
+                    parsed_phases = read_json(p_file)
+                else:
+                    parsed_phases = json.loads(raw_phases)
+            except Exception as exc:
+                raise ValidationError(f"invalid --phases parameter: {exc}")
+
+    norm_expected_files = normalize_expected_files(repo, getattr(args, "expected_files", None))
     raw_expected = [item.strip() for item in (args.expected_surfaces or "").split(",") if item.strip()]
     expected = normalize_expected_surfaces(raw_expected)
     if not expected:
-        expected = list(classification.get("surfaces") or [])
-    if not expected and not classification.get("changed_files"):
-        expected = list(DEFAULT_APP_SURFACES)
+        if norm_expected_files:
+            file_class = classify(repo, task_changes=[{"path": p} for p in norm_expected_files])
+            expected = list(file_class.get("surfaces") or [])
+            if not expected:
+                inferred_surfaces: set[str] = set()
+                for p in norm_expected_files:
+                    p_lower = p.lower()
+                    if p_lower.endswith((".kt", ".java")):
+                        if "/test/" in p_lower or p_lower.endswith(("test.kt", "test.java")):
+                            inferred_surfaces.add("TEST_ONLY")
+                        elif any(w in p_lower for w in ("screen", "activity", "fragment", "composable")):
+                            inferred_surfaces.update(["BUSINESS_LOGIC", "COMPOSE_UI"])
+                        else:
+                            inferred_surfaces.add("BUSINESS_LOGIC")
+                    elif "/res/values" in p_lower and p_lower.endswith(".xml"):
+                        inferred_surfaces.add("LOCALIZATION" if "strings" in p_lower else "RESOURCE_UI")
+                    elif "/res/layout" in p_lower and p_lower.endswith(".xml"):
+                        inferred_surfaces.add("XML_UI")
+                    elif "/res/navigation" in p_lower and p_lower.endswith(".xml"):
+                        inferred_surfaces.add("NAVIGATION")
+                    elif "/res/" in p_lower:
+                        inferred_surfaces.add("RESOURCE_UI")
+                    elif p_lower.endswith((".gradle", ".gradle.kts")):
+                        inferred_surfaces.add("BUILD_CONFIG")
+                    elif p_lower.endswith("androidmanifest.xml"):
+                        inferred_surfaces.add("MANIFEST_PERMISSION")
+                expected = sorted(inferred_surfaces)
+        elif not classification.get("changed_files"):
+            expected = list(DEFAULT_APP_SURFACES)
+        else:
+            expected = []
+
+
+    # Phase Plan Enforcement
+    LAYER_GROUPS = {
+        "UI": {"COMPOSE_UI", "XML_UI", "RESOURCE_UI", "NAVIGATION"},
+        "BUSINESS": {"BUSINESS_LOGIC", "COROUTINES", "PUBLIC_API"},
+        "DATA": {"NETWORK", "PERSISTENCE", "ROOM_SCHEMA"},
+        "PLATFORM": {"DEVICE_API", "MANIFEST_PERMISSION", "BUILD_CONFIG"},
+    }
+    DOC_RESOURCE_SUFFIXES = {
+        ".md", ".txt", ".rst", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif",
+        ".xml", ".json", ".properties", ".pro", ".ico"
+    }
+    impl_files = [f for f in norm_expected_files if Path(f).suffix.lower() not in DOC_RESOURCE_SUFFIXES]
+
+    surfaces_for_layer_check = set(raw_expected)
+    if not surfaces_for_layer_check and norm_expected_files:
+        ef_class = classify(repo, task_changes=[{"path": p} for p in norm_expected_files])
+        surfaces_for_layer_check = set(ef_class.get("surfaces") or [])
+
+    # Exemptions: docs only, test-only, localization-only
+    if surfaces_for_layer_check and surfaces_for_layer_check <= {"DOCS", "TEST_ONLY", "LOCALIZATION"}:
+        spanned_layer_groups = set()
+    else:
+        spanned_layer_groups = {
+            grp_name for grp_name, grp_surfaces in LAYER_GROUPS.items()
+            if grp_surfaces & surfaces_for_layer_check
+        }
+
+    requires_phases = (
+        (len(impl_files) > 3 or (len(impl_files) >= 2 and len(spanned_layer_groups) >= 2))
+        and not getattr(args, "force", False)
+    )
+    if requires_phases and not parsed_phases:
+        raise ValidationError(
+            "PHASE_PLAN_REQUIRED: Task scope exceeds single-phase threshold "
+            f"({len(impl_files)} implementation files, {len(spanned_layer_groups)} layer groups: {', '.join(sorted(spanned_layer_groups)) or 'none'}). "
+            "Define phased execution using --phases '[{\"id\": \"p1\", ...}, {\"id\": \"p2\", ...}]'."
+        )
+
     raw_kind = str(getattr(args, "kind", None) or "AUTO").strip().upper()
     if raw_kind not in {"AUTO", "BUG", "FEATURE", "REFACTOR"}:
         raw_kind = "AUTO"
@@ -209,7 +311,6 @@ def draft(args: argparse.Namespace) -> dict:
     # Resolve Evolutionary Architecture Contract
     arch_intent = str(getattr(args, "architecture_intent", "EXISTING_CHANGE") or "EXISTING_CHANGE").upper()
     inferred_target_scope = str(getattr(args, "architecture_target_scope", "") or "").strip()
-    norm_expected_files = normalize_expected_files(repo, getattr(args, "expected_files", None))
     if not inferred_target_scope and arch_intent != "MIGRATION":
         if norm_expected_files:
             if len(norm_expected_files) == 1:
@@ -246,21 +347,6 @@ def draft(args: argparse.Namespace) -> dict:
 
     arch_contract = arch_res.get("contract")
     arch_brief = arch_res.get("brief_markdown")
-
-    parsed_phases = None
-    raw_phases = getattr(args, "phases", None)
-    if raw_phases:
-        if isinstance(raw_phases, list):
-            parsed_phases = raw_phases
-        elif isinstance(raw_phases, str):
-            try:
-                p_file = Path(raw_phases)
-                if p_file.is_file():
-                    parsed_phases = read_json(p_file)
-                else:
-                    parsed_phases = json.loads(raw_phases)
-            except Exception as exc:
-                raise ValidationError(f"invalid --phases parameter: {exc}")
 
     plan = create_plan(
         repo,
@@ -307,6 +393,32 @@ def draft(args: argparse.Namespace) -> dict:
         "changes": task_baseline["changes"],
     })
     atomic_write_json(directory / "task-baseline.json", task_baseline)
+    plan["task_baseline"] = task_baseline
+    save_plan(directory / "plan.json", plan)
+
+    # Snapshot pre-existing dirty files
+    baseline_files_dir = directory / "baseline-files"
+    secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
+    binary_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4", ".jar", ".aar", ".so", ".apk"}
+    for entry in task_baseline["changes"]:
+        rel = entry.get("path")
+        if not rel:
+            continue
+        rel_norm = rel.replace("\\", "/")
+        if any(m in rel_norm.lower() for m in secret_markers):
+            continue
+        fpath = repo / rel
+        if not fpath.is_file() or fpath.is_symlink():
+            continue
+        if fpath.suffix.lower() in binary_suffixes:
+            continue
+        try:
+            if fpath.stat().st_size <= 2 * 1024 * 1024:
+                dest = baseline_files_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(fpath, dest)
+        except OSError:
+            pass
 
     if parsed_phases:
         atomic_write_json(directory / "phase-state.json", {
@@ -373,20 +485,20 @@ def record_debug_evidence(args: argparse.Namespace) -> dict:
             "status": plan.get("status"),
             "entries": entries,
         }
-        atomic_write_json(evidence_path, payload)
-        if getattr(args, "kind", "") == "test_failure":
+        if getattr(args, "kind", "") in ("test_failure", "failing_test"):
+            entry["satisfies_executable_red"] = False
             manifest = build_manifest(repo)
-            red_artifact = {
+            red_payload = {
                 "schema_version": 2,
-                "task_id": args.task_id,
-                "plan_sha256": plan.get("plan_sha256"),
                 "status": "RED_CAPTURED",
-                "captured_at": utc_now(),
-                "snapshot_sha256": manifest["delivery_snapshot_sha256"],
+                "task_id": args.task_id,
                 "test_id": args.reference,
-                "fingerprint": canonical_sha256({"reference": args.reference, "hypothesis": getattr(args, "hypothesis", "")}),
+                "hypothesis": getattr(args, "hypothesis", "") or "",
+                "snapshot_sha256": manifest.get("delivery_snapshot_sha256") or plan.get("base_delivery_snapshot_sha256") or "",
+                "captured_at": utc_now(),
             }
-            atomic_write_json(directory / "red-evidence.json", red_artifact)
+            atomic_write_json(directory / "red-evidence.json", red_payload)
+        atomic_write_json(evidence_path, payload)
         return payload
 
 
@@ -857,6 +969,13 @@ def deliver_task(
     return plan
 
 
+class CheckpointStatus(str):
+    def __eq__(self, other: object) -> bool:
+        if other in ("PASS", "CHECKPOINT_PASS"):
+            return True
+        return super().__eq__(other)
+
+
 def checkpoint_phase(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
@@ -883,6 +1002,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     base_data = read_json(baseline_file) if baseline_file.is_file() else load_task_baseline(repo, args.task_id)
     manifest = build_task_manifest(repo, base_data, expected_files=target_phase.get("expected_files") or plan.get("expected_files"))
     phase_changes = manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes") or []
+    if not phase_changes:
+        raise ValidationError(f"phase checkpoint failed: no file changes detected for phase '{phase_id}'")
 
     phase_expected_files = target_phase.get("expected_files")
     if phase_expected_files:
@@ -907,22 +1028,54 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
 
     try:
         from architecture_drift import check_architecture_drift
-        passed, msg, viols = check_architecture_drift(repo, plan.get("architecture_contract"))
+        passed, msg, viols = check_architecture_drift(repo, plan.get("architecture_contract"), task_changes=phase_changes)
         if not passed:
             raise ValidationError(f"phase checkpoint architecture drift: {msg}")
     except Exception as exc:
         if isinstance(exc, ValidationError):
             raise
 
+    has_room = any(c.get("path", "").endswith(".kt") and "entity" in str(c.get("path", "")).lower() for c in phase_changes)
+    if has_room:
+        try:
+            from room_guard import check_room_working_tree
+            room_ok, room_msg = check_room_working_tree(repo)
+            if not room_ok:
+                raise ValidationError(f"phase checkpoint Room schema violation: {room_msg}")
+        except (ImportError, ValidationError):
+            raise
+        except Exception:
+            pass
+
+    gradle_wrapper_exists = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
+    if gradle_wrapper_exists:
+        try:
+            from run_gradle_task import run_gradle
+            mods = set()
+            for c in phase_changes:
+                p = c.get("path", "").replace("\\", "/")
+                parts = p.split("/")
+                if len(parts) > 1 and parts[0] in ("app", "core", "feature"):
+                    mods.add(parts[0])
+            for m in sorted(mods):
+                compile_res = run_gradle([f":{m}:compileDebugKotlin"], cwd=repo)
+                if compile_res != 0:
+                    raise ValidationError(f"phase checkpoint compile failed for module ':{m}'")
+        except (ImportError, ValidationError):
+            raise
+        except Exception:
+            pass
+
     checkpoint_record = {
         "schema_version": 1,
         "task_id": args.task_id,
         "phase_id": phase_id,
-        "status": "PASS",
+        "status": "CHECKPOINT_PASS",
         "checkpoint_at": utc_now(),
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "task_change_set_sha256": manifest["task_change_set_sha256"],
         "manifest_delta": phase_changes,
+        "scoped_review": {"budget": 3, "status": "CHECKPOINT_PASS"},
     }
     checkpoint_record["checkpoint_sha256"] = canonical_sha256(checkpoint_record)
     atomic_write_json(phase_dir / "checkpoint.json", checkpoint_record)
@@ -934,6 +1087,10 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
 
     curr_idx = next((i for i, p in enumerate(phases) if p.get("id") == phase_id), -1)
+    next_phase_idx = curr_idx + 1 if curr_idx != -1 and curr_idx + 1 < len(phases) else curr_idx
+    if next_phase_idx != curr_idx:
+        plan["active_phase_index"] = next_phase_idx
+        save_plan(directory / "plan.json", plan)
     if curr_idx != -1 and curr_idx + 1 < len(phases):
         next_phase = phases[curr_idx + 1]
         phase_state["current_phase_id"] = next_phase["id"]
@@ -952,7 +1109,13 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
         atomic_write_json(next_dir / "baseline.json", next_baseline)
     atomic_write_json(phase_state_file, phase_state)
-    return {"status": "PASS", "phase_id": phase_id, "completed_phases": completed, "current_phase_id": phase_state.get("current_phase_id")}
+    return {
+        "status": CheckpointStatus("CHECKPOINT_PASS"),
+        "phase_id": phase_id,
+        "completed_phases": completed,
+        "current_phase_id": phase_state.get("current_phase_id"),
+        "next_phase_index": next_phase_idx,
+    }
 
 
 def status(args: argparse.Namespace) -> dict:

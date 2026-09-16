@@ -231,8 +231,28 @@ def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
     return False
 
 
+def _handle_status(args: argparse.Namespace) -> int:
+    policy = str(DEVICE_TARGET_POLICY or ("allow" if ALLOW_EMULATOR else "physical-only"))
+    all_devices = matching_adb_serials(policy="allow")
+    policy_devices = matching_adb_serials(policy=policy)
+    live_print(f"[*] Target policy: {policy}")
+    if not all_devices:
+        live_print("[-] No connected Android devices or emulators detected via adb.")
+        return 0
+    live_print(f"[+] Detected devices ({len(all_devices)}):")
+    for s in all_devices:
+        kind = "emulator" if adb_serial_is_emulator(s) else "physical"
+        eligible = "eligible" if s in policy_devices else "ineligible (policy)"
+        live_print(f"    - {s} ({kind}, {eligible})")
+    if policy_devices:
+        live_print(f"[*] Default resolved target: {policy_devices[0]}")
+    else:
+        live_print(f"[!] No devices match current policy ({policy})")
+    return 0
+
+
 def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
-    if getattr(args, "force", False) or args.action in ("uninstall", "signoff"):
+    if getattr(args, "force", False) or args.action in ("uninstall", "signoff", "status"):
         return None
     try:
         from mutation_guard import active_plan
@@ -462,7 +482,7 @@ def _handle_signoff(args: argparse.Namespace) -> int:
 def main() -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
-    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff"])
+    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff", "status"])
     parser.add_argument("-s", "--serial", default=None, help="Physical device serial")
     parser.add_argument(
         "--flavor",
@@ -486,6 +506,9 @@ def main() -> int:
     prereq_err = _check_device_prerequisites(args)
     if prereq_err is not None:
         return prereq_err
+
+    if args.action == "status":
+        return _handle_status(args)
 
     if args.action == "signoff":
         return _handle_signoff(args)

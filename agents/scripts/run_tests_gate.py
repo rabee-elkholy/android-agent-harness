@@ -217,8 +217,7 @@ def main(argv=None) -> int:
         try:
             from mutation_guard import active_plan
             from _vnext_common import canonical_sha256, read_json, utc_now, write_json
-            from delivery_manifest import is_delivery_relevant, load_task_baseline
-            from _repo_files import changed_files
+            from delivery_manifest import build_manifest, build_task_manifest, is_delivery_relevant, load_task_baseline
 
             plan = active_plan(REPO)
             task_id = str(plan.get("task_id") or "")
@@ -231,28 +230,34 @@ def main(argv=None) -> int:
             task_d.mkdir(parents=True, exist_ok=True)
 
             baseline = load_task_baseline(REPO, task_id)
-            if baseline:
-                base_change_paths = {c.get("path") for c in baseline.get("changes", []) if c.get("path")}
-                current_changes = [c.rel_posix for c in changed_files(REPO, include_untracked=True)]
-                new_files = set(current_changes) - base_change_paths
-                has_fix_code = any(
-                    is_delivery_relevant(p) and not (
-                        "/test/" in f"/{p.lower()}"
-                        or "/androidtest/" in f"/{p.lower()}"
-                        or p.lower().endswith("test.kt")
-                        or p.lower().endswith("test.java")
-                    )
-                    for p in new_files
-                )
-                if has_fix_code:
-                    live_print("[FAIL] Cannot capture RED evidence: application source modifications already detected before capture.", err=True)
-                    return 1
+            live_manifest = build_manifest(REPO)
+            task_manifest = build_task_manifest(REPO, baseline, expected_files=plan.get("expected_files"))
+            pre_red_changes = task_manifest.get("task_changes") or []
+
+            def is_test_repro_path(p: str) -> bool:
+                pl = f"/{p.replace('\\', '/').lower().strip('/')}"
+                if "/src/test/" in pl or "/src/androidtest/" in pl:
+                    return True
+                if pl.endswith("test.kt") or pl.endswith("test.java") or pl.endswith("tests.kt") or pl.endswith("tests.java"):
+                    return True
+                if "/test/" in pl or "/androidtest/" in pl:
+                    return True
+                return False
+
+            has_fix_code = any(
+                is_delivery_relevant(c.get("path", "")) and not is_test_repro_path(c.get("path", ""))
+                for c in pre_red_changes
+            )
+            if has_fix_code:
+                live_print("[FAIL] Cannot capture RED evidence: application source modifications already detected before capture.", err=True)
+                return 1
 
             current_p = task_d / "current-run.json"
             current_run = read_json(current_p) if current_p.is_file() else {}
-            pre_fix_snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
-            pre_fix_change_set = str(current_run.get("change_set_sha256") or "")
-            pre_fix_task_delta = str(baseline.get("baseline_sha256") or "") if baseline else ""
+            pre_fix_snapshot = live_manifest["delivery_snapshot_sha256"]
+            pre_fix_change_set = live_manifest["change_set_sha256"]
+            pre_fix_task_change_set = task_manifest.get("task_change_set_sha256") or ""
+            baseline_sha = str(baseline.get("baseline_sha256") or "") if baseline else ""
             plan_sha = str(plan.get("plan_sha256") or "")
 
             failed_records = [
@@ -264,18 +269,20 @@ def main(argv=None) -> int:
                 for item in failed
             ]
             red_payload = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "task_id": task_id,
                 "plan_sha256": plan_sha,
                 "captured_at": utc_now(),
+                "producer": "run_tests_gate",
                 "pre_fix_delivery_snapshot_sha256": pre_fix_snapshot,
                 "pre_fix_change_set_sha256": pre_fix_change_set,
-                "pre_fix_task_delta_sha256": pre_fix_task_delta,
+                "pre_fix_task_change_set_sha256": pre_fix_task_change_set,
+                "baseline_sha256": baseline_sha,
                 "reproduction_kind": "FAILING_TEST",
+                "gradle_task": task,
                 "failed_tests": failed_records,
-                "producer": "run_tests_gate",
             }
-            red_payload["red_sha256"] = canonical_sha256(red_payload)
+            red_payload["red_sha256"] = canonical_sha256({k: v for k, v in red_payload.items() if k != "red_sha256"})
             write_json(task_d / "red-evidence.json", red_payload)
             write_json(task_d / "debug-evidence.json", {"schema_version": 1, "task_id": task_id, "entries": repro_entries})
 
@@ -298,7 +305,7 @@ def main(argv=None) -> int:
                         "red_payload": red_payload,
                     },
                 )
-            live_print(f"[+] Recorded {len(repro_entries)} RED test reproduction entries (schema 2).")
+            live_print(f"[+] Recorded {len(repro_entries)} RED test reproduction entries (schema 3).")
             return 0
         except Exception as exc:
             live_print(f"[FAIL] Could not record RED evidence: {exc}", err=True)

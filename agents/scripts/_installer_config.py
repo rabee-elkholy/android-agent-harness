@@ -73,7 +73,7 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
         "DEVICE_VERIFICATION_MODE": answers.get("device_verification") or "manual_only",
         "ENFORCEMENT_TIER": enforcement["overall"],
         "ENFORCEMENT_BY_HOST": enforcement["by_host"],
-        "MODEL_CALL_BUDGET": int(answers.get("model_call_budget") or 8),
+        "MODEL_CALL_BUDGET": int(answers.get("model_call_budget") or 10),
         "ALLOW_MODEL_ESCALATION": bool(answers.get("allow_model_escalation", False)),
     }
     lines = ['"""Generated project identity and vNext policy configuration."""', "from __future__ import annotations", ""]

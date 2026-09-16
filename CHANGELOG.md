@@ -4,6 +4,55 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.41] - 2026-09-16
+
+### Stabilization: Reviewer Independence, RED->GREEN Defect Binding, True Task-Delta Isolation, Phase Checkpoints & Recovery
+
+- **Independent Reviewer Execution & Cryptographic Provenance (`record_review.py`, `final_verifier.py`, `workflow.py`)**:
+  - Implemented strict independent reviewer verification (`verify_independent_reviewer_execution`) ensuring all code reviews for HIGH/CRITICAL severity or sensitive surfaces originate from verified subagent executions rather than self-certification.
+  - Required execution proof containing verified subagent transcripts, task and run ID validation, package SHA-256 integrity, and cryptographic HMAC-SHA256 dispatch receipt signatures.
+  - Enforced fail-closed verification in `final_verifier.py` with explicit rejection reasons when independence proofs or dispatch receipts are missing, tampered, or mismatched.
+- **Defect Binding & Temporal RED->GREEN Protocol (`run_tests_gate.py`, `final_verifier.py`, `workflow.py`)**:
+  - Eliminated synthetic RED evidence generation; required real test failure execution captured via `run_tests_gate.py --capture-red`.
+  - Implemented canonical Schema 3 `red-evidence.json` with live capture manifests and pre-RED task-delta checks preventing RED evidence capture once implementation fix files are modified.
+  - Enforced defect binding in `final_verifier.py`: verified defect test failures in RED evidence, validated `red_sha256` signatures, confirmed subsequent GREEN passing state, and eliminated verifier reset bugs by accumulating binding validation errors.
+- **True Task-Delta Isolation & Snapshot Diffing (`delivery_manifest.py`, `plan_authority.py`, `review_package.py`, `preflight_check.py`, `workflow.py`)**:
+  - Excluded pre-existing baseline dirty files from task manifests and unified diffs; added `BASELINE_DIRTY_REMOVED` tracking for baseline files removed during task execution.
+  - Preserved `task_delta_mode = "TASK_ISOLATED"` even on empty task deltas.
+  - Implemented `build_task_diff` generating unified diffs strictly against baseline file snapshots or git HEAD for accurate review package and verification generation.
+  - Integrated baseline snapshots into `.agents/state/tasks/<id>/baseline-files/` during task drafting.
+- **Real Phase Checkpoints & Multi-Layer Group Enforcements (`workflow.py`)**:
+  - Aligned phase requirement criteria strictly with specification: enforces phases when implementation files > 3 or when implementation files >= 2 spanning 2+ architectural layer groups (`UI`, `BUSINESS`, `DATA`, `PLATFORM`).
+  - Hardened `workflow.py checkpoint-phase` with phase-scoped change tracking, architectural drift validation, Room schema checks, targeted Gradle compilation, and scoped review recording.
+- **Architecture Resolution & Drift Correctness (`project_context.py`, `architecture_resolver.py`, `architecture_drift.py`, `workflow.py`)**:
+  - Replaced naive string prefix matching with component-aware path hierarchy checks in `architecture_resolver.py`; returns `STATUS_DECISION_REQUIRED` upon ambiguous multi-family ties.
+  - Fixed undefined plan references in `architecture_drift.py` and incorporated XML layout and navigation graph validation for NEW features.
+  - Corrected remediation command mappings (`MIGRATE -> MIGRATION`) and preserved multi-phase structures across drift remediation.
+- **Transaction Journal-Driven Interrupted-Update Recovery (`lifecycle.py`)**:
+  - Implemented multi-stage transactional recovery journal (`PREPARED`, `OLD_ENGINE_MOVED`, `NEW_ENGINE_INSTALLED`, `STATE_RESTORED`, `CONTEXT_RESTORED`, `APP_SNAPSHOT_VERIFIED`, `OWNERSHIP_WRITTEN`, `COMPLETED`, `ROLLED_BACK`).
+  - Hardened `recover_interrupted_update` to require `stage == "OWNERSHIP_WRITTEN"` and target version matching before completing forward; otherwise rolls back to previous engine backup.
+- **Source Fingerprint & Context Freshness Performance (`project_context.py`)**:
+  - Implemented Version 2 source fingerprinting combining Git HEAD commit SHA, harness config digest, and dirty architecture file hashes.
+  - Added fast-path context status check returning `CURRENT` with zero AST extraction overhead when the source fingerprint is intact and fresh.
+- **Public Command Contract Accuracy & Tooling Modernization (`command-contract.md`, `run_device.py`, rules/templates)**:
+  - Added `status` action to `run_device.py` for headless device connection inspection.
+  - Standardized command contract field names (`surfaces`, `severity`, `reviewers`, `gates`) and documented all `workflow.py draft` parameters and `checkpoint-phase`.
+  - Replaced obsolete `adb devices` instructions with `run_device.py status` across all rules, agent definitions, and triage workflows.
+- **Setup Architecture Preference Neutrality (`wizard/questions.py`)**:
+  - Removed modernity bias scoring favoring Jetpack Compose over XML Views; options are ordered neutrally (current default first, then alphabetical, then none).
+  - Flags single HIGH-confidence family as `(Recommended)`; marks `none` as `(Recommended)` when zero or multiple high-confidence architectures exist.
+- **Adversarial Regression Test Suite (`_stabilization_v41_selftest.py`, `harness_cli.py`)**:
+  - Added comprehensive 15th selftest suite `_stabilization_v41_selftest.py` covering reviewer independence, RED->GREEN defect binding, true task isolation, phase checkpoints, architecture resolution, update recovery, and contract accuracy.
+- **Model Call Budget Increase & Zero-Polling Invariants (`_product.py`, `review_policy.py`, `_installer_config.py`)**:
+  - Increased default model call budget from 8 to 10 across product defaults, policy resolution, and installer templates.
+- **Live Subtask Progress & Zero-Dot Formatter (`_live_process.py`, `harness_cli.py`)**:
+  - Implemented real-time subtask reporting indented under selftest suite headers: `  {name} [{i}/{total}] [Done] ({elapsed}s)` on completion without name duplication.
+  - Enabled stdout buffering in `SubtaskTestRunner` to prevent orphan `[Done]` lines and eliminate unittest dot noise (`...`).
+- **Review Ingestion Prose Recognition (`record_review.py`)**:
+  - Treated explanatory prose with zero code citations (`cites=0`) as non-blocking clean PASS results instead of generating artificial HIGH-severity findings.
+- **Project Graph UX Guidance (`project_graph.py`)**:
+  - Added helpful diagnostic tips directing users to `--feature` or `--string` when AST symbol lookup misses.
+
 ## [1.0.40] - 2026-09-16
 
 ### Daily Developer Hardening: Public Contract, Task Baseline Isolation, Compose UI Classification, Architecture Evolution & Reviewer Independence

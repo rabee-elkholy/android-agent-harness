@@ -696,14 +696,33 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_adb_core_selftest.py", "_env_codes_selftest.py", "_performance_selftest.py",
             "_android_scenarios_selftest.py", "_release_safety_selftest.py", "_critical_safety_selftest.py",
             "_architecture_selftest.py", "_daily_workflow_selftest.py",
+            "_stabilization_v41_selftest.py",
         )
         total = len(scripts)
         for idx, script in enumerate(scripts, 1):
             label = script.replace("_selftest.py", "").lstrip("_")
-            with _step(f"[{idx}/{total}] selftest: {label}"):
-                code = run_engine_script(kit, script, [])
+            _live(f"selftest: {label} [{idx}/{total}]")
+            t0 = time.time()
+            target = _script_root(kit) / script
+            runner_code = (
+                "import sys, os;"
+                "sys.path.insert(0, r'" + str(_script_root(kit)) + "');"
+                "from _live_process import enable_subtask_test_runner;"
+                "enable_subtask_test_runner();"
+                "import runpy; runpy.run_path(r'" + str(target) + "', run_name='__main__')"
+            )
+            proc = subprocess.run(
+                [sys.executable, "-c", runner_code],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            code = proc.returncode
+            elapsed = time.time() - t0
             if code != 0:
+                _live(f"selftest: {label} [{idx}/{total}] [Fail] ({elapsed:.1f}s)")
                 return code
+            _live(f"selftest: {label} [{idx}/{total}] [Done] ({elapsed:.1f}s)")
         _live(f"\n✅ All {total} selftest suites passed.")
         return 0
     finally:

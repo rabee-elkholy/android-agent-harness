@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import canonical_sha256  # noqa: E402
-from change_classifier import classify  # noqa: E402
+from change_classifier import CRITICAL_SURFACES, HIGH_SURFACES, classify  # noqa: E402
 from skill_router import route  # noqa: E402
 
 
@@ -57,7 +57,7 @@ def _configured_model_call_budget() -> int:
         from _product import MODEL_CALL_BUDGET
         return max(0, int(MODEL_CALL_BUDGET))
     except (ImportError, TypeError, ValueError):
-        return 8
+        return 10
 
 
 def _micro_eligible(classification: dict) -> bool:
@@ -79,7 +79,14 @@ def _micro_eligible(classification: dict) -> bool:
 
 def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE", plan: dict | None = None) -> dict:
     surfaces = set(classification.get("surfaces") or [])
+    if not surfaces and plan:
+        surfaces = set(plan.get("expected_surfaces") or plan.get("surfaces") or [])
     severity = str(classification.get("severity") or "HIGH")
+    if surfaces and severity == "LOW":
+        if set(surfaces) & CRITICAL_SURFACES:
+            severity = "CRITICAL"
+        elif set(surfaces) & HIGH_SURFACES:
+            severity = "HIGH"
     reviewers: set[str] = set()
     for surface in surfaces:
         reviewers.update(ROUTING.get(surface, set()))

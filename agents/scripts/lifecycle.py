@@ -469,33 +469,72 @@ def recover_interrupted_update(repo: Path) -> dict | None:
     except Exception:
         return None
     status = str(journal.get("status") or "")
-    if status in ("COMPLETED", "ROLLED_BACK"):
+    stage = str(journal.get("stage") or "")
+    if status in ("COMPLETED", "ROLLED_BACK") or stage in ("COMPLETED", "ROLLED_BACK"):
         return None
     prev_dirs = sorted(repo.glob(".agents.previous-*"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
     agents_dir = repo / ".agents"
+    target_version = str(journal.get("to_version") or "")
+
+    ownership_file = repo / OWNERSHIP_RELATIVE
+    ownership_valid_for_target = False
+    if ownership_file.is_file():
+        try:
+            own_data = read_json(ownership_file)
+            if own_data.get("harness_version") == target_version:
+                ownership_valid_for_target = True
+        except Exception:
+            pass
+
     is_agents_complete = (
         agents_dir.is_dir()
         and (agents_dir / "VERSION").is_file()
         and (agents_dir / "scripts" / "_product.py").is_file()
         and (agents_dir / "rules" / "harness-rules.md").is_file()
     )
-    if is_agents_complete and (repo / OWNERSHIP_RELATIVE).is_file():
+    if stage == "PREPARED":
+        journal["status"] = "ROLLED_BACK"
+        journal["stage"] = "ROLLED_BACK"
+        journal["recovered_at"] = utc_now()
+        atomic_write_json(journal_path, journal)
+        preserve_root = journal.get("preserve_root")
+        if preserve_root:
+            shutil.rmtree(repo / preserve_root, ignore_errors=True)
+        return {"status": "RECOVERED", "action": "aborted_prepared_update"}
+
+    if stage == "OWNERSHIP_WRITTEN" and ownership_valid_for_target and is_agents_complete:
         journal["status"] = "COMPLETED"
+        journal["stage"] = "COMPLETED"
         journal["recovered_at"] = utc_now()
         atomic_write_json(journal_path, journal)
         for p in prev_dirs:
             shutil.rmtree(p, ignore_errors=True)
+        preserve_root = journal.get("preserve_root")
+        if preserve_root:
+            shutil.rmtree(repo / preserve_root, ignore_errors=True)
         return {"status": "RECOVERED", "action": "completed_new_engine"}
-    if prev_dirs:
-        old = prev_dirs[0]
+    old_target = None
+    if journal.get("old_agents_path"):
+        cand = repo / str(journal["old_agents_path"])
+        if cand.is_dir():
+            old_target = cand
+    if not old_target and prev_dirs:
+        old_target = prev_dirs[0]
+
+    if old_target:
         if agents_dir.exists():
             shutil.rmtree(agents_dir, ignore_errors=True)
-        os.replace(old, agents_dir)
+        os.replace(old_target, agents_dir)
         journal["status"] = "ROLLED_BACK"
+        journal["stage"] = "ROLLED_BACK"
         journal["recovered_at"] = utc_now()
         atomic_write_json(journal_path, journal)
-        for p in prev_dirs[1:]:
-            shutil.rmtree(p, ignore_errors=True)
+        for p in prev_dirs:
+            if p != old_target:
+                shutil.rmtree(p, ignore_errors=True)
+        preserve_root = journal.get("preserve_root")
+        if preserve_root:
+            shutil.rmtree(repo / preserve_root, ignore_errors=True)
         return {"status": "RECOVERED", "action": "restored_previous_engine"}
     return None
 
@@ -588,20 +627,38 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
     old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
     journal = {
         "schema_version": 1,
+        "transaction_id": uuid.uuid4().hex,
         "status": "PREPARED",
+        "stage": "PREPARED",
         "from_version": current_version,
         "to_version": target_version,
+        "old_agents_path": str(old_agents.relative_to(repo).as_posix()),
+        "preserve_root": str(preserve_root.relative_to(repo).as_posix()),
         "backup": str(backup),
+        "ownership_before_sha256": ownership.get("ownership_sha256"),
+        "ownership_after_sha256": None,
         "legacy_reference_migrated": legacy_migrated,
         "started_at": utc_now(),
     }
     journal_path = repo / ".harness-setup" / "update-journal.json"
     atomic_write_json(journal_path, journal)
+
+    def _set_stage(st: str) -> None:
+        journal["stage"] = st
+        journal["updated_at"] = utc_now()
+        atomic_write_json(journal_path, journal)
+
     try:
         os.replace(repo / ".agents", old_agents)
+        _set_stage("OLD_ENGINE_MOVED")
+
         _install_engine(repo, kit, answers, init_context=False)
+        _set_stage("NEW_ENGINE_INSTALLED")
+
         if (old_agents / "state").is_dir():
             shutil.copytree(old_agents / "state", repo / ".agents/state", dirs_exist_ok=True)
+        _set_stage("STATE_RESTORED")
+
         _restore_preserved(repo, preserve_root, preserved)
 
         mode = str(answers.get("update_context_mode") or "preserve").lower()
@@ -635,12 +692,19 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
                         curr_pol["decision_reason"] = f"previously preferred family '{pref_family}' is no longer detected after refresh"
                         curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
                         write_architecture_policy(repo, curr_pol, overwrite=True)
+        _set_stage("CONTEXT_RESTORED")
 
         allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
         _verify_app_snapshot(repo, app_before, allowed_adapters)
+        _set_stage("APP_SNAPSHOT_VERIFIED")
+
         new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
+        journal["ownership_after_sha256"] = new_ownership.get("ownership_sha256")
+        _set_stage("OWNERSHIP_WRITTEN")
+
         _warm_project_graph(repo)
         journal["status"] = "COMPLETED"
+        _set_stage("COMPLETED")
         journal["completed_at"] = utc_now()
         atomic_write_json(journal_path, journal)
         shutil.rmtree(old_agents, ignore_errors=True)
@@ -650,6 +714,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
             os.replace(old_agents, repo / ".agents")
         _rollback_adapters(repo, backup, before)
         journal["status"] = "ROLLED_BACK"
+        journal["stage"] = "ROLLED_BACK"
         journal["rolled_back_at"] = utc_now()
         atomic_write_json(journal_path, journal)
         raise

@@ -285,45 +285,21 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             families = []
 
     if families:
-        # Score families by architectural modernity to pick the best modern default
-        def _score_arch(fam: dict) -> int:
-            score = 0
-            dims = fam.get("dimensions") or {}
-            ui = dims.get("ui_toolkit") or ""
-            host = dims.get("screen_host") or ""
-            stream = dims.get("state_stream") or ""
-            flow = dims.get("presentation_flow") or ""
-            di = dims.get("di") or ""
-            conf = fam.get("confidence") or ""
-            exs = fam.get("exemplars") or []
-            if ui == "compose":
-                score += 50
-            elif ui == "xml":
-                score += 10
-            if host == "composable":
-                score += 35
-            elif host == "fragment" and ui == "compose":
-                score += 20
-            elif host == "activity":
-                score += 10
-            elif host == "fragment":
-                score += 5
-            if stream == "stateflow":
-                score += 20
-            elif stream == "livedata":
-                score += 5
-            if flow == "unidirectional":
-                score += 15
-            if di == "hilt":
-                score += 10
-            elif di == "koin":
-                score += 8
-            if conf == "HIGH":
-                score += 20
-            elif conf == "MEDIUM":
-                score += 5
-            score += min(15, len(exs) * 3)
-            return score
+        saved_pref = None
+        if repo and isinstance(repo, Path):
+            pol_path = repo / ".agents" / "project-context" / "architecture-policy.json"
+            if pol_path.is_file():
+                try:
+                    from common import read_json
+                    pol_data = read_json(pol_path)
+                    saved_pref = pol_data.get("preferred_new_code_family") or pol_data.get("default_family")
+                except Exception:
+                    pass
+        if not saved_pref:
+            saved_pref = d.get("preferred_new_code_family") or (d.get("answers") or {}).get("preferred_new_code_family")
+
+        fam_ids = {str(fam.get("id") or "") for fam in families}
+        high_conf_fams = [fam for fam in families if fam.get("confidence") == "HIGH"]
 
         def _format_fam_label(fam: dict) -> str:
             fam_id = str(fam.get("id") or "")
@@ -371,19 +347,42 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                     ex_hint = f" — e.g. {Path(exs[0]).name}"
             return f"{fam_id} — {title}{detail_str}{ex_hint}"
 
-        sorted_fams = sorted(families, key=_score_arch, reverse=True)
-        best_fam_id = sorted_fams[0]["id"] if (_score_arch(sorted_fams[0]) >= 50) else None
+        recommended_fam_id = None
+        if saved_pref and saved_pref in fam_ids:
+            recommended_fam_id = None
+        elif len(high_conf_fams) == 1:
+            recommended_fam_id = str(high_conf_fams[0].get("id") or "")
+        elif len(high_conf_fams) == 0 and len(families) > 0:
+            sorted_by_exs = sorted(families, key=lambda f: len(f.get("exemplars") or []), reverse=True)
+            if len(sorted_by_exs) == 1 or len(sorted_by_exs[0].get("exemplars") or []) > len(sorted_by_exs[1].get("exemplars") or []):
+                recommended_fam_id = str(sorted_by_exs[0].get("id") or "")
+
+
+        other_fams = sorted(families, key=lambda f: str(f.get("id") or ""))
+        if saved_pref and saved_pref in fam_ids:
+            sorted_fams = [f for f in other_fams if str(f.get("id") or "") == saved_pref] + [
+                f for f in other_fams if str(f.get("id") or "") != saved_pref
+            ]
+        elif recommended_fam_id and any(str(f.get("id") or "") == recommended_fam_id for f in other_fams):
+            sorted_fams = [f for f in other_fams if str(f.get("id") or "") == recommended_fam_id] + [
+                f for f in other_fams if str(f.get("id") or "") != recommended_fam_id
+            ]
+        else:
+            sorted_fams = other_fams
+
 
         arch_opts = []
         for fam in sorted_fams:
             fam_id = str(fam.get("id") or "")
             lbl = _format_fam_label(fam)
-            if fam_id == best_fam_id:
+            if saved_pref and fam_id == saved_pref:
+                lbl += " (Current default)"
+            elif fam_id == recommended_fam_id:
                 lbl += " (Recommended)"
             arch_opts.append({"id": fam_id, "label": lbl})
 
         none_label = t(lang, "pref_arch_family_none") or "None / decide later"
-        if not best_fam_id:
+        if not recommended_fam_id and not (saved_pref and saved_pref in fam_ids):
             none_label += " (Recommended)"
         arch_opts.append({"id": "none", "label": none_label})
 
@@ -522,7 +521,9 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
     return _reorder_with_previous_answers(qs, repo, lang, d)
 
 
-def _reorder_with_previous_answers(qs: list[dict], repo: Path, lang: str, d: dict) -> list[dict]:
+def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str, d: dict) -> list[dict]:
+    if repo is None:
+        return qs
     ans_file = answers_path(repo)
     prev: dict = {}
     if ans_file.is_file():

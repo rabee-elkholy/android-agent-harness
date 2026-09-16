@@ -2,8 +2,8 @@
 
 Conservative, deterministic enforcement of approved task architecture contracts
 during Fast Preflight and standalone CLI checks. Detects unauthorized family transitions
-without LLM calls, without false positives, and with full support for compatibility bridges
-in NEW mode.
+without LLM calls, using conservative deterministic checks designed to minimize false positives,
+and with full support for compatibility bridges in NEW mode.
 """
 from __future__ import annotations
 
@@ -72,7 +72,13 @@ def check_architecture_drift(
         try:
             from delivery_manifest import build_task_manifest, load_task_baseline
             base_data = load_task_baseline(repo, task_id)
-            plan_exp = plan.get("expected_files") if plan else None
+            plan_exp = None
+            try:
+                from workflow import _load_plan
+                plan_obj = _load_plan(repo, task_id)
+                plan_exp = plan_obj.get("expected_files")
+            except Exception:
+                pass
             man = build_task_manifest(repo, base_data, expected_files=plan_exp)
             t_changes = man.get("task_changes") or man.get("changes") or []
             paths_set = {repo / str(c.get("path")) for c in t_changes if c.get("path")}
@@ -83,6 +89,7 @@ def check_architecture_drift(
         modified_paths = [p for p in changed_paths(repo=repo) if p.is_file()]
 
     modified_kt_files = [p for p in modified_paths if p.suffix == ".kt"]
+    modified_xml_files = [p for p in modified_paths if p.suffix == ".xml"]
 
     # Resolve dimensions
     source_dims = contract.get("source_dimensions")
@@ -143,6 +150,7 @@ def check_architecture_drift(
 
     elif mode == "NEW":
         expected_toolkit = target_dims.get("ui_toolkit", "compose")
+        target_nav = target_dims.get("navigation", "")
 
         for p in modified_kt_files:
             rel = p.relative_to(repo).as_posix()
@@ -170,6 +178,21 @@ def check_architecture_drift(
                 if is_xml_screen:
                     violations.append(
                         f"New screen in {rel} built with XML layouts instead of preferred Compose family"
+                    )
+
+        if expected_toolkit == "compose":
+            for p in modified_xml_files:
+                posix_p = p.as_posix().replace("\\", "/")
+                if "/res/layout" in posix_p:
+                    violations.append(
+                        f"Newly added XML layout in {p.relative_to(repo).as_posix()} violates Compose target family"
+                    )
+        if target_nav in ("compose_navigation", "nav_host"):
+            for p in modified_xml_files:
+                posix_p = p.as_posix().replace("\\", "/")
+                if "/res/navigation" in posix_p:
+                    violations.append(
+                        f"Newly added XML navigation graph in {p.relative_to(repo).as_posix()} violates Compose navigation target family"
                     )
 
     elif mode == "MIGRATE":

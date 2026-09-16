@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,7 @@ def resolve_feature_scope(rel_path: str) -> str:
 
     Precedence:
     1. Known module + explicit feature path (/feature/<name>/, /features/<name>/)
-    2. Package/path locality under ui/<feature>, presentation/<feature>
+    2. Package/path locality under ui/<feature>, presentation/<feature>, screens/<feature>
     3. Screen / ViewModel sibling directory (parent directory)
     4. Module-level fallback
     """
@@ -110,11 +111,11 @@ def resolve_feature_scope(rel_path: str) -> str:
     for i, part in enumerate(parts[:-1]):
         if part.lower() in ("feature", "features") and i + 1 < len(parts):
             return "/".join(parts[: i + 2])
-    # 2. Package/path locality under ui/<feature> or presentation/<feature>
+    # 2. Package/path locality under ui/<feature>, presentation/<feature>, etc.
     for i, part in enumerate(parts[:-1]):
-        if part.lower() in ("ui", "presentation") and i + 1 < len(parts) - 1:
+        if part.lower() in ("ui", "presentation", "screens", "screen", "view", "views") and i + 1 < len(parts) - 1:
             return "/".join(parts[: i + 2])
-        elif part.lower() in ("ui", "presentation") and i > 0:
+        elif part.lower() in ("ui", "presentation", "screens", "screen", "view", "views") and i > 0:
             return "/".join(parts[:i])
     # 3. Screen / ViewModel sibling directory (parent directory)
     if len(parts) > 1:
@@ -310,29 +311,6 @@ def scan_viewmodel_declarations(text: str) -> list[tuple[str, str]]:
         elif cls_name.endswith("ViewModel"):
             results.append((cls_name, "ViewModel"))
     return results
-
-
-def resolve_feature_scope(rel_path: str) -> str:
-    norm = rel_path.replace("\\", "/").strip("/")
-    parts = norm.split("/")
-    if not parts:
-        return ""
-    if len(parts) >= 2 and parts[0] in ("feature", "features"):
-        return f"{parts[0]}/{parts[1]}"
-    for i in range(len(parts) - 2):
-        if parts[i] in ("feature", "features"):
-            return "/".join(parts[:i+2])
-    parent_dir = "/".join(parts[:-1]) if len(parts) > 1 else parts[0]
-    parent_parts = parent_dir.split("/")
-    for idx, p in enumerate(parent_parts):
-        if p.lower() in ("ui", "presentation", "screens", "screen", "view", "views") and idx > 0:
-            if idx + 1 < len(parent_parts):
-                return "/".join(parent_parts[:idx+2])
-            else:
-                return "/".join(parent_parts[:idx])
-    if len(parts) > 1:
-        return "/".join(parts[:-1])
-    return parts[0]
 
 
 def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir: Path | None = None) -> dict:
@@ -911,10 +889,15 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     normalized = normalize_project_facts(facts)
     fingerprint = project_context_fingerprint(normalized)
 
+    sfp_info = compute_source_fingerprint(repo)
+
     return {
         "schema_version": SCHEMA_VERSION,
         "extractor_version": EXTRACTOR_VERSION,
         "context_fingerprint_sha256": fingerprint,
+        "source_fingerprint_version": sfp_info["source_fingerprint_version"],
+        "source_fingerprint_sha256": sfp_info["source_fingerprint_sha256"],
+        "source_fingerprint": sfp_info["source_fingerprint"],
         "facts": normalized,
     }
 
@@ -1161,6 +1144,22 @@ def project_context_status(repo: Path) -> dict:
         return {"status": "CORRUPTED", "message": f"project-facts.json cannot be parsed: {exc}"}
 
     disk_fp = current_on_disk.get("context_fingerprint_sha256") or ""
+
+    stored_sfp = current_on_disk.get("source_fingerprint_sha256")
+    if stored_sfp:
+        live_sfp_info = compute_source_fingerprint(repo)
+        if stored_sfp == live_sfp_info["source_fingerprint_sha256"]:
+            return {
+                "status": "CURRENT",
+                "fingerprint": disk_fp,
+                "message": "Project context is up-to-date with codebase architecture.",
+                "diff": {
+                    "kind": "RENDER_ONLY_CHANGE",
+                    "has_drift": False,
+                    "details": [],
+                },
+            }
+
     fresh_payload = extract_project_facts(repo, in_memory_graph=True)
     fresh_fp = fresh_payload.get("context_fingerprint_sha256") or ""
 
@@ -1204,8 +1203,10 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
             stage_file.write_text(content, encoding="utf-8")
 
         # 2. Write facts to staging
-        if "source_fingerprint" not in facts_payload:
-            facts_payload["source_fingerprint"] = compute_context_fingerprint(repo)
+        sfp_info = compute_source_fingerprint(repo)
+        facts_payload["source_fingerprint_version"] = sfp_info["source_fingerprint_version"]
+        facts_payload["source_fingerprint_sha256"] = sfp_info["source_fingerprint_sha256"]
+        facts_payload["source_fingerprint"] = sfp_info["source_fingerprint"]
         facts_file_stage = stage_dir / "project-facts.json"
         facts_content = json.dumps(facts_payload, ensure_ascii=False, indent=2) + "\n"
         facts_file_stage.write_text(facts_content, encoding="utf-8")
@@ -1284,14 +1285,70 @@ def compute_context_fingerprint(repo: Path) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def compute_source_fingerprint(repo: Path) -> dict:
+    """Computes a Git-aware, fast source fingerprint (version 2) without AST extraction."""
+    root = repo.resolve()
+    head_sha = "unknown"
+    try:
+        head_proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head_proc.returncode == 0:
+            head_sha = head_proc.stdout.strip()
+    except Exception:
+        pass
+
+    config_fp = compute_context_fingerprint(root)
+
+    dirty_items = []
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-uall"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                if len(line) > 3:
+                    fpath = line[3:].strip().replace("\\", "/")
+                    if fpath.endswith((".gradle", ".gradle.kts", ".toml", ".xml", ".kt", ".java")):
+                        dirty_items.append((line[:2], fpath))
+    except Exception:
+        pass
+    dirty_items.sort()
+
+    payload = {
+        "version": 2,
+        "head_sha": head_sha,
+        "config_fingerprint": config_fp,
+        "dirty_architecture_files": dirty_items,
+    }
+    canonical = _canonical_json(payload)
+    return {
+        "source_fingerprint_version": 2,
+        "source_fingerprint": payload,
+        "source_fingerprint_sha256": _sha256_text(canonical),
+        "fingerprint_sha256": _sha256_text(canonical),
+    }
+
+
 def is_context_fresh(repo: Path) -> bool:
     """Cheap check to verify whether project-facts.json is still fresh without re-extracting."""
     facts_file = repo / ".agents" / "project-context" / "project-facts.json"
     if not facts_file.is_file():
         return False
     try:
-        from _vnext_common import read_json
         facts = read_json(facts_file)
+        stored_sfp = facts.get("source_fingerprint_sha256")
+        if stored_sfp:
+            live_sfp = compute_source_fingerprint(repo)
+            return stored_sfp == live_sfp["source_fingerprint_sha256"]
         stored_fp = facts.get("source_fingerprint")
         if not stored_fp:
             return False

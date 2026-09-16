@@ -64,64 +64,57 @@ def main(argv: list[str] | None = None) -> int:
     hook_code = 0 if skip_hook else run_step("0. Hook selftest (cached)", "ensure_hook_selftest.py")
     str_code = run_step("1. String parity", "check_strings.py") if "localization" in selected_gates else 0
 
-    import time as _time
-    live_print("⏳ [IN PROGRESS] 2. Room Database Migrations")
-    _t2 = _time.time()
-    db_ok, db_msg = check_room_working_tree() if "room" in selected_gates else (True, "not required by policy")
-    live_print(f"[{'OK' if db_ok else 'FAIL'}] {db_msg}")
-    live_print(f"{'✅ [DONE]' if db_ok else '❌ [FAIL]'} 2. Room Database Migrations ({_time.time() - _t2:.1f}s)")
+    with step_progress("2. Room Database Migrations"):
+        db_ok, db_msg = check_room_working_tree() if "room" in selected_gates else (True, "not required by policy")
+        live_print(f"[{'OK' if db_ok else 'FAIL'}] {db_msg}")
 
     lint_code = run_step("3. Kotlin Syntax & Architectural Rules (Fast Lint)", "fast_kt_lint.py") if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
 
     classification = classify(REPO)
     risk_tier_name = classification["severity"]
-    live_print("⏳ [IN PROGRESS] 4. Approved plan authority")
-    _t4 = _time.time()
-    if diagnostic:
-        risk_ok, risk_msg = True, "diagnostic mode; task approval is checked only during delivery preflight"
-    elif os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
-        risk_ok, risk_msg = True, "selftest fixture"
-    else:
-        try:
-            plan = active_plan(REPO)
-            approval = plan.get("approval") or {}
-            risk_ok = (
-                plan.get("status") in ("IMPLEMENTING", "VERIFYING")
-                and plan.get("execution_nonce")
-                and plan.get("execution_nonce") == approval.get("single_use_nonce")
-                and approval.get("plan_sha256") == plan.get("plan_sha256")
-            )
-            risk_msg = "approved task plan is active" if risk_ok else "active task approval is missing or stale"
-        except ValidationError as exc:
-            risk_ok, risk_msg = False, str(exc)
-    live_print(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
-    live_print(f"{'✅ [DONE]' if risk_ok else '❌ [FAIL]'} 4. Approved plan authority ({_time.time() - _t4:.1f}s)")
+    with step_progress("4. Approved plan authority"):
+        if diagnostic:
+            risk_ok, risk_msg = True, "diagnostic mode; task approval is checked only during delivery preflight"
+        elif os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
+            risk_ok, risk_msg = True, "selftest fixture"
+        else:
+            try:
+                plan = active_plan(REPO)
+                approval = plan.get("approval") or {}
+                risk_ok = (
+                    plan.get("status") in ("IMPLEMENTING", "VERIFYING")
+                    and plan.get("execution_nonce")
+                    and plan.get("execution_nonce") == approval.get("single_use_nonce")
+                    and approval.get("plan_sha256") == plan.get("plan_sha256")
+                )
+                risk_msg = "approved task plan is active" if risk_ok else "active task approval is missing or stale"
+            except ValidationError as exc:
+                risk_ok, risk_msg = False, str(exc)
+        live_print(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
 
     # 5. Architecture Drift Verification (Fast Drift Check)
-    live_print("⏳ [IN PROGRESS] 5. Architecture Drift Check")
-    _t5 = _time.time()
-    arch_ok = True
-    arch_msg = "no architecture contract bound (exempted)"
-    if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
-        contract = None
-        try:
-            plan = active_plan(REPO)
-            contract = plan.get("architecture_contract")
-        except Exception:
+    with step_progress("5. Architecture Drift Check"):
+        arch_ok = True
+        arch_msg = "no architecture contract bound (exempted)"
+        if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
             contract = None
-
-        if contract:
             try:
-                from architecture_drift import check_architecture_drift
-                arch_ok, arch_msg, _ = check_architecture_drift(REPO, contract)
-            except Exception as exc:
-                arch_ok = False
-                arch_msg = f"ARCHITECTURE_DRIFT_CHECK_ERROR: {exc}"
-        else:
-            arch_ok = True
-            arch_msg = "no architecture contract bound (exempted)"
-    live_print(f"[{'OK' if arch_ok else 'FAIL'}] [ARCHITECTURE] {arch_msg}")
-    live_print(f"{'✅ [DONE]' if arch_ok else '❌ [FAIL]'} 5. Architecture Drift Check ({_time.time() - _t5:.1f}s)")
+                plan = active_plan(REPO)
+                contract = plan.get("architecture_contract")
+            except Exception:
+                contract = None
+
+            if contract:
+                try:
+                    from architecture_drift import check_architecture_drift
+                    arch_ok, arch_msg, _ = check_architecture_drift(REPO, contract, task_id=plan.get("task_id") if plan else None)
+                except Exception as exc:
+                    arch_ok = False
+                    arch_msg = f"ARCHITECTURE_DRIFT_CHECK_ERROR: {exc}"
+            else:
+                arch_ok = True
+                arch_msg = "no architecture contract bound (exempted)"
+        live_print(f"[{'OK' if arch_ok else 'FAIL'}] [ARCHITECTURE] {arch_msg}")
 
     live_print("\n==================================================")
     overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok and arch_ok

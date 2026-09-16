@@ -32,13 +32,16 @@ sys.path.insert(0, str(ROOT / "scripts_dev"))
 @contextlib.contextmanager
 def step_progress(name: str):  # type: ignore[return]
     """Print step progress markers."""
-    print(f"[IN PROGRESS] {name}", flush=True)
+    clean_name = name.strip()
+    m = re.match(r"^\[(\d+[a-z]?/\d+)\]\s*(.*)$", clean_name)
+    formatted = f"{m.group(2)} [{m.group(1)}]" if m else clean_name
+    print(f"{formatted} ", end="", flush=True)
     t0 = time.time()
     try:
         yield
-        print(f"[DONE] {name} ({time.time() - t0:.1f}s)", flush=True)
+        print(f"[Done] ({time.time() - t0:.1f}s)", flush=True)
     except Exception:
-        print(f"[FAIL] {name}", flush=True)
+        print(f"[Fail] ({time.time() - t0:.1f}s)", flush=True)
         raise
 
 try:
@@ -420,15 +423,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # Step 3: Run Tests
     if not args.skip_tests:
-        with step_progress("[3/5] Running complete deterministic selftest suite"):
-            selftest_cmd = [sys.executable, str(ROOT / "harness_cli.py"), "selftest", "--kit", str(ROOT)]
-            env = dict(os.environ)
-            env["_IN_HOOK_SELFTEST"] = "1"
-            # Stream output in real-time instead of capturing silently
-            res = subprocess.run(selftest_cmd, cwd=ROOT, text=True, env=env)
-            if res.returncode != 0:
-                print(f"[FAIL] Selftest failed with return code {res.returncode}.")
-                raise RuntimeError(f"selftest exited {res.returncode}")
+        print("Running complete deterministic selftest suite [3/5]")
+        t0 = time.time()
+        selftest_cmd = [sys.executable, str(ROOT / "harness_cli.py"), "selftest", "--kit", str(ROOT)]
+        env = dict(os.environ)
+        env["_IN_HOOK_SELFTEST"] = "1"
+        res = subprocess.run(selftest_cmd, cwd=ROOT, text=True, env=env)
+        if res.returncode != 0:
+            print(f"[FAIL] Selftest failed with return code {res.returncode}.")
+            raise RuntimeError(f"selftest exited {res.returncode}")
+        print(f"Running complete deterministic selftest suite [3/5] [Done] ({time.time() - t0:.1f}s)")
         print("  [SUCCESS] All deterministic self-tests passed (0 failures).")
 
         if validate_release and not args.dry_run:
@@ -465,9 +469,14 @@ def main(argv: list[str] | None = None) -> int:
             "CITATION.cff",
             "CHANGELOG.md",
             "README.md",
+            "ROADMAP.md",
+            "SECURITY.md",
+            "CONTRIBUTING.md",
+            "CODE_OF_CONDUCT.md",
             "harness_cli.py",
             "docs/",
             "scripts_dev/",
+            "templates/",
         ]
         run_cmd(["git", "add", *stage_paths])
 

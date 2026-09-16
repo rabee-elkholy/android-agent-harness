@@ -1321,6 +1321,8 @@ class EndToEndWorkflowTests(RepoCase):
                 "schema_version": 1, "reviewer": reviewer, "package_sha256": package_sha,
                 "delivery_snapshot_sha256": current["delivery_snapshot_sha256"],
                 "change_set_sha256": current["change_set_sha256"], "verdict": "PASS", "findings": [],
+                "independent_execution_verified": True,
+                "execution_proof": {"task_id": task_id, "run_id": current["run_id"]},
             }))
             reports.append(report)
         ingest(self.repo, task_id, reports)

@@ -349,6 +349,102 @@ def load_task_baseline(repo: Path, task_id: str | None = None) -> dict | None:
     return None
 
 
+import difflib
+
+
+def _is_tracked_in_head(repo: Path, rel: str) -> bool:
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "-e", f"HEAD:{rel}"],
+            cwd=str(repo),
+            capture_output=True,
+            check=False,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def build_task_diff(repo: Path, task_id: str | None, task_manifest: dict) -> str:
+    """Build unified diff for changes introduced by this task, isolating pre-existing dirty baseline."""
+    root = repo.resolve()
+    task_changes = task_manifest.get("task_changes")
+    if task_changes is None or task_manifest.get("task_delta_mode") == "LEGACY_FULL_WORKTREE":
+        raw_changes = task_manifest.get("changes") or []
+        paths = sorted({str(c.get("path") or "") for c in raw_changes if c.get("path")} | {str(c.get("old_path") or "") for c in raw_changes if c.get("old_path")})
+        secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
+        safe_paths = [p for p in paths if not any(m in p.lower() for m in secret_markers)]
+        if not safe_paths:
+            return ""
+        chunks: list[str] = []
+        for offset in range(0, len(safe_paths), 100):
+            proc = subprocess.run(
+                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", "HEAD", "--", *safe_paths[offset:offset+100]],
+                cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            chunks.append(proc.stdout or "")
+        return "".join(chunks)
+
+    baseline_files_dir: Path | None = None
+    if task_id:
+        for candidate_state in (root / ".agents" / "state", root / "agents" / "state"):
+            c_dir = candidate_state / "tasks" / task_id / "baseline-files"
+            if c_dir.is_dir():
+                baseline_files_dir = c_dir
+                break
+
+    secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
+    diff_chunks: list[str] = []
+
+    sorted_changes = sorted(task_changes, key=lambda c: (c.get("path") or "", c.get("old_path") or "", c.get("status") or ""))
+    for item in sorted_changes:
+        rel = item.get("path") or ""
+        if not rel:
+            continue
+        rel_norm = rel.replace("\\", "/")
+        if any(m in rel_norm.lower() for m in secret_markers):
+            continue
+
+        status = item.get("status")
+        base_copy = (baseline_files_dir / rel) if baseline_files_dir else None
+        target_path = root / rel
+
+        if status == "BASELINE_DIRTY_REMOVED":
+            if base_copy and base_copy.is_file():
+                base_lines = base_copy.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                try:
+                    head_bytes = git(root, "show", f"HEAD:{rel}")
+                    head_lines = head_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
+                except Exception:
+                    head_lines = []
+                chunk = "".join(difflib.unified_diff(base_lines, head_lines, fromfile=f"a/{rel} (baseline-dirty)", tofile=f"b/{rel} (reverted-to-head)"))
+                if chunk:
+                    diff_chunks.append(chunk)
+            continue
+
+        if base_copy and base_copy.is_file() and target_path.is_file():
+            base_lines = base_copy.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            cur_lines = target_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            chunk = "".join(difflib.unified_diff(base_lines, cur_lines, fromfile=f"a/{rel}", tofile=f"b/{rel}"))
+            if chunk:
+                diff_chunks.append(chunk)
+        elif status == "A" and not _is_tracked_in_head(root, rel):
+            if target_path.is_file():
+                cur_lines = target_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                chunk = "".join(difflib.unified_diff([], cur_lines, fromfile="/dev/null", tofile=f"b/{rel}"))
+                if chunk:
+                    diff_chunks.append(chunk)
+        else:
+            proc = subprocess.run(
+                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", "HEAD", "--", rel],
+                cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            if proc.stdout:
+                diff_chunks.append(proc.stdout)
+
+    return "".join(diff_chunks)
+
+
 def build_task_manifest(
     repo: Path,
     baseline: dict | list | None = None,
@@ -373,20 +469,21 @@ def build_task_manifest(
             base_map[_normal_rel(p)] = entry
             base_map[p] = entry
 
-    if isinstance(expected_files, str):
-        expected_set = {_normal_rel(p.strip()) for p in expected_files.split(",") if p.strip()}
-    else:
-        expected_set = {_normal_rel(p) for p in (expected_files or []) if p}
-
     task_changes: list[dict] = []
-    for cur in manifest.get("changes") or []:
+    current_changes = manifest.get("changes") or []
+    current_paths: set[str] = set()
+
+    for cur in current_changes:
         if cur.get("status") == "U":
             raise HarnessError(f"Conflicted path in working tree: {cur.get('path')}")
         path = cur.get("path")
         norm_path = _normal_rel(path) if path else ""
-        if (norm_path and norm_path in expected_set) or (path and path in expected_set):
-            task_changes.append(cur)
-        elif path not in base_map and norm_path not in base_map:
+        if norm_path:
+            current_paths.add(norm_path)
+        if path:
+            current_paths.add(path)
+
+        if path not in base_map and norm_path not in base_map:
             task_changes.append(cur)
         else:
             base_entry = base_map.get(norm_path) or base_map.get(path)
@@ -396,14 +493,22 @@ def build_task_manifest(
                 cur.get("old_path") != base_entry.get("old_path")):
                 task_changes.append(cur)
 
-    if not task_changes and not expected_set and manifest.get("changes"):
-        manifest["task_changes"] = list(manifest.get("changes") or [])
-        manifest["task_change_set_sha256"] = manifest["change_set_sha256"]
-        manifest["task_delta_mode"] = "LEGACY_FULL_WORKTREE"
-        return manifest
+    # Detect disappeared dirty files (pre-existing dirty changes reverted or removed)
+    for base_entry in base_changes:
+        b_path = base_entry.get("path")
+        b_norm = _normal_rel(b_path) if b_path else ""
+        if b_norm and b_norm not in current_paths and b_path not in current_paths:
+            task_changes.append({
+                "path": b_path,
+                "status": "BASELINE_DIRTY_REMOVED",
+                "old_path": base_entry.get("old_path"),
+                "content_identity": "git:head_or_reverted",
+            })
 
+    task_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))
     change_identities = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in task_changes]
     manifest["task_changes"] = task_changes
+    manifest["baseline_dirty_removed"] = [c["path"] for c in task_changes if c.get("status") == "BASELINE_DIRTY_REMOVED"]
     manifest["task_change_set_sha256"] = canonical_sha256(change_identities)
     manifest["task_delta_mode"] = "TASK_ISOLATED"
     return manifest
