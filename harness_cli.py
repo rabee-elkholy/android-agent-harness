@@ -379,7 +379,7 @@ def run_engine_script(
     if not target.is_file():
         raise SystemExit(f"[ERROR] Engine script missing: {target}")
     proc = subprocess.run(
-        [sys.executable, str(target), *args],
+        [sys.executable, "-u", str(target), *args],
         check=False,
         capture_output=capture,
         text=True,

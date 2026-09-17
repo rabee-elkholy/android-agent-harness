@@ -11,6 +11,12 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _live_process import (  # noqa: E402
+    enable_line_buffered_stdio,
+    live_print,
+    step_progress,
+    sublog,
+)
 from _vnext_common import (  # noqa: E402
     HarnessError,
     ValidationError,
@@ -121,19 +127,27 @@ def _snapshot_files(repo: Path, paths: list[Path]) -> dict[str, str | None]:
 def _snapshot_app_files(repo: Path) -> dict[str, str]:
     """Cryptographically snapshot all Android product and build files outside harness."""
     snapshot: dict[str, str] = {}
-    for path in repo.rglob("*"):
-        if not path.is_file() or path.is_symlink():
-            continue
-        try:
-            rel = path.resolve().relative_to(repo.resolve()).as_posix()
-        except ValueError:
-            continue
-        parts = Path(rel).parts
-        if parts and (parts[0].startswith((".git", ".agents", ".harness", ".gradle", ".idea")) or parts[0] == "build" or path.name.endswith(".lock")):
-            continue
-        digest = sha256_file(path)
-        if digest:
-            snapshot[rel] = digest
+    skip_dir_names = {".git", ".agents", ".gradle", ".idea", "build"}
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [
+            d for d in dirs
+            if d not in skip_dir_names
+            and not (d.startswith((".harness", ".git", ".agents", ".gradle", ".idea")))
+        ]
+        root_path = Path(root)
+        for name in files:
+            if name.endswith(".lock"):
+                continue
+            path = root_path / name
+            if path.is_symlink():
+                continue
+            try:
+                rel = path.resolve().relative_to(repo.resolve()).as_posix()
+            except ValueError:
+                continue
+            digest = sha256_file(path)
+            if digest:
+                snapshot[rel] = digest
     return snapshot
 
 
@@ -416,6 +430,7 @@ def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool 
         os.replace(staging / ".agents", repo / ".agents")
         _configure(repo, kit, answers)
         if init_context:
+            sublog("extracting project facts & architectural views...")
             from project_context import extract_project_facts, render_project_context, write_project_context
             facts_payload = extract_project_facts(repo, in_memory_graph=True)
             views = render_project_context(facts_payload)
@@ -428,6 +443,7 @@ def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool 
                 create_architecture_policy(preferred_new_code_family=target_family),
                 overwrite=True,
             )
+        sublog("validating installed Python scripts...")
         for source in (repo / ".agents" / "scripts").rglob("*.py"):
             try:
                 compile(source.read_bytes(), str(source), "exec")
@@ -550,15 +566,20 @@ def install(repo: Path, kit: Path) -> dict:
     if (repo / ".agents").exists() or (repo / OWNERSHIP_RELATIVE).exists():
         raise ValidationError("target already contains a harness; uninstall it before the clean vNext install")
     answers = _load_answers(repo)
-    app_before = _snapshot_app_files(repo)
-    before = _snapshot_files(repo, _candidate_adapter_paths(repo))
-    backup = _backup(repo, None, "install", _candidate_adapter_paths(repo))
+    with step_progress("1. Creating pre-install application snapshot"):
+        app_before = _snapshot_app_files(repo)
+        before = _snapshot_files(repo, _candidate_adapter_paths(repo))
+        backup = _backup(repo, None, "install", _candidate_adapter_paths(repo))
     try:
-        _install_engine(repo, kit, answers, init_context=True)
-        allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
-        _verify_app_snapshot(repo, app_before, allowed_adapters)
-        ownership = _write_ownership(repo, version=version, before=before, backup=backup)
-        _warm_project_graph(repo)
+        with step_progress("2. Installing harness engine files"):
+            _install_engine(repo, kit, answers, init_context=True)
+        with step_progress("3. Verifying application integrity"):
+            allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
+            _verify_app_snapshot(repo, app_before, allowed_adapters)
+        with step_progress("4. Recording ownership manifest"):
+            ownership = _write_ownership(repo, version=version, before=before, backup=backup)
+        with step_progress("5. Warming project graph cache"):
+            _warm_project_graph(repo)
     except Exception:
         if (repo / ".agents").exists():
             shutil.rmtree(repo / ".agents", ignore_errors=True)
@@ -619,33 +640,34 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
     if answers:
         loaded_answers.update(answers)
     answers = loaded_answers
-    app_before = _snapshot_app_files(repo)
-    before = _snapshot_files(repo, _candidate_adapter_paths(repo))
-    backup = _backup(repo, ownership, "update", _candidate_adapter_paths(repo))
-    preserve_root = repo / ".harness-recovery" / f"preserve-{uuid.uuid4().hex}"
-    preserved = _copy_preserved(repo, preserve_root, refresh_defaults=True)
-    legacy_migrated = [
-        rel for rel in preserved
-        if rel.startswith(".agents/project-context/legacy-overrides/")
-    ]
-    old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
-    journal = {
-        "schema_version": 1,
-        "transaction_id": uuid.uuid4().hex,
-        "status": "PREPARED",
-        "stage": "PREPARED",
-        "from_version": current_version,
-        "to_version": target_version,
-        "old_agents_path": str(old_agents.relative_to(repo).as_posix()),
-        "preserve_root": str(preserve_root.relative_to(repo).as_posix()),
-        "backup": str(backup),
-        "ownership_before_sha256": ownership.get("ownership_sha256"),
-        "ownership_after_sha256": None,
-        "legacy_reference_migrated": legacy_migrated,
-        "started_at": utc_now(),
-    }
-    journal_path = repo / ".harness-setup" / "update-journal.json"
-    atomic_write_json(journal_path, journal)
+    with step_progress("1. Creating pre-update snapshot & backup"):
+        app_before = _snapshot_app_files(repo)
+        before = _snapshot_files(repo, _candidate_adapter_paths(repo))
+        backup = _backup(repo, ownership, "update", _candidate_adapter_paths(repo))
+        preserve_root = repo / ".harness-recovery" / f"preserve-{uuid.uuid4().hex}"
+        preserved = _copy_preserved(repo, preserve_root, refresh_defaults=True)
+        legacy_migrated = [
+            rel for rel in preserved
+            if rel.startswith(".agents/project-context/legacy-overrides/")
+        ]
+        old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
+        journal = {
+            "schema_version": 1,
+            "transaction_id": uuid.uuid4().hex,
+            "status": "PREPARED",
+            "stage": "PREPARED",
+            "from_version": current_version,
+            "to_version": target_version,
+            "old_agents_path": str(old_agents.relative_to(repo).as_posix()),
+            "preserve_root": str(preserve_root.relative_to(repo).as_posix()),
+            "backup": str(backup),
+            "ownership_before_sha256": ownership.get("ownership_sha256"),
+            "ownership_after_sha256": None,
+            "legacy_reference_migrated": legacy_migrated,
+            "started_at": utc_now(),
+        }
+        journal_path = repo / ".harness-setup" / "update-journal.json"
+        atomic_write_json(journal_path, journal)
 
     def _set_stage(st: str) -> None:
         journal["stage"] = st
@@ -653,65 +675,69 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
         atomic_write_json(journal_path, journal)
 
     try:
-        os.replace(repo / ".agents", old_agents)
-        _set_stage("OLD_ENGINE_MOVED")
+        with step_progress("2. Installing updated harness engine"):
+            os.replace(repo / ".agents", old_agents)
+            _set_stage("OLD_ENGINE_MOVED")
 
-        _install_engine(repo, kit, answers, init_context=False)
-        _set_stage("NEW_ENGINE_INSTALLED")
+            _install_engine(repo, kit, answers, init_context=False)
+            _set_stage("NEW_ENGINE_INSTALLED")
 
-        if (old_agents / "state").is_dir():
-            shutil.copytree(old_agents / "state", repo / ".agents/state", dirs_exist_ok=True)
-        _set_stage("STATE_RESTORED")
+            if (old_agents / "state").is_dir():
+                shutil.copytree(old_agents / "state", repo / ".agents/state", dirs_exist_ok=True)
+            _set_stage("STATE_RESTORED")
 
-        _restore_preserved(repo, preserve_root, preserved)
+            _restore_preserved(repo, preserve_root, preserved)
 
-        mode = str(answers.get("update_context_mode") or "preserve").lower()
-        if mode not in {"preserve", "refresh", "auto"}:
-            mode = "preserve"
+            mode = str(answers.get("update_context_mode") or "preserve").lower()
+            if mode not in {"preserve", "refresh", "auto"}:
+                mode = "preserve"
 
-        if mode == "preserve":
-            facts_file = repo / ".agents" / "project-context" / "project-facts.json"
-            if not facts_file.is_file():
-                raise ValidationError("CONTEXT_REFRESH_REQUIRED: missing project-facts.json")
-            try:
-                facts = read_json(facts_file)
-                if facts.get("schema_version") not in (1, 2):
-                    raise ValidationError("CONTEXT_REFRESH_REQUIRED: incompatible project-facts.json schema")
-            except Exception as exc:
-                raise ValidationError(f"CONTEXT_REFRESH_REQUIRED: {exc}")
-        elif mode in ("refresh", "auto"):
-            from project_context import extract_project_facts, render_project_context, write_project_context
-            fresh_facts = extract_project_facts(repo, in_memory_graph=True)
-            fresh_views = render_project_context(fresh_facts)
-            write_project_context(repo, fresh_facts, fresh_views)
-            from architecture_policy import read_architecture_policy, compute_policy_hash, write_architecture_policy
-            curr_pol = read_architecture_policy(repo)
-            if curr_pol:
-                pref_family = curr_pol.get("preferred_new_code_family") or curr_pol.get("default_family")
-                if pref_family and pref_family != "none":
-                    arch_obj = fresh_facts.get("facts", {}).get("architecture") or fresh_facts.get("architecture") or {}
-                    existing_fam_ids = {f.get("id") for f in arch_obj.get("families") or []}
-                    if pref_family not in existing_fam_ids:
-                        curr_pol["status"] = "ARCHITECTURE_DECISION_REQUIRED"
-                        curr_pol["decision_reason"] = f"previously preferred family '{pref_family}' is no longer detected after refresh"
-                        curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
-                        write_architecture_policy(repo, curr_pol, overwrite=True)
-        _set_stage("CONTEXT_RESTORED")
+            if mode == "preserve":
+                facts_file = repo / ".agents" / "project-context" / "project-facts.json"
+                if not facts_file.is_file():
+                    raise ValidationError("CONTEXT_REFRESH_REQUIRED: missing project-facts.json")
+                try:
+                    facts = read_json(facts_file)
+                    if facts.get("schema_version") not in (1, 2):
+                        raise ValidationError("CONTEXT_REFRESH_REQUIRED: incompatible project-facts.json schema")
+                except Exception as exc:
+                    raise ValidationError(f"CONTEXT_REFRESH_REQUIRED: {exc}")
+            elif mode in ("refresh", "auto"):
+                from project_context import extract_project_facts, render_project_context, write_project_context
+                fresh_facts = extract_project_facts(repo, in_memory_graph=True)
+                fresh_views = render_project_context(fresh_facts)
+                write_project_context(repo, fresh_facts, fresh_views)
+                from architecture_policy import read_architecture_policy, compute_policy_hash, write_architecture_policy
+                curr_pol = read_architecture_policy(repo)
+                if curr_pol:
+                    pref_family = curr_pol.get("preferred_new_code_family") or curr_pol.get("default_family")
+                    if pref_family and pref_family != "none":
+                        arch_obj = fresh_facts.get("facts", {}).get("architecture") or fresh_facts.get("architecture") or {}
+                        existing_fam_ids = {f.get("id") for f in arch_obj.get("families") or []}
+                        if pref_family not in existing_fam_ids:
+                            curr_pol["status"] = "ARCHITECTURE_DECISION_REQUIRED"
+                            curr_pol["decision_reason"] = f"previously preferred family '{pref_family}' is no longer detected after refresh"
+                            curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
+                            write_architecture_policy(repo, curr_pol, overwrite=True)
+            _set_stage("CONTEXT_RESTORED")
 
-        allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
-        _verify_app_snapshot(repo, app_before, allowed_adapters)
-        _set_stage("APP_SNAPSHOT_VERIFIED")
+        with step_progress("3. Verifying application integrity"):
+            allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
+            _verify_app_snapshot(repo, app_before, allowed_adapters)
+            _set_stage("APP_SNAPSHOT_VERIFIED")
 
-        new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
-        journal["ownership_after_sha256"] = new_ownership.get("ownership_sha256")
-        _set_stage("OWNERSHIP_WRITTEN")
+        with step_progress("4. Updating ownership manifest"):
+            new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
+            journal["ownership_after_sha256"] = new_ownership.get("ownership_sha256")
+            _set_stage("OWNERSHIP_WRITTEN")
 
-        _warm_project_graph(repo)
-        journal["status"] = "COMPLETED"
-        _set_stage("COMPLETED")
-        journal["completed_at"] = utc_now()
-        atomic_write_json(journal_path, journal)
-        shutil.rmtree(old_agents, ignore_errors=True)
+        with step_progress("5. Warming project graph cache"):
+            _warm_project_graph(repo)
+            journal["status"] = "COMPLETED"
+            _set_stage("COMPLETED")
+            journal["completed_at"] = utc_now()
+            atomic_write_json(journal_path, journal)
+            shutil.rmtree(old_agents, ignore_errors=True)
     except Exception:
         shutil.rmtree(repo / ".agents", ignore_errors=True)
         if old_agents.exists():
@@ -739,23 +765,28 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
     if (repo / OWNERSHIP_RELATIVE).exists():
         raise ValidationError("managed v1 installations must use same-major update, not legacy replacement")
     answers = _load_answers(repo)
-    app_before = _snapshot_app_files(repo)
-    adapters = _candidate_adapter_paths(repo)
-    before = _snapshot_files(repo, adapters)
-    backup = _backup(repo, None, "replace-legacy", adapters)
-    preserve_root = repo / ".harness-recovery" / f"legacy-preserve-{uuid.uuid4().hex}"
-    preserved = _legacy_preserved_paths(kit, _copy_preserved(repo, preserve_root))
-    old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
-    has_prior_facts = (repo / ".agents" / "project-context" / "project-facts.json").is_file()
+    with step_progress("1. Creating pre-replacement snapshot & backup"):
+        app_before = _snapshot_app_files(repo)
+        adapters = _candidate_adapter_paths(repo)
+        before = _snapshot_files(repo, adapters)
+        backup = _backup(repo, None, "replace-legacy", adapters)
+        preserve_root = repo / ".harness-recovery" / f"legacy-preserve-{uuid.uuid4().hex}"
+        preserved = _legacy_preserved_paths(kit, _copy_preserved(repo, preserve_root))
+        old_agents = repo / f".agents.previous-{uuid.uuid4().hex}"
+        has_prior_facts = (repo / ".agents" / "project-context" / "project-facts.json").is_file()
     try:
-        os.replace(repo / ".agents", old_agents)
-        _install_engine(repo, kit, answers, init_context=(not has_prior_facts))
-        _restore_preserved(repo, preserve_root, preserved)
-        allowed_adapters = {p.relative_to(repo).as_posix() for p in adapters}
-        _verify_app_snapshot(repo, app_before, allowed_adapters)
-        ownership = _write_ownership(repo, version=target_version, before=before, backup=backup)
-        _warm_project_graph(repo)
-        shutil.rmtree(old_agents, ignore_errors=True)
+        with step_progress("2. Installing replacement harness engine"):
+            os.replace(repo / ".agents", old_agents)
+            _install_engine(repo, kit, answers, init_context=(not has_prior_facts))
+            _restore_preserved(repo, preserve_root, preserved)
+        with step_progress("3. Verifying application integrity"):
+            allowed_adapters = {p.relative_to(repo).as_posix() for p in adapters}
+            _verify_app_snapshot(repo, app_before, allowed_adapters)
+        with step_progress("4. Recording ownership manifest"):
+            ownership = _write_ownership(repo, version=target_version, before=before, backup=backup)
+        with step_progress("5. Warming project graph cache"):
+            _warm_project_graph(repo)
+            shutil.rmtree(old_agents, ignore_errors=True)
     except Exception:
         shutil.rmtree(repo / ".agents", ignore_errors=True)
         if old_agents.exists():
@@ -842,6 +873,7 @@ def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     for name in ("install", "update", "replace-legacy"):
