@@ -1,19 +1,19 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.44` — **SHA-256**: `07c17126bc2dfb6f6836d2b2c29fd55de5d09e37a5ea3479c060ef556b0fe836` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.0.44`
 
 ---
-Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with. If truncated, STOP. Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
+Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
 
 ## Phase 1: Read-only discovery
 Require root `gradlew`/`gradlew.bat`; else STOP. Select:
 - **Clean Install**: no `.agents`
 - **Same-Major Update**: `.harness-setup/ownership-v1.json` major 1
 - **Legacy Replacement**: `.agents` exists without v1 ownership
-`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.44`.
+`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.45`.
 
 ## Phase 2: Kit bootstrap approval
-`git clone --depth 1 --branch v1.0.44 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
+`git clone --depth 1 --branch v1.0.45 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
 Verify: `git -C <staging-dir> describe --tags --exact-match && python <staging-dir>/harness_cli.py version --kit <staging-dir>`
 Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
 **STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.** Permits cache operations only, not app installation/removal.

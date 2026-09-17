@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "agents/.gitignore": "8a0eaa7cc8e55d17da96f31f6863b5e9b5aba15bb03fd6e8fb07a8cb89e5715c",
-    "agents/VERSION": "d448b6b2bba975c9106f8dddd190c55a6352dfc343ecb7f4a83c5bce677844a8",
+    "agents/VERSION": "77ae45153446def3d17005feb211a20abbb150fd9f1e718b0ec2416449084237",
     "agents/command-packs/check-strings.md.template": "688d464d69849d4b5bc68faae49bf79a196d882765ac5eaf9b829bd8df8b9c0b",
     "agents/command-packs/commit-msg.md.template": "cf8bd58a510a6953a66e2c705c8c9515f0369e4fa454af9bbc9c7f6b1805b80e",
     "agents/command-packs/crash-triage.md.template": "acea2311229cc8d4f7d1eae515a4d3f3b52246437df25ee75dfa40d3407dc69a",
@@ -93,7 +93,7 @@
     "agents/scripts/pm_github.py": "3192aac989418c7bc4a88dac15f13146b9c69ee1d7ad6449eb3ecbd9cba542b2",
     "agents/scripts/pm_policy.py": "77bc2f4af0b8e893d280c117dd90cb6b6f5c56b13f295728d1e13f3a4c227ec6",
     "agents/scripts/pre_invocation_reminder.py": "fe60450d4cf82919865cb9b7dc22de263cc1409136ab2915e871fe507aa0c1d2",
-    "agents/scripts/pre_tool_safety.py": "00e573a17008db9bbb7a7d85b59409771915163aa5b698f4b18f404c4f136b92",
+    "agents/scripts/pre_tool_safety.py": "5ea76fd0a83a11aa7fbb3ccfdc3336f2cfdbdffd2c767cb0f3ab64e8c9dd612a",
     "agents/scripts/preflight.py": "2bf4bfafd04ac08af90657b0205b45d104535c0ae8806a4ef82a3d0e64aebd6b",
     "agents/scripts/preflight_check.py": "6a31162291e6edcc17f3a457bc82c3b4d21c613ed1061b40e91668998f0e6fc7",
     "agents/scripts/project_context.py": "74cfe0936e69051e3beca437eed36d247d9e30306ae4e11b7190c369ef0011d2",

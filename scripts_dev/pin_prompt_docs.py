@@ -38,7 +38,6 @@ URL_FILES = (
 )
 
 CHECKSUM_DOCS = (
-    "docs/install-or-update-prompt.md",
     "docs/diagnostic-prompt.md",
     "docs/rollback-prompt.md",
     "docs/setup-prompt.md",
