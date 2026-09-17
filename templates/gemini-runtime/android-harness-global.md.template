@@ -10,6 +10,6 @@ MANDATORY:
 4. Follow this checkout’s device policy from setup (physical only, emulator allowed, or either if they skipped). Device is automatically resolved by `run_device.py`. Never hardcode a serial.
 5. Git policy: follow `.agents/rules/harness-rules.md` for this checkout (do not assume the source project's "never commit" rule).
 6. Zero chat clutter. Never echo raw `<SYSTEM_MESSAGE>` or Gradle dumps.
-7. Discovery & execution efficiency: Discovery MUST start with `python .agents/scripts/project_graph.py --feature <name>` or `--find <Symbol>`; unanchored grep cascades are forbidden. Never poll or loop on `manage_task status` during background tasks; wait for reactive notifications. When code fixes are needed during verification, run `python .agents/scripts/workflow.py resume` to return to `IMPLEMENTING`.
+7. Discovery & execution efficiency: Discovery MUST start with `python .agents/scripts/project_graph.py --feature <name>` or `--find <Symbol>`; unanchored grep cascades are forbidden. Zero-Polling Invariant: never poll or loop on `manage_task status`, `manage_subagents list`, or `schedule` during background tasks or subagents; wait for reactive notifications. When code fixes are needed during verification, run `python .agents/scripts/workflow.py resume` to return to `IMPLEMENTING`. Harness scripts under `.agents/**` are immutable engine code; never edit them.
 
 Every rule in `.agents/rules/harness-rules.md` is mandatory.

@@ -242,6 +242,24 @@ def _handle_command(command: str) -> None:
 
 
 def _handle_subagent(name: str, args: dict) -> None:
+    # Zero-polling invariant: block busy-waiting loops
+    if name == "manage_task":
+        act = str(args.get("Action") or args.get("action") or "").strip().lower()
+        if act == "status":
+            emit("deny", "ZERO-POLLING INVARIANT: manage_task(Action='status') is blocked to prevent polling loops. Background tasks notify you reactively upon completion. Yield execution now without calling tools.", tool=name)
+            return
+    elif name == "manage_subagents":
+        act = str(args.get("Action") or args.get("action") or "").strip().lower()
+        if act == "list":
+            emit("deny", "ZERO-POLLING INVARIANT: manage_subagents(Action='list') is blocked to prevent polling loops. Subagents notify you reactively upon completion. Yield execution now without calling tools.", tool=name)
+            return
+    elif name == "schedule":
+        cond = str(args.get("TimerCondition") or args.get("timerCondition") or "").strip().lower()
+        dur = args.get("DurationSeconds") or args.get("durationSeconds")
+        if cond in ("any",) or (dur is not None and int(dur) < 180):
+            emit("deny", "ZERO-POLLING INVARIANT: Short schedule timers and condition-based busy-waiting are blocked. Yield execution and await reactive wakeup notifications from the system.", tool=name)
+            return
+
     try:
         plan = active_plan(REPO)
         status = str(plan.get("status") or "")

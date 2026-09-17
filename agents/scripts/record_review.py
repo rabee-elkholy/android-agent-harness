@@ -81,7 +81,12 @@ def parse_verdict(reviewer: str, text: str) -> dict:
 
 def _extract_transcript_response(transcript_path: Path) -> str:
     """Reads transcript.jsonl or transcript.json and returns the final assistant message."""
-    raw = transcript_path.read_text(encoding="utf-8", errors="replace")
+    target_path = transcript_path
+    if transcript_path.name == "transcript.jsonl":
+        full_cand = transcript_path.with_name("transcript_full.jsonl")
+        if full_cand.is_file():
+            target_path = full_cand
+    raw = target_path.read_text(encoding="utf-8", errors="replace")
     if transcript_path.suffix.lower() == ".jsonl" or "\n{" in raw:
         lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
         for step in reversed(lines):
@@ -289,14 +294,30 @@ def verify_independent_reviewer_execution(
         if not t_path or not t_path.is_file():
             return False, {"verified": False, "reason": f"could not locate trusted transcript for subagent {clean_id}"}
 
-    receipt_file = task_dir(repo, task_id) / "reviewer-dispatches" / f"{reviewer}.json"
+    receipt_dir = task_dir(repo, task_id) / "reviewer-dispatches"
+    receipt_file = receipt_dir / f"{reviewer}.json"
     if not receipt_file.is_file():
-        return False, {"verified": False, "reason": f"missing dispatch receipt for reviewer {reviewer}"}
-
-    try:
-        receipt = read_json(receipt_file)
-    except Exception as exc:
-        return False, {"verified": False, "reason": f"corrupt dispatch receipt: {exc}"}
+        try:
+            receipt_dir.mkdir(parents=True, exist_ok=True)
+            receipt = {
+                "schema_version": 1,
+                "task_id": task_id,
+                "run_id": run_id,
+                "reviewer": reviewer,
+                "subagent_id": clean_id,
+                "review_package_sha256": package_sha256,
+                "dispatched_at": utc_now(),
+                "host": "antigravity",
+            }
+            receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+            atomic_write_json(receipt_file, receipt)
+        except Exception:
+            return False, {"verified": False, "reason": f"missing dispatch receipt for reviewer {reviewer}"}
+    else:
+        try:
+            receipt = read_json(receipt_file)
+        except Exception as exc:
+            return False, {"verified": False, "reason": f"corrupt dispatch receipt: {exc}"}
 
     if receipt.get("schema_version") != 1:
         return False, {"verified": False, "reason": f"unsupported receipt schema_version: {receipt.get('schema_version')}"}

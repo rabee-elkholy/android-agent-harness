@@ -245,8 +245,11 @@ def main(argv=None) -> int:
                     return True
                 return False
 
+            def _change_p(item: Any) -> str:
+                return str(item.get("path", "") if isinstance(item, dict) else item or "")
+
             has_fix_code = any(
-                is_delivery_relevant(c.get("path", "")) and not is_test_repro_path(c.get("path", ""))
+                is_delivery_relevant(_change_p(c)) and not is_test_repro_path(_change_p(c))
                 for c in pre_red_changes
             )
             if has_fix_code:

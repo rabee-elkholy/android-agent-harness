@@ -508,7 +508,9 @@ def build_task_manifest(
     task_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))
     change_identities = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in task_changes]
     manifest["task_changes"] = task_changes
-    manifest["baseline_dirty_removed"] = [c["path"] for c in task_changes if c.get("status") == "BASELINE_DIRTY_REMOVED"]
+    manifest["baseline_dirty_removed"] = [
+        c.get("path", "") for c in task_changes if isinstance(c, dict) and c.get("status") == "BASELINE_DIRTY_REMOVED"
+    ]
     manifest["task_change_set_sha256"] = canonical_sha256(change_identities)
     manifest["task_delta_mode"] = "TASK_ISOLATED"
     return manifest

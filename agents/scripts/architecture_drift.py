@@ -64,9 +64,14 @@ def check_architecture_drift(
     target_scope = contract.get("target_scope", "")
     violations: list[str] = []
 
+    def _extract_drift_path(c: Any) -> str:
+        if isinstance(c, dict):
+            return str(c.get("path") or "")
+        return str(c or "")
+
     # Resolve target paths using task delta if available, otherwise changed_paths
     if task_changes is not None:
-        paths_set = {repo / str(c.get("path")) for c in task_changes if c.get("path")}
+        paths_set = {repo / _extract_drift_path(c) for c in task_changes if _extract_drift_path(c)}
         modified_paths = [p for p in paths_set if p.is_file()]
     elif task_id:
         try:
@@ -81,7 +86,7 @@ def check_architecture_drift(
                 pass
             man = build_task_manifest(repo, base_data, expected_files=plan_exp)
             t_changes = man.get("task_changes") or man.get("changes") or []
-            paths_set = {repo / str(c.get("path")) for c in t_changes if c.get("path")}
+            paths_set = {repo / _extract_drift_path(c) for c in t_changes if _extract_drift_path(c)}
             modified_paths = [p for p in paths_set if p.is_file()]
         except Exception:
             modified_paths = [p for p in changed_paths(repo=repo) if p.is_file()]

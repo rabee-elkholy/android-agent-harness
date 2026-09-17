@@ -66,7 +66,11 @@ def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict
     modules = sorted(set(plan.get("expected_modules") or []) | set(changed_modules(repo, manifest)))
     modules_str = ",".join(m.lstrip(":") for m in modules)
 
-    actual_paths = sorted({entry.get("path") for entry in (manifest.get("task_changes") or manifest.get("changes") or []) if entry.get("path")})
+    actual_paths = sorted({
+        (entry.get("path") if isinstance(entry, dict) else str(entry))
+        for entry in (manifest.get("task_changes") or manifest.get("changes") or [])
+        if (entry.get("path") if isinstance(entry, dict) else str(entry))
+    })
     all_expected_files = sorted(set(plan.get("expected_files") or []) | set(actual_paths))
     files_str = ",".join(all_expected_files)
 
@@ -147,9 +151,9 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
     if task_baseline is not None:
         task_manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"))
         uncommitted = [
-            str(c.get("path") or "")
+            str(c.get("path") if isinstance(c, dict) else c or "")
             for c in (task_manifest.get("task_changes") or [])
-            if c.get("path") and c.get("status") != "BASELINE_DIRTY_REMOVED"
+            if (c.get("path") if isinstance(c, dict) else c) and (not isinstance(c, dict) or c.get("status") != "BASELINE_DIRTY_REMOVED")
         ]
         return sorted(set(uncommitted))
     task_current = task_dir(repo, task_id) / "current-run.json"
@@ -161,7 +165,7 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
         if run_manifest_path.is_file():
             run_manifest = read_json(run_manifest_path)
             changes_list = run_manifest.get("task_changes") if "task_changes" in run_manifest else run_manifest.get("changes") or []
-            task_files = {str(c.get("path") or "") for c in changes_list}
+            task_files = {str(c.get("path") if isinstance(c, dict) else c or "") for c in changes_list if (c.get("path") if isinstance(c, dict) else c)}
             return sorted(task_files & current_changes)
     expected = set(plan.get("expected_files") or [])
     return sorted(expected & current_changes)
@@ -641,7 +645,11 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
     else:
         policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
-    actual_task_paths = [c.get("path") for c in (manifest.get("task_changes") or manifest.get("changes") or []) if c.get("path")]
+    actual_task_paths = [
+        (c.get("path") if isinstance(c, dict) else str(c))
+        for c in (manifest.get("task_changes") or manifest.get("changes") or [])
+        if (c.get("path") if isinstance(c, dict) else str(c))
+    ]
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths)
     if drift:
         plan["material_drift"] = drift
@@ -1004,7 +1012,8 @@ def resolve_phase_modules(repo: Path, manifest: dict) -> list[str]:
     found: set[str] = set()
     changes = manifest.get("task_changes") or manifest.get("changes") or []
     for c in changes:
-        p = str(c.get("path") or "").replace("\\", "/").strip("/")
+        raw_p = c.get("path") if isinstance(c, dict) else str(c)
+        p = str(raw_p or "").replace("\\", "/").strip("/")
         if "/src/" in f"/{p}":
             mod_prefix = p.split("/src/")[0]
             if mod_prefix:
@@ -1140,7 +1149,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     if phase_expected_files:
         norm_expected = normalize_expected_files(repo, phase_expected_files)
         for change in phase_changes:
-            change_path = change.get("path", "").replace("\\", "/").strip("/")
+            raw_p = change.get("path") if isinstance(change, dict) else str(change)
+            change_path = (raw_p or "").replace("\\", "/").strip("/")
             if change_path.startswith(".agents/"):
                 continue
             if change_path not in norm_expected:
@@ -1150,7 +1160,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     if phase_expected_modules:
         norm_mods = [m.strip("/:").replace("\\", "/") for m in phase_expected_modules]
         for change in phase_changes:
-            change_path = change.get("path", "").replace("\\", "/").strip("/")
+            raw_p = change.get("path") if isinstance(change, dict) else str(change)
+            change_path = (raw_p or "").replace("\\", "/").strip("/")
             if change_path.startswith(".agents/"):
                 continue
             mod_match = any(change_path.startswith(m + "/") or change_path == m for m in norm_mods)
@@ -1168,7 +1179,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         from fast_kt_lint import lint_file
         kt_issues = []
         for c in phase_changes:
-            p = repo / c.get("path", "")
+            rel_p = c.get("path", "") if isinstance(c, dict) else str(c or "")
+            p = repo / rel_p
             if p.suffix == ".kt" and p.is_file():
                 kt_issues.extend(lint_file(p))
         if kt_issues:
@@ -1190,15 +1202,19 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         raise ValidationError(f"phase checkpoint architecture drift check exception: {exc}")
 
     # Room schema guard
+    def _phase_p(item: Any) -> str:
+        return str(item.get("path", "") if isinstance(item, dict) else item or "")
+
     has_room = any(
-        (c.get("path", "").endswith(".kt") and any(w in str(c.get("path", "")).lower() for w in ("entity", "dao", "database")))
-        or "room" in str(c.get("path", "")).lower()
+        (_phase_p(c).endswith(".kt") and any(w in _phase_p(c).lower() for w in ("entity", "dao", "database")))
+        or "room" in _phase_p(c).lower()
         for c in phase_changes
     ) or "ROOM_SCHEMA" in (phase_policy.get("surfaces") or [])
     if has_room:
         try:
             from room_guard import check_room_working_tree
-            room_ok, room_msg = check_room_working_tree(repo)
+            phase_paths = [_phase_p(c) for c in phase_changes if _phase_p(c)]
+            room_ok, room_msg = check_room_working_tree(repo=repo, paths=phase_paths)
             if not room_ok:
                 raise ValidationError(f"phase checkpoint Room schema violation: {room_msg}")
         except (ImportError, ValidationError):

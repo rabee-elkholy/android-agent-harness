@@ -280,13 +280,21 @@ def iter_database_files(repo: Path | None = None) -> list[Path]:
 
 
 def check_room_working_tree(
-    modified_rels: list[str] | None = None,
+    modified_rels: list[str] | Path | None = None,
     repo: Path | None = None,
-    paths: list[str | Path] | None = None,
+    paths: list[str | Path | dict] | None = None,
 ) -> tuple[bool, str]:
+    if isinstance(modified_rels, Path) and repo is None:
+        repo = modified_rels
+        modified_rels = None
+
     root = (repo or REPO).resolve()
     if modified_rels is None and paths is not None:
-        modified_rels = [str(p).replace("\\", "/") for p in paths]
+        modified_rels = [
+            (p.get("path", "") if isinstance(p, dict) else str(p)).replace("\\", "/")
+            for p in paths
+            if (p.get("path", "") if isinstance(p, dict) else str(p))
+        ]
 
     def _rel(path: Path) -> str:
         return path.relative_to(root).as_posix()

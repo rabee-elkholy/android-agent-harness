@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     live_print(f"[*] Working-tree files (including untracked): {len(modified)}")
 
     selected_gates = {"preflight", "localization", "room"}
-    task_changes: list[str] | None = None
+    task_changes: list | None = None
     if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
         try:
             active_file = state_root(REPO) / "active-task.json"
@@ -79,9 +79,15 @@ def main(argv: list[str] | None = None) -> int:
     risk_tier_name = classification["severity"]
     task_surfaces = set(classification.get("surfaces") or [])
 
+    task_change_paths = [
+        (p.get("path", "") if isinstance(p, dict) else str(p))
+        for p in (task_changes or [])
+        if (p.get("path", "") if isinstance(p, dict) else str(p))
+    ] if task_changes is not None else None
+
     task_touches_room = bool(
         task_surfaces & {"PERSISTENCE", "ROOM_SCHEMA"}
-        or (task_changes and any("room" in p.lower() or "dao" in p.lower() or "entity" in p.lower() or "database" in p.lower() for p in task_changes))
+        or (task_change_paths and any("room" in p.lower() or "dao" in p.lower() or "entity" in p.lower() or "database" in p.lower() for p in task_change_paths))
     )
 
     skip_hook = diagnostic or "--skip-hook-selftest" in sys.argv or os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1"
@@ -94,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         elif task_changes is not None and not task_touches_room:
             db_ok, db_msg = True, "room check not required for current task changes"
         else:
-            task_paths = task_changes if task_changes is not None else None
+            task_paths = task_change_paths if task_change_paths is not None else None
             db_ok, db_msg = check_room_working_tree(paths=task_paths)
         sublog(f"[{'OK' if db_ok else 'FAIL'}] {db_msg}")
 

@@ -129,7 +129,8 @@ def changed_modules(repo: Path, manifest: dict, task_only: bool = True) -> list[
     found: set[str] = set()
     changes = (manifest.get("task_changes") if (task_only and "task_changes" in manifest) else manifest.get("changes")) or []
     for change in changes:
-        for raw in (change.get("path"), change.get("old_path")):
+        raw_paths = (change.get("path"), change.get("old_path")) if isinstance(change, dict) else (str(change), None)
+        for raw in raw_paths:
             rel = str(raw or "").strip("/")
             if not rel:
                 continue

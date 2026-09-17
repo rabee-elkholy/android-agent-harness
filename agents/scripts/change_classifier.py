@@ -406,10 +406,14 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
             pass
 
     if task_changes is not None:
-        task_paths = {
-            c["path"] if isinstance(c, dict) else (c.rel_posix if hasattr(c, "rel_posix") else str(c))
-            for c in task_changes
-        }
+        def _extract_cls_path(c: Any) -> str:
+            if isinstance(c, dict):
+                return str(c.get("path") or "")
+            if hasattr(c, "rel_posix"):
+                return str(c.rel_posix or "")
+            return str(c or "")
+
+        task_paths = {_extract_cls_path(c) for c in task_changes if _extract_cls_path(c)}
         changes = [c for c in all_changes if c.rel_posix in task_paths or (c.old_rel_posix and c.old_rel_posix in task_paths)]
     else:
         changes = all_changes

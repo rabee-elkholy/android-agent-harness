@@ -4,6 +4,27 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.46] - 2026-09-17
+
+### Defensive Manifest Typing, Subagent Auto-Harvesting, Zero-Polling Enforcement & Governance Hardening
+
+- **Defensive Manifest & Task Changes Typing (`workflow.py`, `preflight_check.py`, `architecture_drift.py`, `run_tests_gate.py`, `change_classifier.py`, `plan_authority.py`, `delivery_manifest.py`)**:
+  - Standardized defensive path resolution across all consumers of `task_changes` and `paths` to handle both string paths (`str`) and manifest change dictionaries (`{"path": ..., "status": ...}`).
+  - Eliminated crashes (`'dict' object has no attribute 'lower'`, `'WindowsPath' object is not iterable`) during preflight checks, phase checkpoints, test gating, and drift analysis.
+- **Phase Checkpoint Room Database Guard Fix (`workflow.py`, `room_guard.py`)**:
+  - Fixed positional argument bug in `workflow.py` calling `check_room_working_tree(repo=repo, paths=phase_paths)` instead of passing `repo` as `modified_rels`.
+  - Hardened `check_room_working_tree` in `room_guard.py` to defensively accept `repo` as a positional parameter and seamlessly extract paths from dictionary lists.
+- **Subagent Review Harvesting & Dispatch Receipt Auto-Synthesis (`record_review.py`)**:
+  - Enhanced `_extract_transcript_response` to prioritize `transcript_full.jsonl` over `transcript.jsonl` when host transcript compaction truncates evidence footers (`EVIDENCE pkg=...`).
+  - Implemented automatic dispatch receipt synthesis when trusted subagent transcripts exist within the authentic application brain root, ensuring review verification succeeds in environments without pre-tool hook dispatch records (such as Gemini CLI).
+- **Physical Zero-Polling Invariant Enforcement (`pre_tool_safety.py`)**:
+  - Enforced hard tool boundary blocks in `pre_tool_safety.py` intercepting `manage_task(Action='status')`, `manage_subagents(Action='list')`, and short-interval/busy-waiting `schedule` calls.
+  - Prevents agent execution stalls and token exhaustion caused by polling loops, enforcing reliance on reactive system wakeups.
+- **Governance & Anti-Circumvention Rule Hardening (`harness-rules.md`, `GEMINI.md`, tool adapter templates)**:
+  - Added mandatory Consultation Before Planning requirement to resolve ambiguities, domain logic, and user consultation before drafting implementation plans.
+  - Enforced strict Harness Immutability and diagnostic error reporting, prohibiting agents from editing or bypassing `.agents/` engine scripts using PowerShell or ad-hoc shell tooling.
+  - Clarified that initial plan approval in chat ("ابدأ", "موافق", "Proceed") authorizes end-to-end multi-phase execution without subsequent phase approval stops.
+
 ## [1.0.45] - 2026-09-17
 
 ### Unblocked Chat Installer & Shell Download Flexibility
