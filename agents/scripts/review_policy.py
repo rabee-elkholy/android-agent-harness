@@ -324,14 +324,36 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--task", default=None, help="Task ID (alias for --task-id)")
+    parser.add_argument("--task-id", default=None, help="Task ID")
+    args, _unknown = parser.parse_known_args()
     repo = Path(args.repo).resolve()
+    task_id = args.task or args.task_id or os.environ.get("HARNESS_TASK_ID")
+    if not task_id:
+        active_p = repo / ".agents" / "state" / "active-task.json"
+        if active_p.is_file():
+            try:
+                active_data = json.loads(active_p.read_text(encoding="utf-8"))
+                task_id = active_data.get("task_id")
+            except Exception:
+                pass
+    task_kind = "FEATURE"
+    plan = None
+    if task_id:
+        plan_p = repo / ".agents" / "state" / "tasks" / task_id / "plan.json"
+        if plan_p.is_file():
+            try:
+                plan = json.loads(plan_p.read_text(encoding="utf-8"))
+                task_kind = str(plan.get("task_kind") or "FEATURE")
+            except Exception:
+                pass
     skills_root = (repo / ".agents" / "skills") if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1] / "skills"
     try:
         from _product import PROJECT_KIND
     except ImportError:
         PROJECT_KIND = "application"
-    result = decide(classify(repo), skills_root, project_kind=str(PROJECT_KIND))
+    classification = classify(repo, task_id=task_id)
+    result = decide(classification, skills_root, project_kind=str(PROJECT_KIND), task_kind=task_kind, plan=plan)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

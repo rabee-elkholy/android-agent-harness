@@ -217,20 +217,56 @@ def draft(args: argparse.Namespace) -> dict:
         if isinstance(raw_phases, list):
             parsed_phases = raw_phases
         elif isinstance(raw_phases, str):
-            try:
-                p_file = Path(raw_phases)
-                if p_file.is_file():
+            s = raw_phases.strip()
+            p_file = Path(s)
+            if p_file.is_file():
+                try:
                     loaded = json.loads(p_file.read_text(encoding="utf-8"))
-                else:
-                    loaded = json.loads(raw_phases)
-                if isinstance(loaded, list):
-                    parsed_phases = loaded
-                elif isinstance(loaded, dict) and isinstance(loaded.get("phases"), list):
-                    parsed_phases = loaded["phases"]
-                else:
-                    raise ValidationError("phases JSON must be a list of phases or an object with a 'phases' list")
-            except Exception as exc:
-                raise ValidationError(f"invalid --phases parameter: {exc}")
+                except Exception as exc:
+                    raise ValidationError(f"invalid --phases file: {exc}")
+            else:
+                loaded = None
+                # Tier 1: direct json.loads
+                try:
+                    loaded = json.loads(s)
+                except Exception:
+                    pass
+                # Tier 2: clean powershell escaped quotes and outer wrapping quotes
+                if loaded is None:
+                    cleaned = s
+                    if (cleaned.startswith("'") and cleaned.endswith("'")) or (cleaned.startswith('"') and cleaned.endswith('"')):
+                        cleaned = cleaned[1:-1].strip()
+                    cleaned = cleaned.replace(r'\"', '"')
+                    try:
+                        loaded = json.loads(cleaned)
+                    except Exception:
+                        pass
+                # Tier 3: ast.literal_eval for python-style dict/list representations
+                if loaded is None:
+                    import ast
+                    try:
+                        loaded = ast.literal_eval(cleaned if "cleaned" in locals() else s)
+                    except Exception:
+                        pass
+                # Tier 4: comma-separated list like "p1:Setup, p2:Implementation" or "p1, p2"
+                if loaded is None and not s.startswith(("[", "{")):
+                    parts = [p.strip() for p in s.split(",") if p.strip()]
+                    if parts:
+                        loaded = []
+                        for part in parts:
+                            if ":" in part:
+                                pid, pdesc = part.split(":", 1)
+                                loaded.append({"id": pid.strip(), "description": pdesc.strip()})
+                            else:
+                                loaded.append({"id": part, "description": f"Phase {part}"})
+                if loaded is None:
+                    raise ValidationError(f"invalid --phases parameter: unable to parse phases from '{s[:60]}'")
+            if isinstance(loaded, list):
+                parsed_phases = loaded
+            elif isinstance(loaded, dict) and isinstance(loaded.get("phases"), list):
+                parsed_phases = loaded["phases"]
+            else:
+                raise ValidationError("phases JSON must be a list of phases or an object with a 'phases' list")
 
     norm_expected_files = normalize_expected_files(repo, getattr(args, "expected_files", None))
     raw_expected = [item.strip() for item in (args.expected_surfaces or "").split(",") if item.strip()]
@@ -337,8 +373,19 @@ def draft(args: argparse.Namespace) -> dict:
     inferred_target_scope = str(getattr(args, "architecture_target_scope", "") or "").strip()
     if not inferred_target_scope and arch_intent != "MIGRATION":
         if norm_expected_files:
-            if len(norm_expected_files) == 1:
-                inferred_target_scope = norm_expected_files[0]
+            impl_candidates = [
+                p for p in norm_expected_files
+                if not ("/test/" in p.lower() or p.lower().endswith(("test.kt", "test.java")))
+            ]
+            eval_files = impl_candidates or norm_expected_files
+            if len(eval_files) == 1:
+                inferred_target_scope = eval_files[0]
+            else:
+                primary = next(
+                    (p for p in eval_files if any(k in p.lower() for k in ("view", "fragment", "screen", "activity", "composable"))),
+                    eval_files[0]
+                )
+                inferred_target_scope = primary
         elif classification.get("changed_files") == 1:
             all_files = sorted(set(p for info in (classification.get("details") or {}).values() for p in info.get("files") or []))
             if len(all_files) == 1:
@@ -1329,7 +1376,19 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
 
 
 def status(args: argparse.Namespace) -> dict:
-    return _load_plan(Path(args.repo).resolve(), args.task_id)
+    repo = Path(args.repo).resolve()
+    task_id = str(getattr(args, "task_id", "") or "").strip()
+    if not task_id:
+        active_p = state_root(repo) / "active-task.json"
+        if active_p.is_file():
+            try:
+                active_data = read_json(active_p)
+                task_id = str(active_data.get("task_id") or "").strip()
+            except Exception:
+                pass
+    if not task_id:
+        raise ValidationError("no active task found in repository state; specify --task-id <id>")
+    return _load_plan(repo, task_id)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1400,8 +1459,9 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--status", choices=("CONFIRMED", "FALSE_POSITIVE", "NEEDS_CONTEXT", "NOT_REPRODUCIBLE"), required=True, help="Validation verdict of the technical claim")
     command.add_argument("--reason", default="", help="Concise technical explanation (mandatory for FALSE_POSITIVE)")
     command.add_argument("--evidence-reference", default="", help="File:line or package reference")
-    command.set_defaults(handler=record_finding_validation)
-    sub.add_parser("prepare-verification", parents=[common]).set_defaults(handler=prepare_verification)
+    pv_cmd = sub.add_parser("prepare-verification", parents=[common])
+    pv_cmd.add_argument("--force", action="store_true", help="Force regenerate verification run snapshot")
+    pv_cmd.set_defaults(handler=prepare_verification)
     sub.add_parser("verify", parents=[common]).set_defaults(handler=verify_task)
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)
     command = sub.add_parser("deliver", parents=[common])
@@ -1411,7 +1471,10 @@ def build_parser() -> argparse.ArgumentParser:
     command.set_defaults(handler=deliver_task)
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
-    sub.add_parser("status", parents=[common]).set_defaults(handler=status)
+    status_cmd = sub.add_parser("status")
+    status_cmd.add_argument("--repo", required=True)
+    status_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
+    status_cmd.set_defaults(handler=status)
     command = sub.add_parser("recover-stale")
     command.add_argument("--repo", required=True)
     command.add_argument("--task-id", default="")

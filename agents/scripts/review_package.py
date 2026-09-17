@@ -326,13 +326,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", default=os.environ.get("HARNESS_TASK_ID"))
+    parser.add_argument("--task-id", default=None, help="Task ID (alias for --task)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    if not args.task:
+    repo = Path(args.repo).resolve()
+    task_id = args.task or args.task_id or os.environ.get("HARNESS_TASK_ID")
+    if not task_id:
+        active_p = repo / ".agents" / "state" / "active-task.json"
+        if active_p.is_file():
+            try:
+                active_data = json.loads(active_p.read_text(encoding="utf-8"))
+                task_id = active_data.get("task_id")
+            except Exception:
+                pass
+    if not task_id:
         print("[FAIL] --task or HARNESS_TASK_ID is required", file=sys.stderr)
         return 1
     try:
-        path, metadata = build_package(Path(args.repo).resolve(), args.task)
+        path, metadata = build_package(repo, task_id)
     except (ValidationError, OSError) as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1

@@ -318,9 +318,12 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
                 )
                 return EXIT_ENV
             policy = read_json(policy_path)
+            manifest_path = Path(str(current_run.get("manifest") or ""))
+            recorded_manifest = read_json(manifest_path) if manifest_path.is_file() else {}
+            task_changes = recorded_manifest.get("task_changes") if "task_changes" in recorded_manifest else None
             from final_verifier import validate_policy_artifact
             expected_policy, policy_error, _ = validate_policy_artifact(
-                REPO, active, policy, state, policy_path
+                REPO, active, policy, state, policy_path, task_changes=task_changes
             )
             if policy_error:
                 live_print(f"[FAIL] Invalid verification policy: {policy_error}.", err=True)

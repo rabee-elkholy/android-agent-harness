@@ -4,6 +4,28 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.47] - 2026-09-17
+
+### Reviewer Assemble Gating, Device Policy Consistency, Resilient CLI & Lifecycle Pruning
+
+- **Task Changes Policy Consistency in Device Runner (`run_device.py`)**:
+  - Extracted and forwarded `task_changes` from `recorded_manifest` to `validate_policy_artifact(...)` in `_check_device_prerequisites`.
+  - Prevents intermediate Gradle compilation outputs from altering the working tree surface classification and triggering false-positive `current classification does not match the run policy` errors during device deployment.
+- **Hard Reviewer Gating on APK Assemble (`run_gradle_task.py`)**:
+  - Enforced deterministic gate checking in `run_gradle_task.py` before executing Gradle `assemble` when active task is in `VERIFYING`.
+  - Verifies that all required specialist reviewers have completed with passing verdicts in `EvidenceStore` (or an explicit developer override) before APK generation begins, strictly eliminating reviewer bypass.
+- **Universal CLI Task Parameter Resilience & Active Task Auto-Resolution (`review_policy.py`, `review_package.py`, `workflow.py`)**:
+  - Added support for both `--task` and `--task-id` as interchangeable aliases across `review_policy.py` and `review_package.py`.
+  - Added automatic active task resolution from `.agents/state/active-task.json` when task ID flags are omitted, eliminating fatal missing-argument crashes.
+  - Added `--force` support to `workflow.py prepare-verification` to gracefully handle verification snapshot regeneration requests.
+  - Added multi-tier relaxed parser for `--phases` in `workflow.py draft` resolving PowerShell escaping (`\"`), single quotes, Python dict representations, and comma-separated lists.
+- **Multi-File Architecture Scope Resolution & Preferred Family Fallback (`workflow.py`, `architecture_resolver.py`)**:
+  - Implemented multi-file target scope inference filtering unit tests and prioritizing primary UI/feature screens (`Fragment`, `Activity`, `Screen`).
+  - Added path proximity tie-breaker in `_resolve_scope_match` using exemplar path depth and automated fallback to `preferred_new_code_family` in ambiguous scopes.
+- **Lifecycle Snapshot Traversal Pruning & Progress Streaming (`lifecycle.py`, `harness_cli.py`)**:
+  - Replaced unpruned filesystem walks with directory pruning across `build/`, `.gradle/`, `.git/`, `.idea/`, and `.agents/`, reducing scanned file counts from 75,000+ to ~8,500 and scan time from 40s to 0.5s.
+  - Added real-time step progress and sublog markers to kit installation, update, and legacy replacement workflows.
+
 ## [1.0.46] - 2026-09-17
 
 ### Defensive Manifest Typing, Subagent Auto-Harvesting, Zero-Polling Enforcement & Governance Hardening

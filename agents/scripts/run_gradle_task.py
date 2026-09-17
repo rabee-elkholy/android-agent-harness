@@ -146,6 +146,47 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
             **extra,
         })
 
+    if any("assemble" in arg.lower() for arg in task_args):
+        state_dir = run_root / ".agents" / "state"
+        active_p = state_dir / "active-task.json"
+        if active_p.is_file():
+            try:
+                active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
+                tid = str(active_task_data.get("task_id") or "")
+                if tid:
+                    plan_p = state_dir / "tasks" / tid / "plan.json"
+                    current_run_p = state_dir / "tasks" / tid / "current-run.json"
+                    if plan_p.is_file() and current_run_p.is_file():
+                        plan_data = json.loads(plan_p.read_text(encoding="utf-8"))
+                        if plan_data.get("status") == "VERIFYING":
+                            current_run = json.loads(current_run_p.read_text(encoding="utf-8"))
+                            policy_p = Path(str(current_run.get("policy") or ""))
+                            if policy_p.is_file():
+                                pol_data = json.loads(policy_p.read_text(encoding="utf-8"))
+                                required_revs = list(pol_data.get("reviewers") or [])
+                                if required_revs:
+                                    from evidence_store import EvidenceStore
+                                    store = EvidenceStore(state_dir)
+                                    snap = str(current_run.get("snapshot") or current_run.get("delivery_snapshot_sha256") or "")
+                                    r_id = str(current_run.get("run_id") or "")
+                                    try:
+                                        rev_entry = store.read(snap, r_id, "reviews")
+                                        rev_ev = rev_entry.get("evidence") or {}
+                                        if not rev_ev.get("developer_override"):
+                                            covered = set(rev_ev.get("reviewers") or [])
+                                            if not set(required_revs) <= covered or rev_ev.get("blocking_findings"):
+                                                msg = "Pipeline order violation: required specialist reviewers must pass before running assembleDebug."
+                                                live_print(f"[FAIL] {msg}", err=True)
+                                                record("FAIL", 1, "CODE", msg)
+                                                return 1
+                                    except Exception:
+                                        msg = "Pipeline order violation: required specialist reviews must pass before running assembleDebug."
+                                        live_print(f"[FAIL] {msg}", err=True)
+                                        record("FAIL", 1, "CODE", msg)
+                                        return 1
+            except Exception:
+                pass
+
     try:
         wrapper = gradle_wrapper(run_root)
     except FileNotFoundError as exc:
