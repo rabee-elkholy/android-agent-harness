@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -409,6 +411,37 @@ def _configure(repo: Path, kit: Path, answers: dict) -> None:
     _managed_exclude(repo)
 
 
+def _safe_replace_dir(src: Path, dst: Path, *, retries: int = 5, delay: float = 0.15, fallback_copy: bool = True) -> None:
+    """Move or replace src directory into dst with retry and Windows locking resilience."""
+    for attempt in range(retries):
+        gc.collect()
+        try:
+            os.replace(src, dst)
+            return
+        except (PermissionError, OSError) as exc:
+            if attempt == retries - 1:
+                if not fallback_copy:
+                    raise
+                try:
+                    gc.collect()
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                    shutil.rmtree(src, ignore_errors=True)
+                    return
+                except Exception:
+                    raise exc
+            time.sleep(delay * (attempt + 1))
+
+
+def _safe_restore_from_backup(backup_agents: Path, target_agents: Path) -> None:
+    """Safely restore .agents directory from backup without destructive loss."""
+    if not backup_agents.is_dir():
+        return
+    gc.collect()
+    if target_agents.exists():
+        shutil.rmtree(target_agents, ignore_errors=True)
+    shutil.copytree(backup_agents, target_agents, dirs_exist_ok=True)
+
+
 def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool = False) -> None:
     def ignored(_directory: str, names: list[str]) -> set[str]:
         return {name for name in names if name in {"state", "cache", "__pycache__"} or name.endswith((".pyc", ".pyo"))}
@@ -427,7 +460,7 @@ def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool 
             shutil.rmtree(state)
         state.mkdir(parents=True)
         (state / ".gitkeep").touch()
-        os.replace(staging / ".agents", repo / ".agents")
+        _safe_replace_dir(staging / ".agents", repo / ".agents", fallback_copy=True)
         _configure(repo, kit, answers)
         if init_context:
             sublog("extracting project facts & architectural views...")
@@ -479,6 +512,17 @@ def _warm_project_graph(repo: Path) -> None:
 def recover_interrupted_update(repo: Path) -> dict | None:
     journal_path = repo / ".harness-setup" / "update-journal.json"
     if not journal_path.is_file():
+        agents_dir = repo / ".agents"
+        if (not agents_dir.is_dir() or not (agents_dir / "VERSION").is_file()) and (repo / ".harness-backup").is_dir():
+            backups = sorted(
+                (repo / ".harness-backup").glob("*"),
+                key=lambda p: p.stat().st_mtime if p.is_dir() else 0,
+                reverse=True,
+            )
+            for b in backups:
+                if (b / ".agents").is_dir():
+                    _safe_restore_from_backup(b / ".agents", agents_dir)
+                    return {"status": "RECOVERED", "action": "restored_missing_engine_from_backup"}
         return None
     try:
         journal = read_json(journal_path)
@@ -486,8 +530,6 @@ def recover_interrupted_update(repo: Path) -> dict | None:
         return None
     status = str(journal.get("status") or "")
     stage = str(journal.get("stage") or "")
-    if status in ("COMPLETED", "ROLLED_BACK") or stage in ("COMPLETED", "ROLLED_BACK"):
-        return None
     prev_dirs = sorted(repo.glob(".agents.previous-*"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
     agents_dir = repo / ".agents"
     target_version = str(journal.get("to_version") or "")
@@ -498,7 +540,12 @@ def recover_interrupted_update(repo: Path) -> dict | None:
         and (agents_dir / "scripts" / "_product.py").is_file()
         and (agents_dir / "rules" / "harness-rules.md").is_file()
     )
-    if stage == "PREPARED":
+    if (status == "COMPLETED" or stage == "COMPLETED") and is_agents_complete:
+        return None
+    if (status == "ROLLED_BACK" or stage == "ROLLED_BACK") and is_agents_complete:
+        return None
+
+    if stage == "PREPARED" and is_agents_complete:
         journal["status"] = "ROLLED_BACK"
         journal["stage"] = "ROLLED_BACK"
         journal["recovered_at"] = utc_now()
@@ -541,10 +588,30 @@ def recover_interrupted_update(repo: Path) -> dict | None:
     if not old_target and prev_dirs:
         old_target = prev_dirs[0]
 
+    backup_raw = str(journal.get("backup") or "")
+    if not old_target and backup_raw:
+        backup_cand = (repo / backup_raw).resolve() if not Path(backup_raw).is_absolute() else Path(backup_raw)
+        if (backup_cand / ".agents").is_dir():
+            old_target = backup_cand / ".agents"
+
+    if not old_target and (repo / ".harness-backup").is_dir():
+        backups = sorted(
+            (repo / ".harness-backup").glob("*"),
+            key=lambda p: p.stat().st_mtime if p.is_dir() else 0,
+            reverse=True,
+        )
+        for b in backups:
+            if (b / ".agents").is_dir():
+                old_target = b / ".agents"
+                break
+
     if old_target:
         if agents_dir.exists():
             shutil.rmtree(agents_dir, ignore_errors=True)
-        os.replace(old_target, agents_dir)
+        if old_target.name.startswith(".agents.previous-"):
+            _safe_replace_dir(old_target, agents_dir, fallback_copy=True)
+        else:
+            _safe_restore_from_backup(old_target, agents_dir)
         journal["status"] = "ROLLED_BACK"
         journal["stage"] = "ROLLED_BACK"
         journal["recovered_at"] = utc_now()
@@ -609,7 +676,10 @@ def require_update_idle(repo: Path) -> None:
     if plan.get("task_id") != task_id:
         raise ValidationError("active task identity mismatch; update refused")
     if plan.get("status") not in {"CANCELLED", "DELIVERED"}:
-        raise ValidationError("compatible update refused while an active task exists; finish or cancel the task before updating")
+        raise ValidationError(
+            f"compatible update refused while active task '{task_id}' exists; "
+            f"finish or cancel the task before updating (run: python .agents/scripts/workflow.py cancel --repo . --task-id {task_id})"
+        )
 
 
 def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
@@ -676,7 +746,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
 
     try:
         with step_progress("2. Installing updated harness engine"):
-            os.replace(repo / ".agents", old_agents)
+            _safe_replace_dir(repo / ".agents", old_agents, fallback_copy=True)
             _set_stage("OLD_ENGINE_MOVED")
 
             _install_engine(repo, kit, answers, init_context=False)
@@ -739,9 +809,11 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
             atomic_write_json(journal_path, journal)
             shutil.rmtree(old_agents, ignore_errors=True)
     except Exception:
-        shutil.rmtree(repo / ".agents", ignore_errors=True)
         if old_agents.exists():
-            os.replace(old_agents, repo / ".agents")
+            shutil.rmtree(repo / ".agents", ignore_errors=True)
+            _safe_replace_dir(old_agents, repo / ".agents", fallback_copy=True)
+        elif backup and (backup / ".agents").is_dir() and not (repo / ".agents" / "VERSION").is_file():
+            _safe_restore_from_backup(backup / ".agents", repo / ".agents")
         _rollback_adapters(repo, backup, before)
         journal["status"] = "ROLLED_BACK"
         journal["stage"] = "ROLLED_BACK"
@@ -776,7 +848,7 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
         has_prior_facts = (repo / ".agents" / "project-context" / "project-facts.json").is_file()
     try:
         with step_progress("2. Installing replacement harness engine"):
-            os.replace(repo / ".agents", old_agents)
+            _safe_replace_dir(repo / ".agents", old_agents, fallback_copy=True)
             _install_engine(repo, kit, answers, init_context=(not has_prior_facts))
             _restore_preserved(repo, preserve_root, preserved)
         with step_progress("3. Verifying application integrity"):
@@ -788,9 +860,11 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
             _warm_project_graph(repo)
             shutil.rmtree(old_agents, ignore_errors=True)
     except Exception:
-        shutil.rmtree(repo / ".agents", ignore_errors=True)
         if old_agents.exists():
-            os.replace(old_agents, repo / ".agents")
+            shutil.rmtree(repo / ".agents", ignore_errors=True)
+            _safe_replace_dir(old_agents, repo / ".agents", fallback_copy=True)
+        elif backup and (backup / ".agents").is_dir() and not (repo / ".agents" / "VERSION").is_file():
+            _safe_restore_from_backup(backup / ".agents", repo / ".agents")
         _rollback_adapters(repo, backup, before)
         _managed_exclude(repo, remove=True)
         (repo / OWNERSHIP_RELATIVE).unlink(missing_ok=True)

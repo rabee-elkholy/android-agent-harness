@@ -4,6 +4,25 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.48] - 2026-09-17
+
+### Windows File-Locking Resiliency, Safe Rollback Protection, Self-Healing Recovery & Ghost-Task Prevention
+
+- **Windows Directory Locking & In-Place Replacement Resiliency (`lifecycle.py`)**:
+  - Introduced `_safe_replace_dir` with garbage collection (`gc.collect()`), retry backoff, and fallback to `shutil.copytree` with in-place synchronization when Windows file handles or transient locks deny directory rename (`[WinError 5] Access is denied`).
+  - Eliminates catastrophic directory move failures during updates in active IDE or hook environments.
+- **Safe Rollback & Engine Preservation (`lifecycle.py`)**:
+  - Redesigned exception handling in `update()` and `replace_legacy()` to safeguard `.agents` from deletion when failures occur before or during engine movement (`stage == "PREPARED"`).
+  - In all failure scenarios, rollback now guarantees engine restoration by falling back to `old_agents` or the pre-update backup snapshot (`backup / .agents`), ensuring `.agents` is never wiped.
+- **Self-Healing Interrupted Update Recovery (`lifecycle.py`)**:
+  - Enhanced `recover_interrupted_update()` to detect incomplete or missing `.agents` directories even if previous journals were marked `ROLLED_BACK`.
+  - Automatically recovers and restores the engine from `.harness-backup` or previous directories, eliminating deadlock on subsequent update attempts.
+- **Actionable Active-Task Refusal Error (`lifecycle.py`)**:
+  - Updated `require_update_idle()` to print the active task ID and the exact copy-paste cancellation command (`python .agents/scripts/workflow.py cancel --repo . --task-id <id>`) when an update is attempted with an active task.
+- **Ghost-Task Wandering Prevention (`pre_invocation_reminder.py`, `docs/install-or-update-prompt.md`)**:
+  - Added explicit instructions to `pre_invocation_reminder.py` advising agents that for unrelated work or harness updates, the active task must be cancelled or delivered first rather than wandering into git/brain file searches.
+  - Added an active-task checkpoint at Phase 1 discovery in `docs/install-or-update-prompt.md` to stop immediately and prompt for cancellation.
+
 ## [1.0.47] - 2026-09-17
 
 ### Reviewer Assemble Gating, Device Policy Consistency, Resilient CLI & Lifecycle Pruning

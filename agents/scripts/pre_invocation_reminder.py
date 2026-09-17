@@ -55,7 +55,7 @@ def _message() -> str:
         next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
     else:
         next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
-    return f"Android Harness task {task_id}: {status}. {next_step} Zoho mutates only after explicit `update zoho`."
+    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, cancel or close this active task first (run `workflow.py cancel --task-id {task_id}`); do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`."
 
 
 def _compact_message() -> str:
@@ -65,16 +65,16 @@ def _compact_message() -> str:
         status = str(plan.get("status") or "UNKNOWN")
         task_id = str(plan.get("task_id") or "unknown")
         if status == "IMPLEMENTING":
-            return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion."
+            return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion. For unrelated work, cancel active task first."
         if status == "VERIFYING":
-            return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. verify. Run workflow.py resume for fixes; do not stall on follow-ups."
+            return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. verify. Run workflow.py resume for fixes; do not stall on follow-ups. For unrelated work, cancel active task first."
         if status == "BLOCKED":
             blocked = plan.get("blocked_reviewers", [])
             blocked_str = f" ({', '.join(blocked)})" if blocked else ""
             return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Fix issues and run: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`"
         if status == "READY_FOR_DELIVERY":
             return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close."
-        return f"Harness [Task {task_id}: {status}]: Discovery uses `project_graph.py`. Ask developer before guessing missing scenarios."
+        return f"Harness [Task {task_id}: {status}]: Discovery uses `project_graph.py`. For unrelated work or updates, cancel active task first (workflow.py cancel). Ask developer before guessing missing scenarios."
     except Exception:
         return "Android Harness: Use `project_graph.py --feature <name>` or `--find <Symbol>`. Unanchored grep cascades and guesswork are forbidden."
 

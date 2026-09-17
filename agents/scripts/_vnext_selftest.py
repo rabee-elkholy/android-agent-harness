@@ -1187,6 +1187,65 @@ class LifecycleTests(RepoCase):
         self.assertIn(facts["schema_version"], (1, 2))
         self.assertTrue(facts["context_fingerprint_sha256"])
 
+    def test_update_rollback_preserves_engine_if_old_agents_move_fails(self) -> None:
+        self._answers()
+        install(self.repo, KIT)
+        self.assertTrue((self.repo / ".agents" / "VERSION").is_file())
+
+        original_safe_replace = lifecycle_module._safe_replace_dir
+
+        def fail_replace(src, dst, **kwargs):
+            if "old_agents" in str(dst) or ".agents.previous-" in str(dst):
+                raise PermissionError("[WinError 5] Access is denied (simulated lock)")
+            return original_safe_replace(src, dst, **kwargs)
+
+        with mock.patch.object(lifecycle_module, "_safe_replace_dir", side_effect=fail_replace):
+            with self.assertRaises(PermissionError):
+                lifecycle_module.update(self.repo, KIT)
+
+        self.assertTrue((self.repo / ".agents").is_dir())
+        self.assertTrue((self.repo / ".agents" / "VERSION").is_file())
+        self.assertTrue((self.repo / ".agents" / "scripts" / "_product.py").is_file())
+
+    def test_recover_interrupted_update_restores_from_backup_when_rolled_back_engine_missing(self) -> None:
+        self._answers()
+        install(self.repo, KIT)
+        ownership = lifecycle_module._read_ownership(self.repo)
+        backup = lifecycle_module._backup(self.repo, ownership, "update", lifecycle_module._candidate_adapter_paths(self.repo))
+        journal_path = self.repo / ".harness-setup" / "update-journal.json"
+        write(journal_path, json.dumps({
+            "schema_version": 1,
+            "status": "ROLLED_BACK",
+            "stage": "ROLLED_BACK",
+            "backup": str(backup),
+            "from_version": "1.0.47",
+            "to_version": "1.0.48",
+        }))
+        shutil.rmtree(self.repo / ".agents", ignore_errors=True)
+        self.assertFalse((self.repo / ".agents").exists())
+
+        recovered = lifecycle_module.recover_interrupted_update(self.repo)
+        self.assertIsNotNone(recovered)
+        self.assertEqual("RECOVERED", recovered["status"])
+        self.assertTrue((self.repo / ".agents").is_dir())
+        self.assertTrue((self.repo / ".agents" / "VERSION").is_file())
+
+    def test_update_refusal_includes_exact_cancel_command(self) -> None:
+        self._answers()
+        install(self.repo, KIT)
+        plan_path = self.repo / ".agents/state/plans/task-active.json"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        write(plan_path, json.dumps({"task_id": "task-active", "status": "IMPLEMENTING"}))
+        write(self.repo / ".agents/state/active-task.json", json.dumps({
+            "task_id": "task-active",
+            "plan_path": ".agents/state/plans/task-active.json",
+        }))
+        with self.assertRaises(lifecycle_module.ValidationError) as ctx:
+            lifecycle_module.update(self.repo, KIT)
+        msg = str(ctx.exception)
+        self.assertIn("task-active", msg)
+        self.assertIn("workflow.py cancel --repo . --task-id task-active", msg)
+
 
 class EndToEndWorkflowTests(RepoCase):
     def test_sensitive_final_approval_is_separate_and_snapshot_bound(self) -> None:
