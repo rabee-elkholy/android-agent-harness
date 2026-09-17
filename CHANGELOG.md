@@ -4,6 +4,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.44] - 2026-09-17
+
+### Web Fetch Buffer Hardening: Compact Chat Installer Prompt
+
+- **Compact Chat Installer Prompt (`docs/install-or-update-prompt.md`)**:
+  - Streamlined and optimized installer prompt phrasing across all 5 phases (Discovery, Bootstrap, Authoritative Interview, Lifecycle Execution, Verification) down from 4,095 bytes to ~2,700 bytes.
+  - Eliminated web fetch truncation and stream severance caused by host IDE web tools (`read_url_content`) and network buffering on raw markdown files.
+  - Preserved 100% of security guarantees, mandatory gate assertions, and cryptographic SHA-256 tamper-evident integrity.
+
 ## [1.0.43] - 2026-09-17
 
 ### Performance & Usability: Real-Time Sublogs, Pruned Room Scanning & Architecture Contract Resilience
