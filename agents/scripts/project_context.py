@@ -1316,12 +1316,41 @@ def compute_source_fingerprint(repo: Path) -> dict:
         if proc.returncode == 0:
             for line in proc.stdout.splitlines():
                 if len(line) > 3:
-                    fpath = line[3:].strip().replace("\\", "/")
+                    raw_status = line[:2]
+                    raw_path = line[3:].strip()
+                    if " -> " in raw_path:
+                        parts = raw_path.split(" -> ")
+                        old_path = parts[0].strip().strip('"').replace("\\", "/")
+                        new_path = parts[1].strip().strip('"').replace("\\", "/")
+                        fpath = new_path
+                    else:
+                        old_path = None
+                        fpath = raw_path.strip('"').replace("\\", "/")
+
+                    if fpath.startswith((".git/", ".agents/", ".gradle/", "build/")):
+                        continue
+
                     if fpath.endswith((".gradle", ".gradle.kts", ".toml", ".xml", ".kt", ".java")):
-                        dirty_items.append((line[:2], fpath))
+                        clean_status = raw_status.strip()
+                        is_deleted = "D" in raw_status or not (root / fpath).exists()
+                        content_sha256 = None
+                        if not is_deleted:
+                            try:
+                                content_sha256 = hashlib.sha256((root / fpath).read_bytes()).hexdigest()
+                            except OSError:
+                                content_sha256 = None
+
+                        entry = {
+                            "status": clean_status,
+                            "path": fpath,
+                            "content_sha256": content_sha256,
+                        }
+                        if old_path:
+                            entry["old_path"] = old_path
+                        dirty_items.append(entry)
     except Exception:
         pass
-    dirty_items.sort()
+    dirty_items.sort(key=lambda x: x["path"])
 
     payload = {
         "version": 2,
@@ -1344,7 +1373,7 @@ def is_context_fresh(repo: Path) -> bool:
     if not facts_file.is_file():
         return False
     try:
-        facts = read_json(facts_file)
+        facts = json.loads(facts_file.read_text(encoding="utf-8"))
         stored_sfp = facts.get("source_fingerprint_sha256")
         if stored_sfp:
             live_sfp = compute_source_fingerprint(repo)

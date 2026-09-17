@@ -1140,7 +1140,8 @@ class SecurityTests(unittest.TestCase):
     def test_REDGREEN_ID_001_defect_binding(self):
         """REDGREEN-ID-001: failing test in RED that is resolved in GREEN passes, while unresolved fails"""
         import argparse
-        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root, _load_plan, load_task_baseline
+        from _vnext_common import canonical_sha256, utc_now
         from final_verifier import verify_task
         from evidence_store import EvidenceStore
 
@@ -1179,9 +1180,24 @@ class SecurityTests(unittest.TestCase):
         prep_a = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_a))
 
         task_a_dir = state_root(self.repo) / "tasks" / task_id_a
-        (task_a_dir / "debug-evidence.json").write_text(json.dumps({
-            "entries": [{"kind": "failing_test", "test_name": "com.example.LoginTest.testBadPassword"}],
-        }), encoding="utf-8")
+        base_a = load_task_baseline(self.repo, task_id_a)
+        plan_a = _load_plan(self.repo, task_id_a)
+        red_a = {
+            "schema_version": 3,
+            "task_id": task_id_a,
+            "plan_sha256": plan_a["plan_sha256"],
+            "captured_at": utc_now(),
+            "producer": "run_tests_gate",
+            "pre_fix_delivery_snapshot_sha256": "pre_fix_snap_a",
+            "pre_fix_change_set_sha256": "pre_fix_cs_a",
+            "pre_fix_task_change_set_sha256": "pre_fix_cs_a",
+            "baseline_sha256": base_a.get("baseline_sha256", ""),
+            "reproduction_kind": "FAILING_TEST",
+            "gradle_task": ":app:testDebugUnitTest",
+            "failed_tests": [{"test_id": "com.example.LoginTest.testBadPassword", "failure_fingerprint": "fp1"}],
+        }
+        red_a["red_sha256"] = canonical_sha256({k: v for k, v in red_a.items() if k != "red_sha256"})
+        (task_a_dir / "red-evidence.json").write_text(json.dumps(red_a), encoding="utf-8")
 
         store.write(
             snapshot=prep_a["delivery_snapshot_sha256"],
@@ -1191,7 +1207,7 @@ class SecurityTests(unittest.TestCase):
             harness_version=version,
             change_set=prep_a["change_set_sha256"],
             status="PASS",
-            evidence={"executed": 5, "failed": 0, "new_regressions": []},
+            evidence={"executed": 5, "failed": 0, "new_regressions": [], "executed_tests": ["com.example.LoginTest.testBadPassword"]},
         )
         res_a = verify_task(self.repo, task_id_a)
         red_check_a = next((c for c in res_a["checks"] if c["name"] == "red_evidence"), None)
@@ -1225,9 +1241,24 @@ class SecurityTests(unittest.TestCase):
         prep_b = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_b))
 
         task_b_dir = state_root(self.repo) / "tasks" / task_id_b
-        (task_b_dir / "debug-evidence.json").write_text(json.dumps({
-            "entries": [{"kind": "failing_test", "test_name": "com.example.LoginTest.testBadPassword"}],
-        }), encoding="utf-8")
+        base_b = load_task_baseline(self.repo, task_id_b)
+        plan_b = _load_plan(self.repo, task_id_b)
+        red_b = {
+            "schema_version": 3,
+            "task_id": task_id_b,
+            "plan_sha256": plan_b["plan_sha256"],
+            "captured_at": utc_now(),
+            "producer": "run_tests_gate",
+            "pre_fix_delivery_snapshot_sha256": "pre_fix_snap_b",
+            "pre_fix_change_set_sha256": "pre_fix_cs_b",
+            "pre_fix_task_change_set_sha256": "pre_fix_cs_b",
+            "baseline_sha256": base_b.get("baseline_sha256", ""),
+            "reproduction_kind": "FAILING_TEST",
+            "gradle_task": ":app:testDebugUnitTest",
+            "failed_tests": [{"test_id": "com.example.LoginTest.testBadPassword", "failure_fingerprint": "fp1"}],
+        }
+        red_b["red_sha256"] = canonical_sha256({k: v for k, v in red_b.items() if k != "red_sha256"})
+        (task_b_dir / "red-evidence.json").write_text(json.dumps(red_b), encoding="utf-8")
 
         store.write(
             snapshot=prep_b["delivery_snapshot_sha256"],
@@ -1491,7 +1522,8 @@ class SecurityTests(unittest.TestCase):
     def test_REDGREEN_EXEC_001_executed_test_required(self):
         """REDGREEN-EXEC-001: RED defect must be executed in GREEN run, not just absent from regressions"""
         import argparse
-        from workflow import draft, record_approval, begin_task, prepare_verification, state_root
+        from workflow import draft, record_approval, begin_task, prepare_verification, state_root, _load_plan, load_task_baseline
+        from _vnext_common import canonical_sha256, utc_now
         from final_verifier import verify_task
         from evidence_store import EvidenceStore
 
@@ -1529,9 +1561,24 @@ class SecurityTests(unittest.TestCase):
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id_1))
         prep_1 = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_1))
 
-        (state_root(self.repo) / "tasks" / task_id_1 / "debug-evidence.json").write_text(json.dumps({
-            "entries": [{"kind": "failing_test", "test_name": "com.example.AuthTest.testTokenExpiry"}],
-        }), encoding="utf-8")
+        base_1 = load_task_baseline(self.repo, task_id_1)
+        plan_1 = _load_plan(self.repo, task_id_1)
+        red_1 = {
+            "schema_version": 3,
+            "task_id": task_id_1,
+            "plan_sha256": plan_1["plan_sha256"],
+            "captured_at": utc_now(),
+            "producer": "run_tests_gate",
+            "pre_fix_delivery_snapshot_sha256": "pre_fix_snap_1",
+            "pre_fix_change_set_sha256": "pre_fix_cs_1",
+            "pre_fix_task_change_set_sha256": "pre_fix_cs_1",
+            "baseline_sha256": base_1.get("baseline_sha256", ""),
+            "reproduction_kind": "FAILING_TEST",
+            "gradle_task": ":app:testDebugUnitTest",
+            "failed_tests": [{"test_id": "com.example.AuthTest.testTokenExpiry", "failure_fingerprint": "fp1"}],
+        }
+        red_1["red_sha256"] = canonical_sha256({k: v for k, v in red_1.items() if k != "red_sha256"})
+        (state_root(self.repo) / "tasks" / task_id_1 / "red-evidence.json").write_text(json.dumps(red_1), encoding="utf-8")
 
         # GREEN run ran unrelated test only
         store.write(
@@ -1576,9 +1623,24 @@ class SecurityTests(unittest.TestCase):
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id_2))
         prep_2 = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id_2))
 
-        (state_root(self.repo) / "tasks" / task_id_2 / "debug-evidence.json").write_text(json.dumps({
-            "entries": [{"kind": "failing_test", "test_name": "com.example.AuthTest.testTokenExpiry"}],
-        }), encoding="utf-8")
+        base_2 = load_task_baseline(self.repo, task_id_2)
+        plan_2 = _load_plan(self.repo, task_id_2)
+        red_2 = {
+            "schema_version": 3,
+            "task_id": task_id_2,
+            "plan_sha256": plan_2["plan_sha256"],
+            "captured_at": utc_now(),
+            "producer": "run_tests_gate",
+            "pre_fix_delivery_snapshot_sha256": "pre_fix_snap_2",
+            "pre_fix_change_set_sha256": "pre_fix_cs_2",
+            "pre_fix_task_change_set_sha256": "pre_fix_cs_2",
+            "baseline_sha256": base_2.get("baseline_sha256", ""),
+            "reproduction_kind": "FAILING_TEST",
+            "gradle_task": ":app:testDebugUnitTest",
+            "failed_tests": [{"test_id": "com.example.AuthTest.testTokenExpiry", "failure_fingerprint": "fp2"}],
+        }
+        red_2["red_sha256"] = canonical_sha256({k: v for k, v in red_2.items() if k != "red_sha256"})
+        (state_root(self.repo) / "tasks" / task_id_2 / "red-evidence.json").write_text(json.dumps(red_2), encoding="utf-8")
 
         store.write(
             snapshot=prep_2["delivery_snapshot_sha256"],

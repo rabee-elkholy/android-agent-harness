@@ -413,11 +413,11 @@ class DailyWorkflowSelftest(unittest.TestCase):
             risk="None",
         ))
         red_file = task_dir(self.repo, task_id) / "red-evidence.json"
-        self.assertTrue(red_file.is_file())
-        red_data = read_json(red_file)
-        self.assertEqual(2, red_data.get("schema_version"))
-        self.assertEqual("RED_CAPTURED", red_data.get("status"))
-        self.assertEqual("com.example.OrderTest#testCalculateTotal", red_data.get("test_id"))
+        self.assertFalse(red_file.is_file(), "debug-evidence must not write red-evidence.json")
+        dbg_file = task_dir(self.repo, task_id) / "debug-evidence.json"
+        self.assertTrue(dbg_file.is_file())
+        dbg_data = read_json(dbg_file)
+        self.assertFalse(dbg_data["entries"][0].get("satisfies_executable_red", True))
 
         write_file(
             self.repo / "app/src/main/kotlin/com/example/Order.kt",
@@ -425,7 +425,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         )
         baseline = load_task_baseline(self.repo, task_id)
         task_manifest = build_task_manifest(self.repo, baseline)
-        self.assertNotEqual(red_data["snapshot_sha256"], task_manifest["delivery_snapshot_sha256"])
+        self.assertTrue(len(task_manifest.get("task_changes", [])) > 0)
 
     # -------------------------------------------------------------------------
     # Daily-05: Developer has unrelated dirty file
@@ -691,40 +691,49 @@ class DailyWorkflowSelftest(unittest.TestCase):
         required_reviewers = list(policy.get("reviewers") or ["bug-reviewer-agent"])
         self.assertGreater(len(required_reviewers), 0)
 
-        transcript_dir = self.repo / ".agents" / "state" / "transcripts"
-        transcript_dir.mkdir(parents=True, exist_ok=True)
+        app_data_dir = self.repo / ".test_app_data"
+        old_env = os.environ.get("ANTIGRAVITY_APP_DATA")
+        os.environ["ANTIGRAVITY_APP_DATA"] = str(app_data_dir)
         receipt_dir = task_dir(self.repo, task_id) / "reviewer-dispatches"
         receipt_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from record_review import PASS_TOKENS
+            for rev in required_reviewers:
+                sub_id = f"{rev}-conv-id"
+                t_dir = app_data_dir / "brain" / sub_id / ".system_generated" / "logs"
+                t_dir.mkdir(parents=True, exist_ok=True)
+                t_file = t_dir / "transcript.jsonl"
+                token = PASS_TOKENS.get(rev, "PASS")
+                rev_text = f"VERDICT: PASS\n{token}\nNo issues found.\nEVIDENCE pkg={pkg_sha[:12]} cites=0"
+                t_file.write_text(
+                    json.dumps({"type": "PLANNER_RESPONSE", "content": rev_text}) + "\n",
+                    encoding="utf-8",
+                )
+                r_data = {
+                    "schema_version": 1,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "reviewer": rev,
+                    "subagent_id": sub_id,
+                    "review_package_sha256": pkg_sha,
+                    "dispatched_at": utc_now(),
+                    "host": "antigravity",
+                }
+                r_data["receipt_sha256"] = canonical_sha256(r_data)
+                atomic_write_json(receipt_dir / f"{rev}.json", r_data)
 
-        from record_review import PASS_TOKENS
-        for rev in required_reviewers:
-            t_file = transcript_dir / f"{rev}-conv.jsonl"
-            token = PASS_TOKENS.get(rev, "PASS")
-            rev_text = f"VERDICT: PASS\n{token}\nNo issues found.\nEVIDENCE pkg={pkg_sha[:12]} cites=0"
-            t_file.write_text(
-                json.dumps({"type": "PLANNER_RESPONSE", "content": rev_text}) + "\n",
-                encoding="utf-8",
-            )
-            r_data = {
-                "schema_version": 1,
-                "task_id": task_id,
-                "run_id": run_id,
-                "reviewer": rev,
-                "subagent_id": str(t_file),
-                "review_package_sha256": pkg_sha,
-                "dispatched_at": utc_now(),
-                "host": "antigravity",
-            }
-            r_data["receipt_sha256"] = canonical_sha256(r_data)
-            atomic_write_json(receipt_dir / f"{rev}.json", r_data)
-
-            ret = record_review.main([
-                "--repo", str(self.repo),
-                "--task", task_id,
-                "--response-text", f"{rev}={rev_text}",
-                "--subagent-id", str(t_file),
-            ])
-            self.assertEqual(0, ret)
+                ret = record_review.main([
+                    "--repo", str(self.repo),
+                    "--task", task_id,
+                    "--response-text", f"{rev}={rev_text}",
+                    "--subagent-id", sub_id,
+                ])
+                self.assertEqual(0, ret)
+        finally:
+            if old_env is not None:
+                os.environ["ANTIGRAVITY_APP_DATA"] = old_env
+            else:
+                os.environ.pop("ANTIGRAVITY_APP_DATA", None)
 
         reviews_file = state_root(self.repo) / "runs" / run_info["delivery_snapshot_sha256"] / run_id / "reviews.json"
         self.assertTrue(reviews_file.is_file())
@@ -840,12 +849,26 @@ class DailyWorkflowSelftest(unittest.TestCase):
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
 
         write_file(self.repo / "app/src/main/kotlin/com/example/Data.kt", "package com.example\n\nclass Data\n")
+        p1_dir = task_dir(self.repo, task_id) / "phases" / "phase-1"
+        p1_dir.mkdir(parents=True, exist_ok=True)
+        write_file(p1_dir / "unit_tests.json", json.dumps({"status": "PASS"}))
+        write_file(p1_dir / "reviews.json", json.dumps([
+            {"reviewer": "bug-reviewer-agent", "verdict": "PASS"},
+            {"reviewer": "regression-impact-reviewer-agent", "verdict": "PASS"},
+        ]))
         res1 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="phase-1"))
         self.assertEqual("PASS", res1["status"])
         self.assertEqual(["phase-1"], res1["completed_phases"])
         self.assertEqual("phase-2", res1["current_phase_id"])
 
         write_file(self.repo / "app/src/main/kotlin/com/example/UI.kt", "package com.example\n\nclass UI\n")
+        p2_dir = task_dir(self.repo, task_id) / "phases" / "phase-2"
+        p2_dir.mkdir(parents=True, exist_ok=True)
+        write_file(p2_dir / "unit_tests.json", json.dumps({"status": "PASS"}))
+        write_file(p2_dir / "reviews.json", json.dumps([
+            {"reviewer": "bug-reviewer-agent", "verdict": "PASS"},
+            {"reviewer": "regression-impact-reviewer-agent", "verdict": "PASS"},
+        ]))
         res2 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="phase-2"))
         self.assertEqual("PASS", res2["status"])
         self.assertEqual(["phase-1", "phase-2"], res2["completed_phases"])

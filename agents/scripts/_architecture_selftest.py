@@ -708,8 +708,11 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         qs = questions_payload(repo=self.repo, lang="en", facts=facts)
         arch_q = next((q for q in qs if q["id"] == "pref_arch_family"), None)
         self.assertIsNotNone(arch_q)
-        self.assertTrue(arch_q["options"][0]["recommended"])
-        self.assertEqual(compose_families[0]["id"], arch_q["options"][0]["id"])
+        none_opt = next(opt for opt in arch_q["options"] if opt["id"] == "none")
+        self.assertTrue(none_opt["recommended"])
+        for opt in arch_q["options"]:
+            if opt["id"] != "none":
+                self.assertFalse(opt["recommended"])
 
     def test_update_context_mode_question_and_execution(self) -> None:
         from wizard.questions import questions_payload

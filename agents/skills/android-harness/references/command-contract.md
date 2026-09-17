@@ -66,7 +66,7 @@ python .agents/scripts/workflow.py draft \
   --task-id <id> \
   --outcome "<requested outcome>" \
   --kind <AUTO|BUG|FEATURE|REFACTOR> \
-  --planning-depth <SHALLOW|STANDARD|DEEP> \
+  --planning-depth <BOUNDED|ARCHITECTURAL> \
   --expected-surfaces "<comma-separated surfaces>" \
   --expected-modules "<comma-separated modules>" \
   --expected-files "<comma-separated expected files>" \
@@ -74,11 +74,14 @@ python .agents/scripts/workflow.py draft \
   --device-strategy <EMULATOR_PREFERRED|PHYSICAL_PREFERRED|ANY|NONE> \
   --risks "<comma-separated risks>" \
   --rollback "<rollback instructions>" \
-  --external-write "<comma-separated external paths>" \
+  --external-write zoho_sprints \
   --architecture-intent <EXISTING_CHANGE|NEW_SCREEN|NEW_FEATURE|REFACTOR|MIGRATION> \
   --architecture-target-scope "<target scope when applicable>" \
   --architecture-target-family "<target family id when applicable>" \
   --phases "<phases json or file path when required>"
+
+> `--planning-depth`: `BOUNDED` for normal scoped tasks (default); `ARCHITECTURAL` for explicit architecture migration or broad structural architectural work.
+> `--external-write`: Append `zoho_sprints` when Zoho Sprints tracker mutation is explicitly included in the approved plan.
 
 # 2. Record developer approval (after explicit developer approval via Proceed button or chat)
 python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED

@@ -77,10 +77,14 @@ def _common_path_parts_len(path1: str, path2: str) -> int:
     return common_len
 
 
-def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) -> dict[str, Any] | None:
+def _resolve_scope_match(families: list[dict[str, Any]], target_scope: str) -> tuple[dict[str, Any] | None, str]:
     norm_scope = target_scope.replace("\\", "/").strip("/")
     if not norm_scope:
-        return families[0] if len(families) == 1 else None
+        if len(families) == 1:
+            return families[0], "UNIQUE_LOCAL"
+        elif len(families) > 1:
+            return None, "AMBIGUOUS"
+        return None, "NONE"
 
     # 1. Exact exemplar match (screen / component level)
     exemplar_matches: list[dict[str, Any]] = []
@@ -91,9 +95,9 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
                 if f not in exemplar_matches:
                     exemplar_matches.append(f)
     if len(exemplar_matches) == 1:
-        return exemplar_matches[0]
+        return exemplar_matches[0], "EXACT_EXEMPLAR"
     elif len(exemplar_matches) > 1:
-        return None
+        return None, "AMBIGUOUS"
 
     # 2. Scope match via resolve_feature_scope
     resolved_scope = resolve_feature_scope(norm_scope)
@@ -106,9 +110,9 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
                     if f not in scope_matches:
                         scope_matches.append(f)
         if len(scope_matches) == 1:
-            return scope_matches[0]
+            return scope_matches[0], "EXACT_SCOPE"
         elif len(scope_matches) > 1:
-            return None
+            return None, "AMBIGUOUS"
 
     # 2.5 Path component submatch (no prefix clash)
     component_matches: list[dict[str, Any]] = []
@@ -126,9 +130,9 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
         if matched_f and f not in component_matches:
             component_matches.append(f)
     if len(component_matches) == 1:
-        return component_matches[0]
+        return component_matches[0], "UNIQUE_LOCAL"
     elif len(component_matches) > 1:
-        return None
+        return None, "AMBIGUOUS"
 
     # 3. Path component based prefix match
     best_matches: list[dict[str, Any]] = []
@@ -152,9 +156,19 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
                 best_matches.append(f)
 
     if max_depth > 0 and len(best_matches) == 1:
-        return best_matches[0]
+        return best_matches[0], "UNIQUE_LOCAL"
+    elif max_depth > 0 and len(best_matches) > 1:
+        return None, "AMBIGUOUS"
 
-    return None
+    if len(families) == 1:
+        return families[0], "UNIQUE_LOCAL"
+
+    return None, "NONE"
+
+
+def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) -> dict[str, Any] | None:
+    fam, _ = _resolve_scope_match(families, target_scope)
+    return fam
 
 
 def resolve_architecture_contract(
@@ -227,15 +241,18 @@ def resolve_architecture_contract(
     target_family: dict[str, Any] | None = None
     compat_boundaries: list[str] = []
 
+    match_type = "NONE"
     if mode in ("PRESERVE", "REFACTOR"):
         # Resolve local source family
-        matched = _find_family_for_scope(families, target_scope)
+        matched, m_type = _resolve_scope_match(families, target_scope)
+        match_type = m_type
         if matched:
             source_family = matched
             target_family = matched
         elif len(families) == 1:
             source_family = families[0]
             target_family = families[0]
+            match_type = "UNIQUE_LOCAL"
         elif len(families) > 1:
             # Ambiguous target with multiple candidates
             return {
@@ -249,11 +266,11 @@ def resolve_architecture_contract(
             # Zero detected families: synthesize empty/standard contract
             source_family = None
             target_family = None
+            match_type = "NONE"
 
     elif mode == "NEW":
-        matched_scope_family = _find_family_for_scope(families, target_scope)
         preferred_id = policy.get("preferred_new_code_family") if policy else None
-        target_id = target_family_id or preferred_id or (matched_scope_family.get("id") if matched_scope_family else None)
+        target_id = target_family_id or preferred_id
         if not target_id:
             return {
                 "status": STATUS_DECISION_REQUIRED,
@@ -262,7 +279,7 @@ def resolve_architecture_contract(
                 "brief_markdown": None,
                 "message": "No preferred or explicit target architecture family configured for new code. Developer decision required.",
             }
-        target_family = matched_scope_family if (matched_scope_family and matched_scope_family.get("id") == target_id) else _find_family_by_id(families, target_id)
+        target_family = _find_family_by_id(families, target_id)
         if not target_family:
             return {
                 "status": STATUS_DECISION_REQUIRED,
@@ -271,8 +288,10 @@ def resolve_architecture_contract(
                 "brief_markdown": None,
                 "message": f"Configured architecture family '{target_id}' not found in active architecture inventory.",
             }
+        match_type = "EXACT_SCOPE" if target_family_id else "EXACT_EXEMPLAR"
+
         # Check surrounding local scope for compatibility boundary
-        surrounding_fam = _find_family_for_scope(families, target_scope)
+        surrounding_fam, _ = _resolve_scope_match(families, target_scope)
         if surrounding_fam and surrounding_fam.get("id") != target_family.get("id"):
             surrounding_nav = (surrounding_fam.get("dimensions") or {}).get("navigation")
             surrounding_toolkit = (surrounding_fam.get("dimensions") or {}).get("ui_toolkit")
@@ -291,8 +310,9 @@ def resolve_architecture_contract(
                 "message": "Architecture migration requires planning_depth=ARCHITECTURAL.",
             }
         # Resolve source family
-        matched = _find_family_for_scope(families, target_scope)
+        matched, m_type = _resolve_scope_match(families, target_scope)
         source_family = matched or (families[0] if len(families) == 1 else None)
+        match_type = m_type if matched else ("UNIQUE_LOCAL" if len(families) == 1 else "NONE")
         if not source_family:
             return {
                 "status": STATUS_DECISION_REQUIRED,
@@ -321,6 +341,26 @@ def resolve_architecture_contract(
                 "message": "Source and target architecture families must differ for migration.",
             }
 
+    # Determine resolution confidence
+    fam_conf = (target_family.get("confidence") or "MEDIUM").upper() if target_family else "LOW"
+    if fam_conf in ("LOW", "LOW/AMBIGUOUS"):
+        resolution_confidence = "LOW"
+    elif fam_conf == "MEDIUM":
+        resolution_confidence = "MEDIUM"
+    elif fam_conf == "HIGH":
+        if mode == "PRESERVE":
+            if match_type in ("EXACT_EXEMPLAR", "EXACT_SCOPE", "UNIQUE_LOCAL"):
+                resolution_confidence = "HIGH"
+            else:
+                resolution_confidence = "MEDIUM"
+        else:
+            resolution_confidence = "HIGH"
+    else:
+        resolution_confidence = "LOW"
+
+    if not target_family:
+        resolution_confidence = "LOW"
+
     # Build contract
     exemplars = (target_family.get("exemplars") or []) if target_family else []
     contract: dict[str, Any] = {
@@ -335,7 +375,8 @@ def resolve_architecture_contract(
         "migration_allowed": (mode == "MIGRATE"),
         "compatibility_boundaries": sorted(compat_boundaries),
         "exemplar_paths": sorted(exemplars)[:5],
-        "resolution_confidence": "HIGH" if (target_family or mode == "PRESERVE") else "MEDIUM",
+        "match_type": match_type,
+        "resolution_confidence": resolution_confidence,
     }
     contract["contract_sha256"] = compute_contract_hash(contract)
 

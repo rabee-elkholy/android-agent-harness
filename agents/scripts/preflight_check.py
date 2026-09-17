@@ -46,32 +46,59 @@ def main(argv: list[str] | None = None) -> int:
     live_print(f"[*] Working-tree files (including untracked): {len(modified)}")
 
     selected_gates = {"preflight", "localization", "room"}
+    task_changes: list[str] | None = None
     if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
         try:
-            active = read_json(state_root(REPO) / "active-task.json")
-            t_dir = task_dir(REPO, str(active["task_id"]))
-            current_p = t_dir / "current-run.json"
-            if current_p.is_file():
-                current = read_json(current_p)
-                selected_gates = set(read_json(Path(current["policy"])).get("gates") or [])
-            else:
-                prelim_p = t_dir / "preliminary-policy.json"
-                if prelim_p.is_file():
-                    selected_gates = set(read_json(prelim_p).get("gates") or [])
+            active_file = state_root(REPO) / "active-task.json"
+            if active_file.is_file():
+                active = read_json(active_file)
+                task_id = str(active.get("task_id") or "")
+                if task_id:
+                    from workflow import load_task_baseline, build_task_manifest
+                    base = load_task_baseline(REPO, task_id)
+                    if base:
+                        task_manifest = build_task_manifest(REPO, base)
+                        task_changes = task_manifest.get("task_changes")
+                t_dir = task_dir(REPO, str(active["task_id"]))
+                current_p = t_dir / "current-run.json"
+                if current_p.is_file():
+                    current = read_json(current_p)
+                    selected_gates = set(read_json(Path(current["policy"])).get("gates") or [])
+                else:
+                    prelim_p = t_dir / "preliminary-policy.json"
+                    if prelim_p.is_file():
+                        selected_gates = set(read_json(prelim_p).get("gates") or [])
         except Exception:
             selected_gates = {"preflight", "localization", "room"}
+            task_changes = None
+
+    if task_changes is not None:
+        classification = classify(REPO, task_changes=task_changes)
+    else:
+        classification = classify(REPO)
+    risk_tier_name = classification["severity"]
+    task_surfaces = set(classification.get("surfaces") or [])
+
+    task_touches_room = bool(
+        task_surfaces & {"PERSISTENCE", "ROOM_SCHEMA"}
+        or (task_changes and any("room" in p.lower() or "dao" in p.lower() or "entity" in p.lower() or "database" in p.lower() for p in task_changes))
+    )
+
     skip_hook = diagnostic or "--skip-hook-selftest" in sys.argv or os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1"
     hook_code = 0 if skip_hook else run_step("0. Hook selftest (cached)", "ensure_hook_selftest.py")
     str_code = run_step("1. String parity", "check_strings.py") if "localization" in selected_gates else 0
 
     with step_progress("2. Room Database Migrations"):
-        db_ok, db_msg = check_room_working_tree() if "room" in selected_gates else (True, "not required by policy")
+        if "room" not in selected_gates:
+            db_ok, db_msg = True, "not required by policy"
+        elif task_changes is not None and not task_touches_room:
+            db_ok, db_msg = True, "room check not required for current task changes"
+        else:
+            task_paths = task_changes if task_changes is not None else None
+            db_ok, db_msg = check_room_working_tree(paths=task_paths)
         live_print(f"[{'OK' if db_ok else 'FAIL'}] {db_msg}")
 
     lint_code = run_step("3. Kotlin Syntax & Architectural Rules (Fast Lint)", "fast_kt_lint.py") if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
-
-    classification = classify(REPO)
-    risk_tier_name = classification["severity"]
     with step_progress("4. Approved plan authority"):
         if diagnostic:
             risk_ok, risk_msg = True, "diagnostic mode; task approval is checked only during delivery preflight"

@@ -352,10 +352,8 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             recommended_fam_id = None
         elif len(high_conf_fams) == 1:
             recommended_fam_id = str(high_conf_fams[0].get("id") or "")
-        elif len(high_conf_fams) == 0 and len(families) > 0:
-            sorted_by_exs = sorted(families, key=lambda f: len(f.get("exemplars") or []), reverse=True)
-            if len(sorted_by_exs) == 1 or len(sorted_by_exs[0].get("exemplars") or []) > len(sorted_by_exs[1].get("exemplars") or []):
-                recommended_fam_id = str(sorted_by_exs[0].get("id") or "")
+        else:
+            recommended_fam_id = None
 
 
         other_fams = sorted(families, key=lambda f: str(f.get("id") or ""))

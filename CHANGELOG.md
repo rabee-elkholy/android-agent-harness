@@ -4,13 +4,48 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.42] - 2026-09-17
+
+### Stabilization & Architectural Precision: Canonical Executable RED, Authentic Reviewer Transcripts, Phase Checkpoints & Task Scope
+
+- **Canonical Executable RED Authority (`workflow.py`, `final_verifier.py`)**:
+  - Eliminated non-executable RED synthesis (`record_debug_evidence` writes only `debug-evidence.json` with `satisfies_executable_red: false`).
+  - Restricted executable RED acceptance strictly to Schema 3 manifests produced directly by `run_tests_gate.py --capture-red`.
+  - Enforced defect binding verification requiring valid canonical RED evidence produced by the test gate.
+- **Reviewer Proof via Authentic Host Transcripts (`record_review.py`, `final_verifier.py`)**:
+  - Enforced host-level transcript path validation (`resolve_trusted_subagent_transcript`) anchoring transcripts to the authentic Antigravity application directory (`AppData/Local/antigravity` or `~/.gemini/antigravity`).
+  - Strictly rejected untrusted temporary files, path traversal attempts, and transcript conversation ID mismatches.
+  - Required independent execution verification for HIGH/CRITICAL reviews before delivery approval.
+- **Command Contract & Remediation Parity (`command-contract.md`, `workflow.py`)**:
+  - Aligned public CLI contract documentation and remediation argument generation (`--planning-depth <BOUNDED|ARCHITECTURAL>` and `--external-write <none|zoho_sprints>`).
+  - Exposed `workflow.py build_parser()` for contract introspection and normalized `--planning-depth` values.
+- **Phase Checkpoint Module Scoping & Fail-Closed Compilation (`workflow.py`)**:
+  - Replaced whole-repository compile checks with targeted phase-scoped Gradle tasks derived from AST-mapped changed modules.
+  - Eliminated broad swallowed exceptions in `checkpoint_phase`, failing closed on unexpected compilation failures.
+  - Enforced policy-required unit test and reviewer execution for phase checkpoints.
+- **Architecture Resolution Authority & Contract Confidence (`architecture_resolver.py`)**:
+  - In `NEW` feature mode, restricted target architecture authority strictly to explicit CLI flags or user-preferred family, treating surrounding family strictly as compatibility boundaries.
+  - Maintained contract confidence strictly aligned with family match confidence without artificial elevation.
+- **Dirty Source Fingerprint Content Identity (`project_context.py`)**:
+  - Upgraded source fingerprinting to compute SHA-256 content hashes for dirty/untracked source, build, and configuration files, preventing fingerprint thrashing on metadata/mtime changes.
+  - Fixed `is_context_fresh` JSON loading bug.
+- **Update Recovery Ownership Integrity (`lifecycle.py`)**:
+  - Hardened update recovery to validate ownership metadata against canonical SHA-256 calculation and journal records.
+  - Enforced forward completion only when ownership hashes and target engine versions match exactly; otherwise safely rolls back.
+- **Task-Scoped Preflight & Setup Neutrality (`preflight_check.py`, `room_guard.py`, `wizard/questions.py`)**:
+  - Scoped preflight surface classification and Room database schema verification strictly to current task-delta changes.
+  - Prevented pre-existing unrelated dirty Room migrations or business logic files from blocking unrelated UI/Compose tasks.
+  - Neutralized setup architecture recommendations, removing exemplar-count bias and recommending a family only when a single HIGH-confidence family exists without saved preferences.
+- **Adversarial Stabilization Regression Suite (`_stabilization_v42_selftest.py`, `harness_cli.py`)**:
+  - Added comprehensive 16th selftest suite `_stabilization_v42_selftest.py` with 38 adversarial unit tests validating all 8 stabilization fixes.
+
 ## [1.0.41] - 2026-09-16
 
 ### Stabilization: Reviewer Independence, RED->GREEN Defect Binding, True Task-Delta Isolation, Phase Checkpoints & Recovery
 
 - **Independent Reviewer Execution & Cryptographic Provenance (`record_review.py`, `final_verifier.py`, `workflow.py`)**:
   - Implemented strict independent reviewer verification (`verify_independent_reviewer_execution`) ensuring all code reviews for HIGH/CRITICAL severity or sensitive surfaces originate from verified subagent executions rather than self-certification.
-  - Required execution proof containing verified subagent transcripts, task and run ID validation, package SHA-256 integrity, and cryptographic HMAC-SHA256 dispatch receipt signatures.
+  - Required execution proof containing verified subagent transcripts, task and run ID validation, package SHA-256 integrity, and cryptographic SHA-256 integrity-bound dispatch receipt signatures.
   - Enforced fail-closed verification in `final_verifier.py` with explicit rejection reasons when independence proofs or dispatch receipts are missing, tampered, or mismatched.
 - **Defect Binding & Temporal RED->GREEN Protocol (`run_tests_gate.py`, `final_verifier.py`, `workflow.py`)**:
   - Eliminated synthetic RED evidence generation; required real test failure execution captured via `run_tests_gate.py --capture-red`.

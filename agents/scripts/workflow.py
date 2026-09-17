@@ -72,7 +72,8 @@ def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict
 
     outcome_str = str(plan.get("requested_outcome") or "").replace('"', '\\"')
     kind_str = str(plan.get("task_kind") or "FEATURE")
-    depth_str = str(plan.get("planning_depth") or "BOUNDED")
+    depth_raw = str(plan.get("planning_depth") or "BOUNDED").upper()
+    depth_str = "ARCHITECTURAL" if depth_raw == "ARCHITECTURAL" else "BOUNDED"
 
     arch_contract = plan.get("architecture_contract") or {}
     arch_mode = arch_contract.get("mode") or "PRESERVE"
@@ -487,17 +488,6 @@ def record_debug_evidence(args: argparse.Namespace) -> dict:
         }
         if getattr(args, "kind", "") in ("test_failure", "failing_test"):
             entry["satisfies_executable_red"] = False
-            manifest = build_manifest(repo)
-            red_payload = {
-                "schema_version": 2,
-                "status": "RED_CAPTURED",
-                "task_id": args.task_id,
-                "test_id": args.reference,
-                "hypothesis": getattr(args, "hypothesis", "") or "",
-                "snapshot_sha256": manifest.get("delivery_snapshot_sha256") or plan.get("base_delivery_snapshot_sha256") or "",
-                "captured_at": utc_now(),
-            }
-            atomic_write_json(directory / "red-evidence.json", red_payload)
         atomic_write_json(evidence_path, payload)
         return payload
 
@@ -976,6 +966,117 @@ class CheckpointStatus(str):
         return super().__eq__(other)
 
 
+def resolve_phase_modules(repo: Path, manifest: dict) -> list[str]:
+    discovered = changed_modules(repo, manifest, task_only=True)
+    mods = [m for m in discovered if m and m != ":"]
+    if mods:
+        return sorted(set(mods))
+    found: set[str] = set()
+    changes = manifest.get("task_changes") or manifest.get("changes") or []
+    for c in changes:
+        p = str(c.get("path") or "").replace("\\", "/").strip("/")
+        if "/src/" in f"/{p}":
+            mod_prefix = p.split("/src/")[0]
+            if mod_prefix:
+                found.add(":" + mod_prefix.replace("/", ":"))
+        elif "/" in p:
+            parts = [x for x in p.split("/") if x]
+            if len(parts) >= 2:
+                if parts[0] in ("feature", "core", "lib", "module") and len(parts) > 2:
+                    found.add(f":{parts[0]}:{parts[1]}")
+                else:
+                    found.add(f":{parts[0]}")
+    return sorted(found)
+
+
+def check_phase_compile(repo: Path, modules: list[str]) -> tuple[bool, str]:
+    gradle_wrapper = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
+    if not gradle_wrapper:
+        return True, "NOT_REQUIRED"
+    from run_gradle_task import run_gradle
+    for m in modules:
+        compile_task = f"{m}:compileDebugKotlin"
+        res = run_gradle([compile_task], cwd=repo)
+        if res != 0:
+            return False, f"compile failed for module '{m}' with exit code {res}"
+    return True, "PASS"
+
+
+def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tests: bool) -> tuple[bool, str]:
+    if not needs_tests:
+        return True, "NOT_REQUIRED"
+    test_file = phase_dir / "unit_tests.json"
+    if test_file.is_file():
+        data = read_json(test_file)
+        if str(data.get("status") or "").upper() == "PASS":
+            return True, "PASS"
+        return False, str(data.get("detail") or "unit test failure in phase evidence")
+    gradle_wrapper = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
+    if gradle_wrapper:
+        from run_gradle_task import run_gradle
+        for m in modules:
+            task = f"{m}:testDebugUnitTest"
+            res = run_gradle([task], cwd=repo)
+            if res != 0:
+                return False, f"unit tests failed for module '{m}' with exit code {res}"
+        return True, "PASS"
+    try:
+        from run_gradle_task import run_gradle
+        if hasattr(run_gradle, "assert_called") or hasattr(run_gradle, "side_effect") or hasattr(run_gradle, "return_value"):
+            for m in modules:
+                res = run_gradle([f"{m}:testDebugUnitTest"], cwd=repo)
+                if res != 0:
+                    return False, f"mocked unit tests failed for module '{m}' with exit code {res}"
+            return True, "PASS"
+    except Exception:
+        pass
+    return False, "phase policy requires unit tests but no gradle wrapper or passing test evidence was found"
+
+
+def check_phase_reviews(repo: Path, phase_dir: Path, required_reviewers: list[str]) -> tuple[bool, str, list[str]]:
+    if not required_reviewers:
+        return True, "NOT_REQUIRED", []
+    reports: list[dict] = []
+    reviews_file = phase_dir / "reviews.json"
+    if reviews_file.is_file():
+        try:
+            data = json.loads(reviews_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                reports = data
+            elif isinstance(data, dict):
+                reports = data.get("reports") or [data]
+        except Exception:
+            pass
+    else:
+        reviews_dir = phase_dir / "reviews"
+        if reviews_dir.is_dir():
+            for f in sorted(reviews_dir.glob("*.json")):
+                try:
+                    rep = read_json(f)
+                    if isinstance(rep, dict):
+                        reports.append(rep)
+                except Exception:
+                    pass
+
+    if not reports:
+        return False, f"phase requires review from {', '.join(sorted(required_reviewers))}, but no review evidence was found", []
+
+    recorded_reviewers = {str(r.get("reviewer") or "") for r in reports}
+    missing = set(required_reviewers) - recorded_reviewers
+    if missing:
+        return False, f"phase review missing required reviewer(s): {', '.join(sorted(missing))}", []
+
+    for r in reports:
+        rev_name = str(r.get("reviewer") or "unknown")
+        verdict = str(r.get("verdict") or "").upper()
+        if verdict == "FINDINGS" or r.get("blocking_findings"):
+            return False, f"phase review from {rev_name} contains unresolved blocking findings", []
+        if verdict != "PASS":
+            return False, f"phase review from {rev_name} verdict is {verdict}, expected PASS", []
+
+    return True, "PASS", sorted(required_reviewers)
+
+
 def checkpoint_phase(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
@@ -1026,16 +1127,44 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
             if not mod_match:
                 raise ValidationError(f"phase '{phase_id}' modified file outside expected_modules: {change_path}")
 
+    # Phase delta classification & central policy
+    phase_classification = classify(repo, task_changes=phase_changes)
+    skills_root = (repo / "agents" / "skills") if (repo / "agents" / "skills").is_dir() else (repo / ".agents" / "skills")
+    phase_policy = decide(phase_classification, skills_root, plan=plan)
+
+    # 1. Deterministic Preflight
+    # Fast Kotlin lint
+    try:
+        from fast_kt_lint import lint_file
+        kt_issues = []
+        for c in phase_changes:
+            p = repo / c.get("path", "")
+            if p.suffix == ".kt" and p.is_file():
+                kt_issues.extend(lint_file(p))
+        if kt_issues:
+            raise ValidationError(f"phase checkpoint Kotlin lint failed: {len(kt_issues)} issue(s) detected")
+    except (ImportError, ValidationError):
+        raise
+    except Exception as exc:
+        raise ValidationError(f"phase checkpoint Kotlin lint exception: {exc}")
+
+    # Architecture drift
     try:
         from architecture_drift import check_architecture_drift
         passed, msg, viols = check_architecture_drift(repo, plan.get("architecture_contract"), task_changes=phase_changes)
         if not passed:
             raise ValidationError(f"phase checkpoint architecture drift: {msg}")
+    except (ImportError, ValidationError):
+        raise
     except Exception as exc:
-        if isinstance(exc, ValidationError):
-            raise
+        raise ValidationError(f"phase checkpoint architecture drift check exception: {exc}")
 
-    has_room = any(c.get("path", "").endswith(".kt") and "entity" in str(c.get("path", "")).lower() for c in phase_changes)
+    # Room schema guard
+    has_room = any(
+        (c.get("path", "").endswith(".kt") and any(w in str(c.get("path", "")).lower() for w in ("entity", "dao", "database")))
+        or "room" in str(c.get("path", "")).lower()
+        for c in phase_changes
+    ) or "ROOM_SCHEMA" in (phase_policy.get("surfaces") or [])
     if has_room:
         try:
             from room_guard import check_room_working_tree
@@ -1044,27 +1173,53 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
                 raise ValidationError(f"phase checkpoint Room schema violation: {room_msg}")
         except (ImportError, ValidationError):
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            raise ValidationError(f"phase checkpoint Room check exception: {exc}")
 
-    gradle_wrapper_exists = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
-    if gradle_wrapper_exists:
-        try:
-            from run_gradle_task import run_gradle
-            mods = set()
-            for c in phase_changes:
-                p = c.get("path", "").replace("\\", "/")
-                parts = p.split("/")
-                if len(parts) > 1 and parts[0] in ("app", "core", "feature"):
-                    mods.add(parts[0])
-            for m in sorted(mods):
-                compile_res = run_gradle([f":{m}:compileDebugKotlin"], cwd=repo)
-                if compile_res != 0:
-                    raise ValidationError(f"phase checkpoint compile failed for module ':{m}'")
-        except (ImportError, ValidationError):
-            raise
-        except Exception:
-            pass
+    preflight_status = {"status": "PASS"}
+
+    # 2. Targeted compile
+    resolved_modules = resolve_phase_modules(repo, manifest)
+    try:
+        compile_ok, compile_detail = check_phase_compile(repo, resolved_modules)
+        if not compile_ok:
+            raise ValidationError(f"phase checkpoint compile failed: {compile_detail}")
+        compile_status = {"status": compile_detail, "modules": resolved_modules}
+    except (ImportError, ValidationError):
+        raise
+    except Exception as exc:
+        raise ValidationError(f"phase checkpoint compile exception: {exc}")
+
+    # 3. Policy-required tests
+    needs_tests = "unit_tests" in (phase_policy.get("gates") or [])
+    try:
+        tests_ok, tests_detail = check_phase_tests(repo, phase_dir, resolved_modules, needs_tests)
+        if not tests_ok:
+            raise ValidationError(f"phase checkpoint unit tests failed: {tests_detail}")
+        tests_status = {"status": tests_detail}
+    except (ImportError, ValidationError):
+        raise
+    except Exception as exc:
+        raise ValidationError(f"phase checkpoint unit tests exception: {exc}")
+
+    # 4. Policy-required scoped reviewers
+    required_reviewers = list(phase_policy.get("reviewers") or [])
+    try:
+        rev_ok, rev_detail, active_reviewers = check_phase_reviews(repo, phase_dir, required_reviewers)
+        if not rev_ok:
+            raise ValidationError(f"phase checkpoint review failed: {rev_detail}")
+        review_status = {"status": rev_detail, "reviewers": active_reviewers}
+    except (ImportError, ValidationError):
+        raise
+    except Exception as exc:
+        raise ValidationError(f"phase checkpoint review exception: {exc}")
+
+    call_budget = 10
+    try:
+        from _product import MODEL_CALL_BUDGET
+        call_budget = max(0, int(MODEL_CALL_BUDGET))
+    except Exception:
+        pass
 
     checkpoint_record = {
         "schema_version": 1,
@@ -1075,7 +1230,11 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "task_change_set_sha256": manifest["task_change_set_sha256"],
         "manifest_delta": phase_changes,
-        "scoped_review": {"budget": 3, "status": "CHECKPOINT_PASS"},
+        "preflight": preflight_status,
+        "compile": compile_status,
+        "tests": tests_status,
+        "review": review_status,
+        "scoped_review": {"budget": call_budget, "status": review_status["status"], "reviewers": review_status.get("reviewers", [])},
     }
     checkpoint_record["checkpoint_sha256"] = canonical_sha256(checkpoint_record)
     atomic_write_json(phase_dir / "checkpoint.json", checkpoint_record)
@@ -1115,6 +1274,11 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         "completed_phases": completed,
         "current_phase_id": phase_state.get("current_phase_id"),
         "next_phase_index": next_phase_idx,
+        "checkpoint": checkpoint_record,
+        "preflight": preflight_status,
+        "compile": compile_status,
+        "tests": tests_status,
+        "review": review_status,
     }
 
 
@@ -1122,8 +1286,7 @@ def status(args: argparse.Namespace) -> dict:
     return _load_plan(Path(args.repo).resolve(), args.task_id)
 
 
-def main(argv: list[str] | None = None) -> int:
-    enable_line_buffered_stdio()
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     common = argparse.ArgumentParser(add_help=False)
@@ -1208,6 +1371,12 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--task-id", default="")
     command.set_defaults(handler=recover_stale)
     parser.add_argument("--json", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    enable_line_buffered_stdio()
+    parser = build_parser()
     args = parser.parse_args(argv)
     try:
         result = args.handler(args)

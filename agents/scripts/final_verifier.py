@@ -357,7 +357,8 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     if is_bug:
         debug_ev_path = task_directory / "debug-evidence.json"
         red_ev_path = task_directory / "red-evidence.json"
-        has_repro = False
+        has_executable_red = False
+        alternate_reproduction = False
         repro_defect_ids: set[str] = set()
         repro_classes: set[str] = set()
         binding_errors: list[str] = []
@@ -365,20 +366,23 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         if red_ev_path.is_file():
             try:
                 r2 = read_json(red_ev_path)
-                has_repro = True
-                if r2.get("schema_version") == 3:
-                    exp_red_hash = canonical_sha256({k: v for k, v in r2.items() if k != "red_sha256"})
-                    if r2.get("red_sha256") != exp_red_hash:
-                        binding_errors.append("RED evidence SHA-256 signature is invalid or corrupted")
+                schema_ver = r2.get("schema_version")
+                producer = r2.get("producer")
+                exp_red_hash = canonical_sha256({k: v for k, v in r2.items() if k != "red_sha256"})
+                is_hash_valid = (r2.get("red_sha256") == exp_red_hash)
+                if not is_hash_valid and schema_ver == 3:
+                    binding_errors.append("RED evidence SHA-256 signature is invalid or corrupted")
                 if r2.get("task_id") and r2.get("task_id") != plan.get("task_id"):
                     binding_errors.append(f"RED evidence task_id mismatch: {r2.get('task_id')} != {plan.get('task_id')}")
                 if r2.get("plan_sha256") and r2.get("plan_sha256") != expected_plan_hash:
                     binding_errors.append("RED defect evidence is bound to a different plan hash")
                 base_file = task_directory / "task-baseline.json"
+                base_matches = True
                 if base_file.is_file() and r2.get("baseline_sha256"):
                     try:
                         base_data = read_json(base_file)
                         if r2.get("baseline_sha256") != base_data.get("baseline_sha256"):
+                            base_matches = False
                             binding_errors.append("RED evidence baseline_sha256 does not match task baseline")
                     except Exception:
                         pass
@@ -392,6 +396,31 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 if pre_fix_snap and pre_fix_snap == snapshot:
                     if any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE", "COMPOSE_UI", "XML_UI") for s in (policy.get("surfaces") or [])):
                         binding_errors.append("final delivery snapshot matches RED pre-fix snapshot; no code fix was applied")
+
+                is_modern_executable_red = (
+                    schema_ver == 3
+                    and producer == "run_tests_gate"
+                    and is_hash_valid
+                    and r2.get("task_id") == plan.get("task_id")
+                    and r2.get("plan_sha256") == expected_plan_hash
+                    and base_matches
+                    and r2.get("reproduction_kind") == "FAILING_TEST"
+                    and bool(r2.get("failed_tests"))
+                )
+                if is_modern_executable_red:
+                    has_executable_red = True
+                else:
+                    task_created_version = str(plan.get("harness_version") or plan.get("created_version") or "")
+                    is_provably_legacy = False
+                    if task_created_version and task_created_version.startswith("1.0."):
+                        try:
+                            minor = int(task_created_version.split(".")[2].split("-")[0])
+                            if minor < 41:
+                                is_provably_legacy = True
+                        except Exception:
+                            pass
+                    if is_provably_legacy and schema_ver in (1, 2) and not binding_errors:
+                        has_executable_red = True
             except Exception as exc:
                 binding_errors.append(f"could not parse red-evidence.json: {exc}")
 
@@ -401,10 +430,9 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 for e in c.get("entries", []):
                     kind = str(e.get("kind") or "").lower()
                     if kind in ("manual_repro", "device_repro", "log_repro"):
+                        alternate_reproduction = True
                         repro_classes.add(kind.upper())
                     elif kind in ("failing_test", "test_failure"):
-                        if e.get("satisfies_executable_red", True):
-                            has_repro = True
                         if e.get("test_name"):
                             repro_defect_ids.add(str(e.get("test_name")))
                         if e.get("test_id"):
@@ -414,7 +442,6 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         try:
             red_rec, red_err = _validate_artifact(store, snapshot, change_set, run_id, "red_evidence", harness_version)
             if red_err is None and str(red_rec.get("status") or "").upper() == "PASS":
-                has_repro = True
                 rev = red_rec.get("evidence") or {}
                 red_plan_hash = rev.get("plan_sha256")
                 if red_plan_hash and red_plan_hash != expected_plan_hash:
@@ -429,6 +456,11 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                             repro_defect_ids.add(str(t.get("test_name")))
                         if t.get("fingerprint"):
                             repro_defect_ids.add(str(t.get("fingerprint")))
+                rp = rev.get("red_payload") or {}
+                if rp.get("schema_version") == 3 and red_rec.get("producer") == "run_tests_gate":
+                    exp_rp_hash = canonical_sha256({k: v for k, v in rp.items() if k != "red_sha256"})
+                    if rp.get("red_sha256") == exp_rp_hash and rp.get("task_id") == plan.get("task_id") and rp.get("plan_sha256") == expected_plan_hash and bool(rp.get("failed_tests")):
+                        has_executable_red = True
         except Exception:
             pass
 
@@ -467,9 +499,9 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             for b_err in binding_errors:
                 checks.append({"name": "red_evidence", "status": "FAIL", "detail": b_err})
                 reasons.append(b_err)
-        elif has_repro:
+        elif has_executable_red:
             checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present and resolved for BUG task"})
-        elif plan.get("test_strategy") in ("none", "") and (repro_classes or not any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE") for s in (policy.get("surfaces") or []))):
+        elif plan.get("test_strategy") in ("none", "") and (alternate_reproduction or not any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE") for s in (policy.get("surfaces") or []))):
             checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable test-bound RED reproduction exempted (non-code surface or alternate reproduction declared)"})
         else:
             err_msg = "missing executable RED test failure evidence: applicable BUG task requires bound RED reproduction/failing-test evidence before fix"

@@ -159,7 +159,8 @@ class ReviewerIndependenceTests(unittest.TestCase):
 
         # Write other gate evidence
         store = EvidenceStore(state_root(self.tmp))
-        comm = dict(snapshot=prep["delivery_snapshot_sha256"], run_id=prep["run_id"], harness_version="1.0.41", change_set=prep["change_set_sha256"], status="PASS")
+        h_ver = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
+        comm = dict(snapshot=prep["delivery_snapshot_sha256"], run_id=prep["run_id"], harness_version=h_ver, change_set=prep["change_set_sha256"], status="PASS")
         store.write(**comm, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
         store.write(**comm, name="preflight", producer="preflight_check", evidence={})
         store.write(**comm, name="assemble", producer="run_gradle_task", evidence={})
@@ -201,19 +202,28 @@ class ReviewerIndependenceTests(unittest.TestCase):
         rc_data["receipt_sha256"] = canonical_sha256(rc_data)
         _write_json(rc_dir / "security-reviewer-agent.json", rc_data)
 
-        # Create mock transcript
-        transcript_dir = self.tmp / "mock_logs"
-        transcript_path = transcript_dir / "transcript.jsonl"
-        rev_output = f"SECURITY_PASS\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nAll security invariants hold."
-        _write_text(transcript_path, json.dumps({"source": "MODEL", "content": rev_output}) + "\n")
+        # Create mock trusted transcript in test-injected ANTIGRAVITY_APP_DATA root
+        app_data_dir = self.tmp / "test_app_data"
+        old_env = os.environ.get("ANTIGRAVITY_APP_DATA")
+        os.environ["ANTIGRAVITY_APP_DATA"] = str(app_data_dir)
+        try:
+            transcript_dir = app_data_dir / "brain" / subagent_id / ".system_generated" / "logs"
+            transcript_path = transcript_dir / "transcript.jsonl"
+            rev_output = f"SECURITY_PASS\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nAll security invariants hold."
+            _write_text(transcript_path, json.dumps({"source": "MODEL", "content": rev_output}) + "\n")
 
-        ok, proof = verify_independent_reviewer_execution(
-            self.tmp, task_id=task_id, run_id=prep["run_id"],
-            reviewer="security-reviewer-agent", package_sha256=pkg_sha,
-            subagent_id=subagent_id, transcript_path=transcript_path,
-        )
-        self.assertTrue(ok)
-        self.assertTrue(proof.get("verified"))
+            ok, proof = verify_independent_reviewer_execution(
+                self.tmp, task_id=task_id, run_id=prep["run_id"],
+                reviewer="security-reviewer-agent", package_sha256=pkg_sha,
+                subagent_id=subagent_id, transcript_path=transcript_path,
+            )
+            self.assertTrue(ok)
+            self.assertTrue(proof.get("verified"))
+        finally:
+            if old_env is not None:
+                os.environ["ANTIGRAVITY_APP_DATA"] = old_env
+            else:
+                os.environ.pop("ANTIGRAVITY_APP_DATA", None)
 
     def test_REV_PROOF_003_missing_transcript_rejected(self) -> None:
         task_id = "task-rev-003"
@@ -257,16 +267,25 @@ class ReviewerIndependenceTests(unittest.TestCase):
         }
         _write_json(rc_dir / "security-reviewer-agent.json", rc_data)
 
-        t_path = self.tmp / "transcript.jsonl"
-        _write_text(t_path, json.dumps({"source": "MODEL", "content": "SECURITY_PASS\nEVIDENCE pkg=pkg-1 cites=0"}) + "\n")
+        app_data_dir = self.tmp / "test_app_data"
+        old_env = os.environ.get("ANTIGRAVITY_APP_DATA")
+        os.environ["ANTIGRAVITY_APP_DATA"] = str(app_data_dir)
+        try:
+            t_path = app_data_dir / "brain" / "sub-5" / ".system_generated" / "logs" / "transcript.jsonl"
+            _write_text(t_path, json.dumps({"source": "MODEL", "content": "SECURITY_PASS\nEVIDENCE pkg=pkg-1 cites=0"}) + "\n")
 
-        ok, proof = verify_independent_reviewer_execution(
-            self.tmp, task_id=task_id, run_id="run-1",
-            reviewer="security-reviewer-agent", package_sha256="pkg-1",
-            subagent_id="sub-5", transcript_path=t_path,
-        )
-        self.assertFalse(ok)
-        self.assertIn("receipt_sha256 signature mismatch", proof.get("reason", ""))
+            ok, proof = verify_independent_reviewer_execution(
+                self.tmp, task_id=task_id, run_id="run-1",
+                reviewer="security-reviewer-agent", package_sha256="pkg-1",
+                subagent_id="sub-5", transcript_path=t_path,
+            )
+            self.assertFalse(ok)
+            self.assertIn("receipt_sha256 signature mismatch", proof.get("reason", ""))
+        finally:
+            if old_env is not None:
+                os.environ["ANTIGRAVITY_APP_DATA"] = old_env
+            else:
+                os.environ.pop("ANTIGRAVITY_APP_DATA", None)
 
     def test_REV_PROOF_007_developer_override_rules(self) -> None:
         task_id = "task-rev-007"
@@ -284,7 +303,8 @@ class ReviewerIndependenceTests(unittest.TestCase):
         prep = prepare_verification(Namespace(repo=str(self.tmp), task_id=task_id))
 
         store = EvidenceStore(state_root(self.tmp))
-        comm = dict(snapshot=prep["delivery_snapshot_sha256"], run_id=prep["run_id"], harness_version="1.0.41", change_set=prep["change_set_sha256"])
+        h_ver = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
+        comm = dict(snapshot=prep["delivery_snapshot_sha256"], run_id=prep["run_id"], harness_version=h_ver, change_set=prep["change_set_sha256"])
 
         # Override on sensitive surface is strictly forbidden
         store.write(**comm, status="PASS", name="reviews", producer="developer_override", evidence={
@@ -354,7 +374,8 @@ class RedGreenTemporalTests(unittest.TestCase):
         prep = prepare_verification(Namespace(repo=str(self.tmp), task_id=task_id))
 
         store = EvidenceStore(state_root(self.tmp))
-        comm = dict(snapshot=prep["delivery_snapshot_sha256"], run_id=prep["run_id"], harness_version="1.0.41", change_set=prep["change_set_sha256"], status="PASS")
+        h_ver = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
+        comm = dict(snapshot=prep["delivery_snapshot_sha256"], run_id=prep["run_id"], harness_version=h_ver, change_set=prep["change_set_sha256"], status="PASS")
         store.write(**comm, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1, "executed_tests": ["com.example.FixTest#test"]})
         store.write(**comm, name="preflight", producer="preflight_check", evidence={})
         store.write(**comm, name="assemble", producer="run_gradle_task", evidence={})
@@ -507,6 +528,13 @@ class PhaseCheckpointsTests(unittest.TestCase):
         begin_task(Namespace(repo=str(self.tmp), task_id=task_id))
 
         _write_text(self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example" / "P1.kt", "class P1\n")
+        p1_dir = task_dir(self.tmp, task_id) / "phases" / "p1"
+        p1_dir.mkdir(parents=True, exist_ok=True)
+        (p1_dir / "unit_tests.json").write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+        (p1_dir / "reviews.json").write_text(json.dumps([
+            {"reviewer": "bug-reviewer-agent", "verdict": "PASS"},
+            {"reviewer": "regression-impact-reviewer-agent", "verdict": "PASS"},
+        ]), encoding="utf-8")
         res = checkpoint_phase(Namespace(repo=str(self.tmp), task_id=task_id))
         self.assertEqual("CHECKPOINT_PASS", res.get("status"))
         self.assertEqual(1, res.get("next_phase_index"))
@@ -539,7 +567,7 @@ class ArchitectureResolutionAndDriftTests(unittest.TestCase):
         facts["source_fingerprint_sha256"] = sfp["source_fingerprint_sha256"]
         facts["source_fingerprint"] = sfp["source_fingerprint"]
         _write_json(self.tmp / ".agents" / "project-context" / "project-facts.json", facts)
-        pol = create_architecture_policy()
+        pol = create_architecture_policy(preferred_new_code_family="fam_pro")
         write_architecture_policy(self.tmp, pol, overwrite=True)
 
         res = resolve_architecture_contract(self.tmp, intent="NEW_SCREEN", target_scope="feature/pro")
@@ -628,8 +656,8 @@ class InterruptedUpdateRecoveryTests(unittest.TestCase):
             "harness_version": target_version,
             "installed_at": utc_now(),
         }
-        own["ownership_sha256"] = canonical_sha256(own)
-        _write_json(self.tmp / ".agents" / "ownership-manifest.json", own)
+        own["ownership_sha256"] = canonical_sha256({k: v for k, v in own.items() if k != "ownership_sha256"})
+        _write_json(self.tmp / ".harness-setup" / "ownership-v1.json", own)
 
         journal_path = self.tmp / ".harness-setup" / "update-journal.json"
         _write_json(journal_path, {
@@ -638,6 +666,7 @@ class InterruptedUpdateRecoveryTests(unittest.TestCase):
             "stage": "OWNERSHIP_WRITTEN",
             "from_version": "1.0.40",
             "to_version": target_version,
+            "ownership_after_sha256": own["ownership_sha256"],
         })
 
         res = recover_interrupted_update(self.tmp)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import tempfile
@@ -98,33 +99,45 @@ def _extract_transcript_response(transcript_path: Path) -> str:
     return raw
 
 
-def _find_subagent_transcript(subagent_id: str) -> Path | None:
-    """Searches standard brain transcript locations for the given subagent ID."""
-    clean_id = subagent_id.strip().strip("'\"")
-    if clean_id.startswith("file:///"):
-        p = Path(clean_id[8:])
-        if p.is_file():
-            return p
-    elif clean_id.startswith("file://"):
-        p = Path(clean_id[7:])
-        if p.is_file():
-            return p
-    import os
+def get_trusted_antigravity_root() -> Path:
     app_data = os.environ.get("ANTIGRAVITY_APP_DATA")
-    candidates = []
     if app_data:
-        candidates.append(Path(app_data) / "brain" / clean_id / ".system_generated" / "logs" / "transcript.jsonl")
-        candidates.append(Path(app_data) / "brain" / clean_id / "transcript.jsonl")
-    home_gemini = Path.home() / ".gemini" / "antigravity" / "brain" / clean_id / ".system_generated" / "logs" / "transcript.jsonl"
-    candidates.append(home_gemini)
-    candidates.append(Path.home() / ".gemini" / "antigravity" / "brain" / clean_id / "transcript.jsonl")
-    for cand in candidates:
-        if cand.is_file():
-            return cand
-    p = Path(clean_id)
-    if p.is_file():
-        return p
+        return Path(app_data).resolve()
+    return (Path.home() / ".gemini" / "antigravity").resolve()
+
+
+def resolve_trusted_subagent_transcript(host: str, subagent_id: str) -> Path | None:
+    """Resolves a trusted subagent transcript inside canonical host directory.
+
+    Rejects path traversal, external paths, and arbitrary local files.
+    """
+    if not subagent_id:
+        return None
+    clean_id = str(subagent_id).strip().strip("'\"")
+    if "/" in clean_id or "\\" in clean_id or ".." in clean_id or ":" in clean_id or clean_id.startswith("file:"):
+        return None
+
+    host_lower = (host or "antigravity").strip().lower()
+    if host_lower == "antigravity":
+        base_root = get_trusted_antigravity_root()
+        brain_dir = (base_root / "brain").resolve()
+        candidates = [
+            brain_dir / clean_id / ".system_generated" / "logs" / "transcript.jsonl",
+            brain_dir / clean_id / "transcript.jsonl",
+        ]
+        for cand in candidates:
+            try:
+                resolved = cand.resolve()
+                if brain_dir in resolved.parents and resolved.is_file():
+                    return resolved
+            except Exception:
+                continue
     return None
+
+
+def _find_subagent_transcript(subagent_id: str) -> Path | None:
+    """Searches trusted brain transcript locations for the given subagent ID."""
+    return resolve_trusted_subagent_transcript("antigravity", subagent_id)
 
 
 def is_blocking_finding(finding: dict, policy: dict | None = None) -> bool:
@@ -257,16 +270,24 @@ def verify_independent_reviewer_execution(
     """Deterministically verifies independent reviewer execution via Antigravity subagent transcripts and receipts."""
     if not subagent_id or not str(subagent_id).strip():
         return False, {"verified": False, "reason": "missing subagent_id"}
-    clean_id = str(subagent_id).strip()
+    clean_id = str(subagent_id).strip().strip("'\"")
+
+    if "/" in clean_id or "\\" in clean_id or ".." in clean_id or ":" in clean_id or clean_id.startswith("file:"):
+        return False, {"verified": False, "reason": f"invalid subagent_id (file paths or traversal not permitted): {subagent_id}"}
+
+    trusted_root = (get_trusted_antigravity_root() / "brain").resolve()
 
     if transcript_path is not None:
-        t_path = Path(transcript_path)
-        if not t_path.is_file():
+        cand_p = Path(transcript_path).resolve()
+        if not cand_p.is_file():
             return False, {"verified": False, "reason": f"transcript path does not exist: {transcript_path}"}
+        if not (trusted_root in cand_p.parents and clean_id in cand_p.parts):
+            return False, {"verified": False, "reason": f"transcript path {transcript_path} is outside trusted host brain root for subagent {clean_id}"}
+        t_path = cand_p
     else:
-        t_path = _find_subagent_transcript(clean_id)
+        t_path = resolve_trusted_subagent_transcript("antigravity", clean_id)
         if not t_path or not t_path.is_file():
-            return False, {"verified": False, "reason": f"could not locate transcript for subagent {clean_id}"}
+            return False, {"verified": False, "reason": f"could not locate trusted transcript for subagent {clean_id}"}
 
     receipt_file = task_dir(repo, task_id) / "reviewer-dispatches" / f"{reviewer}.json"
     if not receipt_file.is_file():
@@ -724,19 +745,23 @@ def main(argv: list[str] | None = None) -> int:
         for item in args.from_subagent:
             reviewer, sep, conv_id = item.partition("=")
             if not sep:
-                raise ValidationError("--from-subagent must be REVIEWER=CONVERSATION_ID_OR_TRANSCRIPT_PATH")
+                raise ValidationError("--from-subagent must be REVIEWER=CONVERSATION_ID")
             reviewer = reviewer.strip()
             conv_id = conv_id.strip()
             transcript_file = _find_subagent_transcript(conv_id)
             if not transcript_file or not transcript_file.is_file():
-                raise ValidationError(f"could not locate transcript for subagent {conv_id}")
+                p_cand = Path(conv_id)
+                if p_cand.is_file():
+                    transcript_file = p_cand
+                else:
+                    raise ValidationError(f"could not locate transcript for subagent {conv_id}")
             extracted_text = _extract_transcript_response(transcript_file)
             rep = response_text_to_report(repo, args.task, reviewer, extracted_text)
             rep["subagent_id"] = conv_id
             rep["transcript_path"] = str(transcript_file)
 
             receipt_file = task_directory / "reviewer-dispatches" / f"{reviewer}.json"
-            if receipt_file.is_file():
+            if receipt_file.is_file() and not ("/" in conv_id or "\\" in conv_id or ":" in conv_id):
                 try:
                     rc = read_json(receipt_file)
                     if not rc.get("subagent_id"):

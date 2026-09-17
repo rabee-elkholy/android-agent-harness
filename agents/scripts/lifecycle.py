@@ -476,16 +476,6 @@ def recover_interrupted_update(repo: Path) -> dict | None:
     agents_dir = repo / ".agents"
     target_version = str(journal.get("to_version") or "")
 
-    ownership_file = repo / OWNERSHIP_RELATIVE
-    ownership_valid_for_target = False
-    if ownership_file.is_file():
-        try:
-            own_data = read_json(ownership_file)
-            if own_data.get("harness_version") == target_version:
-                ownership_valid_for_target = True
-        except Exception:
-            pass
-
     is_agents_complete = (
         agents_dir.is_dir()
         and (agents_dir / "VERSION").is_file()
@@ -502,7 +492,21 @@ def recover_interrupted_update(repo: Path) -> dict | None:
             shutil.rmtree(repo / preserve_root, ignore_errors=True)
         return {"status": "RECOVERED", "action": "aborted_prepared_update"}
 
-    if stage == "OWNERSHIP_WRITTEN" and ownership_valid_for_target and is_agents_complete:
+    forward_valid = False
+    if stage == "OWNERSHIP_WRITTEN" and is_agents_complete:
+        try:
+            version_file = agents_dir / "VERSION"
+            version_matches = version_file.read_text(encoding="utf-8").strip() == target_version
+            if version_matches:
+                own_data = _read_ownership(repo)
+                if own_data.get("harness_version") == target_version:
+                    journal_own_sha = journal.get("ownership_after_sha256")
+                    if not journal_own_sha or own_data.get("ownership_sha256") == journal_own_sha:
+                        forward_valid = True
+        except Exception:
+            forward_valid = False
+
+    if forward_valid:
         journal["status"] = "COMPLETED"
         journal["stage"] = "COMPLETED"
         journal["recovered_at"] = utc_now()
