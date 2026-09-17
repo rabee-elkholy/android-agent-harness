@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
+from _live_process import enable_line_buffered_stdio, live_print, step_progress, sublog  # noqa: E402
 from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, repository_identity, utc_now, validate_id  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline  # noqa: E402
@@ -202,7 +202,11 @@ def draft(args: argparse.Namespace) -> dict:
         except Exception as exc:
             raise ValidationError(f"failed to verify prior task collision safety: {exc}")
     with step_progress("Classifying changed surfaces"):
+        sublog("Inspecting working tree status and surface triggers...")
         classification = classify(repo)
+        ch_files = classification.get("changed_files") or 0
+        surfs = ", ".join(classification.get("surfaces") or []) or "none"
+        sublog(f"Detected {ch_files} working tree changes, surfaces: {surfs}")
     raw_phases = getattr(args, "phases", None)
     parsed_phases = None
     if raw_phases:
@@ -212,9 +216,15 @@ def draft(args: argparse.Namespace) -> dict:
             try:
                 p_file = Path(raw_phases)
                 if p_file.is_file():
-                    parsed_phases = read_json(p_file)
+                    loaded = json.loads(p_file.read_text(encoding="utf-8"))
                 else:
-                    parsed_phases = json.loads(raw_phases)
+                    loaded = json.loads(raw_phases)
+                if isinstance(loaded, list):
+                    parsed_phases = loaded
+                elif isinstance(loaded, dict) and isinstance(loaded.get("phases"), list):
+                    parsed_phases = loaded["phases"]
+                else:
+                    raise ValidationError("phases JSON must be a list of phases or an object with a 'phases' list")
             except Exception as exc:
                 raise ValidationError(f"invalid --phases parameter: {exc}")
 
@@ -307,7 +317,16 @@ def draft(args: argparse.Namespace) -> dict:
     policy_input = dict(classification)
     policy_input["surfaces"] = expected
     with step_progress("Evaluating routing policy"):
+        sublog(f"Evaluating review requirements for kind={resolved_kind}...")
         preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo), task_kind=resolved_kind)
+        raw_revs = preliminary_policy.get("reviewers")
+        if isinstance(raw_revs, list):
+            req_roles = ", ".join(str(r) for r in raw_revs) or "none"
+        elif isinstance(raw_revs, dict):
+            req_roles = ", ".join(str(r) for r in raw_revs.get("required_roles", [])) or "none"
+        else:
+            req_roles = "none"
+        sublog(f"Routing policy resolved required reviewers: {req_roles}")
 
     # Resolve Evolutionary Architecture Contract
     arch_intent = str(getattr(args, "architecture_intent", "EXISTING_CHANGE") or "EXISTING_CHANGE").upper()
@@ -336,18 +355,22 @@ def draft(args: argparse.Namespace) -> dict:
         if not inferred_target_scope:
             raise ValidationError("architecture migration requires a non-empty target scope")
 
-    arch_res = resolve_architecture_contract(
-        repo,
-        architecture_intent=arch_intent,
-        target_scope=inferred_target_scope,
-        target_family_id=getattr(args, "architecture_target_family", None),
-        planning_depth=str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper(),
-    )
-    if arch_res["status"] != STATUS_RESOLVED:
-        raise ValidationError(f"architecture contract resolution failed ({arch_res['status']}): {arch_res['message']}")
+    with step_progress("Resolving architecture contract"):
+        sublog(f"Resolving architecture contract (intent={arch_intent}, scope='{inferred_target_scope or 'auto'}')...")
+        arch_res = resolve_architecture_contract(
+            repo,
+            architecture_intent=arch_intent,
+            target_scope=inferred_target_scope,
+            target_family_id=getattr(args, "architecture_target_family", None),
+            planning_depth=str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper(),
+        )
+        if arch_res["status"] != STATUS_RESOLVED:
+            raise ValidationError(f"architecture contract resolution failed ({arch_res['status']}): {arch_res['message']}")
 
-    arch_contract = arch_res.get("contract")
-    arch_brief = arch_res.get("brief_markdown")
+        arch_contract = arch_res.get("contract")
+        arch_brief = arch_res.get("brief_markdown")
+        fam_label = (arch_contract.get("family_id") or "standard") if arch_contract else "none"
+        sublog(f"Architecture contract resolved successfully (family={fam_label}).")
 
     plan = create_plan(
         repo,
@@ -570,10 +593,14 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 f"to '{current_identity.get('head')[:12]}' after task approval"
             )
     with step_progress("Building delivery manifest & snapshot"):
+        sublog("Loading task baseline and building manifest...")
         task_baseline = load_task_baseline(repo, args.task_id)
         manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"))
+        sublog(f"Manifest ready with change set: {manifest.get('change_set_sha256', '')[:12]}")
     with step_progress("Classifying changed surfaces"):
+        sublog("Classifying task changes...")
         classification = classify(repo, task_id=args.task_id, task_changes=manifest.get("task_changes"))
+        sublog(f"Surfaces: {', '.join(classification.get('surfaces') or []) or 'none'}")
     completed_rounds = int(plan.get("review_rounds") or 0)
     if completed_rounds:
         previous_current = read_json(task_dir(repo, args.task_id) / "current-run.json")
@@ -749,7 +776,8 @@ def verify_task(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     current = read_json(task_dir(repo, args.task_id) / "current-run.json")
     with step_progress("Executing deterministic verification checks"):
-        return verify(
+        sublog("Validating delivery manifest, test results, and reviewer evidence...")
+        res = verify(
             repo,
             plan_path=_plan_path(repo, args.task_id),
             policy_path=Path(current["policy"]),
@@ -757,6 +785,8 @@ def verify_task(args: argparse.Namespace) -> dict:
             state_root=state_root(repo),
             run_id=str(current["run_id"]),
         )
+        sublog(f"Verification completed with status: {res.get('status')}")
+        return res
 
 
 def complete(args: argparse.Namespace) -> dict:

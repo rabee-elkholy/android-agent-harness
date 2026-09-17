@@ -4,6 +4,26 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.43] - 2026-09-17
+
+### Performance & Usability: Real-Time Sublogs, Pruned Room Scanning & Architecture Contract Resilience
+
+- **Real-Time Live Progress & Sublog Streaming (`_live_process.py`, `workflow.py`, `change_classifier.py`, `preflight_check.py`, `run_device.py`)**:
+  - Implemented `sublog()` in `_live_process.py` enabling indented sub-step progress markers under active `step_progress` blocks.
+  - Enhanced `step_progress` with sublog tracking, formatting completion timestamps (`  [Done] (0.2s)`) while preserving single-line output for fast sublog-free operations.
+  - Added non-blocking background heartbeat timer in `step_progress` alerting every 5 seconds on long operations to eliminate silent terminal freezes.
+  - Instrumented key workflow stages (`draft`, `begin`, `verify`), classifier surface evaluations, deterministic preflight checks, and ADB device installation/launch steps with real-time sublogs.
+- **Pruned Room Database Scanning & Zero-I/O Fast Path (`room_guard.py`, `change_classifier.py`)**:
+  - Replaced unpruned `root.rglob()` with `os.walk()` directory pruning, preventing traversal into `build/`, `.gradle/`, `.git/`, `.idea/`, and `.agents/`.
+  - Added fast-path check in `change_classifier.py` bypassing Room schema discovery entirely when working tree changes contain no Kotlin or Java source files.
+  - Reduced Room working-tree scanning duration from ~36 seconds to < 0.1s on Windows.
+- **Resilient Phased Execution Parsing (`workflow.py`)**:
+  - Upgraded `--phases` parser in `workflow.py` to support both JSON list (`[...]`) and JSON object (`{"phases": [...]}`) formats, whether passed as file paths or inline strings.
+  - Eliminated `ValidationError: JSON artifact must be an object` when reading phase list files.
+- **Architecture Family Explicit Override in REFACTOR / PRESERVE (`architecture_resolver.py`)**:
+  - Enabled `--architecture-target-family` resolution fallback in `PRESERVE` and `REFACTOR` modes when scope matching is ambiguous or unindexed.
+  - Preserved strict failure-closed behavior when multiple families exist and neither scope nor explicit family ID is provided.
+
 ## [1.0.42] - 2026-09-17
 
 ### Stabilization & Architectural Precision: Canonical Executable RED, Authentic Reviewer Transcripts, Phase Checkpoints & Task Scope

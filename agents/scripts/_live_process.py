@@ -18,6 +18,9 @@ from collections.abc import Callable, Sequence
 DEFAULT_HEARTBEAT_SEC = 10.0
 
 _open_step_line: bool = False
+_active_step_has_sublogs: list[bool] = []
+_active_step_lock = threading.Lock()
+_last_sublog_time: list[float] = [0.0]
 
 
 def enable_line_buffered_stdio() -> None:
@@ -48,9 +51,22 @@ def live_print(msg: str, *, err: bool = False, end: str = "\n") -> None:
     _open_step_line = (end != "\n")
 
 
+def sublog(msg: str, *, bullet: str = "*", indent: int = 2) -> None:
+    """Print an indented live sub-log entry under the active step_progress."""
+    global _active_step_has_sublogs, _last_sublog_time
+    with _active_step_lock:
+        if _active_step_has_sublogs:
+            _active_step_has_sublogs[-1] = True
+    _last_sublog_time[0] = time.time()
+    spaces = " " * indent
+    formatted = f"{spaces}{bullet} {msg}"
+    live_print(formatted)
+
+
 @contextlib.contextmanager
-def step_progress(name: str, step: int | None = None, total: int | None = None):  # type: ignore[return]
-    """Context manager that prints step progress markers with elapsed time."""
+def step_progress(name: str, step: int | None = None, total: int | None = None, heartbeat_sec: float = 5.0):  # type: ignore[return]
+    """Context manager that prints step progress markers with elapsed time, sublogs, and heartbeat."""
+    global _active_step_has_sublogs, _last_sublog_time
     clean_name = name.strip()
     m = re.match(r"^\[(\d+/\d+)\]\s*(.*)$", clean_name)
     if m:
@@ -61,14 +77,47 @@ def step_progress(name: str, step: int | None = None, total: int | None = None):
         formatted = clean_name
 
     live_print(f"{formatted} ", end="")
+    with _active_step_lock:
+        _active_step_has_sublogs.append(False)
+
     t0 = time.time()
+    _last_sublog_time[0] = t0
+    stop_heartbeat = threading.Event()
+
+    def _step_heartbeat() -> None:
+        if heartbeat_sec <= 0:
+            return
+        while not stop_heartbeat.wait(1.0):
+            now = time.time()
+            if (now - _last_sublog_time[0]) >= heartbeat_sec:
+                _last_sublog_time[0] = now
+                elapsed = int(now - t0)
+                sublog(f"still running ({elapsed}s)...", bullet="[-]")
+
+    worker = None
+    if heartbeat_sec > 0:
+        worker = threading.Thread(target=_step_heartbeat, name="step-hb", daemon=True)
+        worker.start()
+
     try:
         yield
+        stop_heartbeat.set()
         elapsed = time.time() - t0
-        live_print(f"[Done] ({elapsed:.1f}s)")
+        with _active_step_lock:
+            has_sublogs = _active_step_has_sublogs.pop() if _active_step_has_sublogs else False
+        if has_sublogs:
+            live_print(f"  [Done] ({elapsed:.1f}s)")
+        else:
+            live_print(f"[Done] ({elapsed:.1f}s)")
     except Exception:
+        stop_heartbeat.set()
         elapsed = time.time() - t0
-        live_print(f"[Fail] ({elapsed:.1f}s)")
+        with _active_step_lock:
+            has_sublogs = _active_step_has_sublogs.pop() if _active_step_has_sublogs else False
+        if has_sublogs:
+            live_print(f"  [Fail] ({elapsed:.1f}s)")
+        else:
+            live_print(f"[Fail] ({elapsed:.1f}s)")
         raise
 
 

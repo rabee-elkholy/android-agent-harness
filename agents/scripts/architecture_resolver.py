@@ -249,6 +249,21 @@ def resolve_architecture_contract(
         if matched:
             source_family = matched
             target_family = matched
+        elif target_family_id:
+            explicit_fam = _find_family_by_id(families, target_family_id)
+            if explicit_fam:
+                source_family = explicit_fam
+                target_family = explicit_fam
+                match_type = "EXACT_SCOPE"
+            else:
+                available_ids = [str(f.get("id")) for f in families if f.get("id")]
+                return {
+                    "status": STATUS_DECISION_REQUIRED,
+                    "mode": mode,
+                    "contract": None,
+                    "brief_markdown": None,
+                    "message": f"Configured architecture family '{target_family_id}' not found in active architecture inventory (available: {', '.join(available_ids) or 'none'}).",
+                }
         elif len(families) == 1:
             source_family = families[0]
             target_family = families[0]

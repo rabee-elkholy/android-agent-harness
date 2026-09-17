@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
+from _live_process import enable_line_buffered_stdio, live_print, step_progress, sublog  # noqa: E402
 from _repo_files import ChangedFile, changed_files  # noqa: E402
 from _vnext_common import canonical_sha256  # noqa: E402
 from delivery_manifest import is_delivery_relevant  # noqa: E402
@@ -414,7 +414,11 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
     else:
         changes = all_changes
 
-    room_types = _room_schema_types(root)
+    if changes:
+        sublog(f"Evaluating surface patterns across {len(changes)} changed file(s)...")
+
+    has_source_files = any(c.rel_posix.lower().endswith((".kt", ".java")) for c in changes)
+    room_types = _room_schema_types(root) if has_source_files else set()
     for changed in changes:
         rel = changed.rel_posix
         if not is_delivery_relevant(rel) and not (changed.old_rel_posix and is_delivery_relevant(changed.old_rel_posix)):

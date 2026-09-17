@@ -7,6 +7,7 @@ or when fallbackToDestructiveMigration is still present on that database.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -260,17 +261,19 @@ def registered_migration_edges(bodies: list[str], database: str, other_databases
 
 def iter_database_files(repo: Path | None = None) -> list[Path]:
     root = repo or REPO
-    skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
+    skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__", "bin", "out"}
     db_files: list[Path] = []
-    for p in (list(root.rglob("*.kt")) + list(root.rglob("*.java"))):
-        if p.is_file() and not (set(p.parts) & skip_parts):
-            if p.name.endswith("Database.kt") or p.name.endswith("Database.java"):
-                db_files.append(p)
-            else:
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_parts and not d.startswith(".")]
+        for f in filenames:
+            if f.endswith(("Database.kt", "Database.java")):
+                db_files.append(Path(dirpath) / f)
+            elif f.endswith((".kt", ".java")):
+                full_p = Path(dirpath) / f
                 try:
-                    head = p.read_text(encoding="utf-8", errors="replace")[:2000]
+                    head = full_p.read_text(encoding="utf-8", errors="replace")[:2000]
                     if "@Database" in head:
-                        db_files.append(p)
+                        db_files.append(full_p)
                 except Exception:
                     pass
     return db_files
