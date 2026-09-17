@@ -512,17 +512,6 @@ def _warm_project_graph(repo: Path) -> None:
 def recover_interrupted_update(repo: Path) -> dict | None:
     journal_path = repo / ".harness-setup" / "update-journal.json"
     if not journal_path.is_file():
-        agents_dir = repo / ".agents"
-        if (not agents_dir.is_dir() or not (agents_dir / "VERSION").is_file()) and (repo / ".harness-backup").is_dir():
-            backups = sorted(
-                (repo / ".harness-backup").glob("*"),
-                key=lambda p: p.stat().st_mtime if p.is_dir() else 0,
-                reverse=True,
-            )
-            for b in backups:
-                if (b / ".agents").is_dir():
-                    _safe_restore_from_backup(b / ".agents", agents_dir)
-                    return {"status": "RECOVERED", "action": "restored_missing_engine_from_backup"}
         return None
     try:
         journal = read_json(journal_path)
@@ -540,7 +529,9 @@ def recover_interrupted_update(repo: Path) -> dict | None:
         and (agents_dir / "scripts" / "_product.py").is_file()
         and (agents_dir / "rules" / "harness-rules.md").is_file()
     )
-    if (status == "COMPLETED" or stage == "COMPLETED") and is_agents_complete:
+    if status == "COMPLETED" or stage == "COMPLETED":
+        return None
+    if not (repo / OWNERSHIP_RELATIVE).is_file():
         return None
     if (status == "ROLLED_BACK" or stage == "ROLLED_BACK") and is_agents_complete:
         return None
@@ -593,17 +584,6 @@ def recover_interrupted_update(repo: Path) -> dict | None:
         backup_cand = (repo / backup_raw).resolve() if not Path(backup_raw).is_absolute() else Path(backup_raw)
         if (backup_cand / ".agents").is_dir():
             old_target = backup_cand / ".agents"
-
-    if not old_target and (repo / ".harness-backup").is_dir():
-        backups = sorted(
-            (repo / ".harness-backup").glob("*"),
-            key=lambda p: p.stat().st_mtime if p.is_dir() else 0,
-            reverse=True,
-        )
-        for b in backups:
-            if (b / ".agents").is_dir():
-                old_target = b / ".agents"
-                break
 
     if old_target:
         if agents_dir.exists():
@@ -943,6 +923,7 @@ def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
             shutil.rmtree(agents, ignore_errors=True)
     _managed_exclude(repo, remove=True)
     (repo / OWNERSHIP_RELATIVE).unlink(missing_ok=True)
+    (repo / ".harness-setup" / "update-journal.json").unlink(missing_ok=True)
     return {"status": "PASS", "action": "uninstall", "removed": removed, "preserved": preserved, "backup": str(backup), "recovery": str(recovery) if preserved or legacy else None}
 
 
