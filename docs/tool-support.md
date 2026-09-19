@@ -40,6 +40,7 @@ python harness_cli.py task draft --repo /path/to/project --task-id feature-1 --o
 python harness_cli.py task approve --repo /path/to/project --task-id feature-1 --source conversation --proof-reference <host-message-id> --enforcement-tier RULE_ENFORCED
 python harness_cli.py task begin --repo /path/to/project --task-id feature-1
 python harness_cli.py doctor --repo /path/to/project --json
+python harness_cli.py repair --repo /path/to/project --kit /path/to/pinned/kit
 python harness_cli.py update --repo /path/to/project
 python harness_cli.py uninstall --repo /path/to/project
 python harness_cli.py uninstall --repo /path/to/project --apply

@@ -70,7 +70,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             return "compileall", tokens[3:]
         path = tokens[1].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
-        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard"}
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "repair"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name == "harness_cli.py":
@@ -128,8 +128,9 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
 def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     return (
-        name in {"harness_cli", "android-harness"} and args[:1] in (["init"], ["update"], ["uninstall"])
+        name in {"harness_cli", "android-harness"} and args[:1] in (["init"], ["update"], ["uninstall"], ["repair"])
         or name in {"harness_cli", "android-harness"} and args[:2] == ["context", "note"]
+        or name == "repair"
         or name == "setup_wizard" and args[:1] == ["write"]
         or name == "git" and args[:1] == ["clone"] and len(args) >= 3
         and ("/.android-harness/" in args[-1].replace("\\", "/") or Path(args[-1]).name.startswith("kit-stage"))

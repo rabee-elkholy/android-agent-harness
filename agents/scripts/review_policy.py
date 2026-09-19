@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -32,10 +33,10 @@ TEST_SURFACES = {
 ROUTING = {
     "BUSINESS_LOGIC": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
     "PUBLIC_API": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
-    "COMPOSE_UI": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
-    "XML_UI": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
-    "RESOURCE_UI": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
-    "NAVIGATION": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
+    "COMPOSE_UI": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
+    "XML_UI": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
+    "RESOURCE_UI": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
+    "NAVIGATION": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
     "COROUTINES": {"bug-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
     "NETWORK": {"bug-reviewer-agent", "security-reviewer-agent", "regression-impact-reviewer-agent"},
     "ROOM_SCHEMA": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
@@ -60,21 +61,60 @@ def _configured_model_call_budget() -> int:
         return 10
 
 
-def _micro_eligible(classification: dict) -> bool:
+def _is_visual_compose(classification: dict) -> bool:
+    details = classification.get("details") or {}
+    compose_info = details.get("COMPOSE_UI")
+    if compose_info is None:
+        return classification.get("severity") == "LOW" and "BUSINESS_LOGIC" not in (classification.get("surfaces") or [])
+    reasons = compose_info.get("reasons") or []
+    return any("VISUAL" in str(r).upper() for r in reasons)
+
+
+def _micro_eligible(classification: dict, plan: dict | None = None) -> bool:
     surfaces = set(classification.get("surfaces") or [])
-    allowed = {"DOCS", "LOCALIZATION", "RESOURCE_UI"}
+    if not surfaces and plan:
+        surfaces = set(plan.get("expected_surfaces") or plan.get("surfaces") or [])
+    allowed = {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI"}
     disallowed = {
         "TEST_ONLY", "ROOM_SCHEMA", "BUILD_CONFIG", "MANIFEST_PERMISSION", "SECURITY",
         "AUTH", "BILLING", "SENSITIVE_DATA", "CRYPTO", "PUBLIC_API", "UNKNOWN",
+        "BUSINESS_LOGIC", "NAVIGATION", "DEVICE_API", "PERSISTENCE", "COROUTINES", "NETWORK", "NATIVE_CODE",
     }
-    return (
-        bool(surfaces)
-        and surfaces <= allowed
-        and not surfaces & disallowed
-        and int(classification.get("changed_files") or 0) <= 5
-        and int(classification.get("changed_lines") or 0) <= 80
-        and not bool(classification.get("has_delete_or_rename"))
-    )
+    if bool(surfaces & disallowed) or not (surfaces <= allowed):
+        return False
+    if "COMPOSE_UI" in surfaces and not _is_visual_compose(classification):
+        return False
+    if int(classification.get("changed_files") or 0) > 5:
+        return False
+    if int(classification.get("changed_lines") or 0) > 80:
+        return False
+    if bool(classification.get("has_delete_or_rename")):
+        return False
+    if plan:
+        planning_depth = str(plan.get("planning_depth") or "").upper()
+        if planning_depth == "ARCHITECTURAL":
+            return False
+        arch_intent = str(plan.get("architecture_intent") or "").upper()
+        if arch_intent == "MIGRATION":
+            return False
+    return bool(surfaces)
+
+
+def _derive_ui_verification_class(surfaces: set[str], micro: bool, classification: dict | None = None) -> str:
+    """Derive UI verification class: VISUAL_MICRO, UI_BEHAVIOR, DEVICE_BEHAVIOR, or NONE."""
+    device_behavior_surfaces = {"DEVICE_API", "MANIFEST_PERMISSION", "BILLING", "AUTH", "ROOM_SCHEMA"}
+    if surfaces & device_behavior_surfaces:
+        return "DEVICE_BEHAVIOR"
+    ui_surfaces = {"COMPOSE_UI", "XML_UI", "NAVIGATION", "RESOURCE_UI", "LOCALIZATION"}
+    if not (surfaces & ui_surfaces):
+        return "NONE"
+    if "XML_UI" in surfaces or "NAVIGATION" in surfaces or "BUSINESS_LOGIC" in surfaces or not micro:
+        return "UI_BEHAVIOR"
+    if "COMPOSE_UI" in surfaces and classification and not _is_visual_compose(classification):
+        return "UI_BEHAVIOR"
+    if micro and (surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI"}):
+        return "VISUAL_MICRO"
+    return "UI_BEHAVIOR"
 
 
 def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE", plan: dict | None = None) -> dict:
@@ -87,21 +127,56 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
             severity = "CRITICAL"
         elif set(surfaces) & HIGH_SURFACES:
             severity = "HIGH"
+
+    micro = _micro_eligible(classification, plan=plan)
+    planning_depth = str(classification.get("planning_depth") or (plan or {}).get("planning_depth") or "BOUNDED").upper()
+    arch_intent = str((plan or {}).get("architecture_intent") or "").upper()
+    changed_modules = (plan or {}).get("changed_modules") or []
+    changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
+
+    if micro:
+        risk_lane = "MICRO"
+    elif (
+        severity == "CRITICAL"
+        or bool(surfaces & CRITICAL_SURFACES)
+        or bool(surfaces & {"ROOM_SCHEMA", "NATIVE_CODE", "MANIFEST_PERMISSION"})
+        or arch_intent == "MIGRATION"
+        or planning_depth == "ARCHITECTURAL"
+    ):
+        risk_lane = "CRITICAL"
+    else:
+        risk_lane = "STANDARD"
+
+    ui_verification_class = _derive_ui_verification_class(surfaces, micro, classification)
+
     reviewers: set[str] = set()
     for surface in surfaces:
         reviewers.update(ROUTING.get(surface, set()))
-    if severity == "CRITICAL":
+    if risk_lane == "CRITICAL":
         reviewers = set(FIVE_REVIEWERS)
     if "TEST_ONLY" in surfaces:
         reviewers.add("test-quality-reviewer-agent")
-    planning_depth = str(classification.get("planning_depth") or (plan or {}).get("planning_depth") or "BOUNDED").upper()
-    if planning_depth == "ARCHITECTURAL" and not _micro_eligible(classification) and "UNKNOWN" not in surfaces:
+    if planning_depth == "ARCHITECTURAL" and not micro and "UNKNOWN" not in surfaces:
         reviewers.add("spec-compliance-agent")
-    micro = _micro_eligible(classification)
+        reviewers.add("convention-reviewer-agent")
+    if arch_intent in ("MIGRATION", "NEW_SUBSYSTEM") and not micro and "UNKNOWN" not in surfaces:
+        reviewers.add("convention-reviewer-agent")
+    if changed_modules_count > 1 and not micro and "UNKNOWN" not in surfaces and (surfaces & {"COMPOSE_UI", "XML_UI", "NAVIGATION", "BUSINESS_LOGIC"}):
+        reviewers.add("convention-reviewer-agent")
+
     if micro:
         reviewers.clear()
     if "UNKNOWN" in surfaces:
         reviewers.clear()
+
+    if project_kind != "application":
+        device_required = False
+    elif ui_verification_class == "VISUAL_MICRO":
+        device_required = False
+    elif ui_verification_class in ("UI_BEHAVIOR", "DEVICE_BEHAVIOR"):
+        device_required = True
+    else:
+        device_required = False
 
     gates: set[str] = {"manifest", "preflight"}
     if surfaces & TEST_SURFACES:
@@ -112,7 +187,6 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         gates.add("room")
     if surfaces - {"DOCS"}:
         gates.add("assemble")
-    device_required = project_kind == "application" and bool(surfaces & DEVICE_SURFACES)
     if device_required:
         gates.add("device")
 
@@ -128,6 +202,8 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "severity": severity,
         "confidence": classification.get("confidence"),
         "status": status,
+        "risk_lane": risk_lane,
+        "ui_verification_class": ui_verification_class,
         "micro_eligible": micro,
         "review_status": "REVIEW_NOT_REQUIRED_BY_POLICY" if micro else "REQUIRED" if reviewers else "NONE",
         "reviewers": sorted(reviewers),
@@ -358,10 +434,12 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(f"POLICY_STATUS={result['status']}")
+        print(f"RISK_LANE={result['risk_lane']}")
+        print(f"UI_VERIFICATION_CLASS={result['ui_verification_class']}")
         print(f"REVIEWERS={','.join(result['reviewers']) or 'NONE'}")
         print(f"GATES={','.join(result['gates'])}")
         print(f"DEVICE_REQUIRED={str(result['device_required']).lower()}")
-    return 0 if result["status"] == "PASS" else 2 if result["status"] == "USER_DECISION_REQUIRED" else 1
+    return 0 if result["status"] in ("PASS", "NO_DELIVERY_CHANGES") else 2 if result["status"] == "USER_DECISION_REQUIRED" else 1
 
 
 if __name__ == "__main__":

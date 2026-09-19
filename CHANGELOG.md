@@ -4,6 +4,33 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.49] - 2026-09-19
+
+### Stabilization Plan: Fail-Closed Gates, Lean Workflow & Risk Lanes, Sensitive Dependency Propagation, Deterministic Repair & Decoupled Integrations
+
+- **P0 Fail-Closed Verification & CI Full-Selftest Coverage (`review_policy.py`, `run_gradle_task.py`, `.github/workflows/ci.yml`)**:
+  - Fixed runtime `NameError` in `review_policy.py` CLI queries on clean checkouts.
+  - Eliminated broad exception swallowing in `run_gradle_task.py` reviewer validation; missing, incomplete, stale, or malformed reviewer evidence strictly fails closed before Gradle assemble starts.
+  - Added dedicated public CLI acceptance suite (`agents/scripts/_public_cli_selftest.py`) testing documented CLI contracts via subprocesses.
+  - Augmented CI matrix with public CLI acceptance suite and canonical full selftest job (`harness_cli.py selftest` on Ubuntu + Python 3.12).
+- **P1 Lean Daily Workflow & Adaptive Discovery (`review_policy.py`, `workflow.py`, `pre_tool_safety.py`, `change_classifier.py`)**:
+  - Introduced explicit risk lanes (`MICRO`, `STANDARD`, `CRITICAL`) and proportional UI verification classes (`VISUAL_MICRO`, `UI_BEHAVIOR`, `DEVICE_BEHAVIOR`, `NONE`).
+  - Presentation-only Compose/XML modifications avoid mandatory device locks (`device_required = False`).
+  - Added targeted path discrimination in `pre_tool_safety.py`, permitting direct file/directory searches without mandatory unanchored graph discovery.
+  - Raised multi-phase planning threshold to > 8 files, multiple Gradle modules, or explicit architectural migrations.
+- **P1 Sensitive Dependency Propagation & Confidence Escalation (`change_classifier.py`)**:
+  - Implemented bounded 1-hop AST/import sensitive dependency propagation across Billing, Auth, Crypto, Security, and Sensitive Data domains.
+  - Excluded universal DI hubs and base classes (`AppModule`, `BaseActivity`, etc.) from propagating false-positive project-wide escalations.
+- **P1 Resilience: Deterministic Repair Command (`repair.py`, `harness_cli.py`)**:
+  - Implemented `android-harness repair` (`python harness_cli.py repair`) restoring missing, modified, or corrupted managed harness engine files from pinned release checksums.
+  - Strictly preserves developer-owned project context (`project-notes.md`, `architecture-policy.json`, task evidence, and application source code).
+  - Enforces fail-closed safety guards: mismatched kit version refusal, corrupted checksum manifest refusal, active task `--force` requirement, and pre/post app code immutability verification.
+- **P2 Core Simplification: Decoupled Integration Boundary (`integrations/`, `pre_tool_safety.py`)**:
+  - Created `agents/scripts/integrations/` with `ExternalIntegration` base class, `IntegrationRegistry`, and generic fail-closed `validate_external_write`.
+  - Encapsulated Zoho Sprints tool knowledge, read/mutation distinction, and idempotency checks behind `ZohoSprintsIntegration`.
+  - Core safety hook delegates dynamically to `registry.resolve(server, tool_name)`.
+  - Core delivery workflow operates cleanly with zero tracker dependencies when `external_writes: []`.
+
 ## [1.0.48] - 2026-09-17
 
 ### Windows File-Locking Resiliency, Safe Rollback Protection, Self-Healing Recovery & Ghost-Task Prevention

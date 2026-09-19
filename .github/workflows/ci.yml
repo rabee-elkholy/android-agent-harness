@@ -65,6 +65,9 @@ jobs:
       - name: Run critical safety regressions
         run: python agents/scripts/_critical_safety_selftest.py
 
+      - name: Run public CLI acceptance tests
+        run: python agents/scripts/_public_cli_selftest.py
+
       - name: Compile Python sources
         run: |
           python -m compileall -q agents/scripts agents/mcp/zoho_sprints harness_cli.py
@@ -75,6 +78,19 @@ jobs:
         run: |
           python harness_cli.py version
           python harness_cli.py doctor --json
+
+  full-selftest:
+    name: Canonical full selftest (Python 3.12 on ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Run canonical full selftest
+        run: python harness_cli.py selftest
 
   performance:
     name: Performance regression budget

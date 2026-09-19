@@ -6,6 +6,7 @@ Kotlin `w:` deprecation floods. Full raw log is kept for failure parsing.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -32,7 +33,24 @@ from _variants import resolve_or_raise  # noqa: E402
 from gradle_error_parser import format_errors, parse_compiler_errors  # noqa: E402
 from artifact_set import build_artifact_set, resolve_artifacts  # noqa: E402
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_env_repo = os.environ.get("HARNESS_REPO", "").strip()
+
+
+def _resolve_repo_root() -> Path:
+    if _env_repo:
+        return Path(_env_repo).resolve()
+    cwd = Path.cwd().resolve()
+    if (
+        (cwd / "gradlew").is_file()
+        or (cwd / "gradlew.bat").is_file()
+        or (cwd / "settings.gradle.kts").is_file()
+        or (cwd / "settings.gradle").is_file()
+    ):
+        return cwd
+    return Path(__file__).resolve().parent.parent.parent
+
+
+REPO_ROOT = _resolve_repo_root()
 
 SUPPRESSED_PATTERNS = [
     re.compile(r"^> Task :.*UP-TO-DATE"),
@@ -124,6 +142,110 @@ def test_failure_only(task: str, raw_log: str) -> bool:
     )
 
 
+def validate_reviewer_precondition_before_assemble(
+    repo: Path,
+    state_dir: Path,
+) -> tuple[bool, str]:
+    """Validate that required specialist reviews have passed before assembleDebug.
+
+    Fail-closed: Returns (False, reason) if evidence is missing, malformed, stale,
+    contains unresolved blocking findings, or required coverage is incomplete.
+    Returns (True, reason) only if reviews are not required or all required reviews passed.
+    """
+    active_p = state_dir / "active-task.json"
+    if not active_p.is_file():
+        return True, "NO_ACTIVE_TASK"
+
+    try:
+        active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"active-task.json is unreadable or malformed: {exc}"
+
+    tid = str(active_task_data.get("task_id") or "").strip()
+    if not tid:
+        return True, "NO_ACTIVE_TASK"
+
+    plan_p = state_dir / "tasks" / tid / "plan.json"
+    if not plan_p.is_file():
+        return False, f"Task {tid} plan.json missing"
+
+    try:
+        plan_data = json.loads(plan_p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"Task {tid} plan.json is unreadable or malformed: {exc}"
+
+    if plan_data.get("status") != "VERIFYING":
+        return True, f"Active task status is {plan_data.get('status')}"
+
+    current_run_p = state_dir / "tasks" / tid / "current-run.json"
+    if not current_run_p.is_file():
+        return False, f"Task {tid} is VERIFYING but current-run.json is missing"
+
+    try:
+        current_run = json.loads(current_run_p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"Task {tid} current-run.json is unreadable or malformed: {exc}"
+
+    policy_raw = str(current_run.get("policy") or "")
+    if not policy_raw:
+        return False, f"Task {tid} current-run.json missing policy reference"
+
+    policy_p = Path(policy_raw)
+    if not policy_p.is_file():
+        if (state_dir / policy_p).is_file():
+            policy_p = state_dir / policy_p
+        elif (repo / policy_p).is_file():
+            policy_p = repo / policy_p
+
+    if not policy_p.is_file():
+        return False, f"Policy file not found: {policy_p}"
+
+    try:
+        pol_data = json.loads(policy_p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"Policy file is unreadable or malformed: {exc}"
+
+    required_revs = list(pol_data.get("reviewers") or [])
+    if not required_revs:
+        return True, "Policy requires no reviewers"
+
+    snap = str(current_run.get("snapshot") or current_run.get("delivery_snapshot_sha256") or "")
+    r_id = str(current_run.get("run_id") or "")
+    change_set = str(current_run.get("change_set_sha256") or "")
+    if not snap or not r_id:
+        return False, "current-run missing snapshot or run_id"
+
+    try:
+        from evidence_store import EvidenceStore
+        store = EvidenceStore(state_dir)
+        rev_entry = store.read(snap, r_id, "reviews")
+    except Exception as exc:
+        return False, f"Required reviews evidence missing, stale, or invalid: {exc}"
+
+    if rev_entry.get("change_set_sha256") and change_set and rev_entry.get("change_set_sha256") != change_set:
+        return False, "reviews evidence change-set mismatch"
+
+    if str(rev_entry.get("status") or "").upper() != "PASS":
+        return False, f"reviews evidence status is {rev_entry.get('status')}, expected PASS"
+
+    rev_ev = rev_entry.get("evidence") or {}
+    if not isinstance(rev_ev, dict):
+        return False, "reviews evidence payload is malformed"
+
+    if rev_ev.get("developer_override"):
+        return True, "developer override present in reviews evidence"
+
+    covered = set(rev_ev.get("reviewers") or [])
+    missing_revs = set(required_revs) - covered
+    if missing_revs:
+        return False, f"Incomplete reviewer coverage: missing {sorted(missing_revs)}"
+
+    if rev_ev.get("blocking_findings"):
+        return False, f"Reviews contain unresolved blocking findings: {rev_ev.get('blocking_findings')}"
+
+    return True, "All required reviewers passed"
+
+
 def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path | str | None = None) -> int:
     enable_line_buffered_stdio()
     if outcome is not None:
@@ -148,44 +270,18 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
 
     if any("assemble" in arg.lower() for arg in task_args):
         state_dir = run_root / ".agents" / "state"
-        active_p = state_dir / "active-task.json"
-        if active_p.is_file():
-            try:
-                active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
-                tid = str(active_task_data.get("task_id") or "")
-                if tid:
-                    plan_p = state_dir / "tasks" / tid / "plan.json"
-                    current_run_p = state_dir / "tasks" / tid / "current-run.json"
-                    if plan_p.is_file() and current_run_p.is_file():
-                        plan_data = json.loads(plan_p.read_text(encoding="utf-8"))
-                        if plan_data.get("status") == "VERIFYING":
-                            current_run = json.loads(current_run_p.read_text(encoding="utf-8"))
-                            policy_p = Path(str(current_run.get("policy") or ""))
-                            if policy_p.is_file():
-                                pol_data = json.loads(policy_p.read_text(encoding="utf-8"))
-                                required_revs = list(pol_data.get("reviewers") or [])
-                                if required_revs:
-                                    from evidence_store import EvidenceStore
-                                    store = EvidenceStore(state_dir)
-                                    snap = str(current_run.get("snapshot") or current_run.get("delivery_snapshot_sha256") or "")
-                                    r_id = str(current_run.get("run_id") or "")
-                                    try:
-                                        rev_entry = store.read(snap, r_id, "reviews")
-                                        rev_ev = rev_entry.get("evidence") or {}
-                                        if not rev_ev.get("developer_override"):
-                                            covered = set(rev_ev.get("reviewers") or [])
-                                            if not set(required_revs) <= covered or rev_ev.get("blocking_findings"):
-                                                msg = "Pipeline order violation: required specialist reviewers must pass before running assembleDebug."
-                                                live_print(f"[FAIL] {msg}", err=True)
-                                                record("FAIL", 1, "CODE", msg)
-                                                return 1
-                                    except Exception:
-                                        msg = "Pipeline order violation: required specialist reviews must pass before running assembleDebug."
-                                        live_print(f"[FAIL] {msg}", err=True)
-                                        record("FAIL", 1, "CODE", msg)
-                                        return 1
-            except Exception:
-                pass
+        try:
+            allowed, reason = validate_reviewer_precondition_before_assemble(run_root, state_dir)
+            if not allowed:
+                msg = f"Pipeline order violation: required specialist reviewers must pass before running assembleDebug ({reason})."
+                live_print(f"[FAIL] {msg}", err=True)
+                record("FAIL", 1, "CODE", msg)
+                return 1
+        except Exception as exc:
+            msg = f"Reviewer precondition validation failed closed: {type(exc).__name__}: {exc}"
+            live_print(f"[FAIL] {msg}", err=True)
+            record("FAIL", 1, "CODE", msg)
+            return 1
 
     try:
         wrapper = gradle_wrapper(run_root)
@@ -251,9 +347,9 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
                 from _product import APPLICATION_ID
                 from _variants import apk_relative
 
-                paths = resolve_artifacts(REPO_ROOT, task_label, apk_relative())
+                paths = resolve_artifacts(run_root, task_label, apk_relative())
                 artifact_set = build_artifact_set(
-                    REPO_ROOT,
+                    run_root,
                     task_label,
                     paths,
                     application_id=str(APPLICATION_ID or ""),
@@ -336,7 +432,7 @@ def main() -> None:
         sys.exit(1)
     if active_flavor:
         live_print(f"[*] Active build variant: {active_flavor} (debug)")
-    sys.exit(run_gradle(task_args))
+    sys.exit(run_gradle(task_args, cwd=_resolve_repo_root()))
 
 
 if __name__ == "__main__":

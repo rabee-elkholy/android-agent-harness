@@ -332,14 +332,32 @@ def draft(args: argparse.Namespace) -> dict:
             if grp_surfaces & surfaces_for_layer_check
         }
 
+    impl_modules = set()
+    for f in impl_files:
+        parts = f.replace("\\", "/").strip().lstrip("./").split("/")
+        if len(parts) > 1 and "src" in parts:
+            idx = parts.index("src")
+            impl_modules.add("/".join(parts[:idx]))
+        elif len(parts) > 1:
+            impl_modules.add(parts[0])
+
+    arch_intent = str(getattr(args, "architecture_intent", "EXISTING_CHANGE") or "EXISTING_CHANGE").upper()
+
     requires_phases = (
-        (len(impl_files) > 3 or (len(impl_files) >= 2 and len(spanned_layer_groups) >= 2))
+        (
+            len(impl_files) > 8
+            or len(impl_modules) > 1
+            or arch_intent == "MIGRATION"
+            or ("ROOM_SCHEMA" in surfaces_for_layer_check and len(impl_files) >= 2)
+            or (len(spanned_layer_groups) >= 3 and len(impl_files) >= 5)
+        )
         and not getattr(args, "force", False)
     )
     if requires_phases and not parsed_phases:
         raise ValidationError(
             "PHASE_PLAN_REQUIRED: Task scope exceeds single-phase threshold "
-            f"({len(impl_files)} implementation files, {len(spanned_layer_groups)} layer groups: {', '.join(sorted(spanned_layer_groups)) or 'none'}). "
+            f"({len(impl_files)} implementation files, {len(impl_modules)} module(s), "
+            f"arch_intent={arch_intent}, layer groups: {', '.join(sorted(spanned_layer_groups)) or 'none'}). "
             "Define phased execution using --phases '[{\"id\": \"p1\", ...}, {\"id\": \"p2\", ...}]'."
         )
 
@@ -1418,7 +1436,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--risks")
     command.add_argument("--rollback")
     command.add_argument(
-        "--external-write", action="append", choices=("zoho_sprints",), default=[],
+        "--external-write", action="append", default=[], metavar="INTEGRATION",
         help="External mutation explicitly included in the plan presented for approval",
     )
     command.add_argument(

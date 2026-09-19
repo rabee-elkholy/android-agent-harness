@@ -926,6 +926,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
 
     def test_daily_17_interrupted_update_recovery(self) -> None:
         """Daily-17: Automatic recovery from interrupted update restores previous valid engine."""
+        setup_ownership(self.repo)
         agents_dir = self.repo / ".agents"
         agents_dir.mkdir(parents=True, exist_ok=True)
         write_file(agents_dir / "engine_marker.txt", "engine_v1")

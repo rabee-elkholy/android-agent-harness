@@ -103,6 +103,35 @@ def is_ui_only_kotlin(diff_text: str, context_text: str, full_text: str, rel: st
     return True
 
 
+VISUAL_COMPOSE_KEYWORDS_RE = re.compile(
+    r"\b(?:padding|margin|spacer|dp|sp|width|height|size|fillmaxwidth|fillmaxheight|fillmaxsize|"
+    r"arrangement|alignment|color|brush|shape|roundedcornershape|fontsize|fontweight|fontfamily|"
+    r"preview|previewparameter|clip|border|alpha|elevation)\b",
+    re.IGNORECASE,
+)
+NON_VISUAL_COMPOSE_TRIGGERS_RE = re.compile(
+    r"\b(?:if|when|remember|mutablestateof|collectasstate|by\s+|var\s+|onclick|onvaluechange|"
+    r"val\s+[a-zA-Z0-9_]+\s*=|navhost|navcontroller|navigate|launch|coroutine)\b|"
+    r"\b(?:viewmodel|repository|usecase|service)\.",
+    re.IGNORECASE,
+)
+
+
+def _is_visual_only_compose(diff_text: str) -> bool:
+    if not diff_text:
+        return False
+    modified_lines = [
+        line[1:].strip() for line in diff_text.splitlines()
+        if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+    ]
+    code_text = " \n ".join(modified_lines)
+    if not code_text.strip():
+        return False
+    if NON_VISUAL_COMPOSE_TRIGGERS_RE.search(code_text):
+        return False
+    return bool(VISUAL_COMPOSE_KEYWORDS_RE.search(code_text))
+
+
 def _add(result: dict, surface: str, path: str, reason: str) -> None:
     result.setdefault(surface, {"files": set(), "reasons": set()})
     result[surface]["files"].add(path)
@@ -140,6 +169,134 @@ def _room_schema_types(repo: Path) -> set[str]:
     except Exception:
         pass
     return types
+
+
+SENSITIVE_DEPENDENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("BILLING", re.compile(r"(?i)billing|purchase|subscription|entitlement")),
+    ("AUTH", re.compile(r"OAuth|Oauth|Authentication|Authorization|Auth(?:$|[A-Z_])|Login|SignIn|Signin|Credential|Biometric")),
+    ("CRYPTO", re.compile(r"(?i)cipher|keystore|secretkey|encrypt|decrypt|crypto")),
+    ("SENSITIVE_DATA", re.compile(r"(?i)access.?token|refresh.?token|password|health.?data")),
+    ("SECURITY", re.compile(r"(?i)certificatepinner|trustmanager|hostnameverifier|security")),
+)
+
+FRAMEWORK_EXCLUDED_TYPES = frozenset({
+    "String", "Int", "Long", "Float", "Double", "Boolean", "Byte", "Short", "Char",
+    "List", "Set", "Map", "MutableList", "MutableSet", "MutableMap", "ArrayList", "HashMap",
+    "Unit", "Any", "Nothing", "Throwable", "Exception", "Error", "Result",
+    "Modifier", "Composable", "Context", "View", "ViewGroup", "Activity", "Fragment",
+    "ComponentActivity", "AppCompatActivity", "ViewModel", "AndroidViewModel", "SavedStateHandle",
+    "CoroutineScope", "Dispatchers", "Flow", "StateFlow", "SharedFlow",
+})
+
+UNIVERSAL_HUB_NAMES = frozenset({
+    "Application", "App", "BaseActivity", "MainActivity", "AppModule",
+    "ApplicationComponent", "SingletonComponent", "ActivityComponent",
+})
+
+
+def _is_universal_hub(rel: str, class_name: str) -> bool:
+    if class_name in UNIVERSAL_HUB_NAMES:
+        return True
+    lower = rel.lower()
+    if any(h in lower for h in ("/di/", "di/module", "applicationcomponent", "singletoncomponent")):
+        return True
+    return False
+
+
+def _extract_direct_dependency_types(text: str) -> set[str]:
+    """Extract direct dependency types: constructor params, fields, supertypes, and imports."""
+    types = set()
+    if not text:
+        return types
+    # 1. Imports
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("import "):
+            import_target = stripped[7:].rstrip(";").strip()
+            parts = import_target.split(".")
+            if parts:
+                leaf = parts[-1]
+                if leaf and leaf[0].isupper() and leaf not in FRAMEWORK_EXCLUDED_TYPES:
+                    types.add(leaf)
+    # 2. Constructor parameters: val/var name: Type
+    for match in re.finditer(r"\b(?:val|var)\s+[a-zA-Z0-9_]+\s*:\s*([A-Za-z0-9_]+)", text):
+        t = match.group(1)
+        if t not in FRAMEWORK_EXCLUDED_TYPES:
+            types.add(t)
+    # 3. Supertypes / interfaces: class/interface/object ... : Super1, Super2
+    for match in re.finditer(r"\b(?:class|interface|object)\s+[a-zA-Z0-9_]+(?:\s*<[^>]*>)?\s*(?:\([^)]*\))?\s*:\s*([A-Za-z0-9_,\s<>]+)\s*(?:\{|;|$)", text):
+        raw_supers = match.group(1)
+        for s in raw_supers.split(","):
+            s_clean = s.strip().split("<")[0].split("(")[0].strip()
+            if s_clean and s_clean not in FRAMEWORK_EXCLUDED_TYPES:
+                types.add(s_clean)
+    # 4. Injected or private properties: private val foo: Type
+    for match in re.finditer(r"\b(?:private|protected|public|internal)?\s*(?:val|var)\s+[a-zA-Z0-9_]+\s*:\s*([A-Za-z0-9_]+)", text):
+        t = match.group(1)
+        if t not in FRAMEWORK_EXCLUDED_TYPES:
+            types.add(t)
+    return types
+
+
+_TYPE_SURFACE_CACHE: dict[tuple[Path, str], str | None] = {}
+
+
+def _resolve_type_surface(root: Path, type_name: str) -> tuple[str, str] | None:
+    """Check if a dependency type maps to a sensitive surface directly or via target source file (1 hop)."""
+    # Direct match on type name
+    for surface, pattern in SENSITIVE_DEPENDENCY_PATTERNS:
+        if pattern.search(type_name):
+            return surface, type_name
+
+    # Check cache
+    cache_key = (root, type_name)
+    if cache_key in _TYPE_SURFACE_CACHE:
+        cached = _TYPE_SURFACE_CACHE[cache_key]
+        return (cached, type_name) if cached else None
+
+    # Search for target file in repository (1 hop)
+    try:
+        matches = []
+        for ext in (".kt", ".java"):
+            for candidate in (root / "app" / "src").glob(f"**/{type_name}{ext}"):
+                matches.append(candidate)
+                if len(matches) >= 1:
+                    break
+            if not matches:
+                for candidate in root.glob(f"**/{type_name}{ext}"):
+                    if ".git" not in str(candidate) and "build" not in str(candidate):
+                        matches.append(candidate)
+                        if len(matches) >= 1:
+                            break
+            if matches:
+                break
+
+        if matches:
+            target_path = matches[0]
+            target_text = _read_text(target_path)
+            for surface, pattern, _reason in PATTERNS:
+                if surface in CRITICAL_SURFACES:
+                    if pattern.search(target_text):
+                        _TYPE_SURFACE_CACHE[cache_key] = surface
+                        return surface, f"{type_name} -> {surface}"
+    except Exception:
+        pass
+
+    _TYPE_SURFACE_CACHE[cache_key] = None
+    return None
+
+
+def _propagate_sensitive_dependencies(root: Path, rel: str, full_text: str, found: dict) -> None:
+    class_name = Path(rel).stem
+    if _is_universal_hub(rel, class_name):
+        return
+
+    deps = _extract_direct_dependency_types(full_text)
+    for dep in sorted(deps):
+        resolved = _resolve_type_surface(root, dep)
+        if resolved:
+            surface, dep_info = resolved
+            _add(found, surface, rel, f"{surface}_DEPENDENCY_PROPAGATION: {dep_info}")
 
 
 HUNK_LINE_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -449,7 +606,10 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
         if "/res/" in f"/{lower}" and suffix not in (".md", ".txt"):
             _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
         if suffix in (".kt", ".kts") and ("@composable" in full_text.lower() or "androidx.compose" in full_text.lower()):
-            _add(found, "COMPOSE_UI", rel, "COMPOSE_PATTERN")
+            if _is_visual_only_compose(diff_text):
+                _add(found, "COMPOSE_UI", rel, "COMPOSE_VISUAL_ONLY")
+            else:
+                _add(found, "COMPOSE_UI", rel, "COMPOSE_PATTERN")
         if suffix in (".kt", ".java") and not test_path and VIEW_UI_RE.search(full_text):
             _add(found, "XML_UI", rel, "VIEW_UI_COMPONENT")
         if suffix in (".kt", ".java") and not test_path and re.search(r"\b(NavHost|NavController|findNavController|rememberNavController)\b|navGraphBuilder|popUpTo\(", diff_text):
@@ -526,6 +686,9 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
                 elif context_text and pattern.search(context_text):
                     _add(found, surface, rel, f"{reason}_CONTEXT")
 
+        if suffix in (".kt", ".java") and not test_path:
+            _propagate_sensitive_dependencies(root, rel, full_text, found)
+
     non_docs = set(found) - {"DOCS", "TEST_ONLY"}
     relevant_changes = [item for item in changes if is_delivery_relevant(item.rel_posix) or (item.old_rel_posix and is_delivery_relevant(item.old_rel_posix))]
     classified_files = {path for info in found.values() for path in info.get("files", ())}
@@ -545,6 +708,14 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
     else:
         severity = "LOW"
     confidence = "LOW" if "UNKNOWN" in surfaces else "HIGH"
+    if confidence == "HIGH":
+        for surface in surfaces:
+            if surface in CRITICAL_SURFACES:
+                info = found.get(surface, {})
+                reasons = info.get("reasons", set())
+                if reasons and all("DEPENDENCY_PROPAGATION" in str(r) for r in reasons):
+                    confidence = "MEDIUM"
+                    break
     details = {
         surface: {
             "files": sorted(info["files"]),

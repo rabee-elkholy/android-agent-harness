@@ -596,13 +596,13 @@ class PolicyTests(RepoCase):
 
     def test_later_round_reruns_only_findings_regression_and_promotions(self) -> None:
         prior_classification = {
-            "classification_sha256": "a" * 64, "surfaces": ["COMPOSE_UI"],
+            "classification_sha256": "a" * 64, "surfaces": ["PUBLIC_API"],
             "severity": "MEDIUM", "confidence": "HIGH", "changed_files": 1,
             "changed_lines": 4, "has_delete_or_rename": False,
         }
         previous = decide(prior_classification, KIT / "agents/skills")
         fixed = dict(prior_classification)
-        fixed.update({"classification_sha256": "b" * 64, "surfaces": ["COMPOSE_UI", "COROUTINES"]})
+        fixed.update({"classification_sha256": "b" * 64, "surfaces": ["PUBLIC_API", "COROUTINES"]})
         later = decide_later_round(
             fixed, KIT / "agents/skills", previous_policy=previous,
             finding_owners=["bug-reviewer-agent"],

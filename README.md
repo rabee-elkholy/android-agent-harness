@@ -90,7 +90,7 @@ Android Agent Harness is not:
 Open your Android project in your AI coding agent (Antigravity, Gemini CLI, Claude Code, Cursor, Windsurf, or Roo Code), and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.48/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.49/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent will:
@@ -105,14 +105,22 @@ Run directly from your command line:
 
 ```bash
 # Clone the pinned harness release
-git clone --depth 1 --branch v1.0.48 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
+git clone --depth 1 --branch v1.0.49 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 # Initialize inside your Android project
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/android-project --kit ~/.android-harness/kit
 
 # Verify configuration and environment health
 python ~/.android-harness/kit/harness_cli.py doctor --repo /path/to/android-project
+
+# Restore damaged immutable harness files from the same pinned kit version
+python ~/.android-harness/kit/harness_cli.py repair --repo /path/to/android-project --kit ~/.android-harness/kit
 ```
+
+`repair` verifies pinned checksums, restores only immutable engine files, and
+preserves project identity, tracker wiring, project context, application source,
+and task evidence. It refuses a live task unless the developer explicitly adds
+`--force`.
 
 The installer configures `.agents` in your project and registers `.git/info/exclude` so that harness state never pollutes your repository's Git tracking.
 

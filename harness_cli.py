@@ -15,6 +15,7 @@ Usage:
     android-harness explain [--last N] [--repo PATH] [--kit PATH]
     android-harness verify --task TASK_ID [--repo PATH] [--kit PATH]
     android-harness doctor [--repo PATH] [--json] [--device] [--kit PATH]
+    android-harness repair [--repo PATH] [--kit PATH] [--force] [--json]
     android-harness preflight [--repo PATH] [--kit PATH]
     android-harness test [ARGS...] [--repo PATH] [--kit PATH]
     android-harness assemble [TASK...] [--repo PATH] [--kit PATH]
@@ -584,6 +585,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return code
 
 
+def cmd_repair(args: argparse.Namespace) -> int:
+    kit = ensure_kit(args.kit)
+    repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
+    cli_args = ["--repo", str(repo), "--kit", str(kit)]
+    if getattr(args, "force", False):
+        cli_args.append("--force")
+    if getattr(args, "json", False):
+        cli_args.append("--json")
+    return run_engine_script(kit, "repair.py", cli_args, capture=getattr(args, "json", False))
+
+
 def cmd_preflight(args: argparse.Namespace) -> int:
     """Run the preflight gate against the client checkout.
 
@@ -698,6 +710,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_architecture_selftest.py", "_daily_workflow_selftest.py",
             "_stabilization_v41_selftest.py",
             "_stabilization_v42_selftest.py",
+            "_public_cli_selftest.py",
         )
         total = len(scripts)
         for idx, script in enumerate(scripts, 1):
@@ -850,6 +863,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--install-check", action="store_true", help="Fast post-install structural validation.")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.set_defaults(func=cmd_doctor)
+
+    sp = sub.add_parser("repair", help="Deterministic restore of managed harness files from pinned kit.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("--force", action="store_true", help="Force repair even if an active task exists.")
+    sp.add_argument("--json", action="store_true", help="Output machine-readable JSON report.")
+    sp.set_defaults(func=cmd_repair)
 
     sp = sub.add_parser("preflight", help="String parity + Room gate + fast Kotlin lint.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")

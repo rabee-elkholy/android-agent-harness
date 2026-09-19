@@ -28,10 +28,8 @@ WRITE_TOOLS = {
 }
 SUBAGENT_TOOLS = {"define_subagent", "invoke_subagent", "manage_subagents", "manage_task", "schedule"}
 SEARCH_TOOLS = {"grep_search", "find_by_name"}
-ZOHO_MUTATION_TOOLS = {
-    "zoho_create_task", "zoho_update_task_status", "zoho_add_comment",
-    "zoho_update_task_description",
-}
+from integrations.registry import registry  # noqa: E402
+from integrations.base import validate_external_write  # noqa: E402
 KNOWN_MCP_READ_PREFIXES = (
     "get_", "list_", "read_", "search_", "fetch_", "query_", "check_", "inspect_",
     "api-get-", "api-retrieve-", "api-query-", "developerknowledge_",
@@ -359,31 +357,20 @@ def _handle_subagent(name: str, args: dict) -> None:
         emit("deny", f"Reviewer policy validation failed closed: {exc}", tool=name)
 
 
-def _handle_zoho_mutation(name: str, args: dict) -> None:
+def _handle_external_mutation(integration, tool_name: str, args: dict) -> None:
     try:
-        plan = active_plan(REPO)
-        status = str(plan.get("status") or "")
-        approval = plan.get("approval") or {}
-        authorized = (
-            status in {"IMPLEMENTING", "READY_FOR_DELIVERY"}
-            and plan.get("execution_nonce")
-            and plan.get("execution_nonce") == approval.get("single_use_nonce")
-            and "zoho_sprints" in set(plan.get("external_writes") or [])
-        )
-        if not authorized:
-            emit("deny", "Zoho mutation is not included in the active approved plan.", tool=name)
+        try:
+            plan = active_plan(REPO)
+        except Exception:
+            emit("deny", f"{integration.display_name} mutation is not included in the active approved plan.", tool=tool_name)
             return
-        operation_id = str(args.get("operation_id") or "").strip()
-        if not operation_id:
-            emit("deny", "Zoho mutations require a stable operation_id for idempotency.", tool=name)
+        allowed, reason = validate_external_write(integration, tool_name, args, plan)
+        if not allowed:
+            emit("deny", reason, tool=tool_name)
             return
-        requested_status = str(args.get("status") or "").strip().lower()
-        if requested_status in {"done", "solved", "closed", "completed"}:
-            emit("deny", "Terminal tracker states are developer-owned.", tool=name)
-            return
-        emit("allow", "Zoho mutation is plan-bound and idempotency-bound.", tool=name)
+        emit("allow", f"{integration.display_name} mutation is plan-bound and idempotency-bound.", tool=tool_name)
     except Exception as exc:
-        emit("deny", f"Zoho mutation authorization failed closed: {exc}", tool=name)
+        emit("deny", f"{integration.display_name} mutation authorization failed closed: {exc}", tool=tool_name)
 
 
 def _handle_mcp_tool(name: str, args: dict) -> None:
@@ -401,11 +388,14 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
         tool_args = {}
 
     tool_lower = tool_name.lower()
-    if "zoho" in server or "zoho" in tool_lower:
-        if tool_lower in ZOHO_MUTATION_TOOLS or any(act in tool_lower for act in ("create", "update", "delete", "close", "add_comment")):
-            _handle_zoho_mutation(tool_name, tool_args)
+
+    # Query integration registry (e.g. Zoho, Jira, Linear)
+    integration = registry.resolve(server, tool_name)
+    if integration is not None:
+        if integration.is_read_only(tool_name, tool_args):
+            emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name)
             return
-        emit("allow", "Read-only Zoho inspection is allowed.", tool=name)
+        _handle_external_mutation(integration, tool_name, tool_args)
         return
 
     is_read = (
@@ -452,13 +442,47 @@ def _is_targeted_search_path(target: str) -> bool:
     return False
 
 
-def _handle_search(name: str, args: dict) -> None:
+BROAD_SEARCH_PATTERNS = {
+    "*", "*.*", "*.kt", "*.java", "*.xml", "*.gradle", "*.kts", "*.json",
+    "*.properties", "*.pro", "**/*", "**", "",
+}
+
+
+def _is_targeted_pattern(pattern: str) -> bool:
+    if not pattern:
+        return False
+    clean = pattern.strip().replace("\\", "/")
+    if clean.lower() in BROAD_SEARCH_PATTERNS:
+        return False
+    if re.match(r"^\*+\.[a-zA-Z0-9]+$", clean):
+        return False
+    core = re.sub(r"[*?]", "", clean)
+    core_name = Path(core).name
+    return len(core_name) >= 3 and core_name.lower() not in {"src", "main", "test", "app", "core", "file"}
+
+
+def _is_targeted_search(name: str, args: dict) -> bool:
     if name == "grep_search":
         target = str(args.get("SearchPath") or args.get("searchPath") or "")
-    else:
+        if _is_targeted_search_path(target):
+            return True
+        includes = args.get("Includes") or args.get("includes") or []
+        if isinstance(includes, list) and any(_is_targeted_pattern(str(inc)) for inc in includes):
+            return True
+        return False
+    elif name == "find_by_name":
         target = str(args.get("SearchDirectory") or args.get("searchDirectory") or "")
+        if _is_targeted_search_path(target):
+            return True
+        pattern = str(args.get("Pattern") or args.get("pattern") or "")
+        if _is_targeted_pattern(pattern):
+            return True
+        return False
+    return False
 
-    if _is_targeted_search_path(target):
+
+def _handle_search(name: str, args: dict) -> None:
+    if _is_targeted_search(name, args):
         emit("allow", "Search is targeted to a specific file or feature directory.", tool=name)
         return
 
@@ -574,8 +598,13 @@ def main() -> None:
         if name in SEARCH_TOOLS:
             _handle_search(name, args)
             return
-        if name in ZOHO_MUTATION_TOOLS:
-            _handle_zoho_mutation(name, args)
+        # External integrations called directly as host tools (e.g. zoho_add_comment)
+        integration = registry.resolve("", name)
+        if integration is not None:
+            if integration.is_read_only(name, args):
+                emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name)
+                return
+            _handle_external_mutation(integration, name, args)
             return
         if name in ("call_mcp_tool", "mcp_tool"):
             _handle_mcp_tool(name, args)
