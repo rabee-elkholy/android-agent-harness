@@ -40,11 +40,20 @@ python harness_cli.py task draft --repo /path/to/project --task-id feature-1 --o
 python harness_cli.py task approve --repo /path/to/project --task-id feature-1 --source conversation --proof-reference <host-message-id> --enforcement-tier RULE_ENFORCED
 python harness_cli.py task begin --repo /path/to/project --task-id feature-1
 python harness_cli.py doctor --repo /path/to/project --json
+python harness_cli.py task-context --repo /path/to/project --file app/src/main/kotlin/com/example/ProfileScreen.kt --json
+python harness_cli.py task-context --repo /path/to/project --symbol ProfileViewModel --module :feature:profile --source-set main --json
+python harness_cli.py context refresh --repo /path/to/project
 python harness_cli.py repair --repo /path/to/project --kit /path/to/pinned/kit
 python harness_cli.py update --repo /path/to/project
 python harness_cli.py uninstall --repo /path/to/project
 python harness_cli.py uninstall --repo /path/to/project --apply
 ```
+
+`task-context` is a trusted read-only inspection command. It performs a live,
+bounded resolution without writing the persistent graph cache or project
+context. Only a target that independently resolves or is genuinely ambiguous
+can satisfy the initial discovery anchor; missing and invalid targets do not
+unlock broad repository search.
 
 For an approved plan that includes tracker mutation, add
 `--external-write zoho_sprints` while drafting. Every Zoho write also requires

@@ -4,234 +4,437 @@ ArtifactMetadata:
   RequestFeedback: true
 ---
 
-# Android Harness Reliability Improvement Plan
-
-> Superseded by `implementation_plan_vnext.md`. This file is retained only as
-> pre-v1 design history and is not an executable plan.
+# Safe Project Intelligence — Implementation Plan
 
 ## Objective
 
-Resolve the verified reliability gaps in the current `v0.27.23` harness without broad refactoring, new runtime dependencies, weakened safety gates, state-format breakage, or changes to Android application code.
+Add deterministic local Project Intelligence to Android Agent Harness so an agent can resolve the smallest accurate context for a concrete Android task across mixed Java/Kotlin, XML/Compose, MVP/MVVM/MVI-like, multi-module, flavored, and KMP projects.
 
-The plan uses incremental, backward-compatible fixes. No implementation phase may begin until the previous phase is green, reviewed, committed by the developer, and explicitly authorized to continue.
+The intelligence remains advisory. It must not change developer authority, approval behavior, architecture contracts, verification rules, Git authority, or application code automatically.
 
-## Current Evidence
+This repository is the Harness kit itself. Development and verification of this plan use Python tooling only:
 
-- Repository state at planning time: clean working tree at `d86581e`.
-- Current version: `0.27.23`.
-- Thirteen local checks were exercised.
-- Ten checks passed.
-- `_hook_selftest.py`, `_environment_selftest.py`, and `preflight_check.py` failed.
-- The preflight failure is downstream of the hook self-test failure.
-- Release version alignment passes for `v0.27.23`, but it does not detect stale pinned URLs or documentation drift.
+- no Harness workflow state;
+- no Android specialist reviewers;
+- no Gradle or ADB;
+- no device walkthrough;
+- no external writes;
+- no Git mutation during implementation and verification; the maintainer later
+  explicitly authorized commit, push, version publication, README updates, and
+  CI confirmation after every local release gate passes.
 
-## Constraints
+## Decisions Locked Before Implementation
 
-- Keep the current safety policy that rejects raw `gradlew` outside Antigravity self-healing.
-- Keep five mandatory review leaves for production-only diffs and six leaves when test files are included.
-- Preserve both existing review verdict spellings, `PASS` and `APPROVED`.
-- Preserve existing JSON fields and add fields only when required for compatibility.
-- Do not add third-party runtime dependencies.
-- Do not add reviewers, services, databases, background workers, or new abstraction layers.
-- Do not install, uninstall, clear, or mutate an Android device during this work.
-- Keep network-dependent update behavior mocked in automated tests.
-- Keep changes phase-local and independently reversible.
+1. Keep `project-facts.json` at schema version 2.
+2. Add only an optional top-level `advisory_knowledge` block.
+3. Keep existing architecture-family signatures and IDs byte-for-byte stable.
+4. Keep old scalar fields such as `ui_toolkit`; add richer advisory arrays rather than replacing scalar semantics.
+5. Reuse `project_context.py`, `architecture_resolver.py`, `_graph_core.py`, and `GraphEngine`.
+6. Do not create a second graph, context root, architecture policy, or resolver.
+7. Persistent context refresh stays explicit, full, staged, and facts-last.
+8. Ordinary Task Context resolution does not persist source, context, workflow, or graph-cache changes.
+9. Local conventions remain guidance even at high confidence.
+10. No automatic architecture migration or modernization is allowed.
 
-## Selected Approach
+## Selected Design
 
-Use the minimal incremental option:
+```text
+authoritative project facts + approved task contract
+                         ↓ authority
+optional advisory local profiles
+                         ↓ acceleration
+incremental in-memory graph
+                         ↓ candidate discovery
+targeted live source verification
+                         ↓
+bounded Task Context result
+```
 
-1. Repair the test oracle before changing production behavior.
-2. Fix proven CLI and doctor correctness bugs with focused regression tests.
-3. Remove duplicate preflight work through a fingerprinted, fail-closed cache contract.
-4. Make release validation catch the documentation and supply-chain drift already observed.
+The graph and advisory snapshot generate candidates. Current source verification decides whether a candidate is still usable. An approved task contract always outranks Task Context.
 
-Rejected approaches:
+## Stable Data Contracts
 
-- Rewriting the self-test framework.
-- Splitting the harness into packages or services.
-- Replacing the current gate state machine.
-- Adding a general-purpose test framework solely for these fixes.
-- Increasing reviewer count or adding another review stage.
+### Advisory knowledge
 
-## Phase 1: Restore Deterministic Gate Health
+```json
+{
+  "schema_version": 2,
+  "extractor_version": "2.1.x",
+  "facts": {},
+  "advisory_knowledge": {
+    "schema_version": 1,
+    "local_profiles": [],
+    "convention_profiles": [],
+    "generated_from": {},
+    "knowledge_fingerprint_sha256": "..."
+  }
+}
+```
 
-### Scope
+The advisory fingerprint is canonical SHA-256 over normalized advisory content excluding the fingerprint field itself. It is independent of the authoritative architecture fingerprint and every family-ID signature.
 
-1. Update the post-review assemble-barrier tests in `agents/scripts/_hook_selftest.py` to invoke `run_gradle_task.py` instead of raw `gradlew.bat`.
-2. Retain explicit tests proving that raw Gradle commands remain denied in Codex and other non-self-healing environments.
-3. Make `agents/scripts/_environment_selftest.py` hermetic:
-   - Isolate environment variables for every runtime-detection case.
-   - Remove ambient `CODEX_*`, `CLAUDE_*`, `CURSOR_*`, and `ANTIGRAVITY_*` contamination where the case does not own them.
-   - Use a temporary writable `ANTIGRAVITY_ARTIFACT_DIR` for render tests.
-   - Restore the parent environment after each case.
-4. Change subprocess assertions that currently raise immediately on failure into aggregated assertions only where this improves diagnostics without hiding a failure.
-5. Add the standalone ADB-core and graph self-tests to CI so their regression coverage cannot be skipped.
+### Local profile identity
 
-### Non-regression checks
+Each profile is identified by:
 
-- Raw `gradlew` remains denied in Codex.
-- Antigravity still returns the existing overwrite payload.
-- A completed review still unlocks the wrapper-based assemble command.
-- Strict evidence mode still rejects missing or mismatched evidence.
-- All existing security tests remain unchanged and pass.
+```text
+module + source_set + logical/package scope + normalized repository paths
+```
 
-### Exit criteria
+Profiles are clustered at the nearest stable package or feature scope. A cluster is split when its UI toolkit or presentation relationship differs. Profiles are not created per class. Evidence and exemplars are capped and sorted deterministically.
 
-- `_hook_selftest.py`: exit `0`.
-- `_environment_selftest.py`: exit `0` in Codex, standard terminals, and CI.
-- `preflight_check.py`: exit `0` on the clean kit repository.
-- No production safety rule is relaxed.
+### Confidence
 
-## Phase 2: Correct CLI Verification and Update Results
+- `UNKNOWN`: no reliable relationship evidence.
+- `LOW`: one independent structural signal.
+- `MEDIUM`: at least two compatible evidence items.
+- `HIGH`: at least three compatible items, including a verified relationship such as presenter↔view contract, screen↔state holder, inheritance, import, or confirmed graph edge.
+- `CONFLICTED`: evidence disagrees; never choose a winner silently.
 
-### Scope
+A filename alone cannot classify MVP, MVVM, or MVI. One occurrence cannot become a project convention.
 
-1. Correct `android-harness verify` in `harness_cli.py`:
-   - Accept verdict records with either `PASS` or `APPROVED`.
-   - Require the five canonical leaves for production-only diffs.
-   - Require the five canonical leaves plus `test_quality` for test/mock diffs.
-   - Recognize existing canonical names and aliases without accepting unknown leaves.
-   - Verify the expected pass token for every required leaf.
-   - Preserve package-path containment, package hashing, file hashing, and evidence validation.
-2. Add round-trip tests using records produced through `record_review.py`, rather than hand-written records only.
-3. Add explicit cases for:
-   - Five-leaf `PASS`.
-   - Five-leaf `APPROVED`.
-   - Six-leaf test diff.
-   - Missing `TEST_PASS` on a test diff.
-   - Unknown or duplicate leaf aliases.
-   - Modified and missing reviewed files.
-4. Align the stale/incomplete exit code with the documented public contract by returning exit `2`, and lock it with a CLI test.
-5. Correct `android-harness update`:
-   - Capture the result of `install_or_update.py`.
-   - Print success only when the result is zero.
-   - Propagate a non-zero result unchanged.
-   - Never claim that an app checkout was verified after a failed update.
+### Task Context result
 
-### Compatibility controls
+Task Context uses its own schema and resolver version. Stable statuses:
 
-- Continue accepting old schema versions already supported by the CLI.
-- Do not rename verdict fields or leaf keys.
-- Do not change successful command output except where it currently reports a false success.
-- Keep exit `0` for success and exit `1` for findings/configuration failures.
+- `RESOLVED`
+- `AMBIGUOUS`
+- `NOT_FOUND`
+- `INVALID_TARGET_PATH`
+- `ADVISORY_STALE_FALLBACK_USED`
+- `CONTEXT_CONFLICT_WITH_APPROVED_CONTRACT`
+- `GRAPH_FALLBACK_USED`
 
-### Exit criteria
+Default output is bounded to:
 
-- A verdict generated by `record_review.py --approve-all` verifies successfully.
-- A valid six-leaf test verdict verifies successfully.
-- A five-leaf test verdict fails clearly.
-- A failed update cannot print `SUCCESS` or return zero.
-- Existing five-leaf production verdicts remain valid.
+- one resolved target;
+- direct dependencies and dependents only;
+- directly relevant tests;
+- at most three compatible profiles;
+- at most five exemplars per profile;
+- at most five evidence items per inferred field.
 
-## Phase 3: Repair Device Diagnostics and Remove Duplicate Preflight Work
+An optional limit may reduce these caps but cannot exceed a fixed safety maximum.
 
-### Scope
+## Resolution Invariants
 
-1. Fix `HarnessDoctor.check_connected_devices()` to parse `proc.stdout.splitlines()` instead of referencing an undefined variable.
-2. Add isolated subprocess tests for:
-   - A single physical device.
-   - A single emulator.
-   - Multiple connected targets.
-   - No device.
-   - `adb` missing.
-   - `adb devices` timeout or non-zero exit.
-3. Keep device diagnostics read-only; only `adb devices` may be invoked by these checks.
-4. Add the current working-tree fingerprint to the preflight gate artifact as an additive field.
-5. Update `review_package.py` to reuse a prior preflight result only when all of the following match:
-   - Status is `PASS`.
-   - Git HEAD matches.
-   - Working-tree fingerprint matches.
-   - Required artifact schema fields are present.
-6. If any preflight artifact condition is missing, corrupt, stale, or mismatched, run preflight normally and fail closed on errors.
-7. Keep a CLI override for an intentional full re-run, used by tests and diagnostics.
-8. Change the preflight success text from `ready for assembleDebug` to `ready for review packaging`; review remains mandatory before assemble.
+### Identity precedence
 
-### Side-effect controls
+```text
+exact repository path
+→ unique exact FQN
+→ exact module + source set + symbol
+→ unique short symbol
+→ AMBIGUOUS or NOT_FOUND
+```
 
-- No cache result may be reused based on Git HEAD alone.
-- Documentation-only changes follow the existing fingerprint policy.
-- Corrupt or future-schema artifacts never unlock review packaging.
-- Cache reuse changes execution time only; it does not change pass/fail criteria.
-- Existing artifact readers must ignore the added fingerprint field safely.
+FQN is not assumed globally unique. Multiple modules or source sets may contain the same package and declaration. The graph must retain all candidates; no API may silently return the first duplicate.
 
-### Exit criteria
+Source-set identity covers `main`, build types, flavors, combined variants, `test`, `androidTest`, `commonMain`, `androidMain`, and other discoverable Gradle-style `src/<name>` roots. Unknown layouts remain explicit rather than being folded into `main`.
 
-- Repeated preflight plus review packaging performs the expensive checks once for an unchanged tree.
-- Any code or test modification invalidates the cached preflight result.
-- Device discovery reports actual connected targets instead of converting the parser error into a warning.
-- No device mutation command is introduced.
+### Read-only graph mode
 
-## Phase 4: Release and Documentation Drift Prevention
+Add an explicit non-persisting mode such as `GraphEngine.sync(persist=False)`. Existing graph commands retain persistent caching by default. Task Context always uses the non-persisting mode.
 
-### Scope
+### Live verification
 
-1. Extend `scripts_dev/pin_prompt_docs.py` to cover every version-pinned file, including `docs/quickstart.md` and any versioned links in `README.md`.
-2. Extend `scripts_dev/validate_release.py` to verify:
-   - `agents/VERSION`, `pyproject.toml`, the release tag, and `CHANGELOG.md` agree.
-   - Every pinned raw prompt URL uses the release version.
-   - Prompt checksum headers are current.
-   - The documented supported release line in `SECURITY.md` is current.
-   - No stale fixed script count remains in release-critical documentation.
-3. Update the architecture workflow diagram so preflight appears before review packaging and assemble remains after review.
-4. Replace brittle documentation counts such as `34 core scripts` with wording derived from, or linked to, the canonical inventory.
-5. Align CLI exit-code documentation with the tested contract.
-6. Harden the publish workflow without affecting runtime:
-   - Pin the PyPI publish action to an audited commit SHA.
-   - Pin `build` and `twine` to reviewed versions.
-   - Keep trusted publishing and the current minimal permissions.
+Before returning target-local relationships, verify:
 
-### Exit criteria
+- resolved path remains inside the repository;
+- the file exists and is supported;
+- the expected declaration still exists;
+- evidence hashes still match;
+- graph relationships agree with current imports/declarations where the decision matters.
 
-- Release validation fails when any prompt URL points to an older version.
-- Release validation fails on a stale or mismatched checksum.
-- No document describes preflight as a post-review gate.
-- No current documentation claims that only `v0.14.x` is supported.
-- The publish workflow contains no floating action reference.
+Stale evidence invalidates only its local profile. It must not trigger automatic full persistent refresh.
 
-## Verification Matrix for Every Phase
+### Path and symlink containment
 
-Run the following checks after each phase, not only at the end:
+Every file target is resolved before indexing. Reject:
 
-1. `python agents/scripts/_hook_selftest.py`
-2. `python agents/scripts/_security_selftest.py`
-3. `python agents/scripts/_env_codes_selftest.py`
-4. `python agents/scripts/_round_cap_selftest.py`
-5. `python agents/scripts/_final_verdict_selftest.py`
-6. `python agents/scripts/_baseline_selftest.py`
-7. `python agents/scripts/_risk_and_impact_selftest.py`
-8. `python agents/scripts/_adb_core_selftest.py`
-9. `python agents/scripts/_apk_freshness_selftest.py`
-10. `python agents/scripts/_environment_selftest.py`
-11. `python agents/scripts/_graph_selftest.py`
-12. `python agents/scripts/preflight_check.py`
-13. `python scripts_dev/validate_release.py v<current-version>`
-14. `python harness_cli.py version`
-15. `python harness_cli.py doctor --json`
+- `..` traversal escaping the repository;
+- absolute external paths;
+- symlinks resolving outside the repository;
+- broken links;
+- directories;
+- unsupported file types.
 
-CI must run the supported Python matrix on Windows, Linux, and macOS. No phase is complete while any check is red.
+An internal symlink is usable only when its resolved target remains inside the repository and current repository policy permits it.
 
-Because this work changes test files, every implementation phase requires the five standard review leaves plus `test-quality-reviewer-agent` against the same review package.
+### Approved contracts
 
-## Phase Boundary and Rollback Policy
+Only a hash-valid approved contract belonging to the active task may be consulted. Draft, cancelled, stale, foreign-task, or corrupted contracts are ignored or reported. A conflict returns `CONTEXT_CONFLICT_WITH_APPROVED_CONTRACT`; Task Context never edits a plan or contract.
 
-1. Complete only one phase at a time.
-2. Generate one review package after the phase is green.
-3. Complete the required six-leaf review for the exact package.
-4. Present one phase milestone with test and review evidence.
-5. Stop and wait for the developer to commit the phase.
-6. Do not open or modify files belonging to the next phase until the developer explicitly authorizes it.
-7. If a phase causes an unrelated regression, revert only that phase rather than compensating with additional architecture.
+## Persistent Snapshot Consistency
 
-## Final Acceptance Criteria
+Generation and refresh follow:
 
-- All automated checks pass on every supported OS and Python version.
-- Preflight and review packaging remain fail-closed.
-- Raw Gradle remains prohibited outside the existing Antigravity overwrite path.
-- Both five-leaf and test-promoted six-leaf review records verify correctly.
-- CLI update failures are propagated accurately.
-- Device diagnostics are correct and read-only.
-- Unchanged trees do not repeat preflight work.
-- Changed trees cannot reuse stale preflight results.
-- Release validation detects stale URLs, stale checksums, version drift, and workflow documentation drift.
-- No new runtime dependency, Android permission, persistent service, or external network call is added.
+```text
+fingerprint A
+→ extract facts and advisory knowledge
+→ fingerprint B
+→ if A != B, discard and retry once
+→ stage views and facts using the accepted fingerprint
+→ optional final pre-commit fingerprint check
+→ replace views
+→ replace project-facts.json last as the authoritative commit point
+```
+
+If the repository changes again, return `CONTEXT_SOURCE_CHANGED_DURING_EXTRACTION`, clean staging, and commit nothing.
+
+`write_project_context()` must use the fingerprint belonging to the extracted payload. It must not recompute a newer fingerprint and attach it to older facts. An edit after the final check may make the snapshot immediately stale, but the stored fingerprint must still truthfully identify the extracted state.
+
+## Implementation Phases
+
+### Phase 1 — Compatibility Baseline and Resolver Safety
+
+Primary files:
+
+- `agents/scripts/architecture_resolver.py`
+- `agents/scripts/_architecture_selftest.py`
+
+Work:
+
+1. Freeze golden family IDs and schema-v2 behavior before implementation.
+2. Add failing regressions for ambiguous `PRESERVE` and `REFACTOR` when a preferred new-code family exists.
+3. Remove preferred-new-family fallback from existing-code modes.
+4. Return `ARCHITECTURE_DECISION_REQUIRED` when the local source family cannot be resolved confidently.
+5. Preserve explicit target-family and unique-local-family behavior.
+6. Prove `NEW_SCREEN`/`NEW_FEATURE` still use preferred-new-code policy and `MIGRATION` remains explicit.
+
+Exit criteria:
+
+- ambiguous existing-code work never modernizes implicitly;
+- all existing family IDs remain unchanged;
+- existing architecture-policy files remain valid.
+
+### Phase 2 — Concurrent Snapshot Protection
+
+Primary files:
+
+- `agents/scripts/project_context.py`
+- `agents/scripts/generate_project_context.py`
+- focused context/lifecycle selftests
+
+Work:
+
+1. Separate accepted extraction fingerprints from write-time behavior.
+2. Add pre/post fingerprint comparison and one bounded retry.
+3. Abort without commit after repeated instability.
+4. Preserve notes, architecture policy, overrides, and rendered-view semantics.
+5. Add fault injection around extraction, staging, and commit boundaries.
+6. Ensure temporary staging is cleaned after every outcome.
+
+Exit criteria:
+
+- old facts can never receive a newer fingerprint;
+- every aborted refresh leaves the previous snapshot authoritative and complete.
+
+### Phase 3 — Advisory Architecture and Convention Profiles
+
+Primary files:
+
+- `agents/scripts/project_context.py`
+- new `agents/scripts/_project_intelligence_selftest.py`
+
+Work:
+
+1. Add the optional versioned advisory block.
+2. Detect module, source set, package/logical scope, language, UI toolkits, XML-hosts-Compose interop, presentation relationships, state/async models, and DI signals.
+3. Add conservative Java MVP-like inference using presenter, contract, view interface, and relationship evidence together.
+4. Build scoped convention profiles using explicit confidence/conflict rules.
+5. Store repository-relative paths and hashes only.
+6. Exclude source contents, secrets, absolute user paths, generated output, and build output.
+7. Keep existing rendered Markdown semantics unchanged.
+
+Exit criteria:
+
+- Java/XML/MVP-like, Kotlin/XML/MVVM, and Kotlin/Compose/MVI-like areas coexist without global flattening;
+- mixed UI is represented without changing existing scalar enforcement;
+- same-family scopes do not leak conventions into each other.
+
+### Phase 4 — Duplicate-Safe Graph and Task Context
+
+Primary files:
+
+- `agents/scripts/_graph_core.py`
+- new `agents/scripts/task_context.py`
+- graph and Project Intelligence selftests
+
+Work:
+
+1. Introduce multi-candidate FQN and symbol indexes where Task Context needs them.
+2. Preserve current graph command output and cache compatibility.
+3. Add non-persisting incremental sync.
+4. Implement exact resolution precedence and source-set identity.
+5. Perform targeted live verification and stale-profile fallback.
+6. Return direct neighborhood, directly relevant tests, conventions, and interop boundaries within fixed limits.
+7. Compare against a valid active approved contract without mutation.
+8. Produce deterministic JSON ordering and stable error codes.
+
+Exit criteria:
+
+- duplicate symbols/FQNs never resolve arbitrarily;
+- rename, move, delete, and corrupt-cache cases cannot return stale targets;
+- unrelated edits do not cause persistent full refresh.
+
+### Phase 5 — Safety, Doctor, CLI, and Documentation
+
+Primary files:
+
+- `agents/scripts/mutation_guard.py`
+- `agents/scripts/pre_tool_safety.py`
+- `agents/scripts/doctor/engine.py`
+- `harness_cli.py`
+- safety, hook, daily-workflow, and public-CLI selftests
+- `README.md`, `docs/architecture.md`, `docs/tool-support.md`
+
+Work:
+
+1. Register Task Context as a trusted inspection command with an exact argument allowlist.
+2. Count only a successful targeted `RESOLVED` or `AMBIGUOUS` result as anchored discovery.
+3. Preserve unknown-script, shell-laundering, path, and Graph-first barriers.
+4. Add public CLI help and examples without a second implementation path.
+5. Add Doctor `PASS/WARN` checks for parseability, version, fingerprint, relative paths, bounded evidence, and suspicious secret material.
+6. Treat missing advisory knowledge on an old compatible installation as non-fatal.
+7. Preserve installer ordering and avoid a context↔warm-cache dependency cycle.
+
+Exit criteria:
+
+- Task Context performs no persistent write in ordinary use;
+- failed or invalid calls do not unlock broad discovery;
+- unknown Python scripts remain blocked.
+
+### Phase 6 — Hardening, Performance, and Release Integrity
+
+Primary files:
+
+- Project Intelligence, graph, performance, lifecycle, and compatibility selftests
+- `agents/release_checksums.json` only after the final file set is frozen
+
+Work:
+
+1. Complete the edge-case matrix below.
+2. Add a deterministic large mixed-project fixture.
+3. Measure full extraction, warm unchanged resolution, relevant edit, unrelated edit, and forced refresh.
+4. Use deterministic work counters as the release assertion: warm unchanged resolution and unrelated-edit resolution must process less than 25% of the files processed by full extraction on the fixture.
+5. Record wall-clock medians for visibility, but do not make cross-platform release success depend on a flaky timing threshold.
+6. Run the complete selftest, compileall, diff check, and release validation.
+7. Refresh checksums last, then perform the separately authorized release only
+   after local release validation and CI pass.
+
+Exit criteria:
+
+- all deterministic compatibility, lifecycle, safety, and performance assertions pass;
+- implementation itself performs no Git mutation; the separately authorized
+  release occurs only after the completed plan is green.
+
+## Mandatory Edge-Case Matrix
+
+### Compatibility
+
+- Old schema-v2 snapshot without advisory knowledge.
+- Unknown future advisory version.
+- Malformed advisory block and fingerprint mismatch.
+- Family IDs before/after on every golden fixture.
+- Existing preferred-family policy, notes, overrides, and rendered files unchanged.
+- Fresh install, update preserve, update refresh, interrupted update, and rollback.
+
+### Architecture and conventions
+
+- Java/XML/MVP-like.
+- Kotlin/XML/MVVM.
+- Kotlin/Compose/MVI-like.
+- All three in one repository.
+- XML Fragment hosting Compose.
+- Java UI calling Kotlin data code.
+- LiveData/Flow bridge.
+- Legacy and modern siblings in one feature.
+- Weak, repeated, contradictory, and deleted evidence.
+- Same architecture family with different local conventions.
+
+### Identity and source sets
+
+- Same short symbol in two modules.
+- Same FQN in two modules.
+- Same symbol/FQN in `main` and `debug`.
+- `commonMain`/`androidMain` expect/actual pair.
+- Flavor and combined-variant source sets.
+- Exact path, unique FQN, qualified identity, unique short name, ambiguous name, missing target, and unsupported target.
+
+### Graph and freshness
+
+- No cache, valid cache, corrupt cache, future cache schema, and incomplete cache.
+- Rename, move, delete, and declaration change without filename change.
+- Relevant edit, unrelated edit, timestamp-only change, and content change with preserved timestamp where feasible.
+- Missing graph edge with a relationship confirmed directly in source.
+- Task Context cannot persist cache; normal project graph still can.
+
+### Concurrency and commit safety
+
+- One mid-extraction change followed by stable retry.
+- Two changes returning `CONTEXT_SOURCE_CHANGED_DURING_EXTRACTION`.
+- Change during staging.
+- Failure before views, between view replacements, and before facts commit.
+- Previous snapshot remains authoritative on every aborted path.
+
+### Contracts and safety
+
+- Valid active approved contract.
+- Conflict with approved contract.
+- Draft, cancelled, stale, hash-corrupt, and foreign-task contracts.
+- Traversal, absolute external path, external symlink, broken symlink, internal safe symlink, directory target, and Windows path canonicalization.
+- Unknown Python script remains denied.
+- Failed Task Context does not satisfy Graph-first discovery.
+
+## Verification Strategy
+
+After every phase:
+
+1. Confirm only phase-owned files changed and preserve concurrent developer edits.
+2. Run syntax validation for touched Python modules.
+3. Run the smallest relevant selftest set.
+4. Run `git diff --check`.
+5. Continue only when the phase is green.
+
+Final verification:
+
+```powershell
+python -m compileall -q harness_cli.py agents/scripts
+python harness_cli.py selftest
+git diff --check
+python scripts_dev/validate_release.py <current-version>
+```
+
+Use the available Python executable when `python` is not on PATH. Do not run Android Gradle, assemble, ADB, device, or Android specialist reviewer flows against this repository.
+
+## Acceptance Criteria
+
+- Schema v2 remains compatible without forced refresh.
+- Existing family IDs and preferred-family policies remain stable.
+- Ambiguous existing-code work never falls back to preferred-new-code architecture.
+- Advisory knowledge is deterministic, bounded, repository-relative, secret-free, and non-authoritative.
+- Mixed languages, UI systems, presentation styles, modules, flavors, variants, and KMP source sets are resolved locally.
+- Duplicate symbols and FQNs never select a first match silently.
+- Persistent refresh is consistency-checked, explicit, full, and facts-last.
+- Ordinary Task Context performs no persistent write.
+- Stale/corrupt advisory or graph data falls back safely to targeted live evidence.
+- Approved contracts remain authoritative and immutable from Task Context.
+- Safety integration is narrow and does not weaken unknown-script or Graph-first controls.
+- Warm narrow resolution demonstrates materially less deterministic work than full extraction.
+- Complete Harness selftest, compileall, release validation, and diff check pass.
+
+## Deliberately Deferred
+
+- Automatic migration or modernization.
+- Java architecture drift enforcement.
+- Hard convention enforcement.
+- LLM-generated project memory or architecture detection.
+- Persistent partial snapshot mutation.
+- Background watchers or automatic refresh.
+- Transitive whole-graph context expansion.
+- Changes to Android specialist reviewer prompts or routing.
+
+## Rollback
+
+Stop at the first failing phase boundary. Preserve developer files, notes, and policies. Revert only the phase-owned Project Intelligence changes through explicit patches. Never use `git reset`, `git checkout --`, stash, hidden commits, or automatic rollback. The previously committed context remains authoritative until a complete replacement commits successfully.

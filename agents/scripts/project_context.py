@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 2
-EXTRACTOR_VERSION = "2.0.0"
+EXTRACTOR_VERSION = "2.1.0"
+ADVISORY_SCHEMA_VERSION = 1
 
 SKIP_PARTS = {
     ".git", ".gradle", "build", ".harness-backup", ".harness-recovery",
@@ -311,6 +312,261 @@ def scan_viewmodel_declarations(text: str) -> list[tuple[str, str]]:
         elif cls_name.endswith("ViewModel"):
             results.append((cls_name, "ViewModel"))
     return results
+
+
+def source_identity(rel_path: str, modules: list[str] | None = None) -> dict[str, str]:
+    """Return deterministic module/source-set identity for an Android/KMP path."""
+    norm = rel_path.replace("\\", "/").strip("/")
+    parts = norm.split("/") if norm else []
+    module = ":"
+    candidates: list[tuple[int, str]] = []
+    for item in modules or []:
+        prefix = str(item).strip(":").replace(":", "/")
+        if prefix and (norm == prefix or norm.startswith(prefix + "/")):
+            candidates.append((len(prefix.split("/")), str(item)))
+    if candidates:
+        module = max(candidates)[1]
+    elif "src" in parts:
+        prefix_parts = parts[: parts.index("src")]
+        module = ":" + ":".join(prefix_parts) if prefix_parts else ":"
+    elif parts:
+        module = f":{parts[0]}"
+
+    source_set = "unknown"
+    if "src" in parts:
+        idx = parts.index("src")
+        if idx + 1 < len(parts):
+            source_set = parts[idx + 1]
+    return {"module": module, "source_set": source_set}
+
+
+def _logical_scope(rel_path: str, package_name: str) -> str:
+    package_name = package_name.strip(".")
+    if package_name:
+        pieces = package_name.split(".")
+        if pieces[-1].lower() in {"ui", "view", "views", "screen", "screens", "presentation"} and len(pieces) > 1:
+            pieces = pieces[:-1]
+        return ".".join(pieces)
+    return resolve_feature_scope(rel_path)
+
+
+def _confidence(evidence_count: int, *, relationship: bool, conflicted: bool = False) -> str:
+    if conflicted:
+        return "CONFLICTED"
+    if evidence_count <= 0:
+        return "UNKNOWN"
+    if evidence_count == 1:
+        return "LOW"
+    if evidence_count >= 3 and relationship:
+        return "HIGH"
+    return "MEDIUM"
+
+
+def _bounded_sorted_dicts(items: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for item in items:
+        key = _canonical_json(item)
+        unique[key] = item
+    return [unique[key] for key in sorted(unique)[:limit]]
+
+
+def build_advisory_knowledge(repo: Path, facts: dict[str, Any], source_fingerprint_sha256: str) -> dict[str, Any]:
+    """Build bounded advisory profiles without changing authoritative architecture facts."""
+    repo = repo.resolve()
+    modules = list(facts.get("modules") or [])
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    supported = {".kt": "kotlin", ".java": "java"}
+
+    for root, dirs, files in os.walk(repo, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_PARTS)
+        for filename in sorted(files):
+            path = Path(root) / filename
+            language = supported.get(path.suffix.lower())
+            if not language or _skip_path(path, repo):
+                continue
+            rel = _rel_path(path, repo)
+            if classify_source_path(rel) in {"TEST_SOURCE", "SAMPLE_SOURCE"}:
+                continue
+            text = _safe_read(path)
+            if not text:
+                continue
+            package_match = re.search(r"\bpackage\s+([A-Za-z0-9_.]+)\s*;?", text)
+            package_name = package_match.group(1) if package_match else ""
+            identity = source_identity(rel, modules)
+            scope = _logical_scope(rel, package_name)
+            key = (identity["module"], identity["source_set"], scope)
+
+            declarations = sorted(set(re.findall(r"\b(?:class|interface|object|fun)\s+([A-Za-z_][A-Za-z0-9_]*)", text)))[:20]
+            signals: set[str] = set()
+            lower = text.lower()
+            if "@composable" in lower or "composeview" in lower or "setcontent" in lower:
+                signals.add("compose")
+            if any(token in text for token in ("R.layout.", "ViewBinding", "DataBinding", "inflate(")) or "Fragment" in text:
+                signals.add("xml")
+            if "ComposeView" in text and ("Fragment" in text or "R.layout." in text or "ViewBinding" in text):
+                signals.add("xml_hosts_compose")
+            if any(name.endswith("Presenter") for name in declarations):
+                signals.add("presenter")
+            if any(name.endswith("Contract") for name in declarations) or re.search(r"\binterface\s+\w*View\b", text):
+                signals.add("view_contract")
+            if any(name.endswith("ViewModel") for name in declarations) or "ViewModel" in text:
+                signals.add("viewmodel")
+            if "StateFlow" in text or "MutableStateFlow" in text:
+                signals.add("stateflow")
+            if "LiveData" in text or "MutableLiveData" in text:
+                signals.add("livedata")
+            if any(token in text for token in ("Observable<", "BehaviorSubject", "Flowable", "Single<")):
+                signals.add("rxjava")
+            if re.search(r"\b(?:Callback|Listener)\b|\bonSuccess\s*\(|\bonFailure\s*\(", text):
+                signals.add("callbacks")
+            if re.search(r"\b(?:onAction|handleAction|processIntent|dispatch|onIntent|onEvent|handleEvent)\s*\(", text):
+                signals.add("event_dispatch")
+            if "@HiltViewModel" in text or "@Inject" in text:
+                signals.add("hilt")
+            if "org.koin" in text or "viewModel(" in text:
+                signals.add("koin")
+            if "Repository" in text:
+                signals.add("repository")
+            if "UseCase" in text or "Interactor" in text:
+                signals.add("usecase")
+
+            try:
+                content_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                # A concurrent edit is handled by the bounded extraction retry.
+                # Skipping the vanished file keeps this scan read-only and lets
+                # the surrounding fingerprint comparison detect the mismatch.
+                continue
+            groups.setdefault(key, []).append({
+                "path": rel,
+                "sha256": content_sha256,
+                "language": language,
+                "package": package_name,
+                "declarations": declarations,
+                "signals": sorted(signals),
+            })
+
+    local_profiles: list[dict[str, Any]] = []
+    convention_profiles: list[dict[str, Any]] = []
+    families = ((facts.get("architecture") or {}).get("families") or [])
+    for (module, source_set, scope), entries in sorted(groups.items()):
+        paths = sorted(entry["path"] for entry in entries)
+        signals = {signal for entry in entries for signal in entry["signals"]}
+        languages = sorted({entry["language"] for entry in entries})
+        toolkits = [name for name in ("xml", "compose") if name in signals]
+        interop = ["XML_HOSTS_COMPOSE"] if "xml_hosts_compose" in signals else []
+        relationship = False
+        if {"presenter", "view_contract"} <= signals:
+            presentation = "presenter_contract"
+            relationship = True
+        elif {"viewmodel", "stateflow", "event_dispatch"} <= signals:
+            presentation = "unidirectional_state"
+            relationship = True
+        elif "viewmodel" in signals:
+            presentation = "viewmodel"
+        else:
+            presentation = "unknown"
+        async_models = [name for name in ("callbacks", "livedata", "rxjava", "stateflow") if name in signals]
+        di_frameworks = [name for name in ("hilt", "koin") if name in signals]
+        evidence = [
+            {"path": entry["path"], "sha256": entry["sha256"], "signals": entry["signals"]}
+            for entry in entries if entry["signals"]
+        ]
+        profile_key = {
+            "module": module,
+            "source_set": source_set,
+            "logical_scope": scope,
+            "paths": paths,
+        }
+        profile_id = "lp-" + _sha256_text(_canonical_json(profile_key))[:12]
+        family_id = None
+        for family in families:
+            if any(scope and (scope.replace(".", "/") in str(candidate) or str(candidate) in paths) for candidate in family.get("scopes") or []):
+                family_id = family.get("id")
+                break
+        local_profiles.append({
+            "profile_id": profile_id,
+            "module": module,
+            "source_set": source_set,
+            "logical_scope": scope,
+            "paths": paths[:20],
+            "languages": languages,
+            "ui_toolkits": toolkits,
+            "interop": interop,
+            "presentation_pattern": presentation,
+            "async_models": async_models,
+            "di_frameworks": di_frameworks,
+            "family_id": family_id,
+            "confidence": _confidence(len(evidence), relationship=relationship),
+            "evidence": _bounded_sorted_dicts(evidence),
+            "exemplars": paths[:5],
+        })
+
+        patterns: dict[str, str] = {}
+        if "event_dispatch" in signals:
+            patterns["event_dispatch"] = "action_or_event_handler"
+        if "stateflow" in signals:
+            patterns["state_holder"] = "StateFlow"
+        elif "livedata" in signals:
+            patterns["state_holder"] = "LiveData"
+        elif "callbacks" in signals:
+            patterns["state_holder"] = "callbacks"
+        if {"repository", "usecase"} <= signals:
+            patterns["repository_shape"] = "usecase_repository"
+        elif "repository" in signals:
+            patterns["repository_shape"] = "repository"
+        if patterns:
+            repeated = max((sum(1 for entry in entries if signal in entry["signals"]) for signal in signals), default=0)
+            convention_profiles.append({
+                "profile_id": "cp-" + _sha256_text(_canonical_json({"key": profile_key, "patterns": patterns}))[:12],
+                "scope": scope,
+                "module": module,
+                "source_set": source_set,
+                "family_id": family_id,
+                "patterns": patterns,
+                "confidence": _confidence(repeated, relationship=relationship),
+                "evidence": _bounded_sorted_dicts(evidence),
+                "exemplars": paths[:5],
+            })
+
+    advisory = {
+        "schema_version": ADVISORY_SCHEMA_VERSION,
+        "extractor_version": EXTRACTOR_VERSION,
+        "local_profiles": sorted(local_profiles, key=lambda item: item["profile_id"]),
+        "convention_profiles": sorted(convention_profiles, key=lambda item: item["profile_id"]),
+        "generated_from": {"source_fingerprint_sha256": source_fingerprint_sha256},
+    }
+    advisory["knowledge_fingerprint_sha256"] = _sha256_text(_canonical_json(advisory))
+    return advisory
+
+
+def validate_advisory_knowledge(payload: dict[str, Any]) -> tuple[bool, str]:
+    """Validate the optional advisory block without making it authoritative."""
+    advisory = payload.get("advisory_knowledge")
+    if advisory is None:
+        return False, "MISSING"
+    if not isinstance(advisory, dict):
+        return False, "MALFORMED"
+    if advisory.get("schema_version") != ADVISORY_SCHEMA_VERSION:
+        return False, "UNSUPPORTED_VERSION"
+    expected = advisory.get("knowledge_fingerprint_sha256")
+    body = dict(advisory)
+    body.pop("knowledge_fingerprint_sha256", None)
+    if not isinstance(expected, str) or expected != _sha256_text(_canonical_json(body)):
+        return False, "FINGERPRINT_MISMATCH"
+    for collection in ("local_profiles", "convention_profiles"):
+        if not isinstance(advisory.get(collection), list):
+            return False, "MALFORMED"
+        for profile in advisory[collection]:
+            if not isinstance(profile, dict):
+                return False, "MALFORMED"
+            if len(profile.get("evidence") or []) > 5 or len(profile.get("exemplars") or []) > 5 or len(profile.get("paths") or []) > 20:
+                return False, "UNBOUNDED"
+            for evidence in profile.get("evidence") or []:
+                path = str((evidence or {}).get("path") or "")
+                if not path or Path(path).is_absolute() or ".." in Path(path).parts:
+                    return False, "UNSAFE_EVIDENCE_PATH"
+    return True, "PASS"
 
 
 def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir: Path | None = None) -> dict:
@@ -890,6 +1146,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     fingerprint = project_context_fingerprint(normalized)
 
     sfp_info = compute_source_fingerprint(repo)
+    advisory = build_advisory_knowledge(repo, normalized, sfp_info["source_fingerprint_sha256"])
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -899,6 +1156,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
         "source_fingerprint_sha256": sfp_info["source_fingerprint_sha256"],
         "source_fingerprint": sfp_info["source_fingerprint"],
         "facts": normalized,
+        "advisory_knowledge": advisory,
     }
 
 
@@ -1195,6 +1453,8 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
 
     stage_dir = context_dir / f".staging_{uuid.uuid4().hex}"
     stage_dir.mkdir(parents=True, exist_ok=True)
+    replaced_views: list[tuple[Path, Path | None]] = []
+    committed = False
 
     try:
         # 1. Write views to staging
@@ -1202,11 +1462,10 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
             stage_file = stage_dir / name
             stage_file.write_text(content, encoding="utf-8")
 
-        # 2. Write facts to staging
-        sfp_info = compute_source_fingerprint(repo)
-        facts_payload["source_fingerprint_version"] = sfp_info["source_fingerprint_version"]
-        facts_payload["source_fingerprint_sha256"] = sfp_info["source_fingerprint_sha256"]
-        facts_payload["source_fingerprint"] = sfp_info["source_fingerprint"]
+        # 2. Write the extraction-bound facts to staging. Never attach a later
+        # repository fingerprint to facts extracted from an earlier state.
+        if not facts_payload.get("source_fingerprint_sha256"):
+            raise ValueError("project context payload is missing its extraction source fingerprint")
         facts_file_stage = stage_dir / "project-facts.json"
         facts_content = json.dumps(facts_payload, ensure_ascii=False, indent=2) + "\n"
         facts_file_stage.write_text(facts_content, encoding="utf-8")
@@ -1220,14 +1479,9 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
         if not facts_file_stage.is_file() or facts_file_stage.stat().st_size == 0:
             raise IOError("Staging failed for project-facts.json")
 
-        # 4. Atomically replace markdown views first
-        for name in rendered_views.keys():
-            os.replace(stage_dir / name, context_dir / name)
-
-        # 5. Atomically replace project-facts.json LAST (the authoritative commit point)
-        os.replace(facts_file_stage, context_dir / "project-facts.json")
-
-        # 6. Create initial project-notes.md only if it does not already exist (NEVER overwrite)
+        # 4. Create initial project-notes.md before the commit sequence. This
+        # ancillary file is never overwritten and cannot leave facts/views
+        # split if its creation fails.
         notes_file = context_dir / "project-notes.md"
         if not notes_file.exists():
             notes_content = [
@@ -1242,11 +1496,68 @@ def write_project_context(repo: Path, facts_payload: dict, rendered_views: dict[
             ]
             notes_file.write_text("\n".join(notes_content), encoding="utf-8")
 
+        # 5. Atomically replace markdown views first. Keep same-filesystem
+        # backups so any pre-commit failure restores the complete old snapshot.
+        for name in rendered_views.keys():
+            target = context_dir / name
+            backup: Path | None = None
+            if target.is_file():
+                backup = stage_dir / f".backup_{name}"
+                shutil.copy2(target, backup)
+            os.replace(stage_dir / name, target)
+            replaced_views.append((target, backup))
+
+        # 6. Atomically replace project-facts.json LAST (the authoritative commit point)
+        os.replace(facts_file_stage, context_dir / "project-facts.json")
+        committed = True
+
     finally:
+        if not committed:
+            for target, backup in reversed(replaced_views):
+                try:
+                    if backup is not None and backup.is_file():
+                        os.replace(backup, target)
+                    elif target.exists():
+                        target.unlink()
+                except OSError:
+                    # Preserve the original exception. Doctor's strict
+                    # facts/view consistency check will surface restore faults.
+                    pass
         if stage_dir.exists():
             shutil.rmtree(stage_dir, ignore_errors=True)
 
     return context_dir
+
+
+class ContextSourceChangedDuringExtraction(RuntimeError):
+    """Raised when a stable project snapshot cannot be extracted after one retry."""
+
+
+def extract_consistent_project_context(
+    repo: Path,
+    *,
+    max_attempts: int = 2,
+    in_memory_graph: bool = True,
+) -> dict[str, Any]:
+    """Extract facts from a stable source state, retrying once on concurrent edits."""
+    root = repo.resolve()
+    attempts = max(1, int(max_attempts))
+    for _ in range(attempts):
+        before = compute_source_fingerprint(root)
+        payload = extract_project_facts(root, in_memory_graph=in_memory_graph)
+        extracted_fingerprint = str(payload.get("source_fingerprint_sha256") or "")
+        if before["source_fingerprint_sha256"] == extracted_fingerprint:
+            payload["source_fingerprint_version"] = before["source_fingerprint_version"]
+            payload["source_fingerprint_sha256"] = before["source_fingerprint_sha256"]
+            payload["source_fingerprint"] = before["source_fingerprint"]
+            advisory = payload.get("advisory_knowledge")
+            if isinstance(advisory, dict):
+                advisory["generated_from"] = {"source_fingerprint_sha256": before["source_fingerprint_sha256"]}
+                body = dict(advisory)
+                body.pop("knowledge_fingerprint_sha256", None)
+                advisory["knowledge_fingerprint_sha256"] = _sha256_text(_canonical_json(body))
+            return payload
+    raise ContextSourceChangedDuringExtraction("CONTEXT_SOURCE_CHANGED_DURING_EXTRACTION")
 
 
 def compute_context_fingerprint(repo: Path) -> str:

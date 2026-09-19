@@ -4,6 +4,28 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.50] - 2026-09-19
+
+### Safe Project Intelligence for Mixed Android Codebases
+
+- **Bounded Task Context (`task_context.py`, `_graph_core.py`, `harness_cli.py`)**:
+  - Added a public read-only resolver for exact files, FQNs, module/source-set-qualified symbols, and unique short symbols.
+  - Preserved duplicate FQNs and symbols across modules, flavors, tests, and KMP-style source sets; ambiguous identities now fail explicitly instead of selecting the first match.
+  - Added non-persisting incremental graph synchronization plus deterministic discovery, hash, and parse work counters.
+- **Advisory Local Architecture Profiles (`project_context.py`)**:
+  - Added an optional schema-v1 advisory block to existing schema-v2 facts, covering scoped language, XML/Compose interop, presenter/view contracts, ViewModel/state models, DI, repositories, and use cases.
+  - Kept architecture families, policy, context fingerprints, and developer-approved task contracts authoritative and backward compatible.
+  - Added stale-evidence live fallback and bounded relative-path evidence with independent integrity fingerprints.
+- **Snapshot and Resolver Safety (`project_context.py`, `architecture_resolver.py`)**:
+  - Added bounded retry for concurrent source edits and rollback of rendered views when a facts-last snapshot commit fails.
+  - Removed preferred-new-code fallback from ambiguous preserve/refactor work so existing code cannot be modernized implicitly.
+- **Harness Integration and Diagnostics (`mutation_guard.py`, `pre_tool_safety.py`, `doctor/engine.py`)**:
+  - Registered only targeted Task Context calls as trusted read-only discovery and independently validates successful resolution before unlocking broader search.
+  - Added non-fatal Doctor validation for optional advisory data so older compatible installations continue to work.
+- **Regression Coverage and Documentation**:
+  - Added mixed Java/Kotlin, MVP/ViewModel, XML/Compose, duplicate identity, stale evidence, path containment, concurrency, atomic rollback, no-cache-write, and warm-work-budget tests.
+  - Documented Task Context and explicit context refresh in the README, architecture guide, and tool-support guide.
+
 ## [1.0.49] - 2026-09-19
 
 ### Stabilization Plan: Fail-Closed Gates, Lean Workflow & Risk Lanes, Sensitive Dependency Propagation, Deterministic Repair & Decoupled Integrations

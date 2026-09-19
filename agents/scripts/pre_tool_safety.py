@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
-from mutation_guard import active_plan, command_allowed, file_mutation_allowed  # noqa: E402
+from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed  # noqa: E402
 from _vnext_common import read_json, sha256_file  # noqa: E402
 
 
@@ -236,6 +236,31 @@ def _handle_command(command: str) -> None:
     allowed, reason = command_allowed(REPO, command)
     if allowed and re.search(r"project_graph(?:\.py)?\b", command):
         reason = f"project_graph executed: {reason}"
+    elif allowed and re.search(r"task_context(?:\.py)?\b|(?:android-harness|harness_cli\.py)\s+task-context\b", command, re.I):
+        # This is a pre-tool hook, so validate the target independently before
+        # recording it as a discovery anchor. Merely invoking a missing or
+        # invalid target must not unlock broad repository search.
+        try:
+            entry, command_args = _entry(command, REPO)
+            if entry in {"harness_cli", "android-harness"} and command_args[:1] == ["task-context"]:
+                command_args = command_args[1:]
+
+            def option(name: str) -> str | None:
+                return command_args[command_args.index(name) + 1] if name in command_args and command_args.index(name) + 1 < len(command_args) else None
+
+            from task_context import resolve_task_context
+            probe = resolve_task_context(
+                REPO,
+                file=option("--file"),
+                symbol=option("--symbol"),
+                module=option("--module"),
+                source_set=option("--source-set"),
+                limit=1,
+            )
+            if probe.get("status") in {"RESOLVED", "AMBIGUOUS"}:
+                reason = f"targeted task_context executed: {reason}"
+        except Exception:
+            pass
     emit("allow" if allowed else "deny", reason, tool="run_command", command=command, reason_code="HARNESS_COMMAND" if allowed else "COMMAND_MUTATION_GUARD", task_id=active_tid)
 
 
@@ -486,6 +511,7 @@ def _handle_search(name: str, args: dict) -> None:
         emit("allow", "Search is targeted to a specific file or feature directory.", tool=name)
         return
 
+    plan: dict = {}
     try:
         plan = active_plan(REPO)
         status = str(plan.get("status") or "")
@@ -538,7 +564,12 @@ def _handle_search(name: str, args: dict) -> None:
                 import time
                 cutoff = draft_time or (time.time() - 3600.0)
                 for rec in reversed(records):
-                    if rec.get("tool") == "run_command" and "project_graph executed" in rec.get("reason", "").lower() and rec.get("decision") == "allow":
+                    discovery_reason = rec.get("reason", "").lower()
+                    if (
+                        rec.get("tool") == "run_command"
+                        and rec.get("decision") == "allow"
+                        and ("project_graph executed" in discovery_reason or "targeted task_context executed" in discovery_reason)
+                    ):
                         r_tid = rec.get("task_id")
                         r_ts = float(rec.get("ts") or 0.0)
                         if task_id and r_tid == task_id:

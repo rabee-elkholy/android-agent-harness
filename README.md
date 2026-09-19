@@ -90,7 +90,7 @@ Android Agent Harness is not:
 Open your Android project in your AI coding agent (Antigravity, Gemini CLI, Claude Code, Cursor, Windsurf, or Roo Code), and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.49/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.50/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent will:
@@ -105,7 +105,7 @@ Run directly from your command line:
 
 ```bash
 # Clone the pinned harness release
-git clone --depth 1 --branch v1.0.49 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
+git clone --depth 1 --branch v1.0.50 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 # Initialize inside your Android project
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/android-project --kit ~/.android-harness/kit
@@ -271,7 +271,13 @@ Beyond LLM reviews, the harness equips your workflow with purpose-built, determi
 - **Topology-Aware Scoping**: Discovers module dependencies across modern multi-module architectures (`:core:network`, `:feature:auth`, `:app`).
 - **Targeted Build Execution**: Directs Gradle to compile and test only the modules affected by the current change, saving minutes of build time on large projects.
 
-### 8. Native Slash Command Packs (`.agents/command-packs/`)
+### 8. Safe Project Intelligence (`task_context.py`)
+- **Local Architecture, Not Global Guessing**: Resolves the target's module, source set, language, UI stack, presentation pattern, async model, DI signals, and nearby conventions from repository evidence.
+- **Mixed-Codebase Aware**: Keeps Java/Kotlin, XML/Compose, legacy MVP, MVVM/MVI-like, flavors, and KMP source sets distinct instead of forcing one project-wide pattern.
+- **Bounded and Read-Only**: Returns only the direct dependencies, dependents, tests, and up to three matching local profiles. Normal resolution does not modify source, workflow state, context snapshots, or the graph cache.
+- **Fail-Safe Resolution**: Duplicate symbols and FQNs return `AMBIGUOUS`; stale advisory evidence falls back to the live source; approved task architecture contracts remain authoritative.
+
+### 9. Native Slash Command Packs (`.agents/command-packs/`)
 - Pre-installed prompt commands for all major AI coding hosts (Claude Code, OpenAI Codex, GitHub Copilot, and Gemini CLI):
   - `/deliver` — End-to-end implementation with verification.
   - `/debug` — Hypothesis-driven defect reproduction and fix.
@@ -279,23 +285,23 @@ Beyond LLM reviews, the harness equips your workflow with purpose-built, determi
   - `/preflight` — Rapid static lint, strings, and Room check.
   - `/perf-audit` — Dedicated ANR and memory leak inspection.
 
-### 9. Project Management & Issue Tracker Governance (`pm_policy.py`)
+### 10. Project Management & Issue Tracker Governance (`pm_policy.py`)
 - **Zoho Sprints & GitHub Projects Integration**: Provides agents with structured, read-only context on active tasks and sprints.
 - **Zero Rogue Mutations**: Ticket status updates, comments, and time-logging mutations are locked behind explicit `--external-write` authorization and human confirmation.
 
-### 10. Lean Task Briefs & Token Economy (`review_package.py`)
+### 11. Lean Task Briefs & Token Economy (`review_package.py`)
 - **Diff-Scoped Brief Generation**: Replaces full-repository context dumps with role-specific `brief-<reviewer>.md` files (~300–400 tokens) detailing touched files, API contracts, and evaluation rubrics.
 - **Token Reduction**: Slashes prompt token consumption for subagents by >60%, preventing context dilution and model distraction.
 
-### 11. Abstract Reviewer Model Router (`review_execution.py`)
+### 12. Abstract Reviewer Model Router (`review_execution.py`)
 - **Capability Tiers**: Maps reviewer roles to abstract requirements (`STANDARD` vs `STRONG`), decoupling policy hashes from specific provider model identifiers.
 - **Targeted Model Assignment**: Routes fast subagents (e.g., fast linter, bug, regression) to high-speed models (`flash`), while routing critical security checks to deep models (`pro`) under developer-controlled escalation guards (`ALLOW_MODEL_ESCALATION`).
 
-### 12. Spec-Compliance Auditor (`spec-compliance-agent`)
+### 13. Spec-Compliance Auditor (`spec-compliance-agent`)
 - **Plan Fidelity Verification**: Automatically selected by policy for architectural refactors and multi-phase tasks.
 - **Drift Prevention**: Compares the final implementation against approved acceptance criteria and planned outcomes in `plan.json`, blocking delivery on unauthorized scope creep.
 
-### 13. Empirical Defect Evidence Binder (`final_verifier.py` & `run_tests_gate.py`)
+### 14. Empirical Defect Evidence Binder (`final_verifier.py` & `run_tests_gate.py`)
 - **RED → GREEN Proof Chain**: For bug tasks, empirically captures reproducible failing test execution evidence (`red_evidence`) before validating the green fix.
 - **Anti-Greenwashing**: Guarantees that regression tests meaningfully reproduce the defect, preventing cosmetic assertions that pass regardless of actual behavior.
 
@@ -330,6 +336,13 @@ python harness_cli.py update --repo /path/to/project --kit /path/to/new-kit
 
 # Run diagnostic health check
 python harness_cli.py doctor --repo /path/to/project --json
+
+# Resolve the smallest live context for a file or symbol (read-only)
+python harness_cli.py task-context --repo /path/to/project --file app/src/main/kotlin/com/example/ProfileScreen.kt --json
+python harness_cli.py task-context --repo /path/to/project --symbol com.example.profile.ProfileViewModel --module :feature:profile --source-set main --json
+
+# Explicitly refresh persistent project facts and advisory profiles
+python harness_cli.py context refresh --repo /path/to/project
 
 # Dry-run harness uninstallation
 python harness_cli.py uninstall --repo /path/to/project

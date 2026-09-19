@@ -8,6 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_context import (  # noqa: E402
+    ContextSourceChangedDuringExtraction,
+    extract_consistent_project_context,
     extract_project_facts,
     project_context_diff,
     project_context_status,
@@ -77,7 +79,11 @@ def cmd_preview(args: argparse.Namespace) -> int:
 
 def cmd_generate(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
-    payload = extract_project_facts(repo, in_memory_graph=True)
+    try:
+        payload = extract_consistent_project_context(repo, in_memory_graph=True)
+    except ContextSourceChangedDuringExtraction as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 2
     views = render_project_context(payload)
     out_dir = write_project_context(repo, payload, views)
     if args.json:
@@ -109,7 +115,11 @@ def cmd_refresh(args: argparse.Namespace) -> int:
         except Exception:
             old_payload = {}
 
-    new_payload = extract_project_facts(repo, in_memory_graph=True)
+    try:
+        new_payload = extract_consistent_project_context(repo, in_memory_graph=True)
+    except ContextSourceChangedDuringExtraction as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 2
     diff = project_context_diff(old_payload, new_payload) if old_payload else {"kind": "INITIAL", "has_drift": False, "details": []}
     views = render_project_context(new_payload)
     out_dir = write_project_context(repo, new_payload, views)

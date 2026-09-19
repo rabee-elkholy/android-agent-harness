@@ -381,6 +381,39 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         res = resolve_architecture_contract(self.repo, architecture_intent="EXISTING_CHANGE", target_scope="")
         self.assertEqual(STATUS_DECISION_REQUIRED, res["status"])
 
+    def test_ambiguous_preserve_never_uses_preferred_new_code_family(self) -> None:
+        self._write("app/src/main/kotlin/legacy/LegacyFragment.kt", "class LegacyFragment : Fragment()")
+        self._write("app/src/main/kotlin/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")
+        facts = extract_project_facts(self.repo)["facts"]
+        preferred = next(f for f in facts["architecture"]["families"] if "compose" in f.get("label", ""))
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=preferred["id"]))
+
+        res = resolve_architecture_contract(
+            self.repo,
+            architecture_intent="EXISTING_CHANGE",
+            target_scope="unknown/UnresolvedScreen.kt",
+        )
+
+        self.assertEqual(STATUS_DECISION_REQUIRED, res["status"])
+        self.assertIsNone(res["contract"])
+        self.assertIn("not a valid fallback", res["message"])
+
+    def test_ambiguous_refactor_never_uses_preferred_new_code_family(self) -> None:
+        self._write("app/src/main/kotlin/legacy/LegacyFragment.kt", "class LegacyFragment : Fragment()")
+        self._write("app/src/main/kotlin/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")
+        facts = extract_project_facts(self.repo)["facts"]
+        preferred = next(f for f in facts["architecture"]["families"] if "compose" in f.get("label", ""))
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=preferred["id"]))
+
+        res = resolve_architecture_contract(
+            self.repo,
+            architecture_intent="REFACTOR",
+            target_scope="unknown/UnresolvedViewModel.kt",
+        )
+
+        self.assertEqual(STATUS_DECISION_REQUIRED, res["status"])
+        self.assertIsNone(res["contract"])
+
     def test_sim_10_stale_preferred_family_reference(self) -> None:
         """SIM-10: Stale preferred family reference diagnosed rather than guessing."""
         self._write("app/src/main/kotlin/MyScreen.kt", "class MyScreen : Fragment()")

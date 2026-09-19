@@ -9,7 +9,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"project_graph", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution"}
+INSPECTION_SCRIPTS = {"project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -113,12 +113,18 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name == "compileall":
         return True
     if name in INSPECTION_SCRIPTS:
+        if name == "task_context":
+            targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
+            return targets == 1 and not any(arg.startswith("--out") for arg in args)
         return not any(arg.startswith("--out") for arg in args)
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
     if name in {"harness_cli", "android-harness"}:
         if args[:1] in (["version"], ["doctor"], ["explain"]):
             return True
+        if args[:1] == ["task-context"]:
+            targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
+            return targets == 1 and not any(arg.startswith("--out") for arg in args)
         if args[:2] in (["context", "preview"], ["context", "status"]):
             return True
     # Only known harness parsers implement help without running arbitrary code.

@@ -55,6 +55,9 @@ jobs:
           python agents/scripts/_baseline_selftest.py
           python agents/scripts/_graph_selftest.py
 
+      - name: Run Project Intelligence regressions
+        run: python agents/scripts/_project_intelligence_selftest.py
+
       - name: Run Android scenario regression matrix
         run: |
           python agents/scripts/_android_scenarios_selftest.py

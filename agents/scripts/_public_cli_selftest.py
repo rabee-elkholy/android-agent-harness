@@ -531,6 +531,38 @@ class PublicCliSelftest(unittest.TestCase):
         class_json = json.loads(raw_class[start_c:])
         self.assertIn("surfaces", class_json)
 
+    def test_task_context_public_cli_json(self) -> None:
+        """The public task-context command returns bounded, read-only JSON."""
+        harness_cli = KIT / "harness_cli.py"
+        (self.repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+        target = "app/src/main/kotlin/com/example/MainActivity.kt"
+        cache = self.repo / ".agents" / "cache" / "project-graph.json"
+        before = cache.read_bytes() if cache.is_file() else None
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(harness_cli),
+                "task-context",
+                "--repo",
+                str(self.repo),
+                "--kit",
+                str(KIT),
+                "--file",
+                target,
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, f"{proc.stderr}\n{proc.stdout}")
+        payload = json.loads(proc.stdout)
+        self.assertEqual("RESOLVED", payload["status"])
+        self.assertEqual(target, payload["target"]["path"])
+        after = cache.read_bytes() if cache.is_file() else None
+        self.assertEqual(before, after, "task-context must not write the persistent graph cache")
+
 
 class PhaseBLeanWorkflowSelftest(unittest.TestCase):
     """Phase B acceptance tests: Risk lanes, proportional device, adaptive graph, multi-phase threshold."""

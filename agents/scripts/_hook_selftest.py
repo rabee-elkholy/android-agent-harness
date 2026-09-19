@@ -24,6 +24,9 @@ class HookTests(unittest.TestCase):
         subprocess.run(["git", "config", "user.name", "Harness Test"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.email", "harness@example.invalid"], cwd=self.repo, check=True)
         (self.repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+        source = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("package com.example\nclass MainActivity {}\n", encoding="utf-8")
         subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
         subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.repo, check=True)
         self.state = self.repo / ".agents/state"
@@ -103,6 +106,32 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "git status > app/status.txt"})["decision"])
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "rg safe | tee app/status.txt"})["decision"])
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "rg $(touch app/owned)"})["decision"])
+
+    def test_task_context_is_bounded_read_only_discovery(self):
+        targeted = "python .agents/scripts/task_context.py --repo . --file app/src/main/kotlin/com/example/MainActivity.kt --json"
+        result = self.call("run_command", {"CommandLine": targeted})
+        self.assertEqual("allow", result["decision"])
+        self.assertIn("targeted task_context executed", result["reason"])
+        self.assertEqual(
+            "deny",
+            self.call("run_command", {"CommandLine": "python .agents/scripts/task_context.py --repo . --json"})["decision"],
+        )
+        self.assertEqual(
+            "deny",
+            self.call("run_command", {"CommandLine": "python .agents/scripts/task_context.py --repo . --file A.kt --out result.json"})["decision"],
+        )
+
+    def test_targeted_task_context_satisfies_discovery_anchor(self):
+        targeted = "python .agents/scripts/task_context.py --repo . --symbol MainActivity --json"
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": targeted})["decision"])
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app", "Query": "MainActivity"})["decision"])
+
+    def test_failed_task_context_does_not_satisfy_discovery_anchor(self):
+        invalid = "python .agents/scripts/task_context.py --repo . --file app/src/main/Missing.kt --json"
+        result = self.call("run_command", {"CommandLine": invalid})
+        self.assertEqual("allow", result["decision"])
+        self.assertNotIn("targeted task_context executed", result["reason"])
+        self.assertEqual("deny", self.call("grep_search", {"SearchPath": "app", "Query": "anything"})["decision"])
 
     def test_agent_cannot_manufacture_approval(self):
         for action in ("approve", "approve-sensitive", "cancel"):

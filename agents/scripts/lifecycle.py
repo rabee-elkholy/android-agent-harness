@@ -464,8 +464,8 @@ def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool 
         _configure(repo, kit, answers)
         if init_context:
             sublog("extracting project facts & architectural views...")
-            from project_context import extract_project_facts, render_project_context, write_project_context
-            facts_payload = extract_project_facts(repo, in_memory_graph=True)
+            from project_context import extract_consistent_project_context, render_project_context, write_project_context
+            facts_payload = extract_consistent_project_context(repo, in_memory_graph=True)
             views = render_project_context(facts_payload)
             write_project_context(repo, facts_payload, views)
             from architecture_policy import create_architecture_policy, write_architecture_policy
@@ -753,8 +753,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
                 except Exception as exc:
                     raise ValidationError(f"CONTEXT_REFRESH_REQUIRED: {exc}")
             elif mode in ("refresh", "auto"):
-                from project_context import extract_project_facts, render_project_context, write_project_context
-                fresh_facts = extract_project_facts(repo, in_memory_graph=True)
+                from project_context import extract_consistent_project_context, render_project_context, write_project_context
+                fresh_facts = extract_consistent_project_context(repo, in_memory_graph=True)
                 fresh_views = render_project_context(fresh_facts)
                 write_project_context(repo, fresh_facts, fresh_views)
                 from architecture_policy import read_architecture_policy, compute_policy_hash, write_architecture_policy

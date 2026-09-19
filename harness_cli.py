@@ -566,6 +566,25 @@ def cmd_context(args: argparse.Namespace) -> int:
     return run_engine_script(kit, "generate_project_context.py", cli_args, capture=getattr(args, "json", False))
 
 
+def cmd_task_context(args: argparse.Namespace) -> int:
+    """Resolve a bounded, read-only architectural slice for a file or symbol."""
+    kit = ensure_kit(args.kit)
+    repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
+    cli_args = ["--repo", str(repo)]
+    if args.file:
+        cli_args.extend(["--file", args.file])
+    if args.symbol:
+        cli_args.extend(["--symbol", args.symbol])
+    if args.module:
+        cli_args.extend(["--module", args.module])
+    if args.source_set:
+        cli_args.extend(["--source-set", args.source_set])
+    cli_args.extend(["--limit", str(args.limit)])
+    if args.json:
+        cli_args.append("--json")
+    return run_engine_script(kit, "task_context.py", cli_args, capture=args.json)
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
@@ -711,6 +730,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_stabilization_v41_selftest.py",
             "_stabilization_v42_selftest.py",
             "_public_cli_selftest.py",
+            "_project_intelligence_selftest.py",
         )
         total = len(scripts)
         for idx, script in enumerate(scripts, 1):
@@ -909,6 +929,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
     sp.add_argument("--json", action="store_true", help="Format output as JSON.")
     sp.set_defaults(func=cmd_context)
+
+    sp = sub.add_parser("task-context", help="Resolve bounded read-only context for one file or symbol.")
+    target = sp.add_mutually_exclusive_group(required=True)
+    target.add_argument("--file", help="Repository-relative or absolute source file path.")
+    target.add_argument("--symbol", help="Short symbol name or fully qualified name.")
+    sp.add_argument("--module", help="Optional module qualifier for ambiguous symbols.")
+    sp.add_argument("--source-set", help="Optional source-set qualifier for ambiguous symbols.")
+    sp.add_argument("--limit", type=int, default=20, help="Maximum related items to return (1-100).")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
+    sp.add_argument("--json", action="store_true", help="Format output as JSON.")
+    sp.set_defaults(func=cmd_task_context)
 
     sp = sub.add_parser("selftest", help="Run the kit hook selftest suite in the kit checkout.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")

@@ -268,8 +268,8 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
     facts_file = root / ".agents" / "project-context" / "project-facts.json"
     if not facts_file.is_file() or facts_file.stat().st_size == 0:
         try:
-            from project_context import extract_project_facts, render_project_context, write_project_context
-            payload = extract_project_facts(root, in_memory_graph=True)
+            from project_context import extract_consistent_project_context, render_project_context, write_project_context
+            payload = extract_consistent_project_context(root, in_memory_graph=True)
             views = render_project_context(payload)
             write_project_context(root, payload, views)
             restored.append(".agents/project-context/project-facts.json")

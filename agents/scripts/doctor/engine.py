@@ -683,6 +683,37 @@ class HarnessDoctor:
         else:
             self.log(category, "Project Context Hygiene", "PASS", "Zero absolute paths or credentials in project-facts.json.")
 
+        try:
+            sys.path.insert(0, str(self.agents_dir / "scripts"))
+            from project_context import validate_advisory_knowledge
+            advisory_valid, advisory_status = validate_advisory_knowledge(data)
+            if advisory_valid:
+                advisory = data.get("advisory_knowledge") or {}
+                profile_count = len(advisory.get("local_profiles") or [])
+                convention_count = len(advisory.get("convention_profiles") or [])
+                self.log(
+                    category,
+                    "Advisory Project Intelligence",
+                    "PASS",
+                    f"Validated {profile_count} local profile(s) and {convention_count} convention profile(s).",
+                )
+            elif advisory_status == "MISSING":
+                self.log(
+                    category,
+                    "Advisory Project Intelligence",
+                    "WARN",
+                    "Optional advisory knowledge is not generated yet; authoritative project facts remain usable. Run context refresh to enable task-local intelligence.",
+                )
+            else:
+                self.log(
+                    category,
+                    "Advisory Project Intelligence",
+                    "WARN",
+                    f"Optional advisory knowledge was ignored ({advisory_status}); authoritative project facts remain usable.",
+                )
+        except Exception as exc:
+            self.log(category, "Advisory Project Intelligence", "WARN", f"Could not validate optional advisory knowledge: {exc}")
+
         required_views = ("architecture.md", "ui.md", "persistence.md", "conventions.md")
         missing_views = [v for v in required_views if not (context_dir / v).is_file()]
         if missing_views:

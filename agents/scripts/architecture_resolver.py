@@ -276,21 +276,16 @@ def resolve_architecture_contract(
             target_family = families[0]
             match_type = "UNIQUE_LOCAL"
         elif len(families) > 1:
-            pref_id = (policy or {}).get("preferred_new_code_family") or (policy or {}).get("default_family")
-            if pref_id and pref_id != "none":
-                pref_fam = _find_family_by_id(families, pref_id)
-                if pref_fam:
-                    source_family = pref_fam
-                    target_family = pref_fam
-                    match_type = "PREFERRED_FALLBACK"
-            if not source_family:
-                return {
-                    "status": STATUS_DECISION_REQUIRED,
-                    "mode": mode,
-                    "contract": None,
-                    "brief_markdown": None,
-                    "message": f"Multiple architecture families exist and target scope '{target_scope}' is ambiguous.",
-                }
+            return {
+                "status": STATUS_DECISION_REQUIRED,
+                "mode": mode,
+                "contract": None,
+                "brief_markdown": None,
+                "message": (
+                    f"Multiple architecture families exist and target scope '{target_scope}' is ambiguous. "
+                    "Preferred new-code policy is not a valid fallback for PRESERVE or REFACTOR work."
+                ),
+            }
         else:
             # Zero detected families: synthesize empty/standard contract
             source_family = None

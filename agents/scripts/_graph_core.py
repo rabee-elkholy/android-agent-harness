@@ -251,6 +251,13 @@ class DependencyGraph:
         self._rev_adj: dict[str, set[str]] = {}
 
     def add_node(self, node: GraphNode) -> None:
+        existing = self.nodes.get(node.id)
+        if existing is not None and existing.file_path != node.file_path:
+            # Preserve legacy IDs for unique symbols while retaining collisions
+            # across modules/source sets instead of overwriting the first node.
+            base_id = node.id
+            suffix = hashlib.sha256(node.file_path.encode("utf-8")).hexdigest()[:12]
+            node.id = f"{base_id}@@{suffix}"
         self.nodes[node.id] = node
         if node.id not in self._adj:
             self._adj[node.id] = set()
@@ -1198,6 +1205,7 @@ class GraphEngine:
         self.symbol_to_node_id: dict[str, str] = {}
         self.fqn_to_node_id: dict[str, str] = {}
         self.symbol_to_node_ids: dict[str, list[str]] = {}
+        self.fqn_to_node_ids: dict[str, list[str]] = {}
         self.healed_log: list[str] = []
 
     def compute_file_hash(self, path: Path) -> str:
@@ -1237,12 +1245,13 @@ class GraphEngine:
         self.symbol_to_node_id.clear()
         self.fqn_to_node_id.clear()
         self.symbol_to_node_ids.clear()
+        self.fqn_to_node_ids.clear()
         for node in self.graph.nodes.values():
             self.fqn_to_node_id[node.id] = node.id
             if node.package:
-                self.fqn_to_node_id[f"{node.package}.{node.name}"] = node.id
+                self.fqn_to_node_ids.setdefault(f"{node.package}.{node.name}", []).append(node.id)
                 for decl in node.declarations:
-                    self.fqn_to_node_id[f"{node.package}.{decl}"] = node.id
+                    self.fqn_to_node_ids.setdefault(f"{node.package}.{decl}", []).append(node.id)
             if node.name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
                 self.symbol_to_node_ids.setdefault(node.name, []).append(node.id)
                 self.symbol_to_node_id[node.name] = node.id
@@ -1251,7 +1260,21 @@ class GraphEngine:
                     self.symbol_to_node_ids.setdefault(decl, []).append(node.id)
                     self.symbol_to_node_id[decl] = node.id
 
-    def sync(self, force_full: bool = False) -> dict[str, Any]:
+        # Single-value compatibility indexes contain only unambiguous identities.
+        for fqn, candidates in self.fqn_to_node_ids.items():
+            unique = sorted(set(candidates))
+            self.fqn_to_node_ids[fqn] = unique
+            if len(unique) == 1:
+                self.fqn_to_node_id[fqn] = unique[0]
+        for symbol, candidates in list(self.symbol_to_node_ids.items()):
+            unique = sorted(set(candidates))
+            self.symbol_to_node_ids[symbol] = unique
+            if len(unique) == 1:
+                self.symbol_to_node_id[symbol] = unique[0]
+            else:
+                self.symbol_to_node_id.pop(symbol, None)
+
+    def sync(self, force_full: bool = False, *, persist: bool = True) -> dict[str, Any]:
         """Incremental synchronization: scans repo, updates dirty files, heals stale paths."""
         if not force_full:
             self.load_cache()
@@ -1301,6 +1324,7 @@ class GraphEngine:
         added: list[str] = []
         modified: list[str] = []
         deleted: list[str] = [rel for rel in self.file_hashes if rel not in current_files]
+        files_hashed = 0
 
         for rel, path in current_files.items():
             try:
@@ -1318,6 +1342,7 @@ class GraphEngine:
                 curr_hash = cached_hash
             else:
                 curr_hash = self.compute_file_hash(path)
+                files_hashed += 1
                 self.file_metadata[rel] = {"size": size, "mtime_ns": mtime_ns, "hash": curr_hash}
 
             if cached_hash is None:
@@ -1335,6 +1360,7 @@ class GraphEngine:
                 self.graph.remove_node(nid)
 
         dirty_files = set(added + modified)
+        files_parsed = 0
         if dirty_files or not self.graph.nodes:
             mod_nodes, mod_edges = parse_gradle_modules(self.repo)
             for m_node in mod_nodes.values():
@@ -1345,6 +1371,7 @@ class GraphEngine:
             xml_connections: list[tuple[GraphNode, list[str]]] = []
 
             for rel in (dirty_files if self.graph.nodes else current_files.keys()):
+                files_parsed += 1
                 p = current_files[rel]
                 existing_nodes = [nid for nid, n in self.graph.nodes.items() if n.file_path == rel]
                 for nid in existing_nodes:
@@ -1395,12 +1422,16 @@ class GraphEngine:
                     elif f"layout:{ref}" in self.graph.nodes:
                         self.graph.add_edge(xnode.id, f"layout:{ref}", kind=EdgeKind.CONTAINS.value)
 
-            self.save_cache()
+            if persist:
+                self.save_cache()
 
         return {
             "added": len(added),
             "modified": len(modified),
             "deleted": len(deleted),
+            "files_discovered": len(current_files),
+            "files_hashed": files_hashed,
+            "files_parsed": files_parsed,
             "total_nodes": len(self.graph.nodes),
             "total_edges": len(self.graph.edges),
             "healed": len(self.healed_log),
