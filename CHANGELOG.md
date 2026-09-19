@@ -4,6 +4,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.52] - 2026-09-19
+
+### Production Workflow Reliability and Lower Daily Friction
+
+- Preserved project-owned Git hooks and Git configuration across install, update, rollback, and uninstall; legacy harness hooks are now removed and restored transactionally.
+- Added the repository-local `.agents/harness.py` entrypoint, including bounded `task-context`, task lifecycle, diagnostics, verification, Gradle, review, and device commands without depending on a global kit path.
+- Reduced always-loaded agent instructions and pruned low-signal advisory context while keeping deterministic safety and architecture contracts intact.
+- Eliminated classifier false positives from unchanged sensitive dependencies and line-ending-only changes; fixed Compose visual classification and Android locale-overlay handling.
+- Made Gradle execution state-aware: diagnostic builds are permitted during implementation, while final builds remain evidence-gated in verification.
+- Hardened installed-engine diagnostics, Python 3.14 support, process cleanup, project-graph bounds, UI context, and state-specific next-action guidance.
+- Added regression coverage for project hook preservation, installed CLI dispatch, launcher portability, classifier edge cases, locale qualifiers, graph labeling, and no-tracker installs.
+
 ## [1.0.51] - 2026-09-19
 
 ### Production Hardening for Large Android Projects

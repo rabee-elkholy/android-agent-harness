@@ -109,7 +109,9 @@ def _is_language_locale_tag(tag: str) -> bool:
         return False
     if any(pat.match(tag_lower) for pat in NON_LOCALE_PATTERNS):
         return False
-    return bool(re.match(r"^(?:b\+[a-zA-Z0-9+]+|[a-z]{2,3}(?:-r?[a-zA-Z0-9]+)?)$", tag_lower))
+    # Only primary locale directories participate in full parity. Android
+    # qualifier overlays such as values-ar-v35 are partial by design.
+    return bool(re.fullmatch(r"(?:b\+[a-z0-9]+(?:\+[a-z0-9]+)*|[a-z]{2,3}(?:-r[a-z]{2})?)", tag_lower))
 
 
 def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
@@ -372,7 +374,7 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
             check=False,
         )
         if proc.returncode != 0 or not proc.stdout.strip():
-            if changed.exists:
+            if changed.exists():
                 # Untracked / new file -> consider all keys touched
                 data, _ = _parse_resources(changed)
                 touched_by_base[base_file].update(data.keys())
@@ -408,12 +410,12 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
                     old_count = int(m.group(2)) if m.group(2) is not None else 1
                     new_start = int(m.group(3))
                     new_count = int(m.group(4)) if m.group(4) is not None else 1
-                    for l in range(new_start, new_start + max(1, new_count)):
+                    for l in range(new_start, new_start + new_count):
                         new_lines.add(l)
-                    for l in range(old_start, old_start + max(1, old_count)):
+                    for l in range(old_start, old_start + old_count):
                         old_lines.add(l)
 
-            if changed.exists and new_lines:
+            if changed.exists() and new_lines:
                 try:
                     content = changed.read_text(encoding="utf-8", errors="replace")
                     keys.update(_extract_touched_keys_from_xml(content, new_lines))

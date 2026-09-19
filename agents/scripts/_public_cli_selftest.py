@@ -444,8 +444,8 @@ class PublicCliSelftest(unittest.TestCase):
     # Non-verifying or no active task cases
     # -------------------------------------------------------------------------
 
-    def test_assemble_allowed_when_no_active_task(self) -> None:
-        """Assemble runs normally when there is no active task."""
+    def test_assemble_blocked_when_no_active_task(self) -> None:
+        """Assemble is a mutation and requires an approved active task."""
         sentinel = _setup_fake_gradlew(self.repo)
         script = KIT / "agents" / "scripts" / "run_gradle_task.py"
         proc = subprocess.run(
@@ -456,8 +456,9 @@ class PublicCliSelftest(unittest.TestCase):
             env=self.env,
             check=False,
         )
-        self.assertEqual(0, proc.returncode)
-        self.assertTrue(sentinel.exists(), "Gradle must run when no active task exists")
+        self.assertNotEqual(0, proc.returncode)
+        self.assertFalse(sentinel.exists(), "Gradle must not run when no active task exists")
+        self.assertIn("NO_ACTIVE_TASK", proc.stdout + proc.stderr)
 
     def test_assemble_allowed_when_task_in_implementing_status(self) -> None:
         """Assemble runs when task is IMPLEMENTING, not yet in VERIFYING."""
@@ -930,8 +931,8 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
         self.assertIn("BILLING", result["surfaces"])
         self.assertEqual(result["confidence"], "HIGH")
 
-    def test_injected_billing_dependency_propagation(self) -> None:
-        """Scenario 2: Enclosing class injects BillingRepository without hunk keywords -> BILLING with MEDIUM confidence."""
+    def test_unchanged_injected_billing_dependency_does_not_propagate(self) -> None:
+        """Scenario 2: Unrelated body edits do not inherit an unchanged BillingRepository dependency."""
         from change_classifier import classify
         target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "OrderViewModel.kt"
         target.write_text(
@@ -939,10 +940,7 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
             encoding="utf-8",
         )
         result = classify(self.repo)
-        self.assertIn("BILLING", result["surfaces"])
-        self.assertEqual(result["confidence"], "MEDIUM")
-        reasons = result["details"].get("BILLING", {}).get("reasons", [])
-        self.assertTrue(any("BILLING_DEPENDENCY_PROPAGATION" in reason for reason in reasons))
+        self.assertNotIn("BILLING", result["surfaces"])
 
     def test_generic_dependency_no_billing(self) -> None:
         """Scenario 3: Generic repository (UserRepository) without sensitive keywords does NOT trigger BILLING."""
@@ -977,8 +975,8 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
         result = classify(self.repo)
         self.assertNotIn("BILLING", result["surfaces"])
 
-    def test_injected_auth_dependency_propagation(self) -> None:
-        """Scenario 5: Enclosing class injects AuthFacade -> AUTH with MEDIUM confidence."""
+    def test_unchanged_injected_auth_dependency_does_not_propagate(self) -> None:
+        """Scenario 5: Unrelated body edits do not inherit an unchanged AuthFacade dependency."""
         from change_classifier import classify
         target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "AccountViewModel.kt"
         target.write_text(
@@ -986,13 +984,10 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
             encoding="utf-8",
         )
         result = classify(self.repo)
-        self.assertIn("AUTH", result["surfaces"])
-        self.assertEqual(result["confidence"], "MEDIUM")
-        reasons = result["details"].get("AUTH", {}).get("reasons", [])
-        self.assertTrue(any("AUTH_DEPENDENCY_PROPAGATION" in reason for reason in reasons))
+        self.assertNotIn("AUTH", result["surfaces"])
 
-    def test_injected_crypto_dependency_propagation(self) -> None:
-        """Scenario 6: Enclosing class injects CryptoWrapper -> CRYPTO with MEDIUM confidence."""
+    def test_unchanged_injected_crypto_dependency_does_not_propagate(self) -> None:
+        """Scenario 6: Unrelated body edits do not inherit an unchanged CryptoWrapper dependency."""
         from change_classifier import classify
         target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "SecureStoreViewModel.kt"
         target.write_text(
@@ -1000,10 +995,7 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
             encoding="utf-8",
         )
         result = classify(self.repo)
-        self.assertIn("CRYPTO", result["surfaces"])
-        self.assertEqual(result["confidence"], "MEDIUM")
-        reasons = result["details"].get("CRYPTO", {}).get("reasons", [])
-        self.assertTrue(any("CRYPTO_DEPENDENCY_PROPAGATION" in reason for reason in reasons))
+        self.assertNotIn("CRYPTO", result["surfaces"])
 
 
 class PhaseDRepairSelftest(unittest.TestCase):

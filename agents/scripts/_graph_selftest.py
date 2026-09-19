@@ -285,6 +285,12 @@ def run_tests() -> bool:
     slice_summary = feat_g.to_slice_summary(f_nodes)
     assert_eq("[UI Screens & Layouts]" in slice_summary and "[ViewModels & State Holders]" in slice_summary, True, "to_slice_summary formats Clean Architecture layers")
     assert_eq("[Domain Layer" in slice_summary and "[Data Layer" in slice_summary, True, "to_slice_summary contains Domain and Data layers")
+    compose_graph = DependencyGraph()
+    compose_graph.add_node(GraphNode(
+        id="CampaignScreen", name="CampaignScreen", type=EntityType.SCREEN.value,
+        file_path="app/src/main/kotlin/CampaignScreen.kt", metadata={"composable": True},
+    ))
+    assert_eq("CampaignScreen [COMPOSE]" in compose_graph.to_slice_summary(), True, "Compose screens are not mislabeled as XML")
 
     # -----------------------------------------------------------------
     # Test 7: Universal Hub Defense, Comment Stripping & Keyword Filtering

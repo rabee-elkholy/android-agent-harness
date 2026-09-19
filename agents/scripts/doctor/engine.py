@@ -54,8 +54,10 @@ class HarnessDoctor:
     def check_environment(self) -> None:
         category = "1. Environment & Host"
         py_ver = sys.version_info
-        if py_ver >= (3, 10):
-            self.log(category, "Python Runtime", "PASS", f"Python {py_ver.major}.{py_ver.minor}.{py_ver.micro} (>= 3.10 required)")
+        if py_ver >= (3, 15):
+            self.log(category, "Python Runtime", "WARN", f"Python {py_ver.major}.{py_ver.minor}.{py_ver.micro} is newer than the declared 3.10-3.14 compatibility matrix.")
+        elif py_ver >= (3, 10):
+            self.log(category, "Python Runtime", "PASS", f"Python {py_ver.major}.{py_ver.minor}.{py_ver.micro} (supported range 3.10-3.14)")
         else:
             self.log(category, "Python Runtime", "FAIL", f"Python {py_ver.major}.{py_ver.minor} detected. Minimum 3.10 is required.")
 
@@ -613,8 +615,8 @@ class HarnessDoctor:
             self.log(
                 category,
                 "Tailored Domain Coverage",
-                "WARN",
-                f"Detected {len(uncovered_domains)} active project domain(s) without dedicated reference guide(s).",
+                "PASS",
+                f"Optional tailoring available for {len(uncovered_domains)} detected project domain(s); no delivery capability is blocked.",
                 details=details,
             )
 

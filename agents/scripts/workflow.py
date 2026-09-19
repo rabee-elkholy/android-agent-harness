@@ -1396,9 +1396,9 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
 def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, str]]:
     """Return deterministic, non-mutating guidance for the current lifecycle state."""
     state = str(plan.get("status") or "").upper()
-    base = f'android-harness task'
+    base = 'python .agents/harness.py task'
     identity = f'--repo "{repo}" --task-id "{task_id}"'
-    if state in {"DRAFTED", "PLAN_APPROVAL_REQUIRED"}:
+    if state in {"DRAFTED", "PLAN_APPROVAL_REQUIRED", "PLAN_DRAFTED", "AWAITING_DEVELOPER_APPROVAL"}:
         return [{
             "action": "approve",
             "command": f'{base} approve {identity} --source conversation --proof-reference "<approval reference>" --enforcement-tier RULE_ENFORCED',

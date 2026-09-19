@@ -452,6 +452,10 @@ def build_advisory_knowledge(repo: Path, facts: dict[str, Any], source_fingerpri
     for (module, source_set, scope), entries in sorted(groups.items()):
         paths = sorted(entry["path"] for entry in entries)
         signals = {signal for entry in entries for signal in entry["signals"]}
+        if not signals:
+            # Profiles without an architectural or convention signal add size
+            # but cannot improve task routing or local convention selection.
+            continue
         languages = sorted({entry["language"] for entry in entries})
         toolkits = [name for name in ("xml", "compose") if name in signals]
         interop = ["XML_HOSTS_COMPOSE"] if "xml_hosts_compose" in signals else []
@@ -1122,6 +1126,19 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
         "ui": {
             "framework": ui_framework,
             "themes": sorted(compose_themes, key=lambda t: (t.get("symbol", ""), t.get("path", ""))),
+            "screens": sorted(
+                [
+                    {
+                        "name": item.get("name"),
+                        "path": item.get("path"),
+                        "ui_toolkit": item.get("ui_toolkit"),
+                        "screen_host": item.get("screen_host"),
+                        "navigation": item.get("nav_type"),
+                    }
+                    for item in discovered_screens
+                ],
+                key=lambda item: (str(item.get("path") or ""), str(item.get("name") or "")),
+            )[:40],
         },
         "navigation": {
             "elements": sorted(nav_elements, key=lambda n: (n.get("type", ""), n.get("path", ""))),
@@ -1214,7 +1231,7 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
     if di.get("modules"):
         arch_lines.append("- **Discovered Modules**:")
         for mod in di["modules"]:
-            arch_lines.append(f"  - `{mod['name']}` in [`{mod['path']}`](file:///{mod['path']})")
+            arch_lines.append(f"  - `{mod['name']}` in `{mod['path']}`")
     else:
         arch_lines.append("- No explicit DI modules indexed in root scan.")
 
@@ -1226,11 +1243,11 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
     primary = vm.get("primary")
     if primary:
         generics_str = f" `{primary['generics']}`" if primary.get("generics") else ""
-        arch_lines.append(f"- **Primary Base**: `{primary['symbol']}`{generics_str} in [`{primary['path']}`](file:///{primary['path']})")
+        arch_lines.append(f"- **Primary Base**: `{primary['symbol']}`{generics_str} in `{primary['path']}`")
     elif vm.get("candidates"):
         arch_lines.append("- **Candidates (Unresolved Primary)**:")
         for cand in vm["candidates"]:
-            arch_lines.append(f"  - `{cand['symbol']}` in [`{cand['path']}`](file:///{cand['path']})")
+            arch_lines.append(f"  - `{cand['symbol']}` in `{cand['path']}`")
     else:
         arch_lines.append("- No custom BaseViewModel detected (NOT_DETECTED).")
 
@@ -1251,7 +1268,7 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
             if fam.get("exemplars"):
                 arch_lines.append("- **Exemplars**:")
                 for ex in fam["exemplars"]:
-                    arch_lines.append(f"  - [`{ex}`](file:///{ex})")
+                    arch_lines.append(f"  - `{ex}`")
 
     arch_lines.extend([
         "",
@@ -1260,7 +1277,7 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
     nav_elements = nav.get("elements") or []
     if nav_elements:
         for elem in nav_elements:
-            arch_lines.append(f"- `{elem['type']}` in [`{elem['path']}`](file:///{elem['path']})")
+            arch_lines.append(f"- `{elem['type']}` in `{elem['path']}`")
     else:
         arch_lines.append("- No explicit navigation library detected (NOT_DETECTED).")
 
@@ -1270,7 +1287,7 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
             "## 5. Result & State Wrappers",
         ])
         for rw in conv["result_wrappers"]:
-            arch_lines.append(f"- `{rw['symbol']}` in [`{rw['path']}`](file:///{rw['path']})")
+            arch_lines.append(f"- `{rw['symbol']}` in `{rw['path']}`")
 
     # 2. ui.md
     ui = facts.get("ui") or {}
@@ -1290,9 +1307,20 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
     if themes:
         ui_lines.append("- **Detected Themes**:")
         for th in themes:
-            ui_lines.append(f"  - `{th['symbol']}` in [`{th['path']}`](file:///{th['path']})")
+            ui_lines.append(f"  - `{th['symbol']}` in `{th['path']}`")
     else:
         ui_lines.append("- No explicit custom theme detected (NOT_DETECTED).")
+    screens = ui.get("screens") or []
+    if screens:
+        ui_lines.extend(["", "## Detected UI Hosts"])
+        for screen in screens[:20]:
+            ui_lines.append(
+                f"- `{screen.get('name')}`: toolkit=`{screen.get('ui_toolkit')}`, "
+                f"host=`{screen.get('screen_host')}`, navigation=`{screen.get('navigation')}` "
+                f"in `{screen.get('path')}`"
+            )
+        if len(screens) > 20:
+            ui_lines.append(f"- ... {len(screens) - 20} additional UI hosts are available in project-facts.json")
 
     # 3. persistence.md
     pers = facts.get("persistence") or {}
@@ -1307,7 +1335,7 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
     if dbs:
         for db in dbs:
             pers_lines.append(f"- **Database**: `{db['symbol']}` (Version `{db['version']}`, Entities: `{db['entities_count']}`)")
-            pers_lines.append(f"  - File: [`{db['path']}`](file:///{db['path']})")
+            pers_lines.append(f"  - File: `{db['path']}`")
             if db.get("entities"):
                 pers_lines.append(f"  - Entities: {', '.join(db['entities'])}")
     else:
@@ -1317,13 +1345,13 @@ def render_project_context(facts_payload: dict) -> dict[str, str]:
     if daos:
         pers_lines.extend(["", "## Discovered DAOs"])
         for dao in daos:
-            pers_lines.append(f"- `{dao['symbol']}` in [`{dao['path']}`](file:///{dao['path']})")
+            pers_lines.append(f"- `{dao['symbol']}` in `{dao['path']}`")
 
     ds = pers.get("datastore_preferences") or []
     if ds:
         pers_lines.extend(["", "## DataStore Preferences"])
         for pref in ds:
-            pers_lines.append(f"- File: [`{pref['file']}`](file:///{pref['file']})")
+            pers_lines.append(f"- File: `{pref['file']}`")
 
     # 4. conventions.md
     conv_lines = [

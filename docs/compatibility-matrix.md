@@ -17,9 +17,9 @@
 
 | Runtime | Declared support | Validation |
 |---|---|---|
-| Python 3.10–3.13 | Supported | CI matrix is defined for Linux, macOS, and Windows |
+| Python 3.10–3.14 | Supported | CI matrix is defined for Linux, macOS, and Windows |
 | Linux, macOS, Windows | Supported | Local completion proves the current OS only; hosted CI is the cross-OS authority |
-| Python 3.14+ | Not yet declared | Refuse release claims until added to CI |
+| Python 3.15+ | Not yet declared | Refuse release claims until added to CI |
 
 CI configuration is evidence only after it has actually run. A local doctor
 must not report an unexecuted hosted matrix as passed.

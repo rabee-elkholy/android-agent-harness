@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-agent-harness"
-version = "1.0.51"
+version = "1.0.52"
 description = "Approval-first, evidence-bound development harness for supported Gradle Android projects."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Quality Assurance",
 ]
 
@@ -41,6 +42,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 "agents" = [
+    "harness.py",
     "VERSION",
     "release_checksums.json",
     ".gitignore",

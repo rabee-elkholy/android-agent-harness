@@ -83,6 +83,18 @@ def changed_files(repo: Path | None = None, *, include_untracked: bool = True) -
                 except Exception:
                     pass
             status = "D" if "D" in xy else ("A" if "A" in xy else "M")
+            if status == "M" and exists:
+                head = subprocess.run(
+                    ["git", "show", f"HEAD:{rel_path}"], cwd=r, capture_output=True, check=False,
+                )
+                if head.returncode == 0:
+                    try:
+                        current = full_path.read_bytes()
+                    except OSError:
+                        current = b""
+                    normalize = lambda data: data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                    if current and current != head.stdout and normalize(current) == normalize(head.stdout):
+                        continue
             results.append(
                 ChangedFile(
                     path=full_path,

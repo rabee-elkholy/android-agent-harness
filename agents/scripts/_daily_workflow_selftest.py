@@ -283,6 +283,10 @@ class DailyWorkflowSelftest(unittest.TestCase):
 
         policy = decide(classification, KIT / "agents" / "skills", plan=plan_payload(read_json(task_dir(self.repo, task_id) / "plan.json")))
         self.assertNotIn("unit_tests", policy.get("gates", []))
+        self.assertEqual("MICRO", policy.get("risk_lane"))
+        self.assertEqual("VISUAL_MICRO", policy.get("ui_verification_class"))
+        self.assertEqual([], policy.get("reviewers"))
+        self.assertFalse(policy.get("device_required"))
 
     # -------------------------------------------------------------------------
     # Daily-02: Compose padding only
@@ -330,6 +334,11 @@ class DailyWorkflowSelftest(unittest.TestCase):
 
         policy = decide(classification, KIT / "agents" / "skills", plan=plan_payload(read_json(task_dir(self.repo, task_id) / "plan.json")))
         self.assertNotIn("unit_tests", policy.get("gates", []))
+
+        self.assertEqual("MICRO", policy.get("risk_lane"))
+        self.assertEqual("VISUAL_MICRO", policy.get("ui_verification_class"))
+        self.assertEqual([], policy.get("reviewers"))
+        self.assertFalse(policy.get("device_required"))
 
     # -------------------------------------------------------------------------
     # Daily-03: Compose click invoking UseCase

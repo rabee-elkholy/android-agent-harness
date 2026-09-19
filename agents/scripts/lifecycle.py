@@ -134,7 +134,8 @@ def _snapshot_app_files(repo: Path) -> dict[str, str]:
         dirs[:] = [
             d for d in dirs
             if d not in skip_dir_names
-            and not (d.startswith((".harness", ".git", ".agents", ".gradle", ".idea")))
+            and not d.startswith(".harness")
+            and not d.startswith((".agents.previous-", ".agents-stage-"))
         ]
         root_path = Path(root)
         for name in files:
@@ -193,7 +194,18 @@ def _candidate_adapter_paths(repo: Path) -> list[Path]:
         candidates.extend((f".claude/commands/{name}.md", f".github/prompts/{name}.prompt.md", f".codex/prompts/{name}.md"))
     for path in (Path(__file__).resolve().parents[1] / "subagents").glob("*.json"):
         candidates.append(f".claude/agents/{path.stem}.md")
-    return [repo / rel for rel in sorted(set(candidates))]
+    result = [repo / rel for rel in sorted(set(candidates))]
+    hooks = repo / ".githooks"
+    if hooks.is_dir():
+        markers = ("managed-by: android-agent-harness", "managed-by: android-harness-kit")
+        for hook in sorted(path for path in hooks.rglob("*") if path.is_file()):
+            try:
+                head = hook.read_text(encoding="utf-8", errors="replace")[:4096].lower()
+            except OSError:
+                continue
+            if any(marker in head for marker in markers):
+                result.append(hook)
+    return result
 
 
 def _rollback_adapters(repo: Path, backup: Path, before: dict[str, str | None]) -> None:
@@ -233,6 +245,22 @@ def subprocess_git(repo: Path, *args: str) -> str:
     if proc.returncode != 0:
         raise ValidationError((proc.stderr or proc.stdout or "git failed").strip())
     return (proc.stdout or "").strip()
+
+
+def _git_config_value(repo: Path, key: str) -> str | None:
+    import subprocess
+
+    proc = subprocess.run(["git", "config", "--get", key], cwd=str(repo), capture_output=True, text=True, check=False)
+    return (proc.stdout or "").strip() if proc.returncode == 0 else None
+
+
+def _restore_git_config(repo: Path, key: str, value: str | None) -> None:
+    import subprocess
+
+    args = ["git", "config", "--unset-all", key] if value is None else ["git", "config", key, value]
+    proc = subprocess.run(args, cwd=str(repo), capture_output=True, text=True, check=False)
+    if value is not None and proc.returncode != 0:
+        raise ValidationError((proc.stderr or proc.stdout or f"failed restoring git config {key}").strip())
 
 
 def _migrate_legacy_references(repo: Path, recovery: Path) -> list[str]:
@@ -320,6 +348,7 @@ def _write_ownership(
     before: dict[str, str | None],
     backup: Path | None,
     previous: dict | None = None,
+    git_config_before: dict[str, str | None] | None = None,
 ) -> dict:
     owned_paths = [
         path
@@ -342,6 +371,26 @@ def _write_ownership(
             "post_install_sha256": post_hash,
             "ownership": "created" if original_hash is None else "managed",
         })
+    for rel, original_hash in sorted(before.items()):
+        if rel in after or original_hash is None:
+            continue
+        entries.append({
+            "path": rel,
+            "pre_install_sha256": original_hash,
+            "post_install_sha256": None,
+            "ownership": "removed_legacy",
+        })
+    previous_git_config = (previous or {}).get("git_config") or {}
+    git_config = {
+        key: {"before": values.get("before"), "after": _git_config_value(repo, key)}
+        for key, values in previous_git_config.items()
+        if isinstance(values, dict)
+    }
+    if not git_config:
+        git_config = {
+            key: {"before": value, "after": _git_config_value(repo, key)}
+            for key, value in (git_config_before or {}).items()
+        }
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "architecture_major": ARCHITECTURE_MAJOR,
@@ -350,6 +399,7 @@ def _write_ownership(
         "install_backup": (previous or {}).get("install_backup") or (backup.relative_to(repo).as_posix() if backup else None),
         "latest_backup": backup.relative_to(repo).as_posix() if backup else None,
         "managed_exclude_block": {"begin": EXCLUDE_BEGIN, "end": EXCLUDE_END},
+        "git_config": git_config,
         "entries": entries,
     }
     manifest["ownership_sha256"] = canonical_sha256({key: value for key, value in manifest.items() if key != "ownership_sha256"})
@@ -613,6 +663,7 @@ def install(repo: Path, kit: Path) -> dict:
     if (repo / ".agents").exists() or (repo / OWNERSHIP_RELATIVE).exists():
         raise ValidationError("target already contains a harness; uninstall it before the clean vNext install")
     answers = _load_answers(repo)
+    git_config_before = {"core.hooksPath": _git_config_value(repo, "core.hooksPath")}
     with step_progress("1. Creating pre-install application snapshot"):
         app_before = _snapshot_app_files(repo)
         before = _snapshot_files(repo, _candidate_adapter_paths(repo))
@@ -621,16 +672,20 @@ def install(repo: Path, kit: Path) -> dict:
         with step_progress("2. Installing harness engine files"):
             _install_engine(repo, kit, answers, init_context=True)
         with step_progress("3. Verifying application integrity"):
-            allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
+            allowed_adapters = set(before) | {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
             _verify_app_snapshot(repo, app_before, allowed_adapters)
         with step_progress("4. Recording ownership manifest"):
-            ownership = _write_ownership(repo, version=version, before=before, backup=backup)
+            ownership = _write_ownership(
+                repo, version=version, before=before, backup=backup, git_config_before=git_config_before,
+            )
         with step_progress("5. Warming project graph cache"):
             _warm_project_graph(repo)
     except Exception:
         if (repo / ".agents").exists():
             shutil.rmtree(repo / ".agents", ignore_errors=True)
         _rollback_adapters(repo, backup, before)
+        for key, value in git_config_before.items():
+            _restore_git_config(repo, key, value)
         _managed_exclude(repo, remove=True)
         raise
     return {"status": "PASS", "action": "install", "version": version, "ownership": ownership, "backup": str(backup), "app_snapshot_verified": True}
@@ -669,6 +724,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
     require_update_idle(repo)
     kit, target_version = _validate_kit(kit)
     ownership = _read_ownership(repo)
+    git_config_transaction_before = {"core.hooksPath": _git_config_value(repo, "core.hooksPath")}
     current_version = str(ownership.get("harness_version") or "")
     if _version_tuple(current_version)[0] != ARCHITECTURE_MAJOR:
         raise ValidationError("legacy in-place migration is unsupported; perform a clean reinstall")
@@ -772,7 +828,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
             _set_stage("CONTEXT_RESTORED")
 
         with step_progress("3. Verifying application integrity"):
-            allowed_adapters = {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
+            allowed_adapters = set(before) | {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
             _verify_app_snapshot(repo, app_before, allowed_adapters)
             _set_stage("APP_SNAPSHOT_VERIFIED")
 
@@ -795,6 +851,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
         elif backup and (backup / ".agents").is_dir() and not (repo / ".agents" / "VERSION").is_file():
             _safe_restore_from_backup(backup / ".agents", repo / ".agents")
         _rollback_adapters(repo, backup, before)
+        for key, value in git_config_transaction_before.items():
+            _restore_git_config(repo, key, value)
         journal["status"] = "ROLLED_BACK"
         journal["stage"] = "ROLLED_BACK"
         journal["rolled_back_at"] = utc_now()
@@ -817,6 +875,7 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
     if (repo / OWNERSHIP_RELATIVE).exists():
         raise ValidationError("managed v1 installations must use same-major update, not legacy replacement")
     answers = _load_answers(repo)
+    git_config_before = {"core.hooksPath": _git_config_value(repo, "core.hooksPath")}
     with step_progress("1. Creating pre-replacement snapshot & backup"):
         app_before = _snapshot_app_files(repo)
         adapters = _candidate_adapter_paths(repo)
@@ -832,10 +891,12 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
             _install_engine(repo, kit, answers, init_context=(not has_prior_facts))
             _restore_preserved(repo, preserve_root, preserved)
         with step_progress("3. Verifying application integrity"):
-            allowed_adapters = {p.relative_to(repo).as_posix() for p in adapters}
+            allowed_adapters = set(before) | {p.relative_to(repo).as_posix() for p in adapters}
             _verify_app_snapshot(repo, app_before, allowed_adapters)
         with step_progress("4. Recording ownership manifest"):
-            ownership = _write_ownership(repo, version=target_version, before=before, backup=backup)
+            ownership = _write_ownership(
+                repo, version=target_version, before=before, backup=backup, git_config_before=git_config_before,
+            )
         with step_progress("5. Warming project graph cache"):
             _warm_project_graph(repo)
             shutil.rmtree(old_agents, ignore_errors=True)
@@ -846,6 +907,8 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
         elif backup and (backup / ".agents").is_dir() and not (repo / ".agents" / "VERSION").is_file():
             _safe_restore_from_backup(backup / ".agents", repo / ".agents")
         _rollback_adapters(repo, backup, before)
+        for key, value in git_config_before.items():
+            _restore_git_config(repo, key, value)
         _managed_exclude(repo, remove=True)
         (repo / OWNERSHIP_RELATIVE).unlink(missing_ok=True)
         raise
@@ -880,7 +943,21 @@ def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
         paths = [".agents", *generated]
     preview = sorted(set(path for path in paths if path))
     if not apply:
-        return {"status": "DRY_RUN", "action": "uninstall", "paths": preview, "legacy": legacy}
+        actions = [
+            {
+                "path": rel,
+                "action": "restore" if next(
+                    (entry.get("pre_install_sha256") for entry in (ownership or {}).get("entries") or [] if entry.get("path") == rel),
+                    None,
+                ) else "remove",
+            }
+            for rel in preview
+        ]
+        actions.extend([
+            {"path": ".harness-setup", "action": "remove-owned-state"},
+            {"path": ".harness-backup", "action": "remove-owned-backups"},
+        ])
+        return {"status": "DRY_RUN", "action": "uninstall", "paths": preview, "actions": actions, "legacy": legacy}
     backup = _backup(repo, ownership, "uninstall", _candidate_adapter_paths(repo))
     recovery = repo / ".harness-recovery" / f"uninstall-{uuid.uuid4().hex}"
     removed: list[str] = []
@@ -900,15 +977,16 @@ def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
         for entry in sorted((ownership or {}).get("entries") or [], key=lambda item: len(str(item.get("path") or "")), reverse=True):
             rel = str(entry.get("path") or "")
             path = repo / rel
-            if not path.is_file():
+            original_hash = entry.get("pre_install_sha256")
+            post_hash = entry.get("post_install_sha256")
+            if not path.is_file() and not (original_hash and post_hash is None):
                 continue
-            modified = _hash_or_none(path) != entry.get("post_install_sha256")
+            modified = _hash_or_none(path) != post_hash
             if modified:
                 target = recovery / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, target)
                 preserved.append(rel)
-            original_hash = entry.get("pre_install_sha256")
             install_backup_raw = str((ownership or {}).get("install_backup") or "")
             backup_root = (repo / install_backup_raw).resolve() if install_backup_raw and not Path(install_backup_raw).is_absolute() else Path(install_backup_raw)
             original = backup_root / rel if install_backup_raw else None
@@ -922,9 +1000,19 @@ def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
         if agents.is_dir():
             shutil.rmtree(agents, ignore_errors=True)
     _managed_exclude(repo, remove=True)
+    for key, values in ((ownership or {}).get("git_config") or {}).items():
+        if isinstance(values, dict):
+            _restore_git_config(repo, str(key), values.get("before"))
     (repo / OWNERSHIP_RELATIVE).unlink(missing_ok=True)
     (repo / ".harness-setup" / "update-journal.json").unlink(missing_ok=True)
-    return {"status": "PASS", "action": "uninstall", "removed": removed, "preserved": preserved, "backup": str(backup), "recovery": str(recovery) if preserved or legacy else None}
+    shutil.rmtree(repo / ".harness-setup", ignore_errors=True)
+    shutil.rmtree(repo / ".harness-backup", ignore_errors=True)
+    if not preserved and not legacy:
+        shutil.rmtree(recovery, ignore_errors=True)
+        recovery_root = repo / ".harness-recovery"
+        if recovery_root.is_dir() and not any(recovery_root.iterdir()):
+            recovery_root.rmdir()
+    return {"status": "PASS", "action": "uninstall", "removed": removed, "preserved": preserved, "backup": None, "recovery": str(recovery) if preserved or legacy else None}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -954,7 +1042,14 @@ def main(argv: list[str] | None = None) -> int:
             result = recover_interrupted_update(Path(args.repo)) or {"status": "PASS", "action": "recover-interrupted-update", "recovered": False}
         else:
             result = uninstall(Path(args.repo), apply=args.apply, legacy=args.legacy)
-        print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else f"[{result['status']}] {result['action']}")
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif result.get("status") == "DRY_RUN":
+            print(f"[DRY_RUN] {result['action']}")
+            for item in result.get("actions") or []:
+                print(f"  - {item['action']}: {item['path']}")
+        else:
+            print(f"[{result['status']}] {result['action']}")
         return 0
     except (HarnessError, OSError, RuntimeError, shutil.Error) as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)

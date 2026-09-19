@@ -215,6 +215,9 @@ def run_streaming(
         raise
     finally:
         stop.set()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        worker.join(timeout=1.0)
 
     code = proc.returncode if proc.returncode is not None else 1
     return code, "".join(raw_chunks), echoed
@@ -300,5 +303,4 @@ def enable_subtask_test_runner() -> None:
 
     unittest.TextTestRunner = SubtaskTestRunner
     unittest.runner.TextTestRunner = SubtaskTestRunner
-
 
