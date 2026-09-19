@@ -17,8 +17,8 @@
 
 | Runtime | Declared support | Validation |
 |---|---|---|
-| Python 3.10–3.14 | Supported | CI matrix is defined for Linux, macOS, and Windows |
-| Linux, macOS, Windows | Supported | Local completion proves the current OS only; hosted CI is the cross-OS authority |
+| Python 3.10–3.14 | Supported | The complete suite runs on Linux for every supported Python version |
+| Linux, macOS, Windows | Supported | The complete suite runs on the canonical runtime for every OS; wheel lifecycle tests run separately on all three |
 | Python 3.15+ | Not yet declared | Refuse release claims until added to CI |
 
 CI configuration is evidence only after it has actually run. A local doctor

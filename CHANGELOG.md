@@ -4,6 +4,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.54] - 2026-09-20
+
+### Production Readiness and Open-Source Clarity
+
+- Rebuilt the README around the developer value proposition, daily workflow, installation paths, Android-aware verification, lifecycle safety, honest enforcement boundaries, and evidence-backed release process.
+- Replaced the redundant 15-combination Cartesian selftest matrix plus duplicate canonical job with seven complete-suite compatibility jobs: every supported Python on Linux and the canonical runtime on Windows and macOS.
+- Added release validation that locks supported Python/platform CI coverage, requires the canonical full selftest, rejects wasteful Cartesian runtime matrices, and requires every GitHub Action reference to use a full immutable commit SHA.
+- Fixed Windows execution of repositories that only contain the Unix `gradlew` launcher by preferring the bundled Git for Windows shell and rejecting the unusable Windows Store/WSL `bash.exe` alias.
+
 ## [1.0.53] - 2026-09-19
 
 ### Transactional Lifecycle and Automation Reliability

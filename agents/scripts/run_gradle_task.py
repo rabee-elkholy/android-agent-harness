@@ -107,6 +107,34 @@ def gradle_wrapper(repo: Path | None = None) -> Path:
     raise FileNotFoundError(f"No Gradle wrapper in {root} (expected gradlew or gradlew.bat)")
 
 
+def posix_shell_candidates() -> list[str]:
+    """Return usable POSIX shells without selecting the Windows WSL alias."""
+    if sys.platform != "win32":
+        return [shell for shell in ("bash", "sh") if shutil.which(shell)]
+
+    candidates: list[str] = []
+    git_exe = shutil.which("git")
+    if git_exe:
+        git_path = Path(git_exe)
+        git_candidates = (
+            git_path.parent / "bash.exe",
+            git_path.parent / "sh.exe",
+            git_path.parent.parent / "bin" / "bash.exe",
+            git_path.parent.parent / "bin" / "sh.exe",
+            git_path.parent.parent / "usr" / "bin" / "bash.exe",
+            git_path.parent.parent / "usr" / "bin" / "sh.exe",
+        )
+        candidates.extend(str(path) for path in git_candidates if path.is_file())
+
+    sh = shutil.which("sh")
+    if sh:
+        candidates.append(sh)
+    bash = shutil.which("bash")
+    if bash and not re.search(r"[\\/](?:WindowsApps|System32)[\\/]bash\.exe$", bash, re.IGNORECASE):
+        candidates.append(bash)
+    return list(dict.fromkeys(candidates))
+
+
 def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
     """Run the unix gradlew through bash, falling back to sh, then direct exec."""
     if os.name == "nt" and wrapper.is_file():
@@ -117,9 +145,8 @@ def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
         except Exception:
             pass
     target = "./gradlew" if wrapper.name == "gradlew" else str(wrapper)
-    for shell in ("bash", "sh"):
-        if shutil.which(shell):
-            return [shell, target, *gradle_args]
+    for shell in posix_shell_candidates():
+        return [shell, target, *gradle_args]
     return [str(wrapper), *gradle_args]
 
 

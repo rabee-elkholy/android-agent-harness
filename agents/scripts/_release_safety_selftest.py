@@ -21,6 +21,33 @@ import lifecycle
 
 
 class ReleaseSafetyTests(unittest.TestCase):
+    def test_workflow_integrity_requires_pinned_actions_and_supported_matrix(self):
+        self.assertEqual([], validation.workflow_integrity_errors(KIT))
+
+        original = Path.read_text
+        ci_path = KIT / ".github/workflows/ci.yml"
+        for replacement, expected in (
+            ("uses: actions/checkout@v7", "full commit SHAs"),
+            ("python-version: '3.14'", "Python 3.14"),
+            ("run: python harness_cli.py selftest", "canonical full selftest"),
+        ):
+            with self.subTest(expected=expected):
+                def read(path, *args, **kwargs):
+                    text = original(path, *args, **kwargs)
+                    if path == ci_path:
+                        if replacement.startswith("uses:"):
+                            return text.replace(
+                                "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                                replacement,
+                                1,
+                            )
+                        return text.replace(replacement, "", 1)
+                    return text
+
+                with mock.patch.object(Path, "read_text", read):
+                    errors = validation.workflow_integrity_errors(KIT)
+                self.assertTrue(any(expected in error for error in errors), errors)
+
     def test_version_bump_preserves_citation_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

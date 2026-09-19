@@ -28,6 +28,29 @@ from _vnext_common import HarnessError, ValidationError, read_json, sha256_bytes
 
 
 class CriticalSafetyTests(unittest.TestCase):
+    def test_windows_unix_wrapper_prefers_git_shell_over_wsl_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git = root / "Git" / "cmd" / "git.exe"
+            git_bash = root / "Git" / "bin" / "bash.exe"
+            wrapper = root / "repo" / "gradlew"
+            for path in (git, git_bash, wrapper):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"#!/bin/sh\nexit 0\n")
+
+            def which(name: str):
+                return {
+                    "git": str(git),
+                    "bash": r"C:\Users\runneradmin\AppData\Local\Microsoft\WindowsApps\bash.exe",
+                    "sh": None,
+                }.get(name)
+
+            with mock.patch.object(run_gradle_task.sys, "platform", "win32"), \
+                 mock.patch.object(run_gradle_task.shutil, "which", side_effect=which):
+                command = run_gradle_task.unix_wrapper_cmd(wrapper, [":app:compileDebugKotlin"])
+            self.assertEqual(str(git_bash), command[0])
+            self.assertEqual("./gradlew", command[1])
+
     def test_gradle_failure_attribution_rejects_other_failed_tasks(self):
         task = ":app:testDebugUnitTest"
         log = f"> Task {task} FAILED\n* What went wrong:\nExecution failed for task '{task}'.\n> There were failing tests. See the report at: fixture\n\n* Try:\nRun with --info\n"
