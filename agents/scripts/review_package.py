@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import ValidationError, atomic_write_bytes, canonical_sha256, read_json, sha256_file, utc_now  # noqa: E402
+from _vnext_common import ValidationError, atomic_write_bytes, canonical_sha256, read_json, redact_text, sha256_file, utc_now  # noqa: E402
 from delivery_manifest import build_task_diff
 from workflow import assert_active_run_fresh, state_root, task_dir  # noqa: E402
 
@@ -207,6 +207,10 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         }
     topology = generate_review_topology(repo, paths)
     content = "\n".join((HEADER, "```json", json.dumps(metadata, ensure_ascii=False, indent=2), "```", "", topology, "", "## Git diff", "```diff", diff, "```", *extras))
+    # Paths such as build.gradle and gradle.properties are legitimate review
+    # inputs but may contain credentials.  Sanitize content, not only paths,
+    # before the immutable package is written or handed to a model.
+    content = redact_text(content)
     package_dir = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"]
     package_path = package_dir / "review-package.md"
     if package_path.exists():

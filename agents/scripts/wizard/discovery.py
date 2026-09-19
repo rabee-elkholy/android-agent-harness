@@ -79,16 +79,52 @@ def discover_pythons() -> list[str]:
 
 def gradle_files(repo: Path) -> list[Path]:
     out: list[Path] = []
-    for pat in ("**/build.gradle.kts", "**/build.gradle"):
-        for path in repo.glob(pat):
-            if not skip_path(path, repo):
-                out.append(path)
-    return out
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
+        for name in files:
+            if name in {"build.gradle.kts", "build.gradle"}:
+                out.append(Path(root) / name)
+    return sorted(out)
 
 
-def discover_modules(repo: Path) -> list[str]:
+def _inventory(repo: Path) -> dict[str, list[Path] | bool]:
+    """Collect reusable discovery inputs with one ignored-directory walk."""
+    gradle: list[Path] = []
+    manifests: list[Path] = []
+    catalogs: list[Path] = []
+    sources: list[Path] = []
+    locale_dirs: list[Path] = []
+    has_layout_xml = False
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
+        root_path = Path(root)
+        if root_path.name.startswith("values") and root_path.parent.name == "res":
+            locale_dirs.append(root_path)
+        for name in files:
+            path = root_path / name
+            if name in {"build.gradle.kts", "build.gradle"}:
+                gradle.append(path)
+            elif name == "AndroidManifest.xml":
+                manifests.append(path)
+            elif name == "libs.versions.toml":
+                catalogs.append(path)
+            elif path.suffix.lower() in {".kt", ".java"}:
+                sources.append(path)
+            elif path.suffix.lower() == ".xml" and root_path.name == "layout" and root_path.parent.name == "res":
+                has_layout_xml = True
+    return {
+        "gradle": sorted(gradle),
+        "manifests": sorted(manifests),
+        "catalogs": sorted(catalogs),
+        "sources": sorted(sources),
+        "locale_dirs": sorted(locale_dirs),
+        "has_layout_xml": has_layout_xml,
+    }
+
+
+def discover_modules(repo: Path, paths: list[Path] | None = None) -> list[str]:
     modules: list[str] = []
-    for path in gradle_files(repo):
+    for path in (paths if paths is not None else gradle_files(repo)):
         text = read_text(path)
         if "applicationId" not in text and "androidApplication" not in text:
             if "com.android.application" not in text:
@@ -109,9 +145,9 @@ def discover_modules(repo: Path) -> list[str]:
     return modules
 
 
-def discover_android_modules(repo: Path) -> list[str]:
+def discover_android_modules(repo: Path, paths: list[Path] | None = None) -> list[str]:
     modules: list[str] = []
-    for path in gradle_files(repo):
+    for path in (paths if paths is not None else gradle_files(repo)):
         text = read_text(path)
         if not re.search(r"com\.android\.(?:application|library|dynamic-feature)|androidTarget\s*\(", text):
             continue
@@ -124,9 +160,13 @@ def discover_android_modules(repo: Path) -> list[str]:
     return modules
 
 
-def discover_application_ids(repo: Path) -> list[str]:
+def discover_application_ids(
+    repo: Path,
+    paths: list[Path] | None = None,
+    manifests: list[Path] | None = None,
+) -> list[str]:
     ids: list[str] = []
-    for path in gradle_files(repo):
+    for path in (paths if paths is not None else gradle_files(repo)):
         text = read_text(path)
         for m in re.finditer(r'applicationId(?:\s*=\s*|\s+)["\']([^"\']+)["\']', text):
             if m.group(1) not in ids:
@@ -136,7 +176,7 @@ def discover_application_ids(repo: Path) -> list[str]:
                 ids.append(m.group(1))
     # Fallback: inspect AndroidManifest.xml package attribute
     if not ids:
-        for path in repo.glob("**/AndroidManifest.xml"):
+        for path in (manifests if manifests is not None else repo.glob("**/AndroidManifest.xml")):
             if skip_path(path, repo):
                 continue
             text = read_text(path)
@@ -146,9 +186,9 @@ def discover_application_ids(repo: Path) -> list[str]:
     return ids
 
 
-def discover_module_application_ids(repo: Path) -> dict[str, str]:
+def discover_module_application_ids(repo: Path, paths: list[Path] | None = None) -> dict[str, str]:
     result: dict[str, str] = {}
-    for path in gradle_files(repo):
+    for path in (paths if paths is not None else gradle_files(repo)):
         text = read_text(path)
         match = re.search(r'applicationId(?:\s*=\s*|\s+)["\']([^"\']+)["\']', text)
         if not match:
@@ -170,11 +210,18 @@ def discover_android_source_root(repo: Path, module: str) -> list[str]:
     return list((module_dir / "src" / "main").relative_to(repo).parts)
 
 
-def discover_launchers(repo: Path) -> list[str]:
-    ids = discover_application_ids(repo)
-    module_ids = discover_module_application_ids(repo)
+def discover_launchers(
+    repo: Path,
+    *,
+    paths: list[Path] | None = None,
+    manifests: list[Path] | None = None,
+    application_ids: list[str] | None = None,
+    module_application_ids: dict[str, str] | None = None,
+) -> list[str]:
+    ids = application_ids if application_ids is not None else discover_application_ids(repo, paths, manifests)
+    module_ids = module_application_ids if module_application_ids is not None else discover_module_application_ids(repo, paths)
     found: list[str] = []
-    for path in repo.glob("**/AndroidManifest.xml"):
+    for path in (manifests if manifests is not None else repo.glob("**/AndroidManifest.xml")):
         if skip_path(path, repo):
             continue
         text = read_text(path)
@@ -255,8 +302,8 @@ def discover_launchers(repo: Path) -> list[str]:
     return found
 
 
-def discover_apk_hint(repo: Path) -> str:
-    modules = discover_modules(repo)
+def discover_apk_hint(repo: Path, modules: list[str] | None = None) -> str:
+    modules = modules if modules is not None else discover_modules(repo)
     if any("composeApp" in m for m in modules):
         return "composeApp/build/outputs/apk/debug/*.apk"
     if any(m == ":app" or m.endswith(":app") for m in modules):
@@ -264,9 +311,9 @@ def discover_apk_hint(repo: Path) -> str:
     return "**/outputs/apk/debug/*.apk"
 
 
-def discover_locales(repo: Path) -> list[str]:
+def discover_locales(repo: Path, locale_dirs: list[Path] | None = None) -> list[str]:
     names: set[str] = set()
-    for path in repo.glob("**/res/values*"):
+    for path in (locale_dirs if locale_dirs is not None else repo.glob("**/res/values*")):
         if skip_path(path, repo) or not path.is_dir():
             continue
         names.add(path.name)
@@ -285,8 +332,12 @@ def discover_di_framework(text: str) -> str:
 
 
 def discover_ui_framework(text: str, modules: list[str]) -> str:
-    has_compose = "androidx.compose" in text or any("composeApp" in m for m in modules)
-    has_xml = "viewBinding" in text or "dataBinding" in text or "findViewById" in text or "R.layout" in text or "BaseFragment" in text
+    lower = text.casefold()
+    has_compose = "androidx.compose" in lower or "jetpack compose" in lower or any("composeApp" in m for m in modules)
+    has_xml = (
+        "xml views" in lower or "viewbinding" in lower or "databinding" in lower
+        or "findviewbyid" in lower or "r.layout" in lower or "basefragment" in lower
+    )
     if has_compose and has_xml:
         return "hybrid"
     if has_compose:
@@ -329,33 +380,47 @@ def discover_clean_locales(raw_locales: list[str]) -> list[str]:
     return locales
 
 
-def discover_project_structure(repo: Path, modules: list[str]) -> str:
+def discover_project_structure(repo: Path, modules: list[str], paths: list[Path] | None = None) -> str:
     if any("composeApp" in m or "shared" in m for m in modules) or (repo / "composeApp").is_dir():
         return "kmp"
-    if len(modules) > 1 or len(gradle_files(repo)) > 2:
+    if len(modules) > 1 or len(paths if paths is not None else gradle_files(repo)) > 2:
         return "multi_module"
     return "single_module"
 
 
-def discover_stack(repo: Path) -> str:
+def discover_stack(
+    repo: Path,
+    *,
+    paths: list[Path] | None = None,
+    catalogs: list[Path] | None = None,
+    sources: list[Path] | None = None,
+    modules: list[str] | None = None,
+    has_layout_xml: bool = False,
+) -> str:
     chunks: list[str] = []
-    for path in gradle_files(repo):
+    for path in (paths if paths is not None else gradle_files(repo)):
         chunks.append(read_text(path))
-    for toml in repo.glob("**/libs.versions.toml"):
+    for toml in (catalogs if catalogs is not None else repo.glob("**/libs.versions.toml")):
         if not skip_path(toml, repo):
             chunks.append(read_text(toml))
     n = 0
-    for folder in ("composeApp", "app", "shared", "androidApp", "core", "presentation"):
-        root = repo / folder
-        if not root.is_dir():
+    source_candidates = sources
+    if source_candidates is None:
+        source_candidates = []
+        for folder in ("composeApp", "app", "shared", "androidApp", "core", "presentation"):
+            root = repo / folder
+            if root.is_dir():
+                source_candidates.extend(root.rglob("*.kt"))
+    preferred_roots = {"composeApp", "app", "shared", "androidApp", "core", "presentation"}
+    for path in source_candidates:
+        try:
+            rel_parts = path.relative_to(repo).parts
+        except ValueError:
             continue
-        for path in root.rglob("*.kt"):
-            if skip_path(path, repo):
-                continue
-            chunks.append(read_text(path))
-            n += 1
-            if n >= 120:
-                break
+        if path.suffix.lower() != ".kt" or not rel_parts or rel_parts[0] not in preferred_roots:
+            continue
+        chunks.append(read_text(path))
+        n += 1
         if n >= 120:
             break
     text = "\n".join(chunks)
@@ -372,7 +437,10 @@ def discover_stack(repo: Path) -> str:
         bits.append("BaseViewModel")
     if "androidx.room" in text or "room-runtime" in text:
         bits.append("Room")
-    if any("composeApp" in m for m in discover_modules(repo)):
+    if has_layout_xml:
+        bits.append("XML Views")
+    active_modules = modules if modules is not None else discover_modules(repo, paths)
+    if any("composeApp" in m for m in active_modules):
         bits.append("Compose Multiplatform")
     elif "androidx.compose" in text:
         bits.append("Jetpack Compose")
@@ -386,10 +454,18 @@ def has_classic_app_src(repo: Path) -> bool:
 
 
 _FLAVOR_KEYWORDS = {"dimension", "missingdimensionstrategy", "isdefault", "targetsdk", "versionname"}
+_BUILD_TYPE_KEYWORDS = {
+    "debuggable", "minifyenabled", "shrinkresources", "signingconfig", "proguardfiles",
+    "buildconfigfield", "manifestplaceholders", "matchingfallbacks", "ndk", "resvalue",
+}
 
 
 def _product_flavors_block(text: str) -> str:
-    m = re.search(r"productFlavors\s*\{", text)
+    return _named_gradle_block(text, "productFlavors")
+
+
+def _named_gradle_block(text: str, name: str) -> str:
+    m = re.search(rf"\b{re.escape(name)}\s*\{{", text)
     if not m:
         return ""
     start = m.end() - 1
@@ -405,9 +481,9 @@ def _product_flavors_block(text: str) -> str:
     return text[start:]
 
 
-def discover_flavors(repo: Path) -> list[str]:
+def discover_flavors(repo: Path, paths: list[Path] | None = None) -> list[str]:
     names: list[str] = []
-    for path in gradle_files(repo):
+    for path in (paths if paths is not None else gradle_files(repo)):
         block = _product_flavors_block(read_text(path))
         if not block:
             continue
@@ -421,6 +497,22 @@ def discover_flavors(repo: Path) -> list[str]:
         if n not in seen:
             seen.append(n)
     return seen
+
+
+def discover_build_types(repo: Path, paths: list[Path] | None = None) -> list[str]:
+    """Return custom Android build types, excluding the standard debug/release pair."""
+    names: list[str] = []
+    for path in (paths if paths is not None else gradle_files(repo)):
+        block = _named_gradle_block(read_text(path), "buildTypes")
+        if not block:
+            continue
+        for match in re.finditer(r'create\s*\(\s*["\']([^"\']+)["\']', block):
+            names.append(match.group(1))
+        for match in re.finditer(r"(?m)^\s{2,}([a-z][a-zA-Z0-9_]*)\s*\{", block):
+            candidate = match.group(1)
+            if candidate.lower() not in _BUILD_TYPE_KEYWORDS | {"debug", "release"}:
+                names.append(candidate)
+    return list(dict.fromkeys(names))
 
 
 def _flavor_pascal(name: str) -> str:
@@ -442,14 +534,17 @@ def zoho_config_present() -> bool:
     return resolve_config_path() is not None
 
 
-def discover_architectural_bases(repo: Path) -> dict:
+def discover_architectural_bases(repo: Path, sources: list[Path] | None = None) -> dict:
     bases: dict = {
         "view_models": [],
         "result_wrappers": [],
         "activities": [],
         "fragments": [],
     }
-    for p in repo.glob("**/*.kt"):
+    candidates = sources if sources is not None else repo.glob("**/*.kt")
+    for p in candidates:
+        if p.suffix.lower() != ".kt":
+            continue
         if skip_path(p, repo) or ".agents" in str(p):
             continue
         try:
@@ -484,29 +579,43 @@ def discover_architectural_bases(repo: Path) -> dict:
     return bases
 
 
-def count_source_files(repo: Path) -> int:
+def count_source_files(repo: Path, sources: list[Path] | None = None) -> int:
+    if sources is not None:
+        return len(sources)
     count = 0
-    for pat in ("**/*.kt", "**/*.java"):
-        for p in repo.glob(pat):
-            if not skip_path(p, repo):
-                count += 1
-                if count > 50:
-                    return count
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
+        count += sum(1 for name in files if Path(name).suffix.lower() in {".kt", ".java"})
     return count
 
 
 def discover(repo: Path) -> dict:
-    modules = discover_modules(repo)
-    android_modules = discover_android_modules(repo)
+    inventory = _inventory(repo)
+    gradle = inventory["gradle"]
+    manifests = inventory["manifests"]
+    catalogs = inventory["catalogs"]
+    sources = inventory["sources"]
+    locale_dirs = inventory["locale_dirs"]
+    modules = discover_modules(repo, gradle)
+    android_modules = discover_android_modules(repo, gradle)
     pythons = discover_pythons()
-    raw_locales = discover_locales(repo)
+    raw_locales = discover_locales(repo, locale_dirs)
     clean_locales = discover_clean_locales(raw_locales)
-    source_count = count_source_files(repo)
-    stack_text = discover_stack(repo)
+    source_count = count_source_files(repo, sources)
+    stack_text = discover_stack(
+        repo,
+        paths=gradle,
+        catalogs=catalogs,
+        sources=sources,
+        modules=modules,
+        has_layout_xml=bool(inventory["has_layout_xml"]),
+    )
     di_framework = discover_di_framework(stack_text)
     ui_framework = discover_ui_framework(stack_text, modules)
-    structure = discover_project_structure(repo, modules)
-    arch_bases = discover_architectural_bases(repo)
+    structure = discover_project_structure(repo, modules, gradle)
+    arch_bases = discover_architectural_bases(repo, sources)
+    application_ids = discover_application_ids(repo, gradle, manifests)
+    module_application_ids = discover_module_application_ids(repo, gradle)
     return {
         "repo": str(repo.resolve()),
         "product": discover_product(repo),
@@ -514,10 +623,16 @@ def discover(repo: Path) -> dict:
         "modules": modules,
         "android_modules": android_modules,
         "project_kind": "application" if modules else "library" if android_modules else "unsupported",
-        "application_ids": discover_application_ids(repo),
-        "module_application_ids": discover_module_application_ids(repo),
-        "launchers": discover_launchers(repo),
-        "apk_hint": discover_apk_hint(repo),
+        "application_ids": application_ids,
+        "module_application_ids": module_application_ids,
+        "launchers": discover_launchers(
+            repo,
+            paths=gradle,
+            manifests=manifests,
+            application_ids=application_ids,
+            module_application_ids=module_application_ids,
+        ),
+        "apk_hint": discover_apk_hint(repo, modules),
         "locales": raw_locales,
         "clean_locales": clean_locales,
         "stack": stack_text,
@@ -531,7 +646,8 @@ def discover(repo: Path) -> dict:
         "gradlew": (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file(),
         "source_count": source_count,
         "is_empty": source_count == 0,
-        "flavors": discover_flavors(repo),
+        "flavors": discover_flavors(repo, gradle),
+        "build_types": discover_build_types(repo, gradle),
     }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -158,11 +159,12 @@ def _head_text(repo: Path, relative: str) -> str:
 def _room_schema_types(repo: Path) -> set[str]:
     types: set[str] = set()
     try:
-        from room_guard import iter_database_files, parse_database_source
+        from room_guard import build_source_type_index, iter_database_files, parse_database_source
+        source_index = build_source_type_index(repo)
         for db_path in iter_database_files(repo):
             try:
                 text = db_path.read_text(encoding="utf-8", errors="replace")
-                decl = parse_database_source(text, db_path.relative_to(repo).as_posix(), repo)
+                decl = parse_database_source(text, db_path.relative_to(repo).as_posix(), repo, source_index)
                 types.update(decl.entity_names)
             except Exception:
                 continue
@@ -241,7 +243,21 @@ def _extract_direct_dependency_types(text: str) -> set[str]:
 _TYPE_SURFACE_CACHE: dict[tuple[Path, str], str | None] = {}
 
 
-def _resolve_type_surface(root: Path, type_name: str) -> tuple[str, str] | None:
+def _build_type_file_index(root: Path) -> dict[str, list[Path]]:
+    """Enumerate source files once for dependency propagation lookups."""
+    ignored = {".git", "build", ".gradle", ".agents", ".idea", "node_modules", "__pycache__"}
+    result: dict[str, list[Path]] = {}
+    for current, dirs, files in os.walk(root):
+        dirs[:] = [name for name in dirs if name not in ignored]
+        for filename in files:
+            path = Path(filename)
+            if path.suffix.lower() not in {".kt", ".java"}:
+                continue
+            result.setdefault(path.stem, []).append(Path(current) / filename)
+    return result
+
+
+def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list[Path]]) -> tuple[str, str] | None:
     """Check if a dependency type maps to a sensitive surface directly or via target source file (1 hop)."""
     # Direct match on type name
     for surface, pattern in SENSITIVE_DEPENDENCY_PATTERNS:
@@ -254,23 +270,10 @@ def _resolve_type_surface(root: Path, type_name: str) -> tuple[str, str] | None:
         cached = _TYPE_SURFACE_CACHE[cache_key]
         return (cached, type_name) if cached else None
 
-    # Search for target file in repository (1 hop)
+    # Resolve from the invocation-scoped index rather than recursively globbing
+    # the entire repository for every imported or injected type.
     try:
-        matches = []
-        for ext in (".kt", ".java"):
-            for candidate in (root / "app" / "src").glob(f"**/{type_name}{ext}"):
-                matches.append(candidate)
-                if len(matches) >= 1:
-                    break
-            if not matches:
-                for candidate in root.glob(f"**/{type_name}{ext}"):
-                    if ".git" not in str(candidate) and "build" not in str(candidate):
-                        matches.append(candidate)
-                        if len(matches) >= 1:
-                            break
-            if matches:
-                break
-
+        matches = type_index.get(type_name, [])
         if matches:
             target_path = matches[0]
             target_text = _read_text(target_path)
@@ -286,14 +289,16 @@ def _resolve_type_surface(root: Path, type_name: str) -> tuple[str, str] | None:
     return None
 
 
-def _propagate_sensitive_dependencies(root: Path, rel: str, full_text: str, found: dict) -> None:
+def _propagate_sensitive_dependencies(
+    root: Path, rel: str, full_text: str, found: dict, type_index: dict[str, list[Path]],
+) -> None:
     class_name = Path(rel).stem
     if _is_universal_hub(rel, class_name):
         return
 
     deps = _extract_direct_dependency_types(full_text)
     for dep in sorted(deps):
-        resolved = _resolve_type_surface(root, dep)
+        resolved = _resolve_type_surface(root, dep, type_index)
         if resolved:
             surface, dep_info = resolved
             _add(found, surface, rel, f"{surface}_DEPENDENCY_PROPAGATION: {dep_info}")
@@ -580,6 +585,7 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
 
     has_source_files = any(c.rel_posix.lower().endswith((".kt", ".java")) for c in changes)
     room_types = _room_schema_types(root) if has_source_files else set()
+    type_index = _build_type_file_index(root) if has_source_files else {}
     for changed in changes:
         rel = changed.rel_posix
         if not is_delivery_relevant(rel) and not (changed.old_rel_posix and is_delivery_relevant(changed.old_rel_posix)):
@@ -687,7 +693,7 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
                     _add(found, surface, rel, f"{reason}_CONTEXT")
 
         if suffix in (".kt", ".java") and not test_path:
-            _propagate_sensitive_dependencies(root, rel, full_text, found)
+            _propagate_sensitive_dependencies(root, rel, full_text, found, type_index)
 
     non_docs = set(found) - {"DOCS", "TEST_ONLY"}
     relevant_changes = [item for item in changes if is_delivery_relevant(item.rel_posix) or (item.old_rel_posix and is_delivery_relevant(item.old_rel_posix))]

@@ -47,6 +47,7 @@
 10. **Unified APK Artifact-Set Integrity**: Multi-APK and split-APK builds are verified as a single cohesive artifact set. The exact hash is enforced across assemble, install, and device launch.
 11. **Attributed Test Execution**: Separates newly introduced regressions from pre-existing baseline test failures, preventing false-positive gate failures.
 12. **Zero Python Runtime Dependencies**: 100% Python standard library (`pathlib`, `json`, `hashlib`, `subprocess`, `argparse`). No `pip install`, zero third-party package supply-chain risks, and seamless operation across Windows, macOS, and Linux.
+13. **Secret-Safe Review Artifacts**: Review packages redact assignment-style Android credentials, private keys, provider tokens, and credential-bearing URLs from diffs while preserving useful surrounding structure.
 
 ---
 
@@ -109,6 +110,7 @@ git clone --depth 1 --branch v1.0.50 --single-branch https://github.com/rabee-el
 
 # Initialize inside your Android project
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/android-project --kit ~/.android-harness/kit
+# `setup` is an equivalent, friendlier alias for `init`.
 
 # Verify configuration and environment health
 python ~/.android-harness/kit/harness_cli.py doctor --repo /path/to/android-project
@@ -200,6 +202,7 @@ Here is how the harness deterministically prevents data corruption during a real
 1. Agent edits UserEntity.kt (adds @ColumnInfo val avatarUrl: String?)
    ↓
 2. change_classifier.py tags the diff: ROOM_SCHEMA, PERSISTENCE (Severity: HIGH)
+   Policy routes it through the DATA lane instead of unrelated security/performance reviewers.
    ↓
 3. room_guard.py recursively inspects AppDatabase.kt:
    - Detects database version bumped from 3 to 4.
@@ -330,6 +333,8 @@ The harness is host-agnostic and adapts to the security model of your coding env
 ```bash
 # Initialize harness into an Android project
 python harness_cli.py init --repo /path/to/project --kit /path/to/kit
+# Equivalent alias:
+python harness_cli.py setup --repo /path/to/project --kit /path/to/kit
 
 # Atomically upgrade an existing project to a newer kit version
 python harness_cli.py update --repo /path/to/project --kit /path/to/new-kit
@@ -343,6 +348,13 @@ python harness_cli.py task-context --repo /path/to/project --symbol com.example.
 
 # Explicitly refresh persistent project facts and advisory profiles
 python harness_cli.py context refresh --repo /path/to/project
+
+# Preview a bounded summary by default; request the large diagnostic payload only when needed
+python harness_cli.py context preview --repo /path/to/project --json
+python harness_cli.py context preview --repo /path/to/project --json --full
+
+# Ask for deterministic next-step guidance without changing task state
+python harness_cli.py task status --repo /path/to/project --task-id feature-1 --next
 
 # Dry-run harness uninstallation
 python harness_cli.py uninstall --repo /path/to/project

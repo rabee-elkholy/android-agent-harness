@@ -1,4 +1,9 @@
-"""Reference benchmark for snapshot and policy overhead (Gradle/ADB/AI excluded)."""
+"""Informational benchmark plus deterministic scalability invariants.
+
+Wall-clock output is intentionally not a pass/fail contract: filesystem,
+antivirus, and CI contention make fixed thresholds misleading. Regression
+tests instead protect exact inventory and deterministic policy behavior.
+"""
 from __future__ import annotations
 
 import os
@@ -44,16 +49,17 @@ def main() -> int:
             "severity": "MEDIUM", "confidence": "HIGH", "changed_files": 1,
         }
         started = time.perf_counter()
+        policies = []
         for _ in range(100):
-            decide(classification, SCRIPTS.parent / "skills")
+            policies.append(decide(classification, SCRIPTS.parent / "skills"))
         policy_ms = (time.perf_counter() - started) * 10
         print(f"manifest_files={len(manifest['files'])} manifest_seconds={manifest_seconds:.3f}")
         print(f"policy_average_ms={policy_ms:.3f}")
-        # CI runners and Windows antivirus vary substantially. This is a
-        # regression tripwire; published sub-second values are measured on the
-        # documented reference machine, not promised to every client.
-        if len(manifest["files"]) != count + 1 or manifest_seconds > 5.0 or policy_ms > 150.0:
-            print("[FAIL] vNext overhead exceeded the CI regression budget", file=sys.stderr)
+        if len(manifest["files"]) != count + 1:
+            print("[FAIL] manifest inventory is incomplete", file=sys.stderr)
+            return 1
+        if not policies or any(item != policies[0] for item in policies[1:]):
+            print("[FAIL] policy routing is not deterministic", file=sys.stderr)
             return 1
     return 0
 

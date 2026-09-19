@@ -16,7 +16,12 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SECRET_KEY = re.compile(r"(?i)(token|secret|password|passwd|authorization|api[_-]?key|private[_-]?key)")
 SECRET_VALUE_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(r"(?i)\b(token|secret|password|passwd|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+"),
+    re.compile(
+        r"(?im)([\"']?\b(?:token|secret|password|passwd|api[_-]?key|authorization|private[_-]?key|"
+        r"storepassword|keypassword)\b[\"']?\s*[:=]\s*)(?:[\"'][^\r\n\"']*[\"']|[^\s,;#]+)"
+    ),
+    re.compile(r"(?i)\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+    re.compile(r"(?i)(https?://[^\s/:@]+:)[^\s/@]+(@)"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 )
 
@@ -178,8 +183,25 @@ def redact(value: Any) -> Any:
     if isinstance(value, tuple):
         return [redact(item) for item in value]
     if isinstance(value, str):
-        result = value
-        for pattern in SECRET_VALUE_PATTERNS:
-            result = pattern.sub("[REDACTED]", result)
-        return result
+        return redact_text(value)
     return value
+
+
+def redact_text(value: str) -> str:
+    """Redact secret-shaped values while retaining useful diff structure.
+
+    Review packages contain free-form source diffs, so dictionary-key
+    redaction alone is insufficient.  The replacement callback preserves a
+    detected assignment key (and URL username) while removing only the secret
+    value.  This keeps line numbers and surrounding build context reviewable.
+    """
+    result = str(value)
+    for pattern in SECRET_VALUE_PATTERNS:
+        def replace(match: re.Match[str]) -> str:
+            if match.lastindex == 1:
+                return f"{match.group(1)}[REDACTED]"
+            if match.lastindex == 2:
+                return f"{match.group(1)}[REDACTED]{match.group(2)}"
+            return "[REDACTED]"
+        result = pattern.sub(replace, result)
+    return result

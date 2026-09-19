@@ -1393,6 +1393,53 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     }
 
 
+def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, str]]:
+    """Return deterministic, non-mutating guidance for the current lifecycle state."""
+    state = str(plan.get("status") or "").upper()
+    base = f'android-harness task'
+    identity = f'--repo "{repo}" --task-id "{task_id}"'
+    if state in {"DRAFTED", "PLAN_APPROVAL_REQUIRED"}:
+        return [{
+            "action": "approve",
+            "command": f'{base} approve {identity} --source conversation --proof-reference "<approval reference>" --enforcement-tier RULE_ENFORCED',
+            "reason": "The reviewed plan needs explicit approval before implementation.",
+        }]
+    if state == "APPROVED":
+        return [{"action": "begin", "command": f"{base} begin {identity}", "reason": "Start the approved implementation."}]
+    if state == "IMPLEMENTING":
+        phases = plan.get("phases") or []
+        if phases:
+            try:
+                requested_index = int(plan.get("active_phase_index") or 0)
+            except (TypeError, ValueError):
+                requested_index = 0
+            index = max(0, min(requested_index, len(phases) - 1))
+            active_phase = phases[index] if isinstance(phases[index], dict) else {}
+            phase_id = str(active_phase.get("id") or "")
+            if phase_id:
+                return [{
+                    "action": "checkpoint-phase",
+                    "command": f'{base} checkpoint-phase {identity} --phase-id "{phase_id}"',
+                    "reason": "Validate the active implementation phase before advancing.",
+                }]
+        return [{
+            "action": "prepare-verification",
+            "command": f"{base} prepare-verification {identity}",
+            "reason": "Freeze the finished change set and derive its gates and reviewers.",
+        }]
+    if state == "VERIFYING":
+        return [{
+            "action": "verify",
+            "command": f"{base} verify {identity}",
+            "reason": "Run the read-only final verifier after the listed gates and reviews pass.",
+        }]
+    if state == "READY_FOR_DELIVERY":
+        return [{"action": "deliver", "command": f"{base} deliver {identity}", "reason": "Finalize the verified task for delivery."}]
+    if state == "BLOCKED":
+        return [{"action": "resume", "command": f"{base} resume {identity}", "reason": "Resume after resolving the recorded blocker."}]
+    return []
+
+
 def status(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = str(getattr(args, "task_id", "") or "").strip()
@@ -1406,7 +1453,11 @@ def status(args: argparse.Namespace) -> dict:
                 pass
     if not task_id:
         raise ValidationError("no active task found in repository state; specify --task-id <id>")
-    return _load_plan(repo, task_id)
+    plan = _load_plan(repo, task_id)
+    if bool(getattr(args, "next", False)):
+        plan = dict(plan)
+        plan["next_actions"] = _next_actions(repo, task_id, plan)
+    return plan
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1492,6 +1543,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--repo", required=True)
     status_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
+    status_cmd.add_argument("--next", action="store_true", help="Include the safest next lifecycle command without executing it")
     status_cmd.set_defaults(handler=status)
     command = sub.add_parser("recover-stale")
     command.add_argument("--repo", required=True)
@@ -1529,6 +1581,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(f"TASK_STATUS={result.get('status', 'READY')}")
+        for item in result.get("next_actions") or []:
+            print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")
+            print(f"NEXT_REASON={item.get('reason')}")
     if args.action == "draft":
         return 0 if result.get("status") not in ("BLOCKED", "STALE", "USER_DECISION_REQUIRED") else 1
     return 0 if result.get("status") not in ("BLOCKED", "STALE", "PLAN_APPROVAL_REQUIRED", "USER_DECISION_REQUIRED") else 1

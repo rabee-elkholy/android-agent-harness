@@ -22,6 +22,8 @@ The agent interviews you in chat, preserves references, shows an explicit plan, 
 
 ```bash
 python harness_cli.py init --repo /path/to/app --kit .
+# `setup` is an alias for the same command.
+python harness_cli.py setup --repo /path/to/app --kit .
 python harness_cli.py doctor --repo /path/to/app --json --kit .
 ```
 
@@ -46,4 +48,4 @@ The first command is a dry run. The applied command restores original adapters, 
 
 ## Daily use
 
-Ask the AI to analyze first. It must present a plan and wait for approval before editing or executing implementation commands. After approval, it follows `.agents/workflows/deliver.md` and the current immutable policy. It operates the harness via documented public command contracts without eagerly inspecting internal engine scripts. It does not automatically commit, push, or update Zoho.
+Ask the AI to analyze first. It must present a plan and wait for approval before editing or executing implementation commands. After approval, it follows `.agents/workflows/deliver.md` and the current immutable policy. It operates the harness via documented public command contracts without eagerly inspecting internal engine scripts. It does not automatically commit, push, or update Zoho. When the lifecycle state is unclear, `python harness_cli.py task status --repo /path/to/app --next` prints the safest next command without executing it.

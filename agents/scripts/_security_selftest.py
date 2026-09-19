@@ -67,6 +67,23 @@ class SecurityTests(unittest.TestCase):
         self.assertNotIn(secret, text)
         self.assertIn("command_sha256_12", text)
 
+    def test_review_text_redaction_covers_android_assignment_and_token_forms(self):
+        from _vnext_common import redact_text
+
+        raw = (
+            'storePassword="release-secret"\n'
+            "api_key = 'AIzaSyD12345678901234567890123456789012'\n"
+            '"password": "json-secret-value"\n'
+            "endpoint=https://build-user:build-pass@example.invalid/path\n"
+            "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II00JJ\n"
+            "-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----\n"
+        )
+        redacted = redact_text(raw)
+        for secret in ("release-secret", "AIzaSy", "json-secret-value", "build-pass", "github_pat_", "private-material"):
+            self.assertNotIn(secret, redacted)
+        self.assertIn("storePassword=[REDACTED]", redacted)
+        self.assertIn("https://build-user:[REDACTED]@example.invalid", redacted)
+
     def test_claude_bridge_denies(self):
         proc = subprocess.run(
             [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}),
@@ -1660,5 +1677,3 @@ class SecurityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
-

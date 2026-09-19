@@ -1,6 +1,6 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.47`
+> **Kit version**: `v1.0.50`
 
 ---
 Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.

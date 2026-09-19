@@ -116,26 +116,36 @@ def changed_kotlin_types(paths: list[Path]) -> set[str]:
     return names
 
 
-def resolve_all_entity_types(root_entities: frozenset[str], repo: Path) -> frozenset[str]:
+def build_source_type_index(repo: Path) -> dict[str, list[Path]]:
+    """Index source declarations once for Room entity/embedded traversal."""
+    skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
+    index: dict[str, list[Path]] = {}
+    for dirpath, dirnames, filenames in os.walk(repo):
+        dirnames[:] = [name for name in dirnames if name not in skip_parts and not name.startswith(".")]
+        for filename in filenames:
+            if not filename.endswith((".kt", ".java")):
+                continue
+            path = Path(dirpath) / filename
+            names = {path.stem}
+            try:
+                names.update(declared_type_names(path.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                pass
+            for name in names:
+                index.setdefault(name, []).append(path)
+    return index
+
+
+def resolve_all_entity_types(
+    root_entities: frozenset[str], repo: Path, source_index: dict[str, list[Path]] | None = None,
+) -> frozenset[str]:
     all_types = set(root_entities)
     frontier = list(root_entities)
     visited_files = set()
-    skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
+    index = source_index if source_index is not None else build_source_type_index(repo)
     while frontier:
         curr = frontier.pop(0)
-        matching_files = [
-            f for f in (list(repo.rglob(f"{curr}.kt")) + list(repo.rglob(f"{curr}.java")))
-            if not (set(f.parts) & skip_parts)
-        ]
-        if not matching_files:
-            class_decl = re.compile(rf"\bclass\s+{re.escape(curr)}\b")
-            for f in (list(repo.rglob("*.kt")) + list(repo.rglob("*.java"))):
-                if f.is_file() and not (set(f.parts) & skip_parts) and f not in visited_files:
-                    try:
-                        if class_decl.search(f.read_text(encoding="utf-8", errors="replace")):
-                            matching_files.append(f)
-                    except Exception:
-                        pass
+        matching_files = index.get(curr, [])
         for kt_file in matching_files:
             if kt_file in visited_files or not kt_file.is_file():
                 continue
@@ -169,7 +179,10 @@ def is_migration_path_covered(start: int, end: int, migrations: frozenset[tuple[
     return False
 
 
-def parse_database_source(text: str, rel: str = "", repo: Path | None = None) -> DatabaseDecl:
+def parse_database_source(
+    text: str, rel: str = "", repo: Path | None = None,
+    source_index: dict[str, list[Path]] | None = None,
+) -> DatabaseDecl:
     root = repo or REPO
     version_match = VERSION_RE.search(text)
     version = int(version_match.group(1)) if version_match else None
@@ -178,7 +191,7 @@ def parse_database_source(text: str, rel: str = "", repo: Path | None = None) ->
     db_ann = re.search(r"@Database\s*\((.*?)\)\s*(?:@|\babstract\b)", text, re.DOTALL)
     header = db_ann.group(1) if db_ann else text.split("abstract class", 1)[0]
     raw_entities = frozenset(ENTITY_REF_RE.findall(header))
-    entities = resolve_all_entity_types(raw_entities, root)
+    entities = resolve_all_entity_types(raw_entities, root, source_index)
     auto_migrations = frozenset(
         (int(a), int(b)) for a, b in AUTO_MIGRATION_RE.findall(text)
     )
@@ -303,6 +316,7 @@ def check_room_working_tree(
     changed_src = [p for p in paths if p.suffix in (".kt", ".java") and p.is_file()]
     changed_types = changed_kotlin_types(changed_src)
     changed_rels = {_rel(p) for p in changed_src}
+    source_index = build_source_type_index(root)
 
     for p in paths:
         if p.suffix in (".kt", ".java") and not p.is_file():
@@ -320,7 +334,7 @@ def check_room_working_tree(
             text = path.read_text(encoding="utf-8", errors="replace")
         except Exception:
             continue
-        databases.append((path, parse_database_source(text, _rel(path), root)))
+        databases.append((path, parse_database_source(text, _rel(path), root, source_index)))
 
     affected: list[tuple[Path, DatabaseDecl, DatabaseDecl | None, str]] = []
     for path, decl in databases:
@@ -328,7 +342,7 @@ def check_room_working_tree(
         if decl.rel in changed_rels:
             reasons.append("database file changed")
         old_text = git_head_text(decl.rel, root)
-        old_decl = parse_database_source(old_text, decl.rel, root) if old_text else None
+        old_decl = parse_database_source(old_text, decl.rel, root, source_index) if old_text else None
 
         all_entities = set(decl.entity_names)
         if old_decl:

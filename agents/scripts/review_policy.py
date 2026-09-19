@@ -139,11 +139,13 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     elif (
         severity == "CRITICAL"
         or bool(surfaces & CRITICAL_SURFACES)
-        or bool(surfaces & {"ROOM_SCHEMA", "NATIVE_CODE", "MANIFEST_PERMISSION"})
+        or bool(surfaces & {"NATIVE_CODE", "MANIFEST_PERMISSION"})
         or arch_intent == "MIGRATION"
         or planning_depth == "ARCHITECTURAL"
     ):
         risk_lane = "CRITICAL"
+    elif "ROOM_SCHEMA" in surfaces:
+        risk_lane = "DATA"
     else:
         risk_lane = "STANDARD"
 
