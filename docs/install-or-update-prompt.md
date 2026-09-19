@@ -13,10 +13,10 @@ Select:
 - **Clean Install**: no `.agents`
 - **Same-Major Update**: `.harness-setup/ownership-v1.json` major 1
 - **Legacy Replacement**: `.agents` exists without v1 ownership
-`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.52`.
+`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.53`.
 
 ## Phase 2: Kit bootstrap approval
-`git clone --depth 1 --branch v1.0.52 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
+`git clone --depth 1 --branch v1.0.53 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
 Verify: `git -C <staging-dir> describe --tags --exact-match && python <staging-dir>/harness_cli.py version --kit <staging-dir>`
 Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
 **STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.** Permits cache operations only, not app installation/removal.

@@ -430,7 +430,7 @@ def main() -> int:
         from _product import PROJECT_KIND
     except ImportError:
         PROJECT_KIND = "application"
-    classification = classify(repo, task_id=task_id)
+    classification = classify(repo, task_id=task_id, progress=not args.json)
     result = decide(classification, skills_root, project_kind=str(PROJECT_KIND), task_kind=task_kind, plan=plan)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

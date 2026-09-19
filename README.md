@@ -35,9 +35,9 @@
 
 ## Core Guarantees
 
-1. **Deterministic Human Authority**: AI agents are strictly restricted to *read-only* discovery and planning. Implementation cannot begin without explicit developer approval recorded in `plan.json`.
+1. **Deterministic Human Authority**: The workflow refuses verified implementation and delivery until explicit developer approval is recorded in `plan.json`. Hosts with native pre-tool hooks also block premature mutations before execution; rule-enforced hosts rely on adapter instructions plus fail-closed verification.
 2. **Zero Autonomous Git Mutations**: In client Android applications, the agent **never** stages, commits, resets, or pushes code. All modifications remain unstaged for the developer to inspect and commit.
-3. **Fail-Closed Shell & MCP Mutation Guard**: Blocks arbitrary shell execution (`rm`, `sed`, `powershell`, unauthorized executables) and unrecognized MCP tool writes during implementation. Only whitelisted inspection commands, audited harness scripts, and host file tools are permitted.
+3. **Tiered Shell & MCP Mutation Guard**: Hard-enforced hosts intercept unauthorized shell and MCP writes before execution. Rule-enforced hosts receive the same policy through adapters, while deterministic workflow and final-delivery gates detect unsupported or unverified execution; see the host matrix below.
 4. **Deterministic Multi-Label Surface Classification**: Inspects Git diffs across 15+ Android-specific surfaces (`ROOM_SCHEMA`, `COMPOSE_UI`, `XML_UI`, `NAVIGATION`, `BILLING`, `AUTH`, `CRYPTO`, `BUILD_CONFIG`, `MANIFEST_PERMISSION`, etc.). Kotlin implicit public APIs are scoped to library projects to prevent token thrashing on application code.
 5. **Lean Task Briefs & Focused Context**: Generates role-focused, lightweight briefs for subagents instead of dumping entire repositories, reducing unnecessary reviewer context and eliminating context dilution.
 6. **Abstract Reviewer Routing & Capability Tiers**: Decouples policy hashes from model names into abstract capability tiers (`STANDARD` -> `inherit`, `STRONG` -> host-mapped deep reasoning model under developer-controlled `ALLOW_MODEL_ESCALATION` kill switch).
@@ -62,7 +62,7 @@ AI coding assistants (Claude Code, Gemini CLI, Cursor, Windsurf, Roo Code) are p
 | **Silent Database Corruption**<br>Agents modify Room entity fields without declaring migrations or testing schema compatibility. | **Deterministic Room Guard** recursively parses `@Database`, entities, and `@Embedded` classes across files, blocking delivery unless valid migration paths are proven. |
 | **Masked Regressions via Mixed Diffs**<br>An agent touches a critical class and a doc file simultaneously, tricking naive classifiers into treating the change as low-risk. | **Full-Coverage Classifier** inspects every delivery-relevant file. Any unclassified file is tagged `UNKNOWN`, forcing human decision rather than auto-approval. |
 | **Runaway Token Costs & Context Dilution**<br>Agents dump entire repositories into subagent prompts, causing context dilution and burning millions of tokens on simple tasks. | **Lean Task Briefs** (`brief-<reviewer>.md`) distill diff-scoped contracts, touched files, and rubrics into ~300–400 tokens, slashing token consumption by >60%. |
-| **Model Mismatch & Over-billing**<br>Using heavyweight models for trivial syntax checks or weak models for mission-critical security audits. | **Abstract Reviewer Routing** (`review_execution.py`) dynamically maps `STANDARD` vs `STRONG` roles to optimal models (`flash` vs `pro`) under developer escalation guards. |
+| **Model Mismatch & Over-billing**<br>Using heavyweight models for trivial syntax checks or weak models for mission-critical security audits. | **Abstract Reviewer Routing** (`review_execution.py`) requests `STANDARD` vs `STRONG` capabilities and lets each supported host map those tiers to configured models under developer escalation guards. |
 | **"Greenwashing" & Untested Bug Fixes**<br>Agents report a bug resolved without proving a test ever failed, risking placebo assertions. | **Empirical RED → GREEN Defect Binding** (`red_evidence`) captures reproducible failing test output before validating the green fix. |
 | **Architectural Scope Drift**<br>Agents deviate from agreed designs and acceptance criteria during multi-phase autonomous execution. | **Spec-Compliance Auditor** (`spec-compliance-agent`) automatically audits architectural and multi-phase tasks against approved `plan.json` outcomes. |
 | **Git History Destruction**<br>Agents perform unexpected `git reset`, create untracked commits, or rebase active branches. | **Host Enforcement Hooks** block autonomous `git add`, `git commit`, `git push`, and `git reset` commands in client applications. |
@@ -93,7 +93,7 @@ Android Agent Harness is not:
 Open your Android project in your AI coding agent (Antigravity, Gemini CLI, Claude Code, Cursor, Windsurf, or Roo Code), and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.52/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.53/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent will:
@@ -108,7 +108,7 @@ Run directly from your command line:
 
 ```bash
 # Clone the pinned harness release
-git clone --depth 1 --branch v1.0.52 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
+git clone --depth 1 --branch v1.0.53 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 # Initialize inside your Android project
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/android-project --kit ~/.android-harness/kit
@@ -157,10 +157,10 @@ stateDiagram-v2
 
 1. **discovery-and-scoping** — *Activates before writing code.* Interrogates project architecture in read-only mode, explores alternatives, and binds exact target modules and surfaces.
 2. **plan-authority-and-approval** — *Activates with drafted plan.* Hashes scope, risks, and tests into an immutable contract. Implementation authority remains deterministically locked by local harness enforcement until explicit developer approval.
-3. **mutation-guard-and-isolation** — *Activates upon approval.* Enforces deterministic host-level interception: blocks arbitrary shell executables, raw Gradle/ADB commands, unauthorized MCP tool writes, protects generated source directories, and leaves Git staging to the developer.
+3. **mutation-guard-and-isolation** — *Activates upon approval.* On hard-enforced hosts, native hooks intercept arbitrary shell executables, raw Gradle/ADB commands, unauthorized MCP writes, and protected paths before execution. Other hosts use instruction adapters and deterministic verification gates; Git staging remains with the developer.
 4. **adaptive-skill-routing** — *Activates on code changes.* Classifies 15+ Android surfaces (Room, Compose, Coroutines, Security) and routes specialized engineering skills. Kotlin implicit public APIs are scoped to library projects to eliminate token-wasting false alarms.
 5. **test-driven-development** — *Activates during implementation.* Applies policy-routed TDD for meaningful behavioral changes, captures empirical RED → GREEN defect evidence (`red_evidence`) for bug tasks, isolates new regressions from baseline failures, and verifies unit test evidence.
-6. **specialist-reviewer-squad** — *Activates during verification.* Generates role-targeted Lean Task Briefs (`brief-<reviewer>.md`) and dispatches isolated specialist subagents (including `spec-compliance-agent` for architectural refactors) using abstract model capability routing (`flash`/`pro`).
+6. **specialist-reviewer-squad** — *Activates during verification.* Generates role-targeted Lean Task Briefs (`brief-<reviewer>.md`) and dispatches isolated specialist subagents (including `spec-compliance-agent` for architectural refactors) using host-mapped `STANDARD`/`STRONG` capability tiers.
 7. **tamper-evident-verification** — *Activates when work completes.* Re-verifies Git branch, repository identity, and APK artifact-set hashes against append-only cryptographic evidence, sealing delivery only when the active tree matches the verified snapshot.
 
 **Deterministic state machines, not prompt suggestions. Proof before delivery.**
@@ -234,11 +234,11 @@ Here is how the harness deterministically prevents data corruption during a real
 
 ## Why Not Just AGENTS.md / .cursorrules?
 
-Prompt rules files provide suggestions; Android Agent Harness provides **deterministic enforcement**:
+Prompt rules files provide suggestions; Android Agent Harness adds deterministic state, evidence, and delivery gates. Pre-execution mutation blocking depends on the host tier shown below:
 
 | Capability | Raw Prompt Rules (`AGENTS.md`, `.cursorrules`) | Android Agent Harness |
 | :--- | :--- | :--- |
-| **Enforcement Model** | Model can drift, ignore, or hallucinate around rules | Local deterministic hooks & Python gates block unauthorized mutations |
+| **Enforcement Model** | Model can drift, ignore, or hallucinate around rules | Native hooks block unauthorized mutations on hard-enforced hosts; Python gates fail closed on unverified delivery across hosts |
 | **Evidence Freshness** | Agent can report tests passed without running them | Cryptographically hashed evidence bound to active snapshot SHA-256 |
 | **APK & Device Binding** | Agent may test old APK or mix up emulators/users | Exact SHA-256 artifact matching across assemble, install, and launch |
 | **Android Semantic Awareness** | Generic code reasoning without domain checks | Specialized guards for Room schemas, resource strings, and ANR risks |
@@ -308,7 +308,7 @@ Beyond LLM reviews, the harness equips your workflow with purpose-built, determi
 
 ### 12. Abstract Reviewer Model Router (`review_execution.py`)
 - **Capability Tiers**: Maps reviewer roles to abstract requirements (`STANDARD` vs `STRONG`), decoupling policy hashes from specific provider model identifiers.
-- **Targeted Model Assignment**: Routes fast subagents (e.g., fast linter, bug, regression) to high-speed models (`flash`), while routing critical security checks to deep models (`pro`) under developer-controlled escalation guards (`ALLOW_MODEL_ESCALATION`).
+- **Targeted Model Assignment**: Requests `STANDARD` capability for routine review and `STRONG` capability for critical review. Concrete model IDs remain host configuration, and escalation stays behind `ALLOW_MODEL_ESCALATION`.
 
 ### 13. Spec-Compliance Auditor (`spec-compliance-agent`)
 - **Plan Fidelity Verification**: Automatically selected by policy for architectural refactors and multi-phase tasks.

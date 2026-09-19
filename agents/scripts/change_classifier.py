@@ -568,7 +568,13 @@ def _changed_line_count(repo: Path, changes: list) -> int:
     return total
 
 
-def classify(repo: Path, task_id: str | None = None, task_changes: list | None = None) -> dict:
+def classify(
+    repo: Path,
+    task_id: str | None = None,
+    task_changes: list | None = None,
+    *,
+    progress: bool = True,
+) -> dict:
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
     all_changes = changed_files(root, include_untracked=True)
@@ -595,7 +601,7 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
     else:
         changes = all_changes
 
-    if changes:
+    if changes and progress:
         sublog(f"Evaluating surface patterns across {len(changes)} changed file(s)...")
 
     has_source_files = any(c.rel_posix.lower().endswith((".kt", ".java")) for c in changes)
@@ -766,7 +772,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     if args.json:
-        result = classify(Path(args.repo), task_id=args.task_id)
+        result = classify(Path(args.repo), task_id=args.task_id, progress=False)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         with step_progress("Classifying changes & surfaces"):
