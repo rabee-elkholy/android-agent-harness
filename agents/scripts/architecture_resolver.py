@@ -460,7 +460,7 @@ def generate_task_architecture_brief(
     if exemplars:
         lines.extend(["", "## Reference Exemplars"])
         for ex in exemplars:
-            lines.append(f"- [`{ex}`](file:///{ex})")
+            lines.append(f"- `{ex}`")
 
     lines.append("")
     return "\n".join(lines)

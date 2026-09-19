@@ -99,7 +99,12 @@ def main(argv: list[str] | None = None) -> int:
     results = doctor.run_install_check() if args.install_check else doctor.run_all()
 
     if args.json:
+        version_file = doctor.agents_dir / "VERSION"
         report_data = {
+            "engine_path": str(doctor.agents_dir.resolve()),
+            "engine_version": version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "unknown",
+            "config_path": str((doctor.agents_dir / "scripts" / "_product.py").resolve()),
+            "repository": str(repo_path),
             "passed": sum(1 for r in results if r.status == "PASS"),
             "warnings": sum(1 for r in results if r.status == "WARN"),
             "failures": sum(1 for r in results if r.status == "FAIL"),

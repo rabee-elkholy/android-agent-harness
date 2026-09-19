@@ -22,14 +22,14 @@ Qwen Code does not run Antigravity hooks. Report `RULE_ENFORCED`, then follow th
 | :--- | :--- | :--- |
 | **Discovery** | `{{PY}} .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
 | **Clarification** | Interactive question with developer before drafting plan |
-| **Context Note** | `{{PY}} harness_cli.py context note "<note>"` | Record architectural convention/note |
+| **Context Note** | `{{PY}} .agents/harness.py context note "<note>"` | Record architectural convention/note |
 | **Preflight Gate** | `{{PY}} .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
 | **Unit Tests** | `{{PY}} .agents/scripts/run_tests_gate.py` | Run unit tests gate |
 | **Review Package** | `{{PY}} .agents/scripts/review_package.py` | Generate immutable review package markdown |
 | **Review Harvest** | `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
 | **Review Text** | `{{PY}} .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
 | **Resume Task** | `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
-| **Assemble Debug** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Build debug APK (ONLY after all reviewers pass) |
+| **Assemble Debug** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Diagnostic assemble is allowed in IMPLEMENTING; final delivery assemble requires all reviewers PASS |
 | **Device Deploy** | `{{PY}} .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
 | **Screen Capture** | `{{PY}} .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
 | **Final Verify** | `{{PY}} .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |

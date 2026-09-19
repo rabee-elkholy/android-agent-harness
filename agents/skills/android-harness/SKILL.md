@@ -28,7 +28,7 @@ Application source inspection remains unaffected. For documented commands, see [
 
 ## Task Guidance & Routing
 - **Harness Public Command Contract**: [Command Contract & Operations](./references/command-contract.md).
-- **Context Management Actions**: Updating project context, recording architectural conventions, or adding domain notes is an administrative action, not an Android code task. Do NOT run change_classifier, review_policy, or assemble. Record notes directly using `android-harness context note "<note>"` or edit `.agents/project-context/project-notes.md`.
+- **Context Management Actions**: Updating project context, recording architectural conventions, or adding domain notes is an administrative action, not an Android code task. Do NOT run change_classifier, review_policy, or assemble. Record notes directly using `python .agents/harness.py context note "<note>"` or edit `.agents/project-context/project-notes.md`.
 - **Active Architecture Contract**: If the active task contains an architecture contract, read `task-architecture-brief.md` in the task directory after project graph discovery and before editing source:
   - **PRESERVE / REFACTOR**: follow local family; no implicit modernization.
   - **NEW**: follow preferred new-code family; surrounding legacy code is only a compatibility boundary.

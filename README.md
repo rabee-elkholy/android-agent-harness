@@ -48,6 +48,8 @@
 11. **Attributed Test Execution**: Separates newly introduced regressions from pre-existing baseline test failures, preventing false-positive gate failures.
 12. **Zero Python Runtime Dependencies**: 100% Python standard library (`pathlib`, `json`, `hashlib`, `subprocess`, `argparse`). No `pip install`, zero third-party package supply-chain risks, and seamless operation across Windows, macOS, and Linux.
 13. **Secret-Safe Review Artifacts**: Review packages redact assignment-style Android credentials, private keys, provider tokens, and credential-bearing URLs from diffs while preserving useful surrounding structure.
+14. **Non-Interfering Lifecycle**: Install, update, rollback, and uninstall preserve project-owned Git hooks and Git configuration byte-for-byte; only marker-owned legacy harness adapters are replaced.
+15. **Repository-Local Commands**: Every installed project gets `.agents/harness.py`, so daily task context, workflow, diagnostics, test, build, review, and device commands do not depend on the kit checkout remaining at a global path.
 
 ---
 
@@ -91,7 +93,7 @@ Android Agent Harness is not:
 Open your Android project in your AI coding agent (Antigravity, Gemini CLI, Claude Code, Cursor, Windsurf, or Roo Code), and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.51/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.52/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent will:
@@ -106,7 +108,7 @@ Run directly from your command line:
 
 ```bash
 # Clone the pinned harness release
-git clone --depth 1 --branch v1.0.51 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
+git clone --depth 1 --branch v1.0.52 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 # Initialize inside your Android project
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/android-project --kit ~/.android-harness/kit
@@ -125,6 +127,14 @@ and task evidence. It refuses a live task unless the developer explicitly adds
 `--force`.
 
 The installer configures `.agents` in your project and registers `.git/info/exclude` so that harness state never pollutes your repository's Git tracking.
+
+After installation, routine commands can run directly from the Android project:
+
+```bash
+python .agents/harness.py task-context --file app/src/main/kotlin/com/example/ProfileScreen.kt --json
+python .agents/harness.py task status --task-id feature-1 --next
+python .agents/harness.py doctor --json
+```
 
 ---
 

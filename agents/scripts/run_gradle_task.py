@@ -154,7 +154,7 @@ def validate_reviewer_precondition_before_assemble(
     """
     active_p = state_dir / "active-task.json"
     if not active_p.is_file():
-        return True, "NO_ACTIVE_TASK"
+        return False, "NO_ACTIVE_TASK: an approved active task is required for assemble"
 
     try:
         active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
@@ -163,7 +163,7 @@ def validate_reviewer_precondition_before_assemble(
 
     tid = str(active_task_data.get("task_id") or "").strip()
     if not tid:
-        return True, "NO_ACTIVE_TASK"
+        return False, "NO_ACTIVE_TASK: active task identity is missing"
 
     plan_p = state_dir / "tasks" / tid / "plan.json"
     if not plan_p.is_file():
@@ -174,8 +174,11 @@ def validate_reviewer_precondition_before_assemble(
     except Exception as exc:
         return False, f"Task {tid} plan.json is unreadable or malformed: {exc}"
 
-    if plan_data.get("status") != "VERIFYING":
-        return True, f"Active task status is {plan_data.get('status')}"
+    status = str(plan_data.get("status") or "").upper()
+    if status == "IMPLEMENTING":
+        return True, "DIAGNOSTIC_ASSEMBLE_DURING_IMPLEMENTATION"
+    if status != "VERIFYING":
+        return False, f"Active task status {status or 'UNKNOWN'} does not authorize assemble"
 
     current_run_p = state_dir / "tasks" / tid / "current-run.json"
     if not current_run_p.is_file():

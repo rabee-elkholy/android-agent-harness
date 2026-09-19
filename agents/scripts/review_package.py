@@ -178,7 +178,7 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         t_dir = task_dir(repo, task_id)
         brief_file = t_dir / "task-architecture-brief.md"
         if brief_file.is_file():
-            arch_section.append(f"- **Task Architecture Brief**: [`task-architecture-brief.md`](file:///{brief_file.as_posix()})")
+            arch_section.append(f"- **Task Architecture Brief**: `{brief_file.as_posix()}`")
         arch_section.append("\n")
         extras.insert(0, "\n".join(arch_section))
 

@@ -95,6 +95,11 @@ class GuidanceTests(unittest.TestCase):
         self.assertIn("task begin", actions[0]["command"])
         self.assertEqual(before, approved)
 
+        awaiting = {"status": "AWAITING_DEVELOPER_APPROVAL"}
+        actions = _next_actions(repo, "task-1", awaiting)
+        self.assertEqual("approve", actions[0]["action"])
+        self.assertIn("task approve", actions[0]["command"])
+
         implementing = {
             "status": "IMPLEMENTING",
             "active_phase_index": 1,
@@ -166,6 +171,11 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn("Antigravity Planning Lifecycle", gemini_root)
         self.assertIn("never generate redundant plan artifacts or stall for nonexistent UI buttons", agents_tpl)
         self.assertIn("Follow-ups and technical fixes within active scope require immediate execution", agents_root)
+
+    def test_always_loaded_codex_prompt_is_bounded(self) -> None:
+        kernel = (KIT / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
+        adapter = (KIT / "agents/tool-adapters/AGENTS.md.template").read_text(encoding="utf-8")
+        self.assertLessEqual(len(kernel) + len(adapter), 12_000)
 
     def test_all_tool_adapters_contain_mobile_walkthrough_and_independent_review_rules(self) -> None:
         templates_dir = KIT / "agents" / "tool-adapters"
@@ -363,6 +373,12 @@ class ChatInstallationLifecycleTests(RepoCase):
         snapshot = lifecycle_module._snapshot_app_files(spaces_repo)
         self.assertIn("build.gradle.kts", snapshot)
 
+    def test_snapshot_includes_project_owned_githooks(self) -> None:
+        hook = self.repo / ".githooks" / "pre-commit"
+        write(hook, "#!/bin/sh\necho project lint\n")
+        snapshot = lifecycle_module._snapshot_app_files(self.repo)
+        self.assertIn(".githooks/pre-commit", snapshot)
+
 
 class ManifestTests(RepoCase):
     def test_snapshot_is_stable_when_identical_content_is_committed(self) -> None:
@@ -381,6 +397,12 @@ class ManifestTests(RepoCase):
         self.assertEqual([], after["changes"])
         self.assertEqual(before["delivery_snapshot_sha256"], after["delivery_snapshot_sha256"])
         self.assertEqual(before["change_set_sha256"], after["change_set_sha256"])
+
+    def test_classifier_ignores_line_endings_only_status_noise(self) -> None:
+        write(self.repo / "app/src/main/kotlin/A.kt", b"internal class A\r\n")
+        classification = classify(self.repo)
+        self.assertEqual(0, classification["changed_files"])
+        self.assertEqual([], classification["surfaces"])
 
     def test_change_set_covers_rename_delete_and_untracked(self) -> None:
         write(self.repo / "app/src/main/kotlin/B.kt", "internal class B\n")
@@ -1159,10 +1181,109 @@ class LifecycleTests(RepoCase):
         self.assertIn("Project-tailored rule.", legacy_override.read_text(encoding="utf-8"))
         preview = uninstall(self.repo)
         self.assertEqual("DRY_RUN", preview["status"])
+        self.assertTrue(preview.get("actions"))
+        self.assertTrue(any(item["path"] == ".harness-setup" for item in preview["actions"]))
         removed = uninstall(self.repo, apply=True)
         self.assertEqual("PASS", removed["status"])
         self.assertFalse((self.repo / ".agents").exists())
+        self.assertFalse((self.repo / ".harness-setup").exists())
+        self.assertFalse((self.repo / ".harness-backup").exists())
         self.assertEqual(original, (self.repo / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_install_preserves_project_owned_githooks_byte_for_byte(self) -> None:
+        self._answers()
+        hook = self.repo / ".githooks/pre-commit"
+        original = b"#!/bin/sh\r\n./gradlew lint\r\n"
+        write(hook, original)
+        run_git(self.repo, "add", ".githooks/pre-commit")
+        run_git(self.repo, "commit", "-qm", "project-owned hook")
+        run_git(self.repo, "config", "core.hooksPath", ".githooks")
+
+        install(self.repo, KIT)
+        self.assertEqual(original, hook.read_bytes())
+        self.assertEqual(".githooks", subprocess.check_output(
+            ["git", "config", "--get", "core.hooksPath"], cwd=self.repo, text=True,
+        ).strip())
+        uninstall(self.repo, apply=True)
+        self.assertEqual(original, hook.read_bytes())
+
+    def test_legacy_harness_hook_is_removed_transactionally_and_restored_on_uninstall(self) -> None:
+        self._answers()
+        hook = self.repo / ".githooks/pre-commit"
+        original = b"#!/bin/sh\n# managed-by: android-agent-harness\nexit 0\n"
+        write(hook, original)
+        run_git(self.repo, "config", "core.hooksPath", ".githooks")
+
+        result = install(self.repo, KIT)
+        self.assertFalse(hook.exists())
+        entry = next(item for item in result["ownership"]["entries"] if item["path"] == ".githooks/pre-commit")
+        self.assertEqual("removed_legacy", entry["ownership"])
+        uninstall(self.repo, apply=True)
+        self.assertEqual(original, hook.read_bytes())
+        self.assertEqual(".githooks", subprocess.check_output(
+            ["git", "config", "--get", "core.hooksPath"], cwd=self.repo, text=True,
+        ).strip())
+
+    def test_installed_local_launcher_records_context_note_without_global_cli(self) -> None:
+        self._answers()
+        install(self.repo, KIT)
+        proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/harness.py"), "context", "note", "Use MVI for profile screens"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        notes = (self.repo / ".agents/project-context/project-notes.md").read_text(encoding="utf-8")
+        self.assertIn("Use MVI for profile screens", notes)
+
+        task_context = subprocess.run(
+            [
+                sys.executable,
+                str(self.repo / ".agents/harness.py"),
+                "task-context",
+                "--file",
+                "app/src/main/kotlin/A.kt",
+                "--json",
+            ],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, task_context.returncode, task_context.stdout + task_context.stderr)
+        self.assertEqual("RESOLVED", json.loads(task_context.stdout)["status"])
+
+    def test_no_tracker_adapter_contains_no_zoho_mutation_instruction(self) -> None:
+        self._answers()
+        answers_path = self.repo / ".harness-setup/answers.json"
+        answers = json.loads(answers_path.read_text(encoding="utf-8"))
+        answers["pm_provider"] = "none"
+        answers["zoho_mcp"] = "disable"
+        write(answers_path, json.dumps(answers))
+        install(self.repo, KIT)
+        generated = (self.repo / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("no tracker", generated.lower())
+        self.assertNotIn("Zoho remains available", generated)
+
+    def test_public_doctor_dispatches_to_installed_engine(self) -> None:
+        self._answers()
+        install(self.repo, KIT)
+        env = dict(os.environ)
+        env["_IN_HOOK_SELFTEST"] = "1"
+        proc = subprocess.run(
+            [sys.executable, str(KIT / "harness_cli.py"), "doctor", "--repo", str(self.repo), "--kit", str(KIT), "--json"],
+            cwd=KIT,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        report = json.loads(proc.stdout)
+        self.assertEqual(str((self.repo / ".agents").resolve()), report["engine_path"])
+        self.assertEqual(str((self.repo / ".agents/scripts/_product.py").resolve()), report["config_path"])
 
     def test_legacy_install_is_refused(self) -> None:
         self._answers()
@@ -2060,6 +2181,58 @@ class EndToEndWorkflowTests(RepoCase):
         classification = classify(self.repo)
         self.assertIn("BILLING", classification.get("surfaces", []))
 
+    def test_classifier_does_not_propagate_unchanged_sensitive_imports(self) -> None:
+        write(
+            self.repo / "app/src/main/kotlin/BillingManager.kt",
+            "package com.fixture\nclass BillingManager { fun purchase() = Unit }\n",
+        )
+        target = self.repo / "app/src/main/kotlin/CampaignViewModel.kt"
+        write(
+            target,
+            "package com.fixture\n"
+            "import com.fixture.BillingManager\n"
+            "class CampaignViewModel(private val billingManager: BillingManager) {\n"
+            "    val campaignName = \"old\"\n"
+            "}\n",
+        )
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "sensitive dependency baseline")
+        write(
+            target,
+            "package com.fixture\n"
+            "import com.fixture.BillingManager\n"
+            "class CampaignViewModel(private val billingManager: BillingManager) {\n"
+            "    val campaignName = \"new\"\n"
+            "}\n",
+        )
+        classification = classify(self.repo)
+        self.assertNotIn("BILLING", classification.get("surfaces", []))
+
+    def test_classifier_propagates_sensitive_dependency_when_changed_reference_uses_it(self) -> None:
+        write(
+            self.repo / "app/src/main/kotlin/BillingManager.kt",
+            "package com.fixture\nclass BillingManager { fun purchase() = Unit }\n",
+        )
+        target = self.repo / "app/src/main/kotlin/CampaignViewModel.kt"
+        write(
+            target,
+            "package com.fixture\n"
+            "class CampaignViewModel {\n"
+            "    fun refresh() = Unit\n"
+            "}\n",
+        )
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "non-sensitive baseline")
+        write(
+            target,
+            "package com.fixture\n"
+            "class CampaignViewModel(private val billingManager: BillingManager) {\n"
+            "    fun refresh() = billingManager.purchase()\n"
+            "}\n",
+        )
+        classification = classify(self.repo)
+        self.assertIn("BILLING", classification.get("surfaces", []))
+
     def test_classifier_deterministic_paths(self) -> None:
         write(self.repo / "app/src/main/res/xml/network_security_config.xml", "<network-security-config />\n")
         write(self.repo / "app/proguard-rules.pro", "-keep class com.fixture.** { *; }\n")
@@ -2093,6 +2266,26 @@ class EndToEndWorkflowTests(RepoCase):
         import check_strings
         err_code = check_strings.main([], repo=self.repo)
         self.assertNotEqual(0, err_code)
+
+    def test_check_strings_ignores_versioned_locale_overlay_for_full_parity(self) -> None:
+        write(
+            self.repo / "app/src/main/res/values/strings.xml",
+            '<resources><string name="title">Title</string><string name="new_key">New</string></resources>\n',
+        )
+        write(
+            self.repo / "app/src/main/res/values-ar/strings.xml",
+            '<resources><string name="title">عنوان</string><string name="new_key">جديد</string></resources>\n',
+        )
+        write(
+            self.repo / "app/src/main/res/values-ar-v35/colors.xml",
+            '<resources><color name="accent">#000000</color></resources>\n',
+        )
+        import check_strings
+        pairs = check_strings.discover_locale_pairs(
+            res_dirs=[self.repo / "app/src/main/res"], repo=self.repo,
+        )
+        self.assertTrue(any(tag == "ar" for _, _, tag in pairs))
+        self.assertFalse(any(tag == "ar-v35" for _, _, tag in pairs))
 
 
     def test_room_guard_detects_deleted_entity(self) -> None:

@@ -60,6 +60,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--module", metavar="NAME", help="Focus graph on a specific Gradle module (e.g. :core:data)")
     parser.add_argument("--screen", metavar="NAME", help="Focus graph on a specific screen/composable")
     parser.add_argument("--depth", type=int, default=2, help="Traversal depth around focus node (default: 2)")
+    parser.add_argument("--limit", type=int, default=80, help="Maximum nodes rendered for broad feature queries (default: 80; 0 disables cap)")
     parser.add_argument("--path-from", metavar="NODE_A", help="Starting node for shortest path search")
     parser.add_argument("--path-to", metavar="NODE_B", help="Target node for shortest path search")
     parser.add_argument(
@@ -127,6 +128,22 @@ def main(argv: list[str] | None = None) -> int:
         if not sub_nodes:
             live_print(f"[!] No feature components found matching '{args.feature}'.")
             return 1
+        original_count = len(sub_nodes)
+        if args.limit > 0 and original_count > args.limit:
+            query = args.feature.lower()
+            ranked = sorted(
+                sub_nodes.values(),
+                key=lambda node: (
+                    0 if query in node.name.lower() or query in node.file_path.lower() else 1,
+                    0 if node.type in {EntityType.SCREEN.value, EntityType.VIEW_MODEL.value, EntityType.USE_CASE.value} else 1,
+                    node.file_path,
+                    node.id,
+                ),
+            )[:args.limit]
+            keep = {node.id for node in ranked}
+            sub_nodes = {node.id: node for node in ranked}
+            sub_edges = [edge for edge in sub_edges if edge.source in keep and edge.target in keep]
+            live_print(f"[*] Feature graph bounded to {len(sub_nodes)} of {original_count} nodes; use --limit 0 for the full graph.")
         live_print(engine.graph.to_slice_summary(sub_nodes))
         from _graph_core import DependencyGraph
         sub_g = DependencyGraph()

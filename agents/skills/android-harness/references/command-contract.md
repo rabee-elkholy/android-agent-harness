@@ -231,7 +231,7 @@ python .agents/scripts/capture_screen.py
 - Build success / APK install confirmation / activity launch output.
 - Exit code: `0` on success.
 
-> **Reviewer Completion Precondition**: The agent MUST NOT run `assembleDebug` or `run_device.py install-start` while any AI reviewer subagent is still executing. All required routed reviewers must finish and have their evidence recorded via `record_review.py` before assembling the APK or deploying to the device. Deploying before reviews complete leads to verifying defective builds or premature deployment.
+> **Reviewer Completion Precondition**: Diagnostic compile/assemble may run during `IMPLEMENTING` after task approval, but it is not delivery evidence. During `VERIFYING`, the final assemble and `run_device.py install-start` require all routed reviewers to finish and their evidence to be recorded via `record_review.py`.
 
 > **Walkthrough Timing & Device Preconditions**: The agent MUST wait for `run_device.py install-start` to finish execution with exit code `0` BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is running in background, WAIT for completion; never output walkthrough or ask questions prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the environment blocker immediately to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when installation failed, and NEVER ask the developer to verify a build that was not installed.
 
@@ -312,8 +312,9 @@ When an exception occurs:
 | Step / Tool | Canonical Command | Description |
 | :--- | :--- | :--- |
 | **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
+| **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded, read-only context for one task target |
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
-| **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
+| **Context Note** | `python .agents/harness.py context note "<note>"` | Record architectural convention/note |
 | **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
 | **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate (GREEN phase) |
 | **Capture RED** | `python .agents/scripts/run_tests_gate.py --capture-red` | Capture executable test failure proof for BUG tasks |
@@ -328,11 +329,10 @@ When an exception occurs:
 | **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
 | **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
 | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
-| **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass) |
+| **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Diagnostic in IMPLEMENTING; final delivery build after all reviewers pass |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
 | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
 | **Harness Doctor** | `python harness_cli.py doctor --repo . --json` | Health check harness installation & adapters |
 | **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
 | **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
-

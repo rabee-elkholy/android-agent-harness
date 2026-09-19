@@ -579,6 +579,7 @@ def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
         provider = "zoho_sprints"
     if tracker_lang not in _PM_LANG_NOTES:
         tracker_lang = "en_titles_ar_comments"
+    pm_language_note = "No tracker integration is configured." if provider == "none" else _PM_LANG_NOTES[tracker_lang]
     return {
         "PRODUCT": args.product.strip(),
         "PY": args.py.strip(),
@@ -587,13 +588,44 @@ def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
         "DEVICE_POLICY": (args.device_text or DEVICE_TEXT[args.device_policy]).strip(),
         "GIT_POLICY": (args.git_text or GIT_TEXT[args.git_policy]).strip(),
         "PM_TRIGGER": _PM_TRIGGERS[provider],
-        "PM_LANG_NOTE": _PM_LANG_NOTES[tracker_lang],
+        "PM_LANG_NOTE": pm_language_note,
     }
 
 
 def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
-    """Cleans up legacy .githooks and unsets core.hooksPath if pointing to .githooks."""
+    """Remove only provably harness-owned legacy hooks.
+
+    ``.githooks`` is a common project-owned directory.  Older installers treated
+    the directory name itself as proof of ownership and could delete unrelated
+    hooks.  A hook is now removable only when its content carries an explicit
+    harness marker; mixed or unmarked directories are preserved byte-for-byte.
+    """
     logs: list[str] = []
+    githooks_dir = repo / ".githooks"
+    marker_tokens = ("managed-by: android-agent-harness", "managed-by: android-harness-kit")
+    removable: list[Path] = []
+    preserved: list[Path] = []
+    if githooks_dir.is_dir():
+        for hook in sorted(path for path in githooks_dir.rglob("*") if path.is_file()):
+            try:
+                head = hook.read_text(encoding="utf-8", errors="replace")[:4096].lower()
+            except OSError:
+                preserved.append(hook)
+                continue
+            (removable if any(token in head for token in marker_tokens) else preserved).append(hook)
+
+    for hook in removable:
+        rel = rel_of(hook, repo)
+        if dry_run:
+            logs.append(f"dry-run remove harness-owned legacy hook {rel}")
+        else:
+            hook.unlink(missing_ok=True)
+            logs.append(f"removed harness-owned legacy hook {rel}")
+
+    if preserved:
+        logs.append(f"preserved {len(preserved)} project-owned .githooks file(s)")
+
+    remaining_files = preserved
     proc = subprocess.run(
         ["git", "config", "--get", "core.hooksPath"],
         cwd=str(repo),
@@ -601,7 +633,7 @@ def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
         text=True,
         check=False,
     )
-    if proc.returncode == 0 and proc.stdout.strip() in (".githooks", ".githooks/"):
+    if proc.returncode == 0 and proc.stdout.strip() in (".githooks", ".githooks/") and not remaining_files:
         if dry_run:
             logs.append("dry-run git config --unset core.hooksPath")
         else:
@@ -613,14 +645,13 @@ def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
             )
             logs.append("unset git core.hooksPath")
 
-    githooks_dir = repo / ".githooks"
-    if githooks_dir.exists():
+    if githooks_dir.is_dir() and not remaining_files:
         if dry_run:
-            logs.append(f"dry-run remove {rel_of(githooks_dir, repo)}")
+            logs.append(f"dry-run remove empty {rel_of(githooks_dir, repo)}")
         else:
             try:
-                shutil.rmtree(githooks_dir)
-                logs.append(f"removed legacy {rel_of(githooks_dir, repo)}")
+                githooks_dir.rmdir()
+                logs.append(f"removed empty legacy {rel_of(githooks_dir, repo)}")
             except Exception as e:
                 logs.append(f"warning: could not remove {githooks_dir}: {e}")
 

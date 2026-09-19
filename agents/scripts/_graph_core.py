@@ -531,7 +531,7 @@ class DependencyGraph:
         if screens:
             lines.append(f"\n[UI Screens & Layouts] ({len(screens)}):")
             for sc in sorted(screens, key=lambda x: x.name):
-                tag = "[COMPOSE]" if sc.metadata.get("compose") else "[XML]"
+                tag = "[COMPOSE]" if sc.metadata.get("composable") else "[XML]"
                 targets = [self.nodes[t].name for t in self.get_targets(sc.id) if t in self.nodes]
                 deps = f" -> {', '.join(targets[:4])}" if targets else ""
                 lines.append(f"  * {sc.name} {tag} ({sc.file_path or 'unknown'}){deps}")

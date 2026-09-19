@@ -274,14 +274,16 @@ def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list
     # the entire repository for every imported or injected type.
     try:
         matches = type_index.get(type_name, [])
-        if matches:
-            target_path = matches[0]
+        resolved_surfaces: set[str] = set()
+        for target_path in matches:
             target_text = _read_text(target_path)
             for surface, pattern, _reason in PATTERNS:
-                if surface in CRITICAL_SURFACES:
-                    if pattern.search(target_text):
-                        _TYPE_SURFACE_CACHE[cache_key] = surface
-                        return surface, f"{type_name} -> {surface}"
+                if surface in CRITICAL_SURFACES and pattern.search(target_text):
+                    resolved_surfaces.add(surface)
+        if len(resolved_surfaces) == 1:
+            surface = next(iter(resolved_surfaces))
+            _TYPE_SURFACE_CACHE[cache_key] = surface
+            return surface, f"{type_name} -> {surface}"
     except Exception:
         pass
 
@@ -290,14 +292,27 @@ def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list
 
 
 def _propagate_sensitive_dependencies(
-    root: Path, rel: str, full_text: str, found: dict, type_index: dict[str, list[Path]],
+    root: Path, rel: str, full_text: str, diff_text: str, found: dict, type_index: dict[str, list[Path]],
 ) -> None:
     class_name = Path(rel).stem
     if _is_universal_hub(rel, class_name):
         return
 
-    deps = _extract_direct_dependency_types(full_text)
+    # Propagation is intentionally diff-aware.  Existing imports and constructor
+    # dependencies in a large ViewModel must not make an unrelated one-line edit
+    # inherit every sensitive surface in the file.
+    dependency_diff = "\n".join(
+        line[1:] if line.startswith(("+", "-")) else line
+        for line in diff_text.splitlines()
+    )
+    deps = _extract_direct_dependency_types(dependency_diff)
+    for match in re.finditer(r"\b(?:val|var)\s+([a-zA-Z0-9_]+)\s*:\s*([A-Za-z0-9_]+)", full_text):
+        property_name, property_type = match.groups()
+        if re.search(rf"\b{re.escape(property_name)}\b", diff_text):
+            deps.add(property_type)
     for dep in sorted(deps):
+        if _is_universal_hub("", dep):
+            continue
         resolved = _resolve_type_surface(root, dep, type_index)
         if resolved:
             surface, dep_info = resolved
@@ -504,7 +519,7 @@ def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
         if line.startswith("+++") or line.startswith("---"):
             continue
         if line.startswith("+") or line.startswith("-"):
-            lines.append(line[1:])
+            lines.append(line)
     diff_text = "\n".join(lines)
     context_text = ""
     if changed.exists and line_nums:
@@ -693,7 +708,7 @@ def classify(repo: Path, task_id: str | None = None, task_changes: list | None =
                     _add(found, surface, rel, f"{reason}_CONTEXT")
 
         if suffix in (".kt", ".java") and not test_path:
-            _propagate_sensitive_dependencies(root, rel, full_text, found, type_index)
+            _propagate_sensitive_dependencies(root, rel, full_text, diff_text, found, type_index)
 
     non_docs = set(found) - {"DOCS", "TEST_ONLY"}
     relevant_changes = [item for item in changes if is_delivery_relevant(item.rel_posix) or (item.old_rel_posix and is_delivery_relevant(item.old_rel_posix))]

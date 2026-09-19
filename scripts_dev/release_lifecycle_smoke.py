@@ -147,9 +147,15 @@ def main(argv: list[str] | None = None) -> int:
         run([*base, "--json", "uninstall", "--repo", str(repo), "--apply"])
         if (repo / ".agents").exists():
             raise RuntimeError("uninstall left the managed engine in place")
+        if (repo / ".harness-setup").exists():
+            raise RuntimeError("uninstall left managed setup state in place")
         assert_project_unchanged(repo, expected)
         if (repo / "AGENTS.md").read_text(encoding="utf-8") != "# Project-owned instructions\n":
             raise RuntimeError("uninstall did not restore the project-owned AGENTS.md")
+        # A clean uninstall intentionally removes the saved setup answers. A
+        # later reinstall is a new lifecycle and must supply configuration
+        # again instead of depending on stale managed state.
+        write_fixture(repo)
         run([*base, "--json", "install", "--repo", str(repo), "--kit", str(kit)])
         assert_project_unchanged(repo, expected)
 

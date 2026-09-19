@@ -600,7 +600,35 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     env_marker = os.environ.get("_IN_HOOK_SELFTEST")
     if env_marker != "1":
         os.environ["_IN_HOOK_SELFTEST"] = "0"
-    code = run_engine_script(kit, "harness_doctor.py", cli_args, capture=args.json)
+    installed_doctor = repo / ".agents" / "scripts" / "harness_doctor.py"
+    installed_version_file = repo / ".agents" / "VERSION"
+    if installed_doctor.is_file() and installed_version_file.is_file():
+        installed_version = installed_version_file.read_text(encoding="utf-8").strip()
+        kit_version = _read_version_file(kit)
+        if _semver_tuple(installed_version)[0] != _semver_tuple(kit_version)[0]:
+            raise SystemExit(
+                f"[ERROR] Installed engine v{installed_version} is incompatible with kit v{kit_version}; "
+                "update or repair the target checkout before running doctor."
+            )
+        doctor_env = os.environ.copy()
+        doctor_env["HARNESS_REPO"] = str(repo)
+        proc = subprocess.run(
+            [sys.executable, "-u", str(installed_doctor), *cli_args],
+            check=False,
+            capture_output=args.json,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=doctor_env,
+            cwd=str(repo),
+        )
+        if args.json and proc.stdout:
+            sys.stdout.write(proc.stdout)
+        if proc.stderr:
+            sys.stderr.write(proc.stderr)
+        code = proc.returncode
+    else:
+        code = run_engine_script(kit, "harness_doctor.py", cli_args, capture=args.json)
     if os.environ.get("_IN_HOOK_SELFTEST") == "0":
         os.environ.pop("_IN_HOOK_SELFTEST", None)
     return code
