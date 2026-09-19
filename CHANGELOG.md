@@ -4,6 +4,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.53] - 2026-09-19
+
+### Transactional Lifecycle and Automation Reliability
+
+- Made uninstall a journaled transaction that restores the engine, adapters, ownership metadata, Git configuration, and Git exclude data after interruption or failure; corrupt lifecycle journals now fail closed.
+- Made classifier and review-policy `--json` output valid JSON from the first byte, with regression coverage for direct machine parsing.
+- Updated GitHub Actions to current Node 24-based checkout and Python setup releases, pinned stable runner images, and added concurrency controls for CI and release workflows.
+- Corrected enforcement and model-routing documentation so hard-enforced host hooks are clearly distinguished from rule-enforced adapters and provider-specific model names are not implied.
+
 ## [1.0.52] - 2026-09-19
 
 ### Production Workflow Reliability and Lower Daily Friction

@@ -1190,6 +1190,72 @@ class LifecycleTests(RepoCase):
         self.assertFalse((self.repo / ".harness-backup").exists())
         self.assertEqual(original, (self.repo / "AGENTS.md").read_text(encoding="utf-8"))
 
+    def test_uninstall_failure_restores_complete_pre_uninstall_state(self) -> None:
+        original = "# User-owned project instructions\n"
+        write(self.repo / "AGENTS.md", original)
+        self._answers()
+        install(self.repo, KIT)
+        agents_instructions_before = (self.repo / "AGENTS.md").read_bytes()
+        backup_names_before = sorted(path.name for path in (self.repo / ".harness-backup").iterdir())
+        ownership_before = (self.repo / OWNERSHIP_RELATIVE).read_bytes()
+        answers_before = (self.repo / ".harness-setup/answers.json").read_bytes()
+        exclude_path = lifecycle_module._git_exclude_path(self.repo)
+        exclude_before = exclude_path.read_bytes()
+        version_before = (self.repo / ".agents/VERSION").read_bytes()
+
+        original_restore = lifecycle_module._restore_git_config
+        calls = 0
+
+        def fail_once(repo, key, value):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("simulated uninstall interruption")
+            return original_restore(repo, key, value)
+
+        with mock.patch.object(lifecycle_module, "_restore_git_config", side_effect=fail_once):
+            with self.assertRaisesRegex(RuntimeError, "simulated uninstall interruption"):
+                uninstall(self.repo, apply=True)
+
+        self.assertEqual(version_before, (self.repo / ".agents/VERSION").read_bytes())
+        self.assertEqual(ownership_before, (self.repo / OWNERSHIP_RELATIVE).read_bytes())
+        self.assertEqual(answers_before, (self.repo / ".harness-setup/answers.json").read_bytes())
+        self.assertEqual(exclude_before, exclude_path.read_bytes())
+        self.assertEqual(agents_instructions_before, (self.repo / "AGENTS.md").read_bytes())
+        self.assertFalse((self.repo / ".harness-setup/uninstall-journal.json").exists())
+        self.assertEqual(backup_names_before, sorted(path.name for path in (self.repo / ".harness-backup").iterdir()))
+
+    def test_interrupted_post_commit_uninstall_finishes_idempotently(self) -> None:
+        self._answers()
+        install(self.repo, KIT)
+        original_rmtree = lifecycle_module.shutil.rmtree
+        failed = False
+
+        def fail_backup_cleanup(path, *args, **kwargs):
+            nonlocal failed
+            if not failed and Path(path).resolve() == (self.repo / ".harness-backup").resolve():
+                failed = True
+                raise PermissionError("simulated cleanup interruption")
+            return original_rmtree(path, *args, **kwargs)
+
+        with mock.patch.object(lifecycle_module.shutil, "rmtree", side_effect=fail_backup_cleanup):
+            with self.assertRaisesRegex(PermissionError, "simulated cleanup interruption"):
+                uninstall(self.repo, apply=True)
+
+        result = uninstall(self.repo, apply=True)
+        self.assertEqual("PASS", result["status"])
+        self.assertTrue(result["recovered"])
+        self.assertFalse((self.repo / ".agents").exists())
+        self.assertFalse((self.repo / ".harness-setup").exists())
+        self.assertFalse((self.repo / ".harness-backup").exists())
+
+    def test_corrupt_lifecycle_journal_fails_closed(self) -> None:
+        self._answers()
+        install(self.repo, KIT)
+        write(self.repo / ".harness-setup/update-journal.json", "{not-json")
+        with self.assertRaisesRegex(lifecycle_module.ValidationError, "journal is unreadable"):
+            lifecycle_module.recover_interrupted_update(self.repo)
+
     def test_install_preserves_project_owned_githooks_byte_for_byte(self) -> None:
         self._answers()
         hook = self.repo / ".githooks/pre-commit"

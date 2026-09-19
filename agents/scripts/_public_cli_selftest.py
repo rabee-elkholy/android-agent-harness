@@ -156,11 +156,8 @@ class PublicCliSelftest(unittest.TestCase):
         self.assertNotIn("Traceback", proc.stderr, f"review_policy raised Traceback: {proc.stderr}")
         self.assertEqual(0, proc.returncode, f"review_policy failed with exit code {proc.returncode}:\n{proc.stderr}\n{proc.stdout}")
 
-        # Stdout must contain valid JSON policy payload
-        raw = proc.stdout.strip()
-        json_start = raw.find("{")
-        self.assertNotEqual(-1, json_start, f"No JSON object found in output: {raw}")
-        policy_data = json.loads(raw[json_start:])
+        # Machine-readable mode owns stdout: no progress prefixes are allowed.
+        policy_data = json.loads(proc.stdout)
 
         self.assertIn("surfaces", policy_data)
         self.assertIn("gates", policy_data)
@@ -526,10 +523,7 @@ class PublicCliSelftest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, proc_class.returncode)
-        raw_class = proc_class.stdout.strip()
-        start_c = raw_class.find("{")
-        self.assertNotEqual(-1, start_c, f"No JSON found in classifier output:\n{proc_class.stdout}")
-        class_json = json.loads(raw_class[start_c:])
+        class_json = json.loads(proc_class.stdout)
         self.assertIn("surfaces", class_json)
 
     def test_task_context_public_cli_json(self) -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import gc
 import json
 import os
@@ -217,10 +218,7 @@ def _rollback_adapters(repo: Path, backup: Path, before: dict[str, str | None]) 
 
 
 def _managed_exclude(repo: Path, *, remove: bool = False) -> None:
-    raw_path = subprocess_git(repo, "rev-parse", "--git-path", "info/exclude")
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = (repo / path).resolve()
+    path = _git_exclude_path(repo)
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     start = text.find(EXCLUDE_BEGIN)
     end = text.find(EXCLUDE_END)
@@ -236,6 +234,12 @@ def _managed_exclude(repo: Path, *, remove: bool = False) -> None:
         text = f"{text.rstrip()}\n\n{block}\n" if text.strip() else f"{block}\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _git_exclude_path(repo: Path) -> Path:
+    raw_path = subprocess_git(repo, "rev-parse", "--git-path", "info/exclude")
+    path = Path(raw_path)
+    return path if path.is_absolute() else (repo / path).resolve()
 
 
 def subprocess_git(repo: Path, *args: str) -> str:
@@ -421,7 +425,7 @@ def _backup(repo: Path, manifest: dict | None, label: str, extra_paths: list[Pat
     root = repo / ".harness-backup"
     target = root / f"{label}-{utc_now().replace(':', '').replace('-', '')}-{uuid.uuid4().hex[:8]}"
     target.mkdir(parents=True, exist_ok=False)
-    paths: set[str] = {".agents", ".harness-setup/answers.json"}
+    paths: set[str] = {".agents", ".harness-setup/answers.json", OWNERSHIP_RELATIVE.as_posix()}
     if manifest:
         paths.update(str(entry.get("path") or "") for entry in manifest.get("entries") or [])
     for path in extra_paths or []:
@@ -559,14 +563,99 @@ def _warm_project_graph(repo: Path) -> None:
         pass
 
 
+def _uninstall_journal_path(repo: Path) -> Path:
+    return repo / ".harness-setup" / "uninstall-journal.json"
+
+
+def _resolve_uninstall_backup(repo: Path, raw: str) -> Path:
+    if not raw:
+        raise ValidationError("uninstall recovery journal is missing its backup path")
+    candidate = Path(raw)
+    candidate = candidate.resolve() if candidate.is_absolute() else (repo / candidate).resolve()
+    backup_root = (repo / ".harness-backup").resolve()
+    try:
+        candidate.relative_to(backup_root)
+    except ValueError as exc:
+        raise ValidationError("uninstall recovery backup escapes .harness-backup") from exc
+    if not candidate.is_dir():
+        raise ValidationError("uninstall recovery backup is missing; refusing lifecycle mutation")
+    return candidate
+
+
+def _restore_git_exclude(repo: Path, journal: dict) -> None:
+    path = _git_exclude_path(repo)
+    encoded = journal.get("git_exclude_base64")
+    if encoded is None:
+        path.unlink(missing_ok=True)
+        return
+    try:
+        payload = base64.b64decode(str(encoded), validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValidationError("uninstall recovery journal contains invalid Git exclude data") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(path, payload)
+
+
+def recover_interrupted_uninstall(repo: Path) -> dict | None:
+    """Finish a committed uninstall or restore the exact pre-uninstall harness state."""
+    journal_path = _uninstall_journal_path(repo)
+    if not journal_path.is_file():
+        return None
+    try:
+        journal = read_json(journal_path)
+    except Exception as exc:
+        raise ValidationError(f"uninstall recovery journal is unreadable; refusing lifecycle mutation: {exc}") from exc
+    if journal.get("schema_version") != 1:
+        raise ValidationError("uninstall recovery journal has an unsupported schema")
+
+    stage = str(journal.get("stage") or "")
+    if stage == "UNINSTALLED":
+        backup_root = repo / ".harness-backup"
+        setup_root = repo / ".harness-setup"
+        if backup_root.exists():
+            shutil.rmtree(backup_root)
+        if setup_root.exists():
+            shutil.rmtree(setup_root)
+        return {"status": "RECOVERED", "action": "completed_uninstall"}
+
+    backup = _resolve_uninstall_backup(repo, str(journal.get("backup") or ""))
+    before = journal.get("before")
+    if not isinstance(before, dict):
+        raise ValidationError("uninstall recovery journal is missing its file snapshot")
+    git_config = journal.get("git_config")
+    if not isinstance(git_config, dict):
+        raise ValidationError("uninstall recovery journal is missing its Git configuration snapshot")
+
+    if (backup / ".agents").is_dir():
+        _safe_restore_from_backup(backup / ".agents", repo / ".agents")
+    _restore_paths_from_backup(repo, backup, before)
+    _restore_git_exclude(repo, journal)
+    for key, value in git_config.items():
+        _restore_git_config(repo, str(key), None if value is None else str(value))
+    recovery_raw = str(journal.get("recovery") or "")
+    if recovery_raw:
+        recovery = (repo / recovery_raw).resolve()
+        try:
+            recovery.relative_to((repo / ".harness-recovery").resolve())
+        except ValueError as exc:
+            raise ValidationError("uninstall recovery path escapes .harness-recovery") from exc
+        shutil.rmtree(recovery, ignore_errors=True)
+        recovery_root = repo / ".harness-recovery"
+        if recovery_root.is_dir() and not any(recovery_root.iterdir()):
+            recovery_root.rmdir()
+    shutil.rmtree(backup)
+    journal_path.unlink(missing_ok=True)
+    return {"status": "RECOVERED", "action": "restored_pre_uninstall_state"}
+
+
 def recover_interrupted_update(repo: Path) -> dict | None:
     journal_path = repo / ".harness-setup" / "update-journal.json"
     if not journal_path.is_file():
         return None
     try:
         journal = read_json(journal_path)
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ValidationError(f"update recovery journal is unreadable; refusing lifecycle mutation: {exc}") from exc
     status = str(journal.get("status") or "")
     stage = str(journal.get("stage") or "")
     prev_dirs = sorted(repo.glob(".agents.previous-*"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
@@ -658,6 +747,7 @@ def recover_interrupted_update(repo: Path) -> dict | None:
 
 def install(repo: Path, kit: Path) -> dict:
     repo = _validate_repo(repo)
+    recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
     kit, version = _validate_kit(kit)
     if (repo / ".agents").exists() or (repo / OWNERSHIP_RELATIVE).exists():
@@ -720,6 +810,7 @@ def require_update_idle(repo: Path) -> None:
 def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
     repo = _validate_repo(repo)
     answers = dict(answers or {})
+    recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
     require_update_idle(repo)
     kit, target_version = _validate_kit(kit)
@@ -868,6 +959,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
 def replace_legacy(repo: Path, kit: Path) -> dict:
     """Atomically replace a pre-v1 engine in one process with rollback."""
     repo = _validate_repo(repo)
+    recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
     kit, target_version = _validate_kit(kit)
     if not (repo / ".agents").is_dir():
@@ -923,6 +1015,12 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
 
 def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
     repo = _validate_repo(repo)
+    recovered_uninstall = recover_interrupted_uninstall(repo)
+    if recovered_uninstall and recovered_uninstall.get("action") == "completed_uninstall":
+        return {
+            "status": "PASS", "action": "uninstall", "removed": [], "preserved": [],
+            "backup": None, "recovery": None, "recovered": True,
+        }
     recover_interrupted_update(repo)
     ownership = None
     try:
@@ -958,55 +1056,85 @@ def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:
             {"path": ".harness-backup", "action": "remove-owned-backups"},
         ])
         return {"status": "DRY_RUN", "action": "uninstall", "paths": preview, "actions": actions, "legacy": legacy}
-    backup = _backup(repo, ownership, "uninstall", _candidate_adapter_paths(repo))
+    adapters = _candidate_adapter_paths(repo)
+    transaction_paths = [*adapters, repo / OWNERSHIP_RELATIVE, repo / ".harness-setup" / "answers.json"]
+    before = _snapshot_files(repo, transaction_paths)
+    backup = _backup(repo, ownership, "uninstall", transaction_paths)
     recovery = repo / ".harness-recovery" / f"uninstall-{uuid.uuid4().hex}"
+    git_keys = {"core.hooksPath", *(((ownership or {}).get("git_config") or {}).keys())}
+    git_config_current = {str(key): _git_config_value(repo, str(key)) for key in sorted(git_keys)}
+    exclude_path = _git_exclude_path(repo)
+    exclude_bytes = exclude_path.read_bytes() if exclude_path.is_file() else None
+    journal = {
+        "schema_version": 1,
+        "transaction_id": uuid.uuid4().hex,
+        "status": "PREPARED",
+        "stage": "PREPARED",
+        "backup": str(backup.relative_to(repo).as_posix()),
+        "recovery": str(recovery.relative_to(repo).as_posix()),
+        "before": before,
+        "git_config": git_config_current,
+        "git_exclude_base64": base64.b64encode(exclude_bytes).decode("ascii") if exclude_bytes is not None else None,
+        "started_at": utc_now(),
+    }
+    journal_path = _uninstall_journal_path(repo)
+    atomic_write_json(journal_path, journal)
     removed: list[str] = []
     preserved: list[str] = []
-    if legacy and (repo / ".agents").is_dir():
-        shutil.copytree(repo / ".agents", recovery / ".agents", dirs_exist_ok=True)
-        shutil.rmtree(repo / ".agents")
-        removed.append(".agents")
-        for rel in preview:
-            if rel == ".agents":
-                continue
-            path = repo / rel
-            if path.is_file():
-                path.unlink()
+    try:
+        if legacy and (repo / ".agents").is_dir():
+            shutil.copytree(repo / ".agents", recovery / ".agents", dirs_exist_ok=True)
+            shutil.rmtree(repo / ".agents")
+            removed.append(".agents")
+            for rel in preview:
+                if rel == ".agents":
+                    continue
+                path = repo / rel
+                if path.is_file():
+                    path.unlink()
+                    removed.append(rel)
+        else:
+            for entry in sorted((ownership or {}).get("entries") or [], key=lambda item: len(str(item.get("path") or "")), reverse=True):
+                rel = str(entry.get("path") or "")
+                path = repo / rel
+                original_hash = entry.get("pre_install_sha256")
+                post_hash = entry.get("post_install_sha256")
+                if not path.is_file() and not (original_hash and post_hash is None):
+                    continue
+                modified = _hash_or_none(path) != post_hash
+                if modified:
+                    target = recovery / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, target)
+                    preserved.append(rel)
+                install_backup_raw = str((ownership or {}).get("install_backup") or "")
+                backup_root = (repo / install_backup_raw).resolve() if install_backup_raw and not Path(install_backup_raw).is_absolute() else Path(install_backup_raw)
+                original = backup_root / rel if install_backup_raw else None
+                if original_hash and original and original.is_file():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(original, path)
+                else:
+                    path.unlink(missing_ok=True)
                 removed.append(rel)
-    else:
-        for entry in sorted((ownership or {}).get("entries") or [], key=lambda item: len(str(item.get("path") or "")), reverse=True):
-            rel = str(entry.get("path") or "")
-            path = repo / rel
-            original_hash = entry.get("pre_install_sha256")
-            post_hash = entry.get("post_install_sha256")
-            if not path.is_file() and not (original_hash and post_hash is None):
-                continue
-            modified = _hash_or_none(path) != post_hash
-            if modified:
-                target = recovery / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
-                preserved.append(rel)
-            install_backup_raw = str((ownership or {}).get("install_backup") or "")
-            backup_root = (repo / install_backup_raw).resolve() if install_backup_raw and not Path(install_backup_raw).is_absolute() else Path(install_backup_raw)
-            original = backup_root / rel if install_backup_raw else None
-            if original_hash and original and original.is_file():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(original, path)
-            else:
-                path.unlink(missing_ok=True)
-            removed.append(rel)
-        agents = repo / ".agents"
-        if agents.is_dir():
-            shutil.rmtree(agents, ignore_errors=True)
-    _managed_exclude(repo, remove=True)
-    for key, values in ((ownership or {}).get("git_config") or {}).items():
-        if isinstance(values, dict):
-            _restore_git_config(repo, str(key), values.get("before"))
-    (repo / OWNERSHIP_RELATIVE).unlink(missing_ok=True)
-    (repo / ".harness-setup" / "update-journal.json").unlink(missing_ok=True)
-    shutil.rmtree(repo / ".harness-setup", ignore_errors=True)
-    shutil.rmtree(repo / ".harness-backup", ignore_errors=True)
+            agents = repo / ".agents"
+            if agents.is_dir():
+                shutil.rmtree(agents)
+        _managed_exclude(repo, remove=True)
+        for key, values in ((ownership or {}).get("git_config") or {}).items():
+            if isinstance(values, dict):
+                _restore_git_config(repo, str(key), values.get("before"))
+        (repo / OWNERSHIP_RELATIVE).unlink(missing_ok=True)
+        (repo / ".harness-setup" / "update-journal.json").unlink(missing_ok=True)
+        journal["status"] = "COMPLETED"
+        journal["stage"] = "UNINSTALLED"
+        journal["completed_at"] = utc_now()
+        atomic_write_json(journal_path, journal)
+    except Exception:
+        recover_interrupted_uninstall(repo)
+        raise
+
+    shutil.rmtree(repo / ".harness-backup")
+    shutil.rmtree(repo / ".harness-setup")
     if not preserved and not legacy:
         shutil.rmtree(recovery, ignore_errors=True)
         recovery_root = repo / ".harness-recovery"
