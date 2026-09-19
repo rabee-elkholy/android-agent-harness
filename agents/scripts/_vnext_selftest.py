@@ -48,7 +48,7 @@ from _repo_files import first_adb_serial  # noqa: E402
 from wizard.discovery import discover, discover_android_source_root, discover_di_framework, discover_launchers, discover_module_application_ids  # noqa: E402
 from wizard.questions import normalize, questions_payload  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
-from workflow import begin_task, complete, deliver_task, draft, prepare_verification, record_approval, record_sensitive_approval, state_root, task_dir  # noqa: E402
+from workflow import _next_actions, begin_task, complete, deliver_task, draft, prepare_verification, record_approval, record_sensitive_approval, state_root, task_dir  # noqa: E402
 
 
 
@@ -84,6 +84,31 @@ class RepoCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+class GuidanceTests(unittest.TestCase):
+    def test_status_next_guidance_is_state_specific_and_non_mutating(self) -> None:
+        repo = Path("C:/fixture")
+        approved = {"status": "APPROVED"}
+        before = dict(approved)
+        actions = _next_actions(repo, "task-1", approved)
+        self.assertEqual("begin", actions[0]["action"])
+        self.assertIn("task begin", actions[0]["command"])
+        self.assertEqual(before, approved)
+
+        implementing = {
+            "status": "IMPLEMENTING",
+            "active_phase_index": 1,
+            "phases": [{"id": "phase-1"}, {"id": "phase-2"}],
+        }
+        actions = _next_actions(repo, "task-1", implementing)
+        self.assertEqual("checkpoint-phase", actions[0]["action"])
+        self.assertIn("phase-2", actions[0]["command"])
+
+    def test_setup_is_a_public_alias_for_init(self) -> None:
+        parser = harness_cli.build_parser()
+        init_args = parser.parse_args(["init", "--repo", "C:/fixture"])
+        setup_args = parser.parse_args(["setup", "--repo", "C:/fixture"])
+        self.assertIs(init_args.func, setup_args.func)
 
 
 class ChatInstallationDocsTests(unittest.TestCase):
@@ -570,6 +595,24 @@ class PolicyTests(RepoCase):
         self.assertIn("unit_tests", policy["gates"])
         self.assertIn("android-harness", {item["id"] for item in policy["skills"]["skills"]})
 
+    def test_room_schema_uses_data_lane_without_unrelated_reviewers(self) -> None:
+        classification = {
+            "classification_sha256": "r" * 64,
+            "surfaces": ["ROOM_SCHEMA"],
+            "severity": "HIGH",
+            "confidence": "HIGH",
+            "changed_files": 2,
+            "changed_lines": 20,
+        }
+        policy = decide(classification, KIT / "agents" / "skills")
+        self.assertEqual("DATA", policy["risk_lane"])
+        self.assertEqual(
+            {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
+            set(policy["reviewers"]),
+        )
+        self.assertIn("room", policy["gates"])
+        self.assertIn("unit_tests", policy["gates"])
+
     def test_micro_localization_uses_no_semantic_reviewers(self) -> None:
         classification = {
             "classification_sha256": "c" * 64,
@@ -645,6 +688,56 @@ productFlavors { create("free") { dimension = "tier" }; create("eu") { dimension
         }, facts)
         self.assertEqual(":app:assembleFreeEuStaging", answers["assemble"])
         self.assertEqual("FreeEuStaging", answers["build_variant"])
+
+    def test_custom_build_type_is_discovered_and_selectable(self) -> None:
+        write(self.repo / "app/build.gradle", '''plugins { id 'com.android.application' }
+android {
+  namespace 'com.example'
+  defaultConfig { applicationId 'com.example' }
+  buildTypes {
+    debug { debuggable true }
+    release { minifyEnabled true }
+    staging { debuggable false }
+  }
+}
+''')
+        facts = discover(self.repo)
+        self.assertEqual(["staging"], facts["build_types"])
+        variant_question = next(item for item in questions_payload(self.repo, "en", facts) if item["id"] == "i19")
+        self.assertIn("build_type:staging", {item["id"] for item in variant_question["options"]})
+        answers = normalize({
+            "i0": "yes", "i14": ["codex"], "i19": "build_type:staging",
+            "i6": "other", "i6_text": "com.example/.MainActivity", "i20": "none",
+        }, facts)
+        self.assertEqual(":app:assembleStaging", answers["assemble"])
+        self.assertEqual("build_type", answers["flavor_mode"])
+
+    def test_discovery_reports_exact_source_count_and_mixed_ui(self) -> None:
+        for index in range(55):
+            write(self.repo / f"app/src/main/kotlin/com/example/F{index}.kt", f"class F{index}\n")
+        write(self.repo / "app/src/main/res/layout/main.xml", "<FrameLayout />\n")
+        write(self.repo / "app/src/main/kotlin/com/example/Compose.kt", "import androidx.compose.runtime.Composable\n@Composable fun App() {}\n")
+        facts = discover(self.repo)
+        self.assertEqual(57, facts["source_count"])
+        self.assertEqual("hybrid", facts["ui_framework"])
+
+    def test_architecture_choice_list_is_human_sized(self) -> None:
+        families = [
+            {
+                "id": f"family-{index:02d}-opaquehash",
+                "label": f"Family {index}",
+                "confidence": "MEDIUM",
+                "exemplars": [f"Feature{index}Screen.kt"],
+                "dimensions": {"ui_toolkit": "compose", "screen_host": "composable"},
+            }
+            for index in range(20)
+        ]
+        question = next(
+            item for item in questions_payload(None, "en", {"families": families})
+            if item["id"] == "pref_arch_family"
+        )
+        self.assertLessEqual(len(question["options"]), 8)
+        self.assertTrue(all("opaquehash" not in item["label"] for item in question["options"]))
 
 
 class AuthorityAndEvidenceTests(RepoCase):
@@ -1473,7 +1566,10 @@ class EndToEndWorkflowTests(RepoCase):
         ))
         begin_task(Namespace(**common))
         new_file = self.repo / "app/src/main/kotlin/NewFeature.kt"
-        write(new_file, "package com.fixture\n\nclass NewFeature {\n    fun hello() = 42\n}\n")
+        write(
+            new_file,
+            'package com.fixture\n\nclass NewFeature {\n    val api_key = "review-package-secret-123456"\n    fun hello() = 42\n}\n',
+        )
         run_git(self.repo, "add", "app/src/main/kotlin/NewFeature.kt")
         prepare_verification(Namespace(**common))
         package_path, _ = build_package(self.repo, task_id)
@@ -1481,6 +1577,8 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertIn("+++ b/app/src/main/kotlin/NewFeature.kt", pkg_content)
         self.assertNotIn("## NEW FILE app/src/main/kotlin/NewFeature.kt", pkg_content)
         self.assertNotIn("## NEW UNTRACKED FILE app/src/main/kotlin/NewFeature.kt", pkg_content)
+        self.assertNotIn("review-package-secret-123456", pkg_content)
+        self.assertIn("api_key = [REDACTED]", pkg_content)
 
     def test_check_strings_deletion_parity_in_diff_scope(self) -> None:
         write(self.repo / ".harness-setup/answers.json", json.dumps({
@@ -2560,5 +2658,3 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
-

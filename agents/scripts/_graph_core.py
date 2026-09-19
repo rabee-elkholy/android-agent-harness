@@ -220,7 +220,13 @@ DECLARATION_PATTERN = re.compile(
 NAMED_OBJECT_PATTERN = re.compile(r"\bobject\s+([a-zA-Z0-9_]+)\b")
 COMPOSABLE_FUNC_PATTERN = re.compile(r"@Composable\s+(?:(?:public|private|internal)\s+)?fun\s+([a-zA-Z0-9_]+)\s*\(")
 FUNCTION_PATTERN = re.compile(r"\b(?:fun|suspend\s+fun)\s+([a-zA-Z0-9_]+)\s*\(")
-JAVA_METHOD_PATTERN = re.compile(r"(?:public|protected|private|static|\s)+[\w<>\[\],\s]+\s+([a-zA-Z0-9_]+)\s*\([^)]*\)\s*(?:throws\s+[\w,\s]+)?\s*\{")
+# Keep Java member discovery line-oriented. The previous expression had two
+# adjacent, overlapping whitespace repetitions and could backtrack
+# catastrophically on large legacy Java files.
+JAVA_METHOD_PATTERN = re.compile(
+    r"(?m)^[ \t]*(?:(?:public|protected|private|static|final|abstract|synchronized|native|default)\s+)*"
+    r"(?:<[^>\r\n]+>\s+)?[\w.$?<>\[\],]+\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\("
+)
 PYTHON_FUNC_PATTERN = re.compile(r"^\s*def\s+([a-zA-Z0-9_]+)\s*\(", re.MULTILINE)
 EXTENDS_PATTERN = re.compile(r"\b(?:class|interface)\s+[a-zA-Z0-9_]+\s*(?:\([^)]*\))?\s*:\s*([a-zA-Z0-9_,\s<>]+)")
 JAVA_EXTENDS_PATTERN = re.compile(r"\bclass\s+[a-zA-Z0-9_]+\s+extends\s+([a-zA-Z0-9_]+)")
@@ -867,6 +873,16 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
         if sf.is_file():
             try:
                 content = sf.read_text(encoding="utf-8", errors="replace")
+                include_statements = re.finditer(
+                    r'''(?ms)\binclude(?!Build)\s*(?:\((.*?)\)|([^\r\n]*))''', content,
+                )
+                for statement in include_statements:
+                    body = statement.group(1) if statement.group(1) is not None else statement.group(2)
+                    for raw_mod in re.findall(r'''["'](:[a-zA-Z0-9_:\-./]+)["']''', body or ""):
+                        mod = raw_mod.strip()
+                        if not mod.startswith(":"):
+                            mod = f":{mod}"
+                        found_modules.add(mod)
                 for m in GRADLE_INCLUDE_PATTERN.finditer(content):
                     mod = m.group(1).strip()
                     if not mod.startswith(":"):
@@ -948,6 +964,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
         obj_name = m.group(1).strip()
         if obj_name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
             raw_decls.append(obj_name)
+    declared_type_names = set(raw_decls)
 
     is_java = path.suffix.lower() == ".java"
     lang = "Java" if is_java else "Kotlin"
@@ -956,6 +973,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
     raw_funcs = [m.group(1).strip() for m in FUNCTION_PATTERN.finditer(clean_text)]
     if is_java:
         raw_funcs.extend([m.group(1).strip() for m in JAVA_METHOD_PATTERN.finditer(clean_text)])
+    function_names = set(raw_funcs)
 
     for fn in raw_funcs:
         fn_lower = fn.lower()
@@ -997,7 +1015,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
             )
 
     for decl in declarations:
-        if decl in [d for d in raw_funcs if d not in [m.group(1).strip() for m in DECLARATION_PATTERN.finditer(clean_text)]]:
+        if decl in function_names and decl not in declared_type_names:
             continue  # Don't create separate top-level node for functions, they are indexed within class/file declarations
         node_id = f"{pkg}.{decl}" if pkg else decl
         etype = classify_entity_type(decl, rel_path, declarations, raw_text)
@@ -1206,6 +1224,7 @@ class GraphEngine:
         self.fqn_to_node_id: dict[str, str] = {}
         self.symbol_to_node_ids: dict[str, list[str]] = {}
         self.fqn_to_node_ids: dict[str, list[str]] = {}
+        self.file_to_node_ids: dict[str, list[str]] = {}
         self.healed_log: list[str] = []
 
     def compute_file_hash(self, path: Path) -> str:
@@ -1224,6 +1243,7 @@ class GraphEngine:
             self.file_metadata = data.get("file_metadata", {})
             self.graph = DependencyGraph.from_dict(data.get("graph", {}))
             self._rebuild_symbol_index()
+            self._rebuild_file_index()
             return True
         except Exception:
             return False
@@ -1274,12 +1294,18 @@ class GraphEngine:
             else:
                 self.symbol_to_node_id.pop(symbol, None)
 
+    def _rebuild_file_index(self) -> None:
+        self.file_to_node_ids.clear()
+        for node_id, node in self.graph.nodes.items():
+            if node.file_path:
+                self.file_to_node_ids.setdefault(node.file_path, []).append(node_id)
+
     def sync(self, force_full: bool = False, *, persist: bool = True) -> dict[str, Any]:
         """Incremental synchronization: scans repo, updates dirty files, heals stale paths."""
         if not force_full:
             self.load_cache()
 
-        extensions = {".kt", ".java", ".xml", ".gradle", ".kts"}
+        extensions = {".kt", ".java", ".gradle", ".kts"}
         current_files: dict[str, Path] = {}
 
         ignored_dir_names = {".git", "build", ".gradle", ".agents", ".harness-backup", "node_modules", ".idea"}
@@ -1287,7 +1313,10 @@ class GraphEngine:
             dirs[:] = [d for d in dirs if d not in ignored_dir_names]
             for f in files:
                 ext = Path(f).suffix.lower()
-                if ext in extensions:
+                include_xml = ext == ".xml" and (
+                    f"{os.sep}res{os.sep}layout" in root or f"{os.sep}res{os.sep}navigation" in root
+                )
+                if ext in extensions or include_xml:
                     fp = Path(root) / f
                     try:
                         rel = fp.relative_to(self.repo).as_posix()
@@ -1355,7 +1384,7 @@ class GraphEngine:
         for rel in deleted:
             self.file_hashes.pop(rel, None)
             self.file_metadata.pop(rel, None)
-            nodes_to_remove = [nid for nid, n in self.graph.nodes.items() if n.file_path == rel]
+            nodes_to_remove = list(self.file_to_node_ids.get(rel, []))
             for nid in nodes_to_remove:
                 self.graph.remove_node(nid)
 
@@ -1373,7 +1402,7 @@ class GraphEngine:
             for rel in (dirty_files if self.graph.nodes else current_files.keys()):
                 files_parsed += 1
                 p = current_files[rel]
-                existing_nodes = [nid for nid, n in self.graph.nodes.items() if n.file_path == rel]
+                existing_nodes = list(self.file_to_node_ids.get(rel, []))
                 for nid in existing_nodes:
                     self.graph.remove_node(nid)
 
@@ -1400,6 +1429,7 @@ class GraphEngine:
                         self.graph.add_node(an)
 
             self._rebuild_symbol_index()
+            self._rebuild_file_index()
 
             for node in list(self.graph.nodes.values()):
                 if node.type == EntityType.MODULE.value:

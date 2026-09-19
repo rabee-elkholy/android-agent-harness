@@ -557,6 +557,8 @@ def cmd_context(args: argparse.Namespace) -> int:
     cli_args = [args.subaction, "--repo", str(repo)]
     if getattr(args, "json", False):
         cli_args.append("--json")
+    if args.subaction == "preview" and getattr(args, "full", False):
+        cli_args.append("--full")
     if args.subaction == "note":
         text = getattr(args, "note", None) or getattr(args, "note_text", None)
         if text:
@@ -848,7 +850,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    sp = sub.add_parser("init", help="Run the setup wizard against an Android checkout.")
+    sp = sub.add_parser("init", aliases=["setup"], help="Run the setup wizard against an Android checkout.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--lang", choices=("en", "ar"), default=None, help="Wizard language.")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
@@ -928,6 +930,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
     sp.add_argument("--json", action="store_true", help="Format output as JSON.")
+    sp.add_argument("--full", action="store_true", help="For context preview, print the complete diagnostic payload.")
     sp.set_defaults(func=cmd_context)
 
     sp = sub.add_parser("task-context", help="Resolve bounded read-only context for one file or symbol.")

@@ -4,6 +4,23 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.51] - 2026-09-19
+
+### Production Hardening for Large Android Projects
+
+- **Fast, deterministic project intelligence**:
+  - Replaced repeated full-tree scans with shared one-pass indexes across classification, task context, Room analysis, graph discovery, and setup inventory.
+  - Added regression coverage that verifies bounded work and deterministic results without brittle wall-clock thresholds.
+- **Safe, bounded model context**:
+  - Redacted credentials, private keys, authorization headers, and credential-bearing URLs from generated review packages.
+  - Bounded the default context preview while preserving `--full` for explicit deep inspection.
+- **More accurate Android discovery**:
+  - Added multiline Gradle module discovery, mixed Compose/XML detection, custom build-type detection, exact source counts, and concise architecture summaries.
+  - Narrowed Room-related work to the data review lane instead of triggering unrelated reviewers and gates.
+- **Smoother daily workflow**:
+  - Added the `setup` alias and deterministic, non-mutating `task status --next` guidance.
+  - Updated README and operator documentation for the hardened workflow and large-project behavior.
+
 ## [1.0.50] - 2026-09-19
 
 ### Safe Project Intelligence for Mixed Android Codebases

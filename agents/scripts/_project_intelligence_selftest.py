@@ -13,6 +13,7 @@ sys.path.insert(0, str(HERE))
 
 import project_context  # noqa: E402
 from _graph_core import GraphEngine  # noqa: E402
+from generate_project_context import summarize_preview  # noqa: E402
 from project_context import (  # noqa: E402
     ContextSourceChangedDuringExtraction,
     extract_consistent_project_context,
@@ -69,6 +70,15 @@ class ProjectIntelligenceTests(unittest.TestCase):
         self.assertEqual("presenter_contract", profile["presentation_pattern"])
         self.assertEqual(["XML_HOSTS_COMPOSE"], profile["interop"])
         self.assertEqual(["xml", "compose"], profile["ui_toolkits"])
+
+    def test_default_preview_is_bounded_and_omits_profile_bodies(self) -> None:
+        self.mixed_project()
+        payload = extract_project_facts(self.repo)
+        summary = summarize_preview(payload)
+        self.assertNotIn("facts", summary)
+        self.assertNotIn("advisory_knowledge", summary)
+        self.assertLessEqual(len(summary["summary"]["representative_families"]), 8)
+        self.assertTrue(summary["full_payload_available"])
 
     def test_authoritative_family_ids_do_not_depend_on_advisory_block(self) -> None:
         self.mixed_project()
@@ -172,6 +182,19 @@ class ProjectIntelligenceTests(unittest.TestCase):
         after_unrelated = resolve_task_context(self.repo, symbol="Fixture0")["graph_sync"]
         self.assertLess(after_unrelated["files_parsed"], cold["files_parsed"] * 0.25)
         self.assertEqual(1, after_unrelated["files_parsed"])
+
+    def test_large_java_sources_do_not_trigger_regex_backtracking(self) -> None:
+        methods = "\n".join(
+            f"    public static final java.util.List<String> method{index}(String value) {{ return null; }}"
+            for index in range(500)
+        )
+        path = self.write(
+            "app/src/main/java/com/example/LargeLegacy.java",
+            f"package com.example;\npublic class LargeLegacy {{\n{methods}\n}}\n",
+        )
+        result = resolve_task_context(self.repo, file=str(path))
+        self.assertEqual("RESOLVED", result["status"])
+        self.assertIn("LargeLegacy", result["target"]["symbols"])
 
     def test_failed_snapshot_commit_restores_previous_views_and_facts(self) -> None:
         self.write("app/src/main/kotlin/com/example/Before.kt", "package com.example\nclass Before {}")

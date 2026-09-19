@@ -90,7 +90,11 @@ def run_tests() -> bool:
         settings_file.write_text(
             '''
             rootProject.name = "FixtureApp"
-            include(":app")
+            include(":app", ":gdpr")
+            include(
+                ":feature:settings",
+                ":feature:reports",
+            )
             include(":core:network")
             include(":core:database")
             include(":feature:login")
@@ -123,6 +127,8 @@ def run_tests() -> bool:
 
         mod_nodes, mod_edges = parse_gradle_modules(temp_dir)
         assert_eq(":app" in mod_nodes, True, "Discovered :app module")
+        assert_eq(":gdpr" in mod_nodes, True, "Discovered second module from one include statement")
+        assert_eq(":feature:reports" in mod_nodes, True, "Discovered module from multiline include statement")
         assert_eq(":feature:login" in mod_nodes, True, "Discovered :feature:login module")
         assert_eq(":core:network" in mod_nodes, True, "Discovered :core:network module")
         assert_eq(":core:database" in mod_nodes, True, "Discovered :core:database module")

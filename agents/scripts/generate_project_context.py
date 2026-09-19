@@ -22,7 +22,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     payload = extract_project_facts(repo, in_memory_graph=True)
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(json.dumps(payload if args.full else summarize_preview(payload), ensure_ascii=False, indent=2))
         return 0
 
     facts = payload.get("facts") or {}
@@ -75,6 +75,44 @@ def cmd_preview(args: argparse.Namespace) -> int:
     print(f"  Capabilities      : {', '.join(detected_caps) if detected_caps else 'Standard Android'}")
     print("==================================================")
     return 0
+
+
+def summarize_preview(payload: dict) -> dict:
+    """Return a bounded discovery summary; full facts stay local and opt-in."""
+    facts = payload.get("facts") or {}
+    architecture = facts.get("architecture") or {}
+    advisory = payload.get("advisory_knowledge") or {}
+    families = architecture.get("families") or []
+    persistence = facts.get("persistence") or {}
+    ui = facts.get("ui") or {}
+    modules = facts.get("modules") or []
+    return {
+        "schema_version": payload.get("schema_version"),
+        "extractor_version": payload.get("extractor_version"),
+        "context_fingerprint_sha256": payload.get("context_fingerprint_sha256"),
+        "source_fingerprint_sha256": payload.get("source_fingerprint_sha256"),
+        "summary": {
+            "modules": modules,
+            "ui_framework": ui.get("framework", "unknown"),
+            "room_databases": [
+                {"symbol": item.get("symbol"), "version": item.get("version"), "path": item.get("path")}
+                for item in (persistence.get("room_databases") or [])
+            ],
+            "architecture_family_count": len(families),
+            "representative_families": [
+                {
+                    "id": item.get("id"), "label": item.get("label"),
+                    "confidence": item.get("confidence"),
+                    "exemplars": list(item.get("exemplars") or [])[:2],
+                }
+                for item in families[:8]
+            ],
+            "local_profile_count": len(advisory.get("local_profiles") or []),
+            "convention_profile_count": len(advisory.get("convention_profiles") or []),
+        },
+        "full_payload_available": True,
+        "full_payload_command": "context preview --full --json",
+    }
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -180,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     p_prev = sub.add_parser("preview")
     p_prev.add_argument("--repo", default=".")
     p_prev.add_argument("--json", action="store_true")
+    p_prev.add_argument("--full", action="store_true", help="Print the complete unbounded diagnostic payload")
 
     p_gen = sub.add_parser("generate")
     p_gen.add_argument("--repo", default=".")

@@ -107,8 +107,13 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             }
         )
     flavors = d.get("flavors") or []
-    if flavors:
+    build_types = d.get("build_types") or []
+    if flavors or build_types:
         flavor_opts = [{"id": f, "label": f} for f in flavors]
+        flavor_opts.extend(
+            {"id": f"build_type:{name}", "label": f"{name} build type"}
+            for name in build_types
+        )
         flavor_opts.append({"id": "default", "label": t(lang, "i19_default")})
         flavor_opts.append({"id": "other", "label": t(lang, "i19_other")})
         qs.append(
@@ -345,7 +350,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                             break
                 if not ex_hint and exs:
                     ex_hint = f" — e.g. {Path(exs[0]).name}"
-            return f"{fam_id} — {title}{detail_str}{ex_hint}"
+            return f"{title}{detail_str}{ex_hint}"
 
         recommended_fam_id = None
         if saved_pref and saved_pref in fam_ids:
@@ -356,7 +361,15 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             recommended_fam_id = None
 
 
-        other_fams = sorted(families, key=lambda f: str(f.get("id") or ""))
+        confidence_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        other_fams = sorted(
+            families,
+            key=lambda f: (
+                confidence_rank.get(str(f.get("confidence") or "").upper(), 3),
+                -len(f.get("exemplars") or []),
+                str(f.get("id") or ""),
+            ),
+        )
         if saved_pref and saved_pref in fam_ids:
             sorted_fams = [f for f in other_fams if str(f.get("id") or "") == saved_pref] + [
                 f for f in other_fams if str(f.get("id") or "") != saved_pref
@@ -367,6 +380,11 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ]
         else:
             sorted_fams = other_fams
+
+        # Large legacy apps can expose dozens of mechanically distinct family
+        # hashes. Keep the setup decision human-sized; local task resolution
+        # still retains and uses every family from project facts.
+        sorted_fams = sorted_fams[:7]
 
 
         arch_opts = []
@@ -391,7 +409,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                 "station_title": "Android Architecture & Target Policy",
                 "required": True,
                 "allow_multiple": False,
-                "prompt": t(lang, "pref_arch_family") or "Which architecture family should be preferred for NEW screens and features?",
+                "prompt": t(lang, "pref_arch_family") or "Which representative architecture should be preferred for NEW screens and features? Local changes still preserve their nearest existing family.",
                 "options": arch_opts,
             }
         )
@@ -793,21 +811,29 @@ def normalize(raw: dict, facts: dict) -> dict:
     if chat_lang not in {"en", "mirror", "ar"}:
         chat_lang = "mirror"
     discovered_flavors = [str(f) for f in (facts.get("flavors") or [])]
+    discovered_build_types = [str(item) for item in (facts.get("build_types") or [])]
     flavor_choice = str(raw.get("i19") or "").strip()
     custom_variant = flavor_choice == "other"
-    flavor = str(raw.get("i19_text") or "").strip() if custom_variant else flavor_choice
+    selected_build_type = flavor_choice.split(":", 1)[1] if flavor_choice.startswith("build_type:") else ""
+    flavor = str(raw.get("i19_text") or "").strip() if custom_variant else ("" if selected_build_type else flavor_choice)
     if flavor in ("", "default"):
         flavor = ""
     if discovered_flavors and flavor and not custom_variant and flavor not in discovered_flavors:
         raise SystemExit(f"Unknown flavor '{flavor}'. Known: {', '.join(discovered_flavors)}")
     if custom_variant and not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", flavor):
         raise SystemExit("Custom build variant must be one Gradle variant name, for example FreeEuStaging.")
-    build_variant = flavor if custom_variant else (f"{_flavor_pascal(flavor)}Debug" if flavor else "Debug")
-    assemble_tasks = (
-        {f: f"{module.rstrip(':')}:assemble{_flavor_pascal(f)}Debug" for f in discovered_flavors}
-        if module
-        else {}
+    if selected_build_type and selected_build_type not in discovered_build_types:
+        raise SystemExit(f"Unknown build type '{selected_build_type}'. Known: {', '.join(discovered_build_types)}")
+    build_variant = (
+        flavor if custom_variant
+        else _flavor_pascal(selected_build_type) if selected_build_type
+        else f"{_flavor_pascal(flavor)}Debug" if flavor
+        else "Debug"
     )
+    assemble_tasks = {}
+    if module:
+        assemble_tasks.update({f: f"{module.rstrip(':')}:assemble{_flavor_pascal(f)}Debug" for f in discovered_flavors})
+        assemble_tasks.update({f"build_type:{name}": f"{module.rstrip(':')}:assemble{_flavor_pascal(name)}" for name in discovered_build_types})
     gemini = raw.get("i12") or auto["gemini_config"]
     if not facts.get("gemini"):
         gemini = "skip"
@@ -835,7 +861,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "project_kind": project_kind,
         "assemble": f"{module.rstrip(':')}:assemble{build_variant}",
         "build_variant": build_variant,
-        "flavor_mode": "custom_variant" if custom_variant else "flavor" if flavor else "default",
+        "flavor_mode": "custom_variant" if custom_variant else "build_type" if selected_build_type else "flavor" if flavor else "default",
         "flavor": flavor,
         "assemble_tasks": assemble_tasks,
         "launcher": launcher,

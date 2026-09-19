@@ -36,6 +36,7 @@ copied to the repository or review evidence.
 
 ```bash
 python harness_cli.py init --repo /path/to/project
+python harness_cli.py setup --repo /path/to/project
 python harness_cli.py task draft --repo /path/to/project --task-id feature-1 --outcome "..." --expected-surfaces BUSINESS_LOGIC --expected-modules :app
 python harness_cli.py task approve --repo /path/to/project --task-id feature-1 --source conversation --proof-reference <host-message-id> --enforcement-tier RULE_ENFORCED
 python harness_cli.py task begin --repo /path/to/project --task-id feature-1
@@ -43,6 +44,9 @@ python harness_cli.py doctor --repo /path/to/project --json
 python harness_cli.py task-context --repo /path/to/project --file app/src/main/kotlin/com/example/ProfileScreen.kt --json
 python harness_cli.py task-context --repo /path/to/project --symbol ProfileViewModel --module :feature:profile --source-set main --json
 python harness_cli.py context refresh --repo /path/to/project
+python harness_cli.py context preview --repo /path/to/project --json
+python harness_cli.py context preview --repo /path/to/project --json --full
+python harness_cli.py task status --repo /path/to/project --task-id feature-1 --next
 python harness_cli.py repair --repo /path/to/project --kit /path/to/pinned/kit
 python harness_cli.py update --repo /path/to/project
 python harness_cli.py uninstall --repo /path/to/project
@@ -65,6 +69,8 @@ The final change classification selects the smallest valid reviewer set.
 Eligible documentation/localization/resource micro changes use
 `REVIEW_NOT_REQUIRED_BY_POLICY`. Normal business logic, UI, coroutine,
 network, persistence, native, and build changes select their relevant roles.
+Room schema changes use the focused `DATA` lane (Room gate, tests, correctness,
+and regression review) rather than automatically selecting all five roles.
 Critical security, billing, authentication, cryptography, or sensitive-data
 changes select all five specialist roles. Test changes add Test Quality.
 
