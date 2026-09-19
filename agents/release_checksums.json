@@ -54,7 +54,7 @@
     "agents/scripts/_repo_files.py": "fc54ef08ebd1a3f7d4cdd805ab425491caedfcb49742ce6261e74ef78fcdf6a2",
     "agents/scripts/_security_selftest.py": "0bf1f77ea1bcb73ff07f18551294b866f2a034e14c696407c380e8262a2297d2",
     "agents/scripts/_stabilization_v41_selftest.py": "8926e83ca7426bb8247eb230d8f7f598ffaf01670056d71c691341c816d9c028",
-    "agents/scripts/_stabilization_v42_selftest.py": "232065b85949611fa90816fb6704e25e39ec7719aa089dc6c29690d3545e716a",
+    "agents/scripts/_stabilization_v42_selftest.py": "0f7baf10f94556302be2891f30c6ad9785bc4a50e280e5dd7eae6113213ba0c1",
     "agents/scripts/_variants.py": "9e7b8c3a813936e99118efc41288a950a5171cfe719c4e8cd1b5234960a26dcb",
     "agents/scripts/_verification_recipes.py": "ad8b6dad0b18bb562e0261d4dd6563b666e4954c8f49ec652f17e2557483f33e",
     "agents/scripts/_vnext_common.py": "e425466db01bd10763673ce6d8e0d710ebe028bed3c84f46022c5bf35e232936",

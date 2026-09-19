@@ -58,6 +58,9 @@ def _setup_mock_repo(root: Path) -> None:
     (root / "build.gradle").write_text("// top-level\n", encoding="utf-8")
     (root / "settings.gradle").write_text("include ':app'\n", encoding="utf-8")
     (root / "gradlew.bat").write_text("@echo off\n", encoding="utf-8")
+    unix_wrapper = root / "gradlew"
+    unix_wrapper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    unix_wrapper.chmod(unix_wrapper.stat().st_mode | 0o111)
 
     version_file = SCRIPTS.parent / "VERSION"
     v_str = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.42"
@@ -1496,5 +1499,4 @@ class PreflightScopeV42Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
 
