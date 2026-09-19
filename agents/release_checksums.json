@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "agents/.gitignore": "8a0eaa7cc8e55d17da96f31f6863b5e9b5aba15bb03fd6e8fb07a8cb89e5715c",
-    "agents/VERSION": "a00e0cdc6953446b62d3c5839d5e00521664962d36be7535b27414cc77d2fa90",
+    "agents/VERSION": "a0a93a44cc212c268474e5d33de91cccac5c3c307f394fe45f845972f04fad29",
     "agents/command-packs/check-strings.md.template": "688d464d69849d4b5bc68faae49bf79a196d882765ac5eaf9b829bd8df8b9c0b",
     "agents/command-packs/commit-msg.md.template": "cf8bd58a510a6953a66e2c705c8c9515f0369e4fa454af9bbc9c7f6b1805b80e",
     "agents/command-packs/crash-triage.md.template": "acea2311229cc8d4f7d1eae515a4d3f3b52246437df25ee75dfa40d3407dc69a",
@@ -51,7 +51,7 @@
     "agents/scripts/_product.py": "483c39a60c57678c9d217eb38a7a7c84fb9654d43794d80c8b784fd82c539bb1",
     "agents/scripts/_project_intelligence_selftest.py": "8a6eee294abed5d84f6776fe59038436af6ee07c713e92bad0f6ffb8154daa86",
     "agents/scripts/_public_cli_selftest.py": "c6426f49172677e1eab1b59420f712a4f3fc09bec33ee1d3b81b828ce497b442",
-    "agents/scripts/_release_safety_selftest.py": "ce080610f0d2add85ba95170038ad03312278d3c7db4ea6b1b3e8a4ba4c4d6b7",
+    "agents/scripts/_release_safety_selftest.py": "c8661b0fc06d801242e6dae6a115f212a1278916f1ad8629839f1cd5e7cdbf78",
     "agents/scripts/_repo_files.py": "ddbfe52ccf69ddfd3548c32787e0317143202eca94604fef1e2e544dd8f83ef9",
     "agents/scripts/_security_selftest.py": "d75c4b486412e901630493720cf6609d1709c8c1af7f4e39ee98ad643aee296e",
     "agents/scripts/_stabilization_v41_selftest.py": "8926e83ca7426bb8247eb230d8f7f598ffaf01670056d71c691341c816d9c028",

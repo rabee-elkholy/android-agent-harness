@@ -21,6 +21,7 @@ CHECKSUM_RE = re.compile(
 PINNED_ACTION_RE = re.compile(
     r"uses:\s*pypa/gh-action-pypi-publish@(?P<ref>[^\s#]+)"
 )
+ACTION_REF_RE = re.compile(r"^\s*-?\s*uses:\s*[^\s@]+@(?P<ref>[^\s#]+)", re.MULTILINE)
 FIXED_SCRIPT_COUNT_RE = re.compile(r"\b\d+\s+core\s+(?:harness\s+)?scripts\b", re.IGNORECASE)
 TEXT_EXTENSIONS = {
     ".py", ".md", ".json", ".toml", ".yml", ".yaml", ".txt", ".xml",
@@ -86,6 +87,36 @@ def publish_workflow_errors(text: str) -> list[str]:
         errors.append("publish workflow: twine must be pinned to an exact version")
     if "id-token: write" not in text:
         errors.append("publish workflow: trusted-publishing id-token permission is missing")
+    return errors
+
+
+def workflow_integrity_errors(repo_root: Path) -> list[str]:
+    """Lock immutable actions and the declared runtime/platform coverage."""
+    errors: list[str] = []
+    workflow_dir = repo_root / ".github" / "workflows"
+    for path in sorted(workflow_dir.glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        for match in ACTION_REF_RE.finditer(text):
+            if not re.fullmatch(r"[0-9a-f]{40}", match.group("ref")):
+                errors.append(
+                    f"{path.relative_to(repo_root).as_posix()}: action references must use full commit SHAs"
+                )
+                break
+
+    ci_path = workflow_dir / "ci.yml"
+    ci = ci_path.read_text(encoding="utf-8")
+    for version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
+        if f"python-version: '{version}'" not in ci:
+            errors.append(f"CI does not exercise supported Python {version}")
+    for runner in ("ubuntu-24.04", "windows-2025", "macos-15-intel"):
+        if runner not in ci:
+            errors.append(f"CI does not exercise supported runner {runner}")
+    if "run: python harness_cli.py selftest" not in ci:
+        errors.append("CI must run the canonical full selftest")
+    if re.search(r"python-version:\s*\[[^\]]+\]", ci):
+        errors.append(
+            "CI must use an explicit compatibility matrix instead of multiplying the full suite across every platform/runtime pair"
+        )
     return errors
 
 
@@ -218,6 +249,7 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
 
     publish = (repo_root / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
     errors.extend(publish_workflow_errors(publish))
+    errors.extend(workflow_integrity_errors(repo_root))
     return errors
 
 
