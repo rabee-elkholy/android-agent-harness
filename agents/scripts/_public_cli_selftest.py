@@ -1035,6 +1035,11 @@ class PhaseDRepairSelftest(unittest.TestCase):
         (self.repo / ".agents" / "VERSION").write_text(f"{kit_version}\n", encoding="utf-8")
 
         shutil.copytree(KIT / "agents", self.repo / ".agents", dirs_exist_ok=True)
+        # Runtime state in a raw kit checkout is not installable content. Keep
+        # this fixture isolated from any earlier suite that exercised the kit
+        # in-place and may have left a fail-closed active-task record.
+        shutil.rmtree(self.repo / ".agents" / "state", ignore_errors=True)
+        (self.repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
 
         ctx_dir = self.repo / ".agents" / "project-context"
         ctx_dir.mkdir(parents=True, exist_ok=True)
