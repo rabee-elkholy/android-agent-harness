@@ -7,6 +7,7 @@ tests instead protect exact inventory and deterministic policy behavior.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,7 +28,8 @@ def git(repo: Path, *args: str) -> None:
 
 def main() -> int:
     count = int(os.environ.get("HARNESS_BENCH_FILES", "20000"))
-    with tempfile.TemporaryDirectory() as temp:
+    kwargs = {"ignore_cleanup_errors": True} if sys.version_info >= (3, 10) else {}
+    with tempfile.TemporaryDirectory(**kwargs) as temp:
         repo = Path(temp)
         git(repo, "init", "-q")
         git(repo, "config", "user.name", "Harness Benchmark")
@@ -61,6 +63,10 @@ def main() -> int:
         if not policies or any(item != policies[0] for item in policies[1:]):
             print("[FAIL] policy routing is not deterministic", file=sys.stderr)
             return 1
+        try:
+            shutil.rmtree(temp, ignore_errors=True)
+        except Exception:
+            pass
     return 0
 
 

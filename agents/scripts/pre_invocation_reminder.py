@@ -18,8 +18,8 @@ def _message() -> str:
             "Android Harness: discovery should start with targeted context (`python .agents/harness.py task-context --file <path> --json`) "
             "or architectural graph (`python .agents/scripts/project_graph.py --feature <name>` / `--find <Symbol>`). "
             "Unanchored repository-wide search cascades are forbidden; targeted/scoped search within feature directories or resources is permitted. "
-            "Pre-planning clarification: Guessing edge cases or missing business logic is strictly prohibited. "
-            "If any requirement, fallback, or scenario is ambiguous, invoke `ask_question` to clarify with developer BEFORE drafting the plan. "
+            "Pre-planning clarification: When asked to explore edge cases, study scenarios, or validate architecture first, present and discuss them directly in plain chat before drafting any plan. Guessing edge cases or missing business logic is strictly prohibited. "
+            "Clarify ambiguous requirements via `ask_question` or plain chat BEFORE drafting the plan. "
             "Verification plan must use strict 6-step headings."
         )
     status = str(plan.get("status") or "UNKNOWN")
@@ -76,7 +76,7 @@ def _compact_message() -> str:
             return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Fix issues and run: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`"
         if status == "READY_FOR_DELIVERY":
             return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close."
-        return f"Harness [Task {task_id}: {status}]: Discovery uses `project_graph.py`. For unrelated work or updates, cancel active task first (workflow.py cancel). Ask developer before guessing missing scenarios."
+        return f"Harness [Task {task_id}: {status}]: Discovery uses `project_graph.py`. Discuss requested edge cases in chat before planning. For unrelated work or updates, cancel active task first (workflow.py cancel). Ask developer before guessing missing scenarios."
     except Exception:
         return "Android Harness: Use `project_graph.py --feature <name>` or `--find <Symbol>`. Unanchored grep cascades and guesswork are forbidden."
 

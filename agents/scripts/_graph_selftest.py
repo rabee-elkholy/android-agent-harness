@@ -503,6 +503,65 @@ import argparse
         assert_eq("campaigns" in features_summary, True, "Features summary lists 'campaigns' feature")
         assert_eq("screen(s)" in features_summary, True, "Features summary breaks down screens")
 
+        # -----------------------------------------------------------------
+        # Test 11: Ranked Symbol Discovery & Partitioned Search
+        # -----------------------------------------------------------------
+        print("\n[*] Test 11: Ranked Symbol Discovery & Partitioned Search")
+        rank_g = DependencyGraph()
+        # Add exact match
+        rank_g.add_node(GraphNode(id="Scanner", name="Scanner", type=EntityType.COMPONENT.value, file_path="core/Scanner.kt"))
+        # Add prefix match
+        rank_g.add_node(GraphNode(id="ScannerHelper", name="ScannerHelper", type=EntityType.COMPONENT.value, file_path="core/ScannerHelper.kt"))
+        # Add substring matches
+        rank_g.add_node(GraphNode(id="FoodScannerFragment", name="FoodScannerFragment", type=EntityType.SCREEN.value, file_path="features/FoodScannerFragment.kt"))
+        rank_g.add_node(GraphNode(id="BarcodeScannerActivity", name="BarcodeScannerActivity", type=EntityType.SCREEN.value, file_path="features/BarcodeScannerActivity.kt"))
+        # Add 20 extra nodes to test limit cap
+        for i in range(20):
+            rank_g.add_node(GraphNode(id=f"ScannerExtra{i:02d}", name=f"ScannerExtra{i:02d}", type=EntityType.COMPONENT.value))
+
+        exacts, partials = rank_g.find_nodes_partitioned("Scanner", limit=15)
+        assert_eq(len(exacts), 1, "find_nodes_partitioned isolated exact match")
+        assert_eq(exacts[0].name, "Scanner", "Exact match is Scanner")
+        partial_names = [p.name for p in partials]
+        assert_eq("ScannerHelper" in partial_names, True, "ScannerHelper is in partial matches")
+        assert_eq(len(partials), 15, "Partial matches are capped at limit=15")
+
+        # Test ranking hierarchy specifically: prefix match ranks before substring match
+        sub_rank_g = DependencyGraph()
+        sub_rank_g.add_node(GraphNode(id="ScannerHelper", name="ScannerHelper", type=EntityType.COMPONENT.value))
+        sub_rank_g.add_node(GraphNode(id="FoodScannerFragment", name="FoodScannerFragment", type=EntityType.SCREEN.value))
+        _, sub_partials = sub_rank_g.find_nodes_partitioned("Scanner", limit=10)
+        sub_names = [p.name for p in sub_partials]
+        assert_eq(sub_names.index("ScannerHelper") < sub_names.index("FoodScannerFragment"), True, "Prefix match ranks before substring match")
+
+        # Formatting with badges
+        exact_formatted = rank_g.format_symbol_match(exacts[0], match_badge="[EXACT MATCH]")
+        assert_eq("[EXACT MATCH]" in exact_formatted, True, "format_symbol_match includes exact badge")
+        partial_formatted = rank_g.format_symbol_match(partials[0], match_badge="[PARTIAL MATCH]")
+        assert_eq("[PARTIAL MATCH]" in partial_formatted, True, "format_symbol_match includes partial badge")
+
+        # Test find_nodes backwards compatibility: exact match comes first
+        all_nodes = rank_g.find_nodes("Scanner", limit=60)
+        assert_eq(all_nodes[0].name, "Scanner", "find_nodes has exact match first")
+        assert_eq(len(all_nodes) >= 20, True, "find_nodes respects higher limit")
+
+        # CLI execution test with project_graph.py
+        import io
+        from contextlib import redirect_stdout
+        import project_graph
+        saved_repo = project_graph.REPO
+        try:
+            project_graph.REPO = temp_dir
+            f = io.StringIO()
+            with redirect_stdout(f):
+                code = project_graph.main(["--find", "Campaigns"])
+            out = f.getvalue()
+            assert_eq(code, 0, "CLI --find on partial query exits with code 0")
+            assert_eq("Campaigns" in out, True, "CLI output contains matched symbol")
+            assert_eq("[*] Partial Matches" in out or "[*] Exact Matches" in out, True, "CLI formats partitioned matches")
+        finally:
+            project_graph.REPO = saved_repo
+
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

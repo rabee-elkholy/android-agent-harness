@@ -153,10 +153,10 @@ def main(argv: list[str] | None = None) -> int:
             sub_g.add_edge(se.source, se.target, kind=se.kind)
         graph_to_render = sub_g
 
-    # Handle --find query with self-healing, rich match details, and multi-match
+    # Handle --find query with self-healing, rich match details, and ranked symbol discovery
     elif args.find:
-        matches = engine.graph.find_nodes(args.find)
-        if not matches:
+        exact_matches, partial_matches = engine.graph.find_nodes_partitioned(args.find, limit=15)
+        if not exact_matches and not partial_matches:
             node, heal_msg = engine.heal_symbol(args.find)
             if heal_msg:
                 live_print(f"[*] {heal_msg}")
@@ -164,25 +164,33 @@ def main(argv: list[str] | None = None) -> int:
                 live_print(f"[!] Symbol '{args.find}' not found in code graph.")
                 live_print("[*] Tip: '--find' searches code AST symbols (classes, methods, composables). For feature packages use '--feature <name>', or for UI string resources use '--string <text>'.")
                 return 1
-            matches = [node]
+            exact_matches = [node]
 
-        live_print(f"[*] Found {len(matches)} component(s) matching '{args.find}':")
-        for m in matches[:10]:
-            live_print(engine.graph.format_symbol_match(m, query=args.find))
+        if exact_matches:
+            live_print(f"[*] Exact Matches ({len(exact_matches)}):")
+            for m in exact_matches:
+                live_print(engine.graph.format_symbol_match(m, query=args.find, match_badge="[EXACT MATCH]"))
 
-        if len(matches) == 1:
-            focus_node_id = matches[0].id
+        if partial_matches:
+            header = (
+                f"\n[*] Partial / Related Matches ({len(partial_matches)}, top 15):"
+                if exact_matches
+                else f"[*] Partial Matches ({len(partial_matches)}, top 15):"
+            )
+            live_print(header)
+            for m in partial_matches:
+                live_print(engine.graph.format_symbol_match(m, query=args.find, match_badge="[PARTIAL MATCH]"))
+
+        if len(exact_matches) == 1:
+            focus_node_id = exact_matches[0].id
+        elif not exact_matches and len(partial_matches) == 1:
+            focus_node_id = partial_matches[0].id
         else:
-            # Multi-match query: extract unified subgraph across all matching nodes
-            start_ids = [m.id for m in matches[:15]]
-            sub_nodes, sub_edges = engine.graph.extract_subgraph(start_ids, max_depth=args.depth, direction="outgoing")
-            from _graph_core import DependencyGraph
-            sub_g = DependencyGraph()
-            for sn in sub_nodes.values():
-                sub_g.add_node(sn)
-            for se in sub_edges:
-                sub_g.add_edge(se.source, se.target, kind=se.kind)
-            graph_to_render = sub_g
+            if len(exact_matches) > 1:
+                live_print("\n[*] Multiple exact matches found across modules. Specify module or use 'task-context --file <path>'.")
+            else:
+                live_print("\n[*] Tip: Multiple partial matches found. Specify the exact symbol with '--find <ExactSymbol>' to view its dependency graph.")
+            return 0
 
     # Handle --screen query
     elif args.screen:

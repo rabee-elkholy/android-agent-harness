@@ -7,7 +7,7 @@ Read `.agents/rules/harness-rules.md` before acting; it is the authoritative saf
 
 - Read-only discussion and discovery need no plan. Start with `{{PY}} .agents/harness.py task-context --file <path> --json` (or `--symbol`); use `project_graph.py --feature` only for a deliberately broad slice.
 - Do not inspect `.agents/scripts/**` during normal app work. If a documented command fails, violates its contract, Doctor reports corruption, or the developer explicitly asks to debug the harness, report the failure and follow the kernel's diagnostic boundary.
-- Clarify material ambiguity before planning. Before mutations, draft the task plan and wait for explicit approval. One approval covers the stated multi-phase scope.
+- Clarify material ambiguity before planning. When asked to explore edge cases or study scenarios before starting, present and discuss them in plain chat first. Before mutations, draft the task plan and wait for explicit approval. One approval covers the stated multi-phase scope.
 - After approval, execute phases autonomously. Follow-ups within active scope must execute immediately: never generate redundant plan artifacts or stall for nonexistent UI buttons.
 - Run the classifier and central policy; load only selected skills. The policy alone selects gates, reviewers, assemble, and device checks.
 - Verification order is preflight, tests, routed independent reviews, final assemble/device, Mobile Verification Walkthrough and sign-off, then read-only final verification.

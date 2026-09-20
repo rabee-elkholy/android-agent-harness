@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Closed safety bypass loopholes in `DANGEROUS` regexes by matching `harness(?:\.py)?` alongside `harness_cli.py` for task cancel and draft overrides.
 - Aligned agent discovery guidance across `GEMINI.md`, `harness-rules.md`, and pre-invocation reminders to explicitly document targeted `task-context` and confirm that bounded search within feature directories is permitted.
 - Replaced misleading generic plan errors with actionable diagnostics for unrecognized or malformed inspection commands.
+- Implemented ranked symbol search in project graph: exact matches are partitioned and displayed first with clear badges, followed by prefix and substring matches capped at 15 without flooding agent context with multi-match topology dumps.
+- Resolved Python 3.13 `TemporaryDirectory` cleanup race condition in performance benchmark selftest.
+- Enforced pre-planning edge-case and scenario discussion across `GEMINI.md`, `harness-rules.md`, and pre-invocation reminders: agents are strictly forbidden from jumping to implementation plan artifacts when requested to study scenarios or explore edge cases before starting.
 
 ## [1.0.55] - 2026-09-20
 

@@ -3,7 +3,7 @@
 Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins. Python: `{{PY}}`. Device: {{DEVICE_POLICY}} {{GIT_POLICY}}
 
 - Discover with `{{PY}} .agents/harness.py task-context --file <path> --json` (or `--symbol`) before source inspection. Use broad `project_graph.py --feature` only when needed.
-- Discuss engineering questions before planning and clarify material ambiguity. Mutations require an approved plan.
+- Discuss engineering questions and surface requested edge cases in chat before planning; clarify material ambiguity. Mutations require an approved plan.
 - **Antigravity Planning Lifecycle**: Proceed appears only for initial approval. Active-scope follow-ups execute immediately without a new plan.
 - Run classifier and central policy. Follow only selected skills, gates, reviewers, and device checks.
 - Verification order: preflight → tests → independent reviewers → assemble/device → Mobile Verification Walkthrough and sign-off → read-only verify.

@@ -323,75 +323,122 @@ class DependencyGraph:
                 return node
         return None
 
-    def find_nodes(self, query: str, limit: int = 60) -> list[GraphNode]:
-        """Find all nodes matching query across ID, name, declarations, file path, or metadata."""
-        q_lower = query.lower().strip()
+    def find_nodes_partitioned(
+        self, query: str, limit: int = 15
+    ) -> tuple[list[GraphNode], list[GraphNode]]:
+        """Find nodes matching query partitioned into exact matches and ranked partial matches."""
+        q_clean = query.strip()
+        q_lower = q_clean.lower()
+        if not q_lower:
+            return [], []
+
         exact_matches: list[GraphNode] = []
-        name_matches: list[GraphNode] = []
+        prefix_matches: list[GraphNode] = []
+        substring_name_matches: list[GraphNode] = []
+        decl_matches: list[GraphNode] = []
         path_matches: list[GraphNode] = []
         seen: set[str] = set()
 
         for node in self.nodes.values():
             if node.id in seen:
                 continue
+
+            # 1. Exact Match: node.name, node.id, or exact declaration matches query
+            is_exact = False
+            if node.name == q_clean or node.id == q_clean or any(d == q_clean for d in node.declarations):
+                is_exact = True
+            elif node.name.lower() == q_lower or node.id.lower() == q_lower or any(d.lower() == q_lower for d in node.declarations):
+                is_exact = True
+
+            if is_exact:
+                exact_matches.append(node)
+                seen.add(node.id)
+                continue
+
+            # 2. Prefix Match: node.name starts with query
+            if node.name.lower().startswith(q_lower):
+                prefix_matches.append(node)
+                seen.add(node.id)
+                continue
+
+            # 3. Substring in node.name
+            if q_lower in node.name.lower():
+                substring_name_matches.append(node)
+                seen.add(node.id)
+                continue
+
+            # 4. Match in declarations (methods, composables, member classes)
+            if any(q_lower in d.lower() for d in node.declarations):
+                decl_matches.append(node)
+                seen.add(node.id)
+                continue
+
+            # 5. Match in file_path, package, or metadata
             meta = node.metadata or {}
             meta_desc = str(meta.get("description") or meta.get("title") or meta.get("role") or "").lower()
             meta_usage = str(meta.get("usage") or "").lower()
             flags = [str(f).lower() for f in meta.get("flags", [])]
 
-            if node.id == query or node.name == query or any(d == query for d in node.declarations):
-                exact_matches.append(node)
+            if node.file_path and q_lower in node.file_path.lower():
+                path_matches.append(node)
                 seen.add(node.id)
-            elif node.name.lower() == q_lower or any(d.lower() == q_lower for d in node.declarations):
-                exact_matches.append(node)
-                seen.add(node.id)
-            elif q_lower in node.name.lower():
-                name_matches.append(node)
-                seen.add(node.id)
-            elif node.file_path and q_lower in node.file_path.lower():
+            elif node.package and q_lower in node.package.lower():
                 path_matches.append(node)
                 seen.add(node.id)
             elif q_lower in meta_desc or q_lower in meta_usage or any(q_lower in f for f in flags):
                 path_matches.append(node)
                 seen.add(node.id)
 
-        results = exact_matches + name_matches + path_matches
+        exact_matches.sort(key=lambda n: (len(n.name), n.name.lower()))
+        prefix_matches.sort(key=lambda n: (len(n.name), n.name.lower()))
+        substring_name_matches.sort(key=lambda n: (len(n.name), n.name.lower()))
+        decl_matches.sort(key=lambda n: (len(n.name), n.name.lower()))
+        path_matches.sort(key=lambda n: (len(n.file_path or n.name), n.name.lower()))
+
+        partial_matches = (prefix_matches + substring_name_matches + decl_matches + path_matches)[:limit]
+        return exact_matches, partial_matches
+
+    def find_nodes(self, query: str, limit: int = 60) -> list[GraphNode]:
+        """Find all nodes matching query across ID, name, declarations, file path, or metadata."""
+        exact_matches, partial_matches = self.find_nodes_partitioned(query, limit=limit)
+        results = exact_matches + partial_matches
         return results[:limit]
 
-    def format_symbol_match(self, node: GraphNode, query: str = "") -> str:
+    def format_symbol_match(self, node: GraphNode, query: str = "", match_badge: str = "") -> str:
         """Formats a single matching node with explicit language, path, and layer."""
         lines = []
         lang = node.metadata.get("language", "")
         composable = node.metadata.get("composable", False)
+        badge_str = f" {match_badge}" if match_badge else ""
 
         if node.type == EntityType.HARNESS_TOOL.value:
-            lines.append(f"  * {node.name} [HARNESS_TOOL]")
+            lines.append(f"  * {node.name} [HARNESS_TOOL]{badge_str}")
             lines.append(f"    Path: {node.file_path}")
             if node.metadata.get("description"):
                 lines.append(f"    Description: {node.metadata.get('description')}")
             if node.metadata.get("usage"):
                 lines.append(f"    Usage: {node.metadata.get('usage')}")
         elif node.type == EntityType.WORKFLOW_PLAYBOOK.value:
-            lines.append(f"  * {node.name} [WORKFLOW_PLAYBOOK]")
+            lines.append(f"  * {node.name} [WORKFLOW_PLAYBOOK]{badge_str}")
             lines.append(f"    Path: {node.file_path}")
             if node.metadata.get("title"):
                 lines.append(f"    Title: {node.metadata.get('title')}")
         elif node.type == EntityType.SUBAGENT_ROSTER.value:
-            lines.append(f"  * {node.name} [SUBAGENT]")
+            lines.append(f"  * {node.name} [SUBAGENT]{badge_str}")
             lines.append(f"    Path: {node.file_path}")
             if node.metadata.get("role"):
                 lines.append(f"    Role: {node.metadata.get('role')}")
             if node.metadata.get("description"):
                 lines.append(f"    Description: {node.metadata.get('description')}")
         elif node.type in (EntityType.XML_LAYOUT.value, EntityType.NAV_GRAPH.value):
-            lines.append(f"  * {node.name} [{node.type}]")
+            lines.append(f"  * {node.name} [{node.type}]{badge_str}")
             lines.append(f"    Path: {node.file_path}")
             lines.append(f"    Module: {node.module}")
         else:
             tag = f"[{lang.upper()}_{node.type}]" if lang else f"[{node.type}]"
             if composable:
                 tag = f"[COMPOSE_{node.type}]"
-            lines.append(f"  * {node.name} {tag}")
+            lines.append(f"  * {node.name} {tag}{badge_str}")
             lines.append(f"    Path: {node.file_path}")
             if node.module:
                 lines.append(f"    Module: {node.module}")

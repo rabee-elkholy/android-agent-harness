@@ -9,8 +9,8 @@ This is the authoritative always-loaded contract. Detailed Android guidance is r
 
 ## 1. Developer authority and lifecycle
 
-- Read-only discussion, explanation, and discovery need no plan. Answer engineering questions before starting planning.
-- Clarify material product behavior, error handling, and architectural ambiguity before drafting. Do not invent requirements.
+- Read-only discussion, explanation, and discovery need no plan. Answer engineering questions, and surface and discuss requested edge cases or missing scenarios directly in plain chat before starting planning.
+- Clarify material product behavior, error handling, and architectural ambiguity before drafting. When asked to study scenarios or find edge cases before starting, present and align on them directly in chat first; do not invent requirements or swallow edge-case discovery into an unreviewed plan artifact.
 - Code/config writes, deletion, build/install, Git history/index changes, tracker writes, and publication require an explicitly approved plan. Approval is bound to task, plan hash, repository, branch/worktree, and base snapshot.
 - Presenting a plan, silence, or an unrelated reply is never approval. Record explicit approval with `workflow.py approve`, then `begin`.
 - **Single-shot Proceed invariant**: Proceed appears only for initial task approval.
