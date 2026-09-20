@@ -97,7 +97,8 @@ def pin_urls(tag: str) -> list[str]:
             rf"\g<1>v{tag}\2",
             updated,
         )
-        if (count or branch_count or detached_count) and updated != text:
+        updated, header_count = TAG_RE.subn(lambda m: f"{m.group(1)}v{tag}{m.group(2)}", updated)
+        if (count or branch_count or detached_count or header_count) and updated != text:
             _write(path, updated)
             parts = []
             if count:
@@ -106,6 +107,8 @@ def pin_urls(tag: str) -> list[str]:
                 parts.append(f"{branch_count} branch ref(s)")
             if detached_count:
                 parts.append(f"{detached_count} detached ref(s)")
+            if header_count:
+                parts.append(f"{header_count} kit version header(s)")
             logs.append(f"pinned {', '.join(parts)} to v{tag} in {rel}")
     return logs
 

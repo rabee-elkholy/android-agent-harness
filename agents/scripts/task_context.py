@@ -266,6 +266,20 @@ def resolve_task_context(
         "confidence": profiles[0].get("confidence", "UNKNOWN") if profiles else "UNKNOWN",
         "warnings": base["warnings"] + conflicts + (["Cached advisory evidence was stale; live graph/source context was used."] if stale_seen else []),
     })
+    if result_status in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
+        target_path = primary.file_path
+        if target_path and (repo / target_path).is_file():
+            try:
+                import time
+                from _vnext_common import atomic_write_json
+                cache_dir = repo / ".agents" / "cache"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(cache_dir / "last-task-context.json", {
+                    "file": target_path,
+                    "timestamp": time.time(),
+                })
+            except Exception:
+                pass
     return base
 
 

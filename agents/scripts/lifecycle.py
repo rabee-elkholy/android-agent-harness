@@ -881,7 +881,11 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
                 continue
             conflicts.append(rel)
     if conflicts:
-        raise ValidationError("user-modified managed files require clean recovery: " + ", ".join(conflicts[:10]))
+        raise ValidationError(
+            "user-modified managed files require clean recovery "
+            "(run 'python harness_cli.py uninstall --apply' then 'python harness_cli.py init --answers-json <answers.json>'): "
+            + ", ".join(conflicts[:10])
+        )
     loaded_answers = _load_answers(repo)
     if answers:
         loaded_answers.update(answers)

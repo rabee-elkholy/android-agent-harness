@@ -43,7 +43,7 @@ Execute commands in this strict sequential order. Every command is fully specifi
 | :--- | :--- | :--- | :--- |
 | 1 | **Discovery** | `{{PY}} .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded AST slice for target file/symbol |
 | 1b | **Broad Discovery** | `{{PY}} .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol feature graph analysis |
-| 2 | **Draft Plan** | `{{PY}} .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR>` | Create task plan. Required: `--task-id`, `--outcome`. Optional: `--kind`, `--expected-surfaces` |
+| 2 | **Draft Plan** | `{{PY}} .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR>` | Create task plan. Required: `--task-id`, `--outcome`. Optional: `--kind`, `--expected-surfaces`, `--architecture-target-scope <file>` (in hybrid codebases to target/preserve specific screen), `--architecture-intent <NEW_FEATURE\|NEW_SCREEN\|EXISTING_CHANGE>` |
 | 3 | **Approve Task** | `{{PY}} .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Record chat approval. Required: `--source`, `--proof-reference`, `--enforcement-tier` |
 | 4 | **Begin Task** | `{{PY}} .agents/scripts/workflow.py begin --repo . --task-id <id>` | Transition task to IMPLEMENTING state. Required: `--task-id` |
 | 5 | **Diagnostic Build** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Optional diagnostic compile during implementation |

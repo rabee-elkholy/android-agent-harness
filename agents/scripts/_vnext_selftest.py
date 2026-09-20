@@ -205,6 +205,23 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn("never stall on new plans or demand 'Proceed'", reminder_script)
         self.assertIn("do not stall on follow-ups", reminder_script)
 
+    def test_pre_invocation_reminder_idle_state(self) -> None:
+        reminder_script = (KIT / "agents" / "scripts" / "pre_invocation_reminder.py").read_text(encoding="utf-8")
+        self.assertIn("Android Harness: Idle (no active task)", reminder_script)
+        self.assertNotIn("Harness task unknown: UNKNOWN", reminder_script)
+        self.assertNotIn("workflow.py cancel --task-id unknown", reminder_script)
+
+    def test_lifecycle_update_clean_recovery_guidance(self) -> None:
+        lifecycle_script = (KIT / "agents" / "scripts" / "lifecycle.py").read_text(encoding="utf-8")
+        self.assertIn("user-modified managed files require clean recovery", lifecycle_script)
+        self.assertIn("run 'python harness_cli.py uninstall --apply' then 'python harness_cli.py init --answers-json <answers.json>'", lifecycle_script)
+
+    def test_install_or_update_prompt_pins_and_unpinned_header_detection(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        current_version = (KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertIn(f"> **Kit version**: `v{current_version}`", prompt_text)
+        self.assertNotIn("&& python", prompt_text)
+
 
 class ChatInstallationLifecycleTests(RepoCase):
     def test_harness_cli_init_with_answers_json(self) -> None:
@@ -2941,6 +2958,47 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
                 "Zero-Polling" in text or "never poll" in text.lower(),
                 f"Missing Zero-Polling rule in {f.name}",
             )
+
+    def test_unauthorized_build_script_deletion_rejected(self) -> None:
+        from fast_kt_lint import lint_build_script
+        with tempfile.TemporaryDirectory(prefix="test_gradle_lint_") as td:
+            build_file = Path(td) / "build.gradle"
+            build_file.write_text(
+                'apply plugin: "com.android.application"\n'
+                'tasks.register("cleanScrapXml") {\n'
+                '    doLast {\n'
+                '        file("src/main/res/layout/temp.xml").delete()\n'
+                '    }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            issues = lint_build_script(build_file)
+            self.assertTrue(len(issues) > 0)
+            self.assertEqual("UNAUTHORIZED_BUILD_SCRIPT_MUTATION", issues[0]["type"])
+
+    def test_feature_cross_import_allowed_hubs_and_suppression(self) -> None:
+        from fast_kt_lint import lint_file
+        with tempfile.TemporaryDirectory(prefix="test_cross_import_") as td:
+            feat_dir = Path(td) / "features" / "food" / "scanner"
+            feat_dir.mkdir(parents=True)
+            kt_file = feat_dir / "ScannerFragment.kt"
+            kt_file.write_text(
+                "package com.example.features.food.scanner\n\n"
+                "import com.example.features.payment.PaymentActivity\n"  # allowed hub
+                "import com.example.features.main.HomeActivity\n"  # allowed hub
+                "import com.example.features.chat.ChatActivity // lint:allow-cross-import\n"  # suppressed
+                "import com.example.features.chat.ChatDirectActivity // nolint\n"  # suppressed
+                "import com.example.features.training.TrainingActivity\n"  # not allowed hub -> should flag
+                "\n"
+                "class ScannerFragment {\n"
+                "    fun run() {}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            issues = lint_file(kt_file)
+            cross_import_issues = [i for i in issues if i["type"] == "FEATURE_CROSS_IMPORT"]
+            self.assertEqual(1, len(cross_import_issues))
+            self.assertIn("training", cross_import_issues[0]["msg"])
 
 
 if __name__ == "__main__":

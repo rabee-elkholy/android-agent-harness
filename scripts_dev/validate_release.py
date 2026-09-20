@@ -270,6 +270,9 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
         expected_detached = f"detached `v{version}`"
         if expected_detached not in prompt_content:
             errors.append(f"docs/install-or-update-prompt.md does not reference '{expected_detached}'")
+        expected_version_header = f"> **Kit version**: `v{version}`"
+        if expected_version_header not in prompt_content:
+            errors.append(f"docs/install-or-update-prompt.md does not pin '{expected_version_header}'")
 
     errors.extend(answer_schema_drift_errors(repo_root))
 

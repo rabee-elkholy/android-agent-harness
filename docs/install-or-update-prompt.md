@@ -1,6 +1,6 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.50`
+> **Kit version**: `v1.0.58`
 
 ---
 Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
@@ -13,11 +13,12 @@ Select:
 - **Clean Install**: no `.agents`
 - **Same-Major Update**: `.harness-setup/ownership-v1.json` major 1
 - **Legacy Replacement**: `.agents` exists without v1 ownership
-`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.57`.
+`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.58`.
 
 ## Phase 2: Kit bootstrap approval
-`git clone --depth 1 --branch v1.0.57 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
-Verify: `git -C <staging-dir> describe --tags --exact-match && python <staging-dir>/harness_cli.py version --kit <staging-dir>`
+`git clone --depth 1 --branch v1.0.58 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
+Verify: `git -C <staging-dir> describe --tags --exact-match`
+Verify version: `python <staging-dir>/harness_cli.py version --kit <staging-dir>`
 Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
 **STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.** Permits cache operations only, not app installation/removal.
 
@@ -33,5 +34,6 @@ create `<temp-answers>.json` outside `<app-root>`, then run:
 - Legacy Replacement: `python <kit-dir>/harness_cli.py init --replace-legacy --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json`
 
 ## Phase 5: Verification
-`python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json && python <kit-dir>/harness_cli.py version --kit <kit-dir>`
+Run: `python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json`
+Optionally verify kit version: `python <kit-dir>/harness_cli.py version --kit <kit-dir>`
 On success show 0 changed app files and say: “Android Agent Harness is successfully configured. Open a NEW chat at the project root.”

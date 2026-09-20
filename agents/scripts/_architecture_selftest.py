@@ -768,6 +768,66 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         content = notes_file.read_text(encoding="utf-8")
         self.assertIn("- Feature X uses MVI pattern", content)
 
+    def test_ambiguous_target_remediation_guidance_present(self) -> None:
+        """Verify that ambiguous architecture contract failure includes clear remediation advice."""
+        self._write("app/src/main/kotlin/legacy/LegacyFragment.kt", "class LegacyFragment : Fragment()")
+        self._write("app/src/main/kotlin/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")
+        facts = extract_project_facts(self.repo)["facts"]
+        preferred = next(f for f in facts["architecture"]["families"] if "compose" in f.get("label", ""))
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=preferred["id"]))
+
+        result = resolve_architecture_contract(
+            self.repo,
+            architecture_intent="EXISTING_CHANGE",
+            target_scope="",
+        )
+        self.assertEqual(STATUS_DECISION_REQUIRED, result["status"])
+        self.assertIn("Remediation: in hybrid codebases", result["message"])
+        self.assertIn("--architecture-target-scope <path>", result["message"])
+        self.assertIn("--architecture-intent NEW_FEATURE", result["message"])
+
+    def test_draft_auto_infers_scope_from_recent_task_context(self) -> None:
+        """Verify draft automatically uses target from recent task-context cache."""
+        import time
+        from _vnext_common import atomic_write_json
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/scope1/VM1.kt", "abstract class VM1 : ViewModel()")
+        self._write("app/src/main/kotlin/scope2/VM2.kt", "abstract class VM2 : ViewModel()")
+        cache_dir = self.repo / ".agents" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(cache_dir / "last-task-context.json", {
+            "file": "app/src/main/kotlin/scope1/VM1.kt",
+            "timestamp": time.time(),
+        })
+
+        args = self._draft_args(
+            task_id="test-cached-ctx",
+            outcome="Change in scope 1",
+            kind="FEATURE",
+        )
+        plan = draft(args)
+        self.assertIn("architecture_contract", plan)
+        contract = plan["architecture_contract"]
+        self.assertEqual("PRESERVE", contract["mode"])
+
+    def test_draft_auto_infers_scope_from_multiple_changed_files(self) -> None:
+        """Verify draft auto-infers primary screen when multiple files are changed."""
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/legacy/LegacyFragment.kt", "class LegacyFragment : Fragment()")
+        self._write("app/src/main/res/layout/fragment_legacy.xml", "<LinearLayout/>")
+        # In this working directory, the files are untracked/modified
+        facts = extract_project_facts(self.repo)["facts"]
+        args = self._draft_args(
+            task_id="test-multi-changed",
+            outcome="Update legacy fragment and layout",
+            kind="FEATURE",
+        )
+        plan = draft(args)
+        self.assertIn("architecture_contract", plan)
+        contract = plan["architecture_contract"]
+        self.assertEqual("PRESERVE", contract["mode"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

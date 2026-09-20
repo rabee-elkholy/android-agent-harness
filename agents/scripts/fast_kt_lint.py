@@ -77,6 +77,18 @@ CLEARTEXT_WHITELIST_HOSTS = {
 FEATURE_CROSS_IMPORT_PATTERN = re.compile(
     r"^\s*import\s+([a-zA-Z0-9_.]*\.(?:features|feature)\.([A-Za-z0-9_]+))(\.|$)"
 )
+FEATURE_CROSS_IMPORT_ALLOWED_HUBS = {
+    "main",
+    "home",
+    "payment",
+    "paywall",
+    "subscription",
+    "auth",
+    "login",
+    "navigation",
+    "common",
+    "core",
+}
 
 
 def _current_feature_segment(path: Path) -> str | None:
@@ -368,17 +380,24 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
         current_feature = _current_feature_segment(file_path)
         if current_feature:
             m = FEATURE_CROSS_IMPORT_PATTERN.match(trimmed)
-            if m and m.group(2).lower() != current_feature:
-                issues.append({
-                    "file": str(file_path),
-                    "line": idx,
-                    "type": "FEATURE_CROSS_IMPORT",
-                    "msg": (
-                        f"Feature module '{current_feature}' imports another feature "
-                        f"('{m.group(2)}'). Route shared logic through a :core/:common "
-                        "module instead of feature-to-feature imports."
-                    ),
-                })
+            if m:
+                imported_feature = m.group(2).lower()
+                if (
+                    imported_feature != current_feature
+                    and imported_feature not in FEATURE_CROSS_IMPORT_ALLOWED_HUBS
+                    and "lint:allow-cross-import" not in line
+                    and "nolint" not in line
+                ):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "type": "FEATURE_CROSS_IMPORT",
+                        "msg": (
+                            f"Feature module '{current_feature}' imports another feature "
+                            f"('{m.group(2)}'). Route shared logic through a :core/:common "
+                            "module instead of feature-to-feature imports."
+                        ),
+                    })
 
         if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function_in_diff):
             has_ann = "@Immutable" in trimmed or "@Stable" in trimmed
@@ -458,6 +477,23 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
     return issues
 
 
+def lint_build_script(file_path: Path) -> list[dict[str, Any]]:
+    issues = []
+    try:
+        txt = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return issues
+    for idx, line in enumerate(txt.splitlines(), start=1):
+        if (".delete()" in line or "delete(" in line) and any(p in line for p in ("src/", "res/", "layout", "values")):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "UNAUTHORIZED_BUILD_SCRIPT_MUTATION",
+                "msg": f"Unauthorized file deletion in Gradle build script at line {idx}: '{line.strip()}'. Do not use Gradle tasks to delete project assets or bypass verification.",
+            })
+    return issues
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fast Kotlin lint for this app")
     parser.add_argument("--all", action="store_true", help="Scan all Kotlin files under app/src/main")
@@ -491,7 +527,9 @@ def main() -> int:
         target_files = [p for p in changed_paths() if p.suffix == ".kt"]
         modified_lines_map = get_modified_lines_map(REPO, target_files)
 
-    if not target_files:
+    build_files = [p for p in changed_paths() if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")]
+
+    if not target_files and not build_files:
         git_head_proc = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=REPO,
@@ -507,14 +545,17 @@ def main() -> int:
                 "Changed-file lint cannot verify the tree; run --all for a full scan.",
                 file=sys.stderr,
             )
-        print("[OK] No Kotlin files to lint in the working tree (including untracked).")
+        print("[OK] No Kotlin or build files to lint in the working tree (including untracked).")
         return 0
 
     mode_label = "all files" if args.all else "modified lines in changed files"
-    print(f"[*] Fast Kotlin Lint: Scanning {len(target_files)} Kotlin file(s) ({mode_label})...")
+    if target_files:
+        print(f"[*] Fast Kotlin Lint: Scanning {len(target_files)} Kotlin file(s) ({mode_label})...")
     all_issues = []
     for path in target_files:
         all_issues.extend(lint_file(path, modified_lines=modified_lines_map.get(path)))
+    for bf in build_files:
+        all_issues.extend(lint_build_script(bf))
 
     if not all_issues:
         print("[SUCCESS] Fast Kotlin Lint passed! 0 syntax/architectural violations detected.")

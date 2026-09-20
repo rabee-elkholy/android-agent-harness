@@ -216,7 +216,17 @@ def check_architecture_drift(
                         )
 
     if violations:
-        return False, f"ARCHITECTURE_DRIFT: {'; '.join(violations)}", violations
+        remediation = ""
+        if any("violates Compose" in v for v in violations):
+            remediation = (
+                " Remediation Advice: If this task is modifying an EXISTING XML screen or fragment, "
+                "do NOT delete your XML layouts! The task plan was drafted with mode=NEW (Compose). "
+                "To fix: update your task contract to preserve the existing screen via: "
+                "`python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome \"...\" --kind FEATURE --architecture-target-scope <screen_file.kt> --force` "
+                "then approve and resume. "
+                "Only delete XML layouts if this task was genuinely meant to build a new screen purely with Jetpack Compose."
+            )
+        return False, f"ARCHITECTURE_DRIFT: {'; '.join(violations)}.{remediation}".strip(), violations
 
     return True, "Architecture contract satisfied.", []
 

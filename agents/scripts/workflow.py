@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -404,14 +405,32 @@ def draft(args: argparse.Namespace) -> dict:
                     eval_files[0]
                 )
                 inferred_target_scope = primary
-        elif classification.get("changed_files") == 1:
+        elif classification.get("changed_files", 0) >= 1:
             all_files = sorted(set(p for info in (classification.get("details") or {}).values() for p in info.get("files") or []))
             if len(all_files) == 1:
                 inferred_target_scope = all_files[0]
+            elif all_files:
+                primary = next(
+                    (p for p in all_files if any(k in p.lower() for k in ("view", "fragment", "screen", "activity", "composable"))),
+                    all_files[0]
+                )
+                inferred_target_scope = primary
         elif getattr(args, "expected_modules", None):
             exp_mods = [m.strip() for m in str(args.expected_modules).split(",") if m.strip()]
             if len(exp_mods) == 1:
                 inferred_target_scope = exp_mods[0]
+
+        if not inferred_target_scope:
+            last_ctx_file = repo / ".agents" / "cache" / "last-task-context.json"
+            if last_ctx_file.is_file():
+                try:
+                    ctx_data = json.loads(last_ctx_file.read_text(encoding="utf-8"))
+                    if time.time() - float(ctx_data.get("timestamp", 0)) < 1800:
+                        cand = str(ctx_data.get("file") or "").strip()
+                        if cand and (repo / cand).is_file():
+                            inferred_target_scope = cand
+                except Exception:
+                    pass
 
     from architecture_resolver import (
         resolve_architecture_contract,

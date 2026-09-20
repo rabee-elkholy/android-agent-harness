@@ -473,6 +473,7 @@ def build_task_manifest(
     current_changes = manifest.get("changes") or []
     current_paths: set[str] = set()
 
+    expected_set = {_normal_rel(p) for p in (expected_files or []) if p}
     for cur in current_changes:
         if cur.get("status") == "U":
             raise HarnessError(f"Conflicted path in working tree: {cur.get('path')}")
@@ -483,7 +484,9 @@ def build_task_manifest(
         if path:
             current_paths.add(path)
 
-        if path not in base_map and norm_path not in base_map:
+        if norm_path in expected_set or path in expected_set:
+            task_changes.append(cur)
+        elif path not in base_map and norm_path not in base_map:
             task_changes.append(cur)
         else:
             base_entry = base_map.get(norm_path) or base_map.get(path)

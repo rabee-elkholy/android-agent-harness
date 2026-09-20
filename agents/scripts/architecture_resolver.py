@@ -283,7 +283,9 @@ def resolve_architecture_contract(
                 "brief_markdown": None,
                 "message": (
                     f"Multiple architecture families exist and target scope '{target_scope}' is ambiguous. "
-                    "Preferred new-code policy is not a valid fallback for PRESERVE or REFACTOR work."
+                    "Preferred new-code policy is not a valid fallback for PRESERVE or REFACTOR work. "
+                    "Remediation: in hybrid codebases, specify the target screen/file via '--architecture-target-scope <path>' "
+                    "(or '--expected-files <path>') to preserve existing architecture, or pass '--architecture-intent NEW_FEATURE' (or NEW_SCREEN) if creating new code."
                 ),
             }
         else:

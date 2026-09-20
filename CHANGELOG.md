@@ -4,6 +4,30 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.58] - 2026-09-20
+
+### Idle Hook Guidance, Architecture Scope Bridging, and Clean Recovery Enforcement
+
+- **Hybrid Codebase Architecture Contract Bridging**:
+  - Automatically bridged Step 1 (`task-context`) discovery context to Step 2 (`workflow.py draft`) via `.agents/cache/last-task-context.json` (30-minute TTL), eliminating ambiguous architecture contract failures in hybrid codebases (e.g. Compose + XML) without requiring manual agent CLI flags.
+  - Enhanced `workflow.py draft` target scope inference when multiple files are modified in git before drafting, automatically selecting the primary screen/fragment/activity/view/composable.
+  - Upgraded `architecture_resolver.py` ambiguity diagnostic (`STATUS_DECISION_REQUIRED`) with actionable remediation guidance instructing agents how to pass `--architecture-target-scope <path>` (to preserve existing code) or `--architecture-intent NEW_FEATURE` (when creating new code).
+  - Documented optional `--architecture-target-scope` and `--architecture-intent` parameters across canonical command catalogs in `GEMINI.md`, tool adapter templates, and guides.
+- Hardened `pre_invocation_reminder.py` during idle states (when no task is active) to return calm, non-alarming discovery guidance, eliminating spurious `Harness task unknown: UNKNOWN` warnings and preventing AI models from stalling or misinterpreting rules.
+- Upgraded `lifecycle.py` update conflict diagnostics to output exact, actionable clean recovery instructions (`python harness_cli.py uninstall --apply` followed by `python harness_cli.py init --answers-json <answers.json>`).
+- Eliminated Windows PowerShell 5.1 command-chaining (`&&`) syntax across prompt documentation and verification steps, ensuring complete multi-platform shell portability.
+- Added automated prompt version header pinning and release verification across `pin_prompt_docs.py` and `validate_release.py` to prevent documentation header drift across versions.
+- Added comprehensive regression tests in `_vnext_selftest.py` and `_architecture_selftest.py` covering idle reminders, clean recovery guidance, prompt header pin validation, architecture scope bridging, and remediation guidance.
+- **Cross-Feature Import and Monolith Navigation Governance (`fast_kt_lint.py`)**:
+  - Whitelisted common application navigation and payment hubs (`main`, `home`, `payment`, `paywall`, `subscription`, `auth`, `login`, `navigation`, `common`, `core`) in `fast_kt_lint.py` to eliminate false-positive `FEATURE_CROSS_IMPORT` violations in monolithic Android codebases when navigating to paywalls or home screens.
+  - Added support for inline lint suppression comments (`// lint:allow-cross-import`, `// nolint`).
+- **De-escalating Architecture Drift Diagnostic (`architecture_drift.py`)**:
+  - Added clear remediation advice to architecture drift diagnostics instructing models that legacy screens should be drafted with `mode=PRESERVE` and explicitly forbidding unauthorized layout file deletions or build script modifications.
+- **Build Script Guard & Isolation Protection**:
+  - Added `UNAUTHORIZED_BUILD_SCRIPT_MUTATION` lint check in `fast_kt_lint.py` preventing destructive file deletion Gradle tasks.
+  - Hardened `delivery_manifest.py` to honor `expected_files` preventing premature isolation pruning of pre-drafted task files.
+- Redesigned `README.md` as an open-source engineering control plane document with ASCII state machines, 15-step canonical lifecycle tables, 5-tier adaptive risk lane specifications, deterministic Android guard matrices, and full PyPI portability without marketing buzzwords.
+
 ## [1.0.57] - 2026-09-20
 
 ### Universal Tool Adapter Alignment and Complete Lifecycle Hardening
