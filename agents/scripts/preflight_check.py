@@ -22,11 +22,11 @@ from _vnext_common import read_json  # noqa: E402
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
-def run_step(title: str, script_name: str) -> int:
+def run_step(title: str, script_name: str, cwd: Path | None = None) -> int:
     with step_progress(title):
         code, _, _ = run_streaming(
             [sys.executable, str(SCRIPTS_DIR / script_name)],
-            cwd=str(REPO),
+            cwd=str(cwd or REPO),
             heartbeat_sec=10.0,
             should_echo=lambda line: bool(line.strip()),
             label=script_name,
@@ -38,28 +38,42 @@ def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
     args_list = sys.argv[1:] if argv is None else argv
     diagnostic = "--diagnostic" in args_list
+    repo_target = REPO
+    task_id_arg = ""
+    for idx, arg in enumerate(args_list):
+        if arg == "--repo" and idx + 1 < len(args_list):
+            repo_target = Path(args_list[idx + 1]).resolve()
+            os.environ["HARNESS_REPO"] = str(repo_target)
+            import _repo_files
+            _repo_files.REPO = repo_target
+        elif arg == "--task-id" and idx + 1 < len(args_list):
+            task_id_arg = args_list[idx + 1]
+
     live_print("==================================================")
     live_print("[Preflight] Harness preflight verification")
     live_print("==================================================")
 
-    modified = [p.relative_to(REPO).as_posix() for p in changed_paths()]
+    modified = [p.relative_to(repo_target).as_posix() for p in changed_paths(repo=repo_target)]
     live_print(f"[*] Working-tree files (including untracked): {len(modified)}")
 
     selected_gates = {"preflight", "localization", "room"}
     task_changes: list | None = None
     if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
         try:
-            active_file = state_root(REPO) / "active-task.json"
-            if active_file.is_file():
-                active = read_json(active_file)
-                task_id = str(active.get("task_id") or "")
-                if task_id:
-                    from workflow import load_task_baseline, build_task_manifest
-                    base = load_task_baseline(REPO, task_id)
-                    if base:
-                        task_manifest = build_task_manifest(REPO, base)
-                        task_changes = task_manifest.get("task_changes")
-                t_dir = task_dir(REPO, str(active["task_id"]))
+            if task_id_arg:
+                from workflow import _load_plan
+                plan = _load_plan(repo_target, task_id_arg)
+                task_id = task_id_arg
+            else:
+                plan = active_plan(repo_target)
+                task_id = str(plan.get("task_id") or "")
+            if task_id:
+                from workflow import load_task_baseline, build_task_manifest
+                base = load_task_baseline(repo_target, task_id)
+                if base:
+                    task_manifest = build_task_manifest(repo_target, base)
+                    task_changes = task_manifest.get("task_changes")
+                t_dir = task_dir(repo_target, task_id)
                 current_p = t_dir / "current-run.json"
                 if current_p.is_file():
                     current = read_json(current_p)
@@ -73,9 +87,9 @@ def main(argv: list[str] | None = None) -> int:
             task_changes = None
 
     if task_changes is not None:
-        classification = classify(REPO, task_changes=task_changes)
+        classification = classify(repo_target, task_changes=task_changes)
     else:
-        classification = classify(REPO)
+        classification = classify(repo_target)
     risk_tier_name = classification["severity"]
     task_surfaces = set(classification.get("surfaces") or [])
 
@@ -91,8 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     skip_hook = diagnostic or "--skip-hook-selftest" in sys.argv or os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1"
-    hook_code = 0 if skip_hook else run_step("0. Hook selftest (cached)", "ensure_hook_selftest.py")
-    str_code = run_step("1. String parity", "check_strings.py") if "localization" in selected_gates else 0
+    hook_code = 0 if skip_hook else run_step("0. Hook selftest (cached)", "ensure_hook_selftest.py", cwd=repo_target)
+    str_code = run_step("1. String parity", "check_strings.py", cwd=repo_target) if "localization" in selected_gates else 0
 
     with step_progress("2. Room Database Migrations"):
         if "room" not in selected_gates:
@@ -101,10 +115,10 @@ def main(argv: list[str] | None = None) -> int:
             db_ok, db_msg = True, "room check not required for current task changes"
         else:
             task_paths = task_change_paths if task_change_paths is not None else None
-            db_ok, db_msg = check_room_working_tree(paths=task_paths)
+            db_ok, db_msg = check_room_working_tree(repo_target, paths=task_paths)
         sublog(f"[{'OK' if db_ok else 'FAIL'}] {db_msg}")
 
-    lint_code = run_step("3. Kotlin Syntax & Architectural Rules (Fast Lint)", "fast_kt_lint.py") if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
+    lint_code = run_step("3. Kotlin Syntax & Architectural Rules (Fast Lint)", "fast_kt_lint.py", cwd=repo_target) if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
     with step_progress("4. Approved plan authority"):
         if diagnostic:
             risk_ok, risk_msg = True, "diagnostic mode; task approval is checked only during delivery preflight"
@@ -112,7 +126,11 @@ def main(argv: list[str] | None = None) -> int:
             risk_ok, risk_msg = True, "selftest fixture"
         else:
             try:
-                plan = active_plan(REPO)
+                if task_id_arg:
+                    from workflow import _load_plan
+                    plan = _load_plan(repo_target, task_id_arg)
+                else:
+                    plan = active_plan(repo_target)
                 approval = plan.get("approval") or {}
                 risk_ok = (
                     plan.get("status") in ("IMPLEMENTING", "VERIFYING")
@@ -121,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                     and approval.get("plan_sha256") == plan.get("plan_sha256")
                 )
                 risk_msg = "approved task plan is active" if risk_ok else "active task approval is missing or stale"
-            except ValidationError as exc:
+            except (ValidationError, OSError) as exc:
                 risk_ok, risk_msg = False, str(exc)
         sublog(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
 
@@ -132,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
             contract = None
             try:
-                plan = active_plan(REPO)
+                plan = active_plan(repo_target)
                 contract = plan.get("architecture_contract")
             except Exception:
                 contract = None
@@ -140,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             if contract:
                 try:
                     from architecture_drift import check_architecture_drift
-                    arch_ok, arch_msg, _ = check_architecture_drift(REPO, contract, task_id=plan.get("task_id") if plan else None)
+                    arch_ok, arch_msg, _ = check_architecture_drift(repo_target, contract, task_id=plan.get("task_id") if plan else None)
                 except Exception as exc:
                     arch_ok = False
                     arch_msg = f"ARCHITECTURE_DRIFT_CHECK_ERROR: {exc}"
@@ -156,8 +174,8 @@ def main(argv: list[str] | None = None) -> int:
         "producer": "preflight_check",
         "status": "PASS" if overall_pass else "FAIL",
         "exit_code": 0 if overall_pass else 1,
-        "git_sha": current_head_sha(),
-        "working_tree_fingerprint": working_tree_fingerprint(REPO),
+        "git_sha": current_head_sha(repo_target),
+        "working_tree_fingerprint": working_tree_fingerprint(repo_target),
         "steps": {
             "hook_selftest": hook_code,
             "string_parity": str_code,

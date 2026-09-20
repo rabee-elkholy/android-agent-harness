@@ -70,23 +70,36 @@ def _is_visual_compose(classification: dict) -> bool:
     return any("VISUAL" in str(r).upper() for r in reasons)
 
 
-def _micro_eligible(classification: dict, plan: dict | None = None) -> bool:
+def _is_analytics_scope(classification: dict, plan: dict | None = None, task_kind: str = "FEATURE") -> bool:
+    if str(task_kind).upper() in ("ANALYTICS", "UI_TWEAK"):
+        return True
+    if plan and str(plan.get("task_kind") or "").upper() in ("ANALYTICS", "UI_TWEAK"):
+        return True
+    text_signals = []
+    if plan:
+        text_signals.extend([str(plan.get("title") or ""), str(plan.get("requested_outcome") or ""), str(plan.get("task_id") or "")])
+    task_changes = classification.get("task_changes") or []
+    paths = [str(c.get("path") if isinstance(c, dict) else c).lower() for c in task_changes]
+    text_blob = (" ".join(text_signals) + " " + " ".join(paths)).lower()
+    return bool("analytic" in text_blob or "telemetry" in text_blob or "tracking" in text_blob)
+
+
+def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: str = "FEATURE") -> bool:
     surfaces = set(classification.get("surfaces") or [])
     if not surfaces and plan:
         surfaces = set(plan.get("expected_surfaces") or plan.get("surfaces") or [])
-    allowed = {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI"}
-    disallowed = {
-        "TEST_ONLY", "ROOM_SCHEMA", "BUILD_CONFIG", "MANIFEST_PERMISSION", "SECURITY",
-        "AUTH", "BILLING", "SENSITIVE_DATA", "CRYPTO", "PUBLIC_API", "UNKNOWN",
-        "BUSINESS_LOGIC", "NAVIGATION", "DEVICE_API", "PERSISTENCE", "COROUTINES", "NETWORK", "NATIVE_CODE",
-    }
-    if bool(surfaces & disallowed) or not (surfaces <= allowed):
+    if not surfaces:
         return False
-    if "COMPOSE_UI" in surfaces and not _is_visual_compose(classification):
+    disallowed = (
+        CRITICAL_SURFACES | {"ROOM_SCHEMA", "BUILD_CONFIG", "MANIFEST_PERMISSION", "TEST_ONLY",
+                             "SECURITY", "AUTH", "BILLING", "SENSITIVE_DATA", "CRYPTO", "PUBLIC_API",
+                             "UNKNOWN", "DEVICE_API", "PERSISTENCE", "NETWORK", "NATIVE_CODE"}
+    )
+    if bool(surfaces & disallowed):
         return False
-    if int(classification.get("changed_files") or 0) > 5:
+    if int(classification.get("changed_files") or 0) > 8:
         return False
-    if int(classification.get("changed_lines") or 0) > 80:
+    if int(classification.get("changed_lines") or 0) > 120:
         return False
     if bool(classification.get("has_delete_or_rename")):
         return False
@@ -97,7 +110,29 @@ def _micro_eligible(classification: dict, plan: dict | None = None) -> bool:
         arch_intent = str(plan.get("architecture_intent") or "").upper()
         if arch_intent == "MIGRATION":
             return False
-    return bool(surfaces)
+        changed_modules = plan.get("changed_modules") or []
+        if isinstance(changed_modules, list) and len(changed_modules) > 1:
+            return False
+
+    # Tier 0: Pure resources, strings, docs
+    if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI"}:
+        return True
+
+    # Tier 1 (Visual): Visual Compose / UI
+    if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI"}:
+        if "COMPOSE_UI" in surfaces and not _is_visual_compose(classification):
+            return False
+        return True
+
+    # Tier 1 (Analytics): Bounded event wiring across UI and ViewModel/Contract
+    if _is_analytics_scope(classification, plan=plan, task_kind=task_kind):
+        if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI", "BUSINESS_LOGIC", "COROUTINES"}:
+            severity = str(classification.get("severity") or "").upper()
+            if severity in ("CRITICAL", "HIGH"):
+                return False
+            return True
+
+    return False
 
 
 def _derive_ui_verification_class(surfaces: set[str], micro: bool, classification: dict | None = None) -> str:
@@ -108,12 +143,12 @@ def _derive_ui_verification_class(surfaces: set[str], micro: bool, classificatio
     ui_surfaces = {"COMPOSE_UI", "XML_UI", "NAVIGATION", "RESOURCE_UI", "LOCALIZATION"}
     if not (surfaces & ui_surfaces):
         return "NONE"
+    if micro and not (surfaces & device_behavior_surfaces):
+        return "VISUAL_MICRO"
     if "XML_UI" in surfaces or "NAVIGATION" in surfaces or "BUSINESS_LOGIC" in surfaces or not micro:
         return "UI_BEHAVIOR"
     if "COMPOSE_UI" in surfaces and classification and not _is_visual_compose(classification):
         return "UI_BEHAVIOR"
-    if micro and (surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI"}):
-        return "VISUAL_MICRO"
     return "UI_BEHAVIOR"
 
 
@@ -128,7 +163,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         elif set(surfaces) & HIGH_SURFACES:
             severity = "HIGH"
 
-    micro = _micro_eligible(classification, plan=plan)
+    micro = _micro_eligible(classification, plan=plan, task_kind=task_kind)
     planning_depth = str(classification.get("planning_depth") or (plan or {}).get("planning_depth") or "BOUNDED").upper()
     arch_intent = str((plan or {}).get("architecture_intent") or "").upper()
     changed_modules = (plan or {}).get("changed_modules") or []

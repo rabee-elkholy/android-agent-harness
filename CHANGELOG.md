@@ -4,6 +4,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.57] - 2026-09-20
+
+### Universal Tool Adapter Alignment and Complete Lifecycle Hardening
+
+- Fully aligned and unified harness execution directives, 15-stage canonical sequential lifecycle, 5-tier adaptive risk lanes, and pre-planning consultation across all agent adapters: Gemini, Claude Code, Codex CLI, Qwen Code, Cursor, GitHub Copilot, Windsurf, Continue, and the root AGENTS.md template.
+- Resolved companion surfaces and localization drift in `plan_authority.py`, recognizing `LOCALIZATION` and `RESOURCE_UI` as companion surfaces alongside business logic to eliminate spurious material drift verification blocks.
+- Fixed `--repo` argument parsing and repository-relative changed paths calculation in `preflight_check.py`.
+- Enforced cryptographic artifact set, application id, device serial, and target user consistency across assemble, install, launch, and mobile verification gates.
+- Guaranteed complete ASCII output compatibility across all CLI logging to prevent `cp1252` encoding crashes on Windows shells.
+- Bounded always-loaded prompt overhead to strictly preserve the 12,000-character context budget for Codex and unified mobile test walkthrough and finding adjudication protocols across all hosts.
+
 ## [1.0.56] - 2026-09-20
 
 ### Discovery Entrypoint Trust and Safety Diagnostics

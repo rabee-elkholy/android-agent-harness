@@ -279,13 +279,11 @@ def iter_database_files(repo: Path | None = None) -> list[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in skip_parts and not d.startswith(".")]
         for f in filenames:
-            if f.endswith(("Database.kt", "Database.java")):
-                db_files.append(Path(dirpath) / f)
-            elif f.endswith((".kt", ".java")):
+            if f.endswith((".kt", ".java")):
                 full_p = Path(dirpath) / f
                 try:
-                    head = full_p.read_text(encoding="utf-8", errors="replace")[:2000]
-                    if "@Database" in head:
+                    head = full_p.read_text(encoding="utf-8", errors="replace")[:4000]
+                    if "@Database" in head or "androidx.room.Database" in head:
                         db_files.append(full_p)
                 except Exception:
                     pass
@@ -314,6 +312,30 @@ def check_room_working_tree(
 
     paths = changed_paths(repo=root, include_deleted=True) if modified_rels is None else [root / r for r in modified_rels]
     changed_src = [p for p in paths if p.suffix in (".kt", ".java") and p.is_file()]
+
+    # Fast path: check if any changed or deleted source file contains Room indicators
+    room_tokens = ("@Database", "@Entity", "@Embedded", "Migration(", "AutoMigration", "RoomDatabase", "databaseBuilder")
+    has_room_triggers = False
+    for p in changed_src:
+        try:
+            sample = p.read_text(encoding="utf-8", errors="replace")[:8000]
+            if any(token in sample for token in room_tokens):
+                has_room_triggers = True
+                break
+        except Exception:
+            continue
+
+    if not has_room_triggers:
+        for p in paths:
+            if p.suffix in (".kt", ".java") and not p.is_file():
+                head_text = git_head_text(_rel(p), root) or ""
+                if any(token in head_text for token in room_tokens):
+                    has_room_triggers = True
+                    break
+
+    if not has_room_triggers:
+        return True, "No Room @Database or mapped @Entity changes in the working tree."
+
     changed_types = changed_kotlin_types(changed_src)
     changed_rels = {_rel(p) for p in changed_src}
     source_index = build_source_type_index(root)

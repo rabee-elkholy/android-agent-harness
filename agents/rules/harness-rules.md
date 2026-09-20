@@ -9,10 +9,10 @@ This is the authoritative always-loaded contract. Detailed Android guidance is r
 
 ## 1. Developer authority and lifecycle
 
-- Read-only discussion, explanation, and discovery need no plan. Answer engineering questions, and surface and discuss requested edge cases or missing scenarios directly in plain chat before starting planning.
-- Clarify material product behavior, error handling, and architectural ambiguity before drafting. When asked to study scenarios or find edge cases before starting, present and align on them directly in chat first; do not invent requirements or swallow edge-case discovery into an unreviewed plan artifact.
-- Code/config writes, deletion, build/install, Git history/index changes, tracker writes, and publication require an explicitly approved plan. Approval is bound to task, plan hash, repository, branch/worktree, and base snapshot.
-- Presenting a plan, silence, or an unrelated reply is never approval. Record explicit approval with `workflow.py approve`, then `begin`.
+- Read-only discussion, explanation, and discovery need no plan. Clarify material behavior, error handling, and architectural ambiguity before drafting. When asked to study scenarios or find edge cases before starting, present and align on them directly in plain chat first; never invent requirements or swallow edge-case discovery into an unreviewed plan artifact.
+- Code/config writes, deletion, build/install, Git history/index changes, tracker writes, and publication require an explicitly approved plan bound to task, plan hash, repository, branch/worktree, and base snapshot.
+- Presenting a plan, silence, or an unrelated reply is never approval. Record chat approval with `workflow.py approve --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED`, then `workflow.py begin` autonomously. Never ask developer to run manual commands.
+- **5-Tier Adaptive Execution**: Review policy assigns RISK_LANE. Tier 0 (NANO: strings, docs) and Tier 1 (VISUAL_ANALYTICS: UI styling, analytics constants <= 8 files in 1 module) select REVIEWERS=NONE, skipping subagents and device. Tier 2 (FEATURE_LOGIC): 1 targeted reviewer. Tier 3 (SUBSYSTEM_ARCH): 2 reviewers + drift check. Tier 4 (CRITICAL_CORE: Room, Auth, Billing): full Five-Leaf review.
 - **Single-shot Proceed invariant**: Proceed appears only for initial task approval.
 - **Direct follow-up execution**: approved in-scope fixes execute immediately. Do not create a new plan or request Proceed unless behavior, sensitive surface, contract, external write, or blast radius materially expands.
 - One approval covers all stated phases. Validate phase boundaries without pausing for repeat approval.
@@ -54,27 +54,24 @@ python .agents/scripts/review_policy.py --repo . --json
 
 ## 4. Build and verification contract
 
-- During `IMPLEMENTING`, approved diagnostic compile/test/assemble is allowed but is not final delivery evidence.
-- During `VERIFYING`, use one frozen change-set and this order:
+- During `IMPLEMENTING`, diagnostic compile/test/assemble is allowed but is not final delivery evidence.
+- During `VERIFYING`, use one frozen change-set and order:
   1. **Fast Deterministic Preflight** (`preflight.py`/`preflight_check.py`).
   2. **Automated Unit Tests** (`run_tests_gate.py`) when selected.
   3. **AI Specialist Reviewers** selected by policy.
   4. **Assemble & Device Verification**.
   5. **Interactive Mobile Walkthrough & Sign-off**.
   6. **Read-Only Delivery Verification** (`workflow.py verify`, then `complete`).
-- Final assemble/device requires all routed reviews PASS with zero blocking findings. Diagnostic builds from implementation do not satisfy this gate.
-- Review dispatch is automatic after deterministic gates. Use independent reviewer output; lead-agent self-certification is forbidden for HIGH/CRITICAL or sensitive work. Reviewer failure/timeout/quota is `ENV_BLOCKED`, never PASS. Maximum three rounds.
-- TDD is required for regressions and deterministic behavior with a meaningful seam, not for docs/resources/mechanical changes.
-- A test task executing zero tests cannot satisfy a required test gate.
+- Final assemble/device requires all routed reviews PASS with zero blocking findings.
+- Review dispatch is automatic after deterministic gates. Use independent reviewer output; self-certification is forbidden for HIGH/CRITICAL or sensitive work. Reviewer failure/timeout/quota is `ENV_BLOCKED`, never PASS. Maximum three rounds.
+- TDD is required for regressions and deterministic behavior with a seam, not for docs/resources. Zero tests cannot satisfy a required test gate.
 - Resume from VERIFYING/BLOCKED with `workflow.py resume` before fixes; do not create a replacement task.
 
 ## 5. Evidence integrity
 
-- `delivery_snapshot_sha256` identifies the final delivery tree; `change_set_sha256` identifies status, paths, renames/deletions/conflicts, and untracked delivery files relative to task baseline.
+- `delivery_snapshot_sha256` identifies delivery tree; `change_set_sha256` identifies status, paths, renames/deletions, and untracked files relative to baseline.
 - Every gate/review must match the same snapshot, change-set, producer, and schema. Evidence is append-only under `.agents/state/runs/`.
-- Stale, partial, malformed, mismatched, truncated, or unknown-schema evidence blocks delivery.
-- Build/install/launch must reference the same immutable APK artifact-set hash.
-- Never edit evidence/state manually. `EMERGENCY_UNVERIFIED` cannot approve delivery.
+- Stale, partial, malformed, mismatched, truncated, or unknown-schema evidence blocks delivery. Build/install/launch must reference the same immutable APK artifact-set hash. Never edit evidence/state manually. `EMERGENCY_UNVERIFIED` cannot approve delivery.
 
 ## 6. Android and environment safety
 
@@ -87,13 +84,13 @@ python .agents/scripts/review_policy.py --repo . --json
 ## 7. Delivery and external systems
 
 - READY_FOR_DELIVERY means local evidence is complete; Git and release actions remain developer-owned.
-- A new task is blocked by unrelated prior task changes unless the developer explicitly overrides after review.
-- CI verifies only; it cannot synthesize approval, implement fixes, publish, mutate trackers, or perform destructive device recovery.
-- Tracker provider `none` disables tracker behavior. Zoho writes require the explicit `update zoho` trigger, approved `zoho_sprints` external-write scope, and stable `operation_id`. Failures become `PM_SYNC_PENDING`; never set Done/Solved automatically.
+- Unrelated prior task changes block new tasks unless explicitly overridden.
+- CI verifies only; cannot synthesize approval, implement fixes, publish, mutate trackers, or perform destructive recovery.
+- Tracker provider `none` disables tracker behavior. Zoho writes require explicit `update zoho` trigger, approved `zoho_sprints` scope, and stable `operation_id`. Failures become `PM_SYNC_PENDING`; never set Done/Solved automatically.
 
 ## 8. Enforcement truth
 
-Report the detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED`. Never describe rule-only behavior as cryptographic or OS-level enforcement.
+Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED`. Never describe rule-only behavior as cryptographic or OS-level enforcement.
 
 ## 9. Canonical Command Catalog
 

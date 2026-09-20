@@ -349,7 +349,7 @@ def draft(args: argparse.Namespace) -> dict:
             or len(impl_modules) > 1
             or arch_intent == "MIGRATION"
             or ("ROOM_SCHEMA" in surfaces_for_layer_check and len(impl_files) >= 2)
-            or (len(spanned_layer_groups) >= 3 and len(impl_files) >= 5)
+            or (len(spanned_layer_groups) >= 3 and len(impl_files) > 8)
         )
         and not getattr(args, "force", False)
     )
@@ -539,6 +539,7 @@ def begin_task(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     plan = begin(repo, _load_plan(repo, args.task_id))
     save_plan(_plan_path(repo, args.task_id), plan)
+    atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
     return plan
 
 
@@ -742,6 +743,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     plan["status"] = "VERIFYING"
     plan["verification_run_id"] = run_id
     save_plan(_plan_path(repo, args.task_id), plan)
+    atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
     recipes = get_verification_recipes(policy.get("surfaces") or [])
     current = {
         "task_id": args.task_id,
@@ -944,6 +946,7 @@ def resume(args: argparse.Namespace) -> dict:
     plan["status"] = "IMPLEMENTING"
     plan["resumed_at"] = utc_now()
     save_plan(_plan_path(repo, args.task_id), plan)
+    atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
     return plan
 
 
@@ -1451,6 +1454,13 @@ def status(args: argparse.Namespace) -> dict:
                 task_id = str(active_data.get("task_id") or "").strip()
             except Exception:
                 pass
+        if not task_id:
+            try:
+                from mutation_guard import active_plan
+                plan_data = active_plan(repo)
+                task_id = str(plan_data.get("task_id") or "").strip()
+            except Exception:
+                pass
     if not task_id:
         raise ValidationError("no active task found in repository state; specify --task-id <id>")
     plan = _load_plan(repo, task_id)
@@ -1464,7 +1474,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--repo", required=True)
+    common.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     common.add_argument("--task-id", required=True)
     command = sub.add_parser("draft", parents=[common])
     command.add_argument("--outcome", required=True)
@@ -1541,12 +1551,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
     status_cmd = sub.add_parser("status")
-    status_cmd.add_argument("--repo", required=True)
+    status_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     status_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
     status_cmd.add_argument("--next", action="store_true", help="Include the safest next lifecycle command without executing it")
     status_cmd.set_defaults(handler=status)
     command = sub.add_parser("recover-stale")
-    command.add_argument("--repo", required=True)
+    command.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     command.add_argument("--task-id", default="")
     command.set_defaults(handler=recover_stale)
     parser.add_argument("--json", action="store_true")

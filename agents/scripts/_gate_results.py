@@ -135,13 +135,13 @@ def gate_artifact_name(task: str) -> str:
     return f"gradle-{sanitize_task(task)}"
 
 
-def current_head_sha() -> str:
+def current_head_sha(repo: Path | None = None) -> str:
     try:
         from _repo_files import REPO
 
         proc = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=str(REPO),
+            cwd=str(repo or REPO),
             capture_output=True,
             text=True,
             encoding="utf-8",

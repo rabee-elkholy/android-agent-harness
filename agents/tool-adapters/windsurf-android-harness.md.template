@@ -6,9 +6,29 @@ trigger: always_on
 
 Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 
-Use `{{PY}}` for `.agents/scripts/*`. Follow the central adaptive policy and load its selected skills. Delivery requires one matching read-only verifier result. Reviewers selected by policy must be evaluated independently; lead agents must never self-certify with `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes.
-
-Device: {{DEVICE_POLICY}}
-- Mobile Verification Walkthrough: After every device installation (`run_device.py install-start`), the agent MUST output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking the developer for verification. Never ask if it passed without full test instructions.
-
-{{GIT_POLICY}}
+- Python: `{{PY}}`
+- Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.
+- Device: {{DEVICE_POLICY}}
+- Discovery: MUST start with targeted task context (`{{PY}} .agents/harness.py task-context --file <path> --json` or `--symbol <name>`) or architectural graph (`{{PY}} .agents/scripts/project_graph.py --feature <name>` or `--find <Symbol>`). Unanchored repository-wide grep cascades are forbidden; targeted search within feature directories is permitted.
+- Consultation & Edge Case Discussion Before Planning: If the user's prompt includes an engineering inquiry, trade-off question, architectural validation, asks to study/research missing scenarios or surface edge cases before starting (e.g. "ادرس الموضوع كويس", "دور ع edge cases قبل ما تبدأ", "find missing scenarios/edge cases before starting"), or asks for confirmation before starting (e.g. "أكد عليا", "is this logic sound or best-practice?", "should we do A or B?"), the agent MUST fully discuss, analyze, and present the findings directly in plain chat BEFORE invoking `workflow.py draft` or drafting any plan. When asked to surface edge cases or examine missing scenarios, the agent MUST present and discuss a comprehensive breakdown of all identified edge cases directly in chat first, and await developer alignment before drafting any implementation plan. Never swallow consultation questions or edge-case discovery into an immediate plan artifact. Only after the developer confirms the direction or says to proceed (e.g. "ابدأ", "اكتب الخطة"), begin the discovery and planning workflow.
+- Pre-Planning Clarification: Missing requirements, edge cases, or domain ambiguities MUST be clarified interactively before drafting the plan; guessing or silently assuming missing scenarios is strictly forbidden.
+- Plan Approval Clarity: On initial plan drafting, explain to the developer: "Review the plan above; reply 'ابدأ' / 'موافق' in chat to approve." When approved, record approval via `workflow.py approve` and `workflow.py begin` autonomously; NEVER instruct the developer to run workflow commands manually.
+- Multi-Phase Execution: Multi-phase plans execute sequentially and autonomously. Single intake approval covers all phases; never pause or ask developer between phases.
+- Strict Verification Order: Preflight -> unit tests -> routed reviewers -> device install -> mobile walkthrough -> verify. Wait for ALL routed specialist reviewers to finish and record verdicts with ZERO blocking findings BEFORE running `assembleDebug` or starting device installation.
+- Reviewer Dispatch & Ingestion: Launch routed reviewers immediately; independent reviews required (no self-certification via `record_review.py --verdict PASS`). Ingest with `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` or `--response-text "<name>=<text>"`. Clean reviews with `cites=0` are recognized as `PASS`.
+- Finding Adjudication: If a reviewer reports a false positive, adjudicate via `{{PY}} .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <id> --status FALSE_POSITIVE --reason "<rationale>"`.
+- Zero-Polling Invariant: Never poll background tasks or subagents in a loop. Yield execution and wait for reactive messages.
+- Harness Immutability & Diagnostic Protocol: The harness engine under `.agents/**` is immutable developer infrastructure. If any harness command crashes, stop immediately, report the traceback and root cause to the developer, and await instructions.
+- Task Resumption: Run `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` if BLOCKED or for fixes.
+- {{GIT_POLICY}}
+- 5-Tier Adaptive Execution: Review policy assigns RISK_LANE dynamically based on blast radius:
+  - Tier 0 (NANO: strings, drawables, docs): REVIEWERS=NONE. Preflight only (<2s). Assemble and device skipped.
+  - Tier 1 (VISUAL_ANALYTICS: UI styling, analytics constants, Compose clicks <= 8 files in 1 module): REVIEWERS=NONE. Fast assemble permitted; device skipped.
+  - Tier 2 (FEATURE_LOGIC: ViewModel, UseCase, standard logic): 1 targeted reviewer (`bug-reviewer-agent`) + unit tests gate + assemble.
+  - Tier 3 (SUBSYSTEM_ARCH: multi-module, Hilt DI, network contracts): 2 reviewers (`bug-reviewer-agent`, `regression-impact-reviewer-agent`) + architecture drift check + assemble.
+  - Tier 4 (CRITICAL_CORE: Room schema, DB migrations, Auth, Billing, Security, Crypto, Native): Full Five-Leaf Review + Room gate + mandatory device deploy.
+  - When REVIEWERS=NONE (Tier 0 & Tier 1), do NOT dispatch reviewer subagents; proceed directly to assemble and verify.
+- Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or asking for verification. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker; NEVER hallucinate serials or claim app is running. Output complete, numbered mobile walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat before asking for sign-off.
+- Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes is administrative context work. Directly record using `{{PY}} .agents/harness.py context note "<note>"`.
+- Follow the Canonical 15-step lifecycle in `AGENTS.md` strictly: 1. task-context -> 1b. project_graph -> 2. workflow draft -> 3. workflow approve -> 4. workflow begin -> 5. diagnostic assemble -> 6. prepare-verification -> 7. preflight_check -> 8. run_tests_gate -> 9. review_package -> 10. record_review -> 10b. validate-finding -> 10c. resume -> 11. assembleDebug -> 12. device install-start -> 12b. capture_screen -> 13. workflow verify -> 14. workflow complete -> 15. workflow deliver.

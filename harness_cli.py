@@ -627,9 +627,13 @@ def cmd_task(args: argparse.Namespace) -> int:
             break
     repo = Path(repo_value).expanduser().resolve() if repo_value else Path.cwd().resolve()
     installed = repo / ".agents" / "scripts" / "workflow.py"
+    forwarded = list(task_args)
+    if repo_value is None and forwarded:
+        action = forwarded[0]
+        forwarded = [action, "--repo", str(repo), *forwarded[1:]]
     if installed.is_file():
-        return subprocess.run([sys.executable, str(installed), *task_args], cwd=str(repo), check=False).returncode
-    return run_engine_script(kit, "workflow.py", task_args)
+        return subprocess.run([sys.executable, str(installed), *forwarded], cwd=str(repo), check=False).returncode
+    return run_engine_script(kit, "workflow.py", forwarded)
 
 
 def cmd_context(args: argparse.Namespace) -> int:
@@ -751,9 +755,11 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     prev_cwd = Path.cwd()
     os.chdir(repo)
     try:
+        task_id = getattr(args, "task_id", None) or getattr(args, "task", None)
+        forward_args = ["--task-id", task_id] if task_id else []
         if client_script.is_file():
             proc = subprocess.run(
-                [sys.executable, str(client_script)],
+                [sys.executable, str(client_script), *forward_args],
                 check=False,
                 text=True,
                 encoding="utf-8",
@@ -762,7 +768,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             return proc.returncode
         env = os.environ.copy()
         env["HARNESS_REPO"] = str(repo)
-        return run_engine_script(kit, "preflight_check.py", [], env=env)
+        return run_engine_script(kit, "preflight_check.py", forward_args, env=env)
     finally:
         os.chdir(prev_cwd)
 
@@ -942,14 +948,26 @@ def cmd_verify(args: argparse.Namespace) -> int:
     """Run the read-only vNext final verifier for one active task."""
     kit = resolve_kit(args.kit)
     repo = find_repo(args.repo) if args.repo else find_repo(None)
+    task_id = getattr(args, "task", "") or getattr(args, "task_id", "")
+    if not task_id:
+        sys.path.insert(0, str(_script_root(kit)))
+        try:
+            from mutation_guard import active_plan
+            plan = active_plan(repo)
+            task_id = str(plan.get("task_id") or "")
+        except Exception:
+            pass
+    if not task_id:
+        print("[FAIL] No active task found in repository; pass --task-id <id>", file=sys.stderr)
+        return 1
     client_workflow = repo / ".agents" / "scripts" / "workflow.py"
     if client_workflow.is_file():
         proc = subprocess.run(
-            [sys.executable, str(client_workflow), "verify", "--repo", str(repo), "--task-id", args.task],
+            [sys.executable, str(client_workflow), "verify", "--repo", str(repo), "--task-id", task_id],
             cwd=str(repo), check=False,
         )
         return proc.returncode
-    return run_engine_script(kit, "workflow.py", ["verify", "--repo", str(repo), "--task-id", args.task])
+    return run_engine_script(kit, "workflow.py", ["verify", "--repo", str(repo), "--task-id", task_id])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1004,6 +1022,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("preflight", help="String parity + Room gate + fast Kotlin lint.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID for preflight validation.")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.set_defaults(func=cmd_preflight)
 
@@ -1079,7 +1098,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the read-only final verifier for an active vNext task.",
     )
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
-    sp.add_argument("--task", required=True, help="Approved task id to verify.")
+    sp.add_argument("--task", "--task-id", dest="task", default="", help="Approved task id to verify (defaults to active task).")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
     sp.set_defaults(func=cmd_verify)
 

@@ -84,7 +84,7 @@ The harness separates three concerns:
 Open the Android project root in your coding agent and paste this exact pinned prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.56/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.57/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer discovers the project in read-only mode, asks only the configuration questions it needs, shows the installation plan, waits for approval, installs the pinned kit, and runs Doctor. Application source is not modified during setup.
@@ -105,7 +105,7 @@ android-harness doctor --repo /path/to/android-project --json
 To use a source checkout instead:
 
 ```bash
-git clone --depth 1 --branch v1.0.56 --single-branch \
+git clone --depth 1 --branch v1.0.57 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py setup \
@@ -142,13 +142,38 @@ The agent should then:
 
 For a bug with a meaningful deterministic seam, the workflow records a real failing result before the fix and a passing result afterward. For a documentation or mechanical change, it avoids pretending that an empty or irrelevant test run adds confidence.
 
-### Common commands
+### Canonical Sequential Lifecycle (Steps 1–15)
+
+Every task follows a strict, sequential lifecycle. Direct engine commands and local CLI wrappers adhere to this contract:
+
+| Step | Stage | Canonical Command | Parameter Rules & Description |
+|:---|:---|:---|:---|
+| 1 | **Discovery** | `python .agents/harness.py task-context --file <path> --json` | Bounded AST slice for target file or `--symbol <name>` |
+| 1b | **Broad Discovery** | `python .agents/scripts/project_graph.py --feature <name>` | Symbol/feature dependency graph (`--find <Symbol>`) |
+| 2 | **Draft Plan** | `python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR>` | Create plan. Required: `--task-id`, `--outcome`. Optional: `--expected-surfaces`, `--kind` |
+| 3 | **Approve Task** | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Record explicit chat or terminal approval. Required: `--source`, `--proof-reference`, `--enforcement-tier` |
+| 4 | **Begin Task** | `python .agents/scripts/workflow.py begin --repo . --task-id <id>` | Transition task to `IMPLEMENTING` state. Consumes single-use approval nonce |
+| 5 | **Diagnostic Build** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Optional diagnostic compilation during implementation |
+| 6 | **Prepare Verification** | `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>` | Freeze review package & transition to `VERIFYING`. Discovers policy & sets active run ID |
+| 7 | **Preflight Gate** | `python .agents/scripts/preflight_check.py` | Deterministic checks: Room, fast ktlint, string parity. Zero flags required |
+| 8 | **Unit Tests Gate** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate (when required by policy). Zero flags required |
+| 9 | **Review Package** | `python .agents/scripts/review_package.py --task-id <id>` | Generate immutable review package markdown. `--task-id` is optional (auto-detects) |
+| 10 | **Record Review** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent review. Accepts `--task <id>` or `--task-id <id>` |
+| 10b | **Validate Finding** | `python .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <id> --status <FALSE_POSITIVE\|CONFIRMED> --reason "<text>"` | Adjudicate finding. Technical rationale embeds into re-reviews |
+| 10c | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume to `IMPLEMENTING` if code fixes are needed |
+| 11 | **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass or REVIEWERS=NONE) |
+| 12 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install & launch on device (ONLY when device_required=true) |
+| 12b | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Optional screenshot verification proof |
+| 13 | **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check. Validates all bound gate evidence |
+| 14 | **Complete Task** | `python .agents/scripts/workflow.py complete --repo . --task-id <id>` | Transition task to `READY_FOR_DELIVERY` |
+| 15 | **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit. Cleans active task pointer |
+| — | **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention or project knowledge |
+
+### Quick CLI Shortcuts
 
 | Goal | Command |
 |---|---|
 | Diagnose installation | `python .agents/harness.py doctor --json` |
-| Resolve context for a file | `python .agents/harness.py task-context --file <path> --json` |
-| Resolve context for a symbol | `python .agents/harness.py task-context --symbol <name> --json` |
 | Ask for the safe next action | `python .agents/harness.py task status --task-id <id> --next` |
 | Run deterministic preflight | `python .agents/harness.py preflight` |
 | Run selected unit tests | `python .agents/harness.py test` |
@@ -156,9 +181,29 @@ For a bug with a meaningful deterministic seam, the workflow records a real fail
 | Install and start verified APKs | `python .agents/harness.py device install-start` |
 | Verify the frozen result | `python .agents/harness.py verify --task-id <id>` |
 
-The project includes command packs for supported hosts, but the repository-local CLI is the canonical contract.
-
 ## Android-aware verification
+
+### 5-Tier Adaptive Execution Lanes
+
+Review policy evaluates blast radius and assigns an adaptive risk lane dynamically:
+
+| Tier | Lane | Scope Triggers | Reviewers | Gates & Requirements |
+|---|---|---|---|---|
+| **Tier 0** | `NANO` | Strings, drawables, docs | **NONE** | Fast preflight only (<2s). Assemble and device skipped. |
+| **Tier 1** | `VISUAL_ANALYTICS` | UI styling, analytics constants, Compose clicks ($\le 8$ files in 1 module) | **NONE** | Fast assemble permitted; device skipped. |
+| **Tier 2** | `FEATURE_LOGIC` | ViewModel, UseCase, standard domain/app logic | **1 Reviewer** (`bug-reviewer-agent`) | Preflight + unit tests gate + assemble. |
+| **Tier 3** | `SUBSYSTEM_ARCH` | Multi-module changes, Hilt DI bindings, network contracts | **2 Reviewers** (`bug-reviewer-agent`, `regression-impact-reviewer-agent`) | Preflight + unit tests + architecture drift check + assemble. |
+| **Tier 4** | `CRITICAL_CORE` | Room schema, DB migrations, Auth, Billing, Security, Crypto, Native | **Full Five-Leaf Review** (5 specialists) | Mandatory Room migration gate + assemble + device deploy & sign-off. |
+
+### Reviewer Evidence & Finding Adjudication
+
+Specialist reviewers execute independently via subagents and append cryptographically bound evidence footers:
+`EVIDENCE pkg=<sha12> cites=<n>`
+
+- Clean reviews pass with `cites=0` and are recognized as `PASS`.
+- If a reviewer reports a false positive, the lead agent adjudicates it via `workflow.py validate-finding --status FALSE_POSITIVE --reason "<rationale>"`.
+- The technical rationale is embedded directly into `review-package.md` under `## LEAD AGENT FINDING VALIDATIONS`, allowing re-reviewers to accept the explanation without manual bypass.
+- Companion surfaces (localization strings, UI layouts, navigation) are automatically recognized alongside code surfaces, preventing spurious material drift blocks.
 
 The central policy routes checks from the actual diff. Examples:
 
@@ -174,7 +219,7 @@ The central policy routes checks from the actual diff. Examples:
 
 ### Example: Room schema change
 
-If an agent adds a field to a Room entity, the harness can classify the change as `ROOM_SCHEMA`, discover the owning database, require an explicit migration path, run configured migration tests, route the data-focused review lane, and bind the final assemble/device evidence to the same frozen tree. A changed entity cannot be disguised as a low-risk documentation change by placing both in one diff.
+If an agent adds a field to a Room entity, the harness classifies the change as `ROOM_SCHEMA`, discovers the owning database, requires an explicit migration path, runs configured migration tests, routes the data-focused review lane, and binds the final assemble/device evidence to the same frozen tree. A changed entity cannot be disguised as a low-risk documentation change by placing both in one diff.
 
 ## Safety model
 

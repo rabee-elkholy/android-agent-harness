@@ -180,26 +180,35 @@ def validate_reviewer_precondition_before_assemble(
     Returns (True, reason) only if reviews are not required or all required reviews passed.
     """
     active_p = state_dir / "active-task.json"
-    if not active_p.is_file():
-        return False, "NO_ACTIVE_TASK: an approved active task is required for assemble"
+    plan_data = None
+    tid = ""
+    if active_p.is_file():
+        try:
+            active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
+            tid = str(active_task_data.get("task_id") or "").strip()
+        except Exception:
+            pass
 
-    try:
-        active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return False, f"active-task.json is unreadable or malformed: {exc}"
+    if not tid:
+        try:
+            from mutation_guard import active_plan
+            plan_data = active_plan(repo)
+            tid = str(plan_data.get("task_id") or "").strip()
+        except Exception:
+            return False, "NO_ACTIVE_TASK: an approved active task is required for assemble"
 
-    tid = str(active_task_data.get("task_id") or "").strip()
     if not tid:
         return False, "NO_ACTIVE_TASK: active task identity is missing"
 
-    plan_p = state_dir / "tasks" / tid / "plan.json"
-    if not plan_p.is_file():
-        return False, f"Task {tid} plan.json missing"
+    if plan_data is None:
+        plan_p = state_dir / "tasks" / tid / "plan.json"
+        if not plan_p.is_file():
+            return False, f"Task {tid} plan.json missing"
 
-    try:
-        plan_data = json.loads(plan_p.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return False, f"Task {tid} plan.json is unreadable or malformed: {exc}"
+        try:
+            plan_data = json.loads(plan_p.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return False, f"Task {tid} plan.json is unreadable or malformed: {exc}"
 
     status = str(plan_data.get("status") or "").upper()
     if status == "IMPLEMENTING":

@@ -15,7 +15,7 @@ VERIFICATION_SCRIPTS = {
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
 }
-BOOTSTRAP_ACTIONS = {"draft", "begin", "status", "approve", "approve-sensitive", "deliver", "debug-evidence", "recover-stale"}
+BOOTSTRAP_ACTIONS = {"draft", "begin", "status", "approve", "approve-sensitive", "deliver", "debug-evidence", "recover-stale", "validate-finding"}
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 
@@ -163,15 +163,52 @@ def _state_root(repo: Path | str) -> Path:
 def active_plan(repo: Path | str) -> dict:
     repo_path = Path(repo)
     state = _state_root(repo_path)
-    active = read_json(state / "active-task.json")
-    plan_path = Path(str(active.get("plan_path") or ""))
-    if not plan_path.is_absolute():
-        plan_path = repo_path / plan_path
-    plan_resolved = plan_path.resolve()
-    state_resolved = state.resolve()
-    if state_resolved != plan_resolved and state_resolved not in plan_resolved.parents:
-        raise ValidationError("active plan path escapes harness state")
-    return read_json(plan_resolved)
+    active_file = state / "active-task.json"
+    if active_file.is_file():
+        try:
+            active = read_json(active_file)
+            plan_path = Path(str(active.get("plan_path") or ""))
+            if not plan_path.is_absolute():
+                plan_path = repo_path / plan_path
+            plan_resolved = plan_path.resolve()
+            state_resolved = state.resolve()
+            if state_resolved != plan_resolved and state_resolved not in plan_resolved.parents:
+                raise ValidationError("active plan path escapes harness state")
+            if plan_resolved.is_file():
+                return read_json(plan_resolved)
+        except ValidationError:
+            raise
+        except Exception:
+            pass
+
+    tasks_dir = state / "tasks"
+    if tasks_dir.is_dir():
+        candidates = []
+        for task_sub in tasks_dir.iterdir():
+            if task_sub.is_dir():
+                p_file = task_sub / "plan.json"
+                if p_file.is_file():
+                    try:
+                        p_data = read_json(p_file)
+                        st = str(p_data.get("status") or "")
+                        if st in ("IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
+                            mtime = p_file.stat().st_mtime
+                            candidates.append((mtime, p_data, p_file, task_sub.name))
+                    except Exception:
+                        continue
+        if candidates:
+            candidates.sort(key=lambda c: c[0], reverse=True)
+            chosen_plan = candidates[0][1]
+            chosen_file = candidates[0][2]
+            chosen_tid = candidates[0][3]
+            try:
+                from _vnext_common import atomic_write_json, utc_now
+                atomic_write_json(active_file, {"task_id": chosen_tid, "plan_path": str(chosen_file), "updated_at": utc_now()})
+            except Exception:
+                pass
+            return chosen_plan
+
+    raise ValidationError(f"cannot read JSON artifact {active_file}: No active task found")
 
 
 def file_mutation_allowed(repo: Path) -> tuple[bool, str]:

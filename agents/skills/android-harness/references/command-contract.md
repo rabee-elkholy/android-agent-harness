@@ -177,8 +177,9 @@ Generate immutable review package and record specialist subagent reviews.
 
 ### Commands
 ```bash
-# 1. Generate review package
+# 1. Generate review package (auto-detects active task; --task-id <id> is optional)
 python .agents/scripts/review_package.py
+# or explicitly: python .agents/scripts/review_package.py --task-id <id>
 
 # 2. Auto-harvest subagent review from transcript (preferred):
 python .agents/scripts/record_review.py --task <id> --from-subagent <reviewer_name>=<subagent_conversation_id>
@@ -189,7 +190,10 @@ python .agents/scripts/record_review.py --task <id> --response-text "<reviewer_n
 # 4. Ingest from file:
 python .agents/scripts/record_review.py --task <id> --response <reviewer_name>=<path>
 
-# 5. Developer review override (only if explicitly requested by developer on non-sensitive surfaces)
+# 5. Validate or dispute reviewer findings (technical adjudication):
+python .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <finding_id> --status <FALSE_POSITIVE|CONFIRMED> --reason "<technical_explanation>"
+
+# 6. Developer review override (only if explicitly requested by developer on non-sensitive surfaces)
 python .agents/scripts/record_review.py --task <id> --override-reviews --proof-reference "<developer_confirmation>"
 ```
 

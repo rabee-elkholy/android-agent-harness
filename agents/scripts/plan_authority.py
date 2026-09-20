@@ -44,6 +44,10 @@ SURFACE_ALIASES: dict[str, list[str]] = {
     "RESOURCE_UI": ["RESOURCE_UI"],
     "STRINGS": ["LOCALIZATION"],
     "LOCALIZATION": ["LOCALIZATION"],
+    "PRESENTATION": ["BUSINESS_LOGIC", "COMPOSE_UI", "XML_UI"],
+    "VIEWMODEL": ["BUSINESS_LOGIC"],
+    "DOMAIN": ["BUSINESS_LOGIC"],
+    "DATA": ["BUSINESS_LOGIC", "PERSISTENCE", "NETWORK"],
     "TEST": ["TEST_ONLY"],
     "TESTS": ["TEST_ONLY"],
     "TEST_ONLY": ["TEST_ONLY"],
@@ -89,7 +93,7 @@ CODE_SURFACES: set[str] = {
     "BUSINESS_LOGIC", "COMPOSE_UI", "XML_UI", "NETWORK",
     "PERSISTENCE", "DEVICE_API", "NAVIGATION", "ROOM_SCHEMA",
 }
-COMPANION_SURFACES: set[str] = {"NAVIGATION", "RESOURCE_UI", "XML_UI", "COMPOSE_UI"}
+COMPANION_SURFACES: set[str] = {"NAVIGATION", "RESOURCE_UI", "XML_UI", "COMPOSE_UI", "LOCALIZATION"}
 
 OUTCOME_SURFACE_KEYWORDS: dict[str, set[str]] = {
     "BILLING": {"billing", "payment", "subscription", "purchase", "revenuecat", "in-app purchase", "iap", "paywall"},
@@ -98,6 +102,7 @@ OUTCOME_SURFACE_KEYWORDS: dict[str, set[str]] = {
     "ROOM_SCHEMA": {"database", "room", "migration", "dao", "entity", "schema", "table"},
     "PERSISTENCE": {"database", "room", "datastore", "sharedpreferences", "pref", "cache", "persistence"},
     "NAVIGATION": {"navigation", "nav", "route", "destination", "screen", "fragment"},
+    "LOCALIZATION": {"locale", "localize", "localization", "string", "strings", "translate", "translation", "i18n", "l10n"},
 }
 
 

@@ -20,28 +20,42 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - Task Resumption: If a task becomes BLOCKED or fixes are needed during verification, run `python .agents/scripts/workflow.py resume --repo . --task-id <id>` to return to implementation.
 - In client Android apps: The agent must not run `git add`, `commit`, `push`, merge, rebase, stash, or reset. Leave changes unstaged. Draft a Conventional Commit message only. The developer commits. In this kit repository itself (`android-harness-kit` development): The agent may run git operations when instructed by the maintainer.
 - Independent Reviews: Reviewer roles selected by policy MUST be executed via subagents. The lead agent is strictly forbidden from self-certifying reviews using `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes; evaluations must come from actual reviewer runs.
-- Antigravity Planning Lifecycle: The interactive Proceed button appears ONLY on initial task plan approval. Subsequent updates show only Review. Never tell the developer to click 'Proceed' on follow-ups or bug fixes during active tasks; execute, compile, and deploy directly.
+- Antigravity Planning Lifecycle: The interactive Proceed button appears ONLY on initial task plan approval. Subsequent updates show only Review. Never tell the developer to click 'Proceed' on follow-ups or bug fixes during active tasks; execute, compile, and deploy directly. When the developer approves in chat (e.g. replies 'ابدأ' or 'موافق'), the agent MUST immediately record approval via `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` and `python .agents/scripts/workflow.py begin --repo . --task-id <id>` autonomously; NEVER instruct the developer to run PowerShell commands manually.
+- 5-Tier Adaptive Execution: Review policy assigns RISK_LANE dynamically based on blast radius:
+  - Tier 0 (NANO: strings, drawables, docs): REVIEWERS=NONE. Preflight only (<2s). Assemble and device skipped.
+  - Tier 1 (VISUAL_ANALYTICS: UI styling, analytics constants, Compose clicks <= 8 files in 1 module): REVIEWERS=NONE. Fast assemble permitted; device skipped.
+  - Tier 2 (FEATURE_LOGIC: ViewModel, UseCase, standard logic): 1 targeted reviewer + unit tests gate + assemble.
+  - Tier 3 (SUBSYSTEM_ARCH: multi-module, Hilt DI, network contracts): 2 reviewers + architecture drift check + assemble.
+  - Tier 4 (CRITICAL_CORE: Room schema, DB migrations, Auth, Billing, Security, Crypto, Native): Full Five-Leaf Review + Room gate + mandatory device deploy.
+  - When REVIEWERS=NONE (Tier 0 & Tier 1), do NOT dispatch reviewer subagents; proceed directly to assemble and verify.
 - Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is still running as a background task, wait for completion; never output walkthrough or invoke `ask_question` prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when it is not, and NEVER ask the developer to verify a build that was not installed. When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE invoking `ask_question` for sign-off. Never invoke `ask_question` with just 'Did it pass' without detailing feature navigation.
 - Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `python harness_cli.py context note "<note>"` (or edit `.agents/project-context/project-notes.md`).
 
-## Canonical Command Catalog
+## Canonical Command Catalog & Sequential Lifecycle
 
-| Step | Canonical Command | Description |
-| :--- | :--- | :--- |
-| **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded, read-only context for one target |
-| **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
-| **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
-| **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
-| **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
-| **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate |
-| **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
-| **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
-| **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
-| **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
-| **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass) |
-| **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
-| **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
-| **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
-| **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
+Execute commands in this strict sequential order. Every command is fully specified with all required arguments:
+
+| Step | Lifecycle Stage | Canonical Command | Description & Parameter Rules |
+| :--- | :--- | :--- | :--- |
+| 1 | **Discovery** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded AST slice for target file/symbol |
+| 1b | **Broad Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol feature graph analysis |
+| 2 | **Draft Plan** | `python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR>` | Create task plan. Required: `--task-id`, `--outcome`. Optional: `--kind`, `--expected-surfaces` |
+| 3 | **Approve Task** | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Record chat approval. Required: `--source`, `--proof-reference`, `--enforcement-tier` |
+| 4 | **Begin Task** | `python .agents/scripts/workflow.py begin --repo . --task-id <id>` | Transition task to IMPLEMENTING state. Required: `--task-id` |
+| 5 | **Diagnostic Build** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Optional diagnostic compile during implementation |
+| 6 | **Prepare Verification** | `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>` | Freeze review package & transition to VERIFYING. Required: `--task-id` |
+| 7 | **Preflight Gate** | `python .agents/scripts/preflight_check.py` (or `python .agents/harness.py preflight`) | Deterministic check: room, fast ktlint, string parity. Zero flags required |
+| 8 | **Unit Tests Gate** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate (when required by policy). Zero flags required |
+| 9 | **Review Package** | `python .agents/scripts/review_package.py --task-id <id>` (or auto-detects active task) | Generate immutable review package markdown. `--task-id` is optional |
+| 10 | **Record Review** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent review. Accepts `--task <id>` or `--task-id <id>` |
+| 10b | **Validate Finding** | `python .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <id> --status <FALSE_POSITIVE\|CONFIRMED> --reason "<text>"` | Validate reviewer finding. `--reason` mandatory for FALSE_POSITIVE |
+| 10c | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume to IMPLEMENTING if fixes needed. Required: `--task-id` |
+| 11 | **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Build debug APK (ONLY after all reviewers pass or REVIEWERS=NONE) |
+| 12 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install & launch on device (ONLY when device_required=true) |
+| 12b | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Optional screenshot verification proof |
+| 13 | **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check. Required: `--task-id` |
+| 14 | **Complete Task** | `python .agents/scripts/workflow.py complete --repo . --task-id <id>` | Transition task to READY_FOR_DELIVERY. Required: `--task-id` |
+| 15 | **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit. Required: `--task-id` |
+| - | **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
 
 Antigravity loads `agents/hooks.json` in this repo. Gemini CLI does not; still honor the five-leaf review before assemble. No `code-review-guard-agent`. No `LGTM`.

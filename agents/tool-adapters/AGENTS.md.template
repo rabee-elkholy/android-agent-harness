@@ -5,13 +5,13 @@ Read `.agents/rules/harness-rules.md` before acting; it is the authoritative saf
 
 ## Daily workflow
 
-- Read-only discussion and discovery need no plan. Start with `{{PY}} .agents/harness.py task-context --file <path> --json` (or `--symbol`); use `project_graph.py --feature` only for a deliberately broad slice.
-- Do not inspect `.agents/scripts/**` during normal app work. If a documented command fails, violates its contract, Doctor reports corruption, or the developer explicitly asks to debug the harness, report the failure and follow the kernel's diagnostic boundary.
+- Read-only discussion and discovery need no plan. Start with `{{PY}} .agents/harness.py task-context --file <path> --json` (or `--symbol`); use `project_graph.py --feature` only for a broad slice.
+- Do not inspect `.agents/scripts/**` during normal app work. If a command fails or Doctor reports corruption, follow the kernel's diagnostic boundary.
 - Clarify material ambiguity before planning. When asked to explore edge cases or study scenarios before starting, present and discuss them in plain chat first. Before mutations, draft the task plan and wait for explicit approval. One approval covers the stated multi-phase scope.
 - After approval, execute phases autonomously. Follow-ups within active scope must execute immediately: never generate redundant plan artifacts or stall for nonexistent UI buttons.
-- Run the classifier and central policy; load only selected skills. The policy alone selects gates, reviewers, assemble, and device checks.
+- Central policy assigns 5-tier adaptive risk lanes: Tier 0-1 select REVIEWERS=NONE; Tier 2: 1 reviewer; Tier 3: 2 reviewers; Tier 4: full Five-Leaf review.
 - Verification order is preflight, tests, routed independent reviews, final assemble/device, Mobile Verification Walkthrough and sign-off, then read-only final verification.
-- Never self-certify HIGH/CRITICAL review evidence with `record_review.py --verdict PASS`. Never poll background work repeatedly (Zero-Polling invariant).
+- Never self-certify HIGH/CRITICAL review evidence with `record_review.py --verdict PASS`. Adjudicate false positives via `validate-finding`. Never poll background work repeatedly (Zero-Polling invariant).
 - Context notes are administrative: `{{PY}} .agents/harness.py context note "<note>"`.
 
 ## Canonical Command Catalog
