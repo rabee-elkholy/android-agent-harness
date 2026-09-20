@@ -54,8 +54,8 @@ DANGEROUS = (
     ("developer_authority", re.compile(
         r"(?:workflow\.py\b.*\bcancel\b|"
         r"workflow\.py\b.*\b(?:approve|approve-sensitive)\b(?!.*\s--source\s+conversation\b)|"
-        r"(?:android-harness|harness_cli\.py)\s+task\b.*\bcancel\b|"
-        r"(?:android-harness|harness_cli\.py)\s+task\b.*\b(?:approve|approve-sensitive)\b(?!.*\s--source\s+conversation\b))",
+        r"(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bcancel\b|"
+        r"(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\b(?:approve|approve-sensitive)\b(?!.*\s--source\s+conversation\b))",
         re.I,
     )),
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)\b", re.I)),
@@ -65,10 +65,10 @@ DANGEROUS = (
     ("raw_adb", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*adb(?:\.exe)?\b", re.I)),
     ("harness_device_emergency", re.compile(r"run_device\.py\b(?:(?=.*\s--force\b)|(?=.*\s--grant-runtime-permissions\b)|\s+uninstall\b)", re.I)),
     ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
-    ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli\.py)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
+    ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
     ("review_override_provenance", re.compile(r"record_review\.py\b.*--override-reviews\b.*--source\s+developer_terminal\b", re.I)),
     ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
-    ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
+    ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
 )
 RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", re.I)
 ALLOWED_GRADLE_WRAPPER = re.compile(r"(?:run_gradle_task|run_tests_gate)\.py\b", re.I)
@@ -236,7 +236,7 @@ def _handle_command(command: str) -> None:
     allowed, reason = command_allowed(REPO, command)
     if allowed and re.search(r"project_graph(?:\.py)?\b", command):
         reason = f"project_graph executed: {reason}"
-    elif allowed and re.search(r"task_context(?:\.py)?\b|(?:android-harness|harness_cli\.py)\s+task-context\b", command, re.I):
+    elif allowed and re.search(r"task_context(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task-context\b", command, re.I):
         # This is a pre-tool hook, so validate the target independently before
         # recording it as a discovery anchor. Merely invoking a missing or
         # invalid target must not unlock broad repository search.
@@ -602,8 +602,9 @@ def _handle_search(name: str, args: dict) -> None:
             emit(
                 "deny",
                 "Unanchored repository-wide search is paused during initial discovery. "
-                "Start by running 'python .agents/scripts/project_graph.py --feature <name>' or '--find <symbol>' "
-                "to inspect the architectural slice, or specify a targeted SearchPath for literal text.",
+                "Anchor discovery with 'python .agents/harness.py task-context --file <path> --json' "
+                "or 'python .agents/scripts/project_graph.py --feature <name>' / '--find <symbol>', "
+                "or specify a targeted SearchPath for literal text in a specific file or feature directory.",
                 tool=name,
                 reason_code="GRAPH_FIRST_REQUIRED",
             )

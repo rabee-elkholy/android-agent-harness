@@ -176,6 +176,12 @@ class HookTests(unittest.TestCase):
         result = self.call("run_command", {"CommandLine": targeted})
         self.assertEqual("allow", result["decision"])
         self.assertIn("targeted task_context executed", result["reason"])
+        harness_targeted = "python .agents/harness.py task-context --file app/src/main/kotlin/com/example/MainActivity.kt --json"
+        h_result = self.call("run_command", {"CommandLine": harness_targeted})
+        self.assertEqual("allow", h_result["decision"])
+        self.assertIn("targeted task_context executed", h_result["reason"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py doctor --json"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py version"})["decision"])
         self.assertEqual(
             "deny",
             self.call("run_command", {"CommandLine": "python .agents/scripts/task_context.py --repo . --json"})["decision"],
@@ -201,6 +207,8 @@ class HookTests(unittest.TestCase):
         for action in ("approve", "approve-sensitive", "cancel"):
             command = f"python .agents/scripts/workflow.py {action} --repo . --task-id t"
             self.assertEqual("deny", self.call("run_command", {"CommandLine": command})["decision"])
+            harness_cmd = f"python .agents/harness.py task {action} --task-id t"
+            self.assertEqual("deny", self.call("run_command", {"CommandLine": harness_cmd})["decision"])
         wrapped = "python harness_cli.py task --kit . approve --repo . --task-id t"
         self.assertEqual("deny", self.call("run_command", {"CommandLine": wrapped})["decision"])
 
@@ -248,6 +256,10 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "./gradlew :app:testDebugUnitTest"})["decision"])
         self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/run_tests_gate.py"})["decision"])
         self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/scripts/record_review.py --task t --reviewer bug --verdict PASS"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py preflight"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py test"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py assemble :app:assembleDebug"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py verify --task-id t"})["decision"])
 
     def test_zoho_mutation_requires_plan_scope_and_operation_id(self):
         self.activate()

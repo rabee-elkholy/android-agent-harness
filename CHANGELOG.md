@@ -4,6 +4,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.56] - 2026-09-20
+
+### Discovery Entrypoint Trust and Safety Diagnostics
+
+- Trusted `.agents/harness.py` as an authorized read-only CLI entrypoint for `task-context`, `doctor`, `explain`, and `version` commands, eliminating spurious mutation blocks during initial discovery.
+- Authorized canonical verification commands (`preflight`, `test`, `assemble`, `device`, `review`) when invoked through `harness.py` during task verification.
+- Closed safety bypass loopholes in `DANGEROUS` regexes by matching `harness(?:\.py)?` alongside `harness_cli.py` for task cancel and draft overrides.
+- Aligned agent discovery guidance across `GEMINI.md`, `harness-rules.md`, and pre-invocation reminders to explicitly document targeted `task-context` and confirm that bounded search within feature directories is permitted.
+- Replaced misleading generic plan errors with actionable diagnostics for unrecognized or malformed inspection commands.
+
 ## [1.0.55] - 2026-09-20
 
 ### Production Integrity and Fail-Closed Guardrails

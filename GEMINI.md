@@ -7,7 +7,7 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - Assemble: `python agents/scripts/run_gradle_task.py :app:assembleDebug`
 - Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.
 - Device: Physical device or emulator. Automatically resolved by `run_device.py`. Prefer a physical device when both are connected. Never hardcode a serial.
-- Discovery: MUST start with `python .agents/scripts/project_graph.py --feature <name>` or `--find <Symbol>` (mandatory even with known commits/files). Unanchored grep cascades are forbidden.
+- Discovery: MUST start with targeted task context (`python .agents/harness.py task-context --file <path> --json` or `--symbol <name>`) or architectural graph (`python .agents/scripts/project_graph.py --feature <name>` or `--find <Symbol>`). Unanchored repository-wide grep cascades are forbidden; targeted search within feature directories is permitted.
 - Consultation & Discussion Before Planning: If the user's prompt includes an engineering inquiry, trade-off question, architectural validation, or asks for confirmation before starting (e.g. "أكد عليا", "is this logic sound or best-practice?", "should we do A or B?"), the agent MUST fully discuss, analyze, and answer the question in plain chat BEFORE invoking `workflow.py draft` or drafting `implementation_plan.md`. Never swallow consultation questions into a plan. Only after the developer confirms the direction or says to proceed, begin the discovery and planning workflow.
 - Pre-Planning Clarification: Missing requirements, edge cases, or domain ambiguities MUST be clarified interactively via `ask_question` before drafting the plan; guessing is strictly forbidden.
 - Plan Approval Clarity: On initial plan drafting, explain to the developer: "Review the plan above; click Proceed, or reply 'ابدأ' / 'موافق' in chat to approve." If the developer replies with approval in chat, proceed immediately; never wait for a nonexistent button.
@@ -28,6 +28,7 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 
 | Step | Canonical Command | Description |
 | :--- | :--- | :--- |
+| **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded, read-only context for one target |
 | **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
 | **Context Note** | `python harness_cli.py context note "<note>"` | Record architectural convention/note |

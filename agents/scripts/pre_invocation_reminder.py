@@ -15,8 +15,9 @@ def _message() -> str:
         plan = active_plan(REPO)
     except Exception:
         return (
-            "Android Harness: discovery MUST start with `python .agents/scripts/project_graph.py --feature <name>` "
-            "or `--find <Symbol>` (mandatory even with known commits/files) before inspecting files. Unanchored grep cascades are forbidden. "
+            "Android Harness: discovery should start with targeted context (`python .agents/harness.py task-context --file <path> --json`) "
+            "or architectural graph (`python .agents/scripts/project_graph.py --feature <name>` / `--find <Symbol>`). "
+            "Unanchored repository-wide search cascades are forbidden; targeted/scoped search within feature directories or resources is permitted. "
             "Pre-planning clarification: Guessing edge cases or missing business logic is strictly prohibited. "
             "If any requirement, fallback, or scenario is ambiguous, invoke `ask_question` to clarify with developer BEFORE drafting the plan. "
             "Verification plan must use strict 6-step headings."
@@ -46,8 +47,9 @@ def _message() -> str:
             plan, delivered = finalize_ready_delivery(REPO, task_id, plan, require_clean_tree=True)
             if delivered:
                 return (
-                    "Android Harness: discovery MUST start with `python .agents/scripts/project_graph.py --feature <name>` "
-                    "or `--find <Symbol>` before inspecting files. Unanchored grep cascades are forbidden. "
+                    "Android Harness: discovery should start with targeted context (`python .agents/harness.py task-context --file <path> --json`) "
+                    "or architectural graph (`python .agents/scripts/project_graph.py --feature <name>` / `--find <Symbol>`). "
+                    "Unanchored repository-wide search cascades are forbidden; targeted search within feature directories is permitted. "
                     "Pre-planning clarification: clarify missing scenarios via ask_question before drafting plan."
                 )
         except Exception:

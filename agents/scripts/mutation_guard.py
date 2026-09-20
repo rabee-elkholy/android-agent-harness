@@ -35,14 +35,16 @@ def _trusted_script(path: str, repo: Path | str, name: str) -> bool:
     script = Path(path)
     resolved = (script if script.is_absolute() else root / script).resolve()
     here = Path(__file__).resolve().parent
-    if name != "harness_cli.py" and resolved in {root / ".agents/scripts" / name, here / name}:
+    if name not in {"harness_cli.py", "harness.py"} and resolved in {root / ".agents/scripts" / name, here / name}:
         return True
     if name == "harness_cli.py" and here.parent.name == "agents" and resolved == here.parents[1] / name:
+        return True
+    if name == "harness.py" and resolved in {root / ".agents/harness.py", root / "agents/harness.py", here.parent / "harness.py"}:
         return True
     configured = os.environ.get("HARNESS_KIT", "").strip()
     if configured:
         kit = Path(configured).expanduser().resolve()
-        expected = kit / name if name == "harness_cli.py" else kit / "agents/scripts" / name
+        expected = kit / name if name in {"harness_cli.py", "harness.py"} else kit / "agents/scripts" / name
         if resolved == expected:
             return True
     # Installer entry points also live in the user's pinned kit cache. Resolve
@@ -54,7 +56,7 @@ def _trusted_script(path: str, repo: Path | str, name: str) -> bool:
         return False
     if not parts or not (parts[0] == "kit" or parts[0].startswith("kit-stage-")):
         return False
-    expected = (name,) if name == "harness_cli.py" else ("agents", "scripts", name)
+    expected = (name,) if name in {"harness_cli.py", "harness.py"} else ("agents", "scripts", name)
     return parts[1:] == expected
 
 
@@ -73,7 +75,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "repair"}
         if not _trusted_script(path, repo, name):
             return "", []
-        if name == "harness_cli.py":
+        if name in {"harness_cli.py", "harness.py"}:
             return "harness_cli", tokens[2:]
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[2:]
@@ -202,12 +204,15 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     try:
         plan = active_plan(repo)
     except ValidationError as exc:
+        lower = normalized.lower()
+        if any(kw in lower for kw in ("task-context", "task_context", "project_graph", "doctor", "preflight")):
+            return False, f"Harness read-only inspection command was not recognized or has invalid arguments: '{normalized}'. Detail: {exc}"
         return False, f"mutation requires an active approved plan: {exc}"
     status = str(plan.get("status") or "")
     entry, arguments = _entry(normalized, repo)
     action = _workflow_action(normalized, repo)
     if status == "IMPLEMENTING":
-        if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I):
+        if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I) or (entry == "harness_cli" and arguments[:1] == ["device"]):
             return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
         if re.search(r"\b(?:del(?:\s+\/[a-z]+)*\s|rmdir\b|rm\s+-rf\b|powershell\b.*-file\b|bash\s+\S+\.sh\b)", normalized, re.I):
             return False, "Destructive filesystem or external script commands are blocked during implementation."
@@ -223,7 +228,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         except ValidationError as exc:
             return False, str(exc)
         return True, f"command authorized by approved plan {plan.get('plan_id')}"
-    if status == "VERIFYING" and (entry in VERIFICATION_SCRIPTS or action in {"verify", "complete"} or (entry == "harness_cli" and arguments[:1] == ["verify"])):
+    if status == "VERIFYING" and (
+        entry in VERIFICATION_SCRIPTS
+        or action in {"verify", "complete"}
+        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["assemble"], ["device"], ["review"]))
+    ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     if status in ("VERIFYING", "BLOCKED") and action == "resume":
         return True, f"resume authorized for {status.lower()} plan {plan.get('plan_id')}"

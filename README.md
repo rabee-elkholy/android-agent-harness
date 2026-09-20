@@ -84,7 +84,7 @@ The harness separates three concerns:
 Open the Android project root in your coding agent and paste this exact pinned prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.55/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.56/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer discovers the project in read-only mode, asks only the configuration questions it needs, shows the installation plan, waits for approval, installs the pinned kit, and runs Doctor. Application source is not modified during setup.
@@ -105,7 +105,7 @@ android-harness doctor --repo /path/to/android-project --json
 To use a source checkout instead:
 
 ```bash
-git clone --depth 1 --branch v1.0.55 --single-branch \
+git clone --depth 1 --branch v1.0.56 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py setup \
