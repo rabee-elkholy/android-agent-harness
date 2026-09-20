@@ -120,6 +120,8 @@ for _tool in TOOLS:
             "type": "string",
             "description": "Stable retry key. vNext workflows always provide this to prevent duplicate writes.",
         }
+        if "operation_id" not in _tool["inputSchema"].get("required", []):
+            _tool["inputSchema"].setdefault("required", []).append("operation_id")
 
 
 def get_api() -> ZohoSprintsAPI:

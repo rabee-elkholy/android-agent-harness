@@ -179,6 +179,88 @@ class ReleaseSafetyTests(unittest.TestCase):
                 self.assertEqual(len(decisions) == 2 and decisions[-1], publish.called)
                 self.assertEqual("ci.yml", gate.call_args_list[0].args[0])
 
+    def test_workflow_job_missing_or_incorrect_timeout_is_rejected(self):
+        original = Path.read_text
+        ci_path = KIT / ".github/workflows/ci.yml"
+        for replacement, expected in (
+            ("timeout-minutes: 35", "missing required timeout-minutes"),
+            ("timeout-minutes: 99", "expected 35"),
+        ):
+            with self.subTest(expected=expected):
+                def read(path, *args, **kwargs):
+                    text = original(path, *args, **kwargs)
+                    if path == ci_path:
+                        return text.replace("timeout-minutes: 35", "" if "missing" in expected else "timeout-minutes: 99", 1)
+                    return text
+                with mock.patch.object(Path, "read_text", read):
+                    errors = validation.workflow_integrity_errors(KIT)
+                self.assertTrue(any(expected in err for err in errors), errors)
+
+    def test_workflow_missing_permissions_is_rejected(self):
+        original = Path.read_text
+        ci_path = KIT / ".github/workflows/ci.yml"
+        def read(path, *args, **kwargs):
+            text = original(path, *args, **kwargs)
+            if path == ci_path:
+                return text.replace("permissions:\n  contents: read\n", "")
+            return text
+        with mock.patch.object(Path, "read_text", read):
+            errors = validation.workflow_integrity_errors(KIT)
+        self.assertTrue(any("must declare explicit top-level 'permissions: contents: read'" in err for err in errors), errors)
+
+    def test_publish_workflow_reproducibility_is_enforced(self):
+        valid_publish = (KIT / ".github/workflows/publish-pypi.yml").read_text(encoding="utf-8")
+        self.assertEqual([], validation.publish_workflow_errors(valid_publish))
+
+        for text_variant, expected_msg in (
+            (valid_publish + "\n        run: python -m pip install --upgrade pip\n", "unpinned pip upgrade is forbidden"),
+            (valid_publish.replace("build==1.6.0", "build"), "build must be pinned to exact version"),
+            (valid_publish.replace("build==1.6.0", "build==1.6.0rc1"), "build must be pinned to exact version"),
+            (valid_publish.replace("twine==7.0.0", "twine==7.0.0.post1"), "twine must be pinned to exact version"),
+            (valid_publish.replace("setuptools==80.9.0", "setuptools==80.9.0rc1"), "setuptools must be pinned to exact version"),
+            (valid_publish.replace("wheel==0.45.1", "wheel"), "wheel must be pinned to exact version"),
+            (valid_publish.replace("--no-isolation", ""), "package build must specify --no-isolation"),
+        ):
+            with self.subTest(expected=expected_msg):
+                errors = validation.publish_workflow_errors(text_variant)
+                self.assertTrue(any(expected_msg in err for err in errors), errors)
+
+    def test_license_and_readme_portability_enforced(self):
+        original = Path.read_text
+        version = (KIT / "agents/VERSION").read_text().strip()
+        readme_path = KIT / "README.md"
+        pyproject_path = KIT / "pyproject.toml"
+
+        # Deprecated table format in pyproject
+        def read_deprecated_table(path, *args, **kwargs):
+            text = original(path, *args, **kwargs)
+            if path == pyproject_path:
+                return text.replace('license = "MIT"', 'license = { text = "MIT" }')
+            return text
+        with mock.patch.object(Path, "read_text", read_deprecated_table):
+            errors = validation.validate_release(KIT, version)
+        self.assertTrue(any("deprecated table format" in err for err in errors), errors)
+
+        # Mermaid block in README
+        def read_mermaid(path, *args, **kwargs):
+            text = original(path, *args, **kwargs)
+            if path == readme_path:
+                return text + "\n```mermaid\ngraph TD;\n```\n"
+            return text
+        with mock.patch.object(Path, "read_text", read_mermaid):
+            errors = validation.validate_release(KIT, version)
+        self.assertTrue(any("Mermaid fence" in err for err in errors), errors)
+
+        # Relative document link in README
+        def read_relative_link(path, *args, **kwargs):
+            text = original(path, *args, **kwargs)
+            if path == readme_path:
+                return text + "\n[Architecture](docs/architecture.md)\n"
+            return text
+        with mock.patch.object(Path, "read_text", read_relative_link):
+            errors = validation.validate_release(KIT, version)
+        self.assertTrue(any("relative link" in err for err in errors), errors)
+
 
 if __name__ == "__main__":
     unittest.main()

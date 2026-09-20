@@ -9,9 +9,9 @@ Turn a general-purpose coding agent into a predictable Android contributor with 
 [![CI](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?label=release)](https://github.com/rabee-elkholy/android-agent-harness/releases)
 [![PyPI](https://img.shields.io/pypi/v/android-agent-harness)](https://pypi.org/project/android-agent-harness/)
-[![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.14-blue)](docs/compatibility-matrix.md)
-[![Platforms](https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20Windows-supported-success)](docs/compatibility-matrix.md)
-[![License](https://img.shields.io/github/license/rabee-elkholy/android-agent-harness)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.14-blue)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
+[![Platforms](https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20Windows-supported-success)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
+[![License](https://img.shields.io/github/license/rabee-elkholy/android-agent-harness)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE)
 
 [Why it exists](#why-it-exists) · [How it works](#how-it-works) · [Install](#install) · [Daily workflow](#daily-workflow) · [Safety model](#safety-model) · [Documentation](#documentation)
 
@@ -54,20 +54,7 @@ The goal is not more ceremony. The goal is to spend model time and developer att
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Discover bounded context] --> B[Draft scope and acceptance criteria]
-    B --> C{Developer approves?}
-    C -- No --> B
-    C -- Yes --> D[Implement within approved scope]
-    D --> E[Freeze change set and policy]
-    E --> F[Run selected deterministic gates]
-    F --> G[Run selected specialist reviews]
-    G --> H[Assemble and device checks when required]
-    H --> I{Evidence matches final snapshot?}
-    I -- No --> D
-    I -- Yes --> J[Ready for developer delivery]
-```
+![Android Agent Harness Architecture Pipeline](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/assets/architecture-pipeline.svg)
 
 The workflow is a persisted state machine:
 
@@ -134,7 +121,7 @@ python .agents/harness.py task-context --file app/src/main/kotlin/com/acme/Profi
 python .agents/harness.py task status --task-id profile-edit --next
 ```
 
-See the [Quickstart](docs/quickstart.md) and [Setup Wizard reference](docs/setup-wizard.md) for update, repair, rollback, uninstall, and non-interactive options.
+See the [Quickstart](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/quickstart.md) and [Setup Wizard reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/setup-wizard.md) for update, repair, rollback, uninstall, and non-interactive options.
 
 ## Daily workflow
 
@@ -209,7 +196,7 @@ Important boundaries:
 - It does not commit, push, reset, or stage client application work for the developer.
 - Zoho Sprints behavior is preserved, but live tracker mutation requires explicit `update zoho` authorization and idempotent operation identity.
 
-For the complete boundary and threat analysis, read [Security](SECURITY.md), [Threat Model](docs/threat-model.md), and [Compatibility Matrix](docs/compatibility-matrix.md).
+For the complete boundary and threat analysis, read [Security](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md), [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md), and [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md).
 
 ## Supported project and host shapes
 
@@ -224,7 +211,7 @@ The validated project boundary includes:
 - normal Git checkouts and worktrees;
 - Linux, macOS, and Windows hosts.
 
-Host adapters are available for Claude Code, GitHub Copilot, Cursor, Windsurf, Roo Code, Gemini CLI, and Antigravity. Enforcement strength depends on the capabilities of each host; see [Tool Support](docs/tool-support.md) for the current matrix.
+Host adapters are available for Claude Code, GitHub Copilot, Cursor, Windsurf, Roo Code, Gemini CLI, and Antigravity. Enforcement strength depends on the capabilities of each host; see [Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) for the current matrix.
 
 ## Lifecycle and non-interference
 
@@ -266,16 +253,16 @@ CI runs the complete selftest suite across every supported Python version on Lin
 
 | Document | Use it for |
 |---|---|
-| [Quickstart](docs/quickstart.md) | installation and first successful run |
-| [Architecture](docs/architecture.md) | components, state, policy, and evidence design |
-| [Workflows](docs/workflows.md) | the full task and delivery lifecycle |
-| [Compatibility Matrix](docs/compatibility-matrix.md) | supported projects, runtimes, and enforcement boundaries |
-| [Tool Support](docs/tool-support.md) | AI-host adapters and capability tiers |
-| [Setup Wizard](docs/setup-wizard.md) | configuration questions and generated policy |
-| [Threat Model](docs/threat-model.md) | trust assumptions, attacks, and residual risks |
-| [Restore and Recovery](docs/restore.md) | damaged installation recovery and verification |
-| [Contributing](CONTRIBUTING.md) | development, tests, and release rules |
-| [Changelog](CHANGELOG.md) | release history and migration notes |
+| [Quickstart](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/quickstart.md) | installation and first successful run |
+| [Architecture](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/architecture.md) | components, state, policy, and evidence design |
+| [Workflows](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows.md) | the full task and delivery lifecycle |
+| [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md) | supported projects, runtimes, and enforcement boundaries |
+| [Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) | AI-host adapters and capability tiers |
+| [Setup Wizard](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/setup-wizard.md) | configuration questions and generated policy |
+| [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md) | trust assumptions, attacks, and residual risks |
+| [Restore and Recovery](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/restore.md) | damaged installation recovery and verification |
+| [Contributing](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CONTRIBUTING.md) | development, tests, and release rules |
+| [Changelog](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CHANGELOG.md) | release history and migration notes |
 
 ## What this project is not
 
@@ -287,10 +274,10 @@ CI runs the complete selftest suite across every supported Python version on Lin
 
 ## Contributing
 
-Issues and focused pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), preserve the standard-library-only runtime, add deterministic regression coverage for behavior changes, and run the complete selftest before opening a pull request.
+Issues and focused pull requests are welcome. Please read [CONTRIBUTING.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CONTRIBUTING.md), preserve the standard-library-only runtime, add deterministic regression coverage for behavior changes, and run the complete selftest before opening a pull request.
 
-Security issues should follow the private reporting process in [SECURITY.md](SECURITY.md).
+Security issues should follow the private reporting process in [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+MIT License. See [LICENSE](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE).

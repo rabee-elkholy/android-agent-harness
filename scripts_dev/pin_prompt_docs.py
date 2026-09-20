@@ -43,7 +43,7 @@ CHECKSUM_DOCS = (
     "docs/setup-prompt.md",
 )
 
-URL_RE = re.compile(r"(android-agent-harness/)(?:main|v\d+\.\d+\.\d+)(/docs/)")
+URL_RE = re.compile(r"(android-agent-harness/)(?:main|v\d+\.\d+\.\d+)(/docs/(?!assets/))")
 
 VERIFY_SENTENCE = (
     "Before executing anything: verify that the SHA-256 of every byte after "

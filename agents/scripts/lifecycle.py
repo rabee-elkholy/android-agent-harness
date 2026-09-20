@@ -97,6 +97,38 @@ def _validate_kit(kit: Path) -> tuple[Path, str]:
     missing_core = core_files - set(files)
     if missing_core:
         raise ValidationError(f"kit release checksums manifest missing core files: {', '.join(sorted(missing_core))}")
+
+    agents_dir = root / "agents"
+    if not agents_dir.is_dir() or agents_dir.is_symlink():
+        raise ValidationError("kit agents directory missing or symlink")
+    actual_files: set[str] = set()
+    ignored_parts = {"state", "cache", "__pycache__"}
+    for p in sorted(agents_dir.rglob("*")):
+        if p.is_symlink():
+            rel_sym = p.relative_to(root).as_posix()
+            raise ValidationError(f"symlink rejected in kit payload: {rel_sym}")
+        if not p.is_file():
+            continue
+        rel_from_agents = p.relative_to(agents_dir)
+        if rel_from_agents.as_posix() == "release_checksums.json":
+            continue
+        if ignored_parts.intersection(rel_from_agents.parts):
+            continue
+        if p.suffix.lower() in {".pyc", ".pyo"}:
+            continue
+        actual_files.add(p.relative_to(root).as_posix())
+
+    manifest_keys = set(files.keys())
+    if actual_files != manifest_keys:
+        missing = sorted(manifest_keys - actual_files)
+        unexpected = sorted(actual_files - manifest_keys)
+        details = []
+        if missing:
+            details.append(f"missing ({len(missing)}): {', '.join(missing[:10])}")
+        if unexpected:
+            details.append(f"unexpected ({len(unexpected)}): {', '.join(unexpected[:10])}")
+        raise ValidationError(f"kit release checksums inventory mismatch: {'; '.join(details)}")
+
     for rel, expected in files.items():
         rel_path = Path(str(rel))
         if rel_path.is_absolute() or ".." in rel_path.parts:
@@ -553,14 +585,20 @@ def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool 
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def _warm_project_graph(repo: Path) -> None:
+def _warm_project_graph(repo: Path) -> tuple[bool, str | None]:
     try:
         from _graph_core import GraphEngine
         engine = GraphEngine(repo)
         engine.sync(force_full=True)
         engine.save_cache()
-    except Exception:
-        pass
+        return True, None
+    except Exception as exc:
+        sanitized = (
+            f"Graph cache warm-up failed ({type(exc).__name__}). "
+            "Run: python .agents/harness.py doctor --json"
+        )
+        print(f"[WARN] {sanitized}")
+        return False, sanitized
 
 
 def _uninstall_journal_path(repo: Path) -> Path:
@@ -769,7 +807,7 @@ def install(repo: Path, kit: Path) -> dict:
                 repo, version=version, before=before, backup=backup, git_config_before=git_config_before,
             )
         with step_progress("5. Warming project graph cache"):
-            _warm_project_graph(repo)
+            graph_cache_warmed, graph_cache_warning = _warm_project_graph(repo)
     except Exception:
         if (repo / ".agents").exists():
             shutil.rmtree(repo / ".agents", ignore_errors=True)
@@ -778,7 +816,18 @@ def install(repo: Path, kit: Path) -> dict:
             _restore_git_config(repo, key, value)
         _managed_exclude(repo, remove=True)
         raise
-    return {"status": "PASS", "action": "install", "version": version, "ownership": ownership, "backup": str(backup), "app_snapshot_verified": True}
+    result = {
+        "status": "PASS",
+        "action": "install",
+        "version": version,
+        "ownership": ownership,
+        "backup": str(backup),
+        "app_snapshot_verified": True,
+        "graph_cache_warmed": graph_cache_warmed,
+    }
+    if not graph_cache_warmed and graph_cache_warning:
+        result["graph_cache_warning"] = graph_cache_warning
+    return result
 
 
 def require_update_idle(repo: Path) -> None:
@@ -929,7 +978,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
             _set_stage("OWNERSHIP_WRITTEN")
 
         with step_progress("5. Warming project graph cache"):
-            _warm_project_graph(repo)
+            graph_cache_warmed, graph_cache_warning = _warm_project_graph(repo)
             journal["status"] = "COMPLETED"
             _set_stage("COMPLETED")
             journal["completed_at"] = utc_now()
@@ -953,7 +1002,20 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
         shutil.rmtree(preserve_root, ignore_errors=True)
     if legacy_migrated:
         print("[MIGRATE] Preserved legacy reference customizations in .agents/project-context/legacy-overrides/: " + ", ".join(Path(m).name for m in legacy_migrated))
-    return {"status": "PASS", "action": "update", "from_version": current_version, "version": target_version, "ownership": new_ownership, "backup": str(backup), "app_snapshot_verified": True, "legacy_reference_migrated": legacy_migrated}
+    result = {
+        "status": "PASS",
+        "action": "update",
+        "from_version": current_version,
+        "version": target_version,
+        "ownership": new_ownership,
+        "backup": str(backup),
+        "app_snapshot_verified": True,
+        "legacy_reference_migrated": legacy_migrated,
+        "graph_cache_warmed": graph_cache_warmed,
+    }
+    if not graph_cache_warmed and graph_cache_warning:
+        result["graph_cache_warning"] = graph_cache_warning
+    return result
 
 
 def replace_legacy(repo: Path, kit: Path) -> dict:
@@ -990,7 +1052,7 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
                 repo, version=target_version, before=before, backup=backup, git_config_before=git_config_before,
             )
         with step_progress("5. Warming project graph cache"):
-            _warm_project_graph(repo)
+            graph_cache_warmed, graph_cache_warning = _warm_project_graph(repo)
             shutil.rmtree(old_agents, ignore_errors=True)
     except Exception:
         if old_agents.exists():
@@ -1006,11 +1068,19 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
         raise
     finally:
         shutil.rmtree(preserve_root, ignore_errors=True)
-    return {
-        "status": "PASS", "action": "replace-legacy", "version": target_version,
-        "ownership": ownership, "backup": str(backup), "preserved": preserved,
+    result = {
+        "status": "PASS",
+        "action": "replace-legacy",
+        "version": target_version,
+        "ownership": ownership,
+        "backup": str(backup),
+        "preserved": preserved,
         "app_snapshot_verified": True,
+        "graph_cache_warmed": graph_cache_warmed,
     }
+    if not graph_cache_warmed and graph_cache_warning:
+        result["graph_cache_warning"] = graph_cache_warning
+    return result
 
 
 def uninstall(repo: Path, *, apply: bool = False, legacy: bool = False) -> dict:

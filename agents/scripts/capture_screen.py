@@ -39,34 +39,58 @@ def capture_screenshot(device_id: str, name: str | None = None) -> Path | None:
                 stdout=fp,
                 stderr=subprocess.PIPE,
                 check=False,
+                timeout=30,
             )
         if proc.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 1000:
             return out_path
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("[WARN] direct screenshot capture timed out after 30s; attempting fallback\n")
     except Exception:
         pass
 
+    remote_tmp = f"/data/local/tmp/harness_cap_{timestamp}.png"
+    fallback_succeeded = False
     try:
-        remote_tmp = f"/data/local/tmp/harness_cap_{timestamp}.png"
         proc_cap = subprocess.run(
             ["adb", "-s", device_id, "shell", "screencap", "-p", remote_tmp],
             capture_output=True,
             check=False,
+            timeout=30,
         )
         if proc_cap.returncode == 0:
-            proc_pull = subprocess.run(
-                ["adb", "-s", device_id, "pull", remote_tmp, str(out_path)],
-                capture_output=True,
-                check=False,
-            )
+            try:
+                proc_pull = subprocess.run(
+                    ["adb", "-s", device_id, "pull", remote_tmp, str(out_path)],
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                )
+                fallback_succeeded = (
+                    proc_pull.returncode == 0
+                    and out_path.is_file()
+                    and out_path.stat().st_size > 1000
+                )
+            except subprocess.TimeoutExpired:
+                sys.stderr.write("[WARN] screenshot pull timed out after 30s\n")
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("[WARN] fallback screenshot capture timed out after 30s\n")
+    except Exception:
+        pass
+    finally:
+        try:
             subprocess.run(
                 ["adb", "-s", device_id, "shell", "rm", "-f", remote_tmp],
                 capture_output=True,
                 check=False,
+                timeout=10,
             )
-            if proc_pull.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 1000:
-                return out_path
-    except Exception:
-        pass
+        except subprocess.TimeoutExpired:
+            sys.stderr.write("[WARN] remote screenshot cleanup timed out after 10s\n")
+        except Exception:
+            pass
+
+    if fallback_succeeded:
+        return out_path
 
     if out_path.is_file():
         try:

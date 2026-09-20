@@ -61,6 +61,21 @@ class HookTests(unittest.TestCase):
         (task / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         (self.state / "active-task.json").write_text(json.dumps({"task_id": "task-one", "plan_path": str(task / "plan.json")}), encoding="utf-8")
 
+    def prepare_reviewer_run(self, task: Path, policy: Path, *, create_package: bool = True) -> Path:
+        run_id = "run-one"
+        snapshot = "a" * 64
+        manifest = task / "manifest.json"
+        manifest.write_text(json.dumps({"delivery_snapshot_sha256": snapshot}), encoding="utf-8")
+        (task / "current-run.json").write_text(
+            json.dumps({"policy": str(policy), "run_id": run_id, "manifest": str(manifest)}),
+            encoding="utf-8",
+        )
+        package = self.state / "runs" / snapshot / run_id / "review-package.md"
+        if create_package:
+            package.parent.mkdir(parents=True, exist_ok=True)
+            package.write_text("# Bound review package\n", encoding="utf-8")
+        return package
+
     def test_file_write_requires_plan(self):
         self.assertEqual("deny", self.call("write_to_file", {"TargetFile": "app/A.kt"})["decision"])
         self.activate()
@@ -92,13 +107,62 @@ class HookTests(unittest.TestCase):
         task = self.state / "tasks/task-one"
         policy = task / "policy.json"
         policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
-        (task / "current-run.json").write_text(json.dumps({"policy": str(policy)}), encoding="utf-8")
+        self.prepare_reviewer_run(task, policy)
         good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
         missing = {"Subagents": []}
         escalated = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "premium"}]}
         self.assertEqual("allow", self.call("invoke_subagent", good)["decision"])
+        receipt_file = task / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        self.assertTrue(receipt_file.is_file())
+        receipt_data = json.loads(receipt_file.read_text(encoding="utf-8"))
+        self.assertEqual("task-one", receipt_data["task_id"])
+        self.assertEqual("run-one", receipt_data["run_id"])
+        self.assertEqual("bug-reviewer-agent", receipt_data["reviewer"])
+        self.assertEqual("antigravity", receipt_data["host"])
+        self.assertRegex(receipt_data["review_package_sha256"], r"^[0-9a-f]{64}$")
+        self.assertTrue(receipt_data["receipt_sha256"])
         self.assertEqual("deny", self.call("invoke_subagent", missing)["decision"])
         self.assertEqual("deny", self.call("invoke_subagent", escalated)["decision"])
+
+    def test_reviewer_receipt_write_failure_denies_dispatch(self):
+        self.activate("VERIFYING")
+        task = self.state / "tasks/task-one"
+        policy = task / "policy.json"
+        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        self.prepare_reviewer_run(task, policy)
+        receipts_dir = task / "reviewer-dispatches"
+        receipts_dir.write_text("not a directory", encoding="utf-8")
+        good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
+        res = self.call("invoke_subagent", good)
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
+
+    def test_missing_review_package_denies_dispatch_before_model_call(self):
+        self.activate("VERIFYING")
+        task = self.state / "tasks/task-one"
+        policy = task / "policy.json"
+        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        self.prepare_reviewer_run(task, policy, create_package=False)
+        good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
+        res = self.call("invoke_subagent", good)
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
+        self.assertFalse((task / "reviewer-dispatches").exists())
+
+    def test_invalid_review_run_identity_denies_dispatch(self):
+        self.activate("VERIFYING")
+        task = self.state / "tasks/task-one"
+        policy = task / "policy.json"
+        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        self.prepare_reviewer_run(task, policy)
+        current_path = task / "current-run.json"
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+        current["run_id"] = "../escape"
+        current_path.write_text(json.dumps(current), encoding="utf-8")
+        good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
+        res = self.call("invoke_subagent", good)
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
 
     def test_read_only_command_without_plan(self):
         self.assertEqual("allow", self.call("run_command", {"CommandLine": "git status"})["decision"])

@@ -107,9 +107,7 @@ def _ledger_lock(path: Path):
 def execute_once(tool: str, arguments: dict, operation: Callable[[], dict]) -> dict:
     operation_id = str(arguments.get("operation_id") or "").strip()
     if not operation_id:
-        # Backward-compatible interface. The vNext workflow always supplies an
-        # operation id; legacy direct callers retain their previous behavior.
-        return operation()
+        raise RuntimeError("operation_id is required for Zoho mutations")
     if len(operation_id) > 128 or not all(char.isalnum() or char in "-_." for char in operation_id):
         raise RuntimeError("operation_id must be 1-128 safe identifier characters")
     path = ledger_path()

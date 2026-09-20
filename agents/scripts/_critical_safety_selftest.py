@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -424,6 +425,100 @@ class CriticalSafetyTests(unittest.TestCase):
             self.assertEqual(0, cli._verify_kit_checksums(fixtures.KIT) or 0)
             valid_root, ver = lifecycle._validate_kit(fixtures.KIT)
             self.assertEqual(fixtures.KIT.resolve(), valid_root)
+
+    def test_exact_executable_payload_inventory_enforced_across_verifiers(self):
+        cli = fixtures.harness_cli
+        from repair import _verify_kit
+        current_version = (fixtures.KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+
+        with tempfile.TemporaryDirectory() as directory:
+            kit = Path(directory)
+            shutil.copytree(fixtures.KIT / "agents", kit / "agents")
+
+            # 1. Valid kit passes all 3 verifiers
+            self.assertEqual(0, cli._verify_kit_checksums(kit) or 0)
+            valid_root, ver = lifecycle._validate_kit(kit)
+            self.assertEqual(kit.resolve(), valid_root)
+            repaired_files = _verify_kit(kit, current_version)
+            self.assertTrue(len(repaired_files) > 0)
+
+            # 2. Extra agents/scripts/json.py fails before any engine script executes
+            extra_file = kit / "agents" / "scripts" / "json.py"
+            extra_file.write_text("# shadow stdlib\n", encoding="utf-8")
+            with self.assertRaises(SystemExit) as ctx:
+                cli._verify_kit_checksums(kit)
+            self.assertIn("unexpected", str(ctx.exception).lower())
+            with self.assertRaisesRegex(ValidationError, "unexpected"):
+                lifecycle._validate_kit(kit)
+            with self.assertRaisesRegex(ValidationError, "unexpected"):
+                _verify_kit(kit, current_version)
+            extra_file.unlink()
+
+            # 3. Extra nested Python file fails
+            nested_file = kit / "agents" / "scripts" / "nested_extra.py"
+            nested_file.write_text("# nested\n", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                cli._verify_kit_checksums(kit)
+            with self.assertRaises(ValidationError):
+                lifecycle._validate_kit(kit)
+            with self.assertRaises(ValidationError):
+                _verify_kit(kit, current_version)
+            nested_file.unlink()
+
+            # 4. State/cache/bytecode files remain ignored
+            (kit / "agents" / "state").mkdir(parents=True, exist_ok=True)
+            (kit / "agents" / "state" / "temp.txt").write_text("state\n")
+            (kit / "agents" / "scripts" / "__pycache__").mkdir(parents=True, exist_ok=True)
+            (kit / "agents" / "scripts" / "__pycache__" / "foo.cpython-312.pyc").write_bytes(b"byte")
+            (kit / "agents" / "scripts" / "temp.pyc").write_bytes(b"byte")
+            # Must still pass!
+            self.assertEqual(0, cli._verify_kit_checksums(kit) or 0)
+            lifecycle._validate_kit(kit)
+            _verify_kit(kit, current_version)
+
+            # 5. Missing manifest entry (file exists on disk, removed from manifest)
+            manifest_path = kit / "agents" / "release_checksums.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            removed_key = "agents/command-packs/debug.md.template"
+            del manifest["files"][removed_key]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(SystemExit) as ctx:
+                cli._verify_kit_checksums(kit)
+            self.assertIn("unexpected", str(ctx.exception).lower())
+            with self.assertRaisesRegex(ValidationError, "unexpected"):
+                lifecycle._validate_kit(kit)
+            with self.assertRaisesRegex(ValidationError, "unexpected"):
+                _verify_kit(kit, current_version)
+
+            # 6. Manifest entry with a missing file (entry in manifest, deleted from disk)
+            shutil.copyfile(fixtures.KIT / "agents" / "release_checksums.json", manifest_path)
+            deleted_file = kit / "agents" / "command-packs" / "debug.md.template"
+            deleted_file.unlink()
+            with self.assertRaises(SystemExit) as ctx:
+                cli._verify_kit_checksums(kit)
+            self.assertIn("missing", str(ctx.exception).lower())
+            with self.assertRaisesRegex(ValidationError, "missing"):
+                lifecycle._validate_kit(kit)
+            with self.assertRaisesRegex(ValidationError, "missing"):
+                _verify_kit(kit, current_version)
+            shutil.copyfile(fixtures.KIT / "agents" / "command-packs" / "debug.md.template", deleted_file)
+
+            # 7. Symlinked payload file fails on platforms that permit symlinks
+            symlink_candidate = kit / "agents" / "scripts" / "symlink_test.py"
+            try:
+                symlink_candidate.symlink_to(kit / "agents" / "VERSION")
+            except OSError:
+                pass
+            else:
+                try:
+                    with self.assertRaises(SystemExit):
+                        cli._verify_kit_checksums(kit)
+                    with self.assertRaises(ValidationError):
+                        lifecycle._validate_kit(kit)
+                    with self.assertRaises(ValidationError):
+                        _verify_kit(kit, current_version)
+                finally:
+                    symlink_candidate.unlink(missing_ok=True)
 
     def test_malformed_skill_metadata_blocks_routing(self):
         with tempfile.TemporaryDirectory() as directory:

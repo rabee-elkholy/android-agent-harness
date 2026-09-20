@@ -1,8 +1,8 @@
 # Roadmap
 
 > Archive note: pre-v1 completion history below is retained for provenance.
-> Current architecture and remaining release acceptance live in
-> `implementation_plan_vnext.md`.
+> Current behavior is documented in `docs/architecture.md`, `docs/workflows.md`,
+> and `docs/compatibility-matrix.md`.
 
 ## Phase 1 — Supply-chain integrity
 - [x] Pin-to-tag CLI provisioning, never floats to `main` (v0.9.0)

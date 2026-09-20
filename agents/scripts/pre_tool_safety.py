@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
 from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed  # noqa: E402
-from _vnext_common import read_json, sha256_file  # noqa: E402
+from _vnext_common import read_json, sha256_file, validate_id  # noqa: E402
 
 
 MAX_STDIN_BYTES = 5 * 1024 * 1024
@@ -351,13 +351,25 @@ def _handle_subagent(name: str, args: dict) -> None:
         # Persist reviewer dispatch receipts for provable independent execution
         try:
             task_id = str(active.get("task_id") or "")
-            run_id = str(current.get("run_id") or "")
-            manifest = read_json(Path(current["manifest"]))
-            package_path = state / "runs" / manifest["delivery_snapshot_sha256"] / run_id / "review-package.md"
-            package_sha = sha256_file(package_path) if package_path.is_file() else ""
+            if not task_id:
+                raise RuntimeError("active task_id is missing")
+            run_id = validate_id(str(current.get("run_id") or ""), "run_id")
+            manifest_p = str(current.get("manifest") or "").strip()
+            if not manifest_p:
+                raise RuntimeError("active run manifest is missing")
+            manifest = read_json(Path(manifest_p))
+            snapshot = str(manifest.get("delivery_snapshot_sha256") or "").strip()
+            if not re.fullmatch(r"[0-9a-f]{64}", snapshot):
+                raise RuntimeError("delivery snapshot identity is missing or invalid")
+            package_path = state / "runs" / snapshot / run_id / "review-package.md"
+            if not package_path.is_file():
+                raise RuntimeError("review package is missing")
+            package_sha = sha256_file(package_path)
+            if not re.fullmatch(r"[0-9a-f]{64}", package_sha):
+                raise RuntimeError("review package digest is invalid")
             receipts_dir = state / "tasks" / task_id / "reviewer-dispatches"
             receipts_dir.mkdir(parents=True, exist_ok=True)
-            from _vnext_common import canonical_sha256, utc_now
+            from _vnext_common import atomic_write_json, canonical_sha256, utc_now
             for r in actual:
                 receipt_file = receipts_dir / f"{r}.json"
                 receipt_data = {
@@ -373,9 +385,14 @@ def _handle_subagent(name: str, args: dict) -> None:
                 receipt_data["receipt_sha256"] = canonical_sha256({
                     k: v for k, v in receipt_data.items() if k != "receipt_sha256"
                 })
-                receipt_file.write_text(json.dumps(receipt_data, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+                atomic_write_json(receipt_file, receipt_data)
+        except Exception as exc:
+            emit(
+                "deny",
+                f"[REVIEW_RECEIPT_WRITE_FAILED] Failed creating reviewer dispatch receipt ({type(exc).__name__}).",
+                tool=name,
+            )
+            return
 
         emit("allow", "Reviewer roster exactly matches the immutable adaptive policy.", tool=name)
     except Exception as exc:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -275,7 +276,11 @@ def matching_adb_serials(*, allow_emulator: bool = True, policy: str | None = No
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=15,
         )
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("[WARN] adb devices timed out after 15s\n")
+        return []
     except Exception:
         return []
     physical: list[str] = []

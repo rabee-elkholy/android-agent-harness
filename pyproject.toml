@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,11 +8,12 @@ version = "1.0.54"
 description = "Approval-first, evidence-bound development harness for supported Gradle Android projects."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Rabee Elkholy" }]
 keywords = ["android", "kmp", "ai-agents", "code-review", "governance", "mcp"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -28,6 +29,10 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/rabee-elkholy/android-agent-harness"
 Issues = "https://github.com/rabee-elkholy/android-agent-harness/issues"
+Source = "https://github.com/rabee-elkholy/android-agent-harness"
+Documentation = "https://github.com/rabee-elkholy/android-agent-harness/tree/main/docs"
+Changelog = "https://github.com/rabee-elkholy/android-agent-harness/blob/main/CHANGELOG.md"
+Security = "https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md"
 
 [project.scripts]
 android-harness = "harness_cli:main"

@@ -231,6 +231,70 @@ def test_network_mutation_is_refused() -> None:
     check(not online_ok and "manual" in online_reason, "online request is side-effect free")
 
 
+def test_adb_devices_timeout_returns_empty_without_traceback() -> None:
+    import subprocess
+    from unittest import mock
+    from _repo_files import matching_adb_serials
+
+    def mock_run(cmd, *args, **kwargs):
+        if cmd == ["adb", "devices"]:
+            raise subprocess.TimeoutExpired(cmd, 15)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with mock.patch("subprocess.run", side_effect=mock_run):
+        serials = matching_adb_serials()
+        check(serials == [], "adb devices timeout gracefully returns empty list without traceback")
+
+
+def test_screenshot_timeout_fallback_and_cleanup() -> None:
+    import subprocess
+    from unittest import mock
+    import capture_screen
+
+    def mock_run_fallback(cmd, *args, **kwargs):
+        if "exec-out" in cmd:
+            raise subprocess.TimeoutExpired(cmd, 30)
+        if "shell" in cmd and "screencap" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+        if "pull" in cmd:
+            out_file = Path(cmd[-1])
+            out_file.write_bytes(b"x" * 2000)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+        if "shell" in cmd and "rm" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+    with mock.patch("subprocess.run", side_effect=mock_run_fallback):
+        res = capture_screen.capture_screenshot("mock_device", "test_fb")
+        check(res is not None and res.is_file(), "direct timeout reaches fallback and succeeds")
+        if res and res.is_file():
+            res.unlink(missing_ok=True)
+
+    timeout_commands = []
+
+    def mock_run_timeout_all(cmd, *args, **kwargs):
+        timeout_commands.append(cmd)
+        if "exec-out" in cmd:
+            raise subprocess.TimeoutExpired(cmd, 30)
+        if "shell" in cmd and "screencap" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+        if "pull" in cmd:
+            out_file = Path(cmd[-1])
+            out_file.write_bytes(b"partial")
+            raise subprocess.TimeoutExpired(cmd, 30)
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+    with mock.patch("subprocess.run", side_effect=mock_run_timeout_all):
+        res = capture_screen.capture_screenshot("mock_device", "test_fail")
+        check(res is None, "fallback timeout returns failure (None)")
+        leftovers = list(capture_screen.SCREENSHOTS_DIR.glob("test_fail_*.png"))
+        check(len(leftovers) == 0, "fallback timeout deletes partial local screenshot")
+        check(
+            any("shell" in cmd and "rm" in cmd for cmd in timeout_commands),
+            "fallback timeout attempts bounded remote screenshot cleanup",
+        )
+
+
 def main() -> int:
     test_parse_bounds()
     test_hierarchy_parse_and_find()
@@ -248,6 +312,8 @@ def main() -> int:
     test_diff_discovery_no_git_errors()
     test_grant_permissions_multipackage()
     test_network_mutation_is_refused()
+    test_adb_devices_timeout_returns_empty_without_traceback()
+    test_screenshot_timeout_fallback_and_cleanup()
     if FAILURES:
         print(f"\n[FAIL] {len(FAILURES)} check(s) failed:")
         for item in FAILURES:

@@ -1152,6 +1152,19 @@ class PhaseDRepairSelftest(unittest.TestCase):
                 repair_repository(self.repo, fake_kit)
             self.assertIn("release checksums manifest", str(ctx.exception).lower())
 
+    def test_repair_rejects_unlisted_executable_payload_file(self) -> None:
+        """Unlisted executable Python files in kit are rejected by repair."""
+        from repair import repair_repository
+        from _vnext_common import ValidationError
+        with tempfile.TemporaryDirectory(prefix="fake_kit_unlisted_") as fake_kit_dir:
+            fake_kit = Path(fake_kit_dir)
+            shutil.copytree(KIT / "agents", fake_kit / "agents")
+            extra = fake_kit / "agents" / "scripts" / "json.py"
+            extra.write_text("# shadow stdlib\n", encoding="utf-8")
+            with self.assertRaises(ValidationError) as ctx:
+                repair_repository(self.repo, fake_kit)
+            self.assertIn("unexpected", str(ctx.exception).lower())
+
     def test_repair_active_task_requires_force(self) -> None:
         """Active task in PLANNED/IMPLEMENTING/VERIFYING requires --force."""
         from repair import repair_repository
@@ -1187,6 +1200,78 @@ class PhaseDRepairSelftest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, f"repair failed:\nstderr: {proc.stderr}\nstdout: {proc.stdout}")
         data = json.loads(proc.stdout)
         self.assertEqual(data.get("status"), "PASS")
+
+    def test_git_fetch_timeout_exits_nonzero_and_preserves_valid_kit(self) -> None:
+        """Git fetch timeout during provisioning exits non-zero with remediation and leaves existing kit intact."""
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("harness_cli", str(KIT / "harness_cli.py"))
+        harness_cli_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness_cli_mod)
+
+        with tempfile.TemporaryDirectory(prefix="harness_timeout_test_") as td:
+            kit_dest = Path(td) / "active_kit"
+            shutil.copytree(KIT / "agents", kit_dest / "agents")
+            sentinel = kit_dest / "sentinel.txt"
+            sentinel.write_text("original", encoding="utf-8")
+
+            def fake_run(cmd, *args, **kwargs):
+                if "fetch" in cmd:
+                    raise subprocess.TimeoutExpired(cmd=cmd, timeout=120)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with self.assertRaises(SystemExit) as ctx:
+                    harness_cli_mod._provision_pinned("https://example.com/repo.git", kit_dest, "1.0.99")
+
+            err_msg = str(ctx.exception)
+            self.assertIn("timed out after 120s", err_msg)
+            self.assertIn("git clone", err_msg)
+            self.assertTrue(kit_dest.exists())
+            self.assertTrue((kit_dest / "agents" / "VERSION").exists())
+            self.assertEqual("original", sentinel.read_text(encoding="utf-8"))
+
+    def test_refresh_checkout_and_symbolic_ref_timeouts_fail_closed(self) -> None:
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("harness_cli_timeout_refresh", str(KIT / "harness_cli.py"))
+        harness_cli_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness_cli_mod)
+
+        with tempfile.TemporaryDirectory(prefix="harness_refresh_timeout_") as td:
+            kit = Path(td)
+            (kit / ".git").mkdir()
+            (kit / "agents").mkdir()
+            (kit / "agents" / "VERSION").write_text("1.0.54\n", encoding="utf-8")
+
+            fetch_ok = subprocess.CompletedProcess(["git", "fetch"], 0)
+
+            with mock.patch(
+                "subprocess.run",
+                side_effect=[fetch_ok, subprocess.TimeoutExpired(["git", "checkout"], 30)],
+            ):
+                with self.assertRaises(SystemExit) as checkout_ctx:
+                    harness_cli_mod.refresh_kit(kit, "1.0.55")
+            self.assertIn("git checkout", str(checkout_ctx.exception))
+            self.assertIn("timed out after 30s", str(checkout_ctx.exception))
+            self.assertIn("state is uncertain", str(checkout_ctx.exception))
+
+            fetch_failed = subprocess.CompletedProcess(["git", "fetch"], 1)
+            checkout_failed = subprocess.CompletedProcess(["git", "checkout"], 1, "", "failed")
+            with mock.patch(
+                "subprocess.run",
+                side_effect=[
+                    fetch_failed,
+                    checkout_failed,
+                    subprocess.TimeoutExpired(["git", "symbolic-ref"], 30),
+                ],
+            ):
+                with self.assertRaises(SystemExit) as symbolic_ctx:
+                    harness_cli_mod.refresh_kit(kit, "1.0.55")
+            self.assertIn("git symbolic-ref", str(symbolic_ctx.exception))
+            self.assertIn("timed out after 30s", str(symbolic_ctx.exception))
 
 
 class PhaseEDecoupleZohoSelftest(unittest.TestCase):

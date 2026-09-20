@@ -121,6 +121,38 @@ def _verify_kit_checksums(kit: Path) -> None:
     missing_core = core_files - set(files)
     if missing_core:
         raise SystemExit(f"[ERROR] Kit release checksums manifest missing core files: {', '.join(sorted(missing_core))}")
+
+    agents_dir = kit / "agents"
+    if not agents_dir.is_dir() or agents_dir.is_symlink():
+        raise SystemExit(f"[ERROR] Kit agents directory missing or symlink: {agents_dir}")
+    actual_files: set[str] = set()
+    ignored_parts = {"state", "cache", "__pycache__"}
+    for p in sorted(agents_dir.rglob("*")):
+        if p.is_symlink():
+            rel_sym = p.relative_to(kit).as_posix()
+            raise SystemExit(f"[ERROR] Symlink rejected in kit payload: {rel_sym}")
+        if not p.is_file():
+            continue
+        rel_from_agents = p.relative_to(agents_dir)
+        if rel_from_agents.as_posix() == "release_checksums.json":
+            continue
+        if ignored_parts.intersection(rel_from_agents.parts):
+            continue
+        if p.suffix.lower() in {".pyc", ".pyo"}:
+            continue
+        actual_files.add(p.relative_to(kit).as_posix())
+
+    manifest_keys = set(files.keys())
+    if actual_files != manifest_keys:
+        missing = sorted(manifest_keys - actual_files)
+        unexpected = sorted(actual_files - manifest_keys)
+        details = []
+        if missing:
+            details.append(f"missing ({len(missing)}): {', '.join(missing[:10])}")
+        if unexpected:
+            details.append(f"unexpected ({len(unexpected)}): {', '.join(unexpected[:10])}")
+        raise SystemExit(f"[ERROR] Kit release checksums inventory mismatch: {'; '.join(details)}")
+
     for rel, expected in files.items():
         rel_path = Path(rel)
         if rel_path.is_absolute() or ".." in rel_path.parts:
@@ -162,9 +194,11 @@ def _provision_pinned(url: str, dest: Path, version: str) -> None:
     staging = dest.parent / f"staging_{int(time.time())}_{uuid.uuid4().hex[:8]}"
     staging.mkdir(parents=True, exist_ok=True)
     tag = f"v{version}"
+    git_env = os.environ.copy()
+    git_env["GIT_TERMINAL_PROMPT"] = "0"
     steps = [
-        (["git", "init", "-q"], True),
-        (["git", "remote", "add", "origin", url], True),
+        (["git", "init", "-q"], True, 30, "git init"),
+        (["git", "remote", "add", "origin", url], True, 30, "git remote add"),
         (
             [
                 "git",
@@ -176,15 +210,29 @@ def _provision_pinned(url: str, dest: Path, version: str) -> None:
                 f"refs/tags/{tag}:refs/tags/{tag}",
             ],
             True,
+            120,
+            "git fetch",
         ),
-        (["git", "checkout", "-q", "--detach", tag], True),
+        (["git", "checkout", "-q", "--detach", tag], True, 30, "git checkout"),
     ]
     try:
-        for step, use_cwd in steps:
-            proc = subprocess.run(step, check=False, cwd=str(staging) if use_cwd else None)
-            if proc.returncode != 0:
+        for step, use_cwd, timeout_sec, op_name in steps:
+            try:
+                proc = subprocess.run(
+                    step,
+                    check=False,
+                    cwd=str(staging) if use_cwd else None,
+                    timeout=timeout_sec,
+                    env=git_env,
+                )
+                if proc.returncode != 0:
+                    raise SystemExit(
+                        f"[ERROR] Could not provision kit at tag {tag}. {_manual_remediation(version)}"
+                    )
+            except subprocess.TimeoutExpired:
                 raise SystemExit(
-                    f"[ERROR] Could not provision kit at tag {tag}. {_manual_remediation(version)}"
+                    f"[ERROR] Operation '{op_name}' timed out after {timeout_sec}s while provisioning tag {tag}. "
+                    + _manual_remediation(version)
                 )
         if not _has_engine(staging):
             raise SystemExit(
@@ -310,38 +358,71 @@ def refresh_kit(kit: Path, target_version: str | None = None) -> None:
     want = (target_version or "").strip().lstrip("v") or _read_version_file(kit)
     tag = f"v{want}"
     print(f"[*] Pinning kit at {kit} to {tag} ...")
-    fetch = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(kit),
-            "fetch",
-            "--depth",
-            "1",
-            "--force",
-            "origin",
-            f"refs/tags/{tag}:refs/tags/{tag}",
-        ],
-        check=False,
-    )
-    checkout = subprocess.run(
-        ["git", "-C", str(kit), "checkout", "-q", "--detach", tag],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if fetch.returncode != 0 or checkout.returncode != 0:
+    git_env = os.environ.copy()
+    git_env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        fetch = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(kit),
+                "fetch",
+                "--depth",
+                "1",
+                "--force",
+                "origin",
+                f"refs/tags/{tag}:refs/tags/{tag}",
+            ],
+            check=False,
+            timeout=120,
+            env=git_env,
+        )
+    except subprocess.TimeoutExpired:
         current = _read_version_file(kit)
-        detached = subprocess.run(
-            ["git", "-C", str(kit), "symbolic-ref", "-q", "HEAD"],
+        print(
+            f"[!] Operation 'git fetch' timed out after 120s; keeping existing pinned checkout v{current}. "
+            "Nothing floated to main."
+        )
+        return
+
+    try:
+        checkout = subprocess.run(
+            ["git", "-C", str(kit), "checkout", "-q", "--detach", tag],
             check=False,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=30,
+            env=git_env,
         )
+    except subprocess.TimeoutExpired:
+        current = _read_version_file(kit)
+        raise SystemExit(
+            f"[ERROR] Operation 'git checkout' timed out after 30s while pinning {tag}; "
+            f"checkout state is uncertain (previous version: v{current}). "
+            + _manual_remediation(want)
+        )
+        return
+
+    if fetch.returncode != 0 or checkout.returncode != 0:
+        current = _read_version_file(kit)
+        try:
+            detached = subprocess.run(
+                ["git", "-C", str(kit), "symbolic-ref", "-q", "HEAD"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                env=git_env,
+            )
+        except subprocess.TimeoutExpired:
+            raise SystemExit(
+                "[ERROR] Operation 'git symbolic-ref' timed out after 30s while checking "
+                f"the failed {tag} refresh. " + _manual_remediation(current)
+            )
         if detached.returncode == 0:
             # The checkout sits on a named branch (e.g. a manual drift to main):
             # refuse to continue — the kit must never float.

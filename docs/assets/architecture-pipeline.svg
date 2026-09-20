@@ -32,7 +32,7 @@
   <!-- Arrow 1 -> 2 -->
   <line x1="246" y1="110" x2="269" y2="110" stroke="#3DDC84" stroke-width="1.8" marker-end="url(#pipe-arrow)"/>
 
-  <!-- STAGE 2: OS Interceptor -->
+  <!-- STAGE 2: Host Safety Boundary -->
   <g transform="translate(275, 45)">
     <rect width="195" height="130" rx="12" fill="url(#card-bg)" stroke="#1E293B" stroke-width="1.5"/>
     <!-- Number Icon -->
@@ -40,7 +40,7 @@
     <text x="30" y="37" text-anchor="middle" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="800">2</text>
     <text x="54" y="37" fill="#64748B" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="700" letter-spacing="1">SAFETY</text>
 
-    <text x="20" y="82" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="700">OS Interceptor</text>
+    <text x="20" y="82" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="700">Host Safety Boundary</text>
     <text x="20" y="106" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="500">PreTool Safety Hooks</text>
   </g>
 

@@ -1170,12 +1170,14 @@ class LifecycleTests(RepoCase):
         self._answers()
         installed = install(self.repo, KIT)
         self.assertEqual("PASS", installed["status"])
+        self.assertTrue(installed.get("graph_cache_warmed"))
         self.assertFalse(any("__pycache__" in item["path"] or item["path"].endswith((".pyc", ".pyo")) for item in installed["ownership"]["entries"]))
         self.assertTrue((self.repo / OWNERSHIP_RELATIVE).is_file())
         reference = self.repo / ".agents/skills/android-harness/references/architecture-guidelines.md"
         write(reference, reference.read_text(encoding="utf-8") + "\nProject-tailored rule.\n")
         updated = update(self.repo, KIT)
         self.assertEqual("PASS", updated["status"])
+        self.assertTrue(updated.get("graph_cache_warmed"))
         legacy_override = self.repo / ".agents/project-context/legacy-overrides/architecture-guidelines.md"
         self.assertTrue(legacy_override.is_file())
         self.assertIn("Project-tailored rule.", legacy_override.read_text(encoding="utf-8"))
@@ -1189,6 +1191,32 @@ class LifecycleTests(RepoCase):
         self.assertFalse((self.repo / ".harness-setup").exists())
         self.assertFalse((self.repo / ".harness-backup").exists())
         self.assertEqual(original, (self.repo / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_graph_cache_warm_up_failure_is_observable_and_non_fatal(self) -> None:
+        original = "# User-owned project instructions\n"
+        write(self.repo / "AGENTS.md", original)
+        self._answers()
+        def failing_warm(repo):
+            return False, "Graph cache warm-up failed (mocked error). Run: python .agents/harness.py doctor --json"
+        with mock.patch.object(lifecycle_module, "_warm_project_graph", side_effect=failing_warm):
+            installed = install(self.repo, KIT)
+        self.assertEqual("PASS", installed["status"])
+        self.assertFalse(installed["graph_cache_warmed"])
+        self.assertIn("python .agents/harness.py doctor --json", installed["graph_cache_warning"])
+        self.assertTrue((self.repo / OWNERSHIP_RELATIVE).is_file())
+
+    def test_graph_cache_warm_up_warning_does_not_expose_exception_text(self) -> None:
+        secret = "api_key=do-not-print-this"
+        with mock.patch("_graph_core.GraphEngine.sync", side_effect=RuntimeError(secret)):
+            with mock.patch("builtins.print") as print_mock:
+                warmed, warning = lifecycle_module._warm_project_graph(self.repo)
+        self.assertFalse(warmed)
+        self.assertNotIn(secret, warning or "")
+        self.assertIn("RuntimeError", warning or "")
+        self.assertIn("python .agents/harness.py doctor --json", warning or "")
+        printed = " ".join(str(arg) for call in print_mock.call_args_list for arg in call.args)
+        self.assertIn("[WARN]", printed)
+        self.assertNotIn(secret, printed)
 
     def test_uninstall_failure_restores_complete_pre_uninstall_state(self) -> None:
         original = "# User-owned project instructions\n"

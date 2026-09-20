@@ -9,10 +9,14 @@ concurrency:
   group: release-check-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   validate-tag:
     name: Validate Release Version & Changelog (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:

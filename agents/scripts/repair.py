@@ -109,6 +109,37 @@ def _verify_kit(kit: Path, expected_version: str) -> dict[str, str]:
     if missing_core:
         raise ValidationError(f"Kit release checksums manifest missing core files: {', '.join(sorted(missing_core))}")
 
+    agents_dir = kit / "agents"
+    if not agents_dir.is_dir() or agents_dir.is_symlink():
+        raise ValidationError("Kit agents directory missing or symlink.")
+    actual_files: set[str] = set()
+    ignored_parts = {"state", "cache", "__pycache__"}
+    for p in sorted(agents_dir.rglob("*")):
+        if p.is_symlink():
+            rel_sym = p.relative_to(kit).as_posix()
+            raise ValidationError(f"Symlink rejected in kit payload: {rel_sym}")
+        if not p.is_file():
+            continue
+        rel_from_agents = p.relative_to(agents_dir)
+        if rel_from_agents.as_posix() == "release_checksums.json":
+            continue
+        if ignored_parts.intersection(rel_from_agents.parts):
+            continue
+        if p.suffix.lower() in {".pyc", ".pyo"}:
+            continue
+        actual_files.add(p.relative_to(kit).as_posix())
+
+    manifest_keys = set(files.keys())
+    if actual_files != manifest_keys:
+        missing = sorted(manifest_keys - actual_files)
+        unexpected = sorted(actual_files - manifest_keys)
+        details = []
+        if missing:
+            details.append(f"missing ({len(missing)}): {', '.join(missing[:10])}")
+        if unexpected:
+            details.append(f"unexpected ({len(unexpected)}): {', '.join(unexpected[:10])}")
+        raise ValidationError(f"Kit release checksums inventory mismatch: {'; '.join(details)}")
+
     for rel, expected in files.items():
         rel_path = Path(rel)
         if rel_path.is_absolute() or ".." in rel_path.parts:

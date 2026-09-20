@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import sys
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ from pin_prompt_docs import CHECKSUM_DOCS, URL_FILES, VERIFY_SENTENCE
 
 
 RAW_PROMPT_RE = re.compile(
-    r"android-agent-harness/(?P<ref>main|v\d+\.\d+\.\d+)/docs/"
+    r"android-agent-harness/(?P<ref>main|v\d+\.\d+\.\d+)/docs/(?!assets/)"
 )
 CHECKSUM_RE = re.compile(
     r"\*\*Kit version\*\*: `v(?P<version>\d+\.\d+\.\d+)`"
@@ -67,6 +68,35 @@ def checksum_doc_error(data: bytes, version: str, label: str) -> str | None:
     return None
 
 
+def _extract_job_timeouts(yaml_text: str) -> dict[str, int]:
+    """Extract job names and their timeout-minutes values from simple GitHub Actions workflow YAML."""
+    jobs: dict[str, int] = {}
+    lines = yaml_text.splitlines()
+    in_jobs = False
+    current_job: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if line.startswith("jobs:"):
+            in_jobs = True
+            continue
+        if in_jobs and not line.startswith(" ") and not line.startswith("\t"):
+            in_jobs = False
+            current_job = None
+            continue
+        if in_jobs:
+            indent = len(line) - len(line.lstrip())
+            if indent == 2 and stripped.endswith(":"):
+                current_job = stripped[:-1].strip()
+                continue
+            if current_job and "timeout-minutes:" in stripped:
+                match = re.search(r"timeout-minutes:\s*(\d+)", stripped)
+                if match:
+                    jobs[current_job] = int(match.group(1))
+    return jobs
+
+
 def publish_workflow_errors(text: str) -> list[str]:
     """Require reproducible publish dependencies and an immutable upload action."""
     errors: list[str] = []
@@ -76,15 +106,27 @@ def publish_workflow_errors(text: str) -> list[str]:
     elif not re.fullmatch(r"[0-9a-f]{40}", action_match.group("ref")):
         errors.append("publish workflow: PyPI publish action must use a full commit SHA")
 
+    if re.search(r"pip\s+install\s+--upgrade\s+pip", text):
+        errors.append("publish workflow: unpinned pip upgrade is forbidden")
+
     install_lines = [line.strip() for line in text.splitlines() if "pip install" in line]
     dependency_line = next(
         (line for line in install_lines if re.search(r"\bbuild(?:==|\s|$)", line)),
         "",
     )
-    if not re.search(r"\bbuild==\d+\.\d+\.\d+\b", dependency_line):
-        errors.append("publish workflow: build must be pinned to an exact version")
-    if not re.search(r"\btwine==\d+\.\d+\.\d+\b", dependency_line):
-        errors.append("publish workflow: twine must be pinned to an exact version")
+    try:
+        dependency_tokens = shlex.split(dependency_line)
+    except ValueError:
+        dependency_tokens = []
+    for tool in ("build==1.6.0", "twine==7.0.0", "setuptools==80.9.0", "wheel==0.45.1"):
+        name = tool.split("==", 1)[0]
+        observed = [token for token in dependency_tokens if re.fullmatch(rf"{re.escape(name)}(?:==[^\s]+)?", token)]
+        if observed != [tool]:
+            errors.append(f"publish workflow: {name} must be pinned to exact version ({tool})")
+
+    if "python -m build --no-isolation" not in text:
+        errors.append("publish workflow: package build must specify --no-isolation")
+
     if "id-token: write" not in text:
         errors.append("publish workflow: trusted-publishing id-token permission is missing")
     return errors
@@ -117,6 +159,44 @@ def workflow_integrity_errors(repo_root: Path) -> list[str]:
         errors.append(
             "CI must use an explicit compatibility matrix instead of multiplying the full suite across every platform/runtime pair"
         )
+
+    # Permission checks: explicit top-level permissions: contents: read in ci.yml and release-check.yml
+    for wf_name in ("ci.yml", "release-check.yml"):
+        wf_path = workflow_dir / wf_name
+        if wf_path.is_file():
+            wf_text = wf_path.read_text(encoding="utf-8")
+            if not re.search(r"^permissions:\s*\n\s+contents:\s*read", wf_text, re.MULTILINE):
+                errors.append(f"{wf_name} must declare explicit top-level 'permissions: contents: read'")
+
+    # Job timeout checks
+    required_timeouts = {
+        "ci.yml": {
+            "selftest": 35,
+            "performance": 10,
+            "release-lifecycle": 15,
+            "release-metadata": 5,
+        },
+        "release-check.yml": {
+            "validate-tag": 10,
+        },
+        "publish-pypi.yml": {
+            "pypi-publish": 20,
+        },
+    }
+    for wf_name, jobs in required_timeouts.items():
+        wf_path = workflow_dir / wf_name
+        if not wf_path.is_file():
+            continue
+        wf_text = wf_path.read_text(encoding="utf-8")
+        observed_timeouts = _extract_job_timeouts(wf_text)
+        for job_name, req_timeout in jobs.items():
+            if job_name not in observed_timeouts:
+                errors.append(f"{wf_name}: job '{job_name}' is missing required timeout-minutes ({req_timeout})")
+            elif observed_timeouts[job_name] != req_timeout:
+                errors.append(
+                    f"{wf_name}: job '{job_name}' has timeout-minutes {observed_timeouts[job_name]}, expected {req_timeout}"
+                )
+
     return errors
 
 
@@ -198,6 +278,32 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
     supported_line = f"| **v{major}.{minor}.x** | Yes |"
     if supported_line not in security:
         errors.append(f"SECURITY.md must support the current v{major}.{minor}.x release line")
+
+    # License consistency checks (M4)
+    license_path = repo_root / "LICENSE"
+    if not license_path.is_file() or not license_path.read_text(encoding="utf-8").startswith("MIT License"):
+        errors.append("LICENSE must be MIT License")
+    if not re.search(r'^license:\s*["\']?MIT["\']?$', citation, re.MULTILINE):
+        errors.append("CITATION.cff license must be MIT")
+    if not re.search(r'^license\s*=\s*"MIT"', pyproject, re.MULTILINE):
+        errors.append('pyproject.toml project.license must be "MIT"')
+    if not re.search(r'license-files\s*=\s*\["LICENSE"\]', pyproject):
+        errors.append('pyproject.toml must declare license-files = ["LICENSE"]')
+    if re.search(r'license\s*=\s*\{', pyproject):
+        errors.append("pyproject.toml must not use deprecated table format for project.license")
+
+    # README checks (M4)
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    if not re.search(r"## License\s*\n+MIT License\.", readme):
+        errors.append("README.md license section must state MIT License")
+    if "```mermaid" in readme:
+        errors.append("README.md must not contain a Mermaid fence (use static SVG instead)")
+    link_matches = re.findall(r'\[([^\]]+)\]\(([^)]+)\)', readme)
+    for text_lbl, link_target in link_matches:
+        link_target = link_target.strip()
+        if link_target.startswith("#") or link_target.startswith("http://") or link_target.startswith("https://") or link_target.startswith("mailto:"):
+            continue
+        errors.append(f"README.md contains relative link [{text_lbl}]({link_target}) that cannot be resolved on PyPI; use absolute URL")
 
     for rel in ("docs/architecture.md", "docs/diagnostic-prompt.md"):
         text = (repo_root / rel).read_text(encoding="utf-8")

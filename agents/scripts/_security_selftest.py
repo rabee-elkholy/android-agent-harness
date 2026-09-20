@@ -107,7 +107,17 @@ class SecurityTests(unittest.TestCase):
         policy_file = self.repo / "policy.json"
         policy_file.write_text(json.dumps(policy), encoding="utf-8")
         current_file = self.repo / "agents/state/tasks/t/current-run.json"
-        current_file.write_text(json.dumps({"policy": str(policy_file)}), encoding="utf-8")
+        run_id = "run-role-match"
+        snapshot = "a" * 64
+        manifest_file = current_file.parent / "manifest.json"
+        manifest_file.write_text(json.dumps({"delivery_snapshot_sha256": snapshot}), encoding="utf-8")
+        current_file.write_text(
+            json.dumps({"policy": str(policy_file), "run_id": run_id, "manifest": str(manifest_file)}),
+            encoding="utf-8",
+        )
+        review_package = self.repo / "agents/state/runs" / snapshot / run_id / "review-package.md"
+        review_package.parent.mkdir(parents=True, exist_ok=True)
+        review_package.write_text("# Bound role-matching package\n", encoding="utf-8")
         plan_file = self.repo / "agents/state/tasks/t/plan.json"
         plan_file.write_text(json.dumps({"plan_id": "p", "status": "VERIFYING", "execution_nonce": "n", "approval": {"single_use_nonce": "n"}}), encoding="utf-8")
 

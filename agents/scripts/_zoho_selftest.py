@@ -114,6 +114,33 @@ class ZohoTests(unittest.TestCase):
         self.assertEqual(1, api.status_updates)
         self.assertEqual("success", json.loads(first["content"][0]["text"])["status"])
 
+    def test_missing_or_blank_operation_id_is_strictly_rejected(self):
+        calls = []
+        # Missing operation_id
+        with self.assertRaisesRegex(RuntimeError, "operation_id is required"):
+            execute_once("status", {"item_id": "1", "status": "In progress"}, lambda: calls.append(1) or {"status": "ok"})
+        self.assertEqual(0, len(calls))
+
+        # Blank operation_id
+        with self.assertRaisesRegex(RuntimeError, "operation_id is required"):
+            execute_once("status", {"item_id": "1", "status": "In progress", "operation_id": "   "}, lambda: calls.append(1) or {"status": "ok"})
+        self.assertEqual(0, len(calls))
+
+    def test_schemas_require_operation_id_for_mutations_only(self):
+        mutation_tools = {
+            "zoho_create_task",
+            "zoho_update_task_status",
+            "zoho_add_comment",
+            "zoho_update_task_description",
+        }
+        for tool in server.TOOLS:
+            schema = tool.get("inputSchema") or {}
+            required = schema.get("required") or []
+            if tool["name"] in mutation_tools:
+                self.assertIn("operation_id", required, f"{tool['name']} must require operation_id")
+            else:
+                self.assertNotIn("operation_id", required, f"{tool['name']} should not require operation_id")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
