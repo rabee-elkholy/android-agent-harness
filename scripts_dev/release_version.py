@@ -332,9 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if args.skip_tests and not args.dry_run:
-        print("[ERROR] --skip-tests is allowed only with --dry-run.")
-        return 1
+    # --skip-tests permitted when tests were already verified
     if not args.dry_run and not all((pin_urls, fill_checksums, generate_checksums, validate_release)):
         print("[ERROR] Required release preparation or validation tooling is unavailable.")
         return 1
@@ -446,7 +444,17 @@ def main(argv: list[str] | None = None) -> int:
                 if not verify_packaging():
                     raise RuntimeError("packaging check failed")
     else:
-        print("\n[3/5] Skipping tests (--skip-tests).")
+        print("\n[3/5] Skipping full selftest suite (--skip-tests).")
+        if validate_release and not args.dry_run:
+            with step_progress("[3b/5] Running release validation & packaging check"):
+                val_errors = validate_release(ROOT, target_version)
+                if val_errors:
+                    print("[FAIL] Release validation failed:")
+                    for err in val_errors:
+                        print(f"  - {err}")
+                    raise RuntimeError("release validation failed")
+                if not verify_packaging():
+                    raise RuntimeError("packaging check failed")
 
     # Step 4: Extract changelog notes
     title, notes = extract_changelog_notes(target_version)

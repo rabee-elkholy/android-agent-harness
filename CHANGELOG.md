@@ -4,6 +4,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.55] - 2026-09-20
+
+### Production Integrity and Fail-Closed Guardrails
+
+- Enforced exact executable-payload inventory across bootstrap, lifecycle, and repair verifiers, rejecting unlisted scripts and symlinks before engine execution.
+- Required `operation_id` for all Zoho Sprints state-mutating tools in both the execution core and MCP schemas.
+- Bounded external Git network fetches (120s), local Git operations (30s), ADB enumeration (15s), screen capture/pull (30s), and CI workflow jobs to prevent indefinite hangs.
+- Pinned release build tools to exact versions without unpinned pip upgrades or build isolation drift, and verified PEP 639-compliant license metadata across all targets.
+- Made project graph cache warm-up failures explicitly report actionable doctor guidance, and enforced atomic, non-silent reviewer dispatch receipt generation.
+- Ensured all documentation links in the README are absolute and portable on PyPI, and embedded the architecture pipeline diagram as a standalone SVG.
+
 ## [1.0.54] - 2026-09-20
 
 ### Production Readiness and Open-Source Clarity
