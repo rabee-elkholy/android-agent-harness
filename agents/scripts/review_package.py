@@ -10,7 +10,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import ValidationError, atomic_write_bytes, canonical_sha256, read_json, redact_text, sha256_file, utc_now  # noqa: E402
+from _vnext_common import (  # noqa: E402
+    ValidationError,
+    active_review_package_path,
+    atomic_write_bytes,
+    canonical_sha256,
+    read_json,
+    redact_text,
+    sha256_file,
+    utc_now,
+)
 from delivery_manifest import build_task_diff
 from workflow import assert_active_run_fresh, state_root, task_dir  # noqa: E402
 
@@ -232,8 +241,11 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     # inputs but may contain credentials.  Sanitize content, not only paths,
     # before the immutable package is written or handed to a model.
     content = redact_text(content)
-    package_dir = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"]
-    package_path = package_dir / "review-package.md"
+    package_path = active_review_package_path(repo, {
+        "run_id": current["run_id"],
+        "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+    })
+    package_dir = package_path.parent
     if package_path.exists():
         raise ValidationError("review package already exists for this immutable run")
     atomic_write_bytes(package_path, content.encode("utf-8"))

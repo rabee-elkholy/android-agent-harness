@@ -11,8 +11,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now, atomic_write_json  # noqa: E402
+from _vnext_common import active_review_package_path as _vnext_active_package_path  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
 from workflow import SENSITIVE_SURFACES, assert_active_run_fresh, state_root, task_dir  # noqa: E402
+
+
+def active_review_package_path(repo: Path, current_run: dict, root: Path | None = None) -> Path:
+    return _vnext_active_package_path(repo, current_run, root=root if root is not None else state_root(repo))
 
 
 VALID_VERDICTS = {"PASS", "FINDINGS"}
@@ -383,7 +388,7 @@ def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, res
     directory = task_dir(repo, task_id)
     current = read_json(directory / "current-run.json")
     manifest = read_json(Path(current["manifest"]))
-    package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+    package = active_review_package_path(repo, current)
     package_sha = sha256_file(package)
 
     verdict, cites, pkg_sha = _extract_evidence_and_verdict(reviewer, text, package_sha)
@@ -429,7 +434,7 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
     round_number = int(plan.get("review_rounds") or 0) + 1
     if round_number > int(policy.get("max_review_rounds") or 3):
         raise ValidationError("review round cap reached; developer decision is required")
-    package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+    package = active_review_package_path(repo, current)
     if not package.is_file():
         raise ValidationError("immutable review package is missing")
     package_sha = sha256_file(package)
@@ -553,7 +558,7 @@ def verdict_to_report(
     directory = task_dir(repo, task_id)
     current = read_json(directory / "current-run.json")
     manifest = read_json(Path(current["manifest"]))
-    package = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+    package = active_review_package_path(repo, current)
     if not package.is_file():
         raise ValidationError("immutable review package is missing")
     package_sha = sha256_file(package)
@@ -676,7 +681,7 @@ def main(argv: list[str] | None = None) -> int:
                 rep_path = Path(rep_str).resolve()
 
             manifest = read_json(Path(current["manifest"]))
-            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_file = active_review_package_path(repo, current)
             pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
 
             if rep_path.suffix.lower() == ".jsonl":
@@ -733,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
             rep = response_to_report(repo, args.task, reviewer_clean, Path(raw_path).resolve())
             rep["provenance"] = "reviewer_response_footer"
             manifest = read_json(Path(current["manifest"]))
-            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_file = active_review_package_path(repo, current)
             pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
             sub_id = getattr(args, "subagent_id", "").strip()
             is_ver = False
@@ -758,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
             rep = response_text_to_report(repo, args.task, reviewer_clean, unescaped_text)
             rep["provenance"] = "reviewer_response_text"
             manifest = read_json(Path(current["manifest"]))
-            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_file = active_review_package_path(repo, current)
             pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
             sub_id = getattr(args, "subagent_id", "").strip()
             is_ver = False
@@ -805,7 +810,7 @@ def main(argv: list[str] | None = None) -> int:
                     pass
 
             manifest = read_json(Path(current["manifest"]))
-            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_file = active_review_package_path(repo, current)
             pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
             is_ver, prf = verify_independent_reviewer_execution(
                 repo,
@@ -833,7 +838,7 @@ def main(argv: list[str] | None = None) -> int:
             severity = str(policy.get("severity") or "").upper()
             sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
             manifest = read_json(Path(current["manifest"]))
-            pkg_file = state_root(repo) / "runs" / manifest["delivery_snapshot_sha256"] / current["run_id"] / "review-package.md"
+            pkg_file = active_review_package_path(repo, current)
             pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
 
             for item in verdict_items:

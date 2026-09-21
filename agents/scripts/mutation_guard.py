@@ -15,7 +15,7 @@ VERIFICATION_SCRIPTS = {
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
 }
-BOOTSTRAP_ACTIONS = {"draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification", "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding"}
+BOOTSTRAP_ACTIONS = {"draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification", "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery"}
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 

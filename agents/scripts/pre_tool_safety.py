@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
 from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed  # noqa: E402
-from _vnext_common import read_json, sha256_file, validate_id  # noqa: E402
+from _vnext_common import active_review_package_path, read_json, sha256_file, validate_id  # noqa: E402
 
 
 MAX_STDIN_BYTES = 5 * 1024 * 1024
@@ -376,7 +376,7 @@ def _handle_subagent(name: str, args: dict) -> None:
             snapshot = str(manifest.get("delivery_snapshot_sha256") or "").strip()
             if not re.fullmatch(r"[0-9a-f]{64}", snapshot):
                 raise RuntimeError("delivery snapshot identity is missing or invalid")
-            package_path = state / "runs" / snapshot / run_id / "review-package.md"
+            package_path = active_review_package_path(REPO, current)
             if not package_path.is_file():
                 raise RuntimeError("review package is missing")
             package_sha = sha256_file(package_path)

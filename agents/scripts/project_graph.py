@@ -97,10 +97,22 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.stats:
+        if is_json:
+            print(json.dumps({
+                "repo_root": str(repo_root),
+                "repository": str(repo_root),
+                "total_nodes": sync_res.get("total_nodes", 0),
+                "total_edges": sync_res.get("total_edges", 0),
+                "added": sync_res.get("added", 0),
+                "modified": sync_res.get("modified", 0),
+                "deleted": sync_res.get("deleted", 0),
+                "healed_log": engine.healed_log,
+            }, indent=2))
+            return 0
         live_print("==================================================")
         live_print("  Android Project Graph Statistics")
         live_print("==================================================")
-        live_print(f"[*] Repository: {REPO}")
+        live_print(f"[*] Repository: {repo_root}")
         live_print(f"[*] Total Nodes: {sync_res['total_nodes']}")
         live_print(f"[*] Total Edges: {sync_res['total_edges']}")
         live_print(f"[*] Added Files (Sync): {sync_res['added']}")
@@ -132,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.feature:
         sub_nodes, sub_edges = engine.graph.extract_feature_graph(args.feature, max_depth=args.depth)
         if not sub_nodes:
-            live_print(f"[!] No feature components found matching '{args.feature}'.")
+            live_print(f"[!] No feature components found matching '{args.feature}'.", err=True)
             return 1
         original_count = len(sub_nodes)
         if args.limit > 0 and original_count > args.limit:
@@ -167,10 +179,10 @@ def main(argv: list[str] | None = None) -> int:
         if not exact_matches and not partial_matches:
             node, heal_msg = engine.heal_symbol(args.find)
             if heal_msg:
-                live_print(f"[*] {heal_msg}")
+                live_print(f"[*] {heal_msg}", err=is_json)
             if not node:
-                live_print(f"[!] Symbol '{args.find}' not found in code graph.")
-                live_print("[*] Tip: '--find' searches code AST symbols (classes, methods, composables). For feature packages use '--feature <name>', or for UI string resources use '--string <text>'.")
+                live_print(f"[!] Symbol '{args.find}' not found in code graph.", err=True)
+                live_print("[*] Tip: '--find' searches code AST symbols (classes, methods, composables). For feature packages use '--feature <name>', or for UI string resources use '--string <text>'.", err=True)
                 return 1
             exact_matches = [node]
 
@@ -205,9 +217,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.screen:
         node, heal_msg = engine.heal_symbol(args.screen)
         if heal_msg:
-            live_print(f"[*] {heal_msg}")
+            live_print(f"[*] {heal_msg}", err=is_json)
         if not node:
-            live_print(f"[!] Screen '{args.screen}' not found in code graph.")
+            live_print(f"[!] Screen '{args.screen}' not found in code graph.", err=True)
             return 1
         focus_node_id = node.id
 
@@ -216,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         mod_name = args.module if args.module.startswith(":") else f":{args.module}"
         node = engine.graph.find_node(mod_name)
         if not node:
-            live_print(f"[!] Module '{mod_name}' not found in Gradle settings.")
+            live_print(f"[!] Module '{mod_name}' not found in Gradle settings.", err=True)
             return 1
         focus_node_id = node.id
 
@@ -334,9 +346,9 @@ def main(argv: list[str] | None = None) -> int:
     # Optional image rendering via dot
     if args.render:
         dot_str = graph_to_render.to_dot()
-        img_out = Path(args.output) if args.output else REPO / ".agents" / "cache" / f"graph.{args.render}"
+        img_out = Path(args.output) if args.output else repo_root / ".agents" / "cache" / f"graph.{args.render}"
         ok, msg = render_dot_to_image(dot_str, img_out, img_format=args.render)
-        live_print(f"[*] Visual Render: {'[PASS]' if ok else '[INFO]'} {msg}")
+        live_print(f"[*] Visual Render: {'[PASS]' if ok else '[INFO]'} {msg}", err=is_json)
 
     return 0
 

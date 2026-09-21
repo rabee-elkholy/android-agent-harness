@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import ValidationError, read_json
+from _vnext_common import ValidationError, active_review_package_path, read_json
 from review_policy import CAPABILITY_STANDARD, CAPABILITY_STRONG, review_execution_requirements
 from workflow import state_root, task_dir
 
@@ -132,16 +132,17 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity
     snapshot = str(current.get("delivery_snapshot_sha256") or "")
     st_root = state_root(repo)
 
-    candidate_pkg_dirs = []
+    canonical_pkg_path = active_review_package_path(repo, current)
+    candidate_pkg_dirs = [canonical_pkg_path.parent]
     if snapshot and run_id:
         candidate_pkg_dirs.append(st_root / "runs" / snapshot / run_id)
     candidate_pkg_dirs.append(directory / f"review-{run_id}")
     candidate_pkg_dirs.append(directory)
 
-    active_pkg_dir = next((d for d in candidate_pkg_dirs if d.is_dir()), candidate_pkg_dirs[0])
+    active_pkg_dir = next((d for d in candidate_pkg_dirs if d.is_dir()), canonical_pkg_path.parent)
 
     resolved_reviewers = {}
-    review_pkg_file = active_pkg_dir / "review-package.md"
+    review_pkg_file = canonical_pkg_path if canonical_pkg_path.is_file() else active_pkg_dir / "review-package.md"
     review_pkg_str = str(review_pkg_file) if review_pkg_file.is_file() else ""
 
     for rev, req in requirements.get("reviewers", {}).items():

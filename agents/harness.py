@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|device|verify|version> [args...]"
+            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|device|verify|version|commands> [args...]"
         )
         return 0
 
@@ -65,9 +65,30 @@ def main(argv: list[str] | None = None) -> int:
         return _run("preflight_check.py", args)
     if command == "test":
         return _run("run_tests_gate.py", args)
+    if command == "commands":
+        sys.path.insert(0, str(SCRIPTS))
+        import json
+        from _public_commands import get_public_commands
+        print(json.dumps(get_public_commands(), indent=2, ensure_ascii=False))
+        return 0
     if command == "assemble":
-        return _run("run_gradle_task.py", args)
+        forwarded = list(args)
+        if not forwarded or (len(forwarded) == 1 and forwarded[0] in ("--repo", ".")):
+            sys.path.insert(0, str(SCRIPTS))
+            try:
+                from _variants import resolve_assemble_task
+                task_str = resolve_assemble_task(REPO_ROOT)
+            except Exception:
+                task_str = ":app:assembleDebug"
+            forwarded = [task_str]
+        return _run("run_gradle_task.py", forwarded)
     if command == "review":
+        if args and args[0] == "package":
+            return _run("review_package.py", args[1:])
+        if args and args[0] == "profile":
+            return _run("review_execution.py", args[1:])
+        if args and args[0] == "ingest":
+            return _run("record_review.py", args[1:])
         return _run("record_review.py", args)
     if command == "device":
         return _run("run_device.py", args)

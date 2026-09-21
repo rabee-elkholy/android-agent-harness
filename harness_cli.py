@@ -859,16 +859,40 @@ def cmd_assemble(args: argparse.Namespace) -> int:
     if forward and forward[0] == "--":
         forward = forward[1:]
     if not forward:
-        forward = [":app:assembleDebug"]
+        kit = ensure_kit(getattr(args, "kit", None))
+        repo = find_repo(getattr(args, "repo", None)) if getattr(args, "repo", None) else Path.cwd().resolve()
+        try:
+            sys.path.insert(0, str(_script_root(kit)))
+            from _variants import resolve_assemble_task
+            task_str = resolve_assemble_task(repo)
+        except Exception:
+            task_str = ":app:assembleDebug"
+        forward = [task_str]
     return _dispatch_pipeline_script(args, "run_gradle_task.py", forward)
 
 
 def cmd_review(args: argparse.Namespace) -> int:
-    """Record reviewer verdicts via record_review.py."""
+    """Record reviewer verdicts or build/profile review packages."""
     forward = list(args.review_args)
     if forward and forward[0] == "--":
         forward = forward[1:]
+    if forward and forward[0] == "package":
+        return _dispatch_pipeline_script(args, "review_package.py", forward[1:])
+    if forward and forward[0] == "profile":
+        return _dispatch_pipeline_script(args, "review_execution.py", forward[1:])
+    if forward and forward[0] == "ingest":
+        return _dispatch_pipeline_script(args, "record_review.py", forward[1:])
     return _dispatch_pipeline_script(args, "record_review.py", forward)
+
+
+def cmd_commands(args: argparse.Namespace) -> int:
+    """Output machine-readable catalog of public harness commands."""
+    kit = ensure_kit(getattr(args, "kit", None))
+    sys.path.insert(0, str(_script_root(kit)))
+    from _public_commands import get_public_commands
+    cmds = get_public_commands()
+    print(json.dumps(cmds, indent=2, ensure_ascii=False))
+    return 0
 
 
 def cmd_device(args: argparse.Namespace) -> int:
@@ -1185,6 +1209,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--task", "--task-id", dest="task", default="", help="Approved task id to verify (defaults to active task).")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
     sp.set_defaults(func=cmd_verify)
+
+    sp = sub.add_parser(
+        "commands",
+        help="Print machine-readable catalog of public harness commands as JSON.",
+    )
+    sp.add_argument("--json", action="store_true", default=True, help="Output format as JSON (default: true).")
+    sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
+    sp.set_defaults(func=cmd_commands)
 
     return p
 

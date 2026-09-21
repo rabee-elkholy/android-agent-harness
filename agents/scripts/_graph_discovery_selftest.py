@@ -369,6 +369,33 @@ class GraphDiscoverySelftest(unittest.TestCase):
         self.assertEqual(DISCOVERY_D2_FEATURE_GRAPH, disc.get("mode"))
         self.assertEqual("profile", disc.get("query", {}).get("value"))
 
+    def test_GRAPH_012_external_checkout_stats_and_json(self) -> None:
+        """GRAPH-012: android-harness graph --repo <external-checkout> --stats displays external repo."""
+        harness_script = KIT / "harness_cli.py"
+        proc = subprocess.run(
+            [sys.executable, str(harness_script), "graph", "--repo", str(self.repo), "--stats"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, f"stderr: {proc.stderr}\nstdout: {proc.stdout}")
+        self.assertIn(str(self.repo), proc.stdout)
+
+    def test_GRAPH_013_json_stdout_is_pure_valid_json(self) -> None:
+        """GRAPH-013: JSON stdout is pure valid JSON; progress goes to stderr."""
+        harness_script = KIT / "harness_cli.py"
+        proc = subprocess.run(
+            [sys.executable, str(harness_script), "graph", "--repo", str(self.repo), "--stats", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, f"stderr: {proc.stderr}\nstdout: {proc.stdout}")
+        # Must parse as pure JSON with no leading/trailing non-JSON output
+        data = json.loads(proc.stdout.strip())
+        self.assertIsInstance(data, dict)
+        self.assertEqual(str(self.repo.resolve()), str(Path(data["repo_root"]).resolve()))
+
 
 if __name__ == "__main__":
     unittest.main()

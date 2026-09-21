@@ -264,6 +264,11 @@ def create_plan(
 
 
 def approve(plan: dict, *, source: str, proof_reference: str, enforcement_tier: str) -> dict:
+    if plan.get("status") in ("APPROVED", "IMPLEMENTING"):
+        approval = plan.get("approval")
+        if isinstance(approval, dict) and approval.get("single_use_nonce"):
+            # Idempotent repeated approve: no nonce rotation
+            return plan
     if plan.get("status") != "AWAITING_DEVELOPER_APPROVAL":
         raise ValidationError("only a pending plan can be approved")
     if source not in APPROVAL_SOURCES:
@@ -289,10 +294,94 @@ def approve(plan: dict, *, source: str, proof_reference: str, enforcement_tier: 
     return plan
 
 
+def approve_and_begin(
+    repo: Path,
+    plan: dict,
+    *,
+    source: str,
+    proof_reference: str,
+    enforcement_tier: str,
+) -> dict:
+    """Atomic checked transition from AWAITING_DEVELOPER_APPROVAL to IMPLEMENTING."""
+    if plan.get("status") == "IMPLEMENTING":
+        approval = plan.get("approval")
+        if isinstance(approval, dict) and plan.get("execution_nonce") == approval.get("single_use_nonce"):
+            # Idempotent repeated approve: no nonce rotation
+            return plan
+        raise ValidationError("task is already IMPLEMENTING with corrupt approval identity")
+
+    if plan.get("status") != "AWAITING_DEVELOPER_APPROVAL":
+        raise ValidationError(f"only a pending plan can be approved; current status is '{plan.get('status')}'")
+    if source not in APPROVAL_SOURCES:
+        raise ValidationError(f"unsupported approval source: {source}")
+    if enforcement_tier not in ENFORCEMENT_TIERS:
+        raise ValidationError(f"unsupported enforcement tier: {enforcement_tier}")
+    if enforcement_tier == "HARD_ENFORCED" and source != "host_native":
+        raise ValidationError("only non-synthesizable host-native approval proof may be HARD_ENFORCED")
+    if not str(proof_reference).strip():
+        raise ValidationError("approval proof reference must not be empty")
+
+    valid, expected = validate_plan_hash(plan, plan.get("plan_sha256"))
+    if not valid:
+        raise ValidationError("plan content changed after its hash was created")
+
+    current_repo = repository_identity(repo)
+    for key in ("root_sha256", "git_common_dir_sha256", "head", "branch"):
+        if current_repo.get(key) != (plan.get("repository") or {}).get(key):
+            raise ValidationError(f"repository identity changed before implementation: {key}")
+
+    current = build_manifest(repo)
+    if current["delivery_snapshot_sha256"] != plan.get("base_delivery_snapshot_sha256"):
+        raise ValidationError("delivery snapshot changed before implementation")
+    if current["change_set_sha256"] != plan.get("base_change_set_sha256"):
+        raise ValidationError("working change set changed before implementation")
+
+    prov = plan.get("discovery_provenance")
+    if prov:
+        try:
+            from discovery_receipt import load_discovery_receipt, check_discovery_freshness
+            rec = load_discovery_receipt(repo, str(prov.get("discovery_id") or ""))
+            if rec:
+                fresh, reason = check_discovery_freshness(repo, rec)
+                if not fresh:
+                    raise ValidationError(f"DISCOVERY_REFRESH_REQUIRED: {reason}")
+        except ValidationError:
+            raise
+        except Exception:
+            pass
+
+    nonce = uuid.uuid4().hex
+    plan["approval"] = {
+        "source": source,
+        "proof_reference_sha256": canonical_sha256({"reference": proof_reference}),
+        "enforcement_tier": enforcement_tier,
+        "approved_at": utc_now(),
+        "plan_sha256": expected,
+        "single_use_nonce": nonce,
+    }
+    plan["execution_nonce"] = nonce
+    plan["status"] = "IMPLEMENTING"
+    plan["implementation_started_at"] = utc_now()
+    return plan
+
+
 def begin(repo: Path, plan: dict) -> dict:
-    if plan.get("status") != "APPROVED" or not isinstance(plan.get("approval"), dict):
+    status = plan.get("status")
+    approval = plan.get("approval")
+    if not isinstance(approval, dict):
         raise ValidationError("implementation requires an approved plan")
-    approval = plan["approval"]
+
+    # Idempotent begin for already IMPLEMENTING plan
+    if status == "IMPLEMENTING":
+        exec_nonce = plan.get("execution_nonce")
+        appr_nonce = approval.get("single_use_nonce")
+        if not exec_nonce or exec_nonce != appr_nonce:
+            raise ValidationError("mutation blocked: corrupt execution nonce or approval identity")
+        return plan
+
+    if status != "APPROVED":
+        raise ValidationError(f"implementation requires an approved plan; current status is '{status}'")
+
     if approval.get("plan_sha256") != plan.get("plan_sha256"):
         raise ValidationError("approval is not bound to this plan")
     if plan.get("execution_nonce"):

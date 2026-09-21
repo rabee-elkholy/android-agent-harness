@@ -15,13 +15,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, step_progress, sublog  # noqa: E402
-from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, repository_identity, utc_now, validate_id, validate_repo_path_containment  # noqa: E402
+from _vnext_common import (  # noqa: E402
+    ValidationError,
+    active_review_package_path,
+    atomic_write_json,
+    canonical_sha256,
+    read_json,
+    repository_identity,
+    utc_now,
+    validate_id,
+    validate_repo_path_containment,
+)
+from _variants import resolve_assemble_task  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline  # noqa: E402
 from final_verifier import verify  # noqa: E402
 from plan_authority import (  # noqa: E402
     DEFAULT_APP_SURFACES,
     approve,
+    approve_and_begin,
     begin,
     changed_modules,
     check_material_drift,
@@ -270,43 +282,33 @@ def draft(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
 
+    # 0. Reconcile clean delivered tasks automatically before conflict checks
+    reconcile_delivery(repo)
+
     # 1. Enforce at most one live task per worktree
     live_tasks = _find_live_tasks(repo)
     for prev_id, prev_status, prev_plan, _ in live_tasks:
         if prev_id != task_id:
             if prev_status == "READY_FOR_DELIVERY":
                 dirty = _find_uncommitted_task_files(repo, prev_id, prev_plan)
-                if dirty and not getattr(args, "force", False):
+                if dirty:
                     raise ValidationError(
                         f"PREVIOUS_DELIVERY_NOT_FINALIZED: previous task '{prev_id}' is READY_FOR_DELIVERY with uncommitted changes: "
-                        f"{', '.join(sorted(dirty))}. Finalize delivery via 'workflow.py deliver' or cancel it via 'workflow.py cancel' before starting a new task."
+                        f"{', '.join(sorted(dirty))}. Commit the verified changes, finalize delivery via 'task deliver', or cancel it via 'task cancel' before starting a new task."
                     )
-                if not dirty:
-                    finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=True)
-                elif getattr(args, "force", False):
-                    finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=False)
+                finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=True)
             elif prev_status in ("APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
-                if not getattr(args, "force", False):
-                    raise ValidationError(
-                        f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
-                        f"Choices: 1. continue current task; 2. cancel current task via 'workflow.py cancel --task-id {prev_id}'; "
-                        "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
-                    )
-                active_path = state_root(repo) / "active-task.json"
-                if active_path.is_file():
-                    try:
-                        if read_json(active_path).get("task_id") == prev_id:
-                            active_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                raise ValidationError(
+                    f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
+                    f"Choices: 1. continue current task; 2. cancel current task via 'workflow.py cancel --task-id {prev_id}'; "
+                    "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
+                )
             elif prev_status == "AWAITING_DEVELOPER_APPROVAL":
-                active_path = state_root(repo) / "active-task.json"
-                if active_path.is_file():
-                    try:
-                        if read_json(active_path).get("task_id") == prev_id:
-                            active_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                raise ValidationError(
+                    f"ACTIVE_TASK_CONFLICT: pending task '{prev_id}' is currently AWAITING_DEVELOPER_APPROVAL. "
+                    f"Choices: 1. approve or revise current task '{prev_id}'; 2. cancel it via 'workflow.py cancel --task-id {prev_id}' before drafting an unrelated task; "
+                    "3. use a separate Git worktree for parallel work."
+                )
 
     # 2. Check if task_id already exists
     existing_plan_path = _plan_path(repo, task_id)
@@ -1039,35 +1041,44 @@ def recover_active(args: argparse.Namespace) -> dict:
 
 def record_approval(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
+    plan_file = _plan_path(repo, args.task_id)
     plan = _load_plan(repo, args.task_id)
     tier = args.enforcement_tier
-    plan = approve(plan, source=args.source, proof_reference=args.proof_reference, enforcement_tier=tier)
-    save_plan(_plan_path(repo, args.task_id), plan)
+    directory = task_dir(repo, args.task_id)
+    with StateLock(directory / ".lock"):
+        plan = approve_and_begin(repo, plan, source=args.source, proof_reference=args.proof_reference, enforcement_tier=tier)
+        save_plan(plan_file, plan)
+        atomic_write_json(state_root(repo) / "active-task.json", {
+            "task_id": args.task_id,
+            "plan_path": str(plan_file),
+            "updated_at": utc_now(),
+        })
     return plan
 
 
 def begin_task(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     loaded_plan = _load_plan(repo, args.task_id)
+    directory = task_dir(repo, args.task_id)
+    with StateLock(directory / ".lock"):
+        if loaded_plan.get("status") != "IMPLEMENTING":
+            prov = loaded_plan.get("discovery_provenance")
+            if prov:
+                try:
+                    from discovery_receipt import load_discovery_receipt, check_discovery_freshness
+                    rec = load_discovery_receipt(repo, str(prov.get("discovery_id") or ""))
+                    if rec:
+                        fresh, reason = check_discovery_freshness(repo, rec)
+                        if not fresh:
+                            raise ValidationError(f"DISCOVERY_REFRESH_REQUIRED: {reason}")
+                except ValidationError:
+                    raise
+                except Exception:
+                    pass
 
-    # Validate discovery freshness if provenance exists
-    prov = loaded_plan.get("discovery_provenance")
-    if prov:
-        try:
-            from discovery_receipt import load_discovery_receipt, check_discovery_freshness
-            rec = load_discovery_receipt(repo, str(prov.get("discovery_id") or ""))
-            if rec:
-                fresh, reason = check_discovery_freshness(repo, rec)
-                if not fresh:
-                    raise ValidationError(f"DISCOVERY_REFRESH_REQUIRED: {reason}")
-        except ValidationError:
-            raise
-        except Exception:
-            pass
-
-    plan = begin(repo, loaded_plan)
-    save_plan(_plan_path(repo, args.task_id), plan)
-    atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
+        plan = begin(repo, loaded_plan)
+        save_plan(_plan_path(repo, args.task_id), plan)
+        atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
     return plan
 
 
@@ -1518,6 +1529,8 @@ def finalize_ready_delivery(
     """
     if plan is None:
         plan = _load_plan(repo, task_id)
+    if plan.get("status") == "DELIVERED":
+        return plan, False
     if plan.get("status") != "READY_FOR_DELIVERY":
         raise ValidationError(f"task '{task_id}' is in status '{plan.get('status')}', not READY_FOR_DELIVERY")
 
@@ -1549,6 +1562,64 @@ def finalize_ready_delivery(
         except Exception:
             active_path.unlink(missing_ok=True)
     return plan, True
+
+
+def reconcile_delivery(repo: Path, task_id: str | None = None) -> tuple[dict | None, str]:
+    """Reconcile READY_FOR_DELIVERY task against clean committed repository state."""
+    tid = task_id
+    if not tid:
+        active_p = state_root(repo) / "active-task.json"
+        if active_p.is_file():
+            try:
+                tid = str(read_json(active_p).get("task_id") or "").strip()
+            except Exception:
+                pass
+    if not tid:
+        live = _find_live_tasks(repo)
+        for l_id, l_status, _, _ in live:
+            if l_status in ("READY_FOR_DELIVERY", "DELIVERED"):
+                tid = l_id
+                break
+    if not tid:
+        return None, "NOOP"
+    plan_p = _plan_path(repo, tid)
+    if not plan_p.is_file():
+        return None, "NOOP"
+    try:
+        plan = read_json(plan_p)
+    except Exception:
+        return None, "NOOP"
+    status_val = str(plan.get("status") or "")
+    if status_val == "DELIVERED":
+        return plan, "DELIVERED"
+    if status_val != "READY_FOR_DELIVERY":
+        return plan, status_val
+    dirty = _find_uncommitted_task_files(repo, tid, plan)
+    if dirty:
+        return plan, "DIRTY_UNCOMMITTED"
+    ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
+    if ready_snapshot:
+        manifest = build_manifest(repo)
+        if manifest.get("delivery_snapshot_sha256") != ready_snapshot:
+            return plan, "SNAPSHOT_MISMATCH"
+    plan, _ = finalize_ready_delivery(repo, tid, plan, require_clean_tree=True)
+    return plan, "DELIVERED"
+
+
+def cmd_reconcile_delivery(args: argparse.Namespace) -> dict:
+    repo = Path(args.repo).resolve()
+    task_id = getattr(args, "task_id", None) or None
+    plan, status_code = reconcile_delivery(repo, task_id)
+    if plan is None:
+        return {"status": "NOOP", "message": "no task to reconcile"}
+    tid = plan.get("task_id", "")
+    if status_code == "DELIVERED":
+        return {"status": "PASS", "task_id": tid, "reconciled": True, "task_state": "DELIVERED"}
+    elif status_code == "DIRTY_UNCOMMITTED":
+        return {"status": "BLOCKED", "task_id": tid, "reconciled": False, "reason": "uncommitted_changes", "task_state": plan.get("status")}
+    elif status_code == "SNAPSHOT_MISMATCH":
+        return {"status": "FAIL", "task_id": tid, "reconciled": False, "reason": "snapshot_mismatch", "task_state": plan.get("status")}
+    return {"status": "PASS", "task_id": tid, "task_state": plan.get("status")}
 
 
 def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None) -> dict:
@@ -2074,22 +2145,22 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
         return {
             "code": "APPROVE_PLAN",
             "kind": "DEVELOPER_ACTION",
-            "command": f'python .agents/scripts/workflow.py approve {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED',
+            "command": f'python .agents/harness.py task approve {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED',
             "blocking": True,
             "reason": "The reviewed plan needs explicit approval before implementation.",
             "inputs": {"repo": ".", "task_id": task_id},
-            "expected": {"success_statuses": ["PASS"]},
+            "expected": {"success_statuses": ["IMPLEMENTING"]},
         }
 
     if state == "APPROVED":
         return {
             "code": "BEGIN_IMPLEMENTATION",
             "kind": "HARNESS_COMMAND",
-            "command": f"python .agents/scripts/workflow.py begin {identity}",
+            "command": f"python .agents/harness.py task begin {identity}",
             "blocking": True,
             "reason": "Start the approved implementation.",
             "inputs": {"repo": ".", "task_id": task_id},
-            "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+            "expected": {"success_exit_codes": [0], "success_statuses": ["IMPLEMENTING"]},
         }
 
     if state == "IMPLEMENTING":
@@ -2100,11 +2171,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
             return {
                 "code": "CAPTURE_RED_EVIDENCE",
                 "kind": "HARNESS_COMMAND",
-                "command": "python .agents/scripts/run_tests_gate.py --capture-red",
+                "command": "python .agents/harness.py test --capture-red",
                 "blocking": True,
                 "reason": "Record failing test reproduction evidence for BUG before implementing production changes.",
                 "inputs": {"repo": ".", "task_id": task_id},
-                "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                "expected": {"success_exit_codes": [0]},
             }
         phases = plan.get("phases") or []
         if phases:
@@ -2144,11 +2215,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
             return {
                 "code": "PREPARE_VERIFICATION",
                 "kind": "HARNESS_COMMAND",
-                "command": f"python .agents/scripts/workflow.py prepare-verification {identity}",
+                "command": f"python .agents/harness.py task prepare-verification {identity}",
                 "blocking": True,
                 "reason": "Freeze the finished change set and derive its gates and reviewers.",
                 "inputs": {"repo": ".", "task_id": task_id},
-                "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                "expected": {"success_exit_codes": [0], "success_statuses": ["VERIFYING"]},
             }
 
         try:
@@ -2160,11 +2231,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
             return {
                 "code": "PREPARE_VERIFICATION",
                 "kind": "HARNESS_COMMAND",
-                "command": f"python .agents/scripts/workflow.py prepare-verification {identity}",
+                "command": f"python .agents/harness.py task prepare-verification {identity}",
                 "blocking": True,
                 "reason": "Verification run artifacts are corrupted; re-run prepare-verification.",
                 "inputs": {"repo": ".", "task_id": task_id},
-                "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                "expected": {"success_exit_codes": [0], "success_statuses": ["VERIFYING"]},
             }
 
         snapshot = str(manifest.get("delivery_snapshot_sha256") or "")
@@ -2185,11 +2256,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 return {
                     "code": "RUN_PREFLIGHT",
                     "kind": "HARNESS_COMMAND",
-                    "command": "python .agents/scripts/preflight_check.py",
+                    "command": "python .agents/harness.py preflight",
                     "blocking": True,
                     "reason": "The active verification policy requires preflight check evidence.",
                     "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-                    "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                    "expected": {"success_exit_codes": [0]},
                 }
 
         # 2. Specialized deterministic gates
@@ -2207,7 +2278,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     "blocking": True,
                     "reason": f"The active verification policy requires {g_name} evidence.",
                     "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-                    "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                    "expected": {"success_exit_codes": [0]},
                 }
 
         # 3. Unit tests
@@ -2216,41 +2287,79 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 return {
                     "code": "RUN_UNIT_TESTS",
                     "kind": "HARNESS_COMMAND",
-                    "command": "python .agents/scripts/run_tests_gate.py",
+                    "command": "python .agents/harness.py test",
                     "blocking": True,
                     "reason": "The active verification policy requires unit-test evidence.",
                     "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-                    "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                    "expected": {"success_exit_codes": [0]},
                 }
 
         # 4. Review package and Reviewers
         required_reviewers = list(policy.get("reviewers") or [])
         if required_reviewers:
-            pkg_path = tdir / "runs" / run_id / "review-package.md"
+            pkg_path = active_review_package_path(repo, current_run)
             if not pkg_path.is_file():
                 return {
                     "code": "BUILD_REVIEW_PACKAGE",
                     "kind": "HARNESS_COMMAND",
-                    "command": f"python .agents/scripts/review_package.py --task-id {task_id}",
+                    "command": f"python .agents/harness.py review package --task-id {task_id}",
                     "blocking": True,
                     "reason": "Build the immutable review package for required specialist reviewers.",
                     "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-                    "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                    "expected": {"success_exit_codes": [0]},
                 }
 
             if not has_pass_evidence("reviews"):
+                briefs = {}
+                exec_profile = {}
+                try:
+                    from review_execution import resolve_execution_profile
+                    exec_profile = resolve_execution_profile(repo, task_id)
+                    for r_name, r_info in exec_profile.get("reviewers", {}).items():
+                        if r_info.get("brief_path"):
+                            briefs[r_name] = r_info["brief_path"]
+                except Exception:
+                    pass
+
+                dispatches_dir = tdir / "reviewer-dispatches"
+                staged_dir = tdir / "staged-reviews"
+                dispatched_reviewers = set()
+                if dispatches_dir.is_dir():
+                    for f in dispatches_dir.glob("*.json"):
+                        dispatched_reviewers.add(f.stem)
+                if staged_dir.is_dir():
+                    for f in staged_dir.glob("*.json"):
+                        dispatched_reviewers.add(f.stem)
+
+                if set(required_reviewers).issubset(dispatched_reviewers):
+                    return {
+                        "code": "INGEST_REVIEW_RESULT",
+                        "kind": "HARNESS_COMMAND",
+                        "command": f"python .agents/harness.py review ingest --task {task_id}",
+                        "blocking": True,
+                        "reason": f"Ingest completed review results for {', '.join(required_reviewers)}.",
+                        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewers": required_reviewers},
+                        "expected": {"success_statuses": ["PASS"]},
+                    }
+
                 return {
                     "code": "DISPATCH_REVIEWERS",
                     "kind": "HOST_ACTION",
-                    "command": f"python .agents/scripts/record_review.py --task {task_id}",
+                    "command": "",
                     "blocking": True,
                     "reason": f"Dispatch independent reviewer subagents: {', '.join(required_reviewers)}.",
+                    "reviewers": required_reviewers,
+                    "package_path": str(pkg_path),
+                    "briefs": briefs,
+                    "review_execution_profile": exec_profile,
                     "inputs": {
                         "repo": ".",
                         "task_id": task_id,
                         "run_id": run_id,
                         "reviewers": required_reviewers,
                         "package_path": str(pkg_path),
+                        "briefs": briefs,
+                        "review_execution_profile": exec_profile,
                     },
                     "expected": {"success_statuses": ["PASS"]},
                 }
@@ -2259,14 +2368,19 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
         assemble_required = ("assemble" in policy_gates) or bool(policy.get("assemble_required"))
         if assemble_required:
             if not has_pass_evidence("assemble"):
+                try:
+                    flavor = policy.get("flavor") or None
+                    assemble_task = resolve_assemble_task(repo, flavor=flavor)
+                except Exception:
+                    assemble_task = ":app:assembleDebug"
                 return {
                     "code": "ASSEMBLE",
                     "kind": "HARNESS_COMMAND",
-                    "command": "python .agents/scripts/run_gradle_task.py :app:assembleDebug",
+                    "command": f"python .agents/harness.py assemble {assemble_task}",
                     "blocking": True,
-                    "reason": "Build the application debug APK.",
-                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-                    "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                    "reason": f"Build the application ({assemble_task}).",
+                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "assemble_task": assemble_task},
+                    "expected": {"success_exit_codes": [0]},
                 }
 
         # 6. Device deploy
@@ -2276,11 +2390,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 return {
                     "code": "DEVICE_INSTALL",
                     "kind": "HARNESS_COMMAND",
-                    "command": "python .agents/scripts/run_device.py install-start",
+                    "command": "python .agents/harness.py device install-start",
                     "blocking": True,
                     "reason": "Install and start the application on a target Android device.",
                     "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-                    "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+                    "expected": {"success_exit_codes": [0]},
                 }
             if not has_pass_evidence("device_signoff"):
                 return {
@@ -2299,7 +2413,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 return {
                     "code": "SENSITIVE_APPROVAL",
                     "kind": "DEVELOPER_ACTION",
-                    "command": f'python .agents/scripts/workflow.py approve-sensitive {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED',
+                    "command": f'python .agents/harness.py task approve-sensitive {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED',
                     "blocking": True,
                     "reason": "Sensitive core change requires explicit final developer approval before delivery.",
                     "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
@@ -2310,7 +2424,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
         return {
             "code": "FINAL_VERIFY",
             "kind": "HARNESS_COMMAND",
-            "command": f"python .agents/scripts/workflow.py verify {identity}",
+            "command": f"python .agents/harness.py task verify {identity}",
             "blocking": True,
             "reason": "Run read-only final verification check to confirm all evidence is in place.",
             "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
@@ -2321,11 +2435,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
         return {
             "code": "DELIVER",
             "kind": "HARNESS_COMMAND",
-            "command": f"python .agents/scripts/workflow.py deliver {identity}",
+            "command": f"python .agents/harness.py task deliver {identity}",
             "blocking": True,
             "reason": "Finalize verified delivery state after git commit.",
             "inputs": {"repo": ".", "task_id": task_id},
-            "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+            "expected": {"success_exit_codes": [0], "success_statuses": ["DELIVERED"]},
         }
 
     if state == "DELIVERED":
@@ -2343,11 +2457,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
         return {
             "code": "RESUME_IMPLEMENTATION",
             "kind": "HARNESS_COMMAND",
-            "command": f"python .agents/scripts/workflow.py resume {identity}",
+            "command": f"python .agents/harness.py task resume {identity}",
             "blocking": True,
             "reason": "Resume after resolving the recorded blocker.",
             "inputs": {"repo": ".", "task_id": task_id},
-            "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+            "expected": {"success_exit_codes": [0], "success_statuses": ["IMPLEMENTING"]},
         }
 
     return {
@@ -2413,6 +2527,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "RUN_UNIT_TESTS": "test",
         "BUILD_REVIEW_PACKAGE": "review-package",
         "DISPATCH_REVIEWERS": "review",
+        "INGEST_REVIEW_RESULT": "review",
         "ASSEMBLE": "assemble",
         "DEVICE_INSTALL": "device",
         "FINAL_VERIFY": "verify",
@@ -2563,6 +2678,8 @@ def build_parser() -> argparse.ArgumentParser:
     command.set_defaults(handler=deliver_task)
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
+    reconcile_cmd = sub.add_parser("reconcile-delivery", parents=[common])
+    reconcile_cmd.set_defaults(handler=cmd_reconcile_delivery)
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     status_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
@@ -2604,6 +2721,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FINDING_VALIDATION_RECORDED={len(result.get('validations', []))}")
     elif args.action == "verify":
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.action == "reconcile-delivery":
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            if result.get("reconciled"):
+                print(f"RECONCILED={result.get('task_id')} -> DELIVERED")
+            else:
+                print(f"TASK_STATUS={result.get('status', 'READY')}")
     elif args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
@@ -2611,7 +2736,7 @@ def main(argv: list[str] | None = None) -> int:
         for item in result.get("next_actions") or []:
             print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")
             print(f"NEXT_REASON={item.get('reason')}")
-    if args.action in ("draft", "revise", "recover-active"):
+    if args.action in ("draft", "revise", "recover-active", "reconcile-delivery"):
         return 0 if result.get("status") not in ("BLOCKED", "STALE", "USER_DECISION_REQUIRED") else 1
     return 0 if result.get("status") not in ("BLOCKED", "STALE", "PLAN_APPROVAL_REQUIRED", "USER_DECISION_REQUIRED") else 1
 

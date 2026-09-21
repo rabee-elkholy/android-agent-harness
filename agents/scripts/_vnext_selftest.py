@@ -787,8 +787,11 @@ class AuthorityAndEvidenceTests(RepoCase):
         plan = create_plan(self.repo, task_id="task-one", requested_outcome="Change A", expected_surfaces=["BUSINESS_LOGIC"])
         plan = approve(plan, source="conversation", proof_reference="message-1", enforcement_tier="RULE_ENFORCED")
         plan = begin(self.repo, plan)
+        self.assertEqual("IMPLEMENTING", begin(self.repo, plan)["status"])
+        plan_corrupt = dict(plan)
+        plan_corrupt["execution_nonce"] = "corrupted_nonce"
         with self.assertRaises(ValidationError):
-            begin(self.repo, plan)
+            begin(self.repo, plan_corrupt)
         self.assertEqual([], check_material_drift(plan, ["BUSINESS_LOGIC"]))
         self.assertEqual(["surface:BILLING"], check_material_drift(plan, ["BUSINESS_LOGIC", "BILLING"]))
 
@@ -1642,7 +1645,7 @@ class EndToEndWorkflowTests(RepoCase):
             **common, source="conversation", proof_reference="test-message",
             enforcement_tier="RULE_ENFORCED",
         ))
-        self.assertEqual("APPROVED", approved["status"])
+        self.assertEqual("IMPLEMENTING", approved["status"])
         self.assertEqual("IMPLEMENTING", begin_task(Namespace(**common))["status"])
         write(self.repo / "app/src/main/kotlin/A.kt", "internal class Changed\n")
         current = prepare_verification(Namespace(**common))
@@ -1945,12 +1948,13 @@ class EndToEndWorkflowTests(RepoCase):
             ))
         self.assertIn("uncommitted changes", str(ctx2.exception).lower())
 
-        task_forced = draft(Namespace(
-            **common_temp, outcome="Task Temp Forced", expected_surfaces="BUSINESS_LOGIC",
-            expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
-            risks="", rollback="Restore", external_write=[], force=True,
-        ))
-        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", task_forced["status"])
+        with self.assertRaises(ValidationError) as ctx_forced:
+            draft(Namespace(
+                **common_temp, outcome="Task Temp Forced", expected_surfaces="BUSINESS_LOGIC",
+                expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+                risks="", rollback="Restore", external_write=[], force=True,
+            ))
+        self.assertIn("uncommitted changes", str(ctx_forced.exception).lower())
 
         run_git(self.repo, "add", ".")
         run_git(self.repo, "commit", "-qm", "commit task 1 files")
@@ -2059,6 +2063,9 @@ class EndToEndWorkflowTests(RepoCase):
         store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
         ready = complete(Namespace(**common))
         self.assertEqual("READY_FOR_DELIVERY", ready["status"])
+
+        run_git(self.repo, "add", "app/src/main/kotlin/Logic.kt")
+        run_git(self.repo, "commit", "-m", "commit logic for test-override-allowed")
 
         task_id_sec = "test-override-forbidden"
         common_sec = {"repo": str(self.repo), "task_id": task_id_sec}

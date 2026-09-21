@@ -11,7 +11,7 @@ This is the authoritative always-loaded contract. Detailed Android guidance is r
 
 - Read-only discussion, explanation, and discovery need no plan. Clarify material ambiguity before drafting. When asked to study scenarios or find edge cases before starting, present and align on them in plain chat first; never invent requirements or swallow edge-case discovery into an unreviewed plan artifact.
 - Code/config writes, deletion, build/install, Git history/index changes, tracker writes, and publication require an explicitly approved plan bound to task, plan hash, repository, branch/worktree, and base snapshot.
-- Presenting a plan, silence, or an unrelated reply is never approval. Record chat approval with `workflow.py approve --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED`, then `workflow.py begin` autonomously. Never ask developer to run manual commands.
+- Silence or an unrelated reply is never approval. Record chat approval with `workflow.py approve --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` (atomically transitions to `IMPLEMENTING`; `begin` is idempotent compat). Never ask developer to run manual shell commands.
 - **6-Tier Dynamic Risk Model**: Review policy assigns RISK_TIER (`T0_TRIVIAL` to `T5_CRITICAL`) as sole runtime authority for risk tier, gates, reviewer roster, device requirement, and skill routing. Execute the policy-resolved roster.
 - **Single-shot Proceed invariant**: Proceed appears only for initial task approval.
 - **Direct follow-up execution**: approved in-scope fixes execute immediately. Do not create a new plan or request Proceed unless behavior, sensitive surface, contract, external write, or blast radius materially expands.
@@ -19,14 +19,13 @@ This is the authoritative always-loaded contract. Detailed Android guidance is r
 - Context notes are administrative, not delivery work: `python .agents/harness.py context note "<note>"`.
 - Commit, push, release, tracker mutation, app uninstall/data clear, downgrade, purchase, and publication are never implicit.
 
-Lifecycle:
+Lifecycle (PLAN → BUILD → VERIFY → SHIP → DONE):
 
 ```text
-INTAKE -> DISCOVERY -> PLAN_DRAFTED -> AWAITING_DEVELOPER_APPROVAL
--> IMPLEMENTING -> VERIFYING -> READY_FOR_DELIVERY | BLOCKED -> DELIVERED
+PLAN (discovery, draft) -> BUILD (implementing) -> VERIFY (gates, reviews, assemble, device) -> SHIP (ready seal, commit, reconcile)
 ```
 
-Use `.agents/harness.py task`/`workflow.py` for state. Query `python .agents/harness.py task status --task-id <id> --next` after every stage for the canonical next action instead of memorizing long sequential stages. Never fabricate approval or evidence. Sensitive final delivery requires a second explicit approval bound to the frozen snapshot.
+Use `.agents/harness.py task`/`workflow.py` for state. Query `python .agents/harness.py task status --task-id <id> --next` after every stage for canonical next action. Never fabricate approval or evidence. Sensitive final delivery requires a second explicit approval bound to the frozen snapshot.
 
 ## 2. Discovery and harness boundary
 
@@ -59,12 +58,12 @@ python .agents/scripts/review_policy.py --repo . --json
 
 - During `IMPLEMENTING`, diagnostic compile/test/assemble is allowed but is not final delivery evidence.
 - During `VERIFYING`, use one frozen change-set and order:
-  1. **Fast Deterministic Preflight** (`preflight.py`/`preflight_check.py`).
+  1. **Fast Deterministic Preflight** (`preflight`).
   2. **Automated Unit Tests** (`run_tests_gate.py`) when selected.
   3. **AI Specialist Reviewers** selected by policy.
   4. **Assemble & Device Verification**.
   5. **Interactive Mobile Walkthrough & Sign-off**.
-  6. **Read-Only Delivery Verification** (`workflow.py verify`, then `complete`).
+  6. **Read-Only Delivery Verification** (`verify`, then `complete`).
 - Final assemble/device requires all routed reviews PASS with zero blocking findings.
 - Review dispatch is automatic after deterministic gates. Use independent reviewer output; self-certification is forbidden for HIGH/CRITICAL or sensitive work. Reviewer failure/timeout/quota is `ENV_BLOCKED`, never PASS. Maximum three rounds.
 - TDD is required for regressions and deterministic behavior with a seam, not for docs/resources. Zero tests cannot satisfy a required test gate.

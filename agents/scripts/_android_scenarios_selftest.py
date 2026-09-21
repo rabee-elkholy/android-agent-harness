@@ -719,7 +719,7 @@ class AndroidScenariosSelftest(unittest.TestCase):
             enforcement_tier="RULE_ENFORCED",
         )
         approved_plan = record_approval(app_args)
-        self.assertEqual("APPROVED", approved_plan.get("status"))
+        self.assertEqual("IMPLEMENTING", approved_plan.get("status"))
 
         begin_args = argparse.Namespace(
             repo=str(self.repo),
@@ -1011,6 +1011,9 @@ class AndroidScenariosSelftest(unittest.TestCase):
             self.assertEqual(EXIT_ENV, code)
 
         # Tampered policy and full evidence verification lifecycle
+        import shutil
+        shutil.rmtree(state / "tasks/TASK-DEV-1", ignore_errors=True)
+        (state / "active-task.json").unlink(missing_ok=True)
         from workflow import draft, record_approval, begin_task, prepare_verification
         task_id = "TASK-DEV-2"
         common = {"repo": str(self.repo), "task_id": task_id}

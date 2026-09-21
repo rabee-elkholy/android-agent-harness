@@ -243,3 +243,29 @@ def validate_repo_path_containment(repo: Path, raw_path: str | Path) -> str:
         raise ValidationError(f"path escapes repository: {raw_path}")
 
     return rel_posix
+
+
+def state_root(repo: Path) -> Path:
+    override = os.environ.get("HARNESS_STATE_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    installed = repo / ".agents" / "state"
+    return installed if (repo / ".agents").is_dir() else repo / "agents" / "state"
+
+
+def active_review_package_path(repo: Path, current_run: dict[str, Any], root: Path | None = None) -> Path:
+    run_id = str(current_run.get("run_id") or "").strip()
+    snapshot = str(current_run.get("delivery_snapshot_sha256") or "").strip()
+    if not snapshot and current_run.get("manifest"):
+        try:
+            m = read_json(Path(current_run["manifest"]))
+            snapshot = str(m.get("delivery_snapshot_sha256") or "").strip()
+        except Exception:
+            pass
+    base = root if root is not None else state_root(repo)
+    canonical = base / "runs" / snapshot / run_id / "review-package.md"
+    if not canonical.is_file() and current_run.get("review_package"):
+        candidate = Path(str(current_run["review_package"]))
+        if candidate.is_file():
+            return candidate
+    return canonical

@@ -42,6 +42,11 @@ class SecurityTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def _reset_active_task(self):
+        import shutil
+        shutil.rmtree(self.repo / "agents/state/tasks", ignore_errors=True)
+        (self.repo / "agents/state/active-task.json").unlink(missing_ok=True)
+
     def engine(self, command: str) -> dict:
         proc = subprocess.run(
             [sys.executable, str(ENGINE)], input=json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": command}}}),
@@ -659,6 +664,7 @@ class SecurityTests(unittest.TestCase):
         from evidence_store import EvidenceStore
 
         task_id = "t-override-sens"
+        self._reset_active_task()
         auth_file = self.repo / "app/src/main/kotlin/com/example/Auth.kt"
         auth_file.parent.mkdir(parents=True, exist_ok=True)
         auth_file.write_text("package com.example\nclass AuthenticationManager { val token = \"\" }\n", encoding="utf-8")
@@ -861,6 +867,7 @@ class SecurityTests(unittest.TestCase):
         from final_verifier import verify
 
         task_id = "t-redgreen"
+        self._reset_active_task()
         fix_file = self.repo / "app/src/main/kotlin/com/example/Fix.kt"
         fix_file.parent.mkdir(parents=True, exist_ok=True)
         fix_file.write_text("package com.example\nfun bugFix() = true\n", encoding="utf-8")
@@ -908,6 +915,7 @@ class SecurityTests(unittest.TestCase):
         from final_verifier import verify
 
         task_id = "t-device-signoff"
+        self._reset_active_task()
         ui_file = self.repo / "app/src/main/kotlin/com/example/Ui.kt"
         ui_file.parent.mkdir(parents=True, exist_ok=True)
         ui_file.write_text("package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun MainView() {}\n", encoding="utf-8")
@@ -1182,6 +1190,7 @@ class SecurityTests(unittest.TestCase):
 
         # Case A: Resolved in GREEN -> PASS
         task_id_a = "t-rg-a"
+        self._reset_active_task()
         draft(argparse.Namespace(
             repo=str(self.repo),
             task_id=task_id_a,
@@ -1243,6 +1252,7 @@ class SecurityTests(unittest.TestCase):
 
         # Case B: Still failing in GREEN (in new_regressions) -> FAIL
         task_id_b = "t-rg-b"
+        self._reset_active_task()
         draft(argparse.Namespace(
             repo=str(self.repo),
             task_id=task_id_b,
@@ -1311,6 +1321,7 @@ class SecurityTests(unittest.TestCase):
         from evidence_store import EvidenceStore
 
         task_id = "t-dev-chain"
+        self._reset_active_task()
         ui_file = self.repo / "app/src/main/kotlin/com/example/UI.kt"
         ui_file.parent.mkdir(parents=True, exist_ok=True)
         ui_file.write_text("package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun MainView() {}\n", encoding="utf-8")
@@ -1382,6 +1393,7 @@ class SecurityTests(unittest.TestCase):
         from _vnext_common import canonical_sha256, read_json
 
         task_id = "t-plan-legacy"
+        self._reset_active_task()
         legacy_file = self.repo / "app/src/main/kotlin/com/example/Legacy.kt"
         legacy_file.parent.mkdir(parents=True, exist_ok=True)
         legacy_file.write_text("package com.example\nclass Legacy {}\n", encoding="utf-8")
@@ -1436,6 +1448,7 @@ class SecurityTests(unittest.TestCase):
         from review_execution import resolve_execution_profile
 
         task_id = "t-brief-resolve"
+        self._reset_active_task()
         code_file = self.repo / "app/src/main/kotlin/com/example/BriefTest.kt"
         code_file.parent.mkdir(parents=True, exist_ok=True)
         code_file.write_text("package com.example\nclass BriefTest {}\n", encoding="utf-8")
@@ -1482,6 +1495,7 @@ class SecurityTests(unittest.TestCase):
         from evidence_store import EvidenceStore
 
         task_id = "t-signoff-prov"
+        self._reset_active_task()
         ui_file = self.repo / "app/src/main/kotlin/com/example/ProvUI.kt"
         ui_file.parent.mkdir(parents=True, exist_ok=True)
         ui_file.write_text("package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun ProvView() {}\n", encoding="utf-8")
@@ -1564,6 +1578,7 @@ class SecurityTests(unittest.TestCase):
 
         # Task 1: GREEN ran only OtherTest (RED target NOT executed) -> FAIL
         task_id_1 = "t-rg-exec-fail"
+        self._reset_active_task()
         draft(argparse.Namespace(
             repo=str(self.repo),
             task_id=task_id_1,
@@ -1626,6 +1641,7 @@ class SecurityTests(unittest.TestCase):
 
         # Task 2: GREEN ran AuthTest.testTokenExpiry -> PASS
         task_id_2 = "t-rg-exec-pass"
+        self._reset_active_task()
         draft(argparse.Namespace(
             repo=str(self.repo),
             task_id=task_id_2,

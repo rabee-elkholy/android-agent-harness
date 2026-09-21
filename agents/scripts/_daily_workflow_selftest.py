@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _product
 from _vnext_common import (
     ValidationError,
+    active_review_package_path,
     atomic_write_json,
     canonical_sha256,
     read_json,
@@ -54,7 +55,7 @@ from evidence_store import EvidenceStore
 from final_verifier import verify_task
 import lifecycle
 from mutation_guard import active_plan
-from plan_authority import plan_payload
+from plan_authority import plan_payload, save_plan
 import record_review
 from record_review import _parse_reviewer_findings, is_blocking_finding
 import review_package
@@ -69,6 +70,7 @@ from workflow import (
     draft,
     normalize_expected_files,
     prepare_verification,
+    reconcile_delivery,
     record_approval,
     record_debug_evidence,
     record_sensitive_approval,
@@ -2177,7 +2179,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         act = resolve_next_action(self.repo, "task-next-001", plan)
         self.assertEqual("RUN_PREFLIGHT", act["code"])
         self.assertEqual("HARNESS_COMMAND", act["kind"])
-        self.assertIn("preflight_check.py", act["command"])
+        self.assertIn("preflight", act["command"])
         self.assertTrue(act["blocking"])
 
     def test_NEXT_002_tests_required_and_missing_resolves_run_unit_tests(self) -> None:
@@ -2192,7 +2194,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         act = resolve_next_action(self.repo, "task-next-002", plan)
         self.assertEqual("RUN_UNIT_TESTS", act["code"])
         self.assertEqual("HARNESS_COMMAND", act["kind"])
-        self.assertIn("run_tests_gate.py", act["command"])
+        self.assertIn("test", act["command"])
 
     def test_NEXT_003_reviewers_required_package_missing_resolves_build_review_package(self) -> None:
         """NEXT-003: When reviewers are required but review-package.md is missing, resolve BUILD_REVIEW_PACKAGE."""
@@ -2206,14 +2208,14 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "unit_tests", "PASS")
 
-        pkg_path = tdir / "runs" / run_id / "review-package.md"
+        pkg_path = active_review_package_path(self.repo, current)
         if pkg_path.is_file():
             pkg_path.unlink()
 
         act = resolve_next_action(self.repo, "task-next-003", plan)
         self.assertEqual("BUILD_REVIEW_PACKAGE", act["code"])
         self.assertEqual("HARNESS_COMMAND", act["kind"])
-        self.assertIn("review_package.py", act["command"])
+        self.assertIn("review package", act["command"])
 
     def test_NEXT_004_reviews_missing_resolves_dispatch_reviewers(self) -> None:
         """NEXT-004: When review package exists but reviews are missing, resolve DISPATCH_REVIEWERS."""
@@ -2226,7 +2228,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "unit_tests", "PASS")
-        pkg_path = tdir / "runs" / run_id / "review-package.md"
+        pkg_path = active_review_package_path(self.repo, current)
         write_file(pkg_path, "# Review Package\n")
 
         act = resolve_next_action(self.repo, "task-next-004", plan)
@@ -2246,13 +2248,13 @@ class NextActionEngineTests(DailyWorkflowSelftest):
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "unit_tests", "PASS")
-        write_file(tdir / "runs" / run_id / "review-package.md", "# Review Package\n")
+        write_file(active_review_package_path(self.repo, current), "# Review Package\n")
         self._record_evidence(manifest, run_id, "reviews", "PASS")
 
         act = resolve_next_action(self.repo, "task-next-005", plan)
         self.assertEqual("ASSEMBLE", act["code"])
         self.assertEqual("HARNESS_COMMAND", act["kind"])
-        self.assertIn("run_gradle_task.py :app:assembleDebug", act["command"])
+        self.assertIn("assemble :app:assembleDebug", act["command"])
 
     def test_NEXT_006_device_required_assemble_pass_device_missing_resolves_device_install(self) -> None:
         """NEXT-006: When assemble passes and device is required, resolve DEVICE_INSTALL."""
@@ -2271,7 +2273,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         act = resolve_next_action(self.repo, "task-next-006", plan)
         self.assertEqual("DEVICE_INSTALL", act["code"])
         self.assertEqual("HARNESS_COMMAND", act["kind"])
-        self.assertIn("run_device.py install-start", act["command"])
+        self.assertIn("device install-start", act["command"])
 
     def test_NEXT_007_sensitive_approval_required_resolves_sensitive_approval(self) -> None:
         """NEXT-007: When sensitive change is ready for final approval, resolve SENSITIVE_APPROVAL."""
@@ -2327,7 +2329,10 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         """ROUTE-CMD-002: Returned commands are authorized under their matching fixture state."""
         plan, _, _, _ = self._setup_verifying_task("route-cmd-002")
         act = resolve_next_action(self.repo, "route-cmd-002", plan)
-        self.assertIn(".agents/scripts/preflight_check.py", act["command"])
+        self.assertIn("preflight", act["command"])
+        from mutation_guard import command_allowed
+        allowed, reason = command_allowed(self.repo, act["command"])
+        self.assertTrue(allowed, f"Guard rejected command: {reason}")
 
     def test_ROUTE_CMD_003_no_missing_script_referenced(self) -> None:
         """ROUTE-CMD-003: No daily command references a missing script in the harness repository."""
@@ -2350,7 +2355,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         cmds.append(resolve_next_action(self.repo, "route-cmd-003", plan)["command"])
         self._record_evidence(manifest, run_id, "unit_tests", "PASS")
         cmds.append(resolve_next_action(self.repo, "route-cmd-003", plan)["command"])
-        write_file(tdir / "runs" / run_id / "review-package.md", "# Pkg\n")
+        write_file(active_review_package_path(self.repo, current), "# Pkg\n")
         self._record_evidence(manifest, run_id, "reviews", "PASS")
         cmds.append(resolve_next_action(self.repo, "route-cmd-003", plan)["command"])
         self._record_evidence(manifest, run_id, "assemble", "PASS")
@@ -2367,14 +2372,15 @@ class NextActionEngineTests(DailyWorkflowSelftest):
                     break
             if py_script:
                 script_name = Path(py_script).name
-                self.assertTrue((KIT / "agents" / "scripts" / script_name).is_file(), f"Missing script: {script_name}")
+                script_path = (KIT / "agents" / script_name) if script_name == "harness.py" else (KIT / "agents" / "scripts" / script_name)
+                self.assertTrue(script_path.is_file(), f"Missing script: {script_name}")
 
     def test_ROUTE_CMD_004_no_stale_flags_in_commands(self) -> None:
         """ROUTE-CMD-004: No command generated uses a stale flag."""
         plan, _, _, _ = self._setup_verifying_task("route-cmd-004")
         act = resolve_next_action(self.repo, "route-cmd-004", plan)
         # Preflight has zero flags
-        self.assertEqual("python .agents/scripts/preflight_check.py", act["command"])
+        self.assertEqual("python .agents/harness.py preflight", act["command"])
 
     def test_ROUTE_CMD_005_no_internal_helper_script_called_directly(self) -> None:
         """ROUTE-CMD-005: No ordinary daily flow requires calling an internal helper script directly."""
@@ -2512,7 +2518,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         plan["status"] = "BLOCKED"
         act = resolve_next_action(self.repo, "route-cmd-013", plan)
         self.assertEqual("RESUME_IMPLEMENTATION", act["code"])
-        self.assertIn("workflow.py resume", act["command"])
+        self.assertIn("task resume", act["command"])
 
 
 class MultiPhaseAndroidTests(DailyWorkflowSelftest):
@@ -3000,6 +3006,596 @@ class ReadmeRedesignTests(unittest.TestCase):
         # Ensure simplified daily workflow is present
         self.assertIn("## What daily use looks like", self.content)
         self.assertIn("task status --task-id <id> --next", self.content)
+
+
+class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
+    """Regression test suite for lifecycle merge and gap closure (Section 27 of spec).
+
+    Covers:
+    - APPROVE-MERGE-001..006
+    - SHIP-001..006
+    - SINGLE-001..004
+    - ROUTER-001..009
+    """
+
+    def _setup_verifying_task_clean(self, task_id: str):
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Verification ready task",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval phrase",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        tdir = task_dir(self.repo, task_id)
+        plan = read_json(tdir / "plan.json")
+        current = read_json(tdir / "current-run.json")
+        policy = read_json(Path(current["policy"]))
+        manifest = read_json(Path(current["manifest"]))
+        return plan, tdir, policy, manifest
+
+    def test_APPROVE_MERGE_001_approval_transitions_to_implementing(self) -> None:
+        """APPROVE-MERGE-001: Valid approval transitions directly to IMPLEMENTING with execution nonce bound."""
+        task_id = "task-am-001"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Feature flow",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", plan.get("status"))
+
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval phrase",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual("IMPLEMENTING", plan.get("status"))
+        self.assertIsNotNone(plan.get("execution_nonce"))
+        self.assertEqual(plan["approval"]["single_use_nonce"], plan["execution_nonce"])
+
+    def test_APPROVE_MERGE_002_baseline_drift_before_approval(self) -> None:
+        """APPROVE-MERGE-002: Baseline drift before approval rejects mutation authority."""
+        task_id = "task-am-002"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Feature flow",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        # Introduce working tree drift before approval
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "// modified\n")
+        with self.assertRaises(ValidationError):
+            record_approval(argparse.Namespace(
+                repo=str(self.repo),
+                task_id=task_id,
+                source="conversation",
+                proof_reference="approval phrase",
+                enforcement_tier="RULE_ENFORCED",
+            ))
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", plan.get("status"))
+        self.assertIsNone(plan.get("execution_nonce"))
+
+    def test_APPROVE_MERGE_003_head_branch_repo_mismatch(self) -> None:
+        """APPROVE-MERGE-003: Repository/HEAD/branch mismatch fails closed."""
+        task_id = "task-am-003"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Feature flow",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        p_path = task_dir(self.repo, task_id) / "plan.json"
+        p_data = read_json(p_path)
+        p_data["repository"]["head"] = "0" * 40
+        p_data["plan_sha256"] = canonical_sha256(p_data)
+        atomic_write_json(p_path, p_data)
+
+        with self.assertRaises(ValidationError):
+            record_approval(argparse.Namespace(
+                repo=str(self.repo),
+                task_id=task_id,
+                source="conversation",
+                proof_reference="approval phrase",
+                enforcement_tier="RULE_ENFORCED",
+            ))
+
+    def test_APPROVE_MERGE_004_legacy_approved_and_begin(self) -> None:
+        """APPROVE-MERGE-004: Legacy APPROVED tasks transition to IMPLEMENTING on begin."""
+        task_id = "task-am-004"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Feature flow",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        import uuid
+        p_path = task_dir(self.repo, task_id) / "plan.json"
+        p_data = read_json(p_path)
+        nonce = uuid.uuid4().hex
+        p_data["status"] = "APPROVED"
+        p_data["approval"] = {
+            "source": "conversation",
+            "enforcement_tier": "RULE_ENFORCED",
+            "proof_reference_sha256": canonical_sha256({"reference": "abc"}),
+            "plan_sha256": p_data["plan_sha256"],
+            "single_use_nonce": nonce,
+        }
+        p_data["execution_nonce"] = None
+        p_data["approved_at"] = utc_now()
+        save_plan(p_path, p_data)
+
+        begun = begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("IMPLEMENTING", begun.get("status"))
+        self.assertEqual(nonce, begun.get("execution_nonce"))
+
+    def test_APPROVE_MERGE_005_implementing_and_begin_idempotent(self) -> None:
+        """APPROVE-MERGE-005: begin is idempotent PASS when status is already IMPLEMENTING."""
+        task_id = "task-am-005"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Feature flow",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval phrase",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        plan1 = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual("IMPLEMENTING", plan1.get("status"))
+        nonce1 = plan1.get("execution_nonce")
+
+        res = begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("IMPLEMENTING", res.get("status"))
+        self.assertEqual(nonce1, res.get("execution_nonce"))
+
+    def test_APPROVE_MERGE_006_repeated_approve_no_nonce_rotation(self) -> None:
+        """APPROVE-MERGE-006: Repeated approval call does not rotate nonce."""
+        task_id = "task-am-006"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Feature flow",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval phrase 1",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        plan1 = read_json(task_dir(self.repo, task_id) / "plan.json")
+        nonce1 = plan1["execution_nonce"]
+
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval phrase 2",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        plan2 = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual(nonce1, plan2["execution_nonce"])
+
+    def test_SHIP_001_complete_sets_ready_for_delivery(self) -> None:
+        """SHIP-001: complete after final verifier PASS persists READY_FOR_DELIVERY."""
+        task_id = "task-ship-001"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        run_id = read_json(tdir / "current-run.json")["run_id"]
+        harness_version = (KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+        store = EvidenceStore(state_root(self.repo))
+        evidence_common = dict(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            harness_version=harness_version,
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+        )
+        for g in policy.get("gates", []):
+            prod = "preflight_check" if g in ("preflight", "localization", "room") else "run_tests_gate"
+            if g == "assemble":
+                prod = "run_gradle_task"
+            store.write(**evidence_common, name=g, producer=prod, evidence={"status": "PASS"})
+        if policy.get("assemble_required") and "assemble" not in policy.get("gates", []):
+            store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+
+        plan_ready = complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("READY_FOR_DELIVERY", plan_ready.get("status"))
+        self.assertIsNotNone(plan_ready.get("ready_delivery_snapshot_sha256"))
+
+    def test_SHIP_002_dirty_verified_files_blocks_delivery(self) -> None:
+        """SHIP-002: Dirty verified files block delivery and automatic reconciliation."""
+        task_id = "task-ship-002"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        p_path = tdir / "plan.json"
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
+        plan["ready_change_set_sha256"] = manifest["change_set_sha256"]
+        save_plan(p_path, plan)
+
+        # Dirty the verified file
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "// uncommitted\n")
+
+        # reconcile_delivery must block
+        _, code = reconcile_delivery(self.repo, task_id)
+        self.assertEqual("DIRTY_UNCOMMITTED", code)
+
+        # deliver without allow_dirty_tree must raise
+        with self.assertRaises(ValidationError):
+            deliver_task(argparse.Namespace(
+                repo=str(self.repo),
+                task_id=task_id,
+                allow_dirty_tree=False,
+                developer_allow_dirty_tree=False,
+                source=None,
+            ))
+
+    def test_SHIP_003_clean_committed_verified_content_reconciles(self) -> None:
+        """SHIP-003: Clean committed verified content reconciles to DELIVERED."""
+        task_id = "task-ship-003"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        p_path = tdir / "plan.json"
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
+        plan["ready_change_set_sha256"] = manifest["change_set_sha256"]
+        save_plan(p_path, plan)
+
+        plan_deliv, code = reconcile_delivery(self.repo, task_id)
+        self.assertEqual("DELIVERED", code)
+        self.assertEqual("DELIVERED", plan_deliv.get("status"))
+        self.assertFalse((state_root(self.repo) / "active-task.json").is_file())
+
+    def test_SHIP_004_source_changed_after_verify_blocks_delivery(self) -> None:
+        """SHIP-004: Source modified after verification triggers snapshot mismatch and blocks delivery."""
+        task_id = "task-ship-004"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        p_path = tdir / "plan.json"
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
+        plan["ready_change_set_sha256"] = manifest["change_set_sha256"]
+        save_plan(p_path, plan)
+
+        # Commit an external change so tree is clean but snapshot differs
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "// committed diff\n")
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "modify after verify")
+
+        _, code = reconcile_delivery(self.repo, task_id)
+        self.assertEqual("SNAPSHOT_MISMATCH", code)
+
+    def test_SHIP_005_deliver_on_delivered_idempotent(self) -> None:
+        """SHIP-005: deliver on DELIVERED returns idempotent PASS."""
+        task_id = "task-ship-005"
+        plan, tdir, _, manifest = self._setup_verifying_task_clean(task_id)
+        p_path = tdir / "plan.json"
+        plan["status"] = "DELIVERED"
+        plan["delivered_at"] = utc_now()
+        save_plan(p_path, plan)
+
+        res = deliver_task(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            allow_dirty_tree=False,
+            developer_allow_dirty_tree=False,
+            source=None,
+        ))
+        self.assertEqual("DELIVERED", res.get("status"))
+
+    def test_SHIP_006_status_and_reminder_zero_mutation(self) -> None:
+        """SHIP-006: Status and read-only hooks never mutate lifecycle state."""
+        task_id = "task-ship-006"
+        plan, tdir, _, manifest = self._setup_verifying_task_clean(task_id)
+        p_path = tdir / "plan.json"
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
+        plan["ready_change_set_sha256"] = manifest["change_set_sha256"]
+        save_plan(p_path, plan)
+
+        from workflow import status as workflow_status
+        workflow_status(argparse.Namespace(repo=str(self.repo), task_id=task_id, next=True))
+        plan_after = read_json(p_path)
+        self.assertEqual("READY_FOR_DELIVERY", plan_after.get("status"))
+
+    def test_SINGLE_001_implementing_rejects_new_draft_force(self) -> None:
+        """SINGLE-001: Live task in IMPLEMENTING rejects unrelated new draft even with --force."""
+        task_id = "task-single-001"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Active task",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval phrase",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        with self.assertRaises(ValidationError) as cm:
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id="task-single-001b",
+                outcome="Conflicting task",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="COMPOSE_UI",
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=True,
+            ))
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
+
+    def test_SINGLE_002_verifying_rejects_new_draft_force(self) -> None:
+        """SINGLE-002: Live task in VERIFYING rejects unrelated new draft even with --force."""
+        task_id = "task-single-002"
+        self._setup_verifying_task_clean(task_id)
+        with self.assertRaises(ValidationError) as cm:
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id="task-single-002b",
+                outcome="Conflicting task",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="COMPOSE_UI",
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=True,
+            ))
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
+
+    def test_SINGLE_003_blocked_rejects_new_draft_force(self) -> None:
+        """SINGLE-003: Live task in BLOCKED rejects unrelated new draft even with --force."""
+        task_id = "task-single-003"
+        plan, tdir, _, _ = self._setup_verifying_task_clean(task_id)
+        plan["status"] = "BLOCKED"
+        save_plan(tdir / "plan.json", plan)
+        with self.assertRaises(ValidationError) as cm:
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id="task-single-003b",
+                outcome="Conflicting task",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="COMPOSE_UI",
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=True,
+            ))
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
+
+    def test_SINGLE_004_awaiting_rejects_unrelated_new_draft(self) -> None:
+        """SINGLE-004: Task in AWAITING_DEVELOPER_APPROVAL raises explicit conflict on unrelated new draft."""
+        task_id = "task-single-004"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Awaiting task",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        with self.assertRaises(ValidationError) as cm:
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id="task-single-004b",
+                outcome="Second awaiting task",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="COMPOSE_UI",
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=False,
+            ))
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
+
+    def test_ROUTER_001_canonical_review_package_path(self) -> None:
+        """ROUTER-001: Review package exists at canonical path; router proceeds without repeated BUILD_REVIEW_PACKAGE."""
+        task_id = "task-router-001"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        current = read_json(tdir / "current-run.json")
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = ["code_review"]
+        atomic_write_json(Path(current["policy"]), policy)
+
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={"status": "PASS"},
+        )
+        write_file(active_review_package_path(self.repo, current), "# Review Package\n")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertNotEqual("BUILD_REVIEW_PACKAGE", act["code"])
+        self.assertEqual("DISPATCH_REVIEWERS", act["code"])
+
+    def test_ROUTER_002_and_003_dispatch_vs_ingest_reviewers(self) -> None:
+        """ROUTER-002 & ROUTER-003: DISPATCH_REVIEWERS is HOST_ACTION, separated from INGEST_REVIEW_RESULT."""
+        task_id = "task-router-002"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        current = read_json(tdir / "current-run.json")
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = ["code_review"]
+        atomic_write_json(Path(current["policy"]), policy)
+
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={"status": "PASS"},
+        )
+        write_file(active_review_package_path(self.repo, current), "# Review Package\n")
+
+        # 1. Before dispatches: DISPATCH_REVIEWERS as HOST_ACTION
+        act_disp = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DISPATCH_REVIEWERS", act_disp["code"])
+        self.assertEqual("HOST_ACTION", act_disp["kind"])
+        self.assertEqual("", act_disp["command"])
+        self.assertIn("code_review", act_disp["reviewers"])
+
+        # 2. Simulate dispatch receipt created by pre-tool safety
+        disp_dir = tdir / "reviewer-dispatches"
+        disp_dir.mkdir(parents=True, exist_ok=True)
+        write_file(disp_dir / "code_review.json", json.dumps({"dispatched": True}))
+
+        # 3. After dispatches: INGEST_REVIEW_RESULT as HARNESS_COMMAND
+        act_ingest = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("INGEST_REVIEW_RESULT", act_ingest["code"])
+        self.assertEqual("HARNESS_COMMAND", act_ingest["kind"])
+        self.assertIn("review ingest", act_ingest["command"])
+
+    def test_ROUTER_004_and_005_configured_flavor_assemble_task(self) -> None:
+        """ROUTER-004 & ROUTER-005: Assemble task derives from configured flavor/variant, not hardcoded :app:assembleDebug."""
+        from _variants import resolve_assemble_task
+        task_flav = resolve_assemble_task(self.repo, flavor="demo")
+        self.assertEqual(":app:assembleDemoDebug", task_flav)
+
+    def test_ROUTER_008_expected_statuses_match_actual_outputs(self) -> None:
+        """ROUTER-008: Expected statuses in next actions declare truthful transitions."""
+        plan, tdir, _, _ = self._setup_verifying_task_clean("task-router-008")
+
+        plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
+        act_app = resolve_next_action(self.repo, "task-router-008", plan)
+        self.assertEqual(["IMPLEMENTING"], act_app["expected"]["success_statuses"])
+
+        plan["status"] = "READY_FOR_DELIVERY"
+        act_del = resolve_next_action(self.repo, "task-router-008", plan)
+        self.assertEqual(["DELIVERED"], act_del["expected"]["success_statuses"])
+
+        plan["status"] = "BLOCKED"
+        act_res = resolve_next_action(self.repo, "task-router-008", plan)
+        self.assertEqual(["IMPLEMENTING"], act_res["expected"]["success_statuses"])
+
+    def test_ROUTER_009_commands_json_matches_actual_parser(self) -> None:
+        """ROUTER-009: commands --json outputs machine-readable catalog matching actual parser."""
+        from _public_commands import get_public_commands
+        cmds = get_public_commands()
+        self.assertGreaterEqual(len(cmds), 30)
+        task_cmds = [c for c in cmds if c["command"].startswith("task ")]
+        self.assertTrue(any(c["command"] == "task approve" for c in task_cmds))
+        self.assertTrue(any(c["command"] == "task begin" for c in task_cmds))
+        self.assertTrue(any(c["command"] == "task reconcile-delivery" for c in task_cmds))
 
 
 if __name__ == "__main__":
