@@ -161,6 +161,16 @@ def record_dispatch_batch(
     if protocol < 2:
         raise ValidationError(f"record_dispatch_batch requires review_protocol_version >= 2, found {protocol}")
 
+    run_host = str(current.get("review_host") or "").strip().lower()
+    if not run_host:
+        raise ValidationError("review_host is missing from V2 current-run")
+
+    requested_host = str(host or "").strip().lower()
+    if requested_host != run_host:
+        raise ValidationError(
+            f"review dispatch host mismatch: run host is '{run_host}', got '{requested_host}'"
+        )
+
     manifest_path = Path(str(current.get("manifest") or ""))
     if not manifest_path.is_file():
         raise ValidationError("active run manifest is missing")
@@ -230,7 +240,7 @@ def record_dispatch_batch(
                 "change_set_sha256": change_set,
                 "review_package_sha256": pkg_sha,
                 "dispatch_nonce": dispatch_nonce,
-                "host": host,
+                "host": run_host,
                 "dispatched_at": utc_now(),
             }
             receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
@@ -383,9 +393,6 @@ def complete_review(
     reviewer: str,
     execution_id: str,
     host: str | None = None,
-    *,
-    _override_text: str | None = None,
-    override_text: str | None = None,
 ) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
     current = read_json(directory / "current-run.json")
@@ -397,15 +404,15 @@ def complete_review(
     required_reviewers = list(policy.get("reviewers") or [])
     review_protocol_version = int(current.get("review_protocol_version") or 1)
 
-    effective_override_text = _override_text if _override_text is not None else override_text
-
-    run_host = str(current.get("review_host") or "antigravity")
+    run_host = str(current.get("review_host") or "").strip().lower()
     if review_protocol_version >= 2:
-        if host is not None and host != run_host:
+        if not run_host:
+            raise ValidationError("review_host is missing from V2 current-run")
+        if host is not None and str(host).strip().lower() != run_host:
             raise ValidationError(f"host cannot change mid-run: run host is '{run_host}', got '{host}'")
         host = run_host
     elif not host:
-        host = run_host
+        host = run_host or "generic"
 
     if reviewer not in required_reviewers:
         raise ValidationError(f"reviewer '{reviewer}' is not in policy required reviewers: {required_reviewers}")
@@ -436,6 +443,11 @@ def complete_review(
                 raise ValidationError("dispatch receipt does not match active task, run, or reviewer")
             if r_data.get("review_package_sha256") != pkg_sha:
                 raise ValidationError("dispatch receipt does not match active review package")
+            if review_protocol_version >= 2:
+                if str(r_data.get("host") or "").strip().lower() != run_host:
+                    raise ValidationError(
+                        "dispatch receipt host does not match active review host"
+                    )
 
         # Idempotency check
         res_file = result_file(directory, run_id, reviewer)
@@ -443,9 +455,11 @@ def complete_review(
             existing_result = read_json(res_file)
             existing_exec = existing_result.get("execution_id")
             if existing_exec == execution_id:
-                if effective_override_text is not None:
+                t_path = resolve_trusted_review_source(run_host, execution_id)
+                if t_path and t_path.is_file():
+                    new_text = _extract_transcript_response(t_path)
                     new_parsed = parse_structured_result(
-                        text=effective_override_text,
+                        text=new_text,
                         expected_task_id=task_id,
                         expected_run_id=run_id,
                         expected_reviewer=reviewer,
@@ -456,16 +470,13 @@ def complete_review(
                 return existing_result.get("result", {})
 
         # Resolve transcript text
-        if effective_override_text is not None:
-            text = effective_override_text
-        else:
-            t_path = resolve_trusted_review_source(host, execution_id)
-            if not t_path or not t_path.is_file():
-                ledger["reviewers"][reviewer]["state"] = REVIEW_ENV_BLOCKED
-                ledger["reviewers"][reviewer]["last_error"] = f"could not locate trusted transcript for {execution_id}"
-                save_ledger(directory, run_id, ledger)
-                raise ValidationError(f"could not locate trusted transcript for subagent '{execution_id}' inside host storage")
-            text = _extract_transcript_response(t_path)
+        t_path = resolve_trusted_review_source(run_host, execution_id)
+        if not t_path or not t_path.is_file():
+            ledger["reviewers"][reviewer]["state"] = REVIEW_ENV_BLOCKED
+            ledger["reviewers"][reviewer]["last_error"] = f"could not locate trusted transcript for {execution_id}"
+            save_ledger(directory, run_id, ledger)
+            raise ValidationError(f"could not locate trusted transcript for subagent '{execution_id}' inside host storage")
+        text = _extract_transcript_response(t_path)
 
         # Parse structured result
         try:

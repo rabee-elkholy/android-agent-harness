@@ -1411,9 +1411,20 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     }
 
     from review_sources import has_trusted_review_source
-    configured_host = getattr(args, "host", None) or os.environ.get("HARNESS_HOST") or "antigravity"
-    configured_host = str(configured_host).strip().lower()
-    review_protocol_version = 2 if has_trusted_review_source(configured_host) else 1
+    explicit_host = (
+        getattr(args, "host", None)
+        or os.environ.get("HARNESS_HOST")
+    )
+
+    configured_host = (
+        str(explicit_host).strip().lower()
+        if explicit_host
+        else "generic"
+    )
+
+    review_protocol_version = (
+        2 if has_trusted_review_source(configured_host) else 1
+    )
 
     current = {
         "task_id": args.task_id,

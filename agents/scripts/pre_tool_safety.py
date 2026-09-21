@@ -344,7 +344,8 @@ def _handle_subagent(name: str, args: dict) -> None:
             return
         try:
             from review_execution import resolve_execution_profile
-            profile = resolve_execution_profile(REPO, str(active["task_id"]), host="antigravity")
+            review_host = str(current.get("review_host") or "").strip().lower()
+            profile = resolve_execution_profile(REPO, str(active["task_id"]), host=review_host)
             reviewer_routes = profile.get("reviewers", {})
         except Exception:
             reviewer_routes = {}
@@ -392,11 +393,12 @@ def _handle_subagent(name: str, args: dict) -> None:
             protocol = int(current.get("review_protocol_version") or 1)
             if protocol >= 2:
                 from review_orchestrator import record_dispatch_batch
+                review_host = str(current.get("review_host") or "").strip().lower()
                 record_dispatch_batch(
                     REPO,
                     task_id,
                     sorted(actual),
-                    host=str(current.get("review_host") or "antigravity"),
+                    host=review_host,
                 )
             else:
                 receipts_dir = state / "tasks" / task_id / "reviewer-dispatches"
