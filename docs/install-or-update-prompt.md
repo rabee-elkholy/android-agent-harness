@@ -1,6 +1,6 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.58`
+> **Kit version**: `v1.0.59`
 
 ---
 Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
@@ -13,10 +13,10 @@ Select:
 - **Clean Install**: no `.agents`
 - **Same-Major Update**: `.harness-setup/ownership-v1.json` major 1
 - **Legacy Replacement**: `.agents` exists without v1 ownership
-`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.58`.
+`<kit-dir>` is `%USERPROFILE%\.android-harness\kit` or `~/.android-harness/kit` at detached `v1.0.59`.
 
 ## Phase 2: Kit bootstrap approval
-`git clone --depth 1 --branch v1.0.58 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
+`git clone --depth 1 --branch v1.0.59 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
 Verify: `git -C <staging-dir> describe --tags --exact-match`
 Verify version: `python <staging-dir>/harness_cli.py version --kit <staging-dir>`
 Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.

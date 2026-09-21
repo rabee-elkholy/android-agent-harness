@@ -137,6 +137,52 @@ def _profile_is_fresh(repo: Path, profile: dict[str, Any]) -> bool:
     return True
 
 
+def package_is_same_or_parent(parent: str, child: str) -> bool:
+    """Return True if parent is identical to or an ancestor package of child."""
+    p_parts = [p for p in parent.strip().strip(".").split(".") if p]
+    c_parts = [p for p in child.strip().strip(".").split(".") if p]
+    if len(p_parts) > len(c_parts):
+        return False
+    return c_parts[:len(p_parts)] == p_parts
+
+
+def path_scope_is_same_or_parent(parent_path: str, child_path: str) -> bool:
+    """Return True if parent_path is identical to or an ancestor directory of child_path."""
+    norm_parent = parent_path.strip().replace("\\", "/").strip("/")
+    norm_child = child_path.strip().replace("\\", "/").strip("/")
+    p_parts = [p for p in norm_parent.split("/") if p]
+    c_parts = [p for p in norm_child.split("/") if p]
+    if len(p_parts) > len(c_parts):
+        return False
+    return c_parts[:len(p_parts)] == p_parts
+
+
+def _scope_matches_node(profile: dict[str, Any], node: GraphNode, node_source_set: str) -> bool:
+    if profile.get("module") != node.module or profile.get("source_set") != node_source_set:
+        return False
+    paths = profile.get("paths") or []
+    if node.file_path in paths:
+        return True
+    logical_scope = str(profile.get("logical_scope") or "").strip()
+    if not logical_scope:
+        return False
+    if node.package and package_is_same_or_parent(logical_scope, node.package):
+        return True
+    scope_path = logical_scope.replace(".", "/")
+    if path_scope_is_same_or_parent(scope_path, node.file_path):
+        return True
+    node_dir = Path(node.file_path).parent.as_posix()
+    if path_scope_is_same_or_parent(scope_path, node_dir):
+        return True
+    file_parts = Path(node.file_path).as_posix().split("/")
+    scope_parts = [p for p in scope_path.strip("/").split("/") if p]
+    if scope_parts and len(file_parts) >= len(scope_parts):
+        for idx in range(len(file_parts) - len(scope_parts) + 1):
+            if file_parts[idx:idx + len(scope_parts)] == scope_parts:
+                return True
+    return False
+
+
 def _matching_profiles(repo: Path, payload: dict[str, Any], node: GraphNode) -> tuple[list[dict[str, Any]], bool]:
     valid, _ = validate_advisory_knowledge(payload)
     if not valid:
@@ -146,13 +192,7 @@ def _matching_profiles(repo: Path, payload: dict[str, Any], node: GraphNode) -> 
     fresh: list[dict[str, Any]] = []
     stale_seen = False
     for profile in advisory.get("local_profiles") or []:
-        paths = profile.get("paths") or []
-        same_identity = (
-            profile.get("module") == node.module
-            and profile.get("source_set") == node_source_set
-            and (node.file_path in paths or str(profile.get("logical_scope") or "").replace(".", "/") in node.file_path)
-        )
-        if not same_identity:
+        if not _scope_matches_node(profile, node, node_source_set):
             continue
         if _profile_is_fresh(repo, profile):
             fresh.append(profile)
@@ -181,6 +221,76 @@ def _active_contract(repo: Path) -> dict[str, Any] | None:
         return contract
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
+
+
+def _load_developer_instructions(repo: Path) -> list[dict[str, Any]]:
+    path = repo / ".agents" / "project-context" / "developer-instructions.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("instructions"), list):
+            return data["instructions"]
+        return []
+    except Exception:
+        return []
+
+
+def _instruction_matches_node(
+    inst: dict[str, Any],
+    node: GraphNode,
+    node_source_set: str,
+    profiles: list[dict[str, Any]],
+) -> bool:
+    if inst.get("status") != "ACTIVE":
+        return False
+    scope = inst.get("scope") or {}
+    kind = str(scope.get("kind") or "GLOBAL").upper()
+    val = str(scope.get("value") or "").strip()
+
+    if kind == "GLOBAL" or val == "*":
+        return True
+    if kind == "MODULE":
+        mod_norm = val if val.startswith(":") else f":{val}"
+        return node.module == mod_norm or node.module == val
+    if kind == "SOURCE_SET":
+        return node_source_set.lower() == val.lower()
+    if kind == "PACKAGE":
+        return bool(node.package and package_is_same_or_parent(val, node.package))
+    if kind == "PATH":
+        return bool(path_scope_is_same_or_parent(val, node.file_path))
+    if kind == "FEATURE":
+        file_parts = Path(node.file_path).as_posix().split("/")
+        return val in file_parts or any(val in str(p.get("logical_scope") or "") for p in profiles)
+    if kind == "ARCH_FAMILY":
+        return any(str(p.get("family_id")) == val for p in profiles)
+    return False
+
+
+def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | None:
+    for i in range(len(instructions)):
+        for j in range(i + 1, len(instructions)):
+            i1 = instructions[i]
+            i2 = instructions[j]
+            s1 = i1.get("scope") or {}
+            s2 = i2.get("scope") or {}
+            if s1.get("kind") == s2.get("kind") and s1.get("value") == s2.get("value"):
+                t1 = i1.get("text", "").lower()
+                t2 = i2.get("text", "").lower()
+                negatives = ("never", "do not", "must not", "don't", "avoid", "no ")
+                positives = ("always", "must use", "require", "mandatory", "use ")
+                has_neg_1 = any(n in t1 for n in negatives)
+                has_pos_1 = any(p in t1 for p in positives)
+                has_neg_2 = any(n in t2 for n in negatives)
+                has_pos_2 = any(p in t2 for p in positives)
+                if (has_neg_1 and has_pos_2) or (has_pos_1 and has_neg_2):
+                    return f"Conflicting developer instructions '{i1.get('id')}' and '{i2.get('id')}' in same scope {s1.get('kind')}:{s1.get('value')}."
+                if i1.get("strength") == "REQUIREMENT" and i2.get("strength") == "REQUIREMENT" and t1 != t2:
+                    if ("mvi" in t1 and "mvvm" in t2) or ("mvvm" in t1 and "mvi" in t2):
+                        return f"Conflicting developer architecture instructions '{i1.get('id')}' and '{i2.get('id')}' in scope {s1.get('kind')}:{s1.get('value')}."
+                    if i1.get("conflict_with") == i2.get("id") or i2.get("conflict_with") == i1.get("id"):
+                        return f"Explicitly conflicting instructions '{i1.get('id')}' and '{i2.get('id')}'."
+    return None
 
 
 def resolve_task_context(
@@ -229,11 +339,44 @@ def resolve_task_context(
         dependent_ids.update(engine.graph.get_sources(node_id))
     dependencies = [engine.graph.nodes[item] for item in dependency_ids if item in engine.graph.nodes and item not in target_ids]
     dependents = [engine.graph.nodes[item] for item in dependent_ids if item in engine.graph.nodes and item not in target_ids]
-    tests = [
+    # Bounded test discovery
+    all_test_nodes = [
         node for node in engine.graph.nodes.values()
         if _source_set(node.file_path).lower().startswith(("test", "androidtest"))
-        and any(target.name in (_safe_read(root / node.file_path)) for target in target_nodes)
     ]
+    target_names = {node.name for node in target_nodes}
+    target_stems = {Path(node.file_path).stem for node in target_nodes}
+    target_module = primary.module
+    target_package = primary.package
+
+    scored_candidates: list[tuple[int, GraphNode]] = []
+    for test_node in all_test_nodes:
+        score = 0
+        if test_node.id in dependent_ids or test_node.id in dependency_ids:
+            score += 100
+        test_stem = Path(test_node.file_path).stem
+        if any(t_name.lower() in test_node.name.lower() for t_name in target_names) or any(t_stem.lower() in test_stem.lower() for t_stem in target_stems):
+            score += 50
+        if test_node.module == target_module:
+            score += 20
+        if target_package and test_node.package and package_is_same_or_parent(target_package, test_node.package):
+            score += 10
+        if score > 0:
+            scored_candidates.append((score, test_node))
+
+    scored_candidates.sort(key=lambda item: (-item[0], item[1].file_path))
+    test_candidates = [item[1] for item in scored_candidates]
+    if not test_candidates:
+        test_candidates = [n for n in all_test_nodes if n.module == target_module]
+
+    MAX_OPEN_FILES = 30
+    files_to_open = test_candidates[:MAX_OPEN_FILES]
+    files_opened = len(files_to_open)
+    tests = [
+        node for node in files_to_open
+        if any(target.name in (_safe_read(root / node.file_path)) for target in target_nodes)
+    ]
+    test_discovery_status = "BOUNDED_COMPLETE" if len(test_candidates) <= MAX_OPEN_FILES else "PARTIAL"
 
     facts_payload = _load_facts(root)
     profiles, stale_seen = _matching_profiles(root, facts_payload, primary)
@@ -245,16 +388,109 @@ def resolve_task_context(
         if source_family and local_family_ids and source_family not in local_family_ids:
             conflicts.append("Live local profile disagrees with the approved source architecture family.")
 
-    result_status = "CONTEXT_CONFLICT_WITH_APPROVED_CONTRACT" if conflicts else "ADVISORY_STALE_FALLBACK_USED" if stale_seen else "RESOLVED"
+    # Load and match developer instructions
+    all_instructions = _load_developer_instructions(root)
+    matched_instructions = [
+        inst for inst in all_instructions
+        if _instruction_matches_node(inst, primary, _source_set(primary.file_path), profiles)
+    ]
+    inst_conflict = _detect_instruction_conflict(matched_instructions)
+    if inst_conflict:
+        conflicts.append(inst_conflict)
+
+    if inst_conflict:
+        result_status = "DEVELOPER_INSTRUCTION_CONFLICT"
+    elif conflicts:
+        result_status = "CONTEXT_CONFLICT_WITH_APPROVED_CONTRACT"
+    elif stale_seen:
+        result_status = "ADVISORY_STALE_FALLBACK_USED"
+    else:
+        result_status = "RESOLVED"
+
+    target_surfaces: list[str] = []
+    try:
+        from change_classifier import classify
+        cl = classify(root, task_changes=[{"path": primary.file_path}])
+        target_surfaces = list(cl.get("surfaces") or [])
+    except Exception:
+        target_surfaces = []
+
+    graph_fp = str(sync.get("graph_fingerprint") or getattr(engine, "graph_fingerprint", "") or "")
+    graph_basis = {
+        "used": True,
+        "sync_mode": "incremental" if not sync.get("forced_full") else "full",
+        "graph_fingerprint": graph_fp,
+        "target_node_ids": sorted(target_ids),
+        "dependency_nodes_considered": len(dependencies),
+        "dependent_nodes_considered": len(dependents),
+    }
+
+    participating_modules = sorted({n.module for n in target_nodes + dependencies + dependents if n.module})
+    is_public_contract = any("interface" in (n.type or "").lower() or "contract" in (n.name or "").lower() for n in target_nodes)
+    dependents_truncated = len(dependents) > bounded_limit
+    dependencies_truncated = len(dependencies) > bounded_limit
+
+    graph_expansion_required = bool(
+        dependents_truncated
+        or (len(participating_modules) > 1 and is_public_contract)
+    )
+    expansion_action = None
+    if graph_expansion_required:
+        target_rep = primary.name or Path(primary.file_path).stem
+        expansion_action = {
+            "code": "RUN_PROJECT_GRAPH",
+            "kind": "HARNESS_COMMAND",
+            "command": f"python .agents/harness.py graph --find {target_rep} --json",
+        }
+
+    res_modules = sorted(participating_modules)
+    res_paths = sorted({primary.file_path} | {node.file_path for node in dependencies + dependents + tests})
+    res_symbols = sorted({node.name for node in target_nodes + dependencies[:10] + dependents[:10]})
+    receipt = None
+    try:
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        receipt = create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT",
+            query_kind="file" if file else "symbol",
+            query_value=query,
+            graph_fingerprint=graph_fp,
+            resolved_modules=res_modules,
+            resolved_paths=res_paths,
+            resolved_symbols=res_symbols,
+        )
+        save_discovery_receipt(root, receipt)
+    except Exception:
+        pass
+
     base.update({
         "status": result_status,
+        "graph_basis": graph_basis,
+        "graph_expansion_required": graph_expansion_required,
         "target": {
             "path": primary.file_path,
             "module": primary.module,
             "source_set": _source_set(primary.file_path),
             "package": primary.package,
+            "candidate_surfaces": target_surfaces,
             "symbols": sorted({node.name for node in target_nodes}),
             "nodes": _candidate_summaries(target_nodes),
+        },
+        "developer_instructions": [
+            {
+                "id": inst["id"],
+                "text": inst["text"],
+                "scope": inst.get("scope", {}),
+                "strength": inst.get("strength", "REQUIREMENT"),
+                "applies_to": inst.get("applies_to", ["ANY"]),
+                "sha256": inst.get("sha256", ""),
+                "status": inst.get("status", "ACTIVE"),
+            }
+            for inst in matched_instructions
+        ],
+        "test_discovery": {
+            "candidate_files": len(test_candidates),
+            "files_opened": files_opened,
+            "status": test_discovery_status,
         },
         "local_profiles": profiles,
         "architecture_contract": contract or {},
@@ -266,18 +502,51 @@ def resolve_task_context(
         "confidence": profiles[0].get("confidence", "UNKNOWN") if profiles else "UNKNOWN",
         "warnings": base["warnings"] + conflicts + (["Cached advisory evidence was stale; live graph/source context was used."] if stale_seen else []),
     })
+    if receipt:
+        base["discovery"] = receipt
+    if expansion_action:
+        base["recommended_action"] = expansion_action
     if result_status in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
         target_path = primary.file_path
-        if target_path and (repo / target_path).is_file():
+        if target_path and (root / target_path).is_file():
             try:
                 import time
                 from _vnext_common import atomic_write_json
-                cache_dir = repo / ".agents" / "cache"
+                id_material = f"{root.as_posix()}:{primary.file_path}:{primary.module}:{_source_set(primary.file_path)}:{query}"
+                context_id = f"ctx-{hashlib.sha256(id_material.encode('utf-8')).hexdigest()[:16]}"
+                base["context_id"] = context_id
+
+                cache_dir = root / ".agents" / "cache" / "task-context"
                 cache_dir.mkdir(parents=True, exist_ok=True)
-                atomic_write_json(cache_dir / "last-task-context.json", {
-                    "file": target_path,
-                    "timestamp": time.time(),
-                })
+
+                now = time.time()
+                for cf in cache_dir.glob("ctx-*.json"):
+                    try:
+                        if now - cf.stat().st_mtime > 1800:
+                            cf.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                remaining = sorted(cache_dir.glob("ctx-*.json"), key=lambda p: p.stat().st_mtime)
+                if len(remaining) > 50:
+                    for old_p in remaining[:-50]:
+                        try:
+                            old_p.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+
+                cache_entry = {
+                    "context_id": context_id,
+                    "repo_path": root.as_posix(),
+                    "target_file": primary.file_path,
+                    "module": primary.module,
+                    "source_set": _source_set(primary.file_path),
+                    "query": query,
+                    "timestamp": now,
+                    "status": result_status,
+                    "candidate_surfaces": target_surfaces,
+                    "developer_instructions": base.get("developer_instructions", []),
+                }
+                atomic_write_json(cache_dir / f"{context_id}.json", cache_entry)
             except Exception:
                 pass
     return base
@@ -312,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Module/source set: {target_info.get('module')} / {target_info.get('source_set')}")
         for warning in result.get("warnings") or []:
             print(f"  Warning: {warning}")
-    return 0 if result["status"] in {"RESOLVED", "AMBIGUOUS", "ADVISORY_STALE_FALLBACK_USED", "CONTEXT_CONFLICT_WITH_APPROVED_CONTRACT"} else 1
+    return 0 if result["status"] in {"RESOLVED", "AMBIGUOUS", "ADVISORY_STALE_FALLBACK_USED"} else 1
 
 
 if __name__ == "__main__":

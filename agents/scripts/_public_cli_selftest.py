@@ -723,7 +723,7 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         self.assertIn("UI_VERIFICATION_CLASS=", proc_plain.stdout)
 
     def test_p1_b3_adaptive_project_graph(self) -> None:
-        """P1-B3: pre_tool_safety permits direct targeted searches without project graph."""
+        """P1-B3: pre_tool_safety enforces Graph-first discovery; search before discovery receipt is denied."""
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
 
         def _invoke_hook(tool_name: str, tool_args: dict) -> dict:
@@ -739,27 +739,48 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
             self.assertEqual(0, proc.returncode, proc.stderr)
             return json.loads(proc.stdout.strip())
 
-        # 1. Exact file pattern search via find_by_name -> allowed
+        # 1. Unanchored search before discovery receipt -> denied (DISCOVERY_ANCHOR_REQUIRED)
         res1 = _invoke_hook("find_by_name", {"SearchDirectory": ".", "Pattern": "ProfileViewModel.kt"})
-        self.assertEqual("allow", res1["decision"])
+        self.assertEqual("deny", res1["decision"])
+        self.assertIn("DISCOVERY_ANCHOR_REQUIRED", res1["reason"])
 
-        # 2. Exact file path search via grep_search -> allowed
-        res2 = _invoke_hook("grep_search", {"SearchPath": "app/src/main/kotlin/ProfileViewModel.kt", "Query": "validateAge"})
-        self.assertEqual("allow", res2["decision"])
+        # 2. Directory search before discovery receipt -> denied (DISCOVERY_ANCHOR_REQUIRED)
+        res2 = _invoke_hook("grep_search", {"SearchPath": "app/src/main/kotlin/feature/profile", "Query": "validateAge"})
+        self.assertEqual("deny", res2["decision"])
+        self.assertIn("DISCOVERY_ANCHOR_REQUIRED", res2["reason"])
 
-        # 3. Exact feature directory search via grep_search -> allowed
-        res3 = _invoke_hook("grep_search", {"SearchPath": "app/src/main/kotlin/feature/profile", "Query": "validateAge"})
-        self.assertEqual("allow", res3["decision"])
+        # 3. Unanchored repository-wide grep without graph -> denied (DISCOVERY_ANCHOR_REQUIRED)
+        res3 = _invoke_hook("grep_search", {"SearchPath": ".", "Query": "validateAge"})
+        self.assertEqual("deny", res3["decision"])
+        self.assertIn("DISCOVERY_ANCHOR_REQUIRED", res3["reason"])
 
-        # 4. Unanchored repository-wide grep without graph -> denied (GRAPH_FIRST_REQUIRED)
-        res4 = _invoke_hook("grep_search", {"SearchPath": ".", "Query": "validateAge"})
-        self.assertEqual("deny", res4["decision"])
-        self.assertIn("project_graph.py", res4["reason"])
+        # 4. Now record a valid discovery receipt for feature profile
+        prof_file = self.repo / "app" / "src" / "main" / "kotlin" / "feature" / "profile" / "ProfileViewModel.kt"
+        prof_file.parent.mkdir(parents=True, exist_ok=True)
+        prof_file.write_text("package feature.profile\nclass ProfileViewModel\n", encoding="utf-8")
 
-        # 5. Unanchored repository-wide wildcard find without graph -> denied
-        res5 = _invoke_hook("find_by_name", {"SearchDirectory": ".", "Pattern": "*.kt"})
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        receipt = create_discovery_receipt(
+            mode="FEATURE_GRAPH",
+            query_kind="feature",
+            query_value="profile",
+            graph_fingerprint="fp123",
+            resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/feature/profile/ProfileViewModel.kt"],
+            resolved_symbols=["ProfileViewModel"],
+            allowed_search_roots=["app/src/main/kotlin/feature/profile"],
+            created_at="2026-09-21T00:00:00Z",
+        )
+        save_discovery_receipt(self.repo, receipt)
+
+        # 5. Search inside discovered scope -> allowed
+        res4 = _invoke_hook("grep_search", {"SearchPath": "app/src/main/kotlin/feature/profile", "Query": "validateAge"})
+        self.assertEqual("allow", res4["decision"])
+
+        # 6. Search outside discovered scope -> denied (DISCOVERY_SCOPE_EXPANSION_REQUIRED)
+        res5 = _invoke_hook("grep_search", {"SearchPath": "app/src/main/kotlin/feature/payments", "Query": "processPayment"})
         self.assertEqual("deny", res5["decision"])
-        self.assertIn("project_graph.py", res5["reason"])
+        self.assertIn("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res5["reason"])
 
     def test_p1_b4_multi_phase_threshold(self) -> None:
         """P1-B4: Clean Architecture multi-file features stay single-phase; multi-module/migration requires phases."""

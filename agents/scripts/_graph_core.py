@@ -1274,6 +1274,11 @@ class GraphEngine:
         self.file_to_node_ids: dict[str, list[str]] = {}
         self.healed_log: list[str] = []
 
+    @property
+    def graph_fingerprint(self) -> str:
+        material = "".join(f"{k}:{v};" for k, v in sorted(self.file_hashes.items()))
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16] if material else "empty_graph"
+
     def compute_file_hash(self, path: Path) -> str:
         try:
             content = path.read_bytes()
@@ -1512,6 +1517,7 @@ class GraphEngine:
             "total_nodes": len(self.graph.nodes),
             "total_edges": len(self.graph.edges),
             "healed": len(self.healed_log),
+            "graph_fingerprint": self.graph_fingerprint,
         }
 
     def heal_symbol(self, query: str) -> tuple[GraphNode | None, str | None]:

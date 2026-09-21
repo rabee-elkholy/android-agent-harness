@@ -598,7 +598,8 @@ class ContractV42Tests(unittest.TestCase):
         self.assertIn("--planning-depth BOUNDED", remediation_cmd)
 
         tokens = shlex.split(remediation_cmd.replace("\\\n", " "))
-        cmd_args = tokens[tokens.index("draft"):]
+        cmd_action = "revise" if "revise" in tokens else "draft"
+        cmd_args = tokens[tokens.index(cmd_action):]
         parsed_remediation = parser.parse_args(cmd_args)
         self.assertEqual("TASK-CONTRACT-04", parsed_remediation.task_id)
         self.assertEqual("BOUNDED", parsed_remediation.planning_depth)

@@ -685,6 +685,17 @@ class HarnessDoctor:
         else:
             self.log(category, "Project Context Hygiene", "PASS", "Zero absolute paths or credentials in project-facts.json.")
 
+        inst_file = context_dir / "developer-instructions.json"
+        if inst_file.is_file():
+            try:
+                inst_data = json.loads(inst_file.read_text(encoding="utf-8"))
+                if not isinstance(inst_data, dict) or "instructions" not in inst_data or not isinstance(inst_data["instructions"], list):
+                    self.log(category, "Developer Instructions", "FAIL", "developer-instructions.json must contain a root dictionary with 'instructions' list.")
+                else:
+                    self.log(category, "Developer Instructions", "PASS", f"Valid developer instruction store ({len(inst_data['instructions'])} instruction(s)).")
+            except Exception as exc:
+                self.log(category, "Developer Instructions", "FAIL", f"Invalid JSON in developer-instructions.json: {exc}")
+
         try:
             sys.path.insert(0, str(self.agents_dir / "scripts"))
             from project_context import validate_advisory_knowledge

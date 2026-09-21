@@ -211,6 +211,124 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_instruct(args: argparse.Namespace) -> int:
+    import hashlib
+    import time
+    repo = Path(args.repo).resolve()
+    context_dir = repo / ".agents" / "project-context"
+    inst_file = context_dir / "developer-instructions.json"
+    if not context_dir.is_dir():
+        context_dir.mkdir(parents=True, exist_ok=True)
+
+    text = (getattr(args, "instruction", None) or getattr(args, "text", None) or "").strip()
+    if not text:
+        print("[ERROR] Instruction text cannot be empty.", file=sys.stderr)
+        return 1
+
+    source = getattr(args, "source", None)
+    proof_ref = getattr(args, "proof_reference", None)
+    if not source or source not in ("conversation", "developer_terminal", "host_native"):
+        print("[ERROR] Mandatory --source must be one of: conversation, developer_terminal, host_native.", file=sys.stderr)
+        return 1
+    if not proof_ref or not str(proof_ref).strip():
+        print("[ERROR] Mandatory --proof-reference cannot be empty.", file=sys.stderr)
+        return 1
+
+    raw_scope = (getattr(args, "scope", None) or "GLOBAL").strip()
+    scope_val_arg = getattr(args, "scope_value", None)
+    if scope_val_arg:
+        scope_kind = raw_scope
+        scope_val = str(scope_val_arg).strip()
+    elif "::" in raw_scope:
+        scope_kind, scope_val = raw_scope.split("::", 1)
+    elif ":" in raw_scope and not raw_scope.startswith(":"):
+        scope_kind, scope_val = raw_scope.split(":", 1)
+    elif raw_scope.startswith(":"):
+        scope_kind = "MODULE"
+        scope_val = raw_scope
+    elif raw_scope.upper() in ("GLOBAL", "*"):
+        scope_kind = "GLOBAL"
+        scope_val = "*"
+    elif raw_scope.upper() in ("MODULE", "PACKAGE", "FEATURE", "SOURCE_SET", "ARCH_FAMILY", "PATH"):
+        scope_kind = raw_scope.upper()
+        scope_val = "*"
+    else:
+        scope_kind = "GLOBAL"
+        scope_val = raw_scope
+
+    scope_kind = scope_kind.upper()
+    if scope_kind == "MODULE" and scope_val != "*" and not scope_val.startswith(":"):
+        scope_val = f":{scope_val}"
+
+    if scope_kind not in ("GLOBAL", "MODULE", "SOURCE_SET", "PACKAGE", "FEATURE", "ARCH_FAMILY", "PATH"):
+        print(f"[ERROR] Unsupported scope kind: {scope_kind}", file=sys.stderr)
+        return 1
+
+    strength = (getattr(args, "strength", None) or "REQUIREMENT").strip().upper()
+    if strength not in ("REQUIREMENT", "PREFERENCE"):
+        strength = "REQUIREMENT"
+
+    applies_to_raw = getattr(args, "applies_to", None) or "ANY"
+    if isinstance(applies_to_raw, str):
+        applies_to = [s.strip().upper() for s in applies_to_raw.split(",") if s.strip()]
+    else:
+        applies_to = list(applies_to_raw)
+    if not applies_to:
+        applies_to = ["ANY"]
+
+    supersedes_id = getattr(args, "supersedes", None)
+
+    existing_store: dict[str, Any] = {"schema_version": 1, "instructions": []}
+    if inst_file.is_file():
+        try:
+            loaded = json.loads(inst_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
+                existing_store = loaded
+        except Exception:
+            pass
+
+    if supersedes_id:
+        for old_inst in existing_store["instructions"]:
+            if old_inst.get("id") == supersedes_id:
+                old_inst["status"] = "SUPERSEDED"
+
+    content_material = f"{scope_kind}:{scope_val}:{strength}:{','.join(sorted(applies_to))}:{text}"
+    content_sha = hashlib.sha256(content_material.encode("utf-8")).hexdigest()
+    inst_id = f"pi-{content_sha[:8]}"
+    proof_sha = hashlib.sha256(str(proof_ref).encode("utf-8")).hexdigest()
+
+    new_inst = {
+        "id": inst_id,
+        "text": text,
+        "scope": {
+            "kind": scope_kind,
+            "value": scope_val,
+        },
+        "applies_to": applies_to,
+        "strength": strength,
+        "source": source,
+        "proof_reference": str(proof_ref),
+        "proof_reference_sha256": proof_sha,
+        "sha256": content_sha,
+        "created_at": time.time(),
+        "status": "ACTIVE",
+    }
+
+    instructions = [i for i in existing_store["instructions"] if i.get("id") != inst_id]
+    instructions.append(new_inst)
+    existing_store["instructions"] = instructions
+
+    from _vnext_common import atomic_write_json
+    atomic_write_json(inst_file, existing_store)
+
+    ret_payload = {"status": "PASS", "id": inst_id, "instruction": new_inst, "path": str(inst_file)}
+    if getattr(args, "json", False):
+        print(json.dumps(ret_payload, ensure_ascii=False))
+    else:
+        print(f"[INSTRUCT] Recorded persistent instruction '{inst_id}' for scope {scope_kind}:{scope_val}")
+    return ret_payload
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -239,6 +357,19 @@ def main(argv: list[str] | None = None) -> int:
     p_note.add_argument("--repo", default=".")
     p_note.add_argument("--json", action="store_true")
 
+    p_inst = sub.add_parser("instruct")
+    p_inst.add_argument("text", nargs="?", default="", help="Instruction text")
+    p_inst.add_argument("--instruction", default="", help="Instruction text")
+    p_inst.add_argument("--scope", default="GLOBAL", help="Instruction scope (e.g. module::payments, package:com.example, global)")
+    p_inst.add_argument("--scope-value", default=None, help="Instruction scope value")
+    p_inst.add_argument("--source", choices=("conversation", "developer_terminal", "host_native"), default=None, help="Explicit developer authority source")
+    p_inst.add_argument("--proof-reference", default="", help="Message or command reference proving developer request")
+    p_inst.add_argument("--strength", choices=("REQUIREMENT", "PREFERENCE"), default="REQUIREMENT")
+    p_inst.add_argument("--applies-to", default="ANY", help="Comma-separated applicable intents (ANY, PRESERVE, NEW, REFACTOR, MIGRATION)")
+    p_inst.add_argument("--supersedes", default=None, help="Prior instruction ID to supersede")
+    p_inst.add_argument("--repo", default=".")
+    p_inst.add_argument("--json", action="store_true")
+
     args = parser.parse_args(argv)
     if args.command == "preview":
         return cmd_preview(args)
@@ -250,6 +381,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_refresh(args)
     if args.command == "note":
         return cmd_note(args)
+    if args.command == "instruct":
+        ret = cmd_instruct(args)
+        return 0 if (isinstance(ret, dict) and ret.get("status") == "PASS") or ret == 0 else 1
     return 1
 
 

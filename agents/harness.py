@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|task|doctor|preflight|test|assemble|review|device|verify|version> [args...]"
+            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|device|verify|version> [args...]"
         )
         return 0
 
@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         return _run("generate_project_context.py", [args[0], "--repo", str(REPO_ROOT), *args[1:]])
     if command == "task-context":
         return _run("task_context.py", ["--repo", str(REPO_ROOT), *args])
+    if command == "graph":
+        forwarded = list(args)
+        if "--repo" not in forwarded:
+            forwarded.extend(["--repo", str(REPO_ROOT)])
+        return _run("project_graph.py", forwarded)
     if command == "task":
         forwarded = list(args)
         if "--repo" not in forwarded:

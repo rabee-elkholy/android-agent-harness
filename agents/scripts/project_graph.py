@@ -72,6 +72,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--render", choices=("svg", "png"), help="Render image using system Graphviz CLI (dot)")
     parser.add_argument("--output", metavar="PATH", help="Write output to a specified file")
     parser.add_argument("--sync", action="store_true", help="Force full cache resynchronization")
+    parser.add_argument("--repo", default=None, help="Android/KMP project root (default: auto-discover)")
+    parser.add_argument("--json", action="store_true", help="Output machine-readable JSON (alias for --format json)")
     parser.add_argument("--stats", action="store_true", help="Display graph cache statistics")
     return parser.parse_args(argv)
 
@@ -79,15 +81,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
     args = parse_args(argv)
+    if args.json:
+        args.format = "json"
+    is_json = (args.format == "json")
 
-    engine = GraphEngine(REPO)
+    repo_root = Path(args.repo).resolve() if args.repo else REPO
+    engine = GraphEngine(repo_root)
     if args.sync:
-        live_print("[*] Rebuilding complete universal code graph from disk...", err=False)
+        live_print("[*] Rebuilding complete universal code graph from disk...", err=is_json)
     sync_res = engine.sync(force_full=args.sync)
     if sync_res.get("added") or sync_res.get("modified") or sync_res.get("deleted"):
         live_print(
             f"[*] Incremental code graph sync: +{sync_res['added']} added, ~{sync_res['modified']} modified, -{sync_res['deleted']} deleted files.",
-            err=False,
+            err=is_json,
         )
 
     if args.stats:
@@ -143,8 +149,10 @@ def main(argv: list[str] | None = None) -> int:
             keep = {node.id for node in ranked}
             sub_nodes = {node.id: node for node in ranked}
             sub_edges = [edge for edge in sub_edges if edge.source in keep and edge.target in keep]
-            live_print(f"[*] Feature graph bounded to {len(sub_nodes)} of {original_count} nodes; use --limit 0 for the full graph.")
-        live_print(engine.graph.to_slice_summary(sub_nodes))
+            if not is_json:
+                live_print(f"[*] Feature graph bounded to {len(sub_nodes)} of {original_count} nodes; use --limit 0 for the full graph.")
+        if not is_json:
+            live_print(engine.graph.to_slice_summary(sub_nodes))
         from _graph_core import DependencyGraph
         sub_g = DependencyGraph()
         for sn in sub_nodes.values():
@@ -166,20 +174,21 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             exact_matches = [node]
 
-        if exact_matches:
-            live_print(f"[*] Exact Matches ({len(exact_matches)}):")
-            for m in exact_matches:
-                live_print(engine.graph.format_symbol_match(m, query=args.find, match_badge="[EXACT MATCH]"))
+        if not is_json:
+            if exact_matches:
+                live_print(f"[*] Exact Matches ({len(exact_matches)}):")
+                for m in exact_matches:
+                    live_print(engine.graph.format_symbol_match(m, query=args.find, match_badge="[EXACT MATCH]"))
 
-        if partial_matches:
-            header = (
-                f"\n[*] Partial / Related Matches ({len(partial_matches)}, top 15):"
-                if exact_matches
-                else f"[*] Partial Matches ({len(partial_matches)}, top 15):"
-            )
-            live_print(header)
-            for m in partial_matches:
-                live_print(engine.graph.format_symbol_match(m, query=args.find, match_badge="[PARTIAL MATCH]"))
+            if partial_matches:
+                header = (
+                    f"\n[*] Partial / Related Matches ({len(partial_matches)}, top 15):"
+                    if exact_matches
+                    else f"[*] Partial Matches ({len(partial_matches)}, top 15):"
+                )
+                live_print(header)
+                for m in partial_matches:
+                    live_print(engine.graph.format_symbol_match(m, query=args.find, match_badge="[PARTIAL MATCH]"))
 
         if len(exact_matches) == 1:
             focus_node_id = exact_matches[0].id
@@ -249,6 +258,57 @@ def main(argv: list[str] | None = None) -> int:
             sub_g.add_edge(me.source, me.target, kind=me.kind)
         graph_to_render = sub_g
 
+    # Build and save discovery receipt for any structured graph query
+    receipt = None
+    query_kind = ""
+    query_val = ""
+    mode = "FEATURE_GRAPH"
+    if args.feature:
+        query_kind = "feature"
+        query_val = args.feature
+        mode = "FEATURE_GRAPH"
+    elif args.find:
+        query_kind = "symbol"
+        query_val = args.find
+        mode = "FEATURE_GRAPH"
+    elif args.module:
+        query_kind = "module"
+        query_val = args.module
+        mode = "FEATURE_GRAPH"
+    elif args.screen:
+        query_kind = "screen"
+        query_val = args.screen
+        mode = "FEATURE_GRAPH"
+    elif args.arch:
+        query_kind = "arch"
+        query_val = "full"
+        mode = "ARCHITECTURAL_GRAPH"
+    elif args.modules:
+        query_kind = "modules"
+        query_val = "dag"
+        mode = "ARCHITECTURAL_GRAPH"
+
+    if query_kind:
+        res_modules = sorted({n.module for n in graph_to_render.nodes.values() if getattr(n, "module", None)})
+        res_paths = sorted({str(n.file_path) for n in graph_to_render.nodes.values() if getattr(n, "file_path", None)})
+        res_symbols = sorted({n.name for n in graph_to_render.nodes.values() if getattr(n, "type", None) != EntityType.MODULE.value})
+        graph_fp = str(sync_res.get("graph_fingerprint") or getattr(engine, "graph_fingerprint", "") or "")
+        try:
+            from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+            receipt = create_discovery_receipt(
+                mode=mode,
+                query_kind=query_kind,
+                query_value=query_val,
+                graph_fingerprint=graph_fp,
+                resolved_modules=res_modules,
+                resolved_paths=res_paths,
+                resolved_symbols=res_symbols,
+            )
+            save_discovery_receipt(repo_root, receipt)
+        except Exception as exc:
+            if not is_json:
+                live_print(f"[!] Discovery receipt generation failed: {exc}", err=True)
+
     # Format output
     output_text = ""
     if args.format == "compact":
@@ -258,7 +318,10 @@ def main(argv: list[str] | None = None) -> int:
     elif args.format == "dot":
         output_text = graph_to_render.to_dot(title="Android Project Code Graph")
     elif args.format == "json":
-        output_text = json.dumps(graph_to_render.to_dict(), indent=2, ensure_ascii=False)
+        payload = graph_to_render.to_dict()
+        if receipt:
+            payload["discovery"] = receipt
+        output_text = json.dumps(payload, indent=2, ensure_ascii=False)
 
     if args.output:
         out_path = Path(args.output).resolve()

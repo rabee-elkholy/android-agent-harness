@@ -2655,8 +2655,8 @@ class EndToEndWorkflowTests(RepoCase):
     def test_mutation_barrier_project_notes(self) -> None:
         from pre_tool_safety import _safe_target
         safe, detail, _ = _safe_target(".agents/project-context/project-notes.md")
-        self.assertTrue(safe)
-        self.assertTrue(detail.replace("\\", "/").endswith(".agents/project-context/project-notes.md"))
+        self.assertFalse(safe)
+        self.assertIn("developer-owned", detail)
 
         safe_override, detail_override, _ = _safe_target(".agents/project-context/legacy-overrides/test.md")
         self.assertFalse(safe_override)

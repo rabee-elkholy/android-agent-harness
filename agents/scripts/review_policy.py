@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -45,6 +46,7 @@ ROUTING = {
     "BUILD_CONFIG": {"security-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
     "NATIVE_CODE": {"bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
     "DEVICE_API": {"bug-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
+    "ANALYTICS": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
     "BILLING": FIVE_REVIEWERS,
     "AUTH": FIVE_REVIEWERS,
     "SECURITY": FIVE_REVIEWERS,
@@ -70,18 +72,34 @@ def _is_visual_compose(classification: dict) -> bool:
     return any("VISUAL" in str(r).upper() for r in reasons)
 
 
+ANALYTICS_SYMBOL_RE = re.compile(
+    r"\b(?:FirebaseAnalytics|Mixpanel|Segment|Amplitude|AnalyticsTracker|"
+    r"trackEvent|logEvent|analytics\.log|Analytics\.log|analytics\.track|Analytics\.track)\b"
+)
+
+
 def _is_analytics_scope(classification: dict, plan: dict | None = None, task_kind: str = "FEATURE") -> bool:
-    if str(task_kind).upper() in ("ANALYTICS", "UI_TWEAK"):
+    if str(task_kind).upper() in ("ANALYTICS", "TELEMETRY", "UI_TWEAK"):
         return True
-    if plan and str(plan.get("task_kind") or "").upper() in ("ANALYTICS", "UI_TWEAK"):
+    if plan and str(plan.get("task_kind") or "").upper() in ("ANALYTICS", "TELEMETRY", "UI_TWEAK"):
+        return True
+    surfaces = set(classification.get("surfaces") or [])
+    if "ANALYTICS" in surfaces:
         return True
     text_signals = []
     if plan:
         text_signals.extend([str(plan.get("title") or ""), str(plan.get("requested_outcome") or ""), str(plan.get("task_id") or "")])
     task_changes = classification.get("task_changes") or []
-    paths = [str(c.get("path") if isinstance(c, dict) else c).lower() for c in task_changes]
-    text_blob = (" ".join(text_signals) + " " + " ".join(paths)).lower()
-    return bool("analytic" in text_blob or "telemetry" in text_blob or "tracking" in text_blob)
+    paths = [str(c.get("path") if isinstance(c, dict) else c) for c in task_changes]
+    diff_texts = [str(c.get("diff") or "") for c in task_changes if isinstance(c, dict)]
+    combined = " ".join(text_signals) + " " + " ".join(paths) + " " + " ".join(diff_texts)
+
+    lower_combined = combined.lower()
+    if "analytic" in lower_combined or "telemetry" in lower_combined:
+        return True
+    if ANALYTICS_SYMBOL_RE.search(combined):
+        return True
+    return False
 
 
 def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: str = "FEATURE") -> bool:
@@ -126,7 +144,7 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
 
     # Tier 1 (Analytics): Bounded event wiring across UI and ViewModel/Contract
     if _is_analytics_scope(classification, plan=plan, task_kind=task_kind):
-        if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI", "BUSINESS_LOGIC", "COROUTINES"}:
+        if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI", "BUSINESS_LOGIC", "COROUTINES", "ANALYTICS"}:
             severity = str(classification.get("severity") or "").upper()
             if severity in ("CRITICAL", "HIGH"):
                 return False
@@ -152,6 +170,43 @@ def _derive_ui_verification_class(surfaces: set[str], micro: bool, classificatio
     return "UI_BEHAVIOR"
 
 
+CANONICAL_TIERS = {
+    "T0": "T0_TRIVIAL",
+    "T0_TRIVIAL": "T0_TRIVIAL",
+    "TRIVIAL": "T0_TRIVIAL",
+    "T1": "T1_LOW_RISK",
+    "T1_LOW_RISK": "T1_LOW_RISK",
+    "LOW_RISK": "T1_LOW_RISK",
+    "T2": "T2_FEATURE",
+    "T2_FEATURE": "T2_FEATURE",
+    "FEATURE": "T2_FEATURE",
+    "T3": "T3_SUBSYSTEM",
+    "T3_SUBSYSTEM": "T3_SUBSYSTEM",
+    "SUBSYSTEM": "T3_SUBSYSTEM",
+    "T4": "T4_DATA_DEVICE",
+    "T4_DATA_DEVICE": "T4_DATA_DEVICE",
+    "DATA_DEVICE": "T4_DATA_DEVICE",
+    "DATA": "T4_DATA_DEVICE",
+    "T5": "T5_CRITICAL",
+    "T5_CRITICAL": "T5_CRITICAL",
+    "CRITICAL": "T5_CRITICAL",
+}
+
+
+def canonical_risk_tier(tier_or_lane: str, surfaces: set[str] | None = None) -> str:
+    """Normalize any legacy risk lane or tier identifier to one of the 6 canonical risk tiers."""
+    norm = str(tier_or_lane or "").strip().upper()
+    if norm in CANONICAL_TIERS:
+        return CANONICAL_TIERS[norm]
+    if norm == "MICRO":
+        if surfaces and surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI"}:
+            return "T0_TRIVIAL"
+        return "T1_LOW_RISK"
+    if norm == "STANDARD":
+        return "T2_FEATURE"
+    return "T2_FEATURE"
+
+
 def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE", plan: dict | None = None) -> dict:
     surfaces = set(classification.get("surfaces") or [])
     if not surfaces and plan:
@@ -170,18 +225,31 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
 
     if micro:
-        risk_lane = "MICRO"
+        if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI"}:
+            risk_tier = "T0_TRIVIAL"
+            risk_lane = "MICRO"
+        else:
+            risk_tier = "T1_LOW_RISK"
+            risk_lane = "MICRO"
     elif (
         severity == "CRITICAL"
         or bool(surfaces & CRITICAL_SURFACES)
         or bool(surfaces & {"NATIVE_CODE", "MANIFEST_PERMISSION"})
-        or arch_intent == "MIGRATION"
-        or planning_depth == "ARCHITECTURAL"
     ):
+        risk_tier = "T5_CRITICAL"
         risk_lane = "CRITICAL"
-    elif "ROOM_SCHEMA" in surfaces:
+    elif surfaces & {"ROOM_SCHEMA", "PERSISTENCE", "DEVICE_API"}:
+        risk_tier = "T4_DATA_DEVICE"
         risk_lane = "DATA"
+    elif (
+        changed_modules_count > 1
+        or planning_depth == "ARCHITECTURAL"
+        or arch_intent in ("MIGRATION", "NEW_SUBSYSTEM")
+    ):
+        risk_tier = "T3_SUBSYSTEM"
+        risk_lane = "STANDARD"
     else:
+        risk_tier = "T2_FEATURE"
         risk_lane = "STANDARD"
 
     ui_verification_class = _derive_ui_verification_class(surfaces, micro, classification)
@@ -189,7 +257,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     reviewers: set[str] = set()
     for surface in surfaces:
         reviewers.update(ROUTING.get(surface, set()))
-    if risk_lane == "CRITICAL":
+    if risk_tier == "T5_CRITICAL":
         reviewers = set(FIVE_REVIEWERS)
     if "TEST_ONLY" in surfaces:
         reviewers.add("test-quality-reviewer-agent")
@@ -222,7 +290,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         gates.add("localization")
     if "ROOM_SCHEMA" in surfaces:
         gates.add("room")
-    if surfaces - {"DOCS"}:
+    if risk_tier != "T0_TRIVIAL" and (surfaces - {"DOCS"}):
         gates.add("assemble")
     if device_required:
         gates.add("device")
@@ -240,6 +308,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "confidence": classification.get("confidence"),
         "status": status,
         "risk_lane": risk_lane,
+        "risk_tier": risk_tier,
         "ui_verification_class": ui_verification_class,
         "micro_eligible": micro,
         "review_status": "REVIEW_NOT_REQUIRED_BY_POLICY" if micro else "REQUIRED" if reviewers else "NONE",

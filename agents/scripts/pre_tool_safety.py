@@ -138,7 +138,10 @@ def emit(
     task_id: str = "",
 ) -> None:
     _audit(decision, reason, tool, command, reason_code=reason_code, conv_hint=conv_hint, task_id=task_id)
-    print(json.dumps({"decision": decision, "reason": reason}, ensure_ascii=False))
+    out: dict[str, Any] = {"decision": decision, "reason": reason}
+    if reason_code:
+        out["reason_code"] = reason_code
+    print(json.dumps(out, ensure_ascii=False))
 
 
 def _tool_name_and_args(payload: dict) -> tuple[str, dict]:
@@ -171,29 +174,34 @@ def _is_ide_artifact(resolved: Path) -> bool:
         return False
 
 
-def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
+def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, bool]:
+    root = (repo or REPO).resolve()
     if not raw_target.strip():
         return False, "Mutating file tool did not expose a target path; refusing an unscoped write.", False
     raw = Path(raw_target).expanduser()
-    resolved = raw.resolve() if raw.is_absolute() else (REPO / raw).resolve()
+    resolved = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
     user_harness = (Path.home() / ".android-harness").resolve()
     if resolved == user_harness or user_harness in resolved.parents:
         return False, "User-level Android Harness configuration and model routes are developer-owned and immutable to model file tools.", False
     try:
-        relative = resolved.relative_to(REPO.resolve()).as_posix()
+        relative = resolved.relative_to(root).as_posix()
     except ValueError:
         temp_dir = Path(tempfile.gettempdir()).resolve()
         if (resolved == temp_dir or temp_dir in resolved.parents) and resolved.suffix.lower() == ".json":
             return True, str(resolved), True
         if _is_ide_artifact(resolved):
             return True, str(resolved), True
-    if relative == ".agents/project-context/project-notes.md":
-        return True, str(resolved), True
-    if relative == ".agents/project-context/architecture-policy.json" or relative.startswith(".agents/project-context/legacy-overrides/"):
-        return False, "Architecture policy and legacy overrides are developer-owned and immutable to model file tools to prevent context poisoning.", False
-    if any(relative == root or relative.startswith(root + "/") for root in PROTECTED_ROOTS):
+        return False, f"Target path '{raw_target}' is outside the repository boundary.", False
+    if (
+        relative == ".agents/project-context/project-notes.md"
+        or relative == ".agents/project-context/developer-instructions.json"
+        or relative == ".agents/project-context/architecture-policy.json"
+        or relative.startswith(".agents/project-context/legacy-overrides/")
+    ):
+        return False, "Project context notes, instructions, and architecture policies are developer-owned and immutable to model file tools to prevent context poisoning.", False
+    if any(relative == r or relative.startswith(r + "/") for r in PROTECTED_ROOTS):
         return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
-    is_kit_dev = (REPO / "harness_cli.py").is_file() and (REPO / "scripts_dev").is_dir()
+    is_kit_dev = (root / "harness_cli.py").is_file() and (root / "scripts_dev").is_dir()
     if not is_kit_dev:
         rel_lower = relative.lower()
         rel_name = Path(relative).name.lower()
@@ -207,6 +215,13 @@ def _safe_target(raw_target: str) -> tuple[bool, str, bool]:
     if EPHEMERAL_GENERATED_RE.search(relative):
         return False, f"Cannot mutate generated build output '{relative}'. Generated code is diagnostic evidence only; edit the source entity/DAO/contract or generator configuration instead.", False
     return True, relative, False
+
+
+def check_write_safety(repo: Path | str, target: str, tool_name: str = "write_to_file") -> dict[str, Any]:
+    safe, detail, is_temp = _safe_target(str(target), repo=Path(repo))
+    if not safe:
+        return {"decision": "DENY", "reason": detail, "reason_code": "PROTECTED_PATH"}
+    return {"decision": "ALLOW", "reason": detail, "reason_code": "TEMP_WRITE_ALLOWED" if is_temp else "PATH_ALLOWED"}
 
 
 def _handle_stop() -> None:
@@ -234,7 +249,7 @@ def _handle_command(command: str) -> None:
         emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)
         return
     allowed, reason = command_allowed(REPO, command)
-    if allowed and re.search(r"project_graph(?:\.py)?\b", command):
+    if allowed and re.search(r"project_graph(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+graph\b", command, re.I):
         reason = f"project_graph executed: {reason}"
     elif allowed and re.search(r"task_context(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task-context\b", command, re.I):
         # This is a pre-tool hook, so validate the target independently before
@@ -523,11 +538,72 @@ def _is_targeted_search(name: str, args: dict) -> bool:
     return False
 
 
-def _handle_search(name: str, args: dict) -> None:
-    if _is_targeted_search(name, args):
-        emit("allow", "Search is targeted to a specific file or feature directory.", tool=name)
+def _handle_list_dir(name: str, args: dict) -> None:
+    plan: dict = {}
+    try:
+        plan = active_plan(REPO)
+        status = str(plan.get("status") or "")
+    except Exception:
+        status = ""
+
+    if status in ("IMPLEMENTING", "READY_FOR_DELIVERY", "VERIFYING"):
+        emit("allow", "Directory listing is permitted for active task.", tool=name, reason_code="LIST_DIR_ALLOWED")
         return
 
+    dir_target = str(args.get("DirectoryPath") or args.get("directoryPath") or args.get("path") or ".")
+    try:
+        from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
+        receipt = load_latest_discovery_receipt(REPO)
+        if receipt:
+            fresh, _ = check_discovery_freshness(REPO, receipt)
+            if fresh and is_path_in_discovery_scope(REPO, dir_target, receipt):
+                emit("allow", "Directory listing is within active discovery scope.", tool=name, reason_code="LIST_DIR_ALLOWED")
+                return
+    except Exception:
+        receipt = None
+
+    rel = dir_target.replace("\\", "/").strip().rstrip("/")
+    try:
+        p = Path(dir_target)
+        if p.is_absolute():
+            rel = p.resolve().relative_to(REPO.resolve()).as_posix().lower()
+        else:
+            rel = rel.lstrip("./").lower()
+    except Exception:
+        rel = rel.lstrip("./").lower()
+
+    parts = [part for part in rel.split("/") if part]
+
+    consecutive_list_dirs = 0
+    try:
+        audit_file = _audit_path()
+        if audit_file.exists():
+            lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            records = [json.loads(line) for line in lines if line.strip()]
+            for rec in reversed(records[-10:]):
+                t = rec.get("tool", "")
+                if t == "list_dir":
+                    consecutive_list_dirs += 1
+                elif t in ("run_command", "write_to_file", "replace_file_content"):
+                    break
+    except Exception:
+        consecutive_list_dirs = 0
+
+    if len(parts) >= 2 or consecutive_list_dirs >= 2:
+        emit(
+            "deny",
+            "DISCOVERY_ANCHOR_REQUIRED: Directory traversal cascade detected before architectural discovery. "
+            "Anchor discovery with 'python .agents/harness.py task-context --file <path> --json' "
+            "or 'python .agents/harness.py graph --feature <name> --json'.",
+            tool=name,
+            reason_code="DISCOVERY_ANCHOR_REQUIRED",
+        )
+        return
+
+    emit("allow", "Minimal repository orientation directory listing permitted.", tool=name, reason_code="LIST_DIR_ALLOWED")
+
+
+def _handle_search(name: str, args: dict) -> None:
     plan: dict = {}
     try:
         plan = active_plan(REPO)
@@ -536,81 +612,108 @@ def _handle_search(name: str, args: dict) -> None:
         status = ""
 
     if status == "VERIFYING":
-        emit("allow", "Reviewer verification search is permitted.", tool=name)
+        emit("allow", "Reviewer verification search is permitted.", tool=name, reason_code="VERIFIER_SEARCH_ALLOWED")
         return
 
-    consecutive_broad_searches = 0
-    try:
-        audit_file = _audit_path()
-        if audit_file.exists():
-            lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
-            records = [json.loads(line) for line in lines if line.strip()]
-            for rec in reversed(records[-10:]):
-                t = rec.get("tool", "")
-                if t in SEARCH_TOOLS:
-                    if "targeted" not in rec.get("reason", "").lower():
-                        consecutive_broad_searches += 1
-                elif t in ("run_command", "view_file", "write_to_file", "replace_file_content"):
-                    break
-    except Exception:
+    target = ""
+    query = ""
+    if name == "grep_search":
+        target = str(args.get("SearchPath") or args.get("searchPath") or "")
+        query = str(args.get("Query") or args.get("query") or "")
+    elif name == "find_by_name":
+        target = str(args.get("SearchDirectory") or args.get("searchDirectory") or "")
+        query = str(args.get("Pattern") or args.get("pattern") or "")
+
+    # 1. If actively implementing, targeted searches within task scope are allowed
+    if status in ("IMPLEMENTING", "READY_FOR_DELIVERY"):
+        if _is_targeted_search(name, args):
+            emit("allow", "Search is targeted to active task implementation scope.", tool=name, reason_code="SEARCH_ALLOWED")
+            return
         consecutive_broad_searches = 0
-
-    if consecutive_broad_searches >= 2:
-        emit(
-            "deny",
-            "Unanchored search cascade detected (multiple consecutive repository-wide searches). "
-            "Run 'python .agents/scripts/project_graph.py --feature <name>' or '--find <symbol>' for architectural discovery, "
-            "or narrow SearchPath to a specific file or feature directory.",
-            tool=name,
-        )
-        return
-
-    if status not in {"IMPLEMENTING", "READY_FOR_DELIVERY"}:
-        has_run_graph = False
         try:
             audit_file = _audit_path()
             if audit_file.exists():
                 lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
                 records = [json.loads(line) for line in lines if line.strip()]
-                task_id = str(plan.get("task_id") or "")
-                draft_time = 0.0
-                if task_id:
-                    tb_file = REPO / ".agents" / "state" / "tasks" / task_id / "task-baseline.json"
-                    if tb_file.is_file():
-                        draft_time = tb_file.stat().st_mtime
-                import time
-                cutoff = draft_time or (time.time() - 3600.0)
-                for rec in reversed(records):
-                    discovery_reason = rec.get("reason", "").lower()
-                    if (
-                        rec.get("tool") == "run_command"
-                        and rec.get("decision") == "allow"
-                        and ("project_graph executed" in discovery_reason or "targeted task_context executed" in discovery_reason)
-                    ):
-                        r_tid = rec.get("task_id")
-                        r_ts = float(rec.get("ts") or 0.0)
-                        if task_id and r_tid == task_id:
-                            has_run_graph = True
-                            break
-                        if r_ts >= cutoff:
-                            has_run_graph = True
-                            break
+                for rec in reversed(records[-10:]):
+                    t = rec.get("tool", "")
+                    if t in SEARCH_TOOLS:
+                        if "targeted" not in rec.get("reason", "").lower():
+                            consecutive_broad_searches += 1
+                    elif t in ("run_command", "view_file", "write_to_file", "replace_file_content"):
+                        break
         except Exception:
-            has_run_graph = False
+            consecutive_broad_searches = 0
 
-        if not has_run_graph:
+        if consecutive_broad_searches >= 2:
             emit(
                 "deny",
-                "Unanchored repository-wide search is paused during initial discovery. "
-                "Anchor discovery with 'python .agents/harness.py task-context --file <path> --json' "
-                "or 'python .agents/scripts/project_graph.py --feature <name>' / '--find <symbol>', "
-                "or specify a targeted SearchPath for literal text in a specific file or feature directory.",
+                "Unanchored search cascade detected (multiple consecutive repository-wide searches). "
+                "Run 'python .agents/harness.py graph --feature <name>' or '--find <symbol>' for architectural discovery, "
+                "or narrow SearchPath to a specific file or feature directory.",
                 tool=name,
-                reason_code="GRAPH_FIRST_REQUIRED",
             )
             return
+        emit("allow", "Search is permitted outside cascade limits.", tool=name, reason_code="SEARCH_ALLOWED")
+        return
 
-    emit("allow", "Search is permitted outside cascade limits.", tool=name, reason_code="SEARCH_ALLOWED")
+    # 2. In Discovery Phase: Check if a fresh discovery receipt exists
+    receipt = None
+    try:
+        from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
+        receipt = load_latest_discovery_receipt(REPO)
+    except Exception:
+        receipt = None
+
+    if receipt:
+        fresh, _ = check_discovery_freshness(REPO, receipt)
+        if fresh:
+            if target and is_path_in_discovery_scope(REPO, target, receipt):
+                emit("allow", "Search is targeted within active discovery scope.", tool=name, reason_code="SEARCH_ALLOWED")
+                return
+            else:
+                emit(
+                    "deny",
+                    f"DISCOVERY_SCOPE_EXPANSION_REQUIRED: Search path '{target or '.'}' is outside the active discovery scope. "
+                    "Expand discovery through Project Graph: 'python .agents/harness.py graph --find <symbol> --json' "
+                    "or '--feature <feature> --json' rather than unanchored search.",
+                    tool=name,
+                    reason_code="DISCOVERY_SCOPE_EXPANSION_REQUIRED",
+                )
+                return
+
+    # 3. No discovery receipt yet: Check exact non-architectural file exception (D0)
+    try:
+        from discovery_router import _is_exact_non_architectural_file
+        if target and _is_exact_non_architectural_file(target):
+            emit("allow", "Exact non-architectural file search allowed under D0.", tool=name, reason_code="SEARCH_ALLOWED")
+            return
+    except Exception:
+        pass
+
+    # Deny initial code search without discovery anchor
+    clean_q = query.strip()
+    is_symbol_q = bool(re.match(r"^[A-Z][a-zA-Z0-9_]+$", clean_q))
+    target_clean = target.replace("\\", "/").strip().lower()
+    feature_match = re.search(r"\b(?:feature|features|flow)/([a-zA-Z0-9_-]+)", target_clean)
+    if not feature_match:
+        feature_match = re.search(r"([a-zA-Z0-9_-]+)(?:ViewModel|Screen|Fragment|Repository|Service)", clean_q)
+
+    if is_symbol_q:
+        anchor_cmd = f"python .agents/harness.py task-context --symbol {clean_q} --json"
+    elif feature_match:
+        feat = feature_match.group(1).lower()
+        anchor_cmd = f"python .agents/harness.py graph --feature {feat} --json"
+    else:
+        anchor_cmd = "python .agents/harness.py graph --feature <name> --json or python .agents/harness.py task-context --file <path> --json"
+
+    emit(
+        "deny",
+        f"DISCOVERY_ANCHOR_REQUIRED: Search cannot be the initial discovery mechanism for code tasks. "
+        f"Anchor discovery first with '{anchor_cmd}'.",
+        tool=name,
+        reason_code="DISCOVERY_ANCHOR_REQUIRED",
+    )
 
 
 def main() -> None:
@@ -647,6 +750,9 @@ def main() -> None:
         if name in SEARCH_TOOLS:
             _handle_search(name, args)
             return
+        if name == "list_dir":
+            _handle_list_dir(name, args)
+            return
         # External integrations called directly as host tools (e.g. zoho_add_comment)
         integration = registry.resolve("", name)
         if integration is not None:
@@ -660,7 +766,7 @@ def main() -> None:
             return
 
         # Known read-only tools
-        if name in ("view_file", "list_dir", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
+        if name in ("view_file", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
             emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
             return
 

@@ -205,3 +205,41 @@ def redact_text(value: str) -> str:
             return "[REDACTED]"
         result = pattern.sub(replace, result)
     return result
+
+
+def validate_repo_path_containment(repo: Path, raw_path: str | Path) -> str:
+    """Validate that raw_path is contained within repo and does not escape via traversal or symlinks.
+
+    Returns the normalized relative posix path within repo.
+    Raises ValidationError if the path escapes repo or contains traversal tokens.
+    """
+    if not raw_path:
+        raise ValidationError("empty path is invalid")
+    raw_str = str(raw_path).strip()
+    if not raw_str:
+        raise ValidationError("empty path is invalid")
+
+    norm_slashes = raw_str.replace("\\", "/")
+    if ".." in Path(raw_str).parts or norm_slashes.startswith("../") or "/../" in norm_slashes or norm_slashes == "..":
+        raise ValidationError(f"path traversal forbidden: {raw_path}")
+
+    repo_resolved = Path(os.path.realpath(str(repo))).resolve()
+
+    p = Path(raw_str)
+    if p.is_absolute():
+        target = Path(os.path.realpath(str(p))).resolve()
+    else:
+        target = Path(os.path.realpath(str(repo_resolved / p))).resolve()
+
+    try:
+        rel = target.relative_to(repo_resolved)
+    except ValueError:
+        raise ValidationError(f"path escapes repository: {raw_path}")
+
+    rel_posix = rel.as_posix()
+    if rel_posix == "." or not rel_posix:
+        raise ValidationError(f"path cannot point to repository root: {raw_path}")
+    if rel_posix.startswith("../"):
+        raise ValidationError(f"path escapes repository: {raw_path}")
+
+    return rel_posix

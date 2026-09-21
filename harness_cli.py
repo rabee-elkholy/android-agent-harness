@@ -650,6 +650,22 @@ def cmd_context(args: argparse.Namespace) -> int:
             cli_args.append(text)
         if getattr(args, "section", None):
             cli_args.extend(["--section", args.section])
+    if args.subaction == "instruct":
+        text = getattr(args, "instruction", None) or getattr(args, "note_text", None)
+        if text:
+            cli_args.append(text)
+        if getattr(args, "scope", None):
+            cli_args.extend(["--scope", args.scope])
+        if getattr(args, "source", None):
+            cli_args.extend(["--source", args.source])
+        if getattr(args, "proof_reference", None):
+            cli_args.extend(["--proof-reference", args.proof_reference])
+        if getattr(args, "strength", None):
+            cli_args.extend(["--strength", args.strength])
+        if getattr(args, "applies_to", None):
+            cli_args.extend(["--applies-to", args.applies_to])
+        if getattr(args, "supersedes", None):
+            cli_args.extend(["--supersedes", args.supersedes])
     return run_engine_script(kit, "generate_project_context.py", cli_args, capture=getattr(args, "json", False))
 
 
@@ -670,6 +686,46 @@ def cmd_task_context(args: argparse.Namespace) -> int:
     if args.json:
         cli_args.append("--json")
     return run_engine_script(kit, "task_context.py", cli_args, capture=args.json)
+
+
+def cmd_graph(args: argparse.Namespace) -> int:
+    """Query the Universal Android Code & Architecture Graph."""
+    kit = ensure_kit(args.kit)
+    cli_args = []
+    if getattr(args, "repo", None):
+        cli_args.extend(["--repo", str(args.repo)])
+    if getattr(args, "feature", None):
+        cli_args.extend(["--feature", args.feature])
+    if getattr(args, "find", None):
+        cli_args.extend(["--find", args.find])
+    if getattr(args, "module", None):
+        cli_args.extend(["--module", args.module])
+    if getattr(args, "screen", None):
+        cli_args.extend(["--screen", args.screen])
+    if getattr(args, "depth", None) is not None:
+        cli_args.extend(["--depth", str(args.depth)])
+    if getattr(args, "limit", None) is not None:
+        cli_args.extend(["--limit", str(args.limit)])
+    if getattr(args, "arch", False):
+        cli_args.append("--arch")
+    if getattr(args, "modules", False):
+        cli_args.append("--modules")
+    if getattr(args, "screens", False):
+        cli_args.append("--screens")
+    if getattr(args, "features", False):
+        cli_args.append("--features")
+    if getattr(args, "sync", False):
+        cli_args.append("--sync")
+    if getattr(args, "stats", False):
+        cli_args.append("--stats")
+    if getattr(args, "json", False):
+        cli_args.append("--json")
+    if getattr(args, "format", None) and not getattr(args, "json", False):
+        cli_args.extend(["--format", args.format])
+    raw_extra = getattr(args, "graph_args", []) or []
+    if raw_extra:
+        cli_args.extend(raw_extra)
+    return run_engine_script(kit, "project_graph.py", cli_args, capture=getattr(args, "json", False))
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -848,6 +904,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             "_stabilization_v42_selftest.py",
             "_public_cli_selftest.py",
             "_project_intelligence_selftest.py",
+            "_graph_discovery_selftest.py",
         )
         total = len(scripts)
         for idx, script in enumerate(scripts, 1):
@@ -1050,10 +1107,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("device_args", nargs=argparse.REMAINDER, help="Device arguments (default: install-start)")
     sp.set_defaults(func=cmd_device)
 
-    sp = sub.add_parser("context", help="Inspect, preview, refresh, or add notes to derived project context.")
-    sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note"), help="Context action.")
-    sp.add_argument("note_text", nargs="?", default="", help="Note text to append when subaction is 'note'.")
+    sp = sub.add_parser("context", help="Inspect, preview, refresh, or add notes/instructions to derived project context.")
+    sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note", "instruct"), help="Context action.")
+    sp.add_argument("note_text", nargs="?", default="", help="Note or instruction text.")
     sp.add_argument("--note", default="", help="Note text to append.")
+    sp.add_argument("--instruction", default="", help="Instruction text.")
+    sp.add_argument("--scope", default="GLOBAL", help="Instruction scope (e.g. module::payments, package:com.example, global).")
+    sp.add_argument("--source", choices=("conversation", "developer_terminal", "host_native"), default=None, help="Explicit developer authority source.")
+    sp.add_argument("--proof-reference", default="", help="Message or command reference proving developer direction.")
+    sp.add_argument("--strength", choices=("REQUIREMENT", "PREFERENCE"), default="REQUIREMENT")
+    sp.add_argument("--applies-to", default="ANY", help="Applicable task intents (ANY, PRESERVE, NEW, REFACTOR, MIGRATION).")
+    sp.add_argument("--supersedes", default=None, help="Prior instruction ID to supersede.")
     sp.add_argument("--section", default="Domain Conventions & Context", help="Section header in project-notes.md.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
@@ -1072,6 +1136,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
     sp.add_argument("--json", action="store_true", help="Format output as JSON.")
     sp.set_defaults(func=cmd_task_context)
+
+    sp = sub.add_parser("graph", help="Query the Universal Android Code & Architecture Graph.")
+    sp.add_argument("--feature", help="Analyze and display architecture slice for a feature.")
+    sp.add_argument("--find", help="Find symbol, screen, or class with dependencies.")
+    sp.add_argument("--module", help="Focus graph on a specific Gradle module.")
+    sp.add_argument("--screen", help="Focus graph on a specific screen or composable.")
+    sp.add_argument("--depth", type=int, default=2, help="Traversal depth around focus node.")
+    sp.add_argument("--limit", type=int, default=80, help="Maximum nodes rendered (0 disables cap).")
+    sp.add_argument("--arch", action="store_true", help="Display Clean Architecture layers graph.")
+    sp.add_argument("--modules", action="store_true", help="Display Gradle module dependency graph.")
+    sp.add_argument("--screens", action="store_true", help="List UI screens/layouts.")
+    sp.add_argument("--features", action="store_true", help="List all detected feature modules.")
+    sp.add_argument("--sync", action="store_true", help="Force full cache resynchronization.")
+    sp.add_argument("--stats", action="store_true", help="Display graph cache statistics.")
+    sp.add_argument("--format", choices=("compact", "mermaid", "dot", "json"), default=None, help="Output format.")
+    sp.add_argument("--json", action="store_true", help="Format output as JSON.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
+    sp.add_argument("graph_args", nargs=argparse.REMAINDER, help="Additional arguments passed to project_graph.py")
+    sp.set_defaults(func=cmd_graph)
 
     sp = sub.add_parser("selftest", help="Run the kit hook selftest suite in the kit checkout.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")

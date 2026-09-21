@@ -33,6 +33,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("NETWORK", re.compile(r"(?i)retrofit|okhttp|ktor|httpclient|@GET\b|@POST\b|websocket"), "NETWORK_PATTERN"),
     ("SECURITY", re.compile(r"(?i)networksecurityconfig|certificatepinner|trustmanager|hostnameverifier|x509certificate|androidx\.security|Class\.forName\s*\(\s*[\"']?(?:[^\"']*\.)?(?:billingclient|biometric|auth|crypto|security)"), "SECURITY_PATTERN"),
     ("DEVICE_API", re.compile(r"(?i)bluetooth|sensor|locationmanager|camera|notificationmanager|foregroundservice"), "DEVICE_API_PATTERN"),
+    ("ANALYTICS", re.compile(r"\b(?:FirebaseAnalytics|Mixpanel|Segment|Amplitude|AnalyticsTracker|trackEvent|logEvent)\b"), "ANALYTICS_PATTERN"),
 )
 
 VIEW_UI_RE = re.compile(

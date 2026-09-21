@@ -314,15 +314,33 @@ class HookTests(unittest.TestCase):
             self.assertEqual("deny", self.call("write_to_file", {"TargetFile": str(temp_script)})["decision"])
 
     def test_search_guard_rules(self):
-        # 1. Targeted file search is always allowed
-        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app/src/main/java/com/example/HomeActivity.kt", "Query": "test"})["decision"])
-        self.assertEqual("allow", self.call("find_by_name", {"SearchDirectory": "app/src/main/java/com/example/features/login", "Pattern": "*.kt"})["decision"])
+        # 1. Targeted search before discovery anchor is denied
+        self.assertEqual("deny", self.call("grep_search", {"SearchPath": "app/src/main/java/com/example/HomeActivity.kt", "Query": "test"})["decision"])
+        self.assertEqual("deny", self.call("find_by_name", {"SearchDirectory": "app/src/main/java/com/example/features/login", "Pattern": "*.kt"})["decision"])
 
-        # 2. Broad search during discovery without project_graph is denied
+        # 2. Targeted search inside discovered scope is allowed
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        target_file = self.repo / "app/src/main/java/com/example/HomeActivity.kt"
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        target_file.write_text("package com.example\nclass HomeActivity\n", encoding="utf-8")
+        receipt = create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT",
+            query_kind="file",
+            query_value="app/src/main/java/com/example/HomeActivity.kt",
+            graph_fingerprint="fp1",
+            resolved_modules=[":app"],
+            resolved_paths=["app/src/main/java/com/example/HomeActivity.kt"],
+            resolved_symbols=["HomeActivity"],
+            allowed_search_roots=["app/src/main/java/com/example"],
+        )
+        save_discovery_receipt(self.repo, receipt)
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app/src/main/java/com/example/HomeActivity.kt", "Query": "test"})["decision"])
+
+        # 3. Broad search outside discovery scope is denied
         self.assertEqual("deny", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
         self.assertEqual("deny", self.call("find_by_name", {"SearchDirectory": ".", "Pattern": "test"})["decision"])
 
-        # 3. Broad search during VERIFYING is allowed (reviewers never blocked)
+        # 4. Broad search during VERIFYING is allowed (reviewers never blocked)
         self.activate("VERIFYING")
         self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
 

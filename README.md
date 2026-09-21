@@ -1,10 +1,12 @@
-<div align="center">
-
 # Android Agent Harness
 
-### A deterministic engineering control plane for AI-assisted Android development
+> **Stricter proof, not heavier daily workflow.**
 
-Turn general-purpose coding agents into disciplined, predictable Android contributors with approval-gated workflows, Android-aware surface classification, AST-bounded context, and cryptographic evidence verification.
+Android Agent Harness is an approval-first engineering layer for AI coding tools working on real Android codebases.
+
+It gives agents bounded project context, preserves local architecture, verifies what actually changed, runs proportional Android checks, and binds delivery claims to real test/build/device evidence.
+
+The model focuses on engineering. The harness handles workflow state, proof, and safety boundaries.
 
 [![CI](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?label=release)](https://github.com/rabee-elkholy/android-agent-harness/releases)
@@ -13,322 +15,269 @@ Turn general-purpose coding agents into disciplined, predictable Android contrib
 [![Platforms](https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20Windows-supported-success)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
 [![License](https://img.shields.io/github/license/rabee-elkholy/android-agent-harness)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE)
 
-[Why It Exists](#why-it-exists) · [Core Architecture](#core-architecture) · [Installation](#install) · [Canonical Lifecycle](#daily-workflow) · [Adaptive Risk Lanes](#5-tier-adaptive-risk-lanes) · [Deterministic Guards](#deterministic-android-guards) · [Documentation](#documentation)
-
-</div>
-
----
-
-## Overview
-
-**Android Agent Harness** is a repository-local governance and verification control plane designed specifically for real-world Android codebases.
-
-General-purpose coding agents (such as Claude Code, GitHub Copilot, Cursor, Windsurf, Roo Code, and Gemini CLI / Antigravity) excel at code generation but lack systemic understanding of Android platform constraints: Gradle variant matrices, Room schema migrations, localized XML string parity, multi-module dependency graphs, main-thread blocking hazards, and device deployment continuity. Left unguided, agents introduce runtime crashes, trigger unanchored grep cascades across large trees, or claim tests passed based on stale terminal logs.
-
-The harness does not replace Android Studio, Gradle, ADB, Git, CI, or your AI model. Instead, it coordinates them through an immutable state machine:
-
-- **Zero Python dependencies**: The entire runtime relies exclusively on the Python standard library (Python 3.10–3.14).
-- **Approval-first execution**: Repository discovery is strictly read-only; implementation requires explicit developer sign-off on scope, risks, and verification criteria.
-- **Strict cryptographic evidence binding**: Assemble, test, and device results are cryptographically bound to the final frozen change set. Stale or partial evidence fails closed.
-- **Respects project ownership**: Git checkouts, commit history, and existing git hooks remain 100% developer-owned. Client application code is never auto-committed or staged by the harness.
-
 ---
 
 ## Why it exists
 
-Raw coding agents frequently suffer from platform-specific failure modes when working on Android repositories. The harness provides deterministic boundaries for each:
+AI coding agents are good at writing code, but production Android work has a second problem: keeping the agent aligned over time.
 
-| Failure Mode Without Harness | Deterministic Protection With Harness |
-|:---|:---|
-| **Eager, Unapproved Edits**<br>Agents start rewriting code before the developer agrees on scope or architectural boundaries. | **Explicit Approval Gate**<br>Discovery is read-only. A single-use cryptographic approval nonce is required before any source file can be modified. |
-| **Context Window Saturation**<br>Dumping the whole repository or running broad grep sweeps wastes tokens and hallucinates dependencies. | **Bounded Project Intelligence**<br>Resolves the exact AST slice, symbol graph, or feature dependency sub-graph needed for the task (`task-context`, `project_graph.py`). |
-| **Generic Diff Evaluation**<br>A mixed diff containing Room entities, XML strings, and Compose UI is treated as one generic code change. | **Multi-Surface Classification**<br>Simultaneously classifies Room schemas, localized resources, Compose state, Coroutine dispatchers, and Gradle builds independently. |
-| **One-Size-Fits-All Verification**<br>Trivial documentation edits pay the cost of full Gradle builds, while sensitive changes skip critical checks. | **5-Tier Adaptive Risk Lanes**<br>Routes tasks dynamically: Tier 0 (Nano, <2s) skips builds, while Tier 4 (Critical Core) mandates Room migration gates and device verification. |
-| **Hallucinated or Stale Verification**<br>Agents claim "build succeeded" or "tests passed" by referencing stale logs or unrelated runs. | **Cryptographic Evidence Fingerprints**<br>Evidence is hashed (`pkg=<sha12> cites=<n>`) and bound to the exact immutable snapshot of the working tree. |
-| **Wrong APK Deployed to Device**<br>Builds generate multiple APKs (splits, variants); agents install older or mismatched binaries. | **Verified Artifact Set Identity**<br>Assemble, install, launch, and UI verification share one deterministic artifact fingerprint and device user identity. |
-| **Silent Runtime Regressions**<br>Room migrations missing destructive fallback protection, or strings missing from `values-ar/strings.xml`. | **Deterministic Preflight Guards**<br>Fast, deterministic checks (<2s) catch broken migrations, missing translation keys, and formatting regressions before Gradle runs. |
-| **Destructive Git & Tracker Mutations**<br>Agents rebase, reset unstaged work, or spam external project trackers. | **Developer Ownership & Safe Trackers**<br>Client git operations are developer-owned; issue tracker updates require explicit authorization and idempotency tokens. |
+As context grows, an agent can infer the wrong local architecture, touch more files than intended, modernize legacy code accidentally, report stale tests/builds as current, miss Room/device/platform risks, or lose track of the approved scope.
+
+Prompt rules help guide behavior. Android Agent Harness moves selected guarantees outside model memory and into deterministic tooling.
 
 ---
 
-## Core Architecture
+## What the harness adds
 
-The harness coordinates discovery, execution control, and verification proof:
+The harness adds five deterministic capabilities around your AI coding assistant:
 
-![Android Agent Harness Architecture Pipeline](https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/assets/architecture-pipeline.svg)
+- **Project-aware discovery**: Bounded AST slicing via Task Context, symbol dependency mapping via Project Graph, source-set awareness, and automatic detection of local architecture families in mixed codebases.
+- **Approval-first execution**: Strict plan-before-mutation flow, single-use cryptographic approval nonces, immutable scope and plan hashing, and zero silent scope creep.
+- **Adaptive Android verification**: Canonical 6-tier risk classification matching blast radius to verification requirements, including specialized checks for Room schemas, localized string parity, coroutine dispatchers, and device APIs.
+- **Evidence-bound delivery**: Tests, reviews, assemble, and device verification are cryptographically bound to the final frozen delivery snapshot. Stale or partial evidence fails closed.
+- **Recovery and developer control**: 12-dimension environment diagnostic (`doctor`), deterministic engine self-healing (`repair`), transactional updates with rollback, and 100% developer-owned Git authority.
 
-### Lifecycle State Machine
+---
 
-Every task is governed by an immutable state machine persisted in `.agents/task-state/`:
+## What daily use looks like
+
+Developer:
+
+> Fix the refresh bug in `ProfileViewModel`.
+
+Harness-assisted agent:
+
+1. Resolves the exact target and local project context.
+2. Shows one implementation plan.
+3. Waits for explicit approval.
+4. Applies only the approved change.
+5. Follows the next action reported by the harness (`task status --task-id <id> --next`).
+6. Runs only the checks required by the final risk policy.
+7. Reports the result with bound test/build/device evidence.
+
+The developer sees the plan, approval point, important blockers, and final result — not the internal plumbing.
 
 ```text
-[INTAKE] ──► [DISCOVERY] ──► [PLAN_DRAFTED] ──► [AWAITING_DEVELOPER_APPROVAL]
-                                                         │ (Developer Approves)
-                                                         ▼
-                                                  [IMPLEMENTING] ◄────────┐
-                                                         │                │
-                                                         ▼                │ (Resume on Fixes)
-                                                   [VERIFYING] ───────────┘
-                                                    │        │
-                                   (Checks Pass)    │        │ (Findings / Blockers)
-                                                    ▼        ▼
-                                       [READY_FOR_DELIVERY] [BLOCKED]
-                                                    │
-                                                    ▼
-                                               [DELIVERED]
+Request
+  ↓
+Project Context
+  ↓
+Plan + Approval
+  ↓
+Implementation
+  ↓
+Adaptive Verification
+  ↓
+Evidence-Bound Result
 ```
-
-1. **Discovery & Scoping**: Explores project topology, build variants, source sets, and symbols without modifying any application files.
-2. **Task Planning & Single Approval**: Establishes target outcomes, predicted surfaces, and required verification tiers. The developer approves once via chat or terminal.
-3. **Implementation**: Code modifications are confined strictly to the approved scope. Material architectural drift or unplanned module edits fail closed.
-4. **Verification & Proof**: Final code is frozen. Preflight checks, unit tests, specialist reviewer subagents, Gradle assemble, and device deployment run in strict topological order.
 
 ---
 
-## Install
-
-### Requirements
-
-- **Python**: 3.10 to 3.14 (standard library only; no virtual environment or external packages required).
-- **Project**: Git checkout of an Android project with a root Gradle Wrapper (`gradlew` / `gradlew.bat`).
-- **Build Tools**: JDK and Android SDK configured for your project.
-- **Device (Optional)**: Connected physical device or running Android emulator (only needed if task triggers device verification).
+## Quick Start
 
 ### Chat installation (recommended)
 
-Open your Android project in your AI coding agent (Claude Code, GitHub Copilot, Cursor, Windsurf, Roo Code, or Gemini CLI / Antigravity) and paste this exact pinned bootstrap prompt into the chat:
+Open your Android project in your AI coding agent (Claude Code, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.58/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.59/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
-The installer runs non-destructively:
-1. Discovers existing Gradle modules, build variants, and architectural conventions.
-2. Interactively asks only necessary configuration questions (e.g., target build variant, device policy).
-3. Presents a clear installation plan and awaits developer approval.
-4. Installs the immutable engine under `.agents/` and configures host adapter files.
-5. Runs the 12-point Doctor diagnosis to verify full environment readiness.
+The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics.
 
 ### Terminal installation (alternative)
 
-You can install the harness CLI globally using `pipx`:
+Install the CLI globally with `pipx`:
 
 ```bash
 # Install the CLI in an isolated environment
 pipx install android-agent-harness
 
-# Run interactive setup in your Android repository root
-android-harness setup --repo /path/to/android-project
+# Initialize harness in your Android repository root
+android-harness init --repo /path/to/android-project
 
-# Verify system health across all 12 diagnostic dimensions
+# Run 12-point diagnostic check
 android-harness doctor --repo /path/to/android-project --json
 ```
 
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.0.58 --single-branch \
+git clone --depth 1 --branch v1.0.59 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
-python ~/.android-harness/kit/harness_cli.py setup \
+python ~/.android-harness/kit/harness_cli.py init \
   --repo /path/to/android-project \
   --kit ~/.android-harness/kit
 ```
 
-After installation, daily work uses the repository-local launcher:
+In an installed repository, daily commands use the local launcher:
 
 ```bash
 python .agents/harness.py doctor --json
 ```
 
----
-
-## Daily workflow
-
-Developers interact naturally with their coding agent. For example:
-
-> *"Add retry handling to profile image loading, preserve our existing MVI architecture, add unit test coverage, and verify the screen on emulator."*
-
-The harness orchestrates the agent's work through the 15-step sequential lifecycle:
-
-### Canonical Sequential Lifecycle
-
-| Step | Stage | Canonical Command | Purpose & Parameter Contract |
-|:---:|:---|:---|:---|
-| **1** | **Discovery** | `python .agents/harness.py task-context --file <path> --json` | AST-bounded symbol and dependency slice (or `--symbol <name>`). |
-| **1b** | **Graph Discovery** | `python .agents/scripts/project_graph.py --feature <name>` | Feature-level dependency graph and component topology. |
-| **2** | **Draft Plan** | `python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR>` | Creates formal task plan. Required: `--task-id`, `--outcome`. |
-| **3** | **Approve Task** | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Records single developer approval. Generates single-use execution nonce. |
-| **4** | **Begin Task** | `python .agents/scripts/workflow.py begin --repo . --task-id <id>` | Transitions task to `IMPLEMENTING` state. Consumes approval nonce. |
-| **5** | **Diagnostic Build** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | *(Optional)* Diagnostic compilation checkpoint during implementation. |
-| **6** | **Prepare Verification** | `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>` | Freezes final working tree diff, resolves risk lane, transitions to `VERIFYING`. |
-| **7** | **Preflight Gate** | `python .agents/scripts/preflight_check.py` | Fast (<2s) deterministic checks: Room schemas, localized strings, ktlint. |
-| **8** | **Unit Tests Gate** | `python .agents/scripts/run_tests_gate.py` | Executes targeted unit tests required by policy; verifies zero regressions. |
-| **9** | **Review Package** | `python .agents/scripts/review_package.py --task-id <id>` | Generates immutable markdown review package with surface diffs and metrics. |
-| **10** | **Record Review** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvests review evidence from independent subagent transcripts. |
-| **10b** | **Validate Finding** | `python .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <id> --status <FALSE_POSITIVE\|CONFIRMED> --reason "<text>"` | Formally adjudicates reviewer findings with technical rationale. |
-| **10c** | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Transitions back to `IMPLEMENTING` if code fixes or re-work are required. |
-| **11** | **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Builds target APK *(executed only AFTER reviewers pass or REVIEWERS=NONE)*. |
-| **12** | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Deploys verified APK set and launches main component on device/emulator. |
-| **12b** | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Captures device verification screenshot as visual proof. |
-| **13** | **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery audit; validates all gates and cryptographic signatures. |
-| **14** | **Complete Task** | `python .agents/scripts/workflow.py complete --repo . --task-id <id>` | Transitions task to `READY_FOR_DELIVERY`. Developer reviews diff. |
-| **15** | **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalizes delivery state after developer completes git commit. |
-| **—** | **Context Note** | `python harness_cli.py context note "<note>"` | Records durable project conventions into `.agents/project-context/`. |
+For advanced configuration, see [docs/install-or-update-prompt.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md) and [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md).
 
 ---
 
-## 5-Tier Adaptive Risk Lanes
+## Prompt Rules vs Harness
 
-Tasks are not evaluated uniformly. The harness inspects the actual working tree diff and dynamically selects an adaptive risk lane based on blast radius:
+| Capability | Prompt / AGENTS.md only | Android Agent Harness |
+|---|---|---|
+| Architecture guidance | Model remembers it | Local project evidence |
+| Scope control | Instruction | Plan + deterministic drift checks |
+| Approval | Conversational convention | Recorded and plan-bound |
+| Tests | Model may run/report them | Execution evidence gate |
+| Review | Model judgment | Runtime-policy-routed evidence |
+| APK/device | Often ad hoc | Artifact/install/launch identity |
+| Dirty tree | Model reasons about it | Baseline-aware task isolation |
+| Recovery | Manual | Doctor + deterministic Repair |
 
-| Tier | Risk Lane | Scope Triggers | Reviewers Required | Verification Gates |
-|:---:|:---|:---|:---:|:---|
-| **Tier 0** | `NANO` | Strings, icons, drawables, documentation | **None** | Fast preflight only (<2s). Assemble and device deployment skipped. |
-| **Tier 1** | `VISUAL_ANALYTICS` | UI styling, analytics constants, Compose clicks ($\le 8$ files in 1 module) | **None** | Fast assemble permitted; device deployment skipped. |
-| **Tier 2** | `FEATURE_LOGIC` | ViewModels, UseCases, standard domain logic | **1 Reviewer**<br>(`bug-reviewer-agent`) | Preflight + unit tests gate + Gradle assemble. |
-| **Tier 3** | `SUBSYSTEM_ARCH` | Multi-module diffs, Hilt DI bindings, network API contracts | **2 Reviewers**<br>(`bug-reviewer-agent`, `regression-impact-reviewer-agent`) | Preflight + unit tests + architecture drift check + Gradle assemble. |
-| **Tier 4** | `CRITICAL_CORE` | Room schemas, DB migrations, Auth, Billing, Crypto, Security | **Full Five-Leaf Review**<br>(5 independent subagent specialists) | Mandatory Room migration gate + assemble + device deploy & sign-off walkthrough. |
-
-### Cryptographic Review Evidence & Finding Adjudication
-
-Specialist reviewers execute independently as subagents and attach cryptographically bound evidence footers:
-`EVIDENCE pkg=<sha12> cites=<n>`
-
-- **Clean Reviews**: Reviews with zero citations (`cites=0`) automatically evaluate to `PASS`.
-- **Finding Adjudication**: When a reviewer reports a false positive or intentional design decision, the lead agent adjudicates it using `workflow.py validate-finding --status FALSE_POSITIVE --reason "<rationale>"`.
-- **Audit Trails**: The technical justification is permanently embedded into `review-package.md` under `## LEAD AGENT FINDING VALIDATIONS`, allowing re-reviews to verify the decision without manual bypasses.
+> Prompt rules remain useful; the harness makes selected parts verifiable outside the model.
 
 ---
 
-## Deterministic Android Guards
+## 6-Tier Risk Model
 
-The harness includes specialized deterministic guards that catch domain-specific regressions in milliseconds before Gradle compilation:
+The harness inspects the final classified working tree diff and selects an adaptive verification tier:
 
-| Android Surface | Deterministic Protection |
-|:---|:---|
-| **Room Database & Schemas** | Checks version increments and migration path continuity. Flags missing migration classes, unhandled column drops, and illegal destructive fallbacks (`fallbackToDestructiveMigration`). |
-| **Localized Resources (`strings.xml`)** | Enforces key, plural, and placeholder parity across all locale directories (`values/`, `values-ar/`, `values-es/`). Detects introduced hardcoded UI strings. |
-| **Compose & XML Presentation** | Classifies Composable functions, Activity/Fragment lifecycle scopes, and ViewBinding references. Detects leaked ViewBinding properties in Fragments. |
-| **Threading & Dispatchers** | Scans for blocking I/O calls on the main dispatcher (`Dispatchers.Main`), unconfined coroutine scopes, and missing exception handlers. |
-| **Sensitive & Auth Logic** | Automatically elevates modifications involving tokens, credentials, encryption, or payment SDKs to Tier 4 verification. |
-| **Device & APK Continuity** | Verifies split APK sets, ABI compatibility, device connectivity states, Android user IDs (`u0`), and package identities to prevent deploying stale artifacts. |
+| Tier | Name | Typical examples | Typical verification |
+|---|---|---|---|
+| T0 | TRIVIAL | docs / non-runtime | structural / preflight |
+| T1 | LOW_RISK | strings, resources, visual-only UI | bounded deterministic checks, compile as needed |
+| T2 | FEATURE | ViewModel, UseCase, normal feature behavior | tests + targeted review + assemble |
+| T3 | SUBSYSTEM | multi-module, DI, network, architecture integration | stronger integration/architecture verification |
+| T4 | DATA_DEVICE | Room, migrations, permissions, location, FGS, device APIs | specialized gates + runtime/device proof as applicable |
+| T5 | CRITICAL | Billing, Auth, Security, Crypto, Sensitive Data | highest applicable review/evidence + sensitive approval |
+
+> Exact reviewers, gates, and device requirements are calculated by the current runtime policy from the final classified change set.
 
 ---
 
-## Safety Model & Boundaries
+## Project-aware, not project-assuming
 
-The harness enforces rigorous boundaries to keep the developer in complete control:
+Real Android repositories are rarely uniform.
+
+One codebase may contain Java + XML + MVP, Kotlin + XML + MVVM, Kotlin + Compose + MVI, callbacks next to Flow, and several source sets/modules.
+
+The harness does not assume one global architecture. It resolves the current task against the nearest evidence-backed local context and preserves that local style unless a migration is explicitly approved.
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│                    DEVELOPER BOUNDARY                        │
-│  • Git commits, pushes, branches, merges, and rebases        │
-│  • Application architecture & third-party dependency choices │
-│  • Production release signing & secret management            │
-├──────────────────────────────────────────────────────────────┤
-│                     HARNESS CONTROL PLANE                    │
-│  • Read-only project discovery & AST slicing                 │
-│  • Approval nonce enforcement & state machine validation     │
-│  • Deterministic preflight gates (<2s)                       │
-│  • Autonomous reviewer subagent routing                      │
-│  • Gradle gate execution & APK artifact fingerprinting       │
-│  • Device deployment & interactive mobile walkthrough        │
-├──────────────────────────────────────────────────────────────┤
-│                      HOST ENVIRONMENT                        │
-│  • Standard Library Python 3.10–3.14 (Zero pip dependencies) │
-│  • Gradle Wrapper, Android SDK, ADB daemon                   │
-└──────────────────────────────────────────────────────────────┘
+legacy/profile  → Java + XML + MVP
+home            → Kotlin + XML + MVVM
+tracking        → Kotlin + Compose + MVI
 ```
 
-### Safety Principles
+---
 
-- **No OS Sandbox**: The harness does not sandbox host processes. A process with shell access can modify local files; cryptographic checksums ensure any tampering with harness engine code is immediately detected.
-- **No Git Tampering**: The harness will never commit, push, reset, stash, or rebase client project code. All changes remain unstaged in the developer's working tree.
-- **No Silent Modernization**: The harness never silently rewrites project architecture, migrates XML to Compose, or swaps dependency injection frameworks without explicit developer instructions.
-- **No Dangerous Device Operations**: Does not clear application data, uninstall applications, downgrade versions, or automatically authorize billable actions on connected devices.
+## Android-specific protection
 
-For detailed security analyses, consult [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md), [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md), and [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md).
+- **Room database & schemas**: Schema version tracking, migration path continuity, column drop protection, and destructive fallback prevention (`fallbackToDestructiveMigration`).
+- **Compose, XML & resources**: String parity across locales (`values/`, `values-ar/`, etc.), plural/placeholder validation, ViewBinding lifecycle leak checks, and Compose UI state handling.
+- **Coroutines, ANR & threading**: Detection of blocking I/O calls on `Dispatchers.Main`, unconfined coroutine scopes, and missing exception handlers.
+- **Device & platform APIs**: Foreground services, runtime permissions, location, notifications, Bluetooth/camera, and Android user ID (`u0`) continuity.
+- **Gradle build variants & multi-module**: Real variant-aware compilation tasks, split APK handling, artifact set identity, and cross-module dependency validation.
 
 ---
 
-## Supported Environments & AI Hosts
+## Evidence-bound verification
 
-### Android Project Compatibility
-
-- **Languages**: Kotlin, Java, and mixed codebases.
-- **UI Frameworks**: Jetpack Compose, XML Views, and hybrid UI.
-- **Project Topologies**: Single-module apps, multi-module apps, library projects, dynamic-feature modules, and Android/KMP targets.
-- **Build Systems**: Gradle with Kotlin DSL (`build.gradle.kts`) or Groovy DSL (`build.gradle`), Gradle Version Catalogs (`libs.versions.toml`).
-- **Operating Systems**: Linux, macOS, and Windows (native PowerShell and CMD support).
-
-### AI Host Adapters
-
-The harness provides native adapter configurations for all major AI coding environments:
-
-| AI Host | Integration Mechanism | Enforcement Tier |
-|:---|:---|:---:|
-| **Antigravity / Gemini CLI** | Native tool hooks (`agents/hooks.json`), rules, and skills | `HARD_ENFORCED` / `RULE_ENFORCED` |
-| **Claude Code** | Pre-tool execution hooks (`config.json`), subagents, custom rules | `HARD_ENFORCED` |
-| **GitHub Copilot** | Custom agent configuration, workspace rules | `RULE_ENFORCED` |
-| **Cursor** | Workspace rules (`.cursorrules`), terminal wrappers | `RULE_ENFORCED` |
-| **Windsurf** | Cascade instructions (`.windsurfrules`), workflow recipes | `RULE_ENFORCED` |
-| **Roo Code** | Custom modes, tool permission wrappers | `RULE_ENFORCED` |
-
-See [Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) for full adapter configuration details.
-
----
-
-## Quality & Self-Testing
-
-This repository tests its own engine through an extensive deterministic selftest suite covering 18 test domains and 500+ unit, integration, and scenario assertions:
-
-```bash
-# Run the complete deterministic selftest suite
-python harness_cli.py selftest
-
-# Run syntax compilation validation across all scripts
-python -m compileall -q harness_cli.py agents/scripts agents/mcp/zoho_sprints
-
-# Validate release metadata, prompt pins, checksums, and package invariants
-python scripts_dev/validate_release.py
+```text
+Final Change Set
+      ↓
+Runtime Policy
+      ↓
+Tests / Reviews / Assemble / Device
+      ↓
+Bound Evidence
+      ↓
+Final Verifier
 ```
 
-### Continuous Integration (CI)
-
-Every commit and pull request is validated by GitHub Actions across:
-- **Python Matrix**: 3.10, 3.11, 3.12, 3.13, and 3.14.
-- **Platforms**: Ubuntu 24.04, Windows Server 2025, and macOS 15.
-- **Checks**: Full deterministic selftest, performance regression benchmarks, wheel lifecycle tests (install, update, uninstall), and tamper-detection validation.
+> Evidence is bound to the exact delivery snapshot/change set. Stale, mismatched, incomplete, or invalid evidence cannot approve delivery.
 
 ---
 
-## Documentation
+## Supported hosts / enforcement model
 
-Comprehensive guides and architectural references are available in the repository:
+| Host | Adapter | Mutation Interception | Approval Trust | Notes |
+|---|---|---|---|---|
+| **Antigravity / Gemini CLI** | `agents/hooks.json`, rules, skills | `HARD_ENFORCED` / `RULE_ENFORCED` | Native hooks + rule gates | Intercepts tool calls directly |
+| **Claude Code** | Pre-tool execution hooks (`config.json`), rules | `HARD_ENFORCED` | Native tool hooks | Blocks unapproved writes |
+| **Cursor** | `.cursorrules` / `.cursor/rules` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
+| **Windsurf** | `.windsurfrules` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
+| **GitHub Copilot** | `.github/copilot-instructions.md` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
+| **Roo Code / Continue** | Mode instructions, system rules | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
 
-| Document | Description |
-|:---|:---|
-| [Quickstart Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/quickstart.md) | Step-by-step setup and running your first governed task. |
-| [Architecture Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/architecture.md) | Deep dive into the state machine, project graph, and evidence subsystem. |
-| [Workflow Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows.md) | Complete guide to the 15-step task and delivery lifecycle. |
-| [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md) | Supported project structures, Gradle versions, and OS platforms. |
-| [AI Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) | Host adapter setup for Claude Code, Gemini CLI, Cursor, and Copilot. |
-| [Setup Wizard Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/setup-wizard.md) | Interactive setup questions, flags, and non-interactive JSON schemas. |
-| [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md) | Security analysis, trust boundaries, and mitigated vulnerability classes. |
-| [Restore & Recovery](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/restore.md) | Safe recovery, repair, and rollback procedures. |
-| [Contributing Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CONTRIBUTING.md) | Guidelines for contributing code, tests, and documentation. |
-| [Changelog](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CHANGELOG.md) | Detailed version history, fixes, and migration notices. |
+Host-native hooks can intercept some mutation classes where supported. Other hosts rely on rule enforcement plus deterministic downstream verification. The harness reports the detected enforcement level honestly.
+
+See [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) for full integration details.
 
 ---
 
-## What this project is not
+## What it does not do
 
-To set clear engineering expectations:
-- **Not an AI Model or Proxy**: We do not sell or wrap LLM APIs. The harness sits in your repository and works with whichever AI model or coding assistant you use.
-- **Not a Framework Replacement**: It does not replace Android Studio, Gradle, Kotlin compiler, or Jetpack libraries.
-- **Not an Autonomous Swarm Gimmick**: It does not spin up uncontrolled agent loops. Every task has an explicit scope, bounded context, and human-in-the-loop approval.
-- **Not a Reason to Run Heavy Builds Blindly**: It actively avoids running slow Gradle builds or device deployments for micro edits and documentation changes.
+- It is not an Android IDE.
+- It is not a coding model.
+- It does not replace Android Studio or Gradle.
+- It does not guarantee bug-free code.
+- It does not make every host OS-sandboxed.
+- It does not automatically modernize legacy architecture.
+- It does not remove developer authority over Git/release decisions.
+
+---
+
+## Who should use it
+
+**Best fit:**
+- Production Android teams using AI coding agents regularly
+- Mixed/legacy codebases (Java/Kotlin, XML/Compose, multi-module)
+- Apps with Room, payments, auth, permissions, foreground services, or device behavior
+- Developers who want AI speed without giving up explicit engineering control
+
+**Probably unnecessary for:**
+- Throwaway prototypes
+- Tiny demo apps
+- One-off code generation
+
+---
+
+## Repository architecture
+
+```text
+agents/
+├── rules/         # Canonical harness rules and behavioral invariants
+├── scripts/       # Deterministic Python standard-library engine and verification gates
+├── skills/        # AI host skill definitions and reference contracts
+├── subagents/     # Independent specialized reviewer agent definitions
+├── tool-adapters/ # Host-specific configuration templates (Claude, Gemini, Cursor, etc.)
+└── workflows/     # Task lifecycle and multi-phase orchestration workflows
+```
+
+Each component is implemented using Python standard-library modules with zero external runtime dependencies.
+
+---
+
+## Testing / CI
+
+- **Platforms**: Linux (Ubuntu 24.04), Windows (Server 2025), macOS (15).
+- **Python Matrix**: Python 3.10, 3.11, 3.12, 3.13, and 3.14 (standard library only; zero pip dependencies).
+- **Validation**: Full deterministic selftest suite (`python harness_cli.py selftest`), syntax compilation across all scripts (`python -m compileall`), wheel packaging and lifecycle tests, security/adversarial boundary validation, and multi-phase Android workflow scenario tests.
+
+All pull requests and commits run the complete matrix on GitHub Actions.
+
+---
+
+## Maturity / roadmap
+
+Production-oriented and heavily self-tested. Real-world Android burn-in continues across heterogeneous production codebases.
+
+**Roadmap:**
+- Real-repo burn-in across diverse Android topologies
+- Performance tuning of Task Context AST slicing
+- Host integration refinement for emerging AI environments
+- Documentation simplification and developer onboarding polish
 
 ---
 
@@ -336,15 +285,51 @@ To set clear engineering expectations:
 
 We welcome contributions! Please review [CONTRIBUTING.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CONTRIBUTING.md) before submitting pull requests.
 
-Key contributor rules:
-1. **Standard Library Only**: All runtime engine code must strictly use the Python standard library.
-2. **Deterministic Coverage**: Any behavioral change or bug fix must include deterministic regression tests in `agents/scripts/_*_selftest.py`.
-3. **Full Suite Green**: Run `python harness_cli.py selftest` and `python scripts_dev/validate_release.py` before submitting.
+1. **Standard Library Only**: All runtime engine code must use Python standard library only.
+2. **Safety Invariants**: Never weaken approval gates, plan nonces, or evidence binding.
+3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly.
 
-For vulnerability disclosures, please follow the coordinated process detailed in [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
+For security reports, refer to [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
+
+---
+
+## FAQ
+
+**1. Does this replace Android Studio?**
+No. Android Studio remains the primary IDE for Android development, debugging, and profiling. The harness is an engineering control layer for AI coding tools working within the repository.
+
+**2. Does this make the AI autonomous?**
+No. The harness is approval-first. All task scopes and risk classifications require explicit developer approval before modifications begin, and delivery requires verified evidence.
+
+**3. Can it work with mixed Java/Kotlin/XML/Compose codebases?**
+Yes. The harness detects local architectural conventions per module and source set, ensuring agents preserve existing patterns (such as Java + XML) rather than performing unplanned modernizations.
+
+**4. Does every task run many reviewers?**
+No. The 6-tier risk model dynamically assigns verification: trivial edits (T0) and low-risk changes (T1) skip reviewer subagents entirely. Specialized reviewers run only when justified by the final classified blast radius.
+
+**5. Does every task require a device?**
+No. Device deployment and mobile verification are required only for tiers and changes involving device-facing surfaces (such as T4/T5 with Room, permissions, or system services) or when explicitly requested.
+
+**6. Can I use Codex / Gemini / Claude / Copilot?**
+Yes. Native tool adapters and instruction templates are provided for Claude Code, Gemini CLI / Antigravity, GitHub Copilot, Cursor, Windsurf, Roo Code, and others.
+
+**7. Does the harness commit/push code?**
+Never. Git commits, branches, pushes, and release decisions remain 100% developer-owned. The harness leaves modifications unstaged in your working tree.
+
+**8. What happens if the harness itself is corrupted?**
+The harness includes deterministic health diagnostics (`doctor`) and self-healing repair (`repair`) that can restore managed engine files from the pinned kit without touching your application source code.
 
 ---
 
 ## License
 
 MIT License. See [LICENSE](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE).
+
+- [Quickstart Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/quickstart.md)
+- [Architecture Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/architecture.md)
+- [Workflow Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows.md)
+- [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
+- [AI Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md)
+- [Setup Wizard Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/setup-wizard.md)
+- [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md)
+- [Restore & Recovery](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/restore.md)

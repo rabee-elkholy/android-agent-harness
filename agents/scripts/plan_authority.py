@@ -169,6 +169,8 @@ def plan_payload(plan: dict) -> dict:
         payload["architecture_contract"] = plan["architecture_contract"]
     if "phases" in plan and plan.get("phases") is not None:
         payload["phases"] = plan["phases"]
+    if "supersedes_plan_sha256" in plan and plan.get("supersedes_plan_sha256") is not None:
+        payload["supersedes_plan_sha256"] = plan["supersedes_plan_sha256"]
     return payload
 
 
@@ -214,6 +216,9 @@ def create_plan(
     external_writes: list[str] | None = None,
     architecture_contract: dict | None = None,
     phases: list[dict] | None = None,
+    base_manifest: dict | None = None,
+    supersedes_plan_sha256: str | None = None,
+    revision_number: int = 1,
 ) -> dict:
     task_id = validate_id(task_id, "task id")
     if not requested_outcome.strip():
@@ -222,7 +227,7 @@ def create_plan(
     unknown_external = set(requested_external) - EXTERNAL_WRITES
     if unknown_external:
         raise ValidationError("unsupported external write authority: " + ", ".join(sorted(unknown_external)))
-    base = build_manifest(repo)
+    base = base_manifest if base_manifest is not None else build_manifest(repo)
     record = {
         "schema_version": SCHEMA_VERSION,
         "plan_id": uuid.uuid4().hex,
@@ -247,6 +252,9 @@ def create_plan(
         "approval": None,
         "execution_nonce": None,
     }
+    if supersedes_plan_sha256:
+        record["supersedes_plan_sha256"] = supersedes_plan_sha256
+        record["revision_number"] = revision_number
     if phases is not None:
         record["phases"] = phases
     if architecture_contract is not None:

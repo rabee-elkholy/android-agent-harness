@@ -484,7 +484,14 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
     used_calls = int(plan.get("review_calls_used") or 0)
     budget = int(policy.get("model_call_budget") or 0)
     if used_calls + len(seen) > budget:
-        raise ValidationError("review model-call budget exceeded; developer decision is required")
+        from workflow import build_budget_exhausted_remediation
+        msg = build_budget_exhausted_remediation(
+            policy=policy,
+            calls_used=used_calls,
+            requested=len(seen),
+            budget=budget,
+        )
+        raise ValidationError(msg)
     blocking = [item for item in findings if is_blocking_finding(item, policy)]
     status = "FAIL" if blocking else "PASS"
     validations: list[dict] = []
@@ -576,7 +583,7 @@ def verdict_to_report(
     }
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", "--task-id", dest="task", required=True)
@@ -595,6 +602,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--override-reviews", action="store_true", help="Record explicit developer override of semantic reviewers")
     parser.add_argument("--proof-reference", default="", help="Proof reference for developer override")
     parser.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), default="conversation", help="Source for developer override")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     try:
         repo = Path(args.repo).resolve()

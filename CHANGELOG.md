@@ -4,6 +4,23 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.59] - 2026-09-21
+
+### 6-Tier Dynamic Risk Model and Graph-First Discovery Architecture
+
+- **6-Tier Dynamic Risk Governance (`review_policy.py`)**:
+  - Transitioned from fixed review lanes to a 6-tier dynamic risk model (`T0_TRIVIAL`, `T1_LOW`, `T2_MEDIUM`, `T3_HIGH`, `T4_COMPLEX`, `T5_CRITICAL`), mapping code changes accurately to required gates, reviewer rosters, and device verification needs.
+  - Aligned subagent reviewer prompt schemas across all specialist roles (`agents/subagents/*.json`), enforcing focused review domains without duplication.
+- **Next-Action Command Router**:
+  - Integrated `--next` command routing into `harness.py task status` and `workflow.py status`, providing agents with authoritative, actionable next commands across every lifecycle transition.
+  - Streamlined finding adjudication with `workflow.py validate-finding` (`CONFIRMED` / `FALSE_POSITIVE` with mandatory justification).
+- **Graph-First Discovery & AST Code Intelligence**:
+  - Introduced graph-first discovery router (`discovery_router.py`) and proof receipt generation (`discovery_receipt.py`), establishing graph inspection (`harness.py graph --feature <name>` / `--find <Symbol>`) as the primary code discovery anchor before search.
+  - Implemented bounded AST slicing and symbol resolution in `task_context.py` and `_graph_core.py`, linking discovery context directly to task drafting.
+- **Unified Tool Adapters & Documentation**:
+  - Updated canonical lifecycle tables, command catalogs, and execution rules across `GEMINI.md`, `README.md`, `agents/rules/harness-rules.md`, and all adapter templates (`AGENTS.md.template`, `CLAUDE.md.template`, `CODEX.md.template`, etc.).
+  - Added full test coverage in `_graph_discovery_selftest.py` and `_daily_workflow_selftest.py`.
+
 ## [1.0.58] - 2026-09-20
 
 ### Idle Hook Guidance, Architecture Scope Bridging, and Clean Recovery Enforcement

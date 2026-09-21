@@ -222,7 +222,7 @@ def check_architecture_drift(
                 " Remediation Advice: If this task is modifying an EXISTING XML screen or fragment, "
                 "do NOT delete your XML layouts! The task plan was drafted with mode=NEW (Compose). "
                 "To fix: update your task contract to preserve the existing screen via: "
-                "`python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome \"...\" --kind FEATURE --architecture-target-scope <screen_file.kt> --force` "
+                "`python .agents/scripts/workflow.py revise --repo . --task-id <id> --outcome \"...\" --kind FEATURE --architecture-target-scope <screen_file.kt>` "
                 "then approve and resume. "
                 "Only delete XML layouts if this task was genuinely meant to build a new screen purely with Jetpack Compose."
             )

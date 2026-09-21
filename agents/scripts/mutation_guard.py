@@ -15,7 +15,7 @@ VERIFICATION_SCRIPTS = {
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
 }
-BOOTSTRAP_ACTIONS = {"draft", "begin", "status", "approve", "approve-sensitive", "deliver", "debug-evidence", "recover-stale", "validate-finding"}
+BOOTSTRAP_ACTIONS = {"draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification", "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding"}
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 
@@ -191,22 +191,31 @@ def active_plan(repo: Path | str) -> dict:
                     try:
                         p_data = read_json(p_file)
                         st = str(p_data.get("status") or "")
-                        if st in ("IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
-                            mtime = p_file.stat().st_mtime
-                            candidates.append((mtime, p_data, p_file, task_sub.name))
+                        if st in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"):
+                            candidates.append((p_data, p_file, task_sub.name))
                     except Exception:
                         continue
-        if candidates:
-            candidates.sort(key=lambda c: c[0], reverse=True)
-            chosen_plan = candidates[0][1]
-            chosen_file = candidates[0][2]
-            chosen_tid = candidates[0][3]
+        if len(candidates) == 1:
+            chosen_plan = candidates[0][0]
+            chosen_file = candidates[0][1]
+            chosen_tid = candidates[0][2]
             try:
                 from _vnext_common import atomic_write_json, utc_now
                 atomic_write_json(active_file, {"task_id": chosen_tid, "plan_path": str(chosen_file), "updated_at": utc_now()})
             except Exception:
                 pass
             return chosen_plan
+        elif len(candidates) > 1:
+            details = []
+            for p_data, _, tid in candidates:
+                st = str(p_data.get("status") or "UNKNOWN")
+                sha = str(p_data.get("plan_sha256") or "")[:12]
+                ca = str(p_data.get("created_at") or "")
+                details.append(f"{tid} ({st}, sha:{sha}, created:{ca})")
+            raise ValidationError(
+                f"AMBIGUOUS_ACTIVE_TASK: Multiple live tasks found in worktree without an active pointer: {'; '.join(details)}. "
+                "Specify the active task via 'workflow.py recover-active --task-id <id>' or cancel obsolete tasks."
+            )
 
     raise ValidationError(f"cannot read JSON artifact {active_file}: No active task found")
 

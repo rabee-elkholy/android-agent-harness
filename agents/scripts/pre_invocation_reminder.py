@@ -27,39 +27,35 @@ def _message() -> str:
         )
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
-    if status == "AWAITING_DEVELOPER_APPROVAL":
-        next_step = "Wait for explicit approval; do not edit files or run mutating commands."
-    elif status == "IMPLEMENTING":
-        next_step = (
-            "Implement approved scope. Multi-phase execution is fully autonomous: single intake approval covers all phases; "
-            "never pause, demand 'Proceed', or ask developer between phases. Self-heal compile errors. Do NOT poll background tasks."
-        )
-    elif status == "VERIFYING":
-        next_step = (
-            "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (ONLY after all reviewers pass) -> 5. ask_question device check -> 6. verify. "
-            "Reviewer dispatch is 100% autonomous via subagents; never pause, ask developer, or demand 'Proceed'. Never assemble or install on device while reviewers are still executing. "
-            "Passing gates bridge automatically into evidence. If fixes needed, run workflow.py resume; never stall on new plans or demand 'Proceed'."
-        )
-    elif status == "BLOCKED":
-        blocked = plan.get("blocked_reviewers", [])
-        blocked_str = f" from: {', '.join(blocked)}" if blocked else ""
-        next_step = f"Task is BLOCKED due to findings{blocked_str}. Fix code issues, then resume via: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`."
-    elif status == "READY_FOR_DELIVERY":
-        try:
-            from workflow import finalize_ready_delivery
-            plan, delivered = finalize_ready_delivery(REPO, task_id, plan, require_clean_tree=True)
-            if delivered:
-                return (
-                    "Android Harness: discovery should start with targeted context (`python .agents/harness.py task-context --file <path> --json`) "
-                    "or architectural graph (`python .agents/scripts/project_graph.py --feature <name>` / `--find <Symbol>`). "
-                    "Unanchored repository-wide search cascades are forbidden; targeted search within feature directories is permitted. "
-                    "Pre-planning clarification: clarify missing scenarios via ask_question before drafting plan."
-                )
-        except Exception:
-            pass
-        next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
-    else:
-        next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
+    status = str(plan.get("status") or "UNKNOWN")
+    task_id = str(plan.get("task_id") or "unknown")
+    try:
+        from workflow import resolve_next_action
+        act = resolve_next_action(REPO, task_id, plan)
+        act_cmd = f" -> `{act['command']}`" if act.get("command") else ""
+        next_step = f"Next action: {act.get('code')} ({act.get('kind')}){act_cmd}. Reason: {act.get('reason')}."
+    except Exception:
+        if status == "AWAITING_DEVELOPER_APPROVAL":
+            next_step = "Wait for explicit approval; do not edit files or run mutating commands."
+        elif status == "IMPLEMENTING":
+            next_step = (
+                "Implement approved scope. Multi-phase execution is fully autonomous: single intake approval covers all phases; "
+                "never pause, demand 'Proceed', or ask developer between phases. Self-heal compile errors. Do NOT poll background tasks."
+            )
+        elif status == "VERIFYING":
+            next_step = (
+                "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (ONLY after all reviewers pass) -> 5. ask_question device check -> 6. verify. "
+                "Reviewer dispatch is 100% autonomous via subagents; never pause, ask developer, or demand 'Proceed'. Never assemble or install on device while reviewers are still executing. "
+                "Passing gates bridge automatically into evidence. If fixes needed, run workflow.py resume; never stall on new plans or demand 'Proceed'."
+            )
+        elif status == "BLOCKED":
+            blocked = plan.get("blocked_reviewers", [])
+            blocked_str = f" from: {', '.join(blocked)}" if blocked else ""
+            next_step = f"Task is BLOCKED due to findings{blocked_str}. Fix code issues, then resume via: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`."
+        elif status == "READY_FOR_DELIVERY":
+            next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
+        else:
+            next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
     return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, cancel or close this active task first (run `workflow.py cancel --task-id {task_id}`); do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`."
 
 
