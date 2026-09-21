@@ -340,9 +340,216 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
         self.assertEqual("deny", self.call("find_by_name", {"SearchDirectory": ".", "Pattern": "test"})["decision"])
 
-        # 4. Broad search during VERIFYING is allowed (reviewers never blocked)
+        # 4. In VERIFYING, search is bounded to review scope
         self.activate("VERIFYING")
-        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
+        task = self.state / "tasks/task-one"
+        (task / "current-run.json").write_text(json.dumps({
+            "run_id": "run-one",
+            "review_scope": {
+                "changed_files": ["app/src/main/java/com/example/HomeActivity.kt"],
+                "allowed_roots": ["app/src/main/java/com/example"],
+                "direct_callers": [],
+                "max_graph_hops": 2,
+            }
+        }), encoding="utf-8")
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app/src/main/java/com/example/HomeActivity.kt", "Query": "test"})["decision"])
+        res_denied = self.call("grep_search", {"SearchPath": "app", "Query": "test"})
+        self.assertEqual("deny", res_denied["decision"])
+        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res_denied.get("reason_code"))
+
+
+class GenericMCPTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp.name)
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Harness Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.email", "harness@example.invalid"], cwd=self.repo, check=True)
+        (self.repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+        source = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("package com.example\nclass MainActivity {}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.repo, check=True)
+        self.state = self.repo / ".agents/state"
+        self.env = os.environ.copy()
+        self.env["HARNESS_REPO"] = str(self.repo)
+        self.env["HARNESS_HOOK_STATE"] = str(self.state / "hook-state.json")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def call(self, name: str, args: dict | None = None) -> dict:
+        payload = {"toolCall": {"name": name, "args": args or {}}}
+        proc = subprocess.run(
+            [sys.executable, str(ENGINE)], input=json.dumps(payload), capture_output=True,
+            text=True, encoding="utf-8", errors="replace", env=self.env, check=False, timeout=15,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def activate(self, status: str = "IMPLEMENTING", *, external_writes: list[str] | None = None, nonce: str = "nonce") -> None:
+        task = self.state / "tasks/task-mcp"
+        task.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "task_id": "task-mcp",
+            "plan_id": "plan-mcp",
+            "status": status,
+            "execution_nonce": nonce,
+            "approval": {"single_use_nonce": nonce},
+            "external_writes": external_writes or [],
+            "plan_sha256": "abcdef1234567890abcdef1234567890",
+        }
+        (task / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        (self.state / "active-task.json").write_text(json.dumps({"task_id": "task-mcp", "plan_path": str(task / "plan.json")}), encoding="utf-8")
+
+    def test_MCP_001_generic_read_allowed(self):
+        """MCP-001: Generic MCP read tools are allowed without external-write scope."""
+        self.activate(external_writes=[])
+        res1 = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "get_file"})
+        self.assertEqual("allow", res1["decision"])
+        res2 = self.call("call_mcp_tool", {"ServerName": "firebase", "ToolName": "list_projects"})
+        self.assertEqual("allow", res2["decision"])
+        res3 = self.call("call_mcp_tool", {"ServerName": "notion", "ToolName": "search_pages"})
+        self.assertEqual("allow", res3["decision"])
+
+    def test_MCP_002_write_without_scope_denied(self):
+        """MCP-002: Mutation without approved external-write scope is denied."""
+        self.activate(external_writes=[])
+        res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "create_component"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("EXTERNAL_WRITE_SCOPE_REQUIRED", res.get("reason_code"))
+        self.assertIn("--external-write mcp:figma", res.get("reason", ""))
+
+    def test_MCP_003_figma_write_with_mcp_figma_allowed(self):
+        """MCP-003: Figma write is allowed when mcp:figma is in approved external_writes."""
+        self.activate(external_writes=["mcp:figma"])
+        res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "create_component"})
+        self.assertEqual("allow", res["decision"])
+
+    def test_MCP_004_figma_scope_does_not_authorize_firebase(self):
+        """MCP-004: mcp:figma scope does not authorize firebase mutations."""
+        self.activate(external_writes=["mcp:figma"])
+        res = self.call("call_mcp_tool", {"ServerName": "firebase", "ToolName": "create_app"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("EXTERNAL_WRITE_SCOPE_REQUIRED", res.get("reason_code"))
+        self.assertIn("--external-write mcp:firebase", res.get("reason", ""))
+
+    def test_MCP_005_firebase_deploy_with_mcp_firebase_denied(self):
+        """MCP-005: High-impact mutation (firebase deploy) with only mcp:firebase is denied."""
+        self.activate(external_writes=["mcp:firebase"])
+        res = self.call("call_mcp_tool", {"ServerName": "firebase", "ToolName": "firebase_deploy"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("EXTERNAL_HIGH_IMPACT_SCOPE_REQUIRED", res.get("reason_code"))
+        self.assertIn("--external-write mcp:firebase:high-impact", res.get("reason", ""))
+
+    def test_MCP_006_firebase_deploy_with_high_impact_scope_allowed(self):
+        """MCP-006: High-impact mutation is allowed when mcp:firebase:high-impact is approved."""
+        self.activate(external_writes=["mcp:firebase:high-impact"])
+        res = self.call("call_mcp_tool", {"ServerName": "firebase", "ToolName": "firebase_deploy"})
+        self.assertEqual("allow", res["decision"])
+
+    def test_MCP_007_unknown_tool_denied(self):
+        """MCP-007: Tools that cannot be safely classified fail closed."""
+        self.activate(external_writes=["mcp:figma", "mcp:figma:high-impact"])
+        res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "arbitrary_custom_action"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("UNKNOWN_MCP_TOOL", res.get("reason_code"))
+
+    def test_MCP_008_read_like_prefix_containing_mutation_keyword_is_not_treated_read_only(self):
+        """MCP-008: Read prefix with mutation keyword (e.g. get_or_create_user) is treated as write."""
+        self.activate(external_writes=[])
+        res = self.call("call_mcp_tool", {"ServerName": "backend", "ToolName": "get_or_create_user"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("EXTERNAL_WRITE_SCOPE_REQUIRED", res.get("reason_code"))
+
+    def test_MCP_009_write_like_tool_cannot_disguise_itself_with_get(self):
+        """MCP-009: High-impact tool prefixed with get (e.g. get_and_delete_account) is high-impact."""
+        self.activate(external_writes=["mcp:auth"])
+        res = self.call("call_mcp_tool", {"ServerName": "auth", "ToolName": "get_and_delete_account"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("EXTERNAL_HIGH_IMPACT_SCOPE_REQUIRED", res.get("reason_code"))
+
+    def test_MCP_010_old_revised_invalidated_approval_cannot_mutate(self):
+        """MCP-010: Plan with invalidated approval nonce cannot execute mutations."""
+        task = self.state / "tasks/task-mcp"
+        task.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "task_id": "task-mcp",
+            "status": "IMPLEMENTING",
+            "execution_nonce": "nonce-new",
+            "approval": {"single_use_nonce": "nonce-old"},
+            "external_writes": ["mcp:figma"],
+            "plan_sha256": "abcdef1234567890abcdef1234567890",
+        }
+        (task / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        (self.state / "active-task.json").write_text(json.dumps({"task_id": "task-mcp", "plan_path": str(task / "plan.json")}), encoding="utf-8")
+        res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "create_frame"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("PLAN_NOT_APPROVED", res.get("reason_code"))
+
+    def test_MCP_011_generic_call_receives_no_injected_operation_id(self):
+        """MCP-011: Generic MCP tools do not receive an injected operation_id."""
+        self.activate(external_writes=["mcp:figma"])
+        tool_args = {"name": "Frame 1", "width": 100}
+        res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "create_frame", "Arguments": tool_args})
+        self.assertEqual("allow", res["decision"])
+        self.assertNotIn("operation_id", tool_args)
+
+    def test_MCP_012_local_audit_fingerprint_created(self):
+        """MCP-012: Local audit fingerprint is created and recorded for generic mutations."""
+        self.activate(external_writes=["mcp:figma"])
+        res = self.call("call_mcp_tool", {
+            "ServerName": "figma",
+            "ToolName": "create_frame",
+            "Arguments": {"name": "Header", "secret_key": "my-token"},
+        })
+        self.assertEqual("allow", res["decision"])
+        fp = res.get("mcp_fingerprint")
+        self.assertTrue(bool(fp), "Audit fingerprint must be returned")
+        audit_file = self.state / "audit_log.jsonl"
+        self.assertTrue(audit_file.is_file())
+        lines = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        matched = [rec for rec in lines if rec.get("mcp_fingerprint") == fp]
+        self.assertEqual(1, len(matched))
+
+    def test_MCP_013_zoho_still_uses_specialized_integration(self):
+        """MCP-013: Zoho calls resolve to specialized integration requiring operation_id and policy."""
+        # 1. Generic scope does not authorize specialized Zoho integration
+        self.activate(external_writes=["mcp:zoho-sprints"])
+        res1 = self.call("call_mcp_tool", {
+            "ServerName": "zoho-sprints",
+            "ToolName": "zoho_update_task_status",
+            "Arguments": {"item_id": "1", "status": "In progress", "operation_id": "op-1"},
+        })
+        self.assertEqual("deny", res1["decision"])
+        self.assertIn("zoho_sprints", res1.get("reason", ""))
+
+        # 2. Specialized scope approved, but missing operation_id is rejected by specialized integration
+        self.activate(external_writes=["zoho_sprints"])
+        res2 = self.call("call_mcp_tool", {
+            "ServerName": "zoho-sprints",
+            "ToolName": "zoho_update_task_status",
+            "Arguments": {"item_id": "1", "status": "In progress"},
+        })
+        self.assertEqual("deny", res2["decision"])
+        self.assertIn("require a stable operation_id", res2.get("reason", ""))
+
+    def test_MCP_014_model_cannot_self_add_mcp_scope_after_approval(self):
+        """MCP-014: Direct modification of plan.json by file tools is blocked."""
+        self.activate(external_writes=[])
+        plan_path = self.state / "tasks/task-mcp/plan.json"
+        res = self.call("replace_file_content", {
+            "TargetFile": str(plan_path),
+            "Instruction": "add scope",
+            "Description": "hack",
+            "TargetContent": '"external_writes": []',
+            "ReplacementContent": '"external_writes": ["mcp:firebase:high-impact"]',
+            "StartLine": 1,
+            "EndLine": 10,
+            "AllowMultiple": False,
+        })
+        self.assertEqual("deny", res["decision"])
 
 
 if __name__ == "__main__":

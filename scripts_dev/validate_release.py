@@ -153,7 +153,7 @@ def workflow_integrity_errors(repo_root: Path) -> list[str]:
     for runner in ("ubuntu-24.04", "windows-2025", "macos-15-intel"):
         if runner not in ci:
             errors.append(f"CI does not exercise supported runner {runner}")
-    if "run: python harness_cli.py selftest" not in ci:
+    if not re.search(r"run:\s*python harness_cli\.py selftest(?!\s*--quick)", ci):
         errors.append("CI must run the canonical full selftest")
     if re.search(r"python-version:\s*\[[^\]]+\]", ci):
         errors.append(
@@ -190,11 +190,14 @@ def workflow_integrity_errors(repo_root: Path) -> list[str]:
         wf_text = wf_path.read_text(encoding="utf-8")
         observed_timeouts = _extract_job_timeouts(wf_text)
         for job_name, req_timeout in jobs.items():
-            if job_name not in observed_timeouts:
+            actual_job = job_name
+            if job_name == "selftest" and "full-selftest" in observed_timeouts:
+                actual_job = "full-selftest"
+            if actual_job not in observed_timeouts:
                 errors.append(f"{wf_name}: job '{job_name}' is missing required timeout-minutes ({req_timeout})")
-            elif observed_timeouts[job_name] != req_timeout:
+            elif observed_timeouts[actual_job] != req_timeout:
                 errors.append(
-                    f"{wf_name}: job '{job_name}' has timeout-minutes {observed_timeouts[job_name]}, expected {req_timeout}"
+                    f"{wf_name}: job '{actual_job}' has timeout-minutes {observed_timeouts[actual_job]}, expected {req_timeout}"
                 )
 
     return errors

@@ -299,10 +299,28 @@ def verify_independent_reviewer_execution(
         if not t_path or not t_path.is_file():
             return False, {"verified": False, "reason": f"could not locate trusted transcript for subagent {clean_id}"}
 
-    receipt_dir = task_dir(repo, task_id) / "reviewer-dispatches"
-    receipt_file = receipt_dir / f"{reviewer}.json"
-    if not receipt_file.is_file():
+    run_exec_receipt = task_dir(repo, task_id) / "review-execution" / run_id / "dispatch" / f"{reviewer}.json"
+    legacy_receipt = task_dir(repo, task_id) / "reviewer-dispatches" / f"{reviewer}.json"
+
+    receipt_file = None
+    if run_exec_receipt.is_file():
+        receipt_file = run_exec_receipt
+    elif legacy_receipt.is_file():
+        receipt_file = legacy_receipt
+
+    current_p = task_dir(repo, task_id) / "current-run.json"
+    protocol_version = 1
+    if current_p.is_file():
         try:
+            protocol_version = int(read_json(current_p).get("review_protocol_version") or 1)
+        except Exception:
+            pass
+
+    if receipt_file is None:
+        if protocol_version >= 2:
+            return False, {"verified": False, "reason": f"missing dispatch receipt for reviewer {reviewer}"}
+        try:
+            receipt_dir = task_dir(repo, task_id) / "reviewer-dispatches"
             receipt_dir.mkdir(parents=True, exist_ok=True)
             receipt = {
                 "schema_version": 1,
@@ -315,7 +333,8 @@ def verify_independent_reviewer_execution(
                 "host": "antigravity",
             }
             receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
-            atomic_write_json(receipt_file, receipt)
+            atomic_write_json(legacy_receipt, receipt)
+            receipt_file = legacy_receipt
         except Exception:
             return False, {"verified": False, "reason": f"missing dispatch receipt for reviewer {reviewer}"}
     else:
@@ -324,8 +343,9 @@ def verify_independent_reviewer_execution(
         except Exception as exc:
             return False, {"verified": False, "reason": f"corrupt dispatch receipt: {exc}"}
 
-    if receipt.get("schema_version") != 1:
-        return False, {"verified": False, "reason": f"unsupported receipt schema_version: {receipt.get('schema_version')}"}
+    r_ver = receipt.get("schema_version")
+    if r_ver not in (1, 2):
+        return False, {"verified": False, "reason": f"unsupported receipt schema_version: {r_ver}"}
     if receipt.get("task_id") != task_id:
         return False, {"verified": False, "reason": f"receipt task_id mismatch: {receipt.get('task_id')} != {task_id}"}
     if receipt.get("run_id") != run_id:
@@ -390,6 +410,26 @@ def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, res
     manifest = read_json(Path(current["manifest"]))
     package = active_review_package_path(repo, current)
     package_sha = sha256_file(package)
+    protocol_version = int(current.get("review_protocol_version") or 1)
+
+    if protocol_version >= 2:
+        from review_orchestrator import parse_structured_result
+        parsed = parse_structured_result(
+            text=text,
+            expected_task_id=task_id,
+            expected_run_id=str(current["run_id"]),
+            expected_reviewer=reviewer,
+            expected_package_sha256=package_sha,
+        )
+        return {
+            "schema_version": 1,
+            "reviewer": reviewer,
+            "package_sha256": package_sha,
+            "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+            "change_set_sha256": manifest["change_set_sha256"],
+            "verdict": parsed["verdict"],
+            "findings": parsed["findings"],
+        }
 
     verdict, cites, pkg_sha = _extract_evidence_and_verdict(reviewer, text, package_sha)
     if not pkg_sha or (verdict == "FAIL" and not pkg_sha):
@@ -607,6 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--override-reviews", action="store_true", help="Record explicit developer override of semantic reviewers")
     parser.add_argument("--proof-reference", default="", help="Proof reference for developer override")
     parser.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), default="conversation", help="Source for developer override")
+    parser.add_argument("--allow-lead-verdict", action="store_true", help="Allow direct lead verdict/response recording in tests or developer override")
     return parser
 
 
@@ -754,6 +795,7 @@ def main(argv: list[str] | None = None) -> int:
             rep["execution_proof"] = prf
             (staging_dir / f"{reviewer_clean}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
         for item in args.response_text:
             reviewer, sep, raw_text = item.partition("=")
             if not sep:
@@ -840,6 +882,21 @@ def main(argv: list[str] | None = None) -> int:
             manifest = read_json(Path(current["manifest"]))
             pkg_file = active_review_package_path(repo, current)
             pkg_sha = sha256_file(pkg_file) if pkg_file.is_file() else ""
+
+            for item in verdict_items:
+                reviewer, sep, v_val = item.partition("=")
+                if not sep:
+                    raise ValidationError("--verdict without --reviewer must be REVIEWER=VERDICT")
+                reviewer = reviewer.strip()
+                if not args.evidence_pkg:
+                    raise ValidationError(f"reviewer {reviewer} verdict requires non-empty --evidence-pkg matching active review package")
+
+            protocol_ver = int(current.get("review_protocol_version") or 1)
+            if protocol_ver >= 2 and not getattr(args, "allow_lead_verdict", False):
+                raise ValidationError(
+                    "LEAD_VERDICT_PROHIBITED: direct --verdict recording without verified subagent proof is strictly prohibited for review protocol v2. "
+                    "Specialist reviews must execute independently via review complete."
+                )
 
             for item in verdict_items:
                 reviewer, sep, v_val = item.partition("=")

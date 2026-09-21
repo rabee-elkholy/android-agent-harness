@@ -789,9 +789,11 @@ class AndroidScenariosSelftest(unittest.TestCase):
         self.assertIn("MANIFEST_PERMISSION", surfaces)
         self.assertIn("NAVIGATION", surfaces)
 
-        # Pure logic receives NO device recipe
+        # BUSINESS_LOGIC recipe (Section 77)
         logic_recipes = get_verification_recipes(["BUSINESS_LOGIC"])
-        self.assertEqual([], logic_recipes)
+        self.assertEqual(1, len(logic_recipes))
+        self.assertEqual("BUSINESS_LOGIC", logic_recipes[0]["surface"])
+        self.assertEqual(4, len(logic_recipes[0]["steps"]))
 
         # 2. Integration with prepare_verification
         compose_file = self.repo / "app/src/main/kotlin/com/example/MyScreen.kt"
@@ -1114,6 +1116,555 @@ class AndroidScenariosSelftest(unittest.TestCase):
         _write_file(b, xml.replace("%s", "%d"))
         code = check_strings.main([], repo=self.repo)
         self.assertEqual(1, code, "Diff-scoped check must catch placeholder mismatch on multiline opening tag.")
+
+
+class MobileValidationTests(unittest.TestCase):
+    """MOBILE-001 through MOBILE-012 test suite for Phase 6 optional mobile validation."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name).resolve()
+        _run_git(self.repo, "init", "-q")
+        _run_git(self.repo, "config", "user.name", "Mobile Test")
+        _run_git(self.repo, "config", "user.email", "mobile@example.invalid")
+        _run_git(self.repo, "config", "core.autocrlf", "true")
+
+        # Basic Android fixture structure
+        _write_file(self.repo / "gradlew", "#!/bin/sh\nexit 0\n")
+        os.chmod(self.repo / "gradlew", 0o755)
+        _write_file(self.repo / "settings.gradle.kts", 'rootProject.name = "ScenarioApp"\ninclude(":app")\n')
+        _write_file(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        _write_file(
+            self.repo / "app/src/main/AndroidManifest.xml",
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '    <application android:label="ScenarioApp">\n'
+            '        <activity android:name=".MainActivity" android:exported="true">\n'
+            '            <intent-filter>\n'
+            '                <action android:name="android.intent.action.MAIN" />\n'
+            '                <category android:name="android.intent.category.LAUNCHER" />\n'
+            '            </intent-filter>\n'
+            '        </activity>\n'
+            '    </application>\n'
+            '</manifest>\n',
+        )
+        _write_file(
+            self.repo / "app/src/main/kotlin/com/example/MainActivity.kt",
+            "package com.example\n\nclass MainActivity\n",
+        )
+        _run_git(self.repo, "add", ".")
+        _run_git(self.repo, "commit", "-qm", "initial commit")
+
+        self.skills_root = KIT / "agents" / "skills"
+        (self.repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+        version_file = KIT / "agents" / "VERSION"
+        self.harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
+        (self.repo / ".agents" / "VERSION").write_text(self.harness_version + "\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _setup_verifying_task(self, task_id: str = "task-mobile-test") -> tuple[dict, Path, dict, dict]:
+        from workflow import (
+            begin_task,
+            draft,
+            prepare_verification,
+            record_approval,
+            task_dir,
+        )
+        import argparse
+
+        _write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val y = 2 }\n")
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Mobile validation test task",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI,BUSINESS_LOGIC",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval for mobile validation test",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        tdir = task_dir(self.repo, task_id)
+        plan = read_json(tdir / "plan.json")
+        current = read_json(tdir / "current-run.json")
+        policy = read_json(Path(current["policy"]))
+        manifest = read_json(Path(current["manifest"]))
+        return plan, tdir, policy, manifest
+
+    def _record_evidence(self, manifest: dict, run_id: str, name: str, status: str = "PASS", producer: str = "test_runner", evidence: dict | None = None) -> None:
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name=name,
+            producer=producer,
+            harness_version=getattr(self, "harness_version", "1.0.0"),
+            change_set=manifest["change_set_sha256"],
+            status=status,
+            evidence=evidence or {"status": status},
+        )
+
+    def test_MOBILE_001_run_keeps_existing_install_start_flow(self) -> None:
+        """MOBILE-001: RUN keeps existing install/start flow and action choices."""
+        import run_device
+        from unittest import mock
+        import argparse
+
+        # Verify action choices include install-start
+        parser = argparse.ArgumentParser()
+        parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff", "skip-validation", "status"])
+        args = parser.parse_args(["install-start"])
+        self.assertEqual("install-start", args.action)
+
+    def test_MOBILE_002_skip_writes_skipped_evidence(self) -> None:
+        """MOBILE-002: SKIP writes SKIPPED evidence with developer_approval producer."""
+        import run_device
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+        from unittest import mock
+        import argparse
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-002")
+        run_id = read_json(tdir / "current-run.json")["run_id"]
+
+        args = argparse.Namespace(
+            action="skip-validation",
+            task_id="mobile-002",
+            source="conversation",
+            proof_reference="developer says skip device test",
+            force=False,
+            serial=None,
+            flavor=None,
+            apk=None,
+            activity=None,
+            package=None,
+            user=None,
+            grant_runtime_permissions=False,
+            confirm_destructive=False,
+            verdict="PASS",
+            approval_token=None,
+        )
+
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._handle_skip_validation(args)
+            self.assertEqual(0, code)
+
+        store = EvidenceStore(state_root(self.repo))
+        rec = store.read(manifest["delivery_snapshot_sha256"], run_id, "mobile_validation_skip")
+        self.assertEqual("SKIPPED", rec["status"])
+        self.assertEqual("developer_approval", rec["producer"])
+        ev = rec.get("evidence") or {}
+        self.assertEqual("mobile-002", ev.get("task_id"))
+        self.assertEqual(run_id, ev.get("run_id"))
+        self.assertEqual("conversation", ev.get("approval_source"))
+        self.assertEqual("developer explicitly skipped manual mobile validation", ev.get("reason"))
+
+    def test_MOBILE_003_model_cannot_skip_without_developer_proof(self) -> None:
+        """MOBILE-003: Model cannot skip mobile validation without explicit developer proof."""
+        import run_device
+        from unittest import mock
+        import argparse
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-003")
+
+        # Missing source
+        args_no_source = argparse.Namespace(
+            action="skip-validation",
+            task_id="mobile-003",
+            source=None,
+            proof_reference="skip it",
+        )
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._handle_skip_validation(args_no_source)
+            self.assertEqual(1, code)
+
+        # Missing proof_reference
+        args_no_proof = argparse.Namespace(
+            action="skip-validation",
+            task_id="mobile-003",
+            source="conversation",
+            proof_reference="",
+        )
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._handle_skip_validation(args_no_proof)
+            self.assertEqual(1, code)
+
+    def test_MOBILE_004_old_run_skip_rejected(self) -> None:
+        """MOBILE-004: Old-run skip evidence is rejected by verifier."""
+        from final_verifier import _validate_mobile_skip
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-004")
+        run_id = read_json(tdir / "current-run.json")["run_id"]
+        store = EvidenceStore(state_root(self.repo))
+
+        # Write evidence with old run_id
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id="old-run-12345",
+            name="mobile_validation_skip",
+            producer="developer_approval",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="SKIPPED",
+            evidence={
+                "task_id": "mobile-004",
+                "plan_sha256": plan["plan_sha256"],
+                "run_id": "old-run-12345",
+                "approval_source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED",
+                "proof_reference_sha256": canonical_sha256("proof"),
+            },
+        )
+
+        # Reading with active run_id should find nothing
+        rec, err = _validate_mobile_skip(
+            store,
+            manifest["delivery_snapshot_sha256"],
+            manifest["change_set_sha256"],
+            run_id,
+            "1.0.0",
+            plan_task_id="mobile-004",
+            plan_sha256=plan["plan_sha256"],
+        )
+        self.assertIsNone(rec)
+        self.assertIsNone(err)  # Not found for current run
+
+    def test_MOBILE_005_old_change_set_skip_rejected(self) -> None:
+        """MOBILE-005: Old change-set skip evidence is rejected."""
+        from final_verifier import _validate_mobile_skip
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-005")
+        run_id = read_json(tdir / "current-run.json")["run_id"]
+        store = EvidenceStore(state_root(self.repo))
+
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="mobile_validation_skip",
+            producer="developer_approval",
+            harness_version="1.0.0",
+            change_set="old-cs-hash-1234",
+            status="SKIPPED",
+            evidence={
+                "task_id": "mobile-005",
+                "plan_sha256": plan["plan_sha256"],
+                "run_id": run_id,
+                "approval_source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED",
+                "proof_reference_sha256": canonical_sha256("proof"),
+            },
+        )
+
+        rec, err = _validate_mobile_skip(
+            store,
+            manifest["delivery_snapshot_sha256"],
+            manifest["change_set_sha256"],
+            run_id,
+            "1.0.0",
+            plan_task_id="mobile-005",
+            plan_sha256=plan["plan_sha256"],
+        )
+        self.assertIsNone(rec)
+        self.assertIn("change-set mismatch", str(err))
+
+    def test_MOBILE_006_skip_never_shown_as_pass(self) -> None:
+        """MOBILE-006: Skip is reported as status SKIPPED, never PASS."""
+        from final_verifier import verify
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+        from _vnext_common import atomic_write_json
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-006")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = False
+        policy["device_required"] = True
+        policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+        atomic_write_json(Path(current["policy"]), policy)
+
+        self._record_evidence(manifest, run_id, "preflight", "PASS", producer="preflight_check")
+
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="mobile_validation_skip",
+            producer="developer_approval",
+            harness_version=self.harness_version,
+            change_set=manifest["change_set_sha256"],
+            status="SKIPPED",
+            evidence={
+                "task_id": "mobile-006",
+                "plan_sha256": plan["plan_sha256"],
+                "run_id": run_id,
+                "approval_source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED",
+                "proof_reference_sha256": canonical_sha256("skip approved"),
+            },
+        )
+
+        from unittest import mock
+        with mock.patch("final_verifier.validate_policy_artifact", return_value=(policy, None, "PASS")):
+            res = verify(
+                self.repo,
+                plan_path=tdir / "plan.json",
+                policy_path=Path(current["policy"]),
+                manifest_path=Path(current["manifest"]),
+                state_root=state_root(self.repo),
+                run_id=run_id,
+            )
+        self.assertEqual("APPROVED", res["status"])
+        mob_chk = next((c for c in res["checks"] if c["name"] == "mobile_validation"), None)
+        self.assertIsNotNone(mob_chk)
+        self.assertEqual("SKIPPED", mob_chk["status"])
+        self.assertNotEqual("PASS", mob_chk["status"])
+
+    def test_MOBILE_007_normal_signoff_path_unchanged(self) -> None:
+        """MOBILE-007: Normal signoff path remains functional."""
+        from final_verifier import verify
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+        from _vnext_common import atomic_write_json
+        from unittest import mock
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-007")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = False
+        policy["device_required"] = True
+        policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+        atomic_write_json(Path(current["policy"]), policy)
+
+        self._record_evidence(manifest, run_id, "preflight", "PASS", producer="preflight_check")
+
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="device_signoff",
+            producer="developer_approval",
+            harness_version=self.harness_version,
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={
+                "task_id": "mobile-007",
+                "plan_sha256": plan["plan_sha256"],
+                "run_id": run_id,
+                "approval_source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED",
+                "proof_reference_sha256": canonical_sha256("device pass agreed"),
+            },
+        )
+
+        with mock.patch("final_verifier.validate_policy_artifact", return_value=(policy, None, "PASS")):
+            res = verify(
+                self.repo,
+                plan_path=tdir / "plan.json",
+                policy_path=Path(current["policy"]),
+                manifest_path=Path(current["manifest"]),
+                state_root=state_root(self.repo),
+                run_id=run_id,
+            )
+        self.assertEqual("APPROVED", res["status"])
+        sign_chk = next((c for c in res["checks"] if c["name"] == "device_signoff"), None)
+        self.assertIsNotNone(sign_chk)
+        self.assertEqual("PASS", sign_chk["status"])
+
+    def test_MOBILE_008_sensitive_approval_still_required(self) -> None:
+        """MOBILE-008: Skipping mobile validation does not satisfy sensitive approval."""
+        from final_verifier import verify
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+        from _vnext_common import atomic_write_json
+        from unittest import mock
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-008")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = False
+        policy["device_required"] = True
+        policy["surfaces"] = ["AUTH"]
+        policy["sensitive"] = True
+        policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+        atomic_write_json(Path(current["policy"]), policy)
+
+        self._record_evidence(manifest, run_id, "preflight", "PASS", producer="preflight_check")
+
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="mobile_validation_skip",
+            producer="developer_approval",
+            harness_version=self.harness_version,
+            change_set=manifest["change_set_sha256"],
+            status="SKIPPED",
+            evidence={
+                "task_id": "mobile-008",
+                "plan_sha256": plan["plan_sha256"],
+                "run_id": run_id,
+                "approval_source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED",
+                "proof_reference_sha256": canonical_sha256("skip agreed"),
+            },
+        )
+
+        with mock.patch("final_verifier.check_material_drift", return_value=[]), \
+             mock.patch("final_verifier.validate_policy_artifact", return_value=(policy, None, "PASS")):
+            res = verify(
+                self.repo,
+                plan_path=tdir / "plan.json",
+                policy_path=Path(current["policy"]),
+                manifest_path=Path(current["manifest"]),
+                state_root=state_root(self.repo),
+                run_id=run_id,
+            )
+        self.assertEqual("BLOCKED", res["status"])
+        sens_chk = next((c for c in res["checks"] if c["name"] == "sensitive_approval"), None)
+        self.assertIsNotNone(sens_chk)
+        self.assertEqual("FAIL", sens_chk["status"])
+
+    def test_MOBILE_009_router_returns_run_skip_choices(self) -> None:
+        """MOBILE-009: Router returns run/skip choices after assemble PASS."""
+        from workflow import resolve_next_action
+        from _vnext_common import atomic_write_json
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-009")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+
+        policy["gates"] = ["preflight", "assemble"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = True
+        policy["device_required"] = True
+        atomic_write_json(Path(current["policy"]), policy)
+
+        self._record_evidence(manifest, run_id, "preflight", "PASS")
+        self._record_evidence(manifest, run_id, "assemble", "PASS")
+
+        act = resolve_next_action(self.repo, "mobile-009", plan)
+        self.assertEqual("MOBILE_VALIDATION_DECISION", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertTrue(act["blocking"])
+        choices = act.get("choices") or []
+        self.assertEqual(2, len(choices))
+        self.assertEqual("run", choices[0]["id"])
+        self.assertEqual("skip", choices[1]["id"])
+        self.assertIn("device install-start", choices[0]["command"])
+        self.assertIn("device skip-validation", choices[1]["command"])
+
+    def test_MOBILE_010_walkthrough_has_four_bounded_sections(self) -> None:
+        """MOBILE-010: Walkthrough has four bounded sections within limits."""
+        from _verification_recipes import generate_bounded_walkthrough
+
+        walkthrough = generate_bounded_walkthrough(
+            requested_outcome="Add logout button in settings",
+            surfaces=["COMPOSE_UI", "NAVIGATION", "BUSINESS_LOGIC"],
+            activity=".SettingsActivity",
+        )
+
+        self.assertEqual(
+            {"preconditions", "happy_path", "edge_cases", "regression_checks"},
+            set(walkthrough.keys()),
+        )
+        self.assertTrue(1 <= len(walkthrough["preconditions"]) <= 4)
+        self.assertTrue(2 <= len(walkthrough["happy_path"]) <= 6)
+        self.assertTrue(1 <= len(walkthrough["edge_cases"]) <= 4)
+        self.assertTrue(1 <= len(walkthrough["regression_checks"]) <= 3)
+
+    def test_MOBILE_011_no_device_required_for_skip_command(self) -> None:
+        """MOBILE-011: No ADB connection or device required for skip command."""
+        import run_device
+        from unittest import mock
+        import argparse
+
+        with mock.patch.object(run_device, "REPO", self.repo), \
+             mock.patch.object(run_device, "run_adb", side_effect=Exception("ADB should not be called")):
+            code = run_device._check_device_prerequisites(
+                argparse.Namespace(action="skip-validation", force=False)
+            )
+            self.assertIsNone(code)
+
+    def test_MOBILE_012_source_artifact_mutation_after_skip_invalidates_run(self) -> None:
+        """MOBILE-012: Source mutation after skip invalidates run freshness."""
+        from final_verifier import verify
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+        from _vnext_common import atomic_write_json
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-012")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = False
+        policy["device_required"] = True
+        policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+        atomic_write_json(Path(current["policy"]), policy)
+
+        self._record_evidence(manifest, run_id, "preflight", "PASS", producer="preflight_check")
+
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="mobile_validation_skip",
+            producer="developer_approval",
+            harness_version=self.harness_version,
+            change_set=manifest["change_set_sha256"],
+            status="SKIPPED",
+            evidence={
+                "task_id": "mobile-012",
+                "plan_sha256": plan["plan_sha256"],
+                "run_id": run_id,
+                "approval_source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED",
+                "proof_reference_sha256": canonical_sha256("skip agreed"),
+            },
+        )
+
+        # Mutate source file after skip was recorded
+        _write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val z = 99 }\n")
+
+        res = verify(
+            self.repo,
+            plan_path=tdir / "plan.json",
+            policy_path=Path(current["policy"]),
+            manifest_path=Path(current["manifest"]),
+            state_root=state_root(self.repo),
+            run_id=run_id,
+        )
+        self.assertEqual("STALE", res["status"])
 
 
 if __name__ == "__main__":

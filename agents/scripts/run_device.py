@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -40,8 +41,12 @@ from _repo_files import REPO, adb_serial_is_emulator, first_adb_serial, matching
 from _variants import apk_relative, resolve_or_raise  # noqa: E402
 from artifact_set import build_artifact_set, verify_artifact_set  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
-from _vnext_common import HarnessError, sha256_bytes  # noqa: E402
-from _verification_recipes import VERIFICATION_RECIPES, get_verification_recipes  # noqa: E402
+from _vnext_common import HarnessError, canonical_sha256, read_json, sha256_bytes  # noqa: E402
+from _verification_recipes import (  # noqa: E402
+    VERIFICATION_RECIPES,
+    generate_bounded_walkthrough,
+    get_verification_recipes,
+)
 
 DEFAULT_ACTIVITY = LAUNCHER
 ADB_ERROR_MARKERS = (
@@ -252,7 +257,7 @@ def _handle_status(args: argparse.Namespace) -> int:
 
 
 def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
-    if getattr(args, "force", False) or args.action in ("uninstall", "signoff", "status"):
+    if getattr(args, "force", False) or args.action in ("uninstall", "signoff", "skip-validation", "status"):
         return None
     try:
         from mutation_guard import active_plan
@@ -482,10 +487,81 @@ def _handle_signoff(args: argparse.Namespace) -> int:
     return 0 if verdict == "PASS" else 1
 
 
+def _handle_skip_validation(args: argparse.Namespace) -> int:
+    task_id = args.task_id
+    if not task_id:
+        try:
+            from mutation_guard import active_plan
+            active = active_plan(REPO)
+            task_id = str(active.get("task_id") or "")
+        except Exception:
+            task_id = ""
+    if not task_id:
+        live_print("[FAIL] --task-id is required for skip-validation.", err=True)
+        return 1
+
+    source = getattr(args, "source", None) or os.environ.get("HARNESS_AUTHORITY_SOURCE")
+    if not source or source not in ("developer_terminal", "host_native", "conversation"):
+        live_print(
+            "[FAIL] skip-validation requires explicit developer authority via "
+            "--source developer_terminal, host_native, or conversation.",
+            err=True,
+        )
+        return 1
+
+    proof_ref = str(args.proof_reference or "").strip()
+    if not proof_ref:
+        live_print("[FAIL] --proof-reference is required for skip-validation.", err=True)
+        return 1
+
+    from workflow import assert_active_run_fresh
+    state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+    try:
+        current_run = assert_active_run_fresh(REPO, task_id)
+    except Exception as exc:
+        live_print(f"[FAIL] Active run freshness check failed for skip-validation: {exc}", err=True)
+        return 1
+
+    snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
+    run_id = str(current_run.get("run_id") or "")
+    change_set = str(current_run.get("change_set_sha256") or "")
+    plan_path = state / "tasks" / task_id / "plan.json"
+    plan = read_json(plan_path) if plan_path.is_file() else {}
+
+    from evidence_store import EvidenceStore
+    store = EvidenceStore(state)
+    harness_version = _read_harness_version(REPO)
+
+    evidence = {
+        "task_id": task_id,
+        "plan_sha256": plan.get("plan_sha256") or "",
+        "run_id": run_id,
+        "delivery_snapshot_sha256": snapshot,
+        "change_set_sha256": change_set,
+        "approval_source": source,
+        "enforcement_tier": "HARD_ENFORCED" if source == "host_native" else "RULE_ENFORCED",
+        "proof_reference_sha256": canonical_sha256(proof_ref),
+        "reason": "developer explicitly skipped manual mobile validation",
+    }
+
+    store.write(
+        snapshot=snapshot,
+        run_id=run_id,
+        name="mobile_validation_skip",
+        producer="developer_approval",
+        harness_version=harness_version,
+        change_set=change_set,
+        status="SKIPPED",
+        evidence=evidence,
+    )
+    live_print(f"[SUCCESS] Mobile validation skip recorded: status=SKIPPED for task {task_id} (run {run_id[:12]})")
+    return 0
+
+
 def main() -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
-    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff", "status"])
+    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff", "skip-validation", "status"])
     parser.add_argument("-s", "--serial", default=None, help="Physical device serial")
     parser.add_argument(
         "--flavor",
@@ -515,6 +591,9 @@ def main() -> int:
 
     if args.action == "signoff":
         return _handle_signoff(args)
+
+    if args.action == "skip-validation":
+        return _handle_skip_validation(args)
 
     try:
         active_flavor, _task = resolve_or_raise(args.flavor)
@@ -683,36 +762,41 @@ def main() -> int:
             state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
             from mutation_guard import active_plan
             from _vnext_common import read_json
-            active = active_plan(REPO)
+            active = active_plan(REPO) or {}
             task_id = str(active.get("task_id") or "")
             current_path = state / "tasks" / task_id / "current-run.json"
+            policy_surfaces: list[str] = []
+            requested_outcome = str(active.get("requested_outcome") or "")
             if current_path.is_file():
                 current_run = read_json(current_path)
-                recipes = current_run.get("verification_recipes") or []
-                if not recipes:
-                    policy_path = Path(str(current_run.get("policy") or ""))
-                    if policy_path.is_file():
-                        policy = read_json(policy_path)
-                        recipes = get_verification_recipes(policy.get("surfaces") or [])
-                if not recipes:
-                    recipes = get_verification_recipes([], fallback=True)
-                if recipes:
-                    live_print("\n" + "=" * 60)
-                    live_print("[MANDATORY MOBILE TEST WALKTHROUGH REQUIRED IN CHAT]")
-                    live_print("The agent MUST now output a custom, numbered walkthrough in chat:")
-                    live_print(f"  1. Navigation Path: Path from {target_activity} to the modified feature/screen")
-                    live_print("  2. Preconditions: Required login state, flags, or test data")
-                    live_print("  3. User Actions: Concrete taps, inputs, and screens to interact with")
-                    live_print("  4. Expected Results: What the user should see and experience on screen")
-                    live_print("  5. Edge Cases: Rotation, cancellations, back navigation")
-                    live_print("-" * 60)
-                    live_print("Surface verification recipes:")
-                    for recipe in recipes:
-                        live_print(f"  [{recipe['surface']}]:")
-                        for idx, step in enumerate(recipe["steps"], 1):
-                            live_print(f"    - {step}")
-                    live_print("=" * 60)
-                    live_print("[!] CRITICAL: DO NOT simply ask 'Did it pass' without first explaining the 5 test steps above in chat!\n")
+                policy_path = Path(str(current_run.get("policy") or ""))
+                if policy_path.is_file():
+                    policy = read_json(policy_path)
+                    policy_surfaces = list(policy.get("surfaces") or [])
+
+            walkthrough = generate_bounded_walkthrough(
+                requested_outcome=requested_outcome,
+                surfaces=policy_surfaces,
+                activity=target_activity,
+            )
+
+            live_print("\n" + "=" * 60)
+            live_print("[MANDATORY MOBILE TEST WALKTHROUGH REQUIRED IN CHAT]")
+            live_print("The agent MUST now output the 4-section bounded walkthrough in chat:")
+            live_print("1. Preconditions:")
+            for p in walkthrough["preconditions"]:
+                live_print(f"   - {p}")
+            live_print("2. Main Happy Path:")
+            for h in walkthrough["happy_path"]:
+                live_print(f"   - {h}")
+            live_print("3. Important Edge Cases:")
+            for e in walkthrough["edge_cases"]:
+                live_print(f"   - {e}")
+            live_print("4. Regression Checks:")
+            for r in walkthrough["regression_checks"]:
+                live_print(f"   - {r}")
+            live_print("=" * 60)
+            live_print("[!] CRITICAL: DO NOT simply ask 'Did it pass' without first explaining the 4 test sections above in chat!\n")
         except Exception:
             pass
 

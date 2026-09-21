@@ -136,6 +136,9 @@ class ReviewerIndependenceTests(unittest.TestCase):
         begin_task(Namespace(repo=str(self.tmp), task_id=task_id))
         _write_text(self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Auth.kt", "class Auth { private val p = 0; fun verify() = CertificatePinner() }\n")
         prep = prepare_verification(Namespace(repo=str(self.tmp), task_id=task_id))
+        prep["review_protocol_version"] = 1
+        current_run_path = self.tmp / ".agents" / "state" / "tasks" / task_id / "current-run.json"
+        _write_json(current_run_path, prep)
         pkg_file, _ = build_package(self.tmp, task_id)
         pkg_sha = hashlib.sha256(pkg_file.read_bytes()).hexdigest()
 

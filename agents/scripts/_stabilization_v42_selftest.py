@@ -489,6 +489,8 @@ class ReviewerProofV42Tests(unittest.TestCase):
 
         (self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Auth.kt").write_text("package com.example\nclass Auth {\n    fun login(token: String): Boolean = true\n}\n", encoding="utf-8")
         prep = prepare_verification(argparse.Namespace(repo=str(self.tmp), task_id=task_id))
+        prep["review_protocol_version"] = 1
+        (self.tmp / ".agents" / "state" / "tasks" / task_id / "current-run.json").write_text(json.dumps(prep), encoding="utf-8")
 
         import review_package
         _, pkg = review_package.build_package(self.tmp, task_id)

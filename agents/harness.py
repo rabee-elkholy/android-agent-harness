@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|device|verify|version|commands> [args...]"
+            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|device|verify|zoho|version|commands> [args...]"
         )
         return 0
 
@@ -86,11 +86,15 @@ def main(argv: list[str] | None = None) -> int:
             return _run("review_execution.py", args[1:])
         if args and args[0] == "ingest":
             return _run("record_review.py", args[1:])
+        if args and args[0] in ("complete", "finalize", "dispatch", "status"):
+            return _run("review_orchestrator.py", args)
         return _run("record_review.py", args)
     if command == "device":
         return _run("run_device.py", args)
     if command == "verify":
         return _run("workflow.py", ["verify", "--repo", str(REPO_ROOT), *args])
+    if command == "zoho":
+        return _run("zoho_sync.py", args)
 
     print(f"[ERROR] Unknown installed harness command: {command}", file=sys.stderr)
     return 2

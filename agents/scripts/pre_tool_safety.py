@@ -94,6 +94,7 @@ def _audit(
     reason_code: str = "",
     conv_hint: str = "",
     task_id: str = "",
+    mcp_fingerprint: str = "",
 ) -> None:
     try:
         path = _audit_path()
@@ -115,6 +116,8 @@ def _audit(
         }
         if task_id:
             record["task_id"] = task_id
+        if mcp_fingerprint:
+            record["mcp_fingerprint"] = mcp_fingerprint
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -136,11 +139,14 @@ def emit(
     reason_code: str = "",
     conv_hint: str = "",
     task_id: str = "",
+    mcp_fingerprint: str = "",
 ) -> None:
-    _audit(decision, reason, tool, command, reason_code=reason_code, conv_hint=conv_hint, task_id=task_id)
+    _audit(decision, reason, tool, command, reason_code=reason_code, conv_hint=conv_hint, task_id=task_id, mcp_fingerprint=mcp_fingerprint)
     out: dict[str, Any] = {"decision": decision, "reason": reason}
     if reason_code:
         out["reason_code"] = reason_code
+    if mcp_fingerprint:
+        out["mcp_fingerprint"] = mcp_fingerprint
     print(json.dumps(out, ensure_ascii=False))
 
 
@@ -444,26 +450,65 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
     else:
         tool_args = {}
 
-    tool_lower = tool_name.lower()
-
-    # Query integration registry (e.g. Zoho, Jira, Linear)
+    # 1. Query specialized integration registry (e.g. Zoho)
     integration = registry.resolve(server, tool_name)
     if integration is not None:
         if integration.is_read_only(tool_name, tool_args):
-            emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name)
+            emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name, reason_code="READ_ALLOWED")
             return
         _handle_external_mutation(integration, tool_name, tool_args)
         return
 
-    is_read = (
-        any(tool_lower.startswith(p) for p in KNOWN_MCP_READ_PREFIXES)
-        and not any(kw in tool_lower for kw in KNOWN_MCP_MUTATION_KEYWORDS)
+    # 2. Generic MCP classification and authorization (Sections 57-63)
+    from integrations.generic_mcp import (
+        classify_generic_mcp_tool,
+        validate_generic_mcp_mutation,
+        compute_generic_mcp_fingerprint,
+        READ,
+        UNKNOWN,
     )
-    if is_read:
-        emit("allow", f"Read-only MCP tool execution '{tool_name}' is allowed.", tool=name)
+
+    tool_class = classify_generic_mcp_tool(tool_name)
+    if tool_class == READ:
+        emit("allow", f"Read-only MCP tool execution '{tool_name}' on server '{server}' is allowed.", tool=name, reason_code="MCP_READ_ALLOWED")
         return
 
-    emit("deny", f"External MCP operation '{tool_name}' on server '{server}' is not registered as read-only and is not authorized by the active approved plan.", tool=name)
+    if tool_class == UNKNOWN:
+        emit("deny", f"External MCP operation '{tool_name}' on server '{server}' cannot be classified safely and is denied.", tool=name, reason_code="UNKNOWN_MCP_TOOL")
+        return
+
+    # WRITE or HIGH_IMPACT requires an active approved task plan
+    try:
+        plan = active_plan(REPO)
+    except Exception:
+        emit("deny", "External MCP mutation requires an active approved task plan.", tool=name, reason_code="PLAN_NOT_APPROVED")
+        return
+
+    allowed, reason, reason_code = validate_generic_mcp_mutation(
+        server=server,
+        tool_name=tool_name,
+        plan=plan,
+    )
+    task_id = str(plan.get("task_id") or "")
+    if not allowed:
+        emit("deny", reason, tool=name, reason_code=reason_code, task_id=task_id)
+        return
+
+    fingerprint = compute_generic_mcp_fingerprint(
+        task_id=task_id,
+        plan_sha256=str(plan.get("plan_sha256") or ""),
+        server=server,
+        tool_name=tool_name,
+        arguments=tool_args,
+    )
+    emit(
+        "allow",
+        f"Generic MCP mutation '{tool_name}' on server '{server}' is authorized.",
+        tool=name,
+        reason_code=reason_code,
+        task_id=task_id,
+        mcp_fingerprint=fingerprint,
+    )
 
 
 def _is_targeted_search_path(target: str) -> bool:
@@ -649,6 +694,99 @@ def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
     return False
 
 
+def _is_contract_file(path: str) -> bool:
+    if not path:
+        return False
+    norm = str(path).replace("\\", "/").strip().lower().lstrip("./")
+    if norm in {"agents.md", "gemini.md", "claude.md", "readme.md"}:
+        return True
+    if norm.startswith("agents/rules/") or norm.startswith(".agents/") or norm.startswith("agents/contracts/"):
+        return True
+    try:
+        from discovery_router import _is_exact_non_architectural_file
+        if _is_exact_non_architectural_file(norm):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_path_in_verifying_scope(repo: Path, target_path: str, plan: dict) -> tuple[bool, str]:
+    target_str = str(target_path or "").replace("\\", "/").strip().rstrip("/")
+    if not target_str or target_str in {".", "./"}:
+        return False, "ROOT_SEARCH_FORBIDDEN"
+
+    repo_root = repo.resolve()
+    try:
+        p = Path(target_str)
+        if p.is_absolute():
+            rel = p.resolve().relative_to(repo_root).as_posix().lower()
+        else:
+            rel = target_str.lstrip("./").lower()
+    except Exception:
+        rel = target_str.lstrip("./").lower()
+
+    if not rel or rel in {".", "./"}:
+        return False, "ROOT_SEARCH_FORBIDDEN"
+
+    if _is_contract_file(rel):
+        return True, "CONTRACT_FILE_ALLOWED"
+
+    review_scope = {}
+    task_id = str(plan.get("task_id") or "")
+    if task_id:
+        try:
+            from workflow import task_dir
+            run_file = task_dir(repo, task_id) / "current-run.json"
+        except Exception:
+            run_file = state_root(repo) / "tasks" / task_id / "current-run.json"
+        if run_file.is_file():
+            try:
+                run_data = json.loads(run_file.read_text(encoding="utf-8"))
+                review_scope = run_data.get("review_scope") or {}
+            except Exception:
+                pass
+    if not review_scope:
+        review_scope = plan.get("review_scope") or {}
+
+    changed_files = {str(f).replace("\\", "/").lower().lstrip("./") for f in review_scope.get("changed_files") or []}
+    allowed_roots = {str(r).replace("\\", "/").lower().lstrip("./").rstrip("/") for r in review_scope.get("allowed_roots") or []}
+    direct_callers = {str(f).replace("\\", "/").lower().lstrip("./") for f in review_scope.get("direct_callers") or []}
+
+    for dc in direct_callers:
+        parent = Path(dc).parent.as_posix().lower()
+        if parent and parent != ".":
+            allowed_roots.add(parent)
+
+    if not changed_files and not allowed_roots and not direct_callers:
+        plan_roots, plan_files = _get_active_task_scope(repo, plan)
+        allowed_roots.update(plan_roots)
+        changed_files.update(plan_files)
+
+    if rel in changed_files:
+        return True, "CHANGED_FILE_ALLOWED"
+    if rel in direct_callers:
+        return True, "DIRECT_CALLER_ALLOWED"
+
+    for r in allowed_roots:
+        if not r:
+            continue
+        if rel == r or rel.startswith(r + "/"):
+            return True, "ALLOWED_ROOT"
+
+    try:
+        from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
+        receipt = load_latest_discovery_receipt(repo)
+        if receipt:
+            fresh, _ = check_discovery_freshness(repo, receipt)
+            if fresh and is_path_in_discovery_scope(repo, target_str, receipt):
+                return True, "GRAPH_EXPANSION_ALLOWED"
+    except Exception:
+        pass
+
+    return False, "OUT_OF_SCOPE"
+
+
 def _handle_list_dir(name: str, args: dict) -> None:
     plan: dict = {}
     try:
@@ -681,7 +819,17 @@ def _handle_list_dir(name: str, args: dict) -> None:
         return
 
     if status == "VERIFYING":
-        emit("allow", "Directory listing is permitted for active task.", tool=name, reason_code="LIST_DIR_ALLOWED")
+        allowed, reason = _is_path_in_verifying_scope(REPO, dir_target, plan)
+        if allowed:
+            emit("allow", "Directory listing is within verified review scope.", tool=name, reason_code="LIST_DIR_ALLOWED")
+            return
+        emit(
+            "deny",
+            f"REVIEW_SCOPE_EXPANSION_REQUIRED: Directory listing '{dir_target}' is outside the frozen review scope. "
+            "Reviewers must stay within review_scope or run graph expansion.",
+            tool=name,
+            reason_code="REVIEW_SCOPE_EXPANSION_REQUIRED",
+        )
         return
 
     try:
@@ -744,10 +892,6 @@ def _handle_search(name: str, args: dict) -> None:
     except Exception:
         status = ""
 
-    if status == "VERIFYING":
-        emit("allow", "Reviewer verification search is permitted.", tool=name, reason_code="VERIFIER_SEARCH_ALLOWED")
-        return
-
     target = ""
     query = ""
     if name == "grep_search":
@@ -756,6 +900,20 @@ def _handle_search(name: str, args: dict) -> None:
     elif name == "find_by_name":
         target = str(args.get("SearchDirectory") or args.get("searchDirectory") or "")
         query = str(args.get("Pattern") or args.get("pattern") or "")
+
+    if status == "VERIFYING":
+        allowed, reason = _is_path_in_verifying_scope(REPO, target, plan)
+        if allowed:
+            emit("allow", "Search is within verified review scope.", tool=name, reason_code="VERIFIER_SEARCH_ALLOWED")
+            return
+        emit(
+            "deny",
+            f"REVIEW_SCOPE_EXPANSION_REQUIRED: Search path '{target or '.'}' is outside the frozen review scope. "
+            "Reviewers must stay within review_scope or run graph expansion.",
+            tool=name,
+            reason_code="REVIEW_SCOPE_EXPANSION_REQUIRED",
+        )
+        return
 
     # 1. If actively implementing, search must stay inside discovered / approved task scope
     if status in ("IMPLEMENTING", "READY_FOR_DELIVERY"):
@@ -888,6 +1046,15 @@ def main() -> None:
             return
         if name in ("call_mcp_tool", "mcp_tool"):
             _handle_mcp_tool(name, args)
+            return
+
+        mcp_match = re.match(r"^mcp_([a-zA-Z0-9_-]+)_(.+)$", name)
+        if mcp_match:
+            _handle_mcp_tool(name, {
+                "ServerName": mcp_match.group(1),
+                "ToolName": mcp_match.group(2),
+                "Arguments": args,
+            })
             return
 
         # Known read-only tools

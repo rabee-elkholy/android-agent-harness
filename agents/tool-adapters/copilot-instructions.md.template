@@ -3,7 +3,7 @@
 Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules file wins.
 
 - Run harness scripts with `{{PY}}` (never assume `python3` on Windows).
-- Assemble: `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}`
+- Assemble: `{{PY}} .agents/harness.py assemble`
 - Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.
 - Device: {{DEVICE_POLICY}}
 - Discovery: Graph-backed. Exact code target -> `{{PY}} .agents/harness.py task-context --file <path> --json` or `--symbol <name>`. Feature/unknown target or cross-module refactor -> `{{PY}} .agents/harness.py graph --feature <name> --json` (or `--find <symbol>`) first, then Task Context on resolved target. Search is never the initial code discovery anchor; after discovery, search only within discovered scope; expand scope via Graph, not grep cascades.

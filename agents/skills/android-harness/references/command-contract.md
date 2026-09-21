@@ -74,17 +74,24 @@ python .agents/scripts/workflow.py draft \
   --device-strategy <EMULATOR_PREFERRED|PHYSICAL_PREFERRED|ANY|NONE> \
   --risks "<comma-separated risks>" \
   --rollback "<rollback instructions>" \
-  --external-write zoho_sprints \
+  --external-write "<scope: zoho_sprints, mcp:<server>, mcp:<server>:high-impact>" \
+  --zoho-item-id "<item_id>" \
+  --zoho-item-type "<Bug|Task|Story>" \
+  --zoho-sprint-id "<sprint_id>" \
   --architecture-intent <EXISTING_CHANGE|NEW_SCREEN|NEW_FEATURE|REFACTOR|MIGRATION> \
   --architecture-target-scope "<target scope when applicable>" \
   --architecture-target-family "<target family id when applicable>" \
   --phases "<phases json or file path when required>"
 
 > `--planning-depth`: `BOUNDED` for normal scoped tasks (default); `ARCHITECTURAL` for explicit architecture migration or broad structural architectural work.
-> `--external-write`: Append `zoho_sprints` when Zoho Sprints tracker mutation is explicitly included in the approved plan.
+> `--external-write`: Append `--external-write zoho_sprints` for Zoho mutation, `mcp:<server>` for generic MCP write operations, or `mcp:<server>:high-impact` for sensitive MCP mutations (deploy, drop, delete).
+> `--zoho-*`: Optional flags to bind the task to an existing Zoho Sprints item.
 
 # 2. Record developer approval (atomically transitions directly to IMPLEMENTING)
 python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED
+
+# 2b. Linked Zoho start sync (when task has approved zoho_link)
+python .agents/harness.py zoho start-sync --task-id <id>
 
 # 3. (Legacy compatibility only) Begin implementation (idempotent when already IMPLEMENTING)
 # python .agents/scripts/workflow.py begin --repo . --task-id <id>
@@ -104,8 +111,12 @@ python .agents/scripts/workflow.py verify --repo . --task-id <id>
 # 8. Complete task (transitions to READY_FOR_DELIVERY)
 python .agents/scripts/workflow.py complete --repo . --task-id <id>
 
-# 9. Mark delivered (unlinks active task after Git commit)
+# 9. Mark delivered / reconcile delivery (unlinks active task after Git commit)
 python .agents/scripts/workflow.py deliver --repo . --task-id <id>
+# or python .agents/scripts/workflow.py reconcile-delivery --repo . --task-id <id>
+
+# 9b. Linked Zoho delivery sync (when task has approved zoho_link, after developer git commit)
+python .agents/harness.py zoho delivery-sync --task-id <id>
 
 # Cancel task
 python .agents/scripts/workflow.py cancel --repo . --task-id <id>
@@ -181,14 +192,14 @@ Generate immutable review package and record specialist subagent reviews.
 python .agents/scripts/review_package.py
 # or explicitly: python .agents/scripts/review_package.py --task-id <id>
 
-# 2. Auto-harvest subagent review from transcript (preferred):
+# 2. Record reviewer completion (Protocol V2 trusted completion):
+python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <subagent_conversation_id>
+
+# 3. Finalize reviews (aggregates completed reviews into immutable evidence):
+python .agents/harness.py review finalize --task <id>
+
+# 4. (Compatibility) Auto-harvest subagent review from transcript:
 python .agents/scripts/record_review.py --task <id> --from-subagent <reviewer_name>=<subagent_conversation_id>
-
-# 3. Direct response text ingestion:
-python .agents/scripts/record_review.py --task <id> --response-text "<reviewer_name>=<response_text>"
-
-# 4. Ingest from file:
-python .agents/scripts/record_review.py --task <id> --response <reviewer_name>=<path>
 
 # 5. Validate or dispute reviewer findings (technical adjudication):
 python .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <finding_id> --status <FALSE_POSITIVE|CONFIRMED> --reason "<technical_explanation>"
@@ -199,13 +210,11 @@ python .agents/scripts/record_review.py --task <id> --override-reviews --proof-r
 
 ### Expected Output
 - Ingestion confirmation, evidence hash, and remaining required reviewers count.
-- Exit code: `0` on success. Clean reviews with `cites=0` and explanatory prose are recognized as `PASS`.
+- Exit code: `0` on success. Clean reviews with `findings: []` are recognized as `PASS`.
 
 > **Zero-Polling Invariant**: Never poll background tasks or subagents with `manage_subagents` or `schedule`. Yield execution and wait for reactive messages from the system.
 
 > **Review Budget Exhaustion**: If `prepare-verification` fails with `REVIEW_BUDGET_EXHAUSTED`, do not inspect harness scripts. Prompt developer via `ask_question` for decision: either approve increasing the review call budget or approve a review override (if touching non-sensitive surfaces).
-
-> **Windows/PowerShell formatting tip**: In terminal commands, write newlines in `--response-text` as `\n` (e.g. `--response-text "<reviewer>=PASS\nEVIDENCE pkg=<sha12> cites=0"`) or write the response to a file and use `--response <reviewer>=<file_path>`.
 
 > **Instruction**: Do not inspect review scripts before execution. Reviewers must be launched as independent subagents.
 
@@ -227,6 +236,9 @@ python .agents/harness.py assemble
 # 3. Install and launch on target device/emulator
 python .agents/scripts/run_device.py install-start
 
+# 3b. Optional skip validation (when developer explicitly requests to skip device verification)
+python .agents/scripts/run_device.py skip-validation --task-id <id> --proof-reference "<developer_skip_confirmation>"
+
 # 4. Capture screen (optional)
 python .agents/scripts/capture_screen.py
 ```
@@ -234,8 +246,9 @@ python .agents/scripts/capture_screen.py
 ### Expected Output
 - Build success / APK install confirmation / activity launch output.
 - Exit code: `0` on success.
+- For `skip-validation`: honest evidence recorded with `status: "SKIPPED"` (never synthetic PASS).
 
-> **Reviewer Completion Precondition**: Diagnostic compile/assemble may run during `IMPLEMENTING` after task approval, but it is not delivery evidence. During `VERIFYING`, the final assemble and `run_device.py install-start` require all routed reviewers to finish and their evidence to be recorded via `record_review.py`.
+> **Reviewer Completion Precondition**: Diagnostic compile/assemble may run during `IMPLEMENTING` after task approval, but it is not delivery evidence. During `VERIFYING`, the final assemble and `run_device.py install-start` require all routed reviewers to finish and their evidence to be finalized.
 
 > **Walkthrough Timing & Device Preconditions**: The agent MUST wait for `run_device.py install-start` to finish execution with exit code `0` BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is running in background, WAIT for completion; never output walkthrough or ask questions prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the environment blocker immediately to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when installation failed, and NEVER ask the developer to verify a build that was not installed.
 
@@ -262,6 +275,22 @@ python .agents/scripts/harness_doctor.py
 - Exit code: `0` = all health checks passed.
 
 > **Instruction**: Do not inspect doctor engine source before execution.
+
+---
+
+## 8b. Test Suite Verification (Selftest)
+
+### Purpose
+Run deterministic safety suite verifying all harness invariants.
+
+### Commands
+```bash
+# Quick selftest (6 high-value developer-loop suites: hook, security, critical_safety, daily_workflow, public_cli, graph_discovery)
+python harness_cli.py selftest --quick
+
+# Full selftest (all 19 deterministic test suites)
+python harness_cli.py selftest
+```
 
 ---
 
@@ -319,6 +348,7 @@ When an exception occurs:
 | **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded, read-only context for one task target |
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
 | **Context Note** | `python .agents/harness.py context note "<note>"` | Record architectural convention/note |
+| **Zoho Start Sync**| `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item |
 | **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
 | **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate (GREEN phase) |
 | **Capture RED** | `python .agents/scripts/run_tests_gate.py --capture-red` | Capture executable test failure proof for BUG tasks |
@@ -330,13 +360,17 @@ When an exception occurs:
 | **Logcat Doctor** | `python .agents/scripts/logcat_doctor.py` | Triage crashes and runtime exceptions |
 | **Feature Scaffold**| `python .agents/scripts/new_feature_scaffold.py --feature <name>` | Scaffold feature conventions and ViewModel |
 | **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
-| **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
-| **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
+| **Review Complete**| `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` | Record trusted reviewer completion |
+| **Review Finalize**| `python .agents/harness.py review finalize --task <id>` | Aggregate review evidence once all reviewers complete |
 | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
-| **Assemble Debug** | `python .agents/harness.py assemble` | Diagnostic in IMPLEMENTING; final delivery build after all reviewers pass (derived assemble task) |
+| **Assemble** | `python .agents/harness.py assemble` | Build application debug artifact (derived assemble task) |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Device Skip** | `python .agents/scripts/run_device.py skip-validation --task-id <id> --proof-reference "<phrase>"` | Record explicit developer skip of mobile validation |
 | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
 | **Harness Doctor** | `python harness_cli.py doctor --repo . --json` | Health check harness installation & adapters |
+| **Selftest Quick** | `python harness_cli.py selftest --quick` | Run high-value developer-loop selftest (6 suites) |
+| **Selftest Full** | `python harness_cli.py selftest` | Run complete deterministic selftest (19 suites) |
 | **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
 | **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
+| **Zoho Delivery Sync**| `python .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item |

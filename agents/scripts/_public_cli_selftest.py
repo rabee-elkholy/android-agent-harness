@@ -26,6 +26,7 @@ from _vnext_common import atomic_write_json, canonical_sha256, utc_now  # noqa: 
 from evidence_store import EvidenceStore  # noqa: E402
 
 KIT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(KIT))
 
 
 def run_git(repo: Path, *args: str) -> None:
@@ -812,6 +813,7 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         )
         # Should NOT raise PHASE_PLAN_REQUIRED
         workflow.draft(args_clean)
+        workflow.cancel(argparse.Namespace(repo=str(self.repo), task_id="task-clean-arch"))
 
         # 2. Multi-module feature without phases -> raises PHASE_PLAN_REQUIRED
         multi_module_files = [
@@ -1472,7 +1474,16 @@ class PhaseEDecoupleZohoSelftest(unittest.TestCase):
             "Arguments": {"title": "Issue"},
         })
         self.assertEqual("deny", res["decision"])
-        self.assertIn("not registered as read-only and is not authorized", res["reason"])
+        self.assertIn("External MCP mutation requires an active approved task plan", res["reason"])
+
+        self._activate_plan(external_writes=[])
+        res2 = self._invoke_hook("call_mcp_tool", {
+            "ServerName": "custom_tracker",
+            "ToolName": "create_issue",
+            "Arguments": {"title": "Issue"},
+        })
+        self.assertEqual("deny", res2["decision"])
+        self.assertIn("EXTERNAL_WRITE_SCOPE_REQUIRED", res2["reason"])
 
     def test_core_delivery_operates_cleanly_without_zoho(self) -> None:
         """Core delivery workflow operates 100% cleanly with external_writes: [] when tracker is not used."""
@@ -1503,6 +1514,96 @@ class PhaseEDecoupleZohoSelftest(unittest.TestCase):
         )
         self.assertEqual(0, proc.returncode)
         self.assertEqual("allow", json.loads(proc.stdout.strip())["decision"])
+
+
+class TestSpeedTests(unittest.TestCase):
+    """TESTMODE-001 through TESTMODE-009: Fast/Full selftest strategy verification."""
+
+    def test_testmode_001_selftest_defaults_to_full_registry(self) -> None:
+        """TESTMODE-001: selftest defaults to full registry (19 suites)."""
+        import harness_cli
+        self.assertEqual(len(harness_cli.FULL_SELFTEST_SUITES), 19)
+        parser = harness_cli.build_parser()
+        args = parser.parse_args(["selftest"])
+        self.assertFalse(args.quick)
+
+    def test_testmode_002_selftest_quick_flag(self) -> None:
+        """TESTMODE-002: selftest --quick selects quick registry (6 suites)."""
+        import harness_cli
+        self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), 6)
+        parser = harness_cli.build_parser()
+        args = parser.parse_args(["selftest", "--quick"])
+        self.assertTrue(args.quick)
+
+    def test_testmode_003_quick_strict_subset_of_full(self) -> None:
+        """TESTMODE-003: quick registry is a strict subset of full registry."""
+        import harness_cli
+        self.assertTrue(set(harness_cli.QUICK_SELFTEST_SUITES) < set(harness_cli.FULL_SELFTEST_SUITES))
+        self.assertLess(len(harness_cli.QUICK_SELFTEST_SUITES), len(harness_cli.FULL_SELFTEST_SUITES))
+
+    def test_testmode_004_quick_failure_returns_nonzero(self) -> None:
+        """TESTMODE-004: failure in a quick suite returns non-zero exit code."""
+        import harness_cli
+        from unittest.mock import patch, MagicMock
+        args = harness_cli.build_parser().parse_args(["selftest", "--quick", "--kit", str(KIT)])
+        with patch.object(harness_cli, "_verify_kit_checksums", return_value=None):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=1)
+                ret = harness_cli.cmd_selftest(args)
+                self.assertNotEqual(0, ret)
+
+    def test_testmode_005_unknown_selftest_flag_fails_parser(self) -> None:
+        """TESTMODE-005: unknown selftest flag fails CLI argument parser."""
+        import harness_cli
+        import contextlib
+        import io
+        parser = harness_cli.build_parser()
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                parser.parse_args(["selftest", "--unrecognized-option"])
+
+    def test_testmode_006_timing_output_emitted(self) -> None:
+        """TESTMODE-006: timing list and slowest suites output are emitted on success."""
+        import harness_cli
+        import contextlib
+        import io
+        from unittest.mock import patch, MagicMock
+        args = harness_cli.build_parser().parse_args(["selftest", "--quick", "--kit", str(KIT)])
+        buf = io.StringIO()
+        with patch.object(harness_cli, "_verify_kit_checksums", return_value=None):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                with contextlib.redirect_stdout(buf):
+                    ret = harness_cli.cmd_selftest(args)
+                self.assertEqual(0, ret)
+                out = buf.getvalue()
+                self.assertIn("Slowest suites:", out)
+                self.assertIn("selftest mode: QUICK", out)
+
+    def test_testmode_007_one_canonical_full_ci_job(self) -> None:
+        """TESTMODE-007: .github/workflows/ci.yml has exactly one canonical full selftest job on ubuntu-24.04."""
+        import re
+        ci_path = KIT / ".github" / "workflows" / "ci.yml"
+        self.assertTrue(ci_path.is_file())
+        ci_text = ci_path.read_text(encoding="utf-8")
+        self.assertIn("full-selftest:", ci_text)
+        self.assertIn("runs-on: ubuntu-24.04", ci_text)
+        full_matches = re.findall(r"python harness_cli\.py selftest(?!\s*--quick)", ci_text)
+        self.assertEqual(1, len(full_matches))
+
+    def test_testmode_008_compatibility_jobs_use_quick(self) -> None:
+        """TESTMODE-008: .github/workflows/ci.yml compatibility matrix uses --quick."""
+        ci_path = KIT / ".github" / "workflows" / "ci.yml"
+        ci_text = ci_path.read_text(encoding="utf-8")
+        self.assertIn("compatibility:", ci_text)
+        self.assertIn("python harness_cli.py selftest --quick", ci_text)
+
+    def test_testmode_009_release_publish_waits_for_ci(self) -> None:
+        """TESTMODE-009: publish-pypi.yml workflow continues to wait for ci.yml."""
+        pypi_path = KIT / ".github" / "workflows" / "publish-pypi.yml"
+        self.assertTrue(pypi_path.is_file())
+        pypi_text = pypi_path.read_text(encoding="utf-8")
+        self.assertIn('wait_for_workflow("ci.yml"', pypi_text)
 
 
 if __name__ == "__main__":

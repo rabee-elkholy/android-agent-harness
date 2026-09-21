@@ -1752,6 +1752,9 @@ class EndToEndWorkflowTests(RepoCase):
         begin_task(Namespace(**common))
         write(self.repo / "app/src/main/kotlin/A.kt", "internal class ChangedReview\n")
         current = prepare_verification(Namespace(**common))
+        current["review_protocol_version"] = 1
+        current_run_path = self.repo / ".agents" / "state" / "tasks" / task_id / "current-run.json"
+        current_run_path.write_text(json.dumps(current), encoding="utf-8")
         package, _ = build_package(self.repo, task_id)
         package_sha = sha256_file(package)
         policy = json.loads(Path(current["policy"]).read_text(encoding="utf-8"))
@@ -2479,8 +2482,8 @@ class EndToEndWorkflowTests(RepoCase):
             self.assertTrue(len(recipes) > 0, f"Expected recipes for {surface}")
             self.assertEqual(surface, recipes[0]["surface"])
             self.assertTrue(len(recipes[0]["steps"]) >= 3)
-        # Check pure logic has no recipe by default (verified by Scenario 31)
-        self.assertEqual([], get_verification_recipes(["BUSINESS_LOGIC"]))
+        # Check pure logic recipe (Section 77)
+        self.assertEqual("BUSINESS_LOGIC", get_verification_recipes(["BUSINESS_LOGIC"])[0]["surface"])
         # Check fallback for empty surfaces when fallback=True
         fallback = get_verification_recipes([], fallback=True)
         self.assertTrue(len(fallback) > 0)

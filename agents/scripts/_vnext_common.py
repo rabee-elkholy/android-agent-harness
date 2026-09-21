@@ -8,7 +8,7 @@ import re
 import subprocess
 import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -207,6 +207,34 @@ def redact_text(value: str) -> str:
     return result
 
 
+def _reject_cross_platform_absolute_path(raw_path: str) -> None:
+    raw = str(raw_path or "").strip()
+    if not raw:
+        raise ValidationError("empty path is invalid")
+
+    normalized = raw.replace("\\", "/")
+    lower = raw.lower()
+
+    win = PureWindowsPath(raw)
+    posix = PurePosixPath(normalized)
+
+    # Windows drive absolute and drive-relative paths.
+    if win.drive:
+        raise ValidationError(f"foreign/drive path is not allowed: {raw_path}")
+
+    # POSIX absolute.
+    if posix.is_absolute():
+        raise ValidationError(f"absolute path is not allowed: {raw_path}")
+
+    # UNC.
+    if raw.startswith("\\\\") or normalized.startswith("//"):
+        raise ValidationError(f"UNC/network path is not allowed: {raw_path}")
+
+    # Windows extended/device namespace.
+    if lower.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./")):
+        raise ValidationError(f"Windows device path is not allowed: {raw_path}")
+
+
 def validate_repo_path_containment(repo: Path, raw_path: str | Path) -> str:
     """Validate that raw_path is contained within repo and does not escape via traversal or symlinks.
 
@@ -218,6 +246,8 @@ def validate_repo_path_containment(repo: Path, raw_path: str | Path) -> str:
     raw_str = str(raw_path).strip()
     if not raw_str:
         raise ValidationError("empty path is invalid")
+
+    _reject_cross_platform_absolute_path(raw_str)
 
     norm_slashes = raw_str.replace("\\", "/")
     if ".." in Path(raw_str).parts or norm_slashes.startswith("../") or "/../" in norm_slashes or norm_slashes == "..":

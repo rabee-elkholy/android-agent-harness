@@ -869,15 +869,20 @@ def cmd_assemble(args: argparse.Namespace) -> int:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
-    """Record reviewer verdicts or build/profile review packages."""
+    """Record reviewer verdicts, complete reviewer execution, or build/profile review packages."""
     forward = list(args.review_args)
     if forward and forward[0] == "--":
         forward = forward[1:]
-    if forward and forward[0] == "package":
+    if not forward:
+        return _dispatch_pipeline_script(args, "record_review.py", forward)
+    sub = forward[0]
+    if sub == "package":
         return _dispatch_pipeline_script(args, "review_package.py", forward[1:])
-    if forward and forward[0] == "profile":
+    if sub == "profile":
         return _dispatch_pipeline_script(args, "review_execution.py", forward[1:])
-    if forward and forward[0] == "ingest":
+    if sub in ("complete", "finalize", "dispatch", "status"):
+        return _dispatch_pipeline_script(args, "review_orchestrator.py", forward)
+    if sub == "ingest":
         return _dispatch_pipeline_script(args, "record_review.py", forward[1:])
     return _dispatch_pipeline_script(args, "record_review.py", forward)
 
@@ -902,6 +907,40 @@ def cmd_device(args: argparse.Namespace) -> int:
     return _dispatch_pipeline_script(args, "run_device.py", forward)
 
 
+FULL_SELFTEST_SUITES = (
+    "_vnext_selftest.py",
+    "_hook_selftest.py",
+    "_security_selftest.py",
+    "_zoho_selftest.py",
+    "_baseline_selftest.py",
+    "_graph_selftest.py",
+    "_adb_core_selftest.py",
+    "_env_codes_selftest.py",
+    "_performance_selftest.py",
+    "_android_scenarios_selftest.py",
+    "_release_safety_selftest.py",
+    "_critical_safety_selftest.py",
+    "_architecture_selftest.py",
+    "_daily_workflow_selftest.py",
+    "_stabilization_v41_selftest.py",
+    "_stabilization_v42_selftest.py",
+    "_public_cli_selftest.py",
+    "_project_intelligence_selftest.py",
+    "_graph_discovery_selftest.py",
+)
+
+QUICK_SELFTEST_SUITES = (
+    "_hook_selftest.py",
+    "_security_selftest.py",
+    "_critical_safety_selftest.py",
+    "_daily_workflow_selftest.py",
+    "_public_cli_selftest.py",
+    "_graph_discovery_selftest.py",
+)
+
+assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
+
+
 def cmd_selftest(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     prev_cwd = Path.cwd()
@@ -915,19 +954,11 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     _step = _lp_mod.step_progress
     _live = _lp_mod.live_print
     try:
-        scripts = (
-            "_vnext_selftest.py", "_hook_selftest.py", "_security_selftest.py",
-            "_zoho_selftest.py", "_baseline_selftest.py", "_graph_selftest.py",
-            "_adb_core_selftest.py", "_env_codes_selftest.py", "_performance_selftest.py",
-            "_android_scenarios_selftest.py", "_release_safety_selftest.py", "_critical_safety_selftest.py",
-            "_architecture_selftest.py", "_daily_workflow_selftest.py",
-            "_stabilization_v41_selftest.py",
-            "_stabilization_v42_selftest.py",
-            "_public_cli_selftest.py",
-            "_project_intelligence_selftest.py",
-            "_graph_discovery_selftest.py",
-        )
+        scripts = QUICK_SELFTEST_SUITES if getattr(args, "quick", False) else FULL_SELFTEST_SUITES
+        mode = "QUICK" if getattr(args, "quick", False) else "FULL"
+        _live(f"selftest mode: {mode}")
         total = len(scripts)
+        timings: list[tuple[str, float]] = []
         for idx, script in enumerate(scripts, 1):
             label = script.replace("_selftest.py", "").lstrip("_")
             _live(f"selftest: {label} [{idx}/{total}]")
@@ -948,11 +979,16 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             )
             code = proc.returncode
             elapsed = time.time() - t0
+            timings.append((label, elapsed))
             if code != 0:
                 _live(f"selftest: {label} [{idx}/{total}] [Fail] ({elapsed:.1f}s)")
                 return code
             _live(f"selftest: {label} [{idx}/{total}] [Done] ({elapsed:.1f}s)")
         _live(f"\n✅ All {total} selftest suites passed.")
+        timings.sort(key=lambda x: x[1], reverse=True)
+        _live("Slowest suites:")
+        for rank, (t_label, t_el) in enumerate(timings[:5], 1):
+            _live(f"{rank}. {t_label} {t_el:.1f}s")
         return 0
     finally:
         os.chdir(prev_cwd)
@@ -1180,6 +1216,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("selftest", help="Run the kit hook selftest suite in the kit checkout.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
+    sp.add_argument(
+        "--quick",
+        action="store_true",
+        help="Run high-value developer-loop selftest subset.",
+    )
     sp.set_defaults(func=cmd_selftest)
 
     sp = sub.add_parser("version", help="Print the active kit engine version.")

@@ -29,6 +29,7 @@ from _vnext_common import (
     active_review_package_path,
     atomic_write_json,
     canonical_sha256,
+    git_text,
     read_json,
     sha256_file,
     utc_now,
@@ -702,6 +703,8 @@ class DailyWorkflowSelftest(unittest.TestCase):
         prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
 
         run_info = read_json(task_dir(self.repo, task_id) / "current-run.json")
+        run_info["review_protocol_version"] = 1
+        atomic_write_json(task_dir(self.repo, task_id) / "current-run.json", run_info)
         run_id = str(run_info["run_id"])
         _, review_pkg = review_package.build_package(self.repo, task_id)
         pkg_sha = review_pkg["package_sha256"]
@@ -801,6 +804,8 @@ class DailyWorkflowSelftest(unittest.TestCase):
         prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
 
         run_info = read_json(task_dir(self.repo, task_id) / "current-run.json")
+        run_info["review_protocol_version"] = 1
+        atomic_write_json(task_dir(self.repo, task_id) / "current-run.json", run_info)
         run_id = str(run_info["run_id"])
         _, review_pkg = review_package.build_package(self.repo, task_id)
         pkg_sha = review_pkg["package_sha256"]
@@ -2277,9 +2282,13 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self._record_evidence(manifest, run_id, "assemble", "PASS")
 
         act = resolve_next_action(self.repo, "task-next-006", plan)
-        self.assertEqual("DEVICE_INSTALL", act["code"])
-        self.assertEqual("HARNESS_COMMAND", act["kind"])
-        self.assertIn("device install-start", act["command"])
+        self.assertEqual("MOBILE_VALIDATION_DECISION", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertEqual(2, len(act.get("choices") or []))
+        self.assertEqual("run", act["choices"][0]["id"])
+        self.assertEqual("skip", act["choices"][1]["id"])
+        self.assertIn("device install-start", act["choices"][0]["command"])
+        self.assertIn("device skip-validation", act["choices"][1]["command"])
 
     def test_NEXT_007_sensitive_approval_required_resolves_sensitive_approval(self) -> None:
         """NEXT-007: When sensitive change is ready for final approval, resolve SENSITIVE_APPROVAL."""
@@ -3051,6 +3060,8 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         tdir = task_dir(self.repo, task_id)
         plan = read_json(tdir / "plan.json")
         current = read_json(tdir / "current-run.json")
+        current["review_protocol_version"] = 1
+        atomic_write_json(tdir / "current-run.json", current)
         policy = read_json(Path(current["policy"]))
         manifest = read_json(Path(current["manifest"]))
         return plan, tdir, policy, manifest
@@ -3903,22 +3914,45 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         self.assertFalse(ctx_cmds["context generate"])
         self.assertFalse(ctx_cmds["context refresh"])
 
+def _managed_instruction_files(kit: Path) -> list[Path]:
+    candidates = [
+        kit / "GEMINI.md",
+        kit / "AGENTS.md",
+        kit / "CLAUDE.md",
+        kit / "CODEX.md",
+        kit / "QWEN.md",
+        kit / "agents" / "rules" / "harness-rules.md",
+        kit / "templates" / "gemini-runtime" / "android-harness-global.md.template",
+        kit / "agents" / "skills" / "android-harness" / "SKILL.md",
+        kit / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
+        kit / "agents" / "workflows" / "deliver.md",
+    ]
+
+    adapters = kit / "agents" / "tool-adapters"
+    if adapters.is_dir():
+        candidates.extend(
+            p for p in adapters.iterdir()
+            if p.is_file()
+        )
+
+    existing = sorted({
+        p.resolve()
+        for p in candidates
+        if p.is_file()
+    })
+
+    if not existing:
+        raise AssertionError("no managed instruction files were discovered")
+
+    return existing
+
+
 class ContractConsistencyTests(unittest.TestCase):
     """CONTRACT-001 through CONTRACT-006: Consistency of documentation, adapters, and contracts."""
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.managed_files = [
-            KIT / "GEMINI.md",
-            KIT / "CLAUDE.md",
-            KIT / "CODEX.md",
-            KIT / "QWEN.md",
-            KIT / "agents" / "rules" / "harness-rules.md",
-            KIT / "templates" / "gemini-runtime" / "android-harness-global.md.template",
-            KIT / "agents" / "skills" / "android-harness" / "SKILL.md",
-            KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
-            KIT / "agents" / "workflows" / "deliver.md",
-        ] + [p for p in (KIT / "agents" / "tool-adapters").glob("*") if p.is_file()]
+        cls.managed_files = _managed_instruction_files(KIT)
 
     def test_CONTRACT_001_no_normal_approve_then_begin(self) -> None:
         """CONTRACT-001: No managed file describes normal happy path as approve -> begin."""
@@ -3982,6 +4016,828 @@ class ContractConsistencyTests(unittest.TestCase):
         for f in self.managed_files:
             txt = f.read_text(encoding="utf-8")
             self.assertNotIn(":app:assembleDebug", txt, f"CONTRACT-006 violation in {f}")
+
+    def test_CONTRACT_FILES_001_optional_missing_root_host_file_does_not_crash(self) -> None:
+        """CONTRACT-FILES-001: optional missing root host file does not crash."""
+        with tempfile.TemporaryDirectory() as td:
+            fake_kit = Path(td)
+            (fake_kit / "GEMINI.md").write_text("dummy", encoding="utf-8")
+            discovered = _managed_instruction_files(fake_kit)
+            self.assertEqual(discovered, [(fake_kit / "GEMINI.md").resolve()])
+
+    def test_CONTRACT_FILES_002_existing_root_file_is_checked(self) -> None:
+        """CONTRACT-FILES-002: existing root file is checked."""
+        resolved = [f.resolve() for f in self.managed_files]
+        if (KIT / "GEMINI.md").is_file():
+            self.assertIn((KIT / "GEMINI.md").resolve(), resolved)
+        if (KIT / "AGENTS.md").is_file():
+            self.assertIn((KIT / "AGENTS.md").resolve(), resolved)
+
+    def test_CONTRACT_FILES_003_tool_adapter_templates_are_checked(self) -> None:
+        """CONTRACT-FILES-003: tool adapter templates are checked."""
+        adapters_dir = KIT / "agents" / "tool-adapters"
+        if adapters_dir.is_dir():
+            adapter_files = [p.resolve() for p in adapters_dir.iterdir() if p.is_file()]
+            for af in adapter_files:
+                self.assertIn(af, [f.resolve() for f in self.managed_files])
+
+    def test_CONTRACT_FILES_004_empty_managed_file_set_fails_loudly(self) -> None:
+        """CONTRACT-FILES-004: empty managed-file set fails loudly."""
+        with tempfile.TemporaryDirectory() as td:
+            empty_kit = Path(td)
+            with self.assertRaises(AssertionError) as ctx:
+                _managed_instruction_files(empty_kit)
+            self.assertIn("no managed instruction files were discovered", str(ctx.exception))
+
+
+class PathPortabilityTests(unittest.TestCase):
+    """PATH-PORTABLE-001 through PATH-PORTABLE-008: Platform-independent repo path containment."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name).resolve()
+        (self.repo / "app" / "src" / "main" / "java" / "com" / "example").mkdir(parents=True, exist_ok=True)
+        (self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Foo.kt").write_text("class Foo", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_PATH_PORTABLE_001_drive_absolute_rejected(self) -> None:
+        """PATH-PORTABLE-001: drive absolute rejected."""
+        for p in [r"C:\Windows\System32\cmd.exe", "C:/Windows/System32/cmd.exe", r"D:\foo\bar"]:
+            with self.assertRaises(ValidationError):
+                validate_repo_path_containment(self.repo, p)
+
+    def test_PATH_PORTABLE_002_drive_relative_rejected(self) -> None:
+        """PATH-PORTABLE-002: drive-relative rejected."""
+        for p in ["C:relative-drive-path", "D:foo"]:
+            with self.assertRaises(ValidationError):
+                validate_repo_path_containment(self.repo, p)
+
+    def test_PATH_PORTABLE_003_UNC_rejected(self) -> None:
+        """PATH-PORTABLE-003: UNC rejected."""
+        for p in [r"\\server\share\file", "//server/share/file"]:
+            with self.assertRaises(ValidationError):
+                validate_repo_path_containment(self.repo, p)
+
+    def test_PATH_PORTABLE_004_device_namespace_rejected(self) -> None:
+        """PATH-PORTABLE-004: device namespace rejected."""
+        for p in [r"\\?\C:\foo", r"\\.\pipe\name", "//?/C:/foo", "//./pipe/name"]:
+            with self.assertRaises(ValidationError):
+                validate_repo_path_containment(self.repo, p)
+
+    def test_PATH_PORTABLE_005_POSIX_absolute_rejected(self) -> None:
+        """PATH-PORTABLE-005: POSIX absolute rejected."""
+        for p in ["/etc/passwd", "/var/log", "/foo/bar"]:
+            with self.assertRaises(ValidationError):
+                validate_repo_path_containment(self.repo, p)
+
+    def test_PATH_PORTABLE_006_traversal_rejected(self) -> None:
+        """PATH-PORTABLE-006: traversal rejected."""
+        for p in ["../secret", "foo/../../../secret", ".."]:
+            with self.assertRaises(ValidationError):
+                validate_repo_path_containment(self.repo, p)
+
+    def test_PATH_PORTABLE_007_normal_POSIX_repo_path_accepted(self) -> None:
+        """PATH-PORTABLE-007: normal POSIX repo path accepted."""
+        rel = validate_repo_path_containment(self.repo, "app/src/main/java/com/example/Foo.kt")
+        self.assertEqual(rel, "app/src/main/java/com/example/Foo.kt")
+
+    def test_PATH_PORTABLE_008_normal_backslash_repo_path_accepted(self) -> None:
+        """PATH-PORTABLE-008: normal backslash repo path accepted."""
+        rel = validate_repo_path_containment(self.repo, r"app\src\main\java\com\example\Foo.kt")
+        self.assertEqual(rel, "app/src/main/java/com/example/Foo.kt")
+
+
+class RecoverStaleTests(unittest.TestCase):
+    """RECOVER-001 through RECOVER-008: recover_stale() protections and recovery rules."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name).resolve()
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
+        self.state_tasks = self.repo / ".agents" / "state" / "tasks"
+        self.state_tasks.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _set_active(self, task_id: str, status: str) -> None:
+        task_dir = self.state_tasks / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "status": status,
+        }
+        (task_dir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        active = {"task_id": task_id, "plan_path": str(task_dir / "plan.json")}
+        (self.state_tasks.parent / "active-task.json").write_text(json.dumps(active), encoding="utf-8")
+
+    def test_RECOVER_001_AWAITING_blocked(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t1", "AWAITING_DEVELOPER_APPROVAL")
+        with self.assertRaises(ValidationError) as ctx:
+            recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertIn("Cannot auto-recover healthy active task", str(ctx.exception))
+
+    def test_RECOVER_002_APPROVED_blocked(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t2", "APPROVED")
+        with self.assertRaises(ValidationError) as ctx:
+            recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertIn("Cannot auto-recover healthy active task", str(ctx.exception))
+
+    def test_RECOVER_003_IMPLEMENTING_blocked(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t3", "IMPLEMENTING")
+        with self.assertRaises(ValidationError) as ctx:
+            recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertIn("Cannot auto-recover healthy active task", str(ctx.exception))
+
+    def test_RECOVER_004_VERIFYING_blocked(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t4", "VERIFYING")
+        with self.assertRaises(ValidationError) as ctx:
+            recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertIn("Cannot auto-recover healthy active task", str(ctx.exception))
+
+    def test_RECOVER_005_BLOCKED_blocked(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t5", "BLOCKED")
+        with self.assertRaises(ValidationError) as ctx:
+            recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertIn("Cannot auto-recover healthy active task", str(ctx.exception))
+
+    def test_RECOVER_006_READY_blocked(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t6", "READY_FOR_DELIVERY")
+        with self.assertRaises(ValidationError) as ctx:
+            recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertIn("Cannot auto-recover healthy active task", str(ctx.exception))
+
+    def test_RECOVER_007_CANCELLED_stale_pointer_recover(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t7", "CANCELLED")
+        res = recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertEqual(res.get("status"), "RECOVERED")
+        self.assertTrue(res.get("cleared_active_task"))
+        self.assertFalse((self.state_tasks.parent / "active-task.json").exists())
+
+    def test_RECOVER_008_DELIVERED_stale_pointer_recover(self) -> None:
+        from workflow import recover_stale
+        self._set_active("t8", "DELIVERED")
+        res = recover_stale(argparse.Namespace(repo=str(self.repo)))
+        self.assertEqual(res.get("status"), "RECOVERED")
+        self.assertTrue(res.get("cleared_active_task"))
+        self.assertFalse((self.state_tasks.parent / "active-task.json").exists())
+
+
+class DeliveryCommitTests(unittest.TestCase):
+    """DELIVERY-COMMIT-001 through DELIVERY-COMMIT-004: Delivery commit sha capture."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name).resolve()
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        (self.repo / "app").mkdir(parents=True, exist_ok=True)
+        (self.repo / "app" / "Foo.kt").write_text("class Foo", encoding="utf-8")
+        subprocess.run(["git", "add", "app/Foo.kt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-m", "init", "-q"], cwd=self.repo, check=True)
+        self.head_sha = git_text(self.repo, "rev-parse", "HEAD")
+        self.state_tasks = self.repo / ".agents" / "state" / "tasks"
+        self.state_tasks.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _setup_ready_task(self, task_id: str, snapshot: str | None = None) -> Path:
+        task_dir = self.state_tasks / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        if snapshot is None:
+            manifest = build_manifest(self.repo)
+            snapshot = manifest["delivery_snapshot_sha256"]
+        plan = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "status": "READY_FOR_DELIVERY",
+            "ready_delivery_snapshot_sha256": snapshot,
+            "expected_files": ["app/Foo.kt"],
+        }
+        p_path = task_dir / "plan.json"
+        p_path.write_text(json.dumps(plan), encoding="utf-8")
+        active = {"task_id": task_id, "plan_path": str(p_path)}
+        (self.state_tasks.parent / "active-task.json").write_text(json.dumps(active), encoding="utf-8")
+        return p_path
+
+    def test_DELIVERY_COMMIT_001_delivered_task_stores_exact_HEAD(self) -> None:
+        from workflow import reconcile_delivery
+        p_path = self._setup_ready_task("del-001")
+        plan, code = reconcile_delivery(self.repo, "del-001")
+        self.assertEqual(code, "DELIVERED")
+        self.assertEqual(plan.get("status"), "DELIVERED")
+        self.assertEqual(plan.get("delivery_commit_sha"), self.head_sha)
+        stored = json.loads(p_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored.get("delivery_commit_sha"), self.head_sha)
+
+    def test_DELIVERY_COMMIT_002_dirty_READY_cannot_store_deliver(self) -> None:
+        from workflow import reconcile_delivery
+        p_path = self._setup_ready_task("del-002")
+        (self.repo / "app" / "Foo.kt").write_text("class FooModified", encoding="utf-8")
+        plan, code = reconcile_delivery(self.repo, "del-002")
+        self.assertEqual(code, "DIRTY_UNCOMMITTED")
+        stored = json.loads(p_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored.get("status"), "READY_FOR_DELIVERY")
+        self.assertNotIn("delivery_commit_sha", stored)
+
+    def test_DELIVERY_COMMIT_003_snapshot_mismatch_cannot_deliver(self) -> None:
+        from workflow import reconcile_delivery
+        p_path = self._setup_ready_task("del-003", snapshot="0" * 64)
+        plan, code = reconcile_delivery(self.repo, "del-003")
+        self.assertEqual(code, "SNAPSHOT_MISMATCH")
+        stored = json.loads(p_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored.get("status"), "READY_FOR_DELIVERY")
+        self.assertNotIn("delivery_commit_sha", stored)
+
+    def test_DELIVERY_COMMIT_004_repeated_reconcile_does_not_change_commit_identity(self) -> None:
+        from workflow import reconcile_delivery
+        p_path = self._setup_ready_task("del-004")
+        plan1, code1 = reconcile_delivery(self.repo, "del-004")
+        self.assertEqual(code1, "DELIVERED")
+        sha1 = plan1.get("delivery_commit_sha")
+        self.assertEqual(sha1, self.head_sha)
+        (self.repo / "app" / "Bar.kt").write_text("class Bar", encoding="utf-8")
+        subprocess.run(["git", "add", "app/Bar.kt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-m", "second", "-q"], cwd=self.repo, check=True)
+        plan2, code2 = reconcile_delivery(self.repo, "del-004")
+        self.assertEqual(code2, "DELIVERED")
+        self.assertEqual(plan2.get("delivery_commit_sha"), sha1)
+
+
+class AssembleResolveTests(unittest.TestCase):
+    """ASSEMBLE-RESOLVE-001 through ASSEMBLE-RESOLVE-006: Build-variant / assemble task resolution."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name).resolve()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_ASSEMBLE_RESOLVE_001_configured_app_task(self) -> None:
+        from _variants import resolve_assemble_task
+        prod_file = self.repo / ".agents" / "scripts" / "_product.py"
+        prod_file.parent.mkdir(parents=True, exist_ok=True)
+        prod_file.write_text("MODULE = ':app'\nASSEMBLE_TASK = ':app:assembleDebug'\n", encoding="utf-8")
+        task = resolve_assemble_task(self.repo)
+        self.assertEqual(task, ":app:assembleDebug")
+
+    def test_ASSEMBLE_RESOLVE_002_flavored_app_task(self) -> None:
+        from _variants import resolve_assemble_task
+        prod_file = self.repo / ".agents" / "scripts" / "_product.py"
+        prod_file.parent.mkdir(parents=True, exist_ok=True)
+        prod_file.write_text("MODULE = ':app'\nACTIVE_FLAVOR = 'staging'\n", encoding="utf-8")
+        task = resolve_assemble_task(self.repo)
+        self.assertEqual(task, ":app:assembleStagingDebug")
+
+    def test_ASSEMBLE_RESOLVE_003_library(self) -> None:
+        from _variants import resolve_assemble_task
+        prod_file = self.repo / ".agents" / "scripts" / "_product.py"
+        prod_file.parent.mkdir(parents=True, exist_ok=True)
+        prod_file.write_text("MODULE = ':core:network'\nPROJECT_KIND = 'library'\n", encoding="utf-8")
+        task = resolve_assemble_task(self.repo)
+        self.assertEqual(task, ":core:network:assemble")
+
+    def test_ASSEMBLE_RESOLVE_004_composeApp_androidApp_topology(self) -> None:
+        from _variants import resolve_assemble_task
+        (self.repo / "composeApp").mkdir(parents=True, exist_ok=True)
+        (self.repo / "composeApp" / "build.gradle.kts").write_text("plugins { id('com.android.application') }", encoding="utf-8")
+        task = resolve_assemble_task(self.repo)
+        self.assertEqual(task, ":composeApp:assembleDebug")
+
+    def test_ASSEMBLE_RESOLVE_005_unresolved_repo_ValidationError(self) -> None:
+        from _variants import resolve_assemble_task
+        with self.assertRaises(ValidationError) as ctx:
+            resolve_assemble_task(self.repo)
+        self.assertIn("ASSEMBLE_TASK_RESOLUTION_FAILED", str(ctx.exception))
+
+    def test_ASSEMBLE_RESOLVE_006_public_harness_assemble_propagates_resolver_failure(self) -> None:
+        from harness_cli import cmd_assemble
+        (self.repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+        args = argparse.Namespace(gradle_args=[], kit=str(KIT), repo=str(self.repo))
+        with self.assertRaises(ValidationError) as ctx:
+            cmd_assemble(args)
+        self.assertIn("ASSEMBLE_TASK_RESOLUTION_FAILED", str(ctx.exception))
+
+class ReviewOrchestrationTests(unittest.TestCase):
+    """REVIEW-ORCH-001 through REVIEW-ORCH-020: Review orchestration, ledger, protocol v2 and evidence tests."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="review_orch_test_")
+        self.repo = Path(self.temp_dir.name).resolve()
+        run_git(self.repo, "init", "-q")
+        run_git(self.repo, "config", "user.name", "Daily Test")
+        run_git(self.repo, "config", "user.email", "daily@example.invalid")
+        run_git(self.repo, "config", "core.autocrlf", "true")
+        (self.repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+        write_file(self.repo / "gradlew", "#!/bin/sh\nexit 0\n")
+        write_file(self.repo / "settings.gradle.kts", 'rootProject.name = "DailyFixture"\ninclude(":app")\n')
+        write_file(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        (self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example").mkdir(parents=True, exist_ok=True)
+        write_file(
+            self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt",
+            "package com.example\n\nclass MainActivity\n"
+        )
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "init", "-q")
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _setup_v2_task(self, task_id: str, reviewers: list[str] | None = None) -> tuple[dict, str, str, Path]:
+        if reviewers is None:
+            reviewers = ["bug-reviewer-agent"]
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="V2 review orchestration task",
+            kind="BUG",
+            planning_depth="BOUNDED",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { fun run() = 1 }\n")
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        tdir = task_dir(self.repo, task_id)
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy = read_json(Path(current["policy"]))
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = reviewers
+        atomic_write_json(Path(current["policy"]), policy)
+        _, pkg = review_package.build_package(self.repo, task_id)
+        pkg_sha = pkg["package_sha256"]
+
+        store = EvidenceStore(state_root(self.repo))
+        manifest = read_json(Path(current["manifest"]))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={"status": "PASS"},
+        )
+
+        return current, run_id, pkg_sha, tdir
+
+    def test_REVIEW_ORCH_001_dispatch_receipt_written_before_result(self) -> None:
+        from review_orchestrator import record_dispatch, dispatch_receipt_file, load_ledger, REVIEW_DISPATCHED
+        task_id = "test-orch-001"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        receipt = record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        r_file = dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent")
+        self.assertTrue(r_file.is_file())
+        self.assertEqual(receipt["receipt_sha256"], read_json(r_file)["receipt_sha256"])
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+
+    def test_REVIEW_ORCH_002_missing_dispatch_cannot_be_synthesized_during_v2_ingest(self) -> None:
+        from record_review import verify_independent_reviewer_execution
+        task_id = "test-orch-002"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        app_data_dir = self.repo / ".test_app_data"
+        old_env = os.environ.get("ANTIGRAVITY_APP_DATA")
+        os.environ["ANTIGRAVITY_APP_DATA"] = str(app_data_dir)
+        try:
+            t_dir = app_data_dir / "brain" / "test-conv-id" / ".system_generated" / "logs"
+            t_dir.mkdir(parents=True, exist_ok=True)
+            write_file(t_dir / "transcript.jsonl", '{"type": "MODEL", "content": "hello"}\n')
+            verified, proof = verify_independent_reviewer_execution(
+                self.repo, task_id=task_id, run_id=run_id, reviewer="bug-reviewer-agent", package_sha256=pkg_sha, subagent_id="test-conv-id"
+            )
+            self.assertFalse(verified)
+            self.assertIn("missing dispatch receipt", proof.get("reason", ""))
+        finally:
+            if old_env is not None:
+                os.environ["ANTIGRAVITY_APP_DATA"] = old_env
+            else:
+                os.environ.pop("ANTIGRAVITY_APP_DATA", None)
+
+    def test_REVIEW_ORCH_003_receipt_is_task_run_package_bound(self) -> None:
+        from review_orchestrator import record_dispatch, dispatch_receipt_file
+        task_id = "test-orch-003"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        receipt = record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        self.assertEqual(task_id, receipt["task_id"])
+        self.assertEqual(run_id, receipt["run_id"])
+        self.assertEqual(pkg_sha, receipt["review_package_sha256"])
+
+    def test_REVIEW_ORCH_004_wrong_run_result_rejected(self) -> None:
+        from review_orchestrator import parse_structured_result
+        text = '```json\n{"schema_version": 2, "task_id": "t1", "run_id": "wrong-run", "reviewer": "r1", "review_package_sha256": "' + "a"*64 + '", "verdict": "PASS", "findings": []}\n```'
+        with self.assertRaises(ValidationError) as ctx:
+            parse_structured_result(text=text, expected_task_id="t1", expected_run_id="correct-run", expected_reviewer="r1", expected_package_sha256="a"*64)
+        self.assertIn("run_id mismatch", str(ctx.exception))
+
+    def test_REVIEW_ORCH_005_wrong_package_result_rejected(self) -> None:
+        from review_orchestrator import parse_structured_result
+        text = '```json\n{"schema_version": 2, "task_id": "t1", "run_id": "r1", "reviewer": "rev1", "review_package_sha256": "' + "b"*64 + '", "verdict": "PASS", "findings": []}\n```'
+        with self.assertRaises(ValidationError) as ctx:
+            parse_structured_result(text=text, expected_task_id="t1", expected_run_id="r1", expected_reviewer="rev1", expected_package_sha256="a"*64)
+        self.assertIn("review_package_sha256 mismatch", str(ctx.exception))
+
+    def test_REVIEW_ORCH_006_wrong_reviewer_result_rejected(self) -> None:
+        from review_orchestrator import parse_structured_result
+        text = '```json\n{"schema_version": 2, "task_id": "t1", "run_id": "r1", "reviewer": "wrong-reviewer", "review_package_sha256": "' + "a"*64 + '", "verdict": "PASS", "findings": []}\n```'
+        with self.assertRaises(ValidationError) as ctx:
+            parse_structured_result(text=text, expected_task_id="t1", expected_run_id="r1", expected_reviewer="expected-reviewer", expected_package_sha256="a"*64)
+        self.assertIn("reviewer mismatch", str(ctx.exception))
+
+    def test_REVIEW_ORCH_007_PASS_plus_findings_rejected(self) -> None:
+        from review_orchestrator import parse_structured_result
+        text = '```json\n{"schema_version": 2, "task_id": "t1", "run_id": "r1", "reviewer": "rev1", "review_package_sha256": "' + "a"*64 + '", "verdict": "PASS", "findings": [{"id": "1", "severity": "HIGH", "message": "issue"}]}\n```'
+        with self.assertRaises(ValidationError) as ctx:
+            parse_structured_result(text=text, expected_task_id="t1", expected_run_id="r1", expected_reviewer="rev1", expected_package_sha256="a"*64)
+        self.assertIn("verdict is PASS but findings list is not empty", str(ctx.exception))
+
+    def test_REVIEW_ORCH_008_FINDINGS_plus_empty_findings_rejected(self) -> None:
+        from review_orchestrator import parse_structured_result
+        text = '```json\n{"schema_version": 2, "task_id": "t1", "run_id": "r1", "reviewer": "rev1", "review_package_sha256": "' + "a"*64 + '", "verdict": "FINDINGS", "findings": []}\n```'
+        with self.assertRaises(ValidationError) as ctx:
+            parse_structured_result(text=text, expected_task_id="t1", expected_run_id="r1", expected_reviewer="rev1", expected_package_sha256="a"*64)
+        self.assertIn("verdict is FINDINGS but findings list is empty", str(ctx.exception))
+
+    def test_REVIEW_ORCH_009_one_malformed_response_retry_required(self) -> None:
+        from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_PROTOCOL_RETRY_REQUIRED
+        task_id = "test-orch-009"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-009", override_text="I am not json")
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(1, ledger["reviewers"]["bug-reviewer-agent"]["protocol_attempts"])
+        plan = read_json(tdir / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("RETRY_REVIEW_PROTOCOL", act["code"])
+
+    def test_REVIEW_ORCH_010_second_malformed_response_failed_protocol(self) -> None:
+        from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_FAILED_PROTOCOL
+        task_id = "test-orch-010"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        # Attempt 1
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-010", override_text="malformed 1")
+        # Attempt 2
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-010", override_text="malformed 2")
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_FAILED_PROTOCOL, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(2, ledger["reviewers"]["bug-reviewer-agent"]["protocol_attempts"])
+        plan = read_json(tdir / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("REVIEW_PROTOCOL_BLOCKED", act["code"])
+
+    def test_REVIEW_ORCH_011_provider_failure_ENV_BLOCKED(self) -> None:
+        from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_ENV_BLOCKED
+        task_id = "test-orch-011"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "nonexistent-transcript-id")
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        plan = read_json(tdir / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("REVIEW_ENV_BLOCKED", act["code"])
+
+    def test_REVIEW_ORCH_012_all_completed_auto_finalize_reviews_evidence(self) -> None:
+        from review_orchestrator import record_dispatch, complete_review
+        task_id = "test-orch-012"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        valid_v2 = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "PASS", "findings": []
+        })
+        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-012", override_text=valid_v2)
+        store = EvidenceStore(state_root(self.repo))
+        evidence = store.read(current["delivery_snapshot_sha256"], run_id, "reviews")
+        self.assertEqual("PASS", evidence.get("status"))
+
+    def test_REVIEW_ORCH_013_duplicate_completion_is_idempotent(self) -> None:
+        from review_orchestrator import record_dispatch, complete_review
+        task_id = "test-orch-013"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        valid_v2 = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "PASS", "findings": []
+        })
+        res1 = complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-013", override_text=valid_v2)
+        res2 = complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-013", override_text=valid_v2)
+        self.assertEqual(res1["verdict"], res2["verdict"])
+
+    def test_REVIEW_ORCH_014_different_result_for_same_completed_execution_is_rejected(self) -> None:
+        from review_orchestrator import record_dispatch, complete_review
+        task_id = "test-orch-014"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        valid_pass = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "PASS", "findings": []
+        })
+        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-014", override_text=valid_pass)
+        diff_findings = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "FINDINGS", "findings": [{"id": "1", "severity": "HIGH", "message": "defect"}]
+        })
+        with self.assertRaises(ValidationError) as ctx:
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-014", override_text=diff_findings)
+        self.assertIn("different result for same completed execution is rejected", str(ctx.exception))
+
+    def test_REVIEW_ORCH_015_zero_polling(self) -> None:
+        from review_orchestrator import record_dispatch
+        task_id = "test-orch-015"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        plan = read_json(tdir / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("WAIT_FOR_REVIEWERS", act["code"])
+        self.assertEqual("HOST_ACTION", act["kind"])
+        self.assertEqual("", act["command"])
+
+    def test_REVIEW_ORCH_016_run_bound_receipt_paths(self) -> None:
+        from review_orchestrator import record_dispatch, dispatch_receipt_file
+        task_id = "test-orch-016"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        bound_receipt = dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent")
+        self.assertTrue(bound_receipt.is_file())
+        legacy_receipt = tdir / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        self.assertFalse(legacy_receipt.is_file())
+
+    def test_REVIEW_ORCH_017_legacy_v1_footer_still_readable(self) -> None:
+        from record_review import _parse_response_text
+        task_id = "test-orch-017"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current["review_protocol_version"] = 1
+        atomic_write_json(tdir / "current-run.json", current)
+        text = f"Clean review.\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nPASS"
+        report = _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")
+        self.assertEqual("PASS", report["verdict"])
+
+    def test_REVIEW_ORCH_018_v2_does_not_accept_footer_only_PASS(self) -> None:
+        from record_review import _parse_response_text
+        task_id = "test-orch-018"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        # protocol_version is 2
+        text = f"Clean review.\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nPASS"
+        with self.assertRaises(ValidationError) as ctx:
+            _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")
+        self.assertIn("HARNESS_REVIEW_RESULT_V2", str(ctx.exception))
+
+    def test_REVIEW_ORCH_019_lead_direct_verdict_blocked_for_v2(self) -> None:
+        task_id = "test-orch-019"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        ret = record_review.main([
+            "--repo", str(self.repo),
+            "--task", task_id,
+            "--verdict", "bug-reviewer-agent=PASS",
+            "--evidence-pkg", pkg_sha,
+        ])
+        self.assertEqual(1, ret)
+
+    def test_REVIEW_ORCH_020_carried_review_behavior_preserved(self) -> None:
+        task_id = "test-orch-020"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        # Complete review round 1
+        valid_v2 = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "PASS", "findings": []
+        })
+        from review_orchestrator import record_dispatch, complete_review
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-020", override_text=valid_v2)
+        # Verify reviews evidence recorded
+        store = EvidenceStore(state_root(self.repo))
+        evidence = store.read(current["delivery_snapshot_sha256"], run_id, "reviews")
+        self.assertEqual("PASS", evidence.get("status"))
+
+
+class VerifyingScopeTests(unittest.TestCase):
+    """VERIFY-SCOPE-001 through 007: Review search and list_dir scope enforcement during VERIFYING."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name).resolve()
+        run_git(self.repo, "init", "-q")
+        (self.repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+        self.state = state_root(self.repo)
+        self.safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        self.env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_REPO_DIR": str(self.repo),
+            "PYTHONPATH": str(KIT / "agents" / "scripts"),
+        }
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _invoke_safety(self, tool_name: str, tool_args: dict) -> dict:
+        payload = json.dumps({"toolName": tool_name, "toolArgs": tool_args})
+        proc = subprocess.run(
+            [sys.executable, str(self.safety_script)],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, f"stderr: {proc.stderr}\nstdout: {proc.stdout}")
+        return json.loads(proc.stdout.strip())
+
+    def _setup_verifying_task(self, task_id: str, review_scope: dict) -> Path:
+        tdir = task_dir(self.repo, task_id)
+        tdir.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "task_id": task_id,
+            "status": "VERIFYING",
+            "execution_nonce": "nonce-1",
+            "approval": {"single_use_nonce": "nonce-1"},
+            "review_scope": review_scope,
+        }
+        atomic_write_json(tdir / "plan.json", plan)
+        atomic_write_json(self.state / "active-task.json", {"task_id": task_id, "plan_path": str(tdir / "plan.json")})
+        current_run = {
+            "task_id": task_id,
+            "run_id": "run-verif-1",
+            "review_scope": review_scope,
+        }
+        atomic_write_json(tdir / "current-run.json", current_run)
+        return tdir
+
+    def test_VERIFY_SCOPE_001_changed_file_search_allowed(self) -> None:
+        scope = {
+            "changed_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "allowed_roots": ["app/src/main/kotlin/com/example"],
+            "direct_callers": [],
+            "max_graph_hops": 2,
+        }
+        self._setup_verifying_task("t-scope-001", scope)
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/MainActivity.kt", "Query": "onCreate"},
+        )
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("VERIFIER_SEARCH_ALLOWED", res.get("reason_code"))
+
+    def test_VERIFY_SCOPE_002_direct_caller_allowed(self) -> None:
+        scope = {
+            "changed_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "allowed_roots": ["app/src/main/kotlin/com/example"],
+            "direct_callers": ["app/src/main/kotlin/com/example/App.kt"],
+            "max_graph_hops": 2,
+        }
+        self._setup_verifying_task("t-scope-002", scope)
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/App.kt", "Query": "MainActivity"},
+        )
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("VERIFIER_SEARCH_ALLOWED", res.get("reason_code"))
+
+    def test_VERIFY_SCOPE_003_unrelated_module_denied(self) -> None:
+        scope = {
+            "changed_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "allowed_roots": ["app/src/main/kotlin/com/example"],
+            "direct_callers": [],
+            "max_graph_hops": 2,
+        }
+        self._setup_verifying_task("t-scope-003", scope)
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "feature/billing/src/main/kotlin/com/example/Billing.kt", "Query": "charge"},
+        )
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+
+    def test_VERIFY_SCOPE_004_root_list_dir_denied(self) -> None:
+        scope = {
+            "changed_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "allowed_roots": ["app/src/main/kotlin/com/example"],
+            "direct_callers": [],
+            "max_graph_hops": 2,
+        }
+        self._setup_verifying_task("t-scope-004", scope)
+        res = self._invoke_safety(
+            "list_dir",
+            {"DirectoryPath": "."},
+        )
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+
+    def test_VERIFY_SCOPE_005_graph_expansion_adds_exact_bounded_root(self) -> None:
+        scope = {
+            "changed_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "allowed_roots": ["app/src/main/kotlin/com/example"],
+            "direct_callers": [],
+            "max_graph_hops": 2,
+        }
+        self._setup_verifying_task("t-scope-005", scope)
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        billing_file = self.repo / "feature/billing/src/main/kotlin/com/example/Billing.kt"
+        billing_file.parent.mkdir(parents=True, exist_ok=True)
+        billing_file.write_text("package com.example\nclass Billing\n", encoding="utf-8")
+        receipt = create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT",
+            query_kind="file",
+            query_value="feature/billing/src/main/kotlin/com/example/Billing.kt",
+            graph_fingerprint="fp-billing",
+            resolved_modules=[":feature:billing"],
+            resolved_paths=["feature/billing/src/main/kotlin/com/example/Billing.kt"],
+            resolved_symbols=["Billing"],
+            allowed_search_roots=["feature/billing"],
+        )
+        save_discovery_receipt(self.repo, receipt)
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "feature/billing/src/main/kotlin/com/example/Billing.kt", "Query": "charge"},
+        )
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("VERIFIER_SEARCH_ALLOWED", res.get("reason_code"))
+
+    def test_VERIFY_SCOPE_006_stale_expansion_receipt_denied(self) -> None:
+        scope = {
+            "changed_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "allowed_roots": ["app/src/main/kotlin/com/example"],
+            "direct_callers": [],
+            "max_graph_hops": 2,
+        }
+        self._setup_verifying_task("t-scope-006", scope)
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        receipt = create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT",
+            query_kind="file",
+            query_value="feature/missing/Missing.kt",
+            graph_fingerprint="fp-stale",
+            resolved_modules=[":feature:missing"],
+            resolved_paths=["feature/missing/Missing.kt"],
+            resolved_symbols=["Missing"],
+            allowed_search_roots=["feature/missing"],
+        )
+        save_discovery_receipt(self.repo, receipt)
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "feature/missing/Missing.kt", "Query": "test"},
+        )
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+
+    def test_VERIFY_SCOPE_007_reviewer_still_can_inspect_required_contract_file(self) -> None:
+        scope = {
+            "changed_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "allowed_roots": ["app/src/main/kotlin/com/example"],
+            "direct_callers": [],
+            "max_graph_hops": 2,
+        }
+        self._setup_verifying_task("t-scope-007", scope)
+        contract_file = self.repo / "AGENTS.md"
+        contract_file.write_text("# Agents\n", encoding="utf-8")
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "AGENTS.md", "Query": "Agents"},
+        )
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("VERIFIER_SEARCH_ALLOWED", res.get("reason_code"))
 
 
 if __name__ == "__main__":

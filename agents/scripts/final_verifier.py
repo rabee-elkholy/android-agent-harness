@@ -29,6 +29,7 @@ ALLOWED_PRODUCERS = {
     "reviews": {"review_orchestrator", "developer_approval", "developer_override"},
     "sensitive_approval": {"developer_approval"},
     "red_evidence": {"run_tests_gate", "workflow", "developer_approval"},
+    "mobile_validation_skip": {"developer_approval"},
 }
 
 
@@ -107,6 +108,56 @@ def _validate_artifact(
         return None, f"ENV:{name} is blocked by the environment"
     if str(record.get("status") or "") != "PASS":
         return None, f"{name} status is {record.get('status')}, not PASS"
+    return record, None
+
+
+def _validate_mobile_skip(
+    store: EvidenceStore,
+    snapshot: str,
+    change_set: str,
+    run_id: str,
+    harness_version: str,
+    plan_task_id: str | None = None,
+    plan_sha256: str | None = None,
+) -> tuple[dict | None, str | None]:
+    try:
+        record = store.read(snapshot, run_id, "mobile_validation_skip")
+    except ValidationError:
+        return None, None
+
+    if str(record.get("status") or "") != "SKIPPED":
+        return None, f"mobile_validation_skip status is {record.get('status')}, not SKIPPED"
+    if record.get("schema_version") != 1:
+        return None, "mobile_validation_skip has an unsupported evidence schema"
+    if record.get("producer") not in ALLOWED_PRODUCERS.get("mobile_validation_skip", set()):
+        return None, "mobile_validation_skip has an invalid producer"
+    if record.get("harness_version") != harness_version:
+        return None, f"mobile_validation_skip was produced by harness {record.get('harness_version')}, expected {harness_version}"
+    if record.get("change_set_sha256") != change_set:
+        return None, "mobile_validation_skip change-set mismatch"
+
+    ev = record.get("evidence") or {}
+    if ev.get("run_id") and ev.get("run_id") != run_id:
+        return None, "mobile_validation_skip run_id mismatch"
+    if plan_task_id and ev.get("task_id") and ev.get("task_id") != plan_task_id:
+        return None, "mobile_validation_skip task_id mismatch"
+    if plan_sha256 and ev.get("plan_sha256") and ev.get("plan_sha256") != plan_sha256:
+        return None, "mobile_validation_skip plan_sha256 mismatch"
+
+    approval_source = str(ev.get("approval_source") or "")
+    if approval_source not in {"host_native", "conversation", "developer_terminal"}:
+        return None, "mobile_validation_skip approval source is invalid"
+
+    tier = str(ev.get("enforcement_tier") or "")
+    if tier not in {"HARD_ENFORCED", "RULE_ENFORCED"}:
+        return None, "mobile_validation_skip enforcement tier is invalid"
+    if tier == "HARD_ENFORCED" and approval_source != "host_native":
+        return None, "mobile_validation_skip enforcement tier overclaims its source"
+
+    proof_hash = str(ev.get("proof_reference_sha256") or "")
+    if len(proof_hash) != 64 or any(c not in "0123456789abcdef" for c in proof_hash.lower()):
+        return None, "mobile_validation_skip proof reference hash is missing or malformed"
+
     return record, None
 
 
@@ -302,8 +353,22 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     version_file = agents_root / "VERSION"
     harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
     store = EvidenceStore(state_root)
+    mobile_skip, skip_error = _validate_mobile_skip(
+        store,
+        snapshot,
+        change_set,
+        run_id,
+        harness_version,
+        plan_task_id=plan.get("task_id"),
+        plan_sha256=expected_plan_hash,
+    )
+    device_skipped = mobile_skip is not None and skip_error is None
+    if skip_error:
+        reasons.append(skip_error)
+        checks.append({"name": "mobile_validation", "status": "FAIL", "detail": skip_error})
+
     gate_names = [name for name in policy.get("gates") or [] if name not in ("manifest", "device")]
-    if "device" in (policy.get("gates") or []):
+    if "device" in (policy.get("gates") or []) and not device_skipped:
         gate_names.extend(["device_install", "device_launch"])
     for name in gate_names:
         record, error = _validate_artifact(store, snapshot, change_set, run_id, name, harness_version)
@@ -312,46 +377,53 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             reasons.append(error)
 
     if policy.get("device_required") or "device" in (policy.get("gates") or []):
-        signoff_rec, signoff_err = _validate_artifact(store, snapshot, change_set, run_id, "device_signoff", harness_version)
-        if signoff_err:
-            checks.append({"name": "device_signoff", "status": "FAIL", "detail": f"device verification sign-off is required: {signoff_err}"})
-            reasons.append(f"device verification sign-off is required: {signoff_err}")
+        if device_skipped:
+            checks.append({
+                "name": "mobile_validation",
+                "status": "SKIPPED",
+                "detail": "developer explicitly skipped manual mobile validation",
+            })
         else:
-            signoff_ev = signoff_rec.get("evidence") or {}
-            signoff_detail = "bound developer device signoff PASS"
-            art_err = None
-            if not signoff_ev.get("proof_reference_sha256") and not signoff_ev.get("proof_reference"):
-                art_err = "device sign-off proof reference is missing"
-            appr_source = str(signoff_ev.get("approval_source") or "")
-            appr_tier = str(signoff_ev.get("enforcement_tier") or "")
-            if appr_source and appr_source not in ("developer_terminal", "host_native", "conversation"):
-                art_err = f"untrusted device signoff approval source: '{appr_source}'"
-            elif appr_tier and appr_tier not in ("HARD_ENFORCED", "RULE_ENFORCED"):
-                art_err = f"unsupported device signoff enforcement tier: '{appr_tier}'"
-            elif appr_tier == "HARD_ENFORCED" and appr_source != "host_native":
-                art_err = "device signoff enforcement tier overclaims its source (HARD_ENFORCED requires host_native)"
-
-            # Exact artifact chain & device identity validation: assemble == install == signoff
-            install_rec, _ = _validate_artifact(store, snapshot, change_set, run_id, "device_install", harness_version)
-            if install_rec:
-                install_ev = install_rec.get("evidence") or {}
-                inst_sha = str(install_ev.get("artifact_set_sha256") or "")
-                sign_sha = str(signoff_ev.get("artifact_set_sha256") or "")
-                if inst_sha and sign_sha and inst_sha != sign_sha:
-                    art_err = f"device sign-off artifact mismatch: signoff ({sign_sha[:12]}) != device_install ({inst_sha[:12]})"
-                inst_user = str(install_ev.get("target_user") or install_ev.get("user") or "")
-                sign_user = str(signoff_ev.get("target_user") or signoff_ev.get("user") or "")
-                if inst_user and sign_user and inst_user != sign_user:
-                    art_err = f"device sign-off target user mismatch: signoff ({sign_user}) != device_install ({inst_user})"
-                inst_serial = str(install_ev.get("serial_sha256") or install_ev.get("serial_hash") or "")
-                sign_serial = str(signoff_ev.get("serial_sha256") or signoff_ev.get("serial_hash") or "")
-                if inst_serial and sign_serial and inst_serial != sign_serial:
-                    art_err = f"device sign-off serial mismatch: signoff ({sign_serial[:12]}) != device_install ({inst_serial[:12]})"
-            if art_err:
-                checks.append({"name": "device_signoff", "status": "FAIL", "detail": art_err})
-                reasons.append(art_err)
+            signoff_rec, signoff_err = _validate_artifact(store, snapshot, change_set, run_id, "device_signoff", harness_version)
+            if signoff_err:
+                checks.append({"name": "device_signoff", "status": "FAIL", "detail": f"device verification sign-off is required: {signoff_err}"})
+                reasons.append(f"device verification sign-off is required: {signoff_err}")
             else:
-                checks.append({"name": "device_signoff", "status": "PASS", "detail": signoff_detail})
+                signoff_ev = signoff_rec.get("evidence") or {}
+                signoff_detail = "bound developer device signoff PASS"
+                art_err = None
+                if not signoff_ev.get("proof_reference_sha256") and not signoff_ev.get("proof_reference"):
+                    art_err = "device sign-off proof reference is missing"
+                appr_source = str(signoff_ev.get("approval_source") or "")
+                appr_tier = str(signoff_ev.get("enforcement_tier") or "")
+                if appr_source and appr_source not in ("developer_terminal", "host_native", "conversation"):
+                    art_err = f"untrusted device signoff approval source: '{appr_source}'"
+                elif appr_tier and appr_tier not in ("HARD_ENFORCED", "RULE_ENFORCED"):
+                    art_err = f"unsupported device signoff enforcement tier: '{appr_tier}'"
+                elif appr_tier == "HARD_ENFORCED" and appr_source != "host_native":
+                    art_err = "device signoff enforcement tier overclaims its source (HARD_ENFORCED requires host_native)"
+
+                # Exact artifact chain & device identity validation: assemble == install == signoff
+                install_rec, _ = _validate_artifact(store, snapshot, change_set, run_id, "device_install", harness_version)
+                if install_rec:
+                    install_ev = install_rec.get("evidence") or {}
+                    inst_sha = str(install_ev.get("artifact_set_sha256") or "")
+                    sign_sha = str(signoff_ev.get("artifact_set_sha256") or "")
+                    if inst_sha and sign_sha and inst_sha != sign_sha:
+                        art_err = f"device sign-off artifact mismatch: signoff ({sign_sha[:12]}) != device_install ({inst_sha[:12]})"
+                    inst_user = str(install_ev.get("target_user") or install_ev.get("user") or "")
+                    sign_user = str(signoff_ev.get("target_user") or signoff_ev.get("user") or "")
+                    if inst_user and sign_user and inst_user != sign_user:
+                        art_err = f"device sign-off target user mismatch: signoff ({sign_user}) != device_install ({inst_user})"
+                    inst_serial = str(install_ev.get("serial_sha256") or install_ev.get("serial_hash") or "")
+                    sign_serial = str(signoff_ev.get("serial_sha256") or signoff_ev.get("serial_hash") or "")
+                    if inst_serial and sign_serial and inst_serial != sign_serial:
+                        art_err = f"device sign-off serial mismatch: signoff ({sign_serial[:12]}) != device_install ({inst_serial[:12]})"
+                if art_err:
+                    checks.append({"name": "device_signoff", "status": "FAIL", "detail": art_err})
+                    reasons.append(art_err)
+                else:
+                    checks.append({"name": "device_signoff", "status": "PASS", "detail": signoff_detail})
 
     is_bug = str(plan.get("task_kind") or plan.get("kind") or "").upper() == "BUG"
     if is_bug:
@@ -673,7 +745,8 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             install = record
         else:
             launch = record
-    reasons.extend(device_chain_errors(assemble, install, launch))
+    if not device_skipped:
+        reasons.extend(device_chain_errors(assemble, install, launch))
     if assemble:
         artifact_set = ((assemble.get("evidence") or {}).get("artifact_set"))
         if artifact_set:

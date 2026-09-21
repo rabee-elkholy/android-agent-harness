@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -28,7 +29,21 @@ STATES = {
 }
 APPROVAL_SOURCES = {"host_native", "conversation", "developer_terminal"}
 ENFORCEMENT_TIERS = {"HARD_ENFORCED", "RULE_ENFORCED"}
-EXTERNAL_WRITES = {"zoho_sprints"}
+STATIC_EXTERNAL_WRITES = {"zoho_sprints"}
+EXTERNAL_WRITES = STATIC_EXTERNAL_WRITES
+
+MCP_SCOPE_RE = re.compile(
+    r"^mcp:[a-z0-9._-]{1,64}(?::high-impact)?$"
+)
+
+
+def validate_external_write_scope(scope: str) -> str:
+    value = str(scope or "").strip().lower()
+    if value in STATIC_EXTERNAL_WRITES:
+        return value
+    if MCP_SCOPE_RE.fullmatch(value):
+        return value
+    raise ValidationError(f"unsupported external write authority: {scope}")
 
 SURFACE_ALIASES: dict[str, list[str]] = {
     "CODE": ["BUSINESS_LOGIC"],
@@ -171,6 +186,8 @@ def plan_payload(plan: dict) -> dict:
         payload["phases"] = plan["phases"]
     if "supersedes_plan_sha256" in plan and plan.get("supersedes_plan_sha256") is not None:
         payload["supersedes_plan_sha256"] = plan["supersedes_plan_sha256"]
+    if "zoho_link" in plan and plan.get("zoho_link") is not None:
+        payload["zoho_link"] = plan["zoho_link"]
     return payload
 
 
@@ -180,6 +197,7 @@ def legacy_plan_payload(plan: dict, payload_fn=None) -> dict:
     payload.pop("planning_depth", None)
     payload.pop("architecture_contract", None)
     payload.pop("phases", None)
+    payload.pop("zoho_link", None)
     return payload
 
 
@@ -219,14 +237,12 @@ def create_plan(
     base_manifest: dict | None = None,
     supersedes_plan_sha256: str | None = None,
     revision_number: int = 1,
+    zoho_link: dict | None = None,
 ) -> dict:
     task_id = validate_id(task_id, "task id")
     if not requested_outcome.strip():
         raise ValidationError("plan requested outcome must not be empty")
-    requested_external = sorted(set(external_writes or []))
-    unknown_external = set(requested_external) - EXTERNAL_WRITES
-    if unknown_external:
-        raise ValidationError("unsupported external write authority: " + ", ".join(sorted(unknown_external)))
+    requested_external = sorted({validate_external_write_scope(item) for item in (external_writes or [])})
     base = base_manifest if base_manifest is not None else build_manifest(repo)
     record = {
         "schema_version": SCHEMA_VERSION,
@@ -259,6 +275,8 @@ def create_plan(
         record["phases"] = phases
     if architecture_contract is not None:
         record["architecture_contract"] = architecture_contract
+    if zoho_link is not None:
+        record["zoho_link"] = zoho_link
     record["plan_sha256"] = canonical_sha256(plan_payload(record))
     return record
 
@@ -359,6 +377,15 @@ def approve_and_begin(
         "plan_sha256": expected,
         "single_use_nonce": nonce,
     }
+    try:
+        from _vnext_common import state_root
+        s_root = state_root(repo)
+        plan_file = s_root / "tasks" / str(plan.get("task_id") or "") / "plan.json"
+        pres = load_plan_presentation(plan_file)
+        if pres:
+            plan["approval"]["presentation_receipt"] = pres
+    except Exception:
+        pass
     plan["execution_nonce"] = nonce
     plan["status"] = "IMPLEMENTING"
     plan["implementation_started_at"] = utc_now()
