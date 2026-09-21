@@ -26,6 +26,11 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
 - Mobile Verification Walkthrough & Device Verification: When device verification is required, Next Action router presents the decision (`MOBILE_VALIDATION_DECISION`). Execute `{{PY}} .agents/harness.py device install-start` to install and launch on target device. If the developer explicitly chooses to skip device verification, record honest skip evidence via `{{PY}} .agents/harness.py device skip-validation --task-id <id> --proof-reference "<phrase>"`. Honest skip records `status: "SKIPPED"` (never synthetic PASS). When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking for sign-off.
 - Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `{{PY}} .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `{{PY}} .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit.
 - Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes is an administrative context action, NOT an Android code delivery task. Directly record the note using `{{PY}} .agents/harness.py context note "<note>"`.
+- Review Host Binding:
+  - In Antigravity, prepare verification with:
+    `{{PY}} .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity`
+  - In Gemini CLI without a trusted transcript adapter, omit `--host` and use the Router's legacy-compatible review path.
+  - Never claim Review Protocol V2 unless `current-run.json` says `review_protocol_version = 2`.
 
 Antigravity may load `.agents/hooks.json`; Gemini CLI may be rule-enforced only. Report the detected enforcement tier honestly.
 
@@ -42,7 +47,7 @@ Execute commands in this strict sequential order. Every command is fully specifi
 | 4 | **(Compat) Begin Task** | `{{PY}} .agents/scripts/workflow.py begin --repo . --task-id <id>` | Idempotent begin compatibility command |
 | 4b | **Zoho Start Sync** | `{{PY}} .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item (when plan has approved zoho_link) |
 | 5 | **Diagnostic Build** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Optional diagnostic compile during implementation |
-| 6 | **Prepare Verification** | `{{PY}} .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>` | Freeze review package & transition to VERIFYING. Required: `--task-id` |
+| 6 | **Prepare Verification** | `{{PY}} .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity` | Freeze review package & transition to VERIFYING. Required: `--task-id` |
 | 7 | **Preflight Gate** | `{{PY}} .agents/scripts/preflight_check.py` (or `{{PY}} .agents/harness.py preflight`) | Deterministic check: room, fast ktlint, string parity. Zero flags required |
 | 8 | **Unit Tests Gate** | `{{PY}} .agents/scripts/run_tests_gate.py` | Run unit tests gate (when required by policy). Zero flags required |
 | 9 | **Review Package** | `{{PY}} .agents/scripts/review_package.py --task-id <id>` (or auto-detects active task) | Generate immutable review package markdown. `--task-id` is optional |

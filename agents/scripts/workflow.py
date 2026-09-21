@@ -2507,7 +2507,15 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 exec_profile = {}
                 try:
                     from review_execution import resolve_execution_profile
-                    exec_profile = resolve_execution_profile(repo, task_id)
+                    review_host = str(
+                        current_run.get("review_host") or "generic"
+                    ).strip().lower()
+
+                    exec_profile = resolve_execution_profile(
+                        repo,
+                        task_id,
+                        host=review_host,
+                    )
                     for r_name, r_info in exec_profile.get("reviewers", {}).items():
                         if r_info.get("brief_path"):
                             briefs[r_name] = r_info["brief_path"]

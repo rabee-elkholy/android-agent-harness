@@ -26,6 +26,11 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is still running as a background task, wait for completion; never output walkthrough or invoke `ask_question` prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when it is not, and NEVER ask the developer to verify a build that was not installed. If the developer chooses to skip device verification, record honest skip evidence with `python .agents/harness.py device skip-validation --task-id <id> --proof-reference "<phrase>"` (recording `status: "SKIPPED"`, never synthetic PASS). When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE invoking `ask_question` for sign-off.
 - Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `python .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `python .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit.
 - Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `python harness_cli.py context note "<note>"`.
+- Review Host Binding:
+  - In Antigravity, prepare verification with:
+    `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity`
+  - In Gemini CLI without a trusted transcript adapter, omit `--host` and use the Router's legacy-compatible review path.
+  - Never claim Review Protocol V2 unless `current-run.json` says `review_protocol_version = 2`.
 
 ## Canonical Command Catalog & 4-Phase Lifecycle (PLAN → BUILD → VERIFY → SHIP)
 
@@ -40,7 +45,7 @@ Follow the simplified 4-phase lifecycle driven by `python .agents/harness.py tas
 | **BUILD** | 4. (Compat) Begin | `python .agents/scripts/workflow.py begin --repo . --task-id <id>` | Idempotent begin compatibility command |
 | **BUILD** | 4b. Zoho Start Sync | `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item (when plan has approved zoho_link) |
 | **BUILD** | 5. Diagnostic Build | `python .agents/harness.py assemble` | Optional diagnostic build during implementation |
-| **VERIFY** | 6. Prepare | `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>` | Freeze review package & transition to VERIFYING |
+| **VERIFY** | 6. Prepare | `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity` | Freeze review package & transition to VERIFYING |
 | **VERIFY** | 7. Preflight | `python .agents/harness.py preflight` | Deterministic preflight: strings, Room, architecture |
 | **VERIFY** | 8. Unit Tests | `python .agents/harness.py test` | Run unit tests gate (when required by policy) |
 | **VERIFY** | 9. Package | `python .agents/harness.py review package` | Generate immutable review package markdown |

@@ -255,6 +255,19 @@ def _handle_command(command: str) -> None:
     if RAW_GRADLE.search(command) and not ALLOWED_GRADLE_WRAPPER.search(command):
         emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)
         return
+    if (
+        re.search(r"(?:workflow(?:\.py)?\s+prepare-verification|harness(?:\.py)?\s+task\s+prepare-verification)\b", command, re.I)
+        and not re.search(r"--host\s+antigravity\b", command, re.I)
+    ):
+        emit(
+            "deny",
+            "REVIEW_HOST_REQUIRED:\nAntigravity verification must be prepared with --host antigravity\nso trusted Review Protocol V2 can be used.",
+            tool="run_command",
+            command=command,
+            reason_code="REVIEW_HOST_REQUIRED",
+            task_id=active_tid,
+        )
+        return
     allowed, reason = command_allowed(REPO, command)
     if allowed and re.search(r"project_graph(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+graph\b", command, re.I):
         reason = f"project_graph executed: {reason}"

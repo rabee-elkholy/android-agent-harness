@@ -5008,6 +5008,131 @@ class ReviewOrchestrationTests(unittest.TestCase):
         finally:
             TRUSTED_REVIEW_SOURCES.pop("future_host", None)
 
+    def test_REVIEW_HOST_ROUTER_001_router_execution_profile_uses_current_run_host(self) -> None:
+        """REVIEW-HOST-ROUTER-001: Router resolve_next_action passes current-run review_host to resolve_execution_profile."""
+        from workflow import resolve_next_action
+        task_id = "test-router-host-001"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        plan = read_json(tdir / "plan.json")
+
+        captured_hosts = []
+        import review_execution
+        orig_resolve = review_execution.resolve_execution_profile
+        def spy_resolve(repo, tid, host="generic"):
+            captured_hosts.append(host)
+            return orig_resolve(repo, tid, host=host)
+
+        with mock.patch("review_execution.resolve_execution_profile", side_effect=spy_resolve):
+            resolve_next_action(self.repo, task_id, plan)
+
+        self.assertIn("antigravity", captured_hosts)
+
+    def test_REVIEW_HOST_ROUTER_002_default_host_is_generic(self) -> None:
+        """REVIEW-HOST-ROUTER-002: Default host parameter of resolve_execution_profile is generic."""
+        import inspect
+        from review_execution import resolve_execution_profile
+        sig = inspect.signature(resolve_execution_profile)
+        self.assertEqual("generic", sig.parameters["host"].default)
+
+        task_id = "test-router-host-002"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        prof = resolve_execution_profile(self.repo, task_id)
+        self.assertEqual("generic", prof.get("host"))
+
+    def test_REVIEW_HOST_ROUTER_003_explicit_antigravity_resolves_antigravity_routes(self) -> None:
+        """REVIEW-HOST-ROUTER-003: Explicit antigravity host still resolves Antigravity routes."""
+        from review_execution import resolve_execution_profile
+        task_id = "test-router-host-003"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+        self.assertEqual("antigravity", prof.get("host"))
+
+    def test_REVIEW_HOST_ANTIGRAVITY_001_hostless_prepare_denied_by_antigravity_hook(self) -> None:
+        """REVIEW-HOST-ANTIGRAVITY-001: Hostless prepare-verification is denied by Antigravity safety hook."""
+        task_id = "test-hostless-prep-001"
+        self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        commands = [
+            "python .agents/scripts/workflow.py prepare-verification --repo . --task-id test-tid",
+            "python .agents/harness.py task prepare-verification --task-id test-tid",
+        ]
+        env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_REPO_DIR": str(self.repo),
+            "PYTHONPATH": str(KIT / "agents" / "scripts"),
+        }
+        for cmd in commands:
+            payload = {"toolName": "run_command", "toolArgs": {"CommandLine": cmd}}
+            proc = subprocess.run(
+                [sys.executable, str(safety_script)],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+                timeout=15,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            res = json.loads(proc.stdout)
+            self.assertEqual("deny", res.get("decision"))
+            self.assertEqual("REVIEW_HOST_REQUIRED", res.get("reason_code"))
+            self.assertIn("Antigravity verification must be prepared with --host antigravity", res.get("reason", ""))
+
+    def test_REVIEW_HOST_ANTIGRAVITY_002_explicit_host_antigravity_allowed(self) -> None:
+        """REVIEW-HOST-ANTIGRAVITY-002: Explicit --host antigravity is allowed by safety hook."""
+        task_id = "test-hostless-prep-002"
+        self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        cmd = "python .agents/scripts/workflow.py prepare-verification --repo . --task-id test-tid --host antigravity"
+        env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_REPO_DIR": str(self.repo),
+            "PYTHONPATH": str(KIT / "agents" / "scripts"),
+        }
+        payload = {"toolName": "run_command", "toolArgs": {"CommandLine": cmd}}
+        proc = subprocess.run(
+            [sys.executable, str(safety_script)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=15,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        res = json.loads(proc.stdout)
+        self.assertEqual("allow", res.get("decision"))
+
+    def test_REVIEW_HOST_ANTIGRAVITY_003_no_core_function_defaults_to_antigravity(self) -> None:
+        """REVIEW-HOST-ANTIGRAVITY-003: No core harness Python function defaults to antigravity."""
+        import inspect
+        from review_execution import resolve_execution_profile
+        from review_orchestrator import complete_review
+        sig_prof = inspect.signature(resolve_execution_profile)
+        self.assertNotEqual("antigravity", sig_prof.parameters["host"].default)
+        sig_comp = inspect.signature(complete_review)
+        self.assertNotEqual("antigravity", sig_comp.parameters["host"].default)
+
+    def test_CONTRACT_REVIEW_HOST_001_contract_and_instructions_binding(self) -> None:
+        """CONTRACT-REVIEW-HOST-001: Antigravity instructions bind --host antigravity; core defaults to generic."""
+        gemini_md = (KIT / "GEMINI.md").read_text(encoding="utf-8")
+        self.assertIn("--host antigravity", gemini_md)
+        self.assertIn("Review Host Binding", gemini_md)
+
+        tmpl_md = (KIT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
+        self.assertIn("--host antigravity", tmpl_md)
+        self.assertIn("Review Host Binding", tmpl_md)
+
+        global_tmpl = (KIT / "templates" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
+        self.assertIn("--host antigravity", global_tmpl)
+        self.assertIn("Review Host Binding", global_tmpl)
+
+        import inspect
+        from review_execution import resolve_execution_profile
+        self.assertEqual("generic", inspect.signature(resolve_execution_profile).parameters["host"].default)
+
     def test_REVIEW_INTEGRATION_001(self) -> None:
         """REVIEW-INTEGRATION-001: prepare_verification -> Router DISPATCH_REVIEWERS -> pre_tool_safety invoke_subagent -> V2 ledger DISPATCHED -> Router WAIT_FOR_REVIEWERS."""
         from workflow import resolve_next_action

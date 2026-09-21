@@ -79,7 +79,7 @@ def load_host_model_routes(host: str) -> dict[str, str]:
     return {}
 
 
-def resolve_execution_profile(repo: Path, task_id: str, host: str = "antigravity") -> dict:
+def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -> dict:
     state = state_root(repo)
     directory = task_dir(repo, task_id)
     plan_path = directory / "plan.json"
@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", default=os.environ.get("HARNESS_TASK_ID"))
-    parser.add_argument("--host", default="antigravity", help="Target host environment")
+    parser.add_argument("--host", default="generic", help="Target host environment")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args(argv)
     if not args.task:
