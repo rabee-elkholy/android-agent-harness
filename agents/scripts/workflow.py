@@ -291,24 +291,37 @@ def draft(args: argparse.Namespace) -> dict:
         if prev_id != task_id:
             if prev_status == "READY_FOR_DELIVERY":
                 dirty = _find_uncommitted_task_files(repo, prev_id, prev_plan)
-                if dirty:
+                if dirty and not getattr(args, "force", False):
                     raise ValidationError(
                         f"PREVIOUS_DELIVERY_NOT_FINALIZED: previous task '{prev_id}' is READY_FOR_DELIVERY with uncommitted changes: "
-                        f"{', '.join(sorted(dirty))}. Commit the verified changes, finalize delivery via 'task deliver', or cancel it via 'task cancel' before starting a new task."
+                        f"{', '.join(sorted(dirty))}. Finalize delivery via 'workflow.py deliver' or cancel it via 'workflow.py cancel' before starting a new task."
                     )
-                finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=True)
+                if not dirty:
+                    finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=True)
+                elif getattr(args, "force", False):
+                    finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=False)
             elif prev_status in ("APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
-                raise ValidationError(
-                    f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
-                    f"Choices: 1. continue current task; 2. cancel current task via 'workflow.py cancel --task-id {prev_id}'; "
-                    "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
-                )
+                if not getattr(args, "force", False):
+                    raise ValidationError(
+                        f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
+                        f"Choices: 1. continue current task; 2. cancel current task via 'workflow.py cancel --task-id {prev_id}'; "
+                        "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
+                    )
+                active_path = state_root(repo) / "active-task.json"
+                if active_path.is_file():
+                    try:
+                        if read_json(active_path).get("task_id") == prev_id:
+                            active_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
             elif prev_status == "AWAITING_DEVELOPER_APPROVAL":
-                raise ValidationError(
-                    f"ACTIVE_TASK_CONFLICT: pending task '{prev_id}' is currently AWAITING_DEVELOPER_APPROVAL. "
-                    f"Choices: 1. approve or revise current task '{prev_id}'; 2. cancel it via 'workflow.py cancel --task-id {prev_id}' before drafting an unrelated task; "
-                    "3. use a separate Git worktree for parallel work."
-                )
+                active_path = state_root(repo) / "active-task.json"
+                if active_path.is_file():
+                    try:
+                        if read_json(active_path).get("task_id") == prev_id:
+                            active_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
     # 2. Check if task_id already exists
     existing_plan_path = _plan_path(repo, task_id)

@@ -127,7 +127,7 @@
     "agents/scripts/wizard/i18n.py": "2929607ba99317e510a82f5689670c6ab52e329abbb24d6fbb821edda41b9348",
     "agents/scripts/wizard/questions.py": "b6988f280a5d0f4928e8ccc041e314d104bc983cc7cda20b2f3bef11aacaa395",
     "agents/scripts/wizard/schema.py": "55c9f61db9429b98673de9568864a4c444bac9b4fd014d27607461655bd42b7c",
-    "agents/scripts/workflow.py": "7b3530d189a057e17a2df954680297cbd01ab59142da333c88a0a0b11982933e",
+    "agents/scripts/workflow.py": "8ff23732d7436a016a5ce6b2e06353d230910d6b78c8a9c42ae8f42c4d93ebc9",
     "agents/settings.json": "88a159a4ed918331db339f4d3b3b0570e7257ad270bd6bd74f8b66783d8d4ee8",
     "agents/skills/android-harness/SKILL.md": "5dc22439959539c1341709c7ee8b47314b1a38ceac35e01a2f8a6c24cd4118dc",
     "agents/skills/android-harness/references/architecture-guidelines.md": "8e1c960a774370c2216733fa7a0efc366e3cf57f194bc5281553f0099368136e",
