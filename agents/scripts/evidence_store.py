@@ -190,6 +190,7 @@ class EvidenceStore:
         change_set: str,
         status: str,
         evidence: dict,
+        lock: bool = True,
     ) -> Path:
         name = validate_id(name, "artifact name")
         producer = validate_id(producer, "producer")
@@ -211,7 +212,8 @@ class EvidenceStore:
             "evidence": redact(evidence),
         }
         record["artifact_sha256"] = canonical_sha256(record)
-        with StateLock(self.state_root):
+
+        def _do_write() -> Path:
             if target.exists():
                 try:
                     existing = read_json(target)
@@ -234,7 +236,12 @@ class EvidenceStore:
                     os.unlink(temp_name)
                 except FileNotFoundError:
                     pass
-        return target
+            return target
+
+        if lock:
+            with StateLock(self.state_root):
+                return _do_write()
+        return _do_write()
 
     def read(self, snapshot: str, run_id: str, name: str) -> dict:
         name = validate_id(name, "artifact name")

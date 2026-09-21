@@ -1410,6 +1410,11 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "max_graph_hops": 2,
     }
 
+    from review_sources import has_trusted_review_source
+    configured_host = getattr(args, "host", None) or os.environ.get("HARNESS_HOST") or "antigravity"
+    configured_host = str(configured_host).strip().lower()
+    review_protocol_version = 2 if has_trusted_review_source(configured_host) else 1
+
     current = {
         "task_id": args.task_id,
         "run_id": run_id,
@@ -1419,7 +1424,8 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "change_set_sha256": manifest["change_set_sha256"],
         "external_inputs_sha256": manifest.get("external_inputs_sha256") or "",
         "verification_recipes": recipes,
-        "review_protocol_version": 2,
+        "review_protocol_version": review_protocol_version,
+        "review_host": configured_host,
         "review_scope": review_scope,
         "created_at": utc_now(),
     }
@@ -3111,6 +3117,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--evidence-reference", default="", help="File:line or package reference")
     pv_cmd = sub.add_parser("prepare-verification", parents=[common])
     pv_cmd.add_argument("--force", action="store_true", help="Force regenerate verification run snapshot")
+    pv_cmd.add_argument("--host", default=None, help="Host environment for reviewer execution")
     pv_cmd.set_defaults(handler=prepare_verification)
     sub.add_parser("verify", parents=[common]).set_defaults(handler=verify_task)
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)

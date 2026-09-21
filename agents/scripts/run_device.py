@@ -522,6 +522,16 @@ def _handle_skip_validation(args: argparse.Namespace) -> int:
         live_print(f"[FAIL] Active run freshness check failed for skip-validation: {exc}", err=True)
         return 1
 
+    policy_path = Path(str(current_run.get("policy") or ""))
+    policy = read_json(policy_path) if policy_path.is_file() else {}
+    device_required = (
+        bool(policy.get("device_required"))
+        or "device" in (policy.get("gates") or [])
+    )
+    if not device_required:
+        live_print("[FAIL] MOBILE_VALIDATION_NOT_REQUIRED: device validation is not required for this task.", err=True)
+        return 1
+
     snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
     run_id = str(current_run.get("run_id") or "")
     change_set = str(current_run.get("change_set_sha256") or "")

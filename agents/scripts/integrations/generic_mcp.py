@@ -17,17 +17,29 @@ READ_PREFIXES = (
     "api-get-", "api-retrieve-", "api-query-", "developerknowledge_",
 )
 
-WRITE_KEYWORDS = (
+READ_ACTIONS = frozenset({
+    "get", "list", "read", "fetch", "search", "find",
+    "query", "inspect", "describe", "show", "lookup", "retrieve", "answer",
+})
+
+WRITE_ACTIONS = frozenset({
     "create", "update", "edit", "write", "set", "add",
     "comment", "rename", "move", "copy", "upload",
     "patch", "post", "put", "assign",
-)
+})
 
-HIGH_IMPACT_KEYWORDS = (
-    "delete", "remove", "drop", "destroy", "deploy", "publish",
-    "release", "production", "prod_", "security_rule", "permissions",
-    "revoke", "disable", "rotate_secret", "truncate", "purge",
-)
+HIGH_IMPACT_ACTIONS = frozenset({
+    "delete", "remove", "drop", "destroy",
+    "deploy", "publish", "revoke", "disable",
+    "rotate", "truncate", "purge",
+})
+
+SENSITIVE_TARGETS = frozenset({
+    "production", "prod",
+    "security", "rule", "rules",
+    "permission", "permissions",
+    "auth",
+})
 
 
 def normalize_mcp_server(server: str) -> str:
@@ -41,29 +53,39 @@ def normalize_mcp_server(server: str) -> str:
 def classify_generic_mcp_tool(tool_name: str) -> str:
     """Classify generic MCP tool into READ, WRITE, HIGH_IMPACT, or UNKNOWN.
 
-    Classification order (Section 58):
-    1. high-impact keyword -> HIGH_IMPACT
-    2. mutation keyword -> WRITE
-    3. known read prefix AND no mutation keyword -> READ
-    4. otherwise -> UNKNOWN (fail closed)
+    Action-aware classification order:
+    1. destructive/deploy/publish action token -> HIGH_IMPACT
+    2. known read prefix/action and no write action -> READ
+    3. write action + sensitive target -> HIGH_IMPACT
+    4. normal write action -> WRITE
+    5. otherwise -> UNKNOWN (fail closed)
     """
     t_lower = str(tool_name or "").lower().strip()
     if not t_lower:
         return UNKNOWN
 
-    # 1. High-impact keyword wins first
-    if any(kw in t_lower for kw in HIGH_IMPACT_KEYWORDS):
+    tokens = [t for t in re.split(r"[_\-.:]+", t_lower) if t]
+    token_set = set(tokens)
+
+    # 1. destructive/deploy/publish action token -> HIGH_IMPACT
+    if bool(token_set & HIGH_IMPACT_ACTIONS):
         return HIGH_IMPACT
 
-    # 2. Mutation keyword
-    if any(kw in t_lower for kw in WRITE_KEYWORDS):
-        return WRITE
-
-    # 3. Known read prefix AND no mutation keyword
-    if any(t_lower.startswith(p) for p in READ_PREFIXES):
+    # 2. known read prefix / action and no write action -> READ
+    has_read = any(t_lower.startswith(p) for p in READ_PREFIXES) or bool(token_set & READ_ACTIONS)
+    has_write = bool(token_set & WRITE_ACTIONS)
+    if has_read and not has_write:
         return READ
 
-    # 4. Otherwise UNKNOWN (fail closed)
+    # 3. write action + sensitive target -> HIGH_IMPACT
+    if has_write and bool(token_set & SENSITIVE_TARGETS):
+        return HIGH_IMPACT
+
+    # 4. normal write action -> WRITE
+    if has_write:
+        return WRITE
+
+    # 5. otherwise -> UNKNOWN (fail closed)
     return UNKNOWN
 
 

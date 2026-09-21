@@ -67,6 +67,7 @@ DANGEROUS = (
     ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
     ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
     ("review_override_provenance", re.compile(r"record_review\.py\b.*--override-reviews\b.*--source\s+developer_terminal\b", re.I)),
+    ("review_complete_text_bypass", re.compile(r"(?:review_orchestrator(?:\.py)?|harness(?:\.py)?\s+review)\b.*\bcomplete\b.*--text\b", re.I)),
     ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
     ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
 )
@@ -388,25 +389,35 @@ def _handle_subagent(name: str, args: dict) -> None:
             package_sha = sha256_file(package_path)
             if not re.fullmatch(r"[0-9a-f]{64}", package_sha):
                 raise RuntimeError("review package digest is invalid")
-            receipts_dir = state / "tasks" / task_id / "reviewer-dispatches"
-            receipts_dir.mkdir(parents=True, exist_ok=True)
-            from _vnext_common import atomic_write_json, canonical_sha256, utc_now
-            for r in actual:
-                receipt_file = receipts_dir / f"{r}.json"
-                receipt_data = {
-                    "schema_version": 1,
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "reviewer": r,
-                    "subagent_id": "",
-                    "review_package_sha256": package_sha,
-                    "dispatched_at": utc_now(),
-                    "host": "antigravity",
-                }
-                receipt_data["receipt_sha256"] = canonical_sha256({
-                    k: v for k, v in receipt_data.items() if k != "receipt_sha256"
-                })
-                atomic_write_json(receipt_file, receipt_data)
+            protocol = int(current.get("review_protocol_version") or 1)
+            if protocol >= 2:
+                from review_orchestrator import record_dispatch_batch
+                record_dispatch_batch(
+                    REPO,
+                    task_id,
+                    sorted(actual),
+                    host=str(current.get("review_host") or "antigravity"),
+                )
+            else:
+                receipts_dir = state / "tasks" / task_id / "reviewer-dispatches"
+                receipts_dir.mkdir(parents=True, exist_ok=True)
+                from _vnext_common import atomic_write_json, canonical_sha256, utc_now
+                for r in actual:
+                    receipt_file = receipts_dir / f"{r}.json"
+                    receipt_data = {
+                        "schema_version": 1,
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "reviewer": r,
+                        "subagent_id": "",
+                        "review_package_sha256": package_sha,
+                        "dispatched_at": utc_now(),
+                        "host": str(current.get("review_host") or "antigravity"),
+                    }
+                    receipt_data["receipt_sha256"] = canonical_sha256({
+                        k: v for k, v in receipt_data.items() if k != "receipt_sha256"
+                    })
+                    atomic_write_json(receipt_file, receipt_data)
         except Exception as exc:
             emit(
                 "deny",

@@ -359,12 +359,18 @@ class ZohoLifecycleTests(unittest.TestCase):
             "task_id": task_id,
             "status": "IMPLEMENTING",
             "task_kind": "FEATURE",
-            "plan_sha256": "abcdef1234567890abcdef1234567890",
             "execution_nonce": "nonce-1",
             "approval": {"single_use_nonce": "nonce-1"},
             "external_writes": ["zoho_sprints"],
         }
         default_plan.update(plan_data)
+        if "plan_sha256" not in plan_data:
+            from plan_authority import plan_payload
+            from _vnext_common import canonical_sha256
+            comp_hash = canonical_sha256(plan_payload(default_plan))
+            default_plan["plan_sha256"] = comp_hash
+            if "approval" in default_plan and isinstance(default_plan["approval"], dict):
+                default_plan["approval"]["plan_sha256"] = comp_hash
         atomic_write_json(plan_path, default_plan)
         return tdir
 
@@ -767,6 +773,147 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual("DONE", action.get("kind"))
         self.assertFalse(action.get("blocking"))
 
+    def test_ZOHO_start_outside_implementing_denied(self):
+        """P1-3: Start sync outside IMPLEMENTING is denied."""
+        tid = "T-ZOHO-NON-IMPL"
+        self._create_task(tid, {
+            "status": "VERIFYING",
+            "zoho_link": {"item_id": "9991", "sprint_id": "s-1", "item_type": "Task"},
+            "external_writes": ["zoho_sprints"],
+        })
+        import io
+        stderr_buf = io.StringIO()
+        with mock.patch("sys.stderr", stderr_buf):
+            rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+        self.assertEqual(1, rc)
+        self.assertIn("TASK_NOT_IMPLEMENTING", stderr_buf.getvalue())
+
+    def test_ZOHO_corrupt_execution_nonce_denied(self):
+        """P1-3: Corrupt execution nonce mismatch is denied."""
+        tid = "T-ZOHO-BAD-NONCE"
+        self._create_task(tid, {
+            "status": "IMPLEMENTING",
+            "zoho_link": {"item_id": "9992", "sprint_id": "s-1", "item_type": "Task"},
+            "external_writes": ["zoho_sprints"],
+            "execution_nonce": "corrupted-nonce",
+            "approval": {"single_use_nonce": "original-nonce"},
+        })
+        import io
+        stderr_buf = io.StringIO()
+        with mock.patch("sys.stderr", stderr_buf):
+            rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+        self.assertEqual(1, rc)
+        self.assertIn("EXECUTION_NONCE_MISMATCH", stderr_buf.getvalue())
+
+    def test_ZOHO_stale_report_plan_denied(self):
+        """P1-3: Delivery report from a stale or superseded plan is denied."""
+        tid = "T-ZOHO-STALE-REPORT"
+        tdir = self._create_task(tid, {
+            "status": "DELIVERED",
+            "zoho_link": {"item_id": "9993", "sprint_id": "s-1", "item_type": "Task"},
+            "external_writes": ["zoho_sprints"],
+            "delivery_commit_sha": "abcdef1234567890",
+        })
+        # Write report with mismatched plan_sha256
+        from _vnext_common import canonical_sha256
+        rep = {
+            "schema_version": 1,
+            "task_id": tid,
+            "plan_sha256": "stale-plan-hash-12345",
+            "objective_or_root_cause": "obj",
+            "solution_or_changes": "changes",
+            "impact_area": ["app"],
+            "test_cases": ["test1"],
+        }
+        rep["report_sha256"] = canonical_sha256(rep)
+        atomic_write_json(tdir / "zoho-delivery-report.json", rep)
+
+        import io
+        stderr_buf = io.StringIO()
+        with mock.patch("sys.stderr", stderr_buf):
+            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+        self.assertEqual(1, rc)
+        self.assertIn("DELIVERY_REPORT_PLAN_MISMATCH", stderr_buf.getvalue())
+
+    def test_ZOHO_tampered_report_hash_denied(self):
+        """P1-3: Tampered report hash in delivery report is denied."""
+        tid = "T-ZOHO-TAMPERED-REPORT"
+        tdir = self._create_task(tid, {
+            "status": "DELIVERED",
+            "zoho_link": {"item_id": "9994", "sprint_id": "s-1", "item_type": "Task"},
+            "external_writes": ["zoho_sprints"],
+            "delivery_commit_sha": "abcdef1234567890",
+        })
+        plan = read_json(tdir / "plan.json")
+        rep = {
+            "schema_version": 1,
+            "task_id": tid,
+            "plan_sha256": plan["plan_sha256"],
+            "objective_or_root_cause": "obj",
+            "solution_or_changes": "changes",
+            "impact_area": ["app"],
+            "test_cases": ["test1"],
+            "report_sha256": "fake-tampered-hash",
+        }
+        atomic_write_json(tdir / "zoho-delivery-report.json", rep)
+
+        import io
+        stderr_buf = io.StringIO()
+        with mock.patch("sys.stderr", stderr_buf):
+            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+        self.assertEqual(1, rc)
+        self.assertIn("DELIVERY_REPORT_TAMPERED", stderr_buf.getvalue())
+
+    def test_ZOHO_delivery_actions_match_policy_resolver_and_sha12_op_ids(self):
+        """P1-3: Delivery actions match ZohoPolicyResolver and operation IDs use sha12."""
+        tid = "T-ZOHO-POLICY-MATCH"
+        full_commit = "abcdef1234567890fedcba"
+        tdir = self._create_task(tid, {
+            "status": "DELIVERED",
+            "zoho_link": {"item_id": "9995", "sprint_id": "s-1", "item_type": "Bug"},
+            "external_writes": ["zoho_sprints"],
+            "delivery_commit_sha": full_commit,
+        })
+        plan = read_json(tdir / "plan.json")
+
+        from _vnext_common import canonical_sha256
+        rep = {
+            "schema_version": 1,
+            "task_id": tid,
+            "plan_sha256": plan["plan_sha256"],
+            "objective_or_root_cause": "Fix crash on login",
+            "solution_or_changes": "Handle null pointer in auth token",
+            "impact_area": ["app:login"],
+            "test_cases": ["LoginTest"],
+        }
+        rep["report_sha256"] = canonical_sha256(rep)
+        atomic_write_json(tdir / "zoho-delivery-report.json", rep)
+
+        called_tools = []
+        def fake_call_tool(name, args):
+            called_tools.append((name, args))
+            return {"status": "success"}
+
+        with mock.patch.object(server, "handle_call_tool", side_effect=fake_call_tool):
+            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+        self.assertEqual(0, rc)
+
+        # Bug delivery: only zoho_add_comment and zoho_update_task_status (never description)
+        tool_names = [t[0] for t in called_tools]
+        self.assertIn("zoho_add_comment", tool_names)
+        self.assertIn("zoho_update_task_status", tool_names)
+        self.assertNotIn("zoho_update_task_description", tool_names)
+
+        # Verify operation IDs use sha12 (first 12 chars of commit: abcdef123456)
+        expected_sha12 = full_commit[:12]
+        for name, args in called_tools:
+            op_id = args.get("operation_id", "")
+            self.assertTrue(op_id.endswith(expected_sha12), f"Operation ID {op_id} must end with sha12 {expected_sha12}")
+
+        # Verify comment displays 7-char short commit (abcdef1)
+        comment_call = next(args for name, args in called_tools if name == "zoho_add_comment")
+        comment_text = comment_call.get("comment", "")
+        self.assertIn(full_commit[:7], comment_text)
 
     def test_ZOHO_new_item_type_resolver(self):
         """Section 52: New Zoho item type resolver logic."""

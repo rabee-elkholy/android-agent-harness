@@ -137,12 +137,16 @@ def _validate_mobile_skip(
         return None, "mobile_validation_skip change-set mismatch"
 
     ev = record.get("evidence") or {}
-    if ev.get("run_id") and ev.get("run_id") != run_id:
+    if not run_id or not ev.get("run_id") or ev.get("run_id") != run_id:
         return None, "mobile_validation_skip run_id mismatch"
-    if plan_task_id and ev.get("task_id") and ev.get("task_id") != plan_task_id:
+    if not plan_task_id or not ev.get("task_id") or ev.get("task_id") != plan_task_id:
         return None, "mobile_validation_skip task_id mismatch"
-    if plan_sha256 and ev.get("plan_sha256") and ev.get("plan_sha256") != plan_sha256:
+    if not plan_sha256 or not ev.get("plan_sha256") or ev.get("plan_sha256") != plan_sha256:
         return None, "mobile_validation_skip plan_sha256 mismatch"
+    if not snapshot or not ev.get("delivery_snapshot_sha256") or ev.get("delivery_snapshot_sha256") != snapshot:
+        return None, "mobile_validation_skip delivery_snapshot_sha256 mismatch"
+    if not change_set or not ev.get("change_set_sha256") or ev.get("change_set_sha256") != change_set:
+        return None, "mobile_validation_skip change_set_sha256 mismatch"
 
     approval_source = str(ev.get("approval_source") or "")
     if approval_source not in {"host_native", "conversation", "developer_terminal"}:

@@ -31,7 +31,7 @@ sys.path.insert(0, str(KIT))
 
 from _env_codes import EXIT_ENV, classify_adb_failure
 from _repo_files import ChangedFile
-from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file
+from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, sha256_file
 from baseline_capture import fingerprint, normalize_failure_message
 from change_classifier import _enclosing_structural_context, classify
 from delivery_manifest import build_manifest, is_delivery_relevant
@@ -1241,7 +1241,11 @@ class MobileValidationTests(unittest.TestCase):
         import argparse
 
         plan, tdir, policy, manifest = self._setup_verifying_task("mobile-002")
-        run_id = read_json(tdir / "current-run.json")["run_id"]
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy["device_required"] = True
+        policy["gates"].append("device")
+        atomic_write_json(Path(current["policy"]), policy)
 
         args = argparse.Namespace(
             action="skip-validation",
@@ -1282,6 +1286,10 @@ class MobileValidationTests(unittest.TestCase):
         import argparse
 
         plan, tdir, policy, manifest = self._setup_verifying_task("mobile-003")
+        current = read_json(tdir / "current-run.json")
+        policy["device_required"] = True
+        policy["gates"].append("device")
+        atomic_write_json(Path(current["policy"]), policy)
 
         # Missing source
         args_no_source = argparse.Namespace(
@@ -1304,6 +1312,78 @@ class MobileValidationTests(unittest.TestCase):
         with mock.patch.object(run_device, "REPO", self.repo):
             code = run_device._handle_skip_validation(args_no_proof)
             self.assertEqual(1, code)
+
+    def test_MOBILE_skip_on_non_device_task_rejected(self) -> None:
+        """MOBILE-SKIP-NON-DEVICE: Skip validation on a non-device task is rejected."""
+        import run_device
+        from unittest import mock
+        import argparse
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-non-device")
+        current = read_json(tdir / "current-run.json")
+        policy["device_required"] = False
+        policy["gates"] = [g for g in policy.get("gates", []) if g != "device"]
+        atomic_write_json(Path(current["policy"]), policy)
+
+        args = argparse.Namespace(
+            action="skip-validation",
+            task_id="mobile-non-device",
+            source="conversation",
+            proof_reference="developer says skip device test",
+            force=False,
+        )
+        with mock.patch.object(run_device, "REPO", self.repo):
+            code = run_device._handle_skip_validation(args)
+            self.assertEqual(1, code)
+
+    def test_MOBILE_missing_required_fields_rejected(self) -> None:
+        """MOBILE-MISSING-FIELDS: Missing run/task/plan/snapshot fields in evidence are rejected."""
+        from final_verifier import _validate_mobile_skip
+        from evidence_store import EvidenceStore
+        from workflow import state_root
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("mobile-missing-fields")
+        run_id = read_json(tdir / "current-run.json")["run_id"]
+        store = EvidenceStore(state_root(self.repo))
+
+        base_evidence = {
+            "task_id": "mobile-missing-fields",
+            "plan_sha256": plan["plan_sha256"],
+            "run_id": run_id,
+            "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+            "change_set_sha256": manifest["change_set_sha256"],
+            "approval_source": "conversation",
+            "enforcement_tier": "RULE_ENFORCED",
+            "proof_reference_sha256": canonical_sha256("proof"),
+        }
+
+        # Test each required field missing in evidence
+        for idx, missing_field in enumerate(["task_id", "plan_sha256", "run_id", "delivery_snapshot_sha256", "change_set_sha256"]):
+            test_run_id = f"{run_id}-{idx}"
+            ev = dict(base_evidence)
+            ev["run_id"] = test_run_id
+            del ev[missing_field]
+            store.write(
+                snapshot=manifest["delivery_snapshot_sha256"],
+                run_id=test_run_id,
+                name="mobile_validation_skip",
+                producer="developer_approval",
+                harness_version="1.0.0",
+                change_set=manifest["change_set_sha256"],
+                status="SKIPPED",
+                evidence=ev,
+            )
+            rec, err = _validate_mobile_skip(
+                store,
+                manifest["delivery_snapshot_sha256"],
+                manifest["change_set_sha256"],
+                test_run_id,
+                "1.0.0",
+                plan_task_id="mobile-missing-fields",
+                plan_sha256=plan["plan_sha256"],
+            )
+            self.assertIsNone(rec, f"Expected rejection for missing {missing_field}")
+            self.assertIsNotNone(err)
 
     def test_MOBILE_004_old_run_skip_rejected(self) -> None:
         """MOBILE-004: Old-run skip evidence is rejected by verifier."""
@@ -1328,6 +1408,8 @@ class MobileValidationTests(unittest.TestCase):
                 "task_id": "mobile-004",
                 "plan_sha256": plan["plan_sha256"],
                 "run_id": "old-run-12345",
+                "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+                "change_set_sha256": manifest["change_set_sha256"],
                 "approval_source": "conversation",
                 "enforcement_tier": "RULE_ENFORCED",
                 "proof_reference_sha256": canonical_sha256("proof"),
@@ -1369,6 +1451,8 @@ class MobileValidationTests(unittest.TestCase):
                 "task_id": "mobile-005",
                 "plan_sha256": plan["plan_sha256"],
                 "run_id": run_id,
+                "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+                "change_set_sha256": "old-cs-hash-1234",
                 "approval_source": "conversation",
                 "enforcement_tier": "RULE_ENFORCED",
                 "proof_reference_sha256": canonical_sha256("proof"),
@@ -1420,6 +1504,8 @@ class MobileValidationTests(unittest.TestCase):
                 "task_id": "mobile-006",
                 "plan_sha256": plan["plan_sha256"],
                 "run_id": run_id,
+                "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+                "change_set_sha256": manifest["change_set_sha256"],
                 "approval_source": "conversation",
                 "enforcement_tier": "RULE_ENFORCED",
                 "proof_reference_sha256": canonical_sha256("skip approved"),
@@ -1532,6 +1618,8 @@ class MobileValidationTests(unittest.TestCase):
                 "task_id": "mobile-008",
                 "plan_sha256": plan["plan_sha256"],
                 "run_id": run_id,
+                "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+                "change_set_sha256": manifest["change_set_sha256"],
                 "approval_source": "conversation",
                 "enforcement_tier": "RULE_ENFORCED",
                 "proof_reference_sha256": canonical_sha256("skip agreed"),
@@ -1647,6 +1735,8 @@ class MobileValidationTests(unittest.TestCase):
                 "task_id": "mobile-012",
                 "plan_sha256": plan["plan_sha256"],
                 "run_id": run_id,
+                "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
+                "change_set_sha256": manifest["change_set_sha256"],
                 "approval_source": "conversation",
                 "enforcement_tier": "RULE_ENFORCED",
                 "proof_reference_sha256": canonical_sha256("skip agreed"),

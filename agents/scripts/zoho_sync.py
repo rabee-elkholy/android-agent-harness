@@ -168,9 +168,30 @@ def cmd_start(args: argparse.Namespace) -> int:
         sys.stderr.write(f"ERROR: {msg}\n")
         return 1
 
+    status = str(plan.get("status") or "")
+    if status != "IMPLEMENTING":
+        sys.stderr.write(f"ERROR: TASK_NOT_IMPLEMENTING: Start sync requires status to be IMPLEMENTING, but current status is '{status}'.\n")
+        return 1
+
     approval = plan.get("approval") or {}
-    if not approval.get("single_use_nonce"):
+    single_use_nonce = approval.get("single_use_nonce")
+    if not single_use_nonce:
         sys.stderr.write("ERROR: PLAN_NOT_APPROVED: Active task plan has not been approved by developer.\n")
+        return 1
+
+    execution_nonce = plan.get("execution_nonce")
+    if not execution_nonce or execution_nonce != single_use_nonce:
+        sys.stderr.write("ERROR: EXECUTION_NONCE_MISMATCH: plan.execution_nonce does not match approval.single_use_nonce.\n")
+        return 1
+
+    from plan_authority import validate_plan_hash
+    valid, expected_hash = validate_plan_hash(plan, plan.get("plan_sha256"))
+    if not valid:
+        sys.stderr.write("ERROR: PLAN_HASH_INVALID: plan hash validation failed.\n")
+        return 1
+
+    if approval.get("plan_sha256") != expected_hash:
+        sys.stderr.write("ERROR: APPROVAL_PLAN_HASH_MISMATCH: approval.plan_sha256 does not match validated plan hash.\n")
         return 1
 
     item_type = str(zoho_link.get("item_type") or "Task")
@@ -272,9 +293,37 @@ def cmd_delivery(args: argparse.Namespace) -> int:
         return 1
 
     report_data = read_json(report_file)
-    item_type = str(zoho_link.get("item_type") or "Task").capitalize()
-    is_bug = item_type == "Bug"
-    tmpl_name = "BUG_COMMENT" if is_bug else ("STORY_DESCRIPTION" if item_type == "Story" else "TASK_DESCRIPTION")
+    if report_data.get("schema_version") != 1:
+        sys.stderr.write("ERROR: DELIVERY_REPORT_INVALID_SCHEMA: zoho-delivery-report.json schema_version must be 1.\n")
+        return 1
+    if str(report_data.get("task_id") or "") != task_id:
+        sys.stderr.write(f"ERROR: DELIVERY_REPORT_TASK_MISMATCH: zoho-delivery-report.json task_id '{report_data.get('task_id')}' != '{task_id}'.\n")
+        return 1
+    plan_sha = str(plan.get("plan_sha256") or "")
+    if str(report_data.get("plan_sha256") or "") != plan_sha:
+        sys.stderr.write("ERROR: DELIVERY_REPORT_PLAN_MISMATCH: zoho-delivery-report.json was produced for a different plan hash.\n")
+        return 1
+    recomputed_report_sha = canonical_sha256({k: v for k, v in report_data.items() if k != "report_sha256"})
+    if str(report_data.get("report_sha256") or "") != recomputed_report_sha:
+        sys.stderr.write("ERROR: DELIVERY_REPORT_TAMPERED: zoho-delivery-report.json report_sha256 does not match canonical contents.\n")
+        return 1
+
+    policy_res = ZohoPolicyResolver.resolve(
+        item_type=str(zoho_link.get("item_type") or "Task"),
+        task_state=status,
+        delivery_state="DELIVERED",
+        approved_external_write_scope=external_writes,
+        configured_language=plan.get("language") or "en_titles_ar_comments",
+        commit_hash=short_commit,
+    )
+    if not policy_res.get("allowed"):
+        sys.stderr.write(f"ERROR: Zoho delivery policy denied: {policy_res.get('denied_reason')}\n")
+        return 1
+
+    primary_action = str(policy_res.get("action") or "NONE")
+    secondary_action = policy_res.get("secondary_action")
+    target_status = str(policy_res.get("status") or "Ready To ReTest")
+    tmpl_name = str(policy_res.get("template") or "TASK_DESCRIPTION")
 
     language = plan.get("language") or "en_titles_ar_comments"
     rendered = ZohoPolicyResolver.render_template(
@@ -290,15 +339,16 @@ def cmd_delivery(args: argparse.Namespace) -> int:
     item_id = str(zoho_link.get("item_id") or "")
     sprint_id = str(zoho_link.get("sprint_id") or "")
 
-    status_op_id = _sanitize_op_id(f"{task_id}.zoho.ready.{short_commit}")
-    bug_comment_op_id = _sanitize_op_id(f"{task_id}.zoho.bug-report.{short_commit}")
-    desc_op_id = _sanitize_op_id(f"{task_id}.zoho.description.{short_commit}")
-    commit_comment_op_id = _sanitize_op_id(f"{task_id}.zoho.commit-comment.{short_commit}")
+    commit_sha12 = commit_sha[:12]
+    status_op_id = _sanitize_op_id(f"{task_id}.zoho.ready.{commit_sha12}")
+    bug_comment_op_id = _sanitize_op_id(f"{task_id}.zoho.bug-report.{commit_sha12}")
+    desc_op_id = _sanitize_op_id(f"{task_id}.zoho.description.{commit_sha12}")
+    commit_comment_op_id = _sanitize_op_id(f"{task_id}.zoho.commit-comment.{commit_sha12}")
 
     sync_file = tdir / "zoho-delivery-sync.json"
     try:
         server = _get_zoho_server()
-        if is_bug:
+        if primary_action == "ADD_COMMENT":
             # Bug: 1. Add QA report as Comment, 2. Set status Ready To ReTest (never edit description)
             c_args: dict[str, Any] = {"item_id": item_id, "comment": rendered, "operation_id": bug_comment_op_id}
             if sprint_id:
@@ -307,13 +357,13 @@ def cmd_delivery(args: argparse.Namespace) -> int:
             if isinstance(c_res, dict) and c_res.get("isError"):
                 raise RuntimeError(str((c_res.get("content") or [{}])[0].get("text") or "Comment failed"))
 
-            s_args: dict[str, Any] = {"item_id": item_id, "status": "Ready To ReTest", "operation_id": status_op_id}
+            s_args: dict[str, Any] = {"item_id": item_id, "status": target_status, "operation_id": status_op_id}
             if sprint_id:
                 s_args["sprint_id"] = sprint_id
             s_res = server.handle_call_tool("zoho_update_task_status", s_args)
             if isinstance(s_res, dict) and s_res.get("isError"):
                 raise RuntimeError(str((s_res.get("content") or [{}])[0].get("text") or "Status update failed"))
-        else:
+        elif primary_action == "UPDATE_DESCRIPTION":
             # Task/Story: 1. Update Description, 2. Add commit Comment, 3. Set status Ready To ReTest
             d_args: dict[str, Any] = {"item_id": item_id, "description": rendered, "operation_id": desc_op_id}
             if sprint_id:
@@ -322,19 +372,23 @@ def cmd_delivery(args: argparse.Namespace) -> int:
             if isinstance(d_res, dict) and d_res.get("isError"):
                 raise RuntimeError(str((d_res.get("content") or [{}])[0].get("text") or "Description update failed"))
 
-            c_args = {"item_id": item_id, "comment": f"Commit: {short_commit}", "operation_id": commit_comment_op_id}
-            if sprint_id:
-                c_args["sprint_id"] = sprint_id
-            c_res = server.handle_call_tool("zoho_add_comment", c_args)
-            if isinstance(c_res, dict) and c_res.get("isError"):
-                raise RuntimeError(str((c_res.get("content") or [{}])[0].get("text") or "Commit comment failed"))
+            if secondary_action == "ADD_COMMENT":
+                c_args = {"item_id": item_id, "comment": f"Commit: {short_commit}", "operation_id": commit_comment_op_id}
+                if sprint_id:
+                    c_args["sprint_id"] = sprint_id
+                c_res = server.handle_call_tool("zoho_add_comment", c_args)
+                if isinstance(c_res, dict) and c_res.get("isError"):
+                    raise RuntimeError(str((c_res.get("content") or [{}])[0].get("text") or "Commit comment failed"))
 
-            s_args = {"item_id": item_id, "status": "Ready To ReTest", "operation_id": status_op_id}
+            s_args = {"item_id": item_id, "status": target_status, "operation_id": status_op_id}
             if sprint_id:
                 s_args["sprint_id"] = sprint_id
             s_res = server.handle_call_tool("zoho_update_task_status", s_args)
             if isinstance(s_res, dict) and s_res.get("isError"):
                 raise RuntimeError(str((s_res.get("content") or [{}])[0].get("text") or "Status update failed"))
+        else:
+            sys.stderr.write(f"ERROR: Unsupported primary action: {primary_action}\n")
+            return 1
 
         atomic_write_json(sync_file, {
             "task_id": task_id,
@@ -342,7 +396,7 @@ def cmd_delivery(args: argparse.Namespace) -> int:
             "commit_sha": commit_sha,
             "item_id": item_id,
             "sprint_id": sprint_id,
-            "target_status": "Ready To ReTest",
+            "target_status": target_status,
             "updated_at": utc_now(),
         })
         sys.stdout.write(json.dumps({"status": "PASS", "commit_sha": short_commit}, indent=2) + "\n")

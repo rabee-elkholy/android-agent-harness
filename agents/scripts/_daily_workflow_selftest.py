@@ -4094,7 +4094,7 @@ class PathPortabilityTests(unittest.TestCase):
 
     def test_PATH_PORTABLE_006_traversal_rejected(self) -> None:
         """PATH-PORTABLE-006: traversal rejected."""
-        for p in ["../secret", "foo/../../../secret", ".."]:
+        for p in ["../secret", "foo/../../../secret", "..", r"..\..\secret"]:
             with self.assertRaises(ValidationError):
                 validate_repo_path_containment(self.repo, p)
 
@@ -4102,11 +4102,19 @@ class PathPortabilityTests(unittest.TestCase):
         """PATH-PORTABLE-007: normal POSIX repo path accepted."""
         rel = validate_repo_path_containment(self.repo, "app/src/main/java/com/example/Foo.kt")
         self.assertEqual(rel, "app/src/main/java/com/example/Foo.kt")
+        self.assertNotIn("\\", rel)
 
     def test_PATH_PORTABLE_008_normal_backslash_repo_path_accepted(self) -> None:
         """PATH-PORTABLE-008: normal backslash repo path accepted."""
         rel = validate_repo_path_containment(self.repo, r"app\src\main\java\com\example\Foo.kt")
         self.assertEqual(rel, "app/src/main/java/com/example/Foo.kt")
+        self.assertNotIn("\\", rel)
+
+    def test_PATH_PORTABLE_009_mixed_separators_repo_path_accepted(self) -> None:
+        """PATH-PORTABLE-009: mixed separators repo path accepted and returns POSIX."""
+        rel = validate_repo_path_containment(self.repo, r"app/src\main/java\com/example\Foo.kt")
+        self.assertEqual(rel, "app/src/main/java/com/example/Foo.kt")
+        self.assertNotIn("\\", rel)
 
 
 class RecoverStaleTests(unittest.TestCase):
@@ -4650,6 +4658,307 @@ class ReviewOrchestrationTests(unittest.TestCase):
         store = EvidenceStore(state_root(self.repo))
         evidence = store.read(current["delivery_snapshot_sha256"], run_id, "reviews")
         self.assertEqual("PASS", evidence.get("status"))
+
+    def test_P0_03_parser_has_no_text(self) -> None:
+        """P0-3: Public review complete parser has no --text argument."""
+        from review_orchestrator import main as orch_main
+        with self.assertRaises(SystemExit):
+            orch_main(["complete", "--task", "t1", "--reviewer", "r1", "--execution-id", "e1", "--text", "fake"])
+
+    def test_P0_03_arbitrary_lead_pass_cannot_be_submitted(self) -> None:
+        """P0-3: Arbitrary lead PASS cannot be submitted via CLI or record_review."""
+        task_id = "test-p03-lead"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        ret = record_review.main([
+            "--repo", str(self.repo),
+            "--task", task_id,
+            "--verdict", "bug-reviewer-agent=PASS",
+            "--evidence-pkg", pkg_sha,
+        ])
+        self.assertEqual(1, ret)
+
+    def test_P1_01_host_compatibility_and_v2_binding(self) -> None:
+        """P1-1: Host compatibility determines review protocol version and prevents mid-run host changes."""
+        from workflow import draft, record_approval, begin_task, prepare_verification, task_dir
+        import argparse
+        from _vnext_common import read_json, ValidationError
+
+        # 1. Antigravity host -> V2
+        t1 = "test-host-ag"
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { fun x() = 1 }\n")
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=t1, outcome="Host ag", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=t1, source="conversation", proof_reference="appr", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=t1))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=t1, host="antigravity"))
+        c1 = read_json(task_dir(self.repo, t1) / "current-run.json")
+        self.assertEqual(2, c1.get("review_protocol_version"))
+        self.assertEqual("antigravity", c1.get("review_host"))
+
+        # Host cannot change mid-run for V2
+        from review_orchestrator import complete_review
+        with self.assertRaises(ValidationError) as ctx:
+            complete_review(self.repo, t1, "bug-reviewer-agent", "exec-1", host="gemini_cli")
+        self.assertIn("host cannot change mid-run", str(ctx.exception))
+
+        # Mark t1 as CANCELED to clear active task for t2
+        from _vnext_common import atomic_write_json
+        p1 = read_json(task_dir(self.repo, t1) / "plan.json")
+        p1["status"] = "CANCELED"
+        atomic_write_json(task_dir(self.repo, t1) / "plan.json", p1)
+
+        # 2. Unsupported host -> V1 compatibility
+        t2 = "test-host-other"
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=t2, outcome="Host other", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=t2, source="conversation", proof_reference="appr", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=t2))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=t2, host="unsupported_host"))
+        c2 = read_json(task_dir(self.repo, t2) / "current-run.json")
+        self.assertEqual(1, c2.get("review_protocol_version"))
+        self.assertEqual("unsupported_host", c2.get("review_host"))
+
+    def test_P1_05_duplicate_finalize_idempotent(self) -> None:
+        """P1-5: State-locked review finalization is idempotent and ledger hashes stay stable."""
+        from review_orchestrator import record_dispatch, complete_review, finalize_review_execution, load_ledger
+        task_id = "test-p15-finalize"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        valid_v2 = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "PASS", "findings": []
+        })
+        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p15", override_text=valid_v2)
+
+        ev1 = finalize_review_execution(self.repo, task_id, run_id)
+        ledger1 = load_ledger(tdir, run_id)
+
+        ev2 = finalize_review_execution(self.repo, task_id, run_id)
+        ledger2 = load_ledger(tdir, run_id)
+
+        self.assertEqual(canonical_sha256(ev1), canonical_sha256(ev2))
+        self.assertEqual(canonical_sha256(ledger1), canonical_sha256(ledger2))
+
+    def test_REVIEW_INTEGRATION_001(self) -> None:
+        """REVIEW-INTEGRATION-001: prepare_verification -> Router DISPATCH_REVIEWERS -> pre_tool_safety invoke_subagent -> V2 ledger DISPATCHED -> Router WAIT_FOR_REVIEWERS."""
+        from workflow import resolve_next_action
+        from review_orchestrator import load_ledger, REVIEW_DISPATCHED
+        task_id = "test-int-001"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        plan = read_json(tdir / "plan.json")
+
+        act1 = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DISPATCH_REVIEWERS", act1["code"])
+
+        safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        subagent_call = {
+            "toolName": "invoke_subagent",
+            "toolArgs": {
+                "Subagents": [
+                    {"TypeName": "self", "Role": "bug-reviewer-agent", "Prompt": "Please review code"}
+                ]
+            }
+        }
+        env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_REPO_DIR": str(self.repo),
+            "PYTHONPATH": str(KIT / "agents" / "scripts"),
+        }
+        proc = subprocess.run(
+            [sys.executable, str(safety_script)],
+            input=json.dumps(subagent_call),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=15,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        res = json.loads(proc.stdout)
+        self.assertEqual("allow", res.get("decision"))
+
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+
+        act2 = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("WAIT_FOR_REVIEWERS", act2["code"])
+
+        legacy_receipt = tdir / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        self.assertFalse(legacy_receipt.is_file())
+
+    def test_REAL_FLOW_REVIEW_001(self) -> None:
+        """REAL-FLOW-REVIEW-001: End-to-end real flow from draft to assemble."""
+        from workflow import (
+            draft, record_approval, begin_task, prepare_verification,
+            resolve_next_action, state_root
+        )
+        from review_orchestrator import (
+            load_ledger, REVIEW_DISPATCHED, REVIEW_INGESTED,
+            main as orch_main, dispatch_receipt_file
+        )
+        import review_package
+        from evidence_store import EvidenceStore
+        import argparse
+        from unittest import mock
+
+        task_id = "real-flow-rev-001"
+        # 1. Draft + Approve
+        write_file(self.repo / "app/src/main/kotlin/com/example/Code.kt", "package com.example\nclass Code { val x = 1 }\n")
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "init-code", "-q")
+
+        write_file(self.repo / "app/src/main/kotlin/com/example/Code.kt", "package com.example\nclass Code { val x = 2 }\n")
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Real flow test",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/Code.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/Code.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approve real flow",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+
+        # 2. Begin + Prepare verification
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+
+        tdir = task_dir(self.repo, task_id)
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy = read_json(Path(current["policy"]))
+        policy["gates"] = ["preflight", "assemble"]
+        policy["reviewers"] = ["bug-reviewer-agent"]
+        policy["assemble_required"] = True
+        atomic_write_json(Path(current["policy"]), policy)
+
+        # 3. Satisfy deterministic gates (preflight)
+        manifest = read_json(Path(current["manifest"]))
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={"status": "PASS"},
+        )
+
+        # 4. Build review package
+        _, pkg = review_package.build_package(self.repo, task_id)
+        pkg_sha = pkg["package_sha256"]
+
+        plan = read_json(tdir / "plan.json")
+        # 5. Router -> DISPATCH_REVIEWERS
+        act1 = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DISPATCH_REVIEWERS", act1["code"])
+
+        # 6. Simulate actual pre_tool_safety invoke_subagent
+        safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        subagent_call = {
+            "toolName": "invoke_subagent",
+            "toolArgs": {
+                "Subagents": [
+                    {"TypeName": "self", "Role": "bug-reviewer-agent", "Prompt": "Review"}
+                ]
+            }
+        }
+        env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_REPO_DIR": str(self.repo),
+            "PYTHONPATH": str(KIT / "agents" / "scripts"),
+        }
+        proc = subprocess.run(
+            [sys.executable, str(safety_script)],
+            input=json.dumps(subagent_call),
+            capture_output=True, text=True, env=env, check=False, timeout=15,
+        )
+        self.assertEqual(0, proc.returncode)
+        self.assertEqual("allow", json.loads(proc.stdout)["decision"])
+
+        # 7. Assert V2 ledger DISPATCHED
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+
+        # 8. Router -> WAIT_FOR_REVIEWERS
+        act2 = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("WAIT_FOR_REVIEWERS", act2["code"])
+        self.assertNotEqual("DISPATCH_REVIEWERS", act2["code"])
+
+        # 9. Complete trusted reviewer(s)
+        # Verify --text is rejected by public CLI
+        with self.assertRaises(SystemExit):
+            orch_main(["complete", "--task", task_id, "--reviewer", "bug-reviewer-agent", "--execution-id", "e1", "--text", "fake"])
+
+        # Mock trusted transcript resolution
+        valid_review_result = {
+            "schema_version": 2,
+            "task_id": task_id,
+            "run_id": run_id,
+            "reviewer": "bug-reviewer-agent",
+            "review_package_sha256": pkg_sha,
+            "verdict": "PASS",
+            "findings": [],
+        }
+        mock_transcript = self.repo / ".mock_transcript.jsonl"
+        mock_transcript.write_text(json.dumps({
+            "type": "MODEL",
+            "content": f"```json\n{json.dumps(valid_review_result)}\n```"
+        }) + "\n", encoding="utf-8")
+
+        with mock.patch("review_orchestrator.resolve_trusted_review_source", return_value=mock_transcript):
+            orch_main(["complete", "--repo", str(self.repo), "--task", task_id, "--reviewer", "bug-reviewer-agent", "--execution-id", "trusted-conv-123"])
+
+        # 10. Auto-finalize aggregate evidence
+        ev_rec = store.read(manifest["delivery_snapshot_sha256"], run_id, "reviews")
+        self.assertEqual("PASS", ev_rec.get("status"))
+        ledger_final = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_INGESTED, ledger_final["reviewers"]["bug-reviewer-agent"]["state"])
+
+        # 11. Router -> ASSEMBLE
+        act3 = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("ASSEMBLE", act3["code"])
+
+        # Assertions
+        # - no repeated DISPATCH_REVIEWERS after actual launch
+        self.assertNotEqual("DISPATCH_REVIEWERS", act2["code"])
+        # - no legacy receipt for V2
+        legacy_receipt = tdir / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        self.assertFalse(legacy_receipt.is_file())
+        # - exact task/run/package binding
+        bound_receipt = dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent")
+        self.assertTrue(bound_receipt.is_file())
+        b_data = read_json(bound_receipt)
+        self.assertEqual(task_id, b_data["task_id"])
+        self.assertEqual(run_id, b_data["run_id"])
+        self.assertEqual(pkg_sha, b_data["review_package_sha256"])
 
 
 class VerifyingScopeTests(unittest.TestCase):

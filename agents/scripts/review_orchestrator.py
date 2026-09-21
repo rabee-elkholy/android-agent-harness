@@ -27,6 +27,7 @@ from record_review import (  # noqa: E402
     is_blocking_finding,
     resolve_trusted_subagent_transcript,
 )
+from review_sources import resolve_trusted_review_source  # noqa: E402
 from workflow import state_root, task_dir  # noqa: E402
 
 REVIEW_NOT_DISPATCHED = "NOT_DISPATCHED"
@@ -141,60 +142,120 @@ def init_ledger(
     return ledger
 
 
-def record_dispatch(
+def record_dispatch_batch(
     repo: Path,
     task_id: str,
-    reviewer: str,
+    reviewers: list[str],
     host: str = "antigravity",
-) -> dict[str, Any]:
+) -> dict[str, dict]:
     directory = task_dir(repo, task_id)
-    current = read_json(directory / "current-run.json")
-    run_id = str(current["run_id"])
-    manifest = read_json(Path(current["manifest"]))
+    current_path = directory / "current-run.json"
+    if not current_path.is_file():
+        raise ValidationError(f"active current-run is missing for task '{task_id}'")
+    current = read_json(current_path)
+    run_id = str(current.get("run_id") or "").strip()
+    if not run_id:
+        raise ValidationError("run_id is missing from current-run")
+
+    protocol = int(current.get("review_protocol_version") or 1)
+    if protocol < 2:
+        raise ValidationError(f"record_dispatch_batch requires review_protocol_version >= 2, found {protocol}")
+
+    manifest_path = Path(str(current.get("manifest") or ""))
+    if not manifest_path.is_file():
+        raise ValidationError("active run manifest is missing")
+    manifest = read_json(manifest_path)
+    snapshot = str(manifest.get("delivery_snapshot_sha256") or "").strip()
+    change_set = str(manifest.get("change_set_sha256") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", snapshot):
+        raise ValidationError("delivery snapshot identity is missing or invalid")
+
     pkg_path = active_review_package_path(repo, current)
-    pkg_sha = sha256_file(pkg_path) if pkg_path.is_file() else ""
-    policy = read_json(Path(current["policy"]))
+    if not pkg_path.is_file():
+        raise ValidationError("review package is missing")
+    pkg_sha = sha256_file(pkg_path)
+    if not re.fullmatch(r"[0-9a-f]{64}", pkg_sha):
+        raise ValidationError("review package digest is invalid")
+
+    policy_path = Path(str(current.get("policy") or ""))
+    if not policy_path.is_file():
+        raise ValidationError("policy artifact is missing")
+    policy = read_json(policy_path)
     required_reviewers = list(policy.get("reviewers") or [])
+
+    for r in reviewers:
+        if r not in required_reviewers:
+            raise ValidationError(f"reviewer '{r}' is not in policy required reviewers: {required_reviewers}")
 
     with StateLock(state_root(repo)):
         ledger = init_ledger(
             directory,
             task_id,
             run_id,
-            manifest["delivery_snapshot_sha256"],
-            manifest["change_set_sha256"],
+            snapshot,
+            change_set,
             pkg_sha,
             required_reviewers,
         )
-        if reviewer not in ledger.get("reviewers", {}):
-            raise ValidationError(f"reviewer '{reviewer}' is not in required reviewers: {required_reviewers}")
 
-        dispatch_nonce = str(uuid.uuid4())
-        receipt = {
-            "schema_version": 2,
-            "task_id": task_id,
-            "run_id": run_id,
-            "reviewer": reviewer,
-            "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
-            "change_set_sha256": manifest["change_set_sha256"],
-            "review_package_sha256": pkg_sha,
-            "dispatch_nonce": dispatch_nonce,
-            "host": host,
-            "dispatched_at": utc_now(),
-        }
-        receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+        for r in reviewers:
+            rev_entry = ledger.get("reviewers", {}).get(r)
+            if not rev_entry:
+                raise ValidationError(f"reviewer '{r}' not in ledger")
+            st = rev_entry.get("state")
+            if st in (REVIEW_COMPLETED, REVIEW_INGESTED):
+                raise ValidationError(f"cannot dispatch reviewer '{r}': state is already {st}")
+            if st in (REVIEW_FAILED_PROTOCOL, REVIEW_ENV_BLOCKED):
+                raise ValidationError(f"cannot silently dispatch reviewer '{r}': state is {st}")
+            if st not in (REVIEW_NOT_DISPATCHED, REVIEW_DISPATCHED):
+                raise ValidationError(f"cannot dispatch reviewer '{r}': state is {st}")
 
-        r_file = dispatch_receipt_file(directory, run_id, reviewer)
-        r_file.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(r_file, receipt)
+        receipts: dict[str, dict] = {}
+        for r in reviewers:
+            rev_entry = ledger["reviewers"][r]
+            st = rev_entry.get("state")
+            r_file = dispatch_receipt_file(directory, run_id, r)
 
-        rev_entry = ledger["reviewers"][reviewer]
-        rev_entry["state"] = REVIEW_DISPATCHED
-        rev_entry["dispatch_nonce"] = dispatch_nonce
-        rev_entry["dispatch_count"] = int(rev_entry.get("dispatch_count", 0)) + 1
-        rev_entry["dispatched_at"] = receipt["dispatched_at"]
+            if st == REVIEW_DISPATCHED and r_file.is_file():
+                receipts[r] = read_json(r_file)
+                continue
+
+            dispatch_nonce = str(uuid.uuid4())
+            receipt = {
+                "schema_version": 2,
+                "task_id": task_id,
+                "run_id": run_id,
+                "reviewer": r,
+                "delivery_snapshot_sha256": snapshot,
+                "change_set_sha256": change_set,
+                "review_package_sha256": pkg_sha,
+                "dispatch_nonce": dispatch_nonce,
+                "host": host,
+                "dispatched_at": utc_now(),
+            }
+            receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+
+            r_file.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(r_file, receipt)
+
+            rev_entry["state"] = REVIEW_DISPATCHED
+            rev_entry["dispatch_nonce"] = dispatch_nonce
+            rev_entry["dispatch_count"] = int(rev_entry.get("dispatch_count", 0)) + 1
+            rev_entry["dispatched_at"] = receipt["dispatched_at"]
+            receipts[r] = receipt
+
         save_ledger(directory, run_id, ledger)
-        return receipt
+        return receipts
+
+
+def record_dispatch(
+    repo: Path,
+    task_id: str,
+    reviewer: str,
+    host: str = "antigravity",
+) -> dict[str, Any]:
+    batch = record_dispatch_batch(repo, task_id, [reviewer], host=host)
+    return batch[reviewer]
 
 
 def parse_structured_result(
@@ -321,7 +382,9 @@ def complete_review(
     task_id: str,
     reviewer: str,
     execution_id: str,
-    host: str = "antigravity",
+    host: str | None = None,
+    *,
+    _override_text: str | None = None,
     override_text: str | None = None,
 ) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
@@ -333,6 +396,16 @@ def complete_review(
     policy = read_json(Path(current["policy"]))
     required_reviewers = list(policy.get("reviewers") or [])
     review_protocol_version = int(current.get("review_protocol_version") or 1)
+
+    effective_override_text = _override_text if _override_text is not None else override_text
+
+    run_host = str(current.get("review_host") or "antigravity")
+    if review_protocol_version >= 2:
+        if host is not None and host != run_host:
+            raise ValidationError(f"host cannot change mid-run: run host is '{run_host}', got '{host}'")
+        host = run_host
+    elif not host:
+        host = run_host
 
     if reviewer not in required_reviewers:
         raise ValidationError(f"reviewer '{reviewer}' is not in policy required reviewers: {required_reviewers}")
@@ -370,9 +443,9 @@ def complete_review(
             existing_result = read_json(res_file)
             existing_exec = existing_result.get("execution_id")
             if existing_exec == execution_id:
-                if override_text is not None:
+                if effective_override_text is not None:
                     new_parsed = parse_structured_result(
-                        text=override_text,
+                        text=effective_override_text,
                         expected_task_id=task_id,
                         expected_run_id=run_id,
                         expected_reviewer=reviewer,
@@ -383,10 +456,10 @@ def complete_review(
                 return existing_result.get("result", {})
 
         # Resolve transcript text
-        if override_text is not None:
-            text = override_text
+        if effective_override_text is not None:
+            text = effective_override_text
         else:
-            t_path = resolve_trusted_subagent_transcript(host, execution_id)
+            t_path = resolve_trusted_review_source(host, execution_id)
             if not t_path or not t_path.is_file():
                 ledger["reviewers"][reviewer]["state"] = REVIEW_ENV_BLOCKED
                 ledger["reviewers"][reviewer]["last_error"] = f"could not locate trusted transcript for {execution_id}"
@@ -451,7 +524,7 @@ def complete_review(
     return parsed
 
 
-def finalize_review_execution(
+def _finalize_review_execution_locked(
     repo: Path,
     task_id: str,
     run_id: str | None = None,
@@ -470,6 +543,18 @@ def finalize_review_execution(
 
     if ledger is None:
         ledger = load_ledger(directory, run_id)
+
+    store = EvidenceStore(state_root(repo))
+    all_ingested = bool(required_reviewers) and all(
+        ledger.get("reviewers", {}).get(r, {}).get("state") == REVIEW_INGESTED
+        for r in required_reviewers
+    )
+    if all_ingested:
+        try:
+            existing_rec = store.read(manifest["delivery_snapshot_sha256"], run_id, "reviews")
+            return existing_rec.get("evidence", {})
+        except ValidationError:
+            pass
 
     for r in required_reviewers:
         st = ledger.get("reviewers", {}).get(r, {}).get("state")
@@ -512,7 +597,7 @@ def finalize_review_execution(
     version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
     harness_ver = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
 
-    EvidenceStore(state_root(repo)).write(
+    store.write(
         snapshot=manifest["delivery_snapshot_sha256"],
         run_id=run_id,
         name="reviews",
@@ -521,6 +606,7 @@ def finalize_review_execution(
         change_set=manifest["change_set_sha256"],
         status=status,
         evidence=evidence_payload,
+        lock=False,
     )
 
     for r in required_reviewers:
@@ -534,6 +620,16 @@ def finalize_review_execution(
         save_plan(directory / "plan.json", plan)
 
     return evidence_payload
+
+
+def finalize_review_execution(
+    repo: Path,
+    task_id: str,
+    run_id: str | None = None,
+    ledger: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    with StateLock(state_root(repo)):
+        return _finalize_review_execution_locked(repo, task_id, run_id, ledger)
 
 
 def get_review_execution_status(repo: Path, task_id: str) -> dict[str, Any]:
@@ -570,8 +666,7 @@ def main(argv: list[str] | None = None) -> int:
     complete_p.add_argument("--task", required=True, help="Task ID")
     complete_p.add_argument("--reviewer", required=True, help="Reviewer role")
     complete_p.add_argument("--execution-id", required=True, help="Trusted execution transcript ID")
-    complete_p.add_argument("--host", default="antigravity", help="Host environment")
-    complete_p.add_argument("--text", default=None, help="Explicit response text override")
+    complete_p.add_argument("--host", default=None, help="Host environment")
 
     finalize_p = subparsers.add_parser("finalize", help="Aggregate review evidence")
     finalize_p.add_argument("--repo", default=".")
@@ -601,7 +696,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.reviewer,
                 args.execution_id,
                 host=args.host,
-                override_text=args.text,
             )
             print(f"REVIEW_COMPLETED: {args.reviewer} verdict={res.get('verdict')}")
             return 0

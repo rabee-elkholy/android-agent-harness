@@ -121,28 +121,9 @@ def resolve_trusted_subagent_transcript(host: str, subagent_id: str) -> Path | N
 
     Rejects path traversal, external paths, and arbitrary local files.
     """
-    if not subagent_id:
-        return None
-    clean_id = str(subagent_id).strip().strip("'\"")
-    if "/" in clean_id or "\\" in clean_id or ".." in clean_id or ":" in clean_id or clean_id.startswith("file:"):
-        return None
+    from review_sources import resolve_trusted_review_source
+    return resolve_trusted_review_source(host, subagent_id)
 
-    host_lower = (host or "antigravity").strip().lower()
-    if host_lower == "antigravity":
-        base_root = get_trusted_antigravity_root()
-        brain_dir = (base_root / "brain").resolve()
-        candidates = [
-            brain_dir / clean_id / ".system_generated" / "logs" / "transcript.jsonl",
-            brain_dir / clean_id / "transcript.jsonl",
-        ]
-        for cand in candidates:
-            try:
-                resolved = cand.resolve()
-                if brain_dir in resolved.parents and resolved.is_file():
-                    return resolved
-            except Exception:
-                continue
-    return None
 
 
 def _find_subagent_transcript(subagent_id: str) -> Path | None:

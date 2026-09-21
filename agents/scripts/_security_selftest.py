@@ -461,6 +461,25 @@ class SecurityTests(unittest.TestCase):
         res = json.loads(proc.stdout)
         self.assertEqual("deny", res["decision"])
 
+    def test_generic_mcp_action_aware_classification(self):
+        """P1-4: Action-aware generic MCP classification distinguishes safe reads from high impact."""
+        from integrations.generic_mcp import classify_generic_mcp_tool, READ, WRITE, HIGH_IMPACT, UNKNOWN
+        expected_cases = {
+            "get_permissions": READ,
+            "read_security_rules": READ,
+            "get_release_notes": READ,
+            "inspect_production_config": READ,
+            "update_security_rules": HIGH_IMPACT,
+            "set_permissions": HIGH_IMPACT,
+            "deploy_function": HIGH_IMPACT,
+            "update_frame": WRITE,
+            "unknown_verb": UNKNOWN,
+        }
+        for tool_name, expected_class in expected_cases.items():
+            with self.subTest(tool=tool_name):
+                actual = classify_generic_mcp_tool(tool_name)
+                self.assertEqual(expected_class, actual, f"{tool_name} classified as {actual}, expected {expected_class}")
+
     def test_recover_stale_active_task_protection(self):
         # AUTH-RECOVER-001: Healthy active task cannot be wiped by recover_stale
         sys.path.insert(0, str(SCRIPTS))
