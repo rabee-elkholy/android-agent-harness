@@ -395,6 +395,82 @@ class GraphDiscoverySelftest(unittest.TestCase):
         data = json.loads(proc.stdout.strip())
         self.assertIsInstance(data, dict)
         self.assertEqual(str(self.repo.resolve()), str(Path(data["repo_root"]).resolve()))
+    def test_GRAPH_SCOPE_001_to_005_implementing_scope_guards(self) -> None:
+        """GRAPH-SCOPE-001 through 005: In-scope vs out-of-scope search, list_dir, expansion, and D0."""
+        task_dir = self.repo / ".agents" / "state" / "tasks" / "task-scope-01"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "task_id": "task-scope-01",
+            "status": "IMPLEMENTING",
+            "expected_files": ["app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"],
+            "discovery_provenance": {
+                "discovery_id": "disc-scope-01",
+                "mode": DISCOVERY_D1_TARGETED_GRAPH,
+                "allowed_search_roots": ["app/src/main/kotlin/com/example/profile"],
+                "resolved_paths": ["app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"],
+            },
+        }
+        (task_dir / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        active_task = {
+            "task_id": "task-scope-01",
+            "plan_path": str(task_dir / "plan.json"),
+        }
+        (self.repo / ".agents" / "state" / "active-task.json").write_text(json.dumps(active_task, indent=2), encoding="utf-8")
+
+        # GRAPH-SCOPE-001: in-scope targeted search allowed
+        res1 = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/profile", "Query": "refresh"},
+        )
+        self.assertEqual("allow", res1["decision"])
+
+        res1_file = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/profile/ProfileViewModel.kt", "Query": "refresh"},
+        )
+        self.assertEqual("allow", res1_file["decision"])
+
+        # GRAPH-SCOPE-002: out-of-scope targeted search denied
+        res2 = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/payments", "Query": "charge"},
+        )
+        self.assertEqual("deny", res2["decision"])
+        self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res2.get("reason_code"))
+
+        # GRAPH-SCOPE-003: out-of-scope list_dir denied
+        res3 = self._invoke_safety(
+            "list_dir",
+            {"DirectoryPath": "app/src/main/kotlin/com/example"},
+        )
+        self.assertEqual("deny", res3["decision"])
+        self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res3.get("reason_code"))
+
+        # GRAPH-SCOPE-004: graph expansion extends allowed roots
+        receipt2 = create_discovery_receipt(
+            mode=DISCOVERY_D2_FEATURE_GRAPH,
+            query_kind="feature",
+            query_value="payments",
+            graph_fingerprint="fp_payments_01",
+            resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/payments/PaymentProcessor.kt"],
+            resolved_symbols=["PaymentProcessor"],
+            allowed_search_roots=["app/src/main/kotlin/com/example/payments"],
+        )
+        save_discovery_receipt(self.repo, receipt2)
+
+        res4 = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/payments", "Query": "charge"},
+        )
+        self.assertEqual("allow", res4["decision"])
+
+        # GRAPH-SCOPE-005: exact developer-known file D0 remains lightweight
+        res5 = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/res/values/strings.xml", "Query": "app_name"},
+        )
+        self.assertEqual("allow", res5["decision"])
 
 
 if __name__ == "__main__":

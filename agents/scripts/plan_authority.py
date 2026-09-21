@@ -473,6 +473,39 @@ def save_plan(path: Path, plan: dict) -> None:
     atomic_write_json(path, plan)
 
 
+def record_plan_presentation(
+    plan_path: Path,
+    artifact_path: str,
+    request_feedback: bool = True,
+) -> dict[str, Any]:
+    """Records UX provenance receipt when plan is presented as host-native review artifact."""
+    plan_file = Path(plan_path).resolve()
+    if not plan_file.is_file():
+        raise ValidationError(f"plan file does not exist at {plan_path}")
+    plan = read_json(plan_file)
+    receipt = {
+        "task_id": str(plan.get("task_id") or ""),
+        "plan_sha256": str(plan.get("plan_sha256") or ""),
+        "artifact_path": str(artifact_path),
+        "presented_at": utc_now(),
+        "request_feedback": bool(request_feedback),
+    }
+    receipt_file = plan_file.parent / "presentation-receipt.json"
+    atomic_write_json(receipt_file, receipt)
+    return receipt
+
+
+def load_plan_presentation(plan_path: Path) -> dict[str, Any] | None:
+    """Loads UX provenance receipt if present."""
+    receipt_file = Path(plan_path).resolve().parent / "presentation-receipt.json"
+    if receipt_file.is_file():
+        try:
+            return read_json(receipt_file)
+        except Exception:
+            return None
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plan", help="Plan JSON path")

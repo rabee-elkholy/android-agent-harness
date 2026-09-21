@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import _product
 from _vnext_common import (
@@ -64,6 +65,7 @@ import workflow
 from workflow import (
     begin_task,
     build_remediation_command,
+    cancel,
     checkpoint_phase,
     complete,
     deliver_task,
@@ -215,7 +217,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
 
         parts = shlex.split(cmd.replace("\\\n", " "))
         revise_idx = parts.index("revise")
-        cli_args = parts[revise_idx:]
+        cli_args = parts[revise_idx:] + ["--repo", str(self.repo)]
         from workflow import main as workflow_main
         ret = workflow_main(cli_args)
         self.assertEqual(0, ret)
@@ -1709,6 +1711,8 @@ class TaskContextIntegrityTests(unittest.TestCase):
         self.assertEqual(ctx_id_a, plan_a.get("task_context_id"))
         self.assertIn("app/src/main/kotlin/com/example/home/HomeViewModel.kt", plan_a.get("expected_files", []))
 
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="task-ctx-a", reason="test complete"))
+
         args_b = argparse.Namespace(
             repo=str(self.repo),
             task_id="task-ctx-b",
@@ -1933,6 +1937,8 @@ class PersistentDeveloperInstructionsTests(unittest.TestCase):
         ))
         self.assertEqual(1, len(plan_pay.get("developer_instructions", [])))
         self.assertEqual(insts_pay[0]["id"], plan_pay["developer_instructions"][0]["id"])
+
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="task-pay", reason="test complete"))
 
         # Profile target (INST-003: payments instruction absent)
         ctx_prof = resolve_task_context(self.repo, file="profile/src/main/kotlin/com/example/profile/ProfileViewModel.kt")
@@ -3500,6 +3506,161 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
             ))
         self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
 
+    def test_FORCE_DELIVERY_001_ready_dirty_rejects_force_draft(self) -> None:
+        """FORCE-DELIVERY-001: READY + dirty task blocks draft even with --force."""
+        task_id = "task-force-deliv-001"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
+        plan["ready_change_set_sha256"] = manifest["change_set_sha256"]
+        save_plan(tdir / "plan.json", plan)
+
+        # Make a verified file dirty in working tree
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "// dirty uncommitted change\n")
+
+        with self.assertRaises(ValidationError) as cm:
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id="task-force-deliv-new",
+                outcome="New task while dirty",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="COMPOSE_UI",
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=True,
+            ))
+        self.assertIn("PREVIOUS_DELIVERY_NOT_FINALIZED", str(cm.exception))
+        # Ensure old plan remains READY_FOR_DELIVERY and active pointer is preserved
+        self.assertEqual("READY_FOR_DELIVERY", read_json(tdir / "plan.json").get("status"))
+        active = read_json(state_root(self.repo) / "active-task.json")
+        self.assertEqual(task_id, active.get("task_id"))
+
+    def test_FORCE_DELIVERY_002_ready_clean_auto_reconciled(self) -> None:
+        """FORCE-DELIVERY-002: READY + clean committed exact verified content auto-reconciles on new draft."""
+        task_id = "task-force-deliv-002"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
+        plan["ready_change_set_sha256"] = manifest["change_set_sha256"]
+        save_plan(tdir / "plan.json", plan)
+
+        # Tree is clean with exact snapshot -> new draft reconciles previous task automatically
+        new_plan = draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id="task-force-deliv-002b",
+            outcome="New task after clean ready",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=False,
+        ))
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", new_plan.get("status"))
+        self.assertEqual("DELIVERED", read_json(tdir / "plan.json").get("status"))
+
+    def test_SAME_ID_FORCE_001_implementing_rejects_same_id_force_draft(self) -> None:
+        """SAME-ID-FORCE-001: Live task in IMPLEMENTING rejects same-task draft even with --force."""
+        task_id = "task-same-force-001"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Initial task",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval phrase",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        plan_before = read_json(task_dir(self.repo, task_id) / "plan.json")
+        sha_before = plan_before.get("plan_sha256")
+
+        with self.assertRaises(ValidationError) as cm:
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id=task_id,
+                outcome="Overwriting outcome",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="COMPOSE_UI",
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=True,
+            ))
+        self.assertIn("TASK_PLAN_ALREADY_EXISTS", str(cm.exception))
+        plan_after = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual(sha_before, plan_after.get("plan_sha256"))
+        self.assertEqual("IMPLEMENTING", plan_after.get("status"))
+
+    def test_STATE_SAFE_010_multiple_live_tasks_fail_closed_ambiguous(self) -> None:
+        """STATE-SAFE-010: Multiple legacy live tasks fail closed with AMBIGUOUS_LIVE_TASKS."""
+        from workflow import cancel, assert_single_live_task
+        task_a = "task-ambig-a"
+        task_b = "task-ambig-b"
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_a,
+            outcome="Task A",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        # Create second live task directory manually to simulate old buggy version
+        dir_b = task_dir(self.repo, task_b)
+        dir_b.mkdir(parents=True, exist_ok=True)
+        plan_b = dict(read_json(task_dir(self.repo, task_a) / "plan.json"))
+        plan_b["task_id"] = task_b
+        plan_b["status"] = "IMPLEMENTING"
+        save_plan(dir_b / "plan.json", plan_b)
+
+        # Both task_a and task_b are now live
+        with self.assertRaises(ValidationError) as cm:
+            assert_single_live_task(self.repo)
+        self.assertIn("AMBIGUOUS_LIVE_TASKS", str(cm.exception))
+
+        with self.assertRaises(ValidationError) as cm:
+            reconcile_delivery(self.repo)
+        self.assertIn("AMBIGUOUS_LIVE_TASKS", str(cm.exception))
+
+        # Cancel one
+        cancel(argparse.Namespace(repo=str(self.repo), task_id=task_a))
+        # Now only task_b is live
+        live = assert_single_live_task(self.repo, allowed_task_id=task_b)
+        self.assertEqual(1, len(live))
+        self.assertEqual(task_b, live[0][0])
+
     def test_ROUTER_001_canonical_review_package_path(self) -> None:
         """ROUTER-001: Review package exists at canonical path; router proceeds without repeated BUILD_REVIEW_PACKAGE."""
         task_id = "task-router-001"
@@ -3530,6 +3691,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         task_id = "task-router-002"
         plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
         current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
         policy["gates"] = ["preflight"]
         policy["reviewers"] = ["code_review"]
         atomic_write_json(Path(current["policy"]), policy)
@@ -3557,19 +3719,129 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         # 2. Simulate dispatch receipt created by pre-tool safety
         disp_dir = tdir / "reviewer-dispatches"
         disp_dir.mkdir(parents=True, exist_ok=True)
-        write_file(disp_dir / "code_review.json", json.dumps({"dispatched": True}))
+        write_file(disp_dir / "code_review.json", json.dumps({"dispatched": True, "run_id": run_id}))
 
-        # 3. After dispatches: INGEST_REVIEW_RESULT as HARNESS_COMMAND
+        # 3. After dispatches, but before completion: WAIT_FOR_REVIEWERS as HOST_ACTION
+        act_wait = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("WAIT_FOR_REVIEWERS", act_wait["code"])
+        self.assertEqual("HOST_ACTION", act_wait["kind"])
+        self.assertEqual("", act_wait["command"])
+
+        # 4. After completion in active run_id staged directory: INGEST_REVIEW_RESULT
+        staged_dir = tdir / "staged-reviews" / str(run_id)
+        staged_dir.mkdir(parents=True, exist_ok=True)
+        write_file(staged_dir / "code_review.json", json.dumps({"reviewer": "code_review", "verdict": "PASS"}))
+
         act_ingest = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("INGEST_REVIEW_RESULT", act_ingest["code"])
         self.assertEqual("HARNESS_COMMAND", act_ingest["kind"])
         self.assertIn("review ingest", act_ingest["command"])
+
+    def test_REVIEW_STATE_multi_reviewer_and_staged_isolation(self) -> None:
+        """REVIEW-STATE-001 through 006: Multi-reviewer wait, active run isolation, and idempotency."""
+        task_id = "task-review-state"
+        plan, tdir, policy, manifest = self._setup_verifying_task_clean(task_id)
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = ["code_review", "bug_review"]
+        atomic_write_json(Path(current["policy"]), policy)
+
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={"status": "PASS"},
+        )
+        write_file(active_review_package_path(self.repo, current), "# Review Package\n")
+
+        # Prior-run staged result in a different run directory must be ignored (REVIEW-STATE-005)
+        old_staged = tdir / "staged-reviews" / "old-run-id"
+        old_staged.mkdir(parents=True, exist_ok=True)
+        write_file(old_staged / "code_review.json", json.dumps({"reviewer": "code_review", "verdict": "PASS"}))
+        write_file(old_staged / "bug_review.json", json.dumps({"reviewer": "bug_review", "verdict": "PASS"}))
+
+        # None dispatched yet
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DISPATCH_REVIEWERS", act["code"])
+
+        # Dispatch one only
+        disp_dir = tdir / "reviewer-dispatches"
+        disp_dir.mkdir(parents=True, exist_ok=True)
+        write_file(disp_dir / "code_review.json", json.dumps({"run_id": run_id}))
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DISPATCH_REVIEWERS", act["code"])
+
+        # Dispatch second one (REVIEW-STATE-001: dispatch receipts only -> WAIT_FOR_REVIEWERS)
+        write_file(disp_dir / "bug_review.json", json.dumps({"run_id": run_id}))
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("WAIT_FOR_REVIEWERS", act["code"])
+
+        # Complete only one of two (REVIEW-STATE-002: one completed -> WAIT_FOR_REVIEWERS)
+        active_staged = tdir / "staged-reviews" / str(run_id)
+        active_staged.mkdir(parents=True, exist_ok=True)
+        write_file(active_staged / "code_review.json", json.dumps({"reviewer": "code_review", "verdict": "PASS"}))
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("WAIT_FOR_REVIEWERS", act["code"])
+
+        # Complete second one (REVIEW-STATE-003: all completed -> INGEST_REVIEW_RESULT)
+        write_file(active_staged / "bug_review.json", json.dumps({"reviewer": "bug_review", "verdict": "PASS"}))
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("INGEST_REVIEW_RESULT", act["code"])
+
+        # Duplicate completion overwrite is idempotent (REVIEW-STATE-006)
+        write_file(active_staged / "bug_review.json", json.dumps({"reviewer": "bug_review", "verdict": "PASS", "duplicate": True}))
+        act_dup = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("INGEST_REVIEW_RESULT", act_dup["code"])
 
     def test_ROUTER_004_and_005_configured_flavor_assemble_task(self) -> None:
         """ROUTER-004 & ROUTER-005: Assemble task derives from configured flavor/variant, not hardcoded :app:assembleDebug."""
         from _variants import resolve_assemble_task
         task_flav = resolve_assemble_task(self.repo, flavor="demo")
         self.assertEqual(":app:assembleDemoDebug", task_flav)
+
+    def test_ASSEMBLE_001_to_006_fail_closed_resolver(self) -> None:
+        """ASSEMBLE-001 through 006: Derived variants, library, KMP, and fail-closed resolution."""
+        from _variants import resolve_assemble_task
+
+        # ASSEMBLE-001: :app Debug
+        self.assertEqual(":app:assembleDebug", resolve_assemble_task(self.repo))
+
+        # ASSEMBLE-002: :mobile demoDebug
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_repo = Path(tmp_dir)
+            write_file(tmp_repo / ".agents" / "scripts" / "_product.py", 'MODULE = ":mobile"\nACTIVE_FLAVOR = "demo"\n')
+            self.assertEqual(":mobile:assembleDemoDebug", resolve_assemble_task(tmp_repo, flavor="demo"))
+
+        # ASSEMBLE-003: custom build type
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_repo = Path(tmp_dir)
+            write_file(tmp_repo / ".agents" / "scripts" / "_product.py", 'MODULE = ":app"\nACTIVE_VARIANT = "Staging"\n')
+            self.assertEqual(":app:assembleStaging", resolve_assemble_task(tmp_repo))
+
+        # ASSEMBLE-004: library project
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_repo = Path(tmp_dir)
+            write_file(tmp_repo / ".agents" / "scripts" / "_product.py", 'PROJECT_KIND = "library"\nMODULE = ":mylib"\n')
+            self.assertEqual(":mylib:assemble", resolve_assemble_task(tmp_repo))
+
+        # ASSEMBLE-005: KMP Android target
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_repo = Path(tmp_dir)
+            write_file(tmp_repo / ".agents" / "scripts" / "_product.py", 'MODULE = ":composeApp"\n')
+            self.assertEqual(":composeApp:assembleDebug", resolve_assemble_task(tmp_repo))
+
+        # ASSEMBLE-006: resolver exception -> fail closed, never :app fallback
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_repo = Path(tmp_dir)
+            with self.assertRaises(ValidationError) as cm:
+                resolve_assemble_task(tmp_repo)
+            self.assertIn("ASSEMBLE_TASK_RESOLUTION_FAILED", str(cm.exception))
 
     def test_ROUTER_008_expected_statuses_match_actual_outputs(self) -> None:
         """ROUTER-008: Expected statuses in next actions declare truthful transitions."""
@@ -3587,6 +3859,31 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         act_res = resolve_next_action(self.repo, "task-router-008", plan)
         self.assertEqual(["IMPLEMENTING"], act_res["expected"]["success_statuses"])
 
+        # FINAL_VERIFY declared expected status must be APPROVED
+        plan["status"] = "VERIFYING"
+        current = read_json(tdir / "current-run.json")
+        policy = read_json(Path(current["policy"]))
+        policy["gates"] = []
+        policy["reviewers"] = []
+        policy["assemble_required"] = False
+        policy["device_required"] = False
+        policy["sensitive"] = False
+        atomic_write_json(Path(current["policy"]), policy)
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=current.get("delivery_snapshot_sha256") or "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            run_id=current["run_id"],
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set="4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            status="PASS",
+            evidence={"status": "PASS"},
+        )
+        act_ver = resolve_next_action(self.repo, "task-router-008", plan)
+        self.assertEqual("FINAL_VERIFY", act_ver["code"])
+        self.assertEqual(["APPROVED"], act_ver["expected"]["success_statuses"])
+
     def test_ROUTER_009_commands_json_matches_actual_parser(self) -> None:
         """ROUTER-009: commands --json outputs machine-readable catalog matching actual parser."""
         from _public_commands import get_public_commands
@@ -3596,6 +3893,95 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         self.assertTrue(any(c["command"] == "task approve" for c in task_cmds))
         self.assertTrue(any(c["command"] == "task begin" for c in task_cmds))
         self.assertTrue(any(c["command"] == "task reconcile-delivery" for c in task_cmds))
+
+        # Verify context subactions are accurately split with correct read_only values
+        ctx_cmds = {c["command"]: c["read_only"] for c in cmds if c["command"].startswith("context ")}
+        self.assertTrue(ctx_cmds["context preview"])
+        self.assertTrue(ctx_cmds["context status"])
+        self.assertFalse(ctx_cmds["context note"])
+        self.assertFalse(ctx_cmds["context instruct"])
+        self.assertFalse(ctx_cmds["context generate"])
+        self.assertFalse(ctx_cmds["context refresh"])
+
+class ContractConsistencyTests(unittest.TestCase):
+    """CONTRACT-001 through CONTRACT-006: Consistency of documentation, adapters, and contracts."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.managed_files = [
+            KIT / "GEMINI.md",
+            KIT / "CLAUDE.md",
+            KIT / "CODEX.md",
+            KIT / "QWEN.md",
+            KIT / "agents" / "rules" / "harness-rules.md",
+            KIT / "templates" / "gemini-runtime" / "android-harness-global.md.template",
+            KIT / "agents" / "skills" / "android-harness" / "SKILL.md",
+            KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
+            KIT / "agents" / "workflows" / "deliver.md",
+        ] + [p for p in (KIT / "agents" / "tool-adapters").glob("*") if p.is_file()]
+
+    def test_CONTRACT_001_no_normal_approve_then_begin(self) -> None:
+        """CONTRACT-001: No managed file describes normal happy path as approve -> begin."""
+        for f in self.managed_files:
+            txt = f.read_text(encoding="utf-8")
+            self.assertNotIn("approve -> begin", txt, f"CONTRACT-001 violation in {f}")
+            self.assertNotIn("approve → begin", txt, f"CONTRACT-001 violation in {f}")
+            lines = txt.splitlines()
+            for idx, line in enumerate(lines):
+                if "workflow.py begin" in line:
+                    ctx = " ".join(lines[max(0, idx - 2):min(len(lines), idx + 3)]).lower()
+                    self.assertTrue(
+                        any(k in ctx for k in ["compat", "legacy", "idempotent"]),
+                        f"Non-compatibility workflow.py begin in {f}: {line}",
+                    )
+
+    def test_CONTRACT_002_no_hardcoded_five_reviewers_when_adaptive(self) -> None:
+        """CONTRACT-002: No managed file says always five reviewers when runtime policy is adaptive."""
+        for f in self.managed_files:
+            txt = f.read_text(encoding="utf-8")
+            self.assertNotIn("always five reviewers", txt.lower(), f"CONTRACT-002 violation in {f}")
+            self.assertNotIn("always dispatch five reviewers", txt.lower(), f"CONTRACT-002 violation in {f}")
+
+    def test_CONTRACT_003_material_drift_uses_revise_not_draft(self) -> None:
+        """CONTRACT-003: No managed file instructs draft on material drift; must use revise."""
+        for f in self.managed_files:
+            txt = f.read_text(encoding="utf-8")
+            if "material drift" in txt.lower():
+                for block in re.split(r"\n\s*\n", txt):
+                    if "material drift" in block.lower() and "workflow.py draft" in block:
+                        self.assertTrue(
+                            any(neg in block.lower() for neg in ["never", "prohibited", "forbidden", "do not"]),
+                            f"CONTRACT-003: material drift recommends draft in {f}",
+                        )
+
+    def test_CONTRACT_004_no_direct_edits_to_protected_context_files(self) -> None:
+        """CONTRACT-004: No managed file instructs direct edits to protected context files."""
+        for f in self.managed_files:
+            txt = f.read_text(encoding="utf-8")
+            for protected in ["project-notes.md", "developer-instructions.json", "architecture-policy.json"]:
+                pattern = rf"(?:edit|modify|update)\s+(?:[^\n]*\b)?{re.escape(protected)}"
+                self.assertIsNone(
+                    re.search(pattern, txt, re.I),
+                    f"CONTRACT-004: Direct edit instruction of {protected} in {f}",
+                )
+
+    def test_CONTRACT_005_public_command_catalog_consistency(self) -> None:
+        """CONTRACT-005: Public commands catalog matches parser commands and mutation/read-only semantics."""
+        from _public_commands import get_public_commands
+        cmds = get_public_commands()
+        self.assertGreaterEqual(len(cmds), 30)
+        for c in cmds:
+            self.assertIn("command", c)
+            self.assertIn("read_only", c)
+            self.assertIn("valid_states", c)
+            self.assertIn("model_facing", c)
+            self.assertIsInstance(c["read_only"], bool)
+
+    def test_CONTRACT_006_no_fixed_assemble_debug_in_public_docs(self) -> None:
+        """CONTRACT-006: No public model-facing assemble documentation claims fixed :app:assembleDebug."""
+        for f in self.managed_files:
+            txt = f.read_text(encoding="utf-8")
+            self.assertNotIn(":app:assembleDebug", txt, f"CONTRACT-006 violation in {f}")
 
 
 if __name__ == "__main__":

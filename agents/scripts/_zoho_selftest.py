@@ -141,6 +141,172 @@ class ZohoTests(unittest.TestCase):
             else:
                 self.assertNotIn("operation_id", required, f"{tool['name']} should not require operation_id")
 
+class ZohoPolicyTests(unittest.TestCase):
+    """ZOHO-001 through ZOHO-009: Deterministic Zoho integration policy tests."""
+
+    def setUp(self) -> None:
+        sys.path.insert(0, str(HERE))
+        from integrations.zoho_sprints.policy import ZohoPolicyResolver
+        from integrations.zoho_sprints.integration import ZohoSprintsIntegration
+        from integrations.base import validate_external_write
+        self.resolver = ZohoPolicyResolver
+        self.integ = ZohoSprintsIntegration()
+        self.validate_write = validate_external_write
+
+    def test_ZOHO_001_and_002_bug_delivery_report_in_comment_description_preserved(self) -> None:
+        """ZOHO-001 & ZOHO-002: Bug delivery report goes to Comment; Bug description edit rejected."""
+        res = self.resolver.resolve(
+            item_type="Bug",
+            task_state="READY_FOR_DELIVERY",
+            delivery_state="GATES_PASSED",
+            approved_external_write_scope=["zoho_sprints"],
+        )
+        self.assertTrue(res["allowed"])
+        self.assertEqual("ADD_COMMENT", res["action"])
+        self.assertEqual("Ready To ReTest", res["status"])
+        self.assertEqual("BUG_COMMENT", res["template"])
+
+        # Attempt to edit Bug description via tool
+        plan = {
+            "status": "READY_FOR_DELIVERY",
+            "execution_nonce": "nonce-bug",
+            "approval": {"single_use_nonce": "nonce-bug"},
+            "external_writes": ["zoho_sprints"],
+        }
+        allowed, reason = self.validate_write(
+            self.integ,
+            "zoho_update_task_description",
+            {"item_type": "Bug", "description": "mod", "operation_id": "op-bug-desc"},
+            plan,
+        )
+        self.assertFalse(allowed)
+        self.assertIn("Editing Bug description is strictly prohibited", reason)
+
+    def test_ZOHO_003_and_004_task_story_report_in_description_commit_in_comment(self) -> None:
+        """ZOHO-003 & ZOHO-004: Task/Story report goes to Description; short commit comment."""
+        for itype in ("Task", "Story"):
+            with self.subTest(item_type=itype):
+                res = self.resolver.resolve(
+                    item_type=itype,
+                    task_state="READY_FOR_DELIVERY",
+                    delivery_state="GATES_PASSED",
+                    approved_external_write_scope=["zoho_sprints"],
+                )
+                self.assertTrue(res["allowed"])
+                self.assertEqual("UPDATE_DESCRIPTION", res["action"])
+                self.assertEqual("ADD_COMMENT", res["secondary_action"])
+                self.assertEqual("Ready To ReTest", res["status"])
+
+    def test_ZOHO_005_plan_approval_in_progress_only_when_external_write_approved(self) -> None:
+        """ZOHO-005: Plan approval transitions to In progress only when external write is approved."""
+        res_ok = self.resolver.resolve(
+            item_type="Task",
+            task_state="IMPLEMENTING",
+            approved_external_write_scope=["zoho_sprints"],
+        )
+        self.assertTrue(res_ok["allowed"])
+        self.assertEqual("UPDATE_STATUS", res_ok["action"])
+        self.assertEqual("In progress", res_ok["status"])
+
+        res_denied = self.resolver.resolve(
+            item_type="Task",
+            task_state="IMPLEMENTING",
+            approved_external_write_scope=[],
+        )
+        self.assertFalse(res_denied["allowed"])
+        self.assertIn("EXTERNAL_WRITE_SCOPE_REQUIRED", res_denied["denied_reason"])
+
+    def test_ZOHO_006_delivery_ready_to_retest_never_done_or_solved(self) -> None:
+        """ZOHO-006: Delivery transitions to Ready To ReTest, never Done or Solved."""
+        res = self.resolver.resolve(
+            item_type="Task",
+            task_state="READY_FOR_DELIVERY",
+            delivery_state="GATES_PASSED",
+            approved_external_write_scope=["zoho_sprints"],
+        )
+        self.assertEqual("Ready To ReTest", res["status"])
+
+        plan = {
+            "status": "READY_FOR_DELIVERY",
+            "execution_nonce": "nonce-done",
+            "approval": {"single_use_nonce": "nonce-done"},
+            "external_writes": ["zoho_sprints"],
+        }
+        for bad_status in ("Done", "Solved", "Closed", "Completed"):
+            with self.subTest(bad_status=bad_status):
+                allowed, reason = self.validate_write(
+                    self.integ,
+                    "zoho_update_task_status",
+                    {"status": bad_status, "operation_id": f"op-{bad_status}"},
+                    plan,
+                )
+                self.assertFalse(allowed)
+                self.assertIn("Terminal tracker states", reason)
+
+    def test_ZOHO_007_missing_external_scope_fails_closed(self) -> None:
+        """ZOHO-007: Missing external write scope fails closed with EXTERNAL_WRITE_SCOPE_REQUIRED."""
+        plan_no_scope = {
+            "status": "IMPLEMENTING",
+            "execution_nonce": "n1",
+            "approval": {"single_use_nonce": "n1"},
+            "external_writes": [],
+        }
+        allowed, reason = self.validate_write(
+            self.integ,
+            "zoho_update_task_status",
+            {"status": "In progress", "operation_id": "op-noscope"},
+            plan_no_scope,
+        )
+        self.assertFalse(allowed)
+        self.assertIn("EXTERNAL_WRITE_SCOPE_REQUIRED", reason)
+
+    def test_ZOHO_008_denied_external_write_never_generates_bypass_script(self) -> None:
+        """ZOHO-008: Denied external write provides remediation advice, not bypass script."""
+        plan = {
+            "status": "IMPLEMENTING",
+            "execution_nonce": "n1",
+            "approval": {"single_use_nonce": "n1"},
+            "external_writes": [],
+        }
+        allowed, reason = self.validate_write(
+            self.integ,
+            "zoho_update_task_status",
+            {"status": "In progress", "operation_id": "op-remediate"},
+            plan,
+        )
+        self.assertFalse(allowed)
+        self.assertIn("workflow.py revise --external-write zoho_sprints", reason)
+
+    def test_ZOHO_009_language_template_obeys_configured_language(self) -> None:
+        """ZOHO-009: Language template formatting obeys configured ZOHO_LANGUAGE."""
+        tmpl_ar = self.resolver.render_template(
+            "BUG_COMMENT",
+            "en_titles_ar_comments",
+            "abc1234",
+            "سبب الخلل الوظيفي",
+            "إصلاح منطق التحقق",
+            ["شاشة تسجيل الدخول"],
+            ["التحقق من صحة الإدخال"],
+        )
+        self.assertIn("Commit: abc1234", tmpl_ar)
+        self.assertIn("سبب المشكلة:", tmpl_ar)
+        self.assertIn("الحل المطبق:", tmpl_ar)
+        self.assertIn("نطاق التأثير (Impact Area):", tmpl_ar)
+
+        tmpl_en = self.resolver.render_template(
+            "BUG_COMMENT",
+            "all_en",
+            "abc1234",
+            "Functional defect explanation",
+            "Validation fix",
+            ["Login screen"],
+            ["Input validation step"],
+        )
+        self.assertIn("Commit: abc1234", tmpl_en)
+        self.assertIn("Root Cause:", tmpl_en)
+        self.assertIn("Solution:", tmpl_en)
+        self.assertIn("Impact Area (Blast Radius):", tmpl_en)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

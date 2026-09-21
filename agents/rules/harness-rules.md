@@ -107,6 +107,6 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 | Review package | `python .agents/scripts/review_package.py` |
 | Record review | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` |
 | Resume | `python .agents/harness.py task resume --task-id <id>` |
-| Assemble | `python .agents/harness.py assemble <configured-task>` |
+| Assemble | `python .agents/harness.py assemble` |
 | Device | `python .agents/harness.py device install-start` |
 | Verify | `python .agents/harness.py verify --task-id <id>` |

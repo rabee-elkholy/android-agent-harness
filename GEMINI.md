@@ -4,7 +4,7 @@
 Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 
 - Python: `python`
-- Assemble: `python agents/scripts/run_gradle_task.py :app:assembleDebug`
+- Assemble: `python .agents/harness.py assemble`
 - Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.
 - Device: Physical device or emulator. Automatically resolved by `run_device.py`. Prefer a physical device when both are connected. Never hardcode a serial.
 - Discovery: Graph-backed. Exact code target -> `python .agents/harness.py task-context --file <path> --json` or `--symbol <name>`. Feature/unknown target or cross-module refactor -> `python .agents/harness.py graph --feature <name> --json` (or `--find <symbol>`) first, then Task Context on resolved target. Search is never the initial code discovery anchor; after discovery, search only within discovered scope; expand scope via Graph, not grep cascades.
@@ -24,7 +24,7 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - 6-Tier Dynamic Risk Model: Review policy (`review_policy.py`) evaluates changes into 6 risk tiers (`T0_TRIVIAL` through `T5_CRITICAL`) and is the sole runtime authority for risk tier, required gates, reviewer roster, and device requirements. Execute exactly the policy-resolved roster; when reviewers are omitted by policy, do not dispatch subagents.
 - Next-Action Command Router: After every lifecycle transition or verification step, query `python .agents/harness.py task status --task-id <id> --next` (or `workflow.py status`) for the authoritative next action instead of memorizing long sequential stages.
 - Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is still running as a background task, wait for completion; never output walkthrough or invoke `ask_question` prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when it is not, and NEVER ask the developer to verify a build that was not installed. When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE invoking `ask_question` for sign-off. Never invoke `ask_question` with just 'Did it pass' without detailing feature navigation.
-- Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `python harness_cli.py context note "<note>"` (or edit `.agents/project-context/project-notes.md`).
+- Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `python harness_cli.py context note "<note>"`.
 
 ## Canonical Command Catalog & 4-Phase Lifecycle (PLAN → BUILD → VERIFY → SHIP)
 
@@ -53,4 +53,4 @@ Follow the simplified 4-phase lifecycle driven by `python .agents/harness.py tas
 | **SHIP** | 15. Reconcile / Deliver | `python .agents/scripts/workflow.py reconcile-delivery --repo . --task-id <id>` | Finalize to DELIVERED after developer git commit |
 | - | Context Note | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
 
-Antigravity loads `agents/hooks.json` in this repo. Gemini CLI does not; still honor the five-leaf review before assemble. No `code-review-guard-agent`. No `LGTM`.
+Antigravity loads `agents/hooks.json` in this repo. Gemini CLI does not; still execute the policy-resolved reviewer roster before assemble. No `code-review-guard-agent`. No `LGTM`.

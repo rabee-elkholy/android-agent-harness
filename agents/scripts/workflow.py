@@ -258,6 +258,16 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
     return sorted(expected & current_changes)
 
 
+LIVE_TASK_STATUSES = (
+    "AWAITING_DEVELOPER_APPROVAL",
+    "APPROVED",
+    "IMPLEMENTING",
+    "VERIFYING",
+    "BLOCKED",
+    "READY_FOR_DELIVERY",
+)
+
+
 def _find_live_tasks(repo: Path) -> list[tuple[str, str, dict, Path]]:
     state = state_root(repo)
     tasks_dir = state / "tasks"
@@ -271,10 +281,34 @@ def _find_live_tasks(repo: Path) -> list[tuple[str, str, dict, Path]]:
                 try:
                     p_data = read_json(p_file)
                     st = str(p_data.get("status") or "")
-                    if st in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"):
+                    if st in LIVE_TASK_STATUSES:
                         live.append((task_sub.name, st, p_data, p_file))
                 except Exception:
                     pass
+    return live
+
+
+def assert_single_live_task(repo: Path, allowed_task_id: str | None = None) -> list[tuple[str, str, dict, Path]]:
+    """Enforce the one-live-task-per-worktree invariant.
+
+    Fails closed with AMBIGUOUS_LIVE_TASKS if multiple live tasks are found.
+    Fails closed with ACTIVE_TASK_CONFLICT if a single live task exists that does not match allowed_task_id.
+    """
+    live = _find_live_tasks(repo)
+    if len(live) > 1:
+        tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
+        raise ValidationError(
+            f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
+            "Fail closed: at most one live task is allowed per worktree. "
+            "Remediation: inspect tasks via 'task status' and cancel unwanted live tasks via 'workflow.py cancel --task-id <id>'."
+        )
+    if live and allowed_task_id and live[0][0] != allowed_task_id:
+        prev_id, prev_status = live[0][0], live[0][1]
+        raise ValidationError(
+            f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
+            f"Choices: 1. continue current task '{prev_id}'; 2. cancel it via 'workflow.py cancel --task-id {prev_id}'; "
+            "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
+        )
     return live
 
 
@@ -287,41 +321,35 @@ def draft(args: argparse.Namespace) -> dict:
 
     # 1. Enforce at most one live task per worktree
     live_tasks = _find_live_tasks(repo)
+    if len(live_tasks) > 1:
+        tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live_tasks)
+        raise ValidationError(
+            f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
+            "Fail closed: at most one live task is allowed per worktree. "
+            "Remediation: inspect tasks via 'task status' and cancel unwanted live tasks via 'workflow.py cancel --task-id <id>'."
+        )
     for prev_id, prev_status, prev_plan, _ in live_tasks:
         if prev_id != task_id:
             if prev_status == "READY_FOR_DELIVERY":
                 dirty = _find_uncommitted_task_files(repo, prev_id, prev_plan)
-                if dirty and not getattr(args, "force", False):
+                if dirty:
                     raise ValidationError(
                         f"PREVIOUS_DELIVERY_NOT_FINALIZED: previous task '{prev_id}' is READY_FOR_DELIVERY with uncommitted changes: "
                         f"{', '.join(sorted(dirty))}. Finalize delivery via 'workflow.py deliver' or cancel it via 'workflow.py cancel' before starting a new task."
                     )
-                if not dirty:
-                    finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=True)
-                elif getattr(args, "force", False):
-                    finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=False)
+                finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=True)
             elif prev_status in ("APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
-                if not getattr(args, "force", False):
-                    raise ValidationError(
-                        f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
-                        f"Choices: 1. continue current task; 2. cancel current task via 'workflow.py cancel --task-id {prev_id}'; "
-                        "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
-                    )
-                active_path = state_root(repo) / "active-task.json"
-                if active_path.is_file():
-                    try:
-                        if read_json(active_path).get("task_id") == prev_id:
-                            active_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                raise ValidationError(
+                    f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
+                    f"Choices: 1. continue current task; 2. cancel current task via 'workflow.py cancel --task-id {prev_id}'; "
+                    "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
+                )
             elif prev_status == "AWAITING_DEVELOPER_APPROVAL":
-                active_path = state_root(repo) / "active-task.json"
-                if active_path.is_file():
-                    try:
-                        if read_json(active_path).get("task_id") == prev_id:
-                            active_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                raise ValidationError(
+                    f"ACTIVE_TASK_CONFLICT: pending task '{prev_id}' is currently AWAITING_DEVELOPER_APPROVAL. "
+                    f"Choices: 1. approve or revise current task '{prev_id}'; 2. cancel it via 'workflow.py cancel --task-id {prev_id}' before drafting an unrelated task; "
+                    "3. use a separate Git worktree for parallel work."
+                )
 
     # 2. Check if task_id already exists
     existing_plan_path = _plan_path(repo, task_id)
@@ -329,11 +357,10 @@ def draft(args: argparse.Namespace) -> dict:
         existing_plan = read_json(existing_plan_path)
         existing_status = str(existing_plan.get("status") or "")
         if existing_status in ("APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"):
-            if not getattr(args, "force", False):
-                raise ValidationError(
-                    f"TASK_PLAN_ALREADY_EXISTS: task '{task_id}' is currently {existing_status}. "
-                    "Plain draft cannot overwrite an active task. Use 'workflow.py revise' to revise the plan, or cancel it first via 'workflow.py cancel'."
-                )
+            raise ValidationError(
+                f"TASK_PLAN_ALREADY_EXISTS: task '{task_id}' is currently {existing_status}. "
+                "Plain draft cannot overwrite an active task. Use 'workflow.py revise' to revise the plan, or cancel it first via 'workflow.py cancel'."
+            )
         elif existing_status == "AWAITING_DEVELOPER_APPROVAL":
             req_outcome = str(args.outcome or "").strip()
             exist_outcome = str(existing_plan.get("requested_outcome") or "").strip()
@@ -974,6 +1001,7 @@ def _build_and_save_plan(
 def revise(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
+    assert_single_live_task(repo, allowed_task_id=task_id)
     plan_p = _plan_path(repo, task_id)
     if not plan_p.is_file():
         raise ValidationError(f"cannot revise task '{task_id}': plan.json does not exist at {plan_p}")
@@ -1035,6 +1063,7 @@ def revise(args: argparse.Namespace) -> dict:
 def recover_active(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     tid = validate_id(args.task_id, "task id")
+    assert_single_live_task(repo, allowed_task_id=tid)
     plan_p = _plan_path(repo, tid)
     if not plan_p.is_file():
         raise ValidationError(f"cannot recover active task '{tid}': plan.json does not exist at {plan_p}")
@@ -1054,6 +1083,7 @@ def recover_active(args: argparse.Namespace) -> dict:
 
 def record_approval(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
+    assert_single_live_task(repo, allowed_task_id=args.task_id)
     plan_file = _plan_path(repo, args.task_id)
     plan = _load_plan(repo, args.task_id)
     tier = args.enforcement_tier
@@ -1071,6 +1101,7 @@ def record_approval(args: argparse.Namespace) -> dict:
 
 def begin_task(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
+    assert_single_live_task(repo, allowed_task_id=args.task_id)
     loaded_plan = _load_plan(repo, args.task_id)
     directory = task_dir(repo, args.task_id)
     with StateLock(directory / ".lock"):
@@ -1198,6 +1229,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     else:
         args = args_or_repo
         repo = Path(args.repo).resolve()
+    assert_single_live_task(repo, allowed_task_id=args.task_id)
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("verification preparation requires an IMPLEMENTING plan")
@@ -1474,6 +1506,13 @@ def cancel(args: argparse.Namespace) -> dict:
 
 def recover_stale(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
+    live = _find_live_tasks(repo)
+    if len(live) > 1:
+        tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
+        raise ValidationError(
+            f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
+            "Cannot recover stale state automatically. Specify --task-id explicitly or cancel unwanted tasks via 'workflow.py cancel'."
+        )
     active_path = state_root(repo) / "active-task.json"
     if not active_path.is_file():
         return {"status": "NOOP", "cleared_active_task": False, "message": "no active task to recover"}
@@ -1512,6 +1551,7 @@ def recover_stale(args: argparse.Namespace) -> dict:
 
 def resume(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
+    assert_single_live_task(repo, allowed_task_id=args.task_id)
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") not in ("VERIFYING", "BLOCKED"):
         raise ValidationError("only a verifying or blocked task can resume implementation")
@@ -1581,18 +1621,22 @@ def reconcile_delivery(repo: Path, task_id: str | None = None) -> tuple[dict | N
     """Reconcile READY_FOR_DELIVERY task against clean committed repository state."""
     tid = task_id
     if not tid:
-        active_p = state_root(repo) / "active-task.json"
-        if active_p.is_file():
-            try:
-                tid = str(read_json(active_p).get("task_id") or "").strip()
-            except Exception:
-                pass
-    if not tid:
         live = _find_live_tasks(repo)
-        for l_id, l_status, _, _ in live:
-            if l_status in ("READY_FOR_DELIVERY", "DELIVERED"):
-                tid = l_id
-                break
+        if len(live) > 1:
+            tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
+            raise ValidationError(
+                f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
+                "Cannot determine which task to reconcile automatically. Specify --task-id explicitly or cancel unwanted tasks via 'workflow.py cancel'."
+            )
+        elif len(live) == 1:
+            tid = live[0][0]
+        else:
+            active_p = state_root(repo) / "active-task.json"
+            if active_p.is_file():
+                try:
+                    tid = str(read_json(active_p).get("task_id") or "").strip()
+                except Exception:
+                    pass
     if not tid:
         return None, "NOOP"
     plan_p = _plan_path(repo, tid)
@@ -2335,45 +2379,84 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     pass
 
                 dispatches_dir = tdir / "reviewer-dispatches"
-                staged_dir = tdir / "staged-reviews"
+                staged_dir = tdir / "staged-reviews" / str(run_id)
                 dispatched_reviewers = set()
+                completed_reviewers = set()
                 if dispatches_dir.is_dir():
                     for f in dispatches_dir.glob("*.json"):
-                        dispatched_reviewers.add(f.stem)
+                        try:
+                            d_data = read_json(f)
+                            if not d_data.get("run_id") or str(d_data.get("run_id")) == run_id:
+                                dispatched_reviewers.add(f.stem)
+                        except Exception:
+                            dispatched_reviewers.add(f.stem)
+                    run_disp_dir = dispatches_dir / str(run_id)
+                    if run_disp_dir.is_dir():
+                        for f in run_disp_dir.glob("*.json"):
+                            dispatched_reviewers.add(f.stem)
+
                 if staged_dir.is_dir():
                     for f in staged_dir.glob("*.json"):
-                        dispatched_reviewers.add(f.stem)
+                        try:
+                            s_data = read_json(f)
+                            rev = str(s_data.get("reviewer") or f.stem)
+                            if rev:
+                                completed_reviewers.add(rev)
+                        except Exception:
+                            completed_reviewers.add(f.stem)
 
-                if set(required_reviewers).issubset(dispatched_reviewers):
+                req_set = set(required_reviewers)
+                if not req_set.issubset(dispatched_reviewers):
                     return {
-                        "code": "INGEST_REVIEW_RESULT",
-                        "kind": "HARNESS_COMMAND",
-                        "command": f"python .agents/harness.py review ingest --task {task_id}",
+                        "code": "DISPATCH_REVIEWERS",
+                        "kind": "HOST_ACTION",
+                        "command": "",
                         "blocking": True,
-                        "reason": f"Ingest completed review results for {', '.join(required_reviewers)}.",
-                        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewers": required_reviewers},
-                        "expected": {"success_statuses": ["PASS"]},
-                    }
-
-                return {
-                    "code": "DISPATCH_REVIEWERS",
-                    "kind": "HOST_ACTION",
-                    "command": "",
-                    "blocking": True,
-                    "reason": f"Dispatch independent reviewer subagents: {', '.join(required_reviewers)}.",
-                    "reviewers": required_reviewers,
-                    "package_path": str(pkg_path),
-                    "briefs": briefs,
-                    "review_execution_profile": exec_profile,
-                    "inputs": {
-                        "repo": ".",
-                        "task_id": task_id,
-                        "run_id": run_id,
+                        "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(req_set - dispatched_reviewers))}.",
                         "reviewers": required_reviewers,
                         "package_path": str(pkg_path),
                         "briefs": briefs,
                         "review_execution_profile": exec_profile,
-                    },
+                        "inputs": {
+                            "repo": ".",
+                            "task_id": task_id,
+                            "run_id": run_id,
+                            "reviewers": required_reviewers,
+                            "package_path": str(pkg_path),
+                            "briefs": briefs,
+                            "review_execution_profile": exec_profile,
+                        },
+                        "expected": {"success_statuses": ["PASS"]},
+                    }
+
+                if not req_set.issubset(completed_reviewers):
+                    pending = sorted(req_set - completed_reviewers)
+                    return {
+                        "code": "WAIT_FOR_REVIEWERS",
+                        "kind": "HOST_ACTION",
+                        "command": "",
+                        "blocking": True,
+                        "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(pending)}.",
+                        "reviewers": required_reviewers,
+                        "pending_reviewers": pending,
+                        "inputs": {
+                            "repo": ".",
+                            "task_id": task_id,
+                            "run_id": run_id,
+                            "dispatched_reviewers": sorted(dispatched_reviewers),
+                            "pending_reviewers": pending,
+                            "completed_reviewers": sorted(completed_reviewers),
+                        },
+                        "expected": {"success_statuses": ["PASS"]},
+                    }
+
+                return {
+                    "code": "INGEST_REVIEW_RESULT",
+                    "kind": "HARNESS_COMMAND",
+                    "command": f"python .agents/harness.py review ingest --task {task_id}",
+                    "blocking": True,
+                    "reason": f"Ingest completed review results for {', '.join(sorted(required_reviewers))}.",
+                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewers": required_reviewers},
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
@@ -2381,11 +2464,8 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
         assemble_required = ("assemble" in policy_gates) or bool(policy.get("assemble_required"))
         if assemble_required:
             if not has_pass_evidence("assemble"):
-                try:
-                    flavor = policy.get("flavor") or None
-                    assemble_task = resolve_assemble_task(repo, flavor=flavor)
-                except Exception:
-                    assemble_task = ":app:assembleDebug"
+                flavor = policy.get("flavor") or None
+                assemble_task = resolve_assemble_task(repo, flavor=flavor)
                 return {
                     "code": "ASSEMBLE",
                     "kind": "HARNESS_COMMAND",
@@ -2441,7 +2521,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
             "blocking": True,
             "reason": "Run read-only final verification check to confirm all evidence is in place.",
             "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-            "expected": {"success_exit_codes": [0], "success_statuses": ["PASS"]},
+            "expected": {"success_exit_codes": [0], "success_statuses": ["APPROVED"]},
         }
 
     if state == "READY_FOR_DELIVERY":
@@ -2540,6 +2620,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "RUN_UNIT_TESTS": "test",
         "BUILD_REVIEW_PACKAGE": "review-package",
         "DISPATCH_REVIEWERS": "review",
+        "WAIT_FOR_REVIEWERS": "review",
         "INGEST_REVIEW_RESULT": "review",
         "ASSEMBLE": "assemble",
         "DEVICE_INSTALL": "device",
@@ -2563,20 +2644,30 @@ def status(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = str(getattr(args, "task_id", "") or "").strip()
     if not task_id:
-        active_p = state_root(repo) / "active-task.json"
-        if active_p.is_file():
-            try:
-                active_data = read_json(active_p)
-                task_id = str(active_data.get("task_id") or "").strip()
-            except Exception:
-                pass
-        if not task_id:
-            try:
-                from mutation_guard import active_plan
-                plan_data = active_plan(repo)
-                task_id = str(plan_data.get("task_id") or "").strip()
-            except Exception:
-                pass
+        live = _find_live_tasks(repo)
+        if len(live) > 1:
+            tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
+            raise ValidationError(
+                f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
+                "Specify --task-id explicitly or cancel unwanted live tasks via 'workflow.py cancel --task-id <id>'."
+            )
+        elif len(live) == 1:
+            task_id = live[0][0]
+        else:
+            active_p = state_root(repo) / "active-task.json"
+            if active_p.is_file():
+                try:
+                    active_data = read_json(active_p)
+                    task_id = str(active_data.get("task_id") or "").strip()
+                except Exception:
+                    pass
+            if not task_id:
+                try:
+                    from mutation_guard import active_plan
+                    plan_data = active_plan(repo)
+                    task_id = str(plan_data.get("task_id") or "").strip()
+                except Exception:
+                    pass
     if not task_id:
         raise ValidationError("no active task found in repository state; specify --task-id <id>")
     plan = _load_plan(repo, task_id)

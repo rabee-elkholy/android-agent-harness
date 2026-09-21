@@ -27,7 +27,7 @@ Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 | Unit tests | `{{PY}} .agents/harness.py test` |
 | Review evidence | `{{PY}} .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` |
 | Resume | `{{PY}} .agents/harness.py task resume --task-id <id>` |
-| Assemble | `{{PY}} .agents/harness.py assemble {{ASSEMBLE}}` |
+| Assemble | `{{PY}} .agents/harness.py assemble` |
 | Device | `{{PY}} .agents/harness.py device install-start` |
 | Verify | `{{PY}} .agents/harness.py verify --task-id <id>` |
 

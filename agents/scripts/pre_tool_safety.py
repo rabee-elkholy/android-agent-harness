@@ -538,6 +538,117 @@ def _is_targeted_search(name: str, args: dict) -> bool:
     return False
 
 
+def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
+    roots: set[str] = set()
+    files: set[str] = set()
+
+    for ef in plan.get("expected_files") or []:
+        norm = str(ef).replace("\\", "/").strip().lstrip("/")
+        if not norm:
+            continue
+        files.add(norm.lower())
+        p = Path(norm)
+        parent = p.parent.as_posix().lower()
+        if parent and parent != ".":
+            roots.add(parent)
+
+    prov = plan.get("discovery_provenance") or {}
+    for r in prov.get("allowed_search_roots") or []:
+        norm_r = str(r).replace("\\", "/").strip().lstrip("/").lower().rstrip("/")
+        if norm_r:
+            roots.add(norm_r)
+    for p in prov.get("resolved_paths") or []:
+        norm_p = str(p).replace("\\", "/").strip().lstrip("/").lower()
+        if norm_p:
+            files.add(norm_p)
+            parent = Path(norm_p).parent.as_posix().lower()
+            if parent and parent != ".":
+                roots.add(parent)
+
+    try:
+        from discovery_receipt import load_latest_discovery_receipt, load_discovery_receipt
+        rec_id = str(prov.get("discovery_id") or "")
+        receipts_to_check = []
+        if rec_id:
+            r = load_discovery_receipt(repo, rec_id)
+            if r:
+                receipts_to_check.append(r)
+        latest = load_latest_discovery_receipt(repo)
+        if latest and latest not in receipts_to_check:
+            receipts_to_check.append(latest)
+
+        for rec in receipts_to_check:
+            for r in rec.get("allowed_search_roots") or []:
+                norm_r = str(r).replace("\\", "/").strip().lstrip("/").lower().rstrip("/")
+                if norm_r:
+                    roots.add(norm_r)
+            for p in rec.get("resolved_paths") or []:
+                norm_p = str(p).replace("\\", "/").strip().lstrip("/").lower()
+                if norm_p:
+                    files.add(norm_p)
+                    parent = Path(norm_p).parent.as_posix().lower()
+                    if parent and parent != ".":
+                        roots.add(parent)
+            for er in rec.get("expanded_roots") or []:
+                norm_er = str(er).replace("\\", "/").strip().lstrip("/").lower().rstrip("/")
+                if norm_er:
+                    roots.add(norm_er)
+    except Exception:
+        pass
+
+    arch = plan.get("architecture_contract") or {}
+    arch_scope = str(arch.get("target_scope") or "").replace("\\", "/").strip().lstrip("/")
+    if arch_scope:
+        files.add(arch_scope.lower())
+        parent = Path(arch_scope).parent.as_posix().lower()
+        if parent and parent != ".":
+            roots.add(parent)
+
+    return roots, files
+
+
+def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
+    target_str = str(target_path or "").replace("\\", "/").strip().rstrip("/")
+    if not target_str or target_str in {".", "./"}:
+        return False
+    try:
+        p = Path(target_str)
+        if p.is_absolute():
+            rel = p.resolve().relative_to(repo.resolve()).as_posix().lower()
+        else:
+            rel = target_str.lstrip("./").lower()
+    except Exception:
+        rel = target_str.lstrip("./").lower()
+
+    try:
+        from discovery_router import _is_exact_non_architectural_file
+        if _is_exact_non_architectural_file(target_str):
+            return True
+    except Exception:
+        pass
+
+    roots, files = _get_active_task_scope(repo, plan)
+    if not roots and not files:
+        try:
+            from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope
+            rec = load_latest_discovery_receipt(repo)
+            if rec and is_path_in_discovery_scope(repo, target_str, rec):
+                return True
+        except Exception:
+            pass
+        return False
+
+    if rel in files:
+        return True
+    for r in roots:
+        if not r:
+            continue
+        if rel == r or rel.startswith(r + "/"):
+            return True
+
+    return False
+
+
 def _handle_list_dir(name: str, args: dict) -> None:
     plan: dict = {}
     try:
@@ -546,11 +657,33 @@ def _handle_list_dir(name: str, args: dict) -> None:
     except Exception:
         status = ""
 
-    if status in ("IMPLEMENTING", "READY_FOR_DELIVERY", "VERIFYING"):
+    dir_target = str(args.get("DirectoryPath") or args.get("directoryPath") or args.get("path") or ".")
+
+    if status in ("IMPLEMENTING", "READY_FOR_DELIVERY"):
+        if _is_path_in_active_scope(REPO, dir_target, plan):
+            emit("allow", "Directory listing is within active task scope.", tool=name, reason_code="LIST_DIR_ALLOWED")
+            return
+        try:
+            from discovery_router import _is_exact_non_architectural_file
+            if dir_target and _is_exact_non_architectural_file(dir_target):
+                emit("allow", "Exact non-architectural directory listing allowed under D0.", tool=name, reason_code="LIST_DIR_ALLOWED")
+                return
+        except Exception:
+            pass
+        emit(
+            "deny",
+            f"DISCOVERY_SCOPE_EXPANSION_REQUIRED: Directory listing '{dir_target}' is outside the active task scope. "
+            "Expand scope through Project Graph: 'python .agents/harness.py graph --feature <name> --json' "
+            "or 'python .agents/harness.py task-context --file <path> --json'.",
+            tool=name,
+            reason_code="DISCOVERY_SCOPE_EXPANSION_REQUIRED",
+        )
+        return
+
+    if status == "VERIFYING":
         emit("allow", "Directory listing is permitted for active task.", tool=name, reason_code="LIST_DIR_ALLOWED")
         return
 
-    dir_target = str(args.get("DirectoryPath") or args.get("directoryPath") or args.get("path") or ".")
     try:
         from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
         receipt = load_latest_discovery_receipt(REPO)
@@ -624,37 +757,29 @@ def _handle_search(name: str, args: dict) -> None:
         target = str(args.get("SearchDirectory") or args.get("searchDirectory") or "")
         query = str(args.get("Pattern") or args.get("pattern") or "")
 
-    # 1. If actively implementing, targeted searches within task scope are allowed
+    # 1. If actively implementing, search must stay inside discovered / approved task scope
     if status in ("IMPLEMENTING", "READY_FOR_DELIVERY"):
-        if _is_targeted_search(name, args):
+        if _is_path_in_active_scope(REPO, target, plan):
             emit("allow", "Search is targeted to active task implementation scope.", tool=name, reason_code="SEARCH_ALLOWED")
             return
-        consecutive_broad_searches = 0
-        try:
-            audit_file = _audit_path()
-            if audit_file.exists():
-                lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
-                records = [json.loads(line) for line in lines if line.strip()]
-                for rec in reversed(records[-10:]):
-                    t = rec.get("tool", "")
-                    if t in SEARCH_TOOLS:
-                        if "targeted" not in rec.get("reason", "").lower():
-                            consecutive_broad_searches += 1
-                    elif t in ("run_command", "view_file", "write_to_file", "replace_file_content"):
-                        break
-        except Exception:
-            consecutive_broad_searches = 0
 
-        if consecutive_broad_searches >= 2:
-            emit(
-                "deny",
-                "Unanchored search cascade detected (multiple consecutive repository-wide searches). "
-                "Run 'python .agents/harness.py graph --feature <name>' or '--find <symbol>' for architectural discovery, "
-                "or narrow SearchPath to a specific file or feature directory.",
-                tool=name,
-            )
-            return
-        emit("allow", "Search is permitted outside cascade limits.", tool=name, reason_code="SEARCH_ALLOWED")
+        try:
+            from discovery_router import _is_exact_non_architectural_file
+            if target and _is_exact_non_architectural_file(target):
+                emit("allow", "Exact non-architectural file search allowed under D0.", tool=name, reason_code="SEARCH_ALLOWED")
+                return
+        except Exception:
+            pass
+
+        clean_target = target.replace("\\", "/").strip()
+        emit(
+            "deny",
+            f"DISCOVERY_SCOPE_EXPANSION_REQUIRED: Search path '{clean_target or '.'}' is outside the active task implementation scope. "
+            "Expand scope through Project Graph: 'python .agents/harness.py graph --find <symbol> --json' "
+            "or 'python .agents/harness.py graph --feature <feature> --json' rather than unanchored search.",
+            tool=name,
+            reason_code="DISCOVERY_SCOPE_EXPANSION_REQUIRED",
+        )
         return
 
     # 2. In Discovery Phase: Check if a fresh discovery receipt exists

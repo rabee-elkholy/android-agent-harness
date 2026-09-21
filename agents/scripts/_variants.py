@@ -34,6 +34,13 @@ except ImportError:
     PROJECT_KIND = "application"
 
 
+try:
+    from _vnext_common import ValidationError
+except ImportError:
+    class ValidationError(Exception):
+        pass
+
+
 def _default_module() -> str:
     if _APP_MODULE:
         return str(_APP_MODULE)
@@ -87,15 +94,15 @@ def resolve_assemble_task(repo: Path | str | None = None, flavor: str | None = N
                 except Exception:
                     pass
 
-    kind = str(prod_dict.get("PROJECT_KIND") or PROJECT_KIND or "application").lower().strip()
-    active_fl = normalize_flavor(flavor if flavor is not None else prod_dict.get("ACTIVE_FLAVOR") or ACTIVE_FLAVOR)
-    assemble_tasks_map = prod_dict.get("ASSEMBLE_TASKS") if isinstance(prod_dict.get("ASSEMBLE_TASKS"), dict) else ASSEMBLE_TASKS
+    kind = str(prod_dict.get("PROJECT_KIND") or ("" if repo else PROJECT_KIND) or "application").lower().strip()
+    active_fl = normalize_flavor(flavor if flavor is not None else prod_dict.get("ACTIVE_FLAVOR") or ("" if repo else ACTIVE_FLAVOR))
+    assemble_tasks_map = prod_dict.get("ASSEMBLE_TASKS") if isinstance(prod_dict.get("ASSEMBLE_TASKS"), dict) else ({} if repo else ASSEMBLE_TASKS)
     if active_fl and isinstance(assemble_tasks_map, dict) and active_fl in assemble_tasks_map:
         return str(assemble_tasks_map[active_fl]).strip()
 
-    active_var = str(prod_dict.get("ACTIVE_VARIANT") or ACTIVE_VARIANT or "Debug").strip()
-    configured_task = str(prod_dict.get("ASSEMBLE_TASK") or ASSEMBLE_TASK or "").strip()
-    module = str(prod_dict.get("MODULE") or _APP_MODULE or "").strip()
+    active_var = str(prod_dict.get("ACTIVE_VARIANT") or ("" if repo else ACTIVE_VARIANT) or "Debug").strip()
+    configured_task = str(prod_dict.get("ASSEMBLE_TASK") or ("" if repo else ASSEMBLE_TASK) or "").strip()
+    module = str(prod_dict.get("MODULE") or ("" if repo else _APP_MODULE) or "").strip()
 
     if not module:
         if configured_task and ":assemble" in configured_task:
@@ -113,6 +120,11 @@ def resolve_assemble_task(repo: Path | str | None = None, flavor: str | None = N
                     module = first if first.startswith(":") else f":{first}"
             except Exception:
                 pass
+    if not module and not configured_task:
+        raise ValidationError(
+            "ASSEMBLE_TASK_RESOLUTION_FAILED: Could not determine assemble task for repository. "
+            "Remediation: run 'python harness_cli.py doctor' or configure ASSEMBLE_TASK / MODULE in _product.py."
+        )
     if not module:
         module = ":app"
     if not module.startswith(":"):

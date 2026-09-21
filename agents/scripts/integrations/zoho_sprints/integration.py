@@ -52,4 +52,18 @@ class ZohoSprintsIntegration(ExternalIntegration):
         args: Mapping[str, Any],
         plan: Mapping[str, Any],
     ) -> tuple[bool, str]:
+        status_req = str(args.get("status") or "").strip().lower()
+        if status_req in ("done", "solved", "closed", "completed"):
+            return False, "ZOHO_POLICY_VIOLATION: Terminal tracker states (Done/Solved) are developer-owned and cannot be automated."
+
+        item_type = str(args.get("item_type") or args.get("type") or "").strip().lower()
+        if tool_name == "zoho_update_task_description" and item_type in ("bug", "defect", "issue"):
+            return False, "ZOHO_POLICY_VIOLATION: Editing Bug description is strictly prohibited. Bug delivery reports must be added as a Comment to preserve QA original bug report."
+
+        if status_req in ("ready to retest", "ready for retest"):
+            content = str(args.get("comment") or args.get("description") or args.get("content") or "")
+            commit_hash = str(args.get("commit_hash") or args.get("commit") or "")
+            if not commit_hash and "commit:" not in content.lower():
+                return False, "ZOHO_POLICY_VIOLATION: Ready To ReTest delivery report requires a valid Git commit hash."
+
         return True, ""

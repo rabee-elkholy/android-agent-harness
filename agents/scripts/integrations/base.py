@@ -65,7 +65,7 @@ def validate_external_write(
         and integration.name in external_writes
     )
     if not authorized:
-        return False, f"{integration.display_name} mutation is not included in the active approved plan."
+        return False, f"EXTERNAL_WRITE_SCOPE_REQUIRED: {integration.display_name} mutation is not included in the active approved plan. Run 'workflow.py revise --external-write {integration.name}' and obtain developer approval."
 
     operation_id = str(args.get("operation_id") or "").strip()
     if not operation_id:

@@ -75,11 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         forwarded = list(args)
         if not forwarded or (len(forwarded) == 1 and forwarded[0] in ("--repo", ".")):
             sys.path.insert(0, str(SCRIPTS))
-            try:
-                from _variants import resolve_assemble_task
-                task_str = resolve_assemble_task(REPO_ROOT)
-            except Exception:
-                task_str = ":app:assembleDebug"
+            from _variants import resolve_assemble_task
+            task_str = resolve_assemble_task(REPO_ROOT)
             forwarded = [task_str]
         return _run("run_gradle_task.py", forwarded)
     if command == "review":

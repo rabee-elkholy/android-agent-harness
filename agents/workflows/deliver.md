@@ -7,7 +7,7 @@ description: Deliver an approved Android change through adaptive, evidence-bound
 Follow `.agents/rules/harness-rules.md`. Analysis and planning are read-only. No implementation begins until the developer explicitly approves the exact plan.
 
 1. Draft the task with `workflow.py draft`; include expected surfaces, modules, risks, test strategy, device strategy, rollback, and routed skills.
-2. Present the plan and wait. After explicit approval, record its proof with `workflow.py approve`, then consume it once with `workflow.py begin`.
+2. Present the plan and wait. After explicit approval, record its proof with `workflow.py approve` (which atomically transitions directly to `IMPLEMENTING`; `begin` is idempotent compatibility).
 3. Implement only the approved scope. Use TDD and domain skills selected by the plan. Material classifier drift invalidates approval.
 4. Run `workflow.py prepare-verification`. Read the generated policy; execute selected gates and reviewers in strict pipeline order:
    a. **Preflight**: Run `python .agents/scripts/preflight_check.py` (String parity, fast Kotlin lint, plan authority).

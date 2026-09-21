@@ -83,11 +83,11 @@ python .agents/scripts/workflow.py draft \
 > `--planning-depth`: `BOUNDED` for normal scoped tasks (default); `ARCHITECTURAL` for explicit architecture migration or broad structural architectural work.
 > `--external-write`: Append `zoho_sprints` when Zoho Sprints tracker mutation is explicitly included in the approved plan.
 
-# 2. Record developer approval (after explicit developer approval via Proceed button or chat)
+# 2. Record developer approval (atomically transitions directly to IMPLEMENTING)
 python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED
 
-# 3. Begin implementation
-python .agents/scripts/workflow.py begin --repo . --task-id <id>
+# 3. (Legacy compatibility only) Begin implementation (idempotent when already IMPLEMENTING)
+# python .agents/scripts/workflow.py begin --repo . --task-id <id>
 
 # 4. Advance phase checkpoint (for multi-phase plans; autonomous execution without developer prompt)
 python .agents/scripts/workflow.py checkpoint-phase --repo . --task-id <id>
@@ -115,9 +115,9 @@ python .agents/scripts/workflow.py cancel --repo . --task-id <id>
 - Lifecycle state confirmation message or JSON with task status, run ID, and frozen snapshot hash.
 - Exit code: `0` on success; non-zero if state transition precondition is not satisfied.
 
-> **Material Drift Reconciliation**: If `prepare-verification` reports material drift (e.g. `surface:BUSINESS_LOGIC`), do not inspect harness scripts. Reconcile by updating the plan draft with all active surfaces while preserving the original task outcome and intent:
-> `python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<original_outcome>" --kind <original_kind> --expected-surfaces "<all_active_surfaces>"`
-> and obtain developer approval.
+> **Material Drift Reconciliation**: If `prepare-verification` reports material drift (e.g. `surface:BUSINESS_LOGIC`), do not inspect harness scripts. Material drift produces `PLAN_REVISION_REQUIRED`. Reconcile with the canonical command produced by `build_remediation_command()`:
+> `python .agents/scripts/workflow.py revise --repo . --task-id <id> --outcome "<original_outcome>" --kind <original_kind> --planning-depth <depth> --expected-surfaces "<all_active_surfaces>" ...`
+> This archives the old plan, invalidates prior approval, and requires developer approval of the revised plan. Never use `workflow.py draft` to re-draft or overwrite an active task.
 
 > **Instruction**: Do not inspect `workflow.py` implementation before execution.
 
@@ -221,8 +221,8 @@ Build debug APK and verify application on connected Android physical device or e
 # 1. Check connected device status and target resolution
 python .agents/scripts/run_device.py status
 
-# 2. Assemble APK
-python .agents/scripts/run_gradle_task.py :app:assembleDebug
+# 2. Assemble APK (resolved by project configuration; runs resolved task via run_gradle_task.py)
+python .agents/harness.py assemble
 
 # 3. Install and launch on target device/emulator
 python .agents/scripts/run_device.py install-start
@@ -333,7 +333,7 @@ When an exception occurs:
 | **Review Harvest** | `python .agents/scripts/record_review.py --task <id> --from-subagent <role>=<convId>` | Auto-harvest subagent transcript and record review |
 | **Review Text** | `python .agents/scripts/record_review.py --task <id> --response-text "<role>=<text>"` | Direct review text ingestion with evidence footer |
 | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
-| **Assemble Debug** | `python .agents/scripts/run_gradle_task.py :app:assembleDebug` | Diagnostic in IMPLEMENTING; final delivery build after all reviewers pass |
+| **Assemble Debug** | `python .agents/harness.py assemble` | Diagnostic in IMPLEMENTING; final delivery build after all reviewers pass (derived assemble task) |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
 | **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |

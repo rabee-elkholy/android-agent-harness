@@ -861,12 +861,9 @@ def cmd_assemble(args: argparse.Namespace) -> int:
     if not forward:
         kit = ensure_kit(getattr(args, "kit", None))
         repo = find_repo(getattr(args, "repo", None)) if getattr(args, "repo", None) else Path.cwd().resolve()
-        try:
-            sys.path.insert(0, str(_script_root(kit)))
-            from _variants import resolve_assemble_task
-            task_str = resolve_assemble_task(repo)
-        except Exception:
-            task_str = ":app:assembleDebug"
+        sys.path.insert(0, str(_script_root(kit)))
+        from _variants import resolve_assemble_task
+        task_str = resolve_assemble_task(repo)
         forward = [task_str]
     return _dispatch_pipeline_script(args, "run_gradle_task.py", forward)
 
@@ -1116,7 +1113,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("assemble", help="Run Gradle assemble via run_gradle_task.py.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
-    sp.add_argument("gradle_args", nargs=argparse.REMAINDER, help="Gradle task arguments (default: :app:assembleDebug)")
+    sp.add_argument("gradle_args", nargs=argparse.REMAINDER, help="Gradle task arguments (resolved dynamically from project configuration if omitted)")
     sp.set_defaults(func=cmd_assemble)
 
     sp = sub.add_parser("review", help="Record reviewer results via record_review.py.")
