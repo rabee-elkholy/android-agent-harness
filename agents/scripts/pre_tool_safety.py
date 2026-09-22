@@ -363,19 +363,92 @@ def _handle_subagent(name: str, args: dict) -> None:
         except Exception:
             reviewer_routes = {}
 
+        COMMON_REASONING_KEYS = {
+            "reasoning",
+            "Reasoning",
+            "reasoning_effort",
+            "ReasoningEffort",
+            "effort",
+            "Effort",
+            "thinking_level",
+            "ThinkingLevel",
+        }
+
         for item in raw_subs:
             if not isinstance(item, dict):
                 continue
             r_role = str(item.get("Role") or item.get("role") or "").strip()
             r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
             key = r_role if r_role in reviewer_routes else r_type
-            req_model = str(item.get("Model") or item.get("model") or "inherit").lower().strip()
-            if req_model in {"", "inherit"}:
-                continue
-            allowed_model = reviewer_routes.get(key, {}).get("preferred_model", "inherit").lower().strip()
-            if req_model != allowed_model:
-                emit("deny", f"Reviewer model escalation for '{key}' ({req_model}) requires explicit central-policy authorization (allowed: {allowed_model}).", tool=name)
+
+            req_model = str(
+                item.get("Model")
+                or item.get("model")
+                or "inherit"
+            ).strip().lower()
+
+            if req_model not in {
+                "",
+                "inherit",
+            }:
+                emit(
+                    "deny",
+                    (
+                        "Reviewer model switching is disabled. "
+                        "Every reviewer must inherit the "
+                        "parent model."
+                    ),
+                    tool=name,
+                )
                 return
+
+            rev_info = reviewer_routes.get(key, {})
+            rev_reasoning = rev_info.get("reasoning", {})
+            control = rev_reasoning.get("control")
+            native_val = rev_reasoning.get("native_value")
+            arg_name = rev_reasoning.get("argument_name")
+
+            supplied_reasoning_keys = [k for k in item if k in COMMON_REASONING_KEYS]
+
+            if control != "SUPPORTED":
+                if supplied_reasoning_keys:
+                    emit(
+                        "deny",
+                        (
+                            "This host does not expose trusted per-subagent reasoning control. "
+                            "Omit reasoning override and inherit the parent setting."
+                        ),
+                        tool=name,
+                    )
+                    return
+            else:
+                if native_val is not None:
+                    if arg_name not in item or str(item[arg_name]) != str(native_val):
+                        emit(
+                            "deny",
+                            f"Reviewer reasoning override for '{key}' must use '{arg_name}={native_val}'.",
+                            tool=name,
+                        )
+                        return
+                    other_keys = [k for k in supplied_reasoning_keys if k != arg_name]
+                    if other_keys:
+                        emit(
+                            "deny",
+                            f"Unexpected reasoning key '{other_keys[0]}' for '{key}'. Expected '{arg_name}'.",
+                            tool=name,
+                        )
+                        return
+                else:
+                    if supplied_reasoning_keys:
+                        emit(
+                            "deny",
+                            (
+                                "This host does not expose trusted per-subagent reasoning control. "
+                                "Omit reasoning override and inherit the parent setting."
+                            ),
+                            tool=name,
+                        )
+                        return
         if int(plan.get("review_rounds") or 0) >= int(policy.get("max_review_rounds") or 3):
             emit("deny", "Review round cap reached; developer decision is required.", tool=name)
             return

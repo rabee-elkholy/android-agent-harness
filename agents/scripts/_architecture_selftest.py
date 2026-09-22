@@ -160,7 +160,7 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertIsNotNone(read_back)
         self.assertEqual(policy["policy_sha256"], read_back["policy_sha256"])
 
-    # --- 5. Hardening HARD-001: Model Escalation Kill Switch is Strictly One-Way ---
+    # --- 5. Hardening HARD-001: Model Inheritance is Universal and Invariant ---
     def test_hard_001_model_escalation_one_way_kill_switch(self) -> None:
         # Create minimal valid task state
         t_id = "test-task-hard001"
@@ -179,13 +179,14 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
             json.dumps({"run_id": "run-1", "policy": str(policy_path)}), encoding="utf-8"
         )
 
-        # When ALLOW_MODEL_ESCALATION in _product is False, environment cannot elevate to True
-        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", False):
-            with mock.patch.dict("os.environ", {"HARNESS_ALLOW_MODEL_ESCALATION": "1"}):
-                profile = resolve_execution_profile(self.repo, t_id)
-                self.assertFalse(profile["allow_model_escalation"])
-                for rev, r_data in profile["reviewers"].items():
-                    self.assertEqual("inherit", r_data["preferred_model"])
+        # Legacy env vars cannot change the invariant: model_policy is INHERIT_PARENT_ONLY and required_model is inherit
+        with mock.patch.dict("os.environ", {"HARNESS_ALLOW_MODEL_ESCALATION": "1", "HARNESS_MODEL_ROUTES": "{}"}):
+            profile = resolve_execution_profile(self.repo, t_id)
+            self.assertEqual("INHERIT_PARENT_ONLY", profile["model_policy"])
+            self.assertNotIn("allow_model_escalation", profile)
+            for rev, r_data in profile["reviewers"].items():
+                self.assertEqual("inherit", r_data["required_model"])
+                self.assertNotIn("preferred_model", r_data)
 
     # --- 6. Hardening HARD-004 & HARD-005: Reviewer Dispatch Payload & Strict Schema ---
     def test_hard_004_and_005_reviewer_dispatch_contract(self) -> None:
@@ -216,6 +217,9 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertTrue(rev_info["brief_path"].endswith("brief-security-reviewer-agent.md"))
         self.assertEqual("# Security Brief", rev_info["brief_content"])
         self.assertEqual("EVIDENCE pkg=<sha12> cites=<count>", rev_info["evidence_footer_contract"])
+        self.assertEqual("inherit", rev_info["required_model"])
+        self.assertIn("reasoning_intent", rev_info)
+        self.assertIn("dispatch_contract", rev_info)
 
     # --- 7. Architecture Drift Detection with Compatibility Bridges ---
     def test_architecture_drift_enforcement(self) -> None:

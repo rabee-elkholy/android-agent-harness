@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.0.60] - 2026-09-22
 
+### Same-Model Adaptive Reviewer Reasoning
+
+- **Same-Model Reviewer Invariant (`review_execution.py`, `pre_tool_safety.py`, `agents/subagents/*.json`)**:
+  - Eliminated reviewer model escalation, capability tiers (`STANDARD`/`STRONG`), provider model routes (`load_host_model_routes`, `HARNESS_MODEL_ROUTES`, `model_routes.json`), and escalation flags (`ALLOW_MODEL_ESCALATION`, `model_escalation`).
+  - Enforced that all specialist reviewers strictly inherit the parent lead agent's model (`model = "inherit"`).
+  - Pre-tool safety hook denies any reviewer subagent dispatch specifying non-inherit models.
+  - Reviewer definitions in `agents/subagents/*.json` permanently pinned to `model = "inherit"`, `workspace = "inherit"`, `enable_write_tools = false`, and `enable_subagent_tools = false`.
+- **Adaptive Reasoning Intent Policy (`review_policy.py`, `review_reasoning.py`)**:
+  - Introduced internal abstract reasoning intents: `NORMAL`, `DEEP`, and `MAX` via `reviewer_effort_for()`, scaling reasoning effort proportionally with surface sensitivity, change severity, and review round.
+  - Core judgment reviewers in Round 3 and critical sensitive security reviews receive `MAX`; high-severity or sensitive surfaces receive `DEEP`; standard reviews receive `NORMAL`.
+  - Added `review_reasoning.py` mapping abstract intents to host-native reasoning controls dynamically without global caching.
+  - For current Antigravity, per-subagent reasoning controls are recognized as unavailable, gracefully falling back to inheriting parent reasoning without blocking reviews.
+- **Installer & Doctor Cleanup (`wizard/*`, `_installer_config.py`, `doctor/engine.py`)**:
+  - Removed `review_model_policy` question and `allow_model_escalation` from setup wizard questions, schema, and normalization.
+  - Retained reviewer call limit (`review_call_budget` / `MODEL_CALL_BUDGET`), clarifying it strictly as a logical call-count limit.
+  - Updated Doctor diagnostics to report `Reviewer Model Policy = INHERIT_PARENT_ONLY` and `Reviewer Reasoning = ADAPTIVE_HOST_CAPABILITY`.
+- **Review Batch Preservation (`workflow.py`)**:
+  - Constrained `DISPATCH_REVIEWERS` to return only currently un-dispatched reviewers (`sorted(not_dispatched)`), ensuring identical parent model semantics across batch dispatch.
+
 ### Clean Install V2 Specification & External Kit Architecture
 
 - **Setup Wizard Schema V2 (`wizard/i18n.py`, `wizard/schema.py`, `wizard/questions.py`)**:

@@ -379,13 +379,12 @@ class HarnessDoctor:
                 f"overall={enforcement['overall']}; approval={enforcement['approval_trust']}; mutation hooks: {', '.join(f'{key}={value}' for key, value in enforcement['by_host'].items()) or 'no configured hosts'}",
             )
             budget = getattr(_product, "MODEL_CALL_BUDGET", 10)
-            escalation = getattr(_product, "ALLOW_MODEL_ESCALATION", False)
             git_policy = getattr(_product, "GIT_POLICY", "never")
             self.log(
                 category,
                 "Reviewer Settings",
                 "PASS",
-                f"MODEL_CALL_BUDGET = {budget}; ALLOW_MODEL_ESCALATION = {escalation}",
+                f"MODEL_CALL_BUDGET = {budget}; Reviewer Model Policy = INHERIT_PARENT_ONLY; Reviewer Reasoning = ADAPTIVE_HOST_CAPABILITY (Antigravity per-subagent reasoning control = UNAVAILABLE; fallback = inherit current reasoning)",
             )
             self.log(
                 category,

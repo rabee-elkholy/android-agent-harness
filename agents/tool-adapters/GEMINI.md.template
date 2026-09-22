@@ -31,6 +31,15 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
     `{{PY}} .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity`
   - In Gemini CLI without a trusted transcript adapter, omit `--host` and use the Router's legacy-compatible review path.
   - Never claim Review Protocol V2 unless `current-run.json` says `review_protocol_version = 2`.
+- Reviewer Model & Reasoning:
+  - Every reviewer MUST use the same model as the parent.
+  - Never select flash/pro/another model for a reviewer.
+  - Read each reviewer dispatch_contract from review_execution_profile.
+  - model must remain inherit.
+  - If reasoning_argument and reasoning_value are both non-null, pass exactly that native override.
+  - If either is null, omit reasoning override completely.
+  - Never invent a reasoning level from provider/model knowledge.
+  - Current Antigravity invoke_subagent does not expose trusted per-subagent reasoning control through this Harness adapter, so reviewer reasoning normally inherits the parent setting.
 
 Antigravity may load `.agents/hooks.json`; Gemini CLI may be rule-enforced only. Report the detected enforcement tier honestly.
 

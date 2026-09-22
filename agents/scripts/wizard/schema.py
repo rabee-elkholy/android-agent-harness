@@ -37,7 +37,6 @@ ALLOWED_QUESTION_KEYS = {
     "i19_text",
     "i20",
     "i22",
-    "review_model_policy",
     "review_call_budget",
     "review_call_budget_text",
     "b_platform",
@@ -86,7 +85,6 @@ ALLOWED_NORMALIZED_KEYS = {
     "gemini_config",
     "assemble_now",
     "model_call_budget",
-    "allow_model_escalation",
     "zoho_mcp",
     "chat_language",
     "zoho_language",
@@ -167,12 +165,6 @@ def validate_raw_answers(payload: Any) -> list[str]:
         val = payload["i16"]
         if val not in ("enable", "skip", True, False):
             errors.append("i16 (zoho_mcp) must be 'enable' or 'skip'")
-
-    # Validate review_model_policy
-    if "review_model_policy" in payload:
-        val = payload["review_model_policy"]
-        if val not in ("inherit_only", "allow_strong"):
-            errors.append("review_model_policy must be 'inherit_only' or 'allow_strong'")
 
     # Validate review_call_budget
     if "review_call_budget" in payload:

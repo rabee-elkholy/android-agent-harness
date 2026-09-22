@@ -563,18 +563,12 @@ class SecurityTests(unittest.TestCase):
         current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
         current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
 
-        # When ALLOW_MODEL_ESCALATION is False (default)
-        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", False):
-            prof_default = resolve_execution_profile(self.repo, task_id, host="antigravity")
-            self.assertEqual("inherit", prof_default["reviewers"]["security-reviewer-agent"]["preferred_model"])
-            self.assertEqual("inherit", prof_default["reviewers"]["convention-reviewer-agent"]["preferred_model"])
-
-        # When ALLOW_MODEL_ESCALATION is True: security-reviewer on AUTH escalates to pro when trusted route configured
-        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True):
-            with mock.patch("review_execution.load_host_model_routes", return_value={"STRONG": "pro"}):
-                prof_escalated = resolve_execution_profile(self.repo, task_id, host="antigravity")
-                self.assertEqual("pro", prof_escalated["reviewers"]["security-reviewer-agent"]["preferred_model"])
-                self.assertEqual("inherit", prof_escalated["reviewers"]["convention-reviewer-agent"]["preferred_model"])
+        # In the new architecture, every reviewer unconditionally inherits the parent model
+        prof_default = resolve_execution_profile(self.repo, task_id, host="antigravity")
+        self.assertEqual("INHERIT_PARENT_ONLY", prof_default["model_policy"])
+        self.assertEqual("inherit", prof_default["reviewers"]["security-reviewer-agent"]["required_model"])
+        self.assertEqual("inherit", prof_default["reviewers"]["convention-reviewer-agent"]["required_model"])
+        self.assertNotIn("preferred_model", prof_default["reviewers"]["security-reviewer-agent"])
 
     def test_DELIVERY_CLEAN_001(self):
         """DELIVERY-CLEAN-001: normal workflow deliver with dirty verified task files -> DENY"""
@@ -765,14 +759,13 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual("PASS", report.get("verdict"))
 
     def test_MODEL_ROUND_001(self):
-        """MODEL-ROUND-001: round 2 finding owner can deterministically promote capability"""
-        from review_policy import reviewer_capability_for, CAPABILITY_STRONG
-        cap, reas = reviewer_capability_for("bug-reviewer-agent", ["BUSINESS_LOGIC"], severity="HIGH", round_number=2, is_finding_owner=True)
-        self.assertEqual(CAPABILITY_STRONG, cap)
-        self.assertEqual("HIGH", reas)
+        """MODEL-ROUND-001: round 2 finding owner can deterministically promote effort"""
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_DEEP
+        eff = reviewer_effort_for("bug-reviewer-agent", ["BUSINESS_LOGIC"], severity="HIGH", round_number=2, is_finding_owner=True)
+        self.assertEqual(REVIEW_EFFORT_DEEP, eff)
 
     def test_MODEL_ROUND_002(self):
-        """MODEL-ROUND-002: non-empty carried_reviews (dicts) cannot crash model resolver"""
+        """MODEL-ROUND-002: non-empty carried_reviews (dicts) cannot crash execution requirements resolver"""
         from review_policy import review_execution_requirements
         policy = {
             "surfaces": ["BUSINESS_LOGIC"],
@@ -784,14 +777,15 @@ class SecurityTests(unittest.TestCase):
         }
         reqs = review_execution_requirements(policy)
         self.assertIn("bug-reviewer-agent", reqs["reviewers"])
+        self.assertEqual("DEEP", reqs["reviewers"]["bug-reviewer-agent"]["reasoning_intent"])
+        self.assertEqual("INHERIT_PARENT", reqs["reviewers"]["bug-reviewer-agent"]["model_policy"])
 
     def test_MODEL_ROUND_003(self):
-        """MODEL-ROUND-003: round 3 core judgment reviewer requests STRONG"""
-        from review_policy import reviewer_capability_for, CAPABILITY_STRONG
+        """MODEL-ROUND-003: round 3 core judgment reviewer requests MAX effort"""
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_MAX
         for r in ("bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"):
-            cap, reas = reviewer_capability_for(r, ["BUSINESS_LOGIC"], severity="MEDIUM", round_number=3)
-            self.assertEqual(CAPABILITY_STRONG, cap, f"{r} must be STRONG in round 3")
-            self.assertEqual("HIGH", reas)
+            eff = reviewer_effort_for(r, ["BUSINESS_LOGIC"], severity="MEDIUM", round_number=3)
+            self.assertEqual(REVIEW_EFFORT_MAX, eff, f"{r} must be MAX in round 3")
 
     def test_MODEL_PORTABILITY_001(self):
         """MODEL-PORTABILITY-001: unknown host -> inherit"""
@@ -808,10 +802,11 @@ class SecurityTests(unittest.TestCase):
         current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
 
         prof = resolve_execution_profile(self.repo, task_id, host="unknown_platform_host")
-        self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+        self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["required_model"])
+        self.assertEqual("HOST_CONTROL_UNAVAILABLE", prof["reviewers"]["security-reviewer-agent"]["reasoning"]["resolution"])
 
     def test_MODEL_PORTABILITY_002(self):
-        """MODEL-PORTABILITY-002: missing local route -> inherit"""
+        """MODEL-PORTABILITY-002: legacy route env has zero effect -> inherit"""
         from review_execution import resolve_execution_profile
         task_id = "t"
         plan_file = self.repo / f"agents/state/tasks/{task_id}/plan.json"
@@ -827,7 +822,8 @@ class SecurityTests(unittest.TestCase):
         env_routes = json.dumps({"antigravity": {"STANDARD": "inherit"}})
         with mock.patch.dict(os.environ, {"HARNESS_MODEL_ROUTES": env_routes}):
             prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-            self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+            self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["required_model"])
+            self.assertIsNone(prof["reviewers"]["security-reviewer-agent"]["dispatch_contract"]["reasoning_argument"])
 
     def test_MODEL_AUTH_001(self):
         """MODEL-AUTH-001: main agent cannot invent arbitrary explicit model"""
@@ -849,10 +845,10 @@ class SecurityTests(unittest.TestCase):
         )
         data = json.loads(proc.stdout)
         self.assertEqual("deny", data["decision"])
-        self.assertIn("Reviewer model escalation", data["reason"])
+        self.assertIn("Reviewer model switching is disabled", data["reason"])
 
     def test_MODEL_HASH_001(self):
-        """MODEL-HASH-001: changing exact host model route does not change authoritative policy hash"""
+        """MODEL-HASH-001: legacy env vars do not change authoritative policy hash or outputs"""
         from review_policy import decide
         skills_root = SCRIPTS.parent / "skills"
         cls = {"surfaces": ["AUTH", "SECURITY"], "severity": "HIGH", "changed_files": 2}
@@ -860,6 +856,8 @@ class SecurityTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HARNESS_MODEL_ROUTES": json.dumps({"antigravity": {"STRONG": "other-model"}})}):
             p2 = decide(cls, skills_root)
         self.assertEqual(p1["policy_sha256"], p2["policy_sha256"])
+        self.assertNotIn("model_escalation", p1)
+        self.assertNotIn("model_escalation", p2)
 
     def test_BRIEF_001(self):
         """BRIEF-001: reviewer dispatch receives lean brief and immutable package reference"""
@@ -1087,7 +1085,7 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("Dirty-tree delivery override requires explicit developer terminal authority", str(ctx.exception))
 
     def test_MODEL_KILL_001_global_kill_switch_forces_inherit(self):
-        """MODEL-KILL-001: when ALLOW_MODEL_ESCALATION=False, every reviewer unconditionally resolves to inherit"""
+        """MODEL-KILL-001: every reviewer unconditionally resolves to inherit model"""
         from review_execution import resolve_execution_profile
         task_id = "T-KILL-SWITCH"
         task_d = self.repo / f"agents/state/tasks/{task_id}"
@@ -1105,30 +1103,27 @@ class SecurityTests(unittest.TestCase):
             "delivery_snapshot_sha256": "snap1", "change_set_sha256": "cs1",
         }), encoding="utf-8")
 
-        with mock.patch("review_execution.load_host_model_routes", return_value={"STRONG": "pro", "STANDARD": "flash"}):
-            with mock.patch.dict("os.environ", {"HARNESS_ALLOW_MODEL_ESCALATION": "0"}):
-                prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-                self.assertFalse(prof["allow_model_escalation"])
-                for rev, info in prof["reviewers"].items():
-                    self.assertEqual("inherit", info["preferred_model"], f"{rev} must inherit when kill switch active")
-                    self.assertEqual("INHERIT_FALLBACK", info["resolution"])
+        with mock.patch.dict("os.environ", {"HARNESS_ALLOW_MODEL_ESCALATION": "1", "HARNESS_MODEL_ROUTES": "{}"}):
+            prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+            self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+            for rev, info in prof["reviewers"].items():
+                self.assertEqual("inherit", info["required_model"], f"{rev} must inherit")
+                self.assertEqual("HOST_CONTROL_UNAVAILABLE", info["reasoning"]["resolution"])
 
     def test_MODEL_NAME_001_core_requires_no_provider_literals(self):
-        """MODEL-NAME-001: core review_execution requires no hardcoded provider/model literals"""
-        from review_execution import load_host_model_routes
-        routes = load_host_model_routes("unknown_or_empty_host")
-        self.assertEqual({}, routes)
-        # Even for antigravity without local config, core default is empty
-        ag_routes = load_host_model_routes("antigravity")
-        # In absence of ~/.android-harness/model_routes.json, returns empty
-        if not (Path.home() / ".android-harness" / "model_routes.json").is_file():
-            self.assertEqual({}, ag_routes)
+        """MODEL-NAME-001: core contains no hardcoded provider/model literals or routes file"""
+        from review_reasoning import capability_for_host
+        cap = capability_for_host("antigravity")
+        self.assertFalse(cap.supported)
+        self.assertIsNone(cap.argument_name)
+        self.assertEqual((), cap.ordered_levels)
+        self.assertIsNone(cap.current_level)
 
     def test_MODEL_CONFIG_001_model_cannot_write_route_config(self):
-        """MODEL-CONFIG-001: model file tools cannot write to user-level harness config or model routes"""
+        """MODEL-CONFIG-001: model file tools cannot write to user-level harness config"""
         from pre_tool_safety import _safe_target
-        user_routes = str(Path.home() / ".android-harness" / "model_routes.json")
-        allowed, reason, _ = _safe_target(user_routes)
+        user_config = str(Path.home() / ".android-harness" / "config.json")
+        allowed, reason, _ = _safe_target(user_config)
         self.assertFalse(allowed)
         self.assertIn("developer-owned and immutable", reason)
 
@@ -1729,6 +1724,628 @@ class SecurityTests(unittest.TestCase):
         chk2 = next((c for c in res2["checks"] if c["name"] == "red_evidence"), None)
         self.assertIsNotNone(chk2)
         self.assertEqual("PASS", chk2["status"])
+
+
+class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp.name)
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
+        version_file = SCRIPTS.parent / "VERSION"
+        version_str = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.60"
+        (self.repo / "agents").mkdir(parents=True, exist_ok=True)
+        (self.repo / "agents" / "VERSION").write_text(f"{version_str}\n", encoding="utf-8")
+
+        state_dir = self.repo / "agents" / "state"
+        task_dir = state_dir / "tasks" / "t"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "plan_id": "p",
+            "task_id": "t",
+            "status": "VERIFYING",
+            "execution_nonce": "n",
+            "approval": {"single_use_nonce": "n"},
+            "review_rounds": 0,
+            "review_calls_used": 0,
+        }
+        (task_dir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        (state_dir / "active-task.json").write_text(json.dumps({"plan_path": str(task_dir / "plan.json"), "task_id": "t"}), encoding="utf-8")
+
+        policy_file = task_dir / "policy.json"
+        policy_file.write_text(json.dumps({
+            "surfaces": ["AUTH", "BUSINESS_LOGIC"],
+            "severity": "HIGH",
+            "reviewers": ["bug-reviewer-agent", "security-reviewer-agent"],
+            "max_review_rounds": 3,
+            "model_call_budget": 10,
+        }), encoding="utf-8")
+        run_id = "r1"
+        snapshot = "a" * 64
+        manifest = task_dir / "manifest.json"
+        manifest.write_text(json.dumps({"delivery_snapshot_sha256": snapshot}), encoding="utf-8")
+        package = state_dir / "runs" / snapshot / run_id / "review-package.md"
+        package.parent.mkdir(parents=True, exist_ok=True)
+        package.write_text("# Bound review package\n", encoding="utf-8")
+
+        current_file = task_dir / "current-run.json"
+        current_file.write_text(json.dumps({
+            "task_id": "t",
+            "policy": str(policy_file),
+            "manifest": str(manifest),
+            "delivery_snapshot_sha256": snapshot,
+            "run_id": run_id,
+            "change_set_sha256": "cs",
+            "review_host": "antigravity",
+        }), encoding="utf-8")
+
+        self.env = os.environ.copy()
+        self.env["HARNESS_REPO"] = str(self.repo)
+        self.env["HARNESS_HOOK_STATE"] = str(self.repo / "audit/state.json")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    # --- Section 46: Tests — installer ---
+    def test_REASON_INSTALL_001_questions_payload_has_no_review_model_policy(self):
+        from wizard import questions
+        qs = questions.questions_payload(self.repo, "en")
+        self.assertFalse(any(q.get("id") == "review_model_policy" for q in qs))
+
+    def test_REASON_INSTALL_002_questions_payload_still_contains_review_call_budget(self):
+        from wizard import questions
+        qs = questions.questions_payload(self.repo, "en")
+        self.assertTrue(any(q.get("id") == "review_call_budget" for q in qs))
+
+    def test_REASON_INSTALL_003_normalized_answers_contain_no_allow_model_escalation(self):
+        from wizard import questions
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["gemini"], "i20": "none", "review_call_budget": "10"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        norm = questions.normalize(raw, facts)
+        self.assertNotIn("allow_model_escalation", norm)
+        self.assertNotIn("review_model_policy", norm)
+
+    def test_REASON_INSTALL_004_generated_product_contains_no_ALLOW_MODEL_ESCALATION(self):
+        import _installer_config
+        target = _installer_config.generate_product_py(self.repo, {"product": "App", "model_call_budget": 10})
+        content = target.read_text(encoding="utf-8")
+        self.assertNotIn("ALLOW_MODEL_ESCALATION", content)
+
+    def test_REASON_INSTALL_005_generated_product_keeps_MODEL_CALL_BUDGET(self):
+        import _installer_config
+        target = _installer_config.generate_product_py(self.repo, {"product": "App", "model_call_budget": 15})
+        content = target.read_text(encoding="utf-8")
+        self.assertIn("MODEL_CALL_BUDGET = 15", content)
+
+    def test_REASON_INSTALL_006_setup_answers_says_reviewer_model_inherit_parent(self):
+        from wizard import questions, discovery
+        questions.write_answers(self.repo, {"product": "App", "model_call_budget": 10})
+        md = discovery.markdown_path(self.repo).read_text(encoding="utf-8")
+        self.assertIn("- Reviewer model: inherit parent model (fixed)", md)
+
+    def test_REASON_INSTALL_007_setup_answers_says_reviewer_reasoning_adaptive(self):
+        from wizard import questions, discovery
+        questions.write_answers(self.repo, {"product": "App", "model_call_budget": 10})
+        md = discovery.markdown_path(self.repo).read_text(encoding="utf-8")
+        self.assertIn("- Reviewer reasoning: adaptive / host-capability-aware", md)
+
+    # --- Section 47: Tests — effort policy ---
+    def test_REASON_POLICY_001_ordinary_bug_reviewer(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_NORMAL
+        self.assertEqual(REVIEW_EFFORT_NORMAL, reviewer_effort_for("bug-reviewer-agent", ["BUSINESS_LOGIC"], severity="MEDIUM", round_number=1))
+
+    def test_REASON_POLICY_002_security_auth_high(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_DEEP
+        self.assertEqual(REVIEW_EFFORT_DEEP, reviewer_effort_for("security-reviewer-agent", ["AUTH"], severity="HIGH", round_number=1))
+
+    def test_REASON_POLICY_003_security_auth_critical(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_MAX
+        self.assertEqual(REVIEW_EFFORT_MAX, reviewer_effort_for("security-reviewer-agent", ["AUTH"], severity="CRITICAL", round_number=1))
+
+    def test_REASON_POLICY_004_perf_high_coroutines(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_DEEP
+        self.assertEqual(REVIEW_EFFORT_DEEP, reviewer_effort_for("perf-anr-guardian-agent", ["COROUTINES"], severity="HIGH", round_number=1))
+
+    def test_REASON_POLICY_005_regression_high_room_schema(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_DEEP
+        self.assertEqual(REVIEW_EFFORT_DEEP, reviewer_effort_for("regression-impact-reviewer-agent", ["ROOM_SCHEMA"], severity="HIGH", round_number=1))
+
+    def test_REASON_POLICY_006_regression_multi_module_navigation(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_DEEP
+        self.assertEqual(REVIEW_EFFORT_DEEP, reviewer_effort_for("regression-impact-reviewer-agent", ["NAVIGATION"], severity="MEDIUM", changed_modules_count=2))
+
+    def test_REASON_POLICY_007_round2_finding_owner_bug_reviewer(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_DEEP
+        self.assertEqual(REVIEW_EFFORT_DEEP, reviewer_effort_for("bug-reviewer-agent", ["BUSINESS_LOGIC"], severity="HIGH", round_number=2, is_finding_owner=True))
+
+    def test_REASON_POLICY_008_spec_compliance_architectural(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_DEEP
+        self.assertEqual(REVIEW_EFFORT_DEEP, reviewer_effort_for("spec-compliance-agent", ["ARCHITECTURAL"], severity="HIGH", planning_depth="ARCHITECTURAL"))
+
+    def test_REASON_POLICY_009_ordinary_convention_reviewer(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_NORMAL
+        self.assertEqual(REVIEW_EFFORT_NORMAL, reviewer_effort_for("convention-reviewer-agent", ["BUSINESS_LOGIC"], severity="LOW"))
+
+    def test_REASON_POLICY_010_round3_core_reviewer(self):
+        from review_policy import reviewer_effort_for, REVIEW_EFFORT_MAX
+        for r in ("bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"):
+            self.assertEqual(REVIEW_EFFORT_MAX, reviewer_effort_for(r, ["BUSINESS_LOGIC"], round_number=3), f"{r} must be MAX in round 3")
+
+    # --- Section 48: Tests — generic reasoning resolver ---
+    def test_REASON_RESOLVER_synthetic_and_edge_cases(self):
+        from review_reasoning import HostReasoningCapability, resolve_reasoning
+
+        cap4 = HostReasoningCapability(
+            host="test",
+            supported=True,
+            argument_name="effort",
+            ordered_levels=("eco", "balanced", "deep", "maximal"),
+            current_level="balanced",
+            source="test",
+        )
+        self.assertIsNone(resolve_reasoning(cap4, "NORMAL")["native_value"])
+        self.assertEqual("deep", resolve_reasoning(cap4, "DEEP")["native_value"])
+        self.assertEqual("maximal", resolve_reasoning(cap4, "MAX")["native_value"])
+
+        cap2 = HostReasoningCapability(
+            host="test",
+            supported=True,
+            argument_name="effort",
+            ordered_levels=("standard", "deep"),
+            current_level="standard",
+            source="test",
+        )
+        self.assertIsNone(resolve_reasoning(cap2, "NORMAL")["native_value"])
+        self.assertEqual("deep", resolve_reasoning(cap2, "DEEP")["native_value"])
+        self.assertEqual("deep", resolve_reasoning(cap2, "MAX")["native_value"])
+
+        cap1 = HostReasoningCapability(
+            host="test",
+            supported=True,
+            argument_name="effort",
+            ordered_levels=("standard",),
+            current_level="standard",
+            source="test",
+        )
+        self.assertIsNone(resolve_reasoning(cap1, "NORMAL")["native_value"])
+        self.assertIsNone(resolve_reasoning(cap1, "DEEP")["native_value"])
+        self.assertEqual("ALREADY_AT_MAX", resolve_reasoning(cap1, "DEEP")["resolution"])
+        self.assertIsNone(resolve_reasoning(cap1, "MAX")["native_value"])
+        self.assertEqual("ALREADY_AT_MAX", resolve_reasoning(cap1, "MAX")["resolution"])
+
+        # Unsupported
+        cap_un = HostReasoningCapability(host="test", supported=False, argument_name=None, ordered_levels=(), current_level=None, source="test")
+        for it in ("NORMAL", "DEEP", "MAX"):
+            r = resolve_reasoning(cap_un, it)
+            self.assertIsNone(r["native_value"])
+            self.assertIsNone(r["argument_name"])
+            self.assertEqual("HOST_CONTROL_UNAVAILABLE", r["resolution"])
+            self.assertEqual("UNAVAILABLE", r["control"])
+
+        # Unknown current level
+        cap_unk = HostReasoningCapability(host="test", supported=True, argument_name="effort", ordered_levels=("low", "high"), current_level=None, source="test")
+        r_unk = resolve_reasoning(cap_unk, "DEEP")
+        self.assertIsNone(r_unk["native_value"])
+        self.assertEqual("CURRENT_LEVEL_UNKNOWN", r_unk["resolution"])
+
+        # Malformed levels (duplicates)
+        cap_dup = HostReasoningCapability(host="test", supported=True, argument_name="effort", ordered_levels=("low", "low"), current_level="low", source="test")
+        r_dup = resolve_reasoning(cap_dup, "DEEP")
+        self.assertIsNone(r_dup["native_value"])
+        self.assertEqual("INVALID_HOST_CAPABILITY", r_dup["resolution"])
+
+    # --- Section 49: Tests — current Antigravity ---
+    def test_REASON_HOST_AG_001_antigravity_capability(self):
+        from review_reasoning import capability_for_host
+        cap = capability_for_host("antigravity")
+        self.assertFalse(cap.supported)
+        self.assertIsNone(cap.argument_name)
+        self.assertEqual((), cap.ordered_levels)
+        self.assertIsNone(cap.current_level)
+
+    # --- Section 50: Tests — execution profile ---
+    def test_REASON_EXEC_001_through_009_profile_contract(self):
+        from review_execution import resolve_execution_profile
+        task_id = "t-exec-contract"
+        task_d = self.repo / f"agents/state/tasks/{task_id}"
+        task_d.mkdir(parents=True, exist_ok=True)
+        (task_d / "plan.json").write_text(json.dumps({"task_id": task_id, "status": "VERIFYING"}), encoding="utf-8")
+        policy_p = task_d / "policy.json"
+        policy_p.write_text(json.dumps({
+            "surfaces": ["AUTH", "BUSINESS_LOGIC"],
+            "severity": "HIGH",
+            "reviewers": ["security-reviewer-agent", "bug-reviewer-agent"],
+        }), encoding="utf-8")
+        (task_d / "current-run.json").write_text(json.dumps({
+            "task_id": task_id, "run_id": "r-exec", "policy": str(policy_p),
+            "delivery_snapshot_sha256": "snap1", "change_set_sha256": "cs1",
+        }), encoding="utf-8")
+
+        prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+
+        # REASON-EXEC-002: root model_policy == INHERIT_PARENT_ONLY
+        self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+        # REASON-EXEC-003: no allow_model_escalation
+        self.assertNotIn("allow_model_escalation", prof)
+
+        for rev, info in prof["reviewers"].items():
+            # REASON-EXEC-001: required_model == inherit
+            self.assertEqual("inherit", info["required_model"])
+            # REASON-EXEC-004: no preferred_model
+            self.assertNotIn("preferred_model", info)
+            # REASON-EXEC-005: no fallback_model
+            self.assertNotIn("fallback_model", info)
+            # REASON-EXEC-006: no requested_capability
+            self.assertNotIn("requested_capability", info)
+            # REASON-EXEC-007: reasoning_intent exists
+            self.assertIn("reasoning_intent", info)
+            # REASON-EXEC-008: dispatch_contract exists
+            self.assertIn("dispatch_contract", info)
+            # REASON-EXEC-009: Antigravity dispatch contract
+            contract = info["dispatch_contract"]
+            self.assertEqual("inherit", contract["model"])
+            self.assertIsNone(contract["reasoning_argument"])
+            self.assertIsNone(contract["reasoning_value"])
+
+    # --- Section 51: Tests — same model safety ---
+    def test_SAME_MODEL_001_through_005_tool_safety(self):
+        def run_tool(subagents: list[dict]) -> dict:
+            proc = subprocess.run(
+                [sys.executable, str(ENGINE)],
+                input=json.dumps({"toolCall": {"name": "invoke_subagent", "args": {"Subagents": subagents}}}),
+                capture_output=True, text=True, env=self.env, check=False, timeout=15,
+            )
+            return json.loads(proc.stdout)
+
+        # SAME-MODEL-001: Model omitted -> allowed
+        res1 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review"}])
+        self.assertEqual("allow", res1["decision"])
+
+        # SAME-MODEL-002: Model=inherit -> allowed
+        res2 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Model": "inherit"}])
+        self.assertEqual("allow", res2["decision"])
+
+        # SAME-MODEL-003: Model=flash -> denied
+        res3 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Model": "flash"}])
+        self.assertEqual("deny", res3["decision"])
+        self.assertIn("Reviewer model switching is disabled. Every reviewer must inherit the parent model.", res3["reason"])
+
+        # SAME-MODEL-004: Model=pro -> denied
+        res4 = run_tool([{"Role": "security-reviewer-agent", "TypeName": "security-reviewer-agent", "Prompt": "review", "Model": "pro"}])
+        self.assertEqual("deny", res4["decision"])
+        self.assertIn("Reviewer model switching is disabled. Every reviewer must inherit the parent model.", res4["reason"])
+
+        # SAME-MODEL-005: Model=<arbitrary> -> denied
+        res5 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Model": "custom-gpt-model"}])
+        self.assertEqual("deny", res5["decision"])
+        self.assertIn("Reviewer model switching is disabled. Every reviewer must inherit the parent model.", res5["reason"])
+
+    # --- Section 52: Tests — reasoning safety ---
+    def test_SAME_REASON_001_through_004_antigravity_reasoning_safety(self):
+        def run_tool(subagents: list[dict]) -> dict:
+            proc = subprocess.run(
+                [sys.executable, str(ENGINE)],
+                input=json.dumps({"toolCall": {"name": "invoke_subagent", "args": {"Subagents": subagents}}}),
+                capture_output=True, text=True, env=self.env, check=False, timeout=15,
+            )
+            return json.loads(proc.stdout)
+
+        # SAME-REASON-001: no reasoning arg -> allowed
+        res1 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review"}])
+        self.assertEqual("allow", res1["decision"])
+
+        # SAME-REASON-002: Effort=high -> denied
+        res2 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Effort": "high"}])
+        self.assertEqual("deny", res2["decision"])
+        self.assertIn("This host does not expose trusted per-subagent reasoning control", res2["reason"])
+
+        # SAME-REASON-003: ReasoningEffort=high -> denied
+        res3 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "ReasoningEffort": "high"}])
+        self.assertEqual("deny", res3["decision"])
+        self.assertIn("This host does not expose trusted per-subagent reasoning control", res3["reason"])
+
+        # SAME-REASON-004: ThinkingLevel=max -> denied
+        res4 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "ThinkingLevel": "max"}])
+        self.assertEqual("deny", res4["decision"])
+        self.assertIn("This host does not expose trusted per-subagent reasoning control", res4["reason"])
+
+    def test_SAME_REASON_005_synthetic_supported_host_reasoning_safety(self):
+        import io
+        import _repo_files as _rf
+        import pre_tool_safety as pts
+
+        def run_tool(subagents: list[dict]) -> dict:
+            input_data = json.dumps({"toolCall": {"name": "invoke_subagent", "args": {"Subagents": subagents}}})
+            with mock.patch.object(_rf, "REPO", self.repo), \
+                 mock.patch.object(pts, "REPO", self.repo), \
+                 mock.patch("sys.stdin", io.StringIO(input_data)), \
+                 mock.patch("sys.stdout", new=io.StringIO()) as fake_out:
+                try:
+                    pts.main()
+                except SystemExit:
+                    pass
+                return json.loads(fake_out.getvalue())
+
+        # Mock review_execution profile to return supported host reasoning
+        mock_prof = {
+            "reviewers": {
+                "security-reviewer-agent": {
+                    "reasoning": {
+                        "control": "SUPPORTED",
+                        "argument_name": "effort",
+                        "native_value": "deep",
+                    }
+                }
+            }
+        }
+        with mock.patch("review_execution.resolve_execution_profile", return_value=mock_prof):
+            # effort=deep -> allowed
+            res1 = run_tool([{"Role": "security-reviewer-agent", "TypeName": "security-reviewer-agent", "Prompt": "review", "effort": "deep"}])
+            self.assertEqual("allow", res1["decision"])
+
+            # effort=low -> denied
+            res2 = run_tool([{"Role": "security-reviewer-agent", "TypeName": "security-reviewer-agent", "Prompt": "review", "effort": "low"}])
+            self.assertEqual("deny", res2["decision"])
+            self.assertIn("must use 'effort=deep'", res2["reason"])
+
+            # ReasoningEffort=deep (unexpected extra key) -> denied
+            res3 = run_tool([{"Role": "security-reviewer-agent", "TypeName": "security-reviewer-agent", "Prompt": "review", "effort": "deep", "ReasoningEffort": "deep"}])
+            self.assertEqual("deny", res3["decision"])
+            self.assertIn("Unexpected reasoning key", res3["reason"])
+
+    # --- Section 53: Tests — old config cannot influence runtime ---
+    def test_OLD_CONFIG_001_legacy_env_and_product_cannot_influence_runtime(self):
+        from review_execution import resolve_execution_profile
+        task_id = "t-legacy"
+        task_d = self.repo / f"agents/state/tasks/{task_id}"
+        task_d.mkdir(parents=True, exist_ok=True)
+        (task_d / "plan.json").write_text(json.dumps({"task_id": task_id, "status": "VERIFYING"}), encoding="utf-8")
+        policy_p = task_d / "policy.json"
+        policy_p.write_text(json.dumps({
+            "surfaces": ["AUTH", "SECURITY"],
+            "severity": "HIGH",
+            "reviewers": ["security-reviewer-agent"],
+        }), encoding="utf-8")
+        (task_d / "current-run.json").write_text(json.dumps({
+            "task_id": task_id, "run_id": "r-leg", "policy": str(policy_p),
+            "delivery_snapshot_sha256": "snap1", "change_set_sha256": "cs1",
+        }), encoding="utf-8")
+
+        import _product
+        with mock.patch.dict("os.environ", {
+            "HARNESS_MODEL_ROUTES": json.dumps({"antigravity": {"STRONG": "pro"}}),
+            "HARNESS_ALLOW_MODEL_ESCALATION": "1",
+        }):
+            with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True, create=True):
+                prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+                self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+                self.assertNotIn("allow_model_escalation", prof)
+                sec_rev = prof["reviewers"]["security-reviewer-agent"]
+                self.assertEqual("inherit", sec_rev["required_model"])
+                self.assertNotIn("preferred_model", sec_rev)
+
+    # --- Section A: Tests — reviewer definitions ---
+    def test_SAME_MODEL_DEF_001_through_005_shipped_reviewer_definitions(self):
+        routable_reviewers = (
+            "bug-reviewer-agent",
+            "convention-reviewer-agent",
+            "perf-anr-guardian-agent",
+            "regression-impact-reviewer-agent",
+            "security-reviewer-agent",
+            "spec-compliance-agent",
+            "test-quality-reviewer-agent",
+        )
+        subagents_dir = SCRIPTS.parent / "subagents"
+        for rev in routable_reviewers:
+            f = subagents_dir / f"{rev}.json"
+            self.assertTrue(f.is_file(), f"{rev}.json must exist in {subagents_dir}")
+            data = json.loads(f.read_text(encoding="utf-8"))
+            self.assertEqual("inherit", data.get("model"), f"{rev} model must be inherit")
+            self.assertEqual("inherit", data.get("workspace"), f"{rev} workspace must be inherit")
+            self.assertFalse(data.get("enable_write_tools", True), f"{rev} enable_write_tools must be false")
+            self.assertFalse(data.get("enable_subagent_tools", True), f"{rev} enable_subagent_tools must be false")
+
+    def test_SAME_MODEL_DEF_006_generated_definitions_preserve_inheritance(self):
+        template_dir = SCRIPTS.parent / "tool-adapters"
+        if template_dir.is_dir():
+            for f in template_dir.glob("*.json"):
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    if "model" in data:
+                        self.assertEqual("inherit", data["model"])
+                except Exception:
+                    pass
+
+    # --- Section B: Tests — review batch ---
+    def test_SAME_MODEL_BATCH_001_through_005_router_batch_dispatch(self):
+        from workflow import resolve_next_action
+        from review_orchestrator import (
+            init_ledger, save_ledger,
+            REVIEW_NOT_DISPATCHED, REVIEW_DISPATCHED, REVIEW_COMPLETED,
+            REVIEW_PROTOCOL_RETRY_REQUIRED,
+        )
+        task_id = "t-batch"
+        task_d = self.repo / ".agents" / "state" / "tasks" / task_id
+        task_d.mkdir(parents=True, exist_ok=True)
+        (self.repo / ".agents" / "state" / "active-task.json").write_text(json.dumps({"task_id": task_id, "plan_path": str(task_d / "plan.json")}), encoding="utf-8")
+        (task_d / "plan.json").write_text(json.dumps({"task_id": task_id, "status": "VERIFYING"}), encoding="utf-8")
+        policy_p = task_d / "policy.json"
+        policy_p.write_text(json.dumps({
+            "surfaces": ["AUTH", "BUSINESS_LOGIC", "DATABASE"],
+            "severity": "HIGH",
+            "reviewers": ["bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent"],
+            "gates": ["reviews"],
+        }), encoding="utf-8")
+        snapshot = "b" * 64
+        cs = "c" * 64
+        manifest_p = task_d / "manifest.json"
+        manifest_p.write_text(json.dumps({
+            "delivery_snapshot_sha256": snapshot,
+            "change_set_sha256": cs,
+        }), encoding="utf-8")
+        runs_dir = self.repo / ".agents" / "state" / "runs" / snapshot / "r1"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        pkg_file = runs_dir / "review-package.md"
+        pkg_file.write_text("# Review Package", encoding="utf-8")
+        current_run_file = task_d / "current-run.json"
+
+        # Initialize ledger for r1
+        ledger = init_ledger(
+            task_d, task_id, "r1", snapshot, cs, "pkg_sha",
+            ["bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent"]
+        )
+
+        # SAME-MODEL-BATCH-001: all 3 NOT_DISPATCHED -> all 3 returned in one batch
+        current_run_file.write_text(json.dumps({
+            "task_id": task_id, "run_id": "r1", "policy": str(policy_p),
+            "manifest": str(manifest_p),
+            "review_protocol_version": 2,
+            "package_path": str(pkg_file),
+            "review_round": 1,
+        }), encoding="utf-8")
+        step1 = resolve_next_action(self.repo, task_id)
+        self.assertEqual("DISPATCH_REVIEWERS", step1["code"])
+        self.assertEqual(["bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent"], step1["reviewers"])
+
+        # SAME-MODEL-BATCH-002: one already DISPATCHED -> not returned again
+        ledger["reviewers"]["bug-reviewer-agent"]["state"] = REVIEW_DISPATCHED
+        save_ledger(task_d, "r1", ledger)
+        step2 = resolve_next_action(self.repo, task_id)
+        self.assertEqual("DISPATCH_REVIEWERS", step2["code"])
+        self.assertEqual(["convention-reviewer-agent", "security-reviewer-agent"], step2["reviewers"])
+
+        # SAME-MODEL-BATCH-003: one COMPLETED -> not returned again
+        ledger["reviewers"]["bug-reviewer-agent"]["state"] = REVIEW_COMPLETED
+        save_ledger(task_d, "r1", ledger)
+        step3 = resolve_next_action(self.repo, task_id)
+        self.assertEqual("DISPATCH_REVIEWERS", step3["code"])
+        self.assertEqual(["convention-reviewer-agent", "security-reviewer-agent"], step3["reviewers"])
+
+        # SAME-MODEL-BATCH-004: protocol retry returns only reviewer requiring correction
+        ledger["reviewers"]["bug-reviewer-agent"]["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED
+        ledger["reviewers"]["bug-reviewer-agent"]["last_error"] = "missing signature"
+        ledger["reviewers"]["convention-reviewer-agent"]["state"] = REVIEW_COMPLETED
+        ledger["reviewers"]["security-reviewer-agent"]["state"] = REVIEW_COMPLETED
+        save_ledger(task_d, "r1", ledger)
+        step4 = resolve_next_action(self.repo, task_id)
+        self.assertEqual("RETRY_REVIEW_PROTOCOL", step4["code"])
+        self.assertEqual("bug-reviewer-agent", step4["reviewer"])
+
+        # SAME-MODEL-BATCH-005: later-round promoted reviewer dispatched only in later round
+        runs_dir_r2 = self.repo / ".agents" / "state" / "runs" / snapshot / "r2"
+        runs_dir_r2.mkdir(parents=True, exist_ok=True)
+        pkg_file_r2 = runs_dir_r2 / "review-package.md"
+        pkg_file_r2.write_text("# Review Package R2", encoding="utf-8")
+        policy_round2 = task_d / "policy_r2.json"
+        policy_round2.write_text(json.dumps({
+            "surfaces": ["AUTH"],
+            "severity": "HIGH",
+            "reviewers": ["security-reviewer-agent"],
+            "gates": ["reviews"],
+        }), encoding="utf-8")
+        current_run_file.write_text(json.dumps({
+            "task_id": task_id, "run_id": "r2", "policy": str(policy_round2),
+            "manifest": str(manifest_p),
+            "review_protocol_version": 2,
+            "package_path": str(pkg_file_r2),
+            "review_round": 2,
+        }), encoding="utf-8")
+        init_ledger(
+            task_d, task_id, "r2", snapshot, cs, "pkg_sha_r2",
+            ["security-reviewer-agent"]
+        )
+        step5 = resolve_next_action(self.repo, task_id)
+        self.assertEqual("DISPATCH_REVIEWERS", step5["code"])
+        self.assertEqual(["security-reviewer-agent"], step5["reviewers"])
+
+    # --- Section E: Tests — capability dynamic resolution ---
+    def test_REASON_CAP_001_dynamic_resolution_no_global_cache(self):
+        from review_execution import resolve_execution_profile
+        from review_reasoning import HostReasoningCapability
+        task_id = "t-dyn-cap"
+        task_d = self.repo / f"agents/state/tasks/{task_id}"
+        task_d.mkdir(parents=True, exist_ok=True)
+        (task_d / "plan.json").write_text(json.dumps({"task_id": task_id, "status": "VERIFYING"}), encoding="utf-8")
+        policy_p = task_d / "policy.json"
+        policy_p.write_text(json.dumps({
+            "surfaces": ["AUTH"],
+            "severity": "HIGH",
+            "reviewers": ["security-reviewer-agent"],
+        }), encoding="utf-8")
+        (task_d / "current-run.json").write_text(json.dumps({
+            "task_id": task_id, "run_id": "r-dyn", "policy": str(policy_p),
+            "delivery_snapshot_sha256": "snap1", "change_set_sha256": "cs1",
+        }), encoding="utf-8")
+
+        cap_a = HostReasoningCapability(host="dyn_host", supported=False, argument_name=None, ordered_levels=(), current_level=None, source="test_a")
+        cap_b = HostReasoningCapability(host="dyn_host", supported=True, argument_name="effort", ordered_levels=("standard", "deep"), current_level="standard", source="test_b")
+
+        with mock.patch("review_execution.capability_for_host", return_value=cap_a):
+            prof_a = resolve_execution_profile(self.repo, task_id, host="dyn_host")
+            self.assertIsNone(prof_a["reviewers"]["security-reviewer-agent"]["dispatch_contract"]["reasoning_argument"])
+
+        with mock.patch("review_execution.capability_for_host", return_value=cap_b):
+            prof_b = resolve_execution_profile(self.repo, task_id, host="dyn_host")
+            self.assertEqual("effort", prof_b["reviewers"]["security-reviewer-agent"]["dispatch_contract"]["reasoning_argument"])
+            self.assertEqual("deep", prof_b["reviewers"]["security-reviewer-agent"]["dispatch_contract"]["reasoning_value"])
+
+    # --- Section I: Tests — clean contracts ---
+    def test_REASON_CLEAN_001_review_policy_output_contains_no_model_escalation(self):
+        from review_policy import decide
+        skills_root = SCRIPTS.parent / "skills"
+        decision = decide({"surfaces": ["AUTH", "SECURITY"], "severity": "HIGH"}, skills_root)
+        self.assertNotIn("model_escalation", decision)
+
+    def test_REASON_CLEAN_002_no_active_runtime_model_routing_env_lookup(self):
+        forbidden_envs = ["HARNESS_MODEL_ROUTES", "HARNESS_ALLOW_MODEL_ESCALATION"]
+        active_scripts = [p for p in SCRIPTS.glob("*.py") if not p.name.startswith("_") and p.name != "selftest.py"]
+        for script in active_scripts:
+            content = script.read_text(encoding="utf-8")
+            for var in forbidden_envs:
+                self.assertNotIn(var, content, f"Active script {script.name} must not reference {var}")
+
+    def test_REASON_CLEAN_003_active_runtime_does_not_read_model_routes_json(self):
+        active_scripts = [p for p in SCRIPTS.glob("*.py") if not p.name.startswith("_")]
+        for script in active_scripts:
+            content = script.read_text(encoding="utf-8")
+            self.assertNotIn("model_routes.json", content, f"Active script {script.name} must not read model_routes.json")
+
+    def test_REASON_CLEAN_004_installer_asks_no_model_escalation_question(self):
+        from wizard import questions
+        qs = questions.questions_payload(self.repo, "en")
+        for q in qs:
+            self.assertNotIn("model_escalation", q.get("id", ""))
+            self.assertNotIn("escalat", q.get("prompt", "").lower())
+
+    def test_REASON_CLEAN_005_installer_asks_no_reasoning_level_question(self):
+        from wizard import questions
+        qs = questions.questions_payload(self.repo, "en")
+        for q in qs:
+            self.assertNotIn("reasoning", q.get("id", "").lower())
+            self.assertNotIn("effort", q.get("id", "").lower())
+
+    def test_REASON_CLEAN_006_reviewer_call_limit_remains_configurable(self):
+        from wizard import questions
+        import _installer_config
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["gemini"], "i20": "none", "review_call_budget": "custom", "review_call_budget_text": "25"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        norm = questions.normalize(raw, facts)
+        self.assertEqual(25, norm.get("model_call_budget"))
+        prod = _installer_config.generate_product_py(self.repo, {"product": "TestApp", "model_call_budget": 25})
+        self.assertIn("MODEL_CALL_BUDGET = 25", prod.read_text(encoding="utf-8"))
+
+    def test_REASON_CLEAN_007_reasoning_intent_never_changes_reviewer_call_accounting(self):
+        from review_policy import review_execution_requirements
+        policy = {
+            "surfaces": ["AUTH"],
+            "severity": "CRITICAL",
+            "reviewers": ["security-reviewer-agent"],
+        }
+        reqs = review_execution_requirements(policy)
+        self.assertEqual(1, len(reqs["reviewers"]))
+        self.assertEqual("MAX", reqs["reviewers"]["security-reviewer-agent"]["reasoning_intent"])
 
 
 if __name__ == "__main__":

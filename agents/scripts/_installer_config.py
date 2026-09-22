@@ -74,7 +74,6 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
         "ENFORCEMENT_TIER": enforcement["overall"],
         "ENFORCEMENT_BY_HOST": enforcement["by_host"],
         "MODEL_CALL_BUDGET": int(answers.get("model_call_budget") or 10),
-        "ALLOW_MODEL_ESCALATION": bool(answers.get("allow_model_escalation", False)),
     }
     lines = ['"""Generated project identity and vNext policy configuration."""', "from __future__ import annotations", ""]
     lines.extend(f"{key} = {value!r}" for key, value in values.items())

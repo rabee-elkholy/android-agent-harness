@@ -521,32 +521,12 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         }
     )
 
-    # --- Station 5: Reviewer Cost & Quality ---
-    qs.append(
-        {
-            "id": "review_model_policy",
-            "station": 5,
-            "station_title": "Reviewer Cost & Quality",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "review_model_policy"),
-            "options": [
-                {
-                    "id": "inherit_only",
-                    "label": t(lang, "review_model_policy_inherit"),
-                },
-                {
-                    "id": "allow_strong",
-                    "label": t(lang, "review_model_policy_strong"),
-                },
-            ],
-        }
-    )
+    # --- Station 5: Reviewer Budget ---
     qs.append(
         {
             "id": "review_call_budget",
             "station": 5,
-            "station_title": "Reviewer Cost & Quality",
+            "station_title": "Reviewer Budget",
             "required": True,
             "allow_multiple": False,
             "prompt": t(lang, "review_call_budget"),
@@ -571,7 +551,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "conditional_text_input": {
                 "when_option": "custom",
                 "answer_key": "review_call_budget_text",
-                "prompt": "Enter reviewer model-call budget (whole number 1–100).",
+                "prompt": "Enter maximum reviewer calls (whole number 1–100).",
                 "required": True,
             },
         }
@@ -638,7 +618,6 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
         "i18": prev.get("zoho_language"),
         "i20": prev.get("pm_provider"),
         "i22": prev.get("device_verification"),
-        "review_model_policy": "allow_strong" if prev.get("allow_model_escalation") else ("inherit_only" if "allow_model_escalation" in prev else None),
         "review_call_budget": prev_budget_choice,
         "i19": prev.get("flavor") or "default",
         "pref_arch_family": prev.get("preferred_new_code_family") or prev.get("pref_arch_family"),
@@ -901,23 +880,6 @@ def normalize(raw: dict, facts: dict) -> dict:
         pref_family_norm = pref_arch
     else:
         pref_family_norm = raw.get("preferred_new_code_family") or auto.get("preferred_new_code_family")
-    review_model_policy = str(
-        raw.get("review_model_policy")
-        or "inherit_only"
-    ).strip()
-
-    if review_model_policy not in {
-        "inherit_only",
-        "allow_strong",
-    }:
-        raise SystemExit(
-            "Invalid reviewer model policy."
-        )
-
-    allow_model_escalation = (
-        review_model_policy == "allow_strong"
-    )
-
     budget_choice = str(
         raw.get("review_call_budget")
         or "10"
@@ -962,7 +924,6 @@ def normalize(raw: dict, facts: dict) -> dict:
             or k in (
                 "pref_arch_family",
                 "update_context_mode",
-                "review_model_policy",
                 "review_call_budget",
                 "review_call_budget_text",
             )
@@ -1011,7 +972,6 @@ def normalize(raw: dict, facts: dict) -> dict:
         "git_gate": "no",
         "device_verification": raw.get("i22") or auto.get("device_verification", "manual_only"),
         "model_call_budget": model_call_budget,
-        "allow_model_escalation": allow_model_escalation,
         "asked": asked,
     }
 
@@ -1046,7 +1006,9 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- Device verification: {answers.get('device_verification', 'manual_only')}",
-        f"- Reviewer model escalation: {'enabled' if answers.get('allow_model_escalation') else 'disabled / inherit only'}",
+        "- Reviewer model: inherit parent model (fixed)",
+        "- Reviewer reasoning: adaptive / host-capability-aware",
+        f"- Reviewer call limit: {answers.get('model_call_budget', 10)}",
         f"- Reviewer model-call budget: {answers.get('model_call_budget', 10)}",
         f"- Preferred new code architecture family: {answers.get('preferred_new_code_family') or '(none)'}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
@@ -1137,8 +1099,6 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         value = answers.get(field)
         if value:
             defaults[qid] = value
-    if "allow_model_escalation" in answers:
-        defaults["review_model_policy"] = "allow_strong" if answers.get("allow_model_escalation") else "inherit_only"
     if "model_call_budget" in answers:
         budget_val = str(answers.get("model_call_budget"))
         defaults["review_call_budget"] = budget_val if budget_val in {"5", "10", "20"} else "custom"

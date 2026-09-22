@@ -341,7 +341,6 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "device_required": device_required,
         "project_kind": project_kind,
         "max_review_rounds": 3,
-        "model_escalation": "EXPLICIT_POLICY_OR_DEVELOPER_APPROVAL",
         "model_call_budget": call_budget,
         "estimated_calls_this_round": len(reviewers),
         "skills": skills,
@@ -429,11 +428,18 @@ def decide_later_round(
     return result
 
 
-CAPABILITY_STANDARD = "STANDARD"
-CAPABILITY_STRONG = "STRONG"
+REVIEW_EFFORT_NORMAL = "NORMAL"
+REVIEW_EFFORT_DEEP = "DEEP"
+REVIEW_EFFORT_MAX = "MAX"
+
+VALID_REVIEW_EFFORTS = {
+    REVIEW_EFFORT_NORMAL,
+    REVIEW_EFFORT_DEEP,
+    REVIEW_EFFORT_MAX,
+}
 
 
-def reviewer_capability_for(
+def reviewer_effort_for(
     reviewer: str,
     surfaces: list[str] | set[str],
     severity: str = "HIGH",
@@ -441,46 +447,98 @@ def reviewer_capability_for(
     is_finding_owner: bool = False,
     planning_depth: str = "BOUNDED",
     changed_modules_count: int = 1,
-) -> tuple[str, str]:
-    """Derive abstract capability (STANDARD or STRONG) and reasoning effort (MEDIUM or HIGH).
-
-    Pure deterministic helper per Section 19.6.
-    """
+) -> str:
     surfaces_set = set(surfaces)
-    sev_upper = str(severity or "HIGH").upper()
+    sev = str(severity or "HIGH").upper()
 
-    # Rule 1: Security reviewer
+    core_judgment_reviewers = {
+        "bug-reviewer-agent",
+        "security-reviewer-agent",
+        "perf-anr-guardian-agent",
+        "regression-impact-reviewer-agent",
+    }
+
+    if (
+        round_number >= 3
+        and reviewer in core_judgment_reviewers
+    ):
+        return REVIEW_EFFORT_MAX
+
     if reviewer == "security-reviewer-agent":
-        if surfaces_set & {"AUTH", "BILLING", "SECURITY", "SENSITIVE_DATA", "CRYPTO", "NATIVE_CODE"} or sev_upper == "CRITICAL":
-            return CAPABILITY_STRONG, "HIGH"
+        sensitive = {
+            "AUTH",
+            "BILLING",
+            "SECURITY",
+            "SENSITIVE_DATA",
+            "CRYPTO",
+            "NATIVE_CODE",
+        }
 
-    # Rule 2: Performance reviewer
-    elif reviewer == "perf-anr-guardian-agent":
-        if sev_upper == "CRITICAL" or (sev_upper == "HIGH" and surfaces_set & {"NATIVE_CODE", "DEVICE_API", "COROUTINES"}):
-            return CAPABILITY_STRONG, "HIGH"
+        if (
+            sev == "CRITICAL"
+            and surfaces_set & sensitive
+        ):
+            return REVIEW_EFFORT_MAX
 
-    # Rule 3: Regression reviewer
-    elif reviewer == "regression-impact-reviewer-agent":
-        if sev_upper == "CRITICAL" or (sev_upper == "HIGH" and surfaces_set & {"PUBLIC_API", "ROOM_SCHEMA", "BUILD_CONFIG"}):
-            return CAPABILITY_STRONG, "HIGH"
-        if "NAVIGATION" in surfaces_set and changed_modules_count > 1:
-            return CAPABILITY_STRONG, "HIGH"
+        if (
+            sev == "CRITICAL"
+            or surfaces_set & sensitive
+        ):
+            return REVIEW_EFFORT_DEEP
 
-    # Rule 4: Bug reviewer
-    elif reviewer == "bug-reviewer-agent":
-        if sev_upper == "CRITICAL" or (round_number > 1 and is_finding_owner):
-            return CAPABILITY_STRONG, "HIGH"
+    if reviewer == "perf-anr-guardian-agent":
+        if sev == "CRITICAL":
+            return REVIEW_EFFORT_DEEP
 
-    # Rule 5: Spec compliance reviewer
-    elif reviewer == "spec-compliance-agent":
-        if str(planning_depth or "").upper() == "ARCHITECTURAL" or sev_upper in ("HIGH", "CRITICAL"):
-            return CAPABILITY_STRONG, "HIGH"
+        if (
+            sev == "HIGH"
+            and surfaces_set & {
+                "NATIVE_CODE",
+                "DEVICE_API",
+                "COROUTINES",
+            }
+        ):
+            return REVIEW_EFFORT_DEEP
 
-    # Round 3 escalation for core judgment reviewers
-    if round_number >= 3 and reviewer in {"bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"}:
-        return CAPABILITY_STRONG, "HIGH"
+    if reviewer == "regression-impact-reviewer-agent":
+        if sev == "CRITICAL":
+            return REVIEW_EFFORT_DEEP
 
-    return CAPABILITY_STANDARD, "MEDIUM"
+        if (
+            sev == "HIGH"
+            and surfaces_set & {
+                "PUBLIC_API",
+                "ROOM_SCHEMA",
+                "BUILD_CONFIG",
+            }
+        ):
+            return REVIEW_EFFORT_DEEP
+
+        if (
+            "NAVIGATION" in surfaces_set
+            and changed_modules_count > 1
+        ):
+            return REVIEW_EFFORT_DEEP
+
+    if reviewer == "bug-reviewer-agent":
+        if sev == "CRITICAL":
+            return REVIEW_EFFORT_DEEP
+
+        if (
+            round_number > 1
+            and is_finding_owner
+        ):
+            return REVIEW_EFFORT_DEEP
+
+    if reviewer == "spec-compliance-agent":
+        if (
+            str(planning_depth or "").upper()
+            == "ARCHITECTURAL"
+            or sev in {"HIGH", "CRITICAL"}
+        ):
+            return REVIEW_EFFORT_DEEP
+
+    return REVIEW_EFFORT_NORMAL
 
 
 def review_execution_requirements(
@@ -503,24 +561,23 @@ def review_execution_requirements(
         round_number = int(policy.get("review_round") or (((plan or {}).get("review_rounds") or 0) + 1))
 
     requirements = {}
-    for r in reviewers:
-        cap, reas = reviewer_capability_for(
-            r,
+    for reviewer in reviewers:
+        effort = reviewer_effort_for(
+            reviewer,
             surfaces=surfaces,
             severity=severity,
             round_number=round_number,
-            is_finding_owner=(r in finding_owners),
+            is_finding_owner=(reviewer in finding_owners),
             planning_depth=planning_depth,
             changed_modules_count=changed_modules_count,
         )
-        requirements[r] = {
-            "requested_capability": cap,
-            "requested_reasoning": reas,
-            "diversity": "PREFERRED" if cap == CAPABILITY_STRONG else "NONE",
+        requirements[reviewer] = {
+            "reasoning_intent": effort,
+            "model_policy": "INHERIT_PARENT",
             "context": "ISOLATED_PREFERRED",
         }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "round_number": round_number,
         "reviewers": requirements,
     }

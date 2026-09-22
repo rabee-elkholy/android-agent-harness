@@ -183,17 +183,8 @@ T = {
         ),
         "i22_manual": "Interactive Manual Smoke Test — App is launched on device; you follow simple steps and confirm (Recommended)",
         "i22_off": "No device verification — assemble only (I test manually outside the harness)",
-        "review_model_policy": (
-            "How should specialist reviewers choose models?"
-        ),
-        "review_model_policy_inherit": (
-            "Use the current model for all reviewers (Recommended)"
-        ),
-        "review_model_policy_strong": (
-            "Allow stronger mapped reviewer models when risk policy requests them"
-        ),
         "review_call_budget": (
-            "Maximum reviewer model calls allowed for one task before developer intervention?"
+            "Maximum reviewer calls allowed for one task before developer intervention?"
         ),
         "review_call_budget_10": (
             "10 — Balanced (Recommended)"

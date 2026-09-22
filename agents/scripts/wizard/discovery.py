@@ -687,7 +687,6 @@ def auto_from_facts(facts: dict) -> dict:
         "agents_git": "gitignore",
         "gemini_config": "merge-allowlist" if facts.get("gemini") else "skip",
         "assemble_now": "tests-only",
-        "review_model_policy": "inherit_only",
         "review_call_budget": "10",
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
         "chat_language": "mirror",

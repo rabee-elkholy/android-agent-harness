@@ -231,7 +231,6 @@ class ChatInstallationLifecycleTests(RepoCase):
                 "i5": ":app",
                 "i6": "com.example.fixture.MainActivity",
                 "i14": ["codex"],
-                "review_model_policy": "inherit_only",
                 "review_call_budget": "10",
                 "i20": "none",
             }),
@@ -3029,16 +3028,15 @@ class CleanInstallV2SpecificationTests(RepoCase):
         q_ids = [q["id"] for q in qs]
         self.assertNotIn("i15", q_ids)
 
-    def test_SETUP_V2_004_questions_payload_contains_review_model_policy(self) -> None:
+    def test_SETUP_V2_004_questions_payload_contains_no_review_model_policy(self) -> None:
+        """REASON-INSTALL-001: questions payload has no review_model_policy"""
         import wizard.questions as wq
         qs = wq.questions_payload(self.repo, "en")
         q = next((q for q in qs if q["id"] == "review_model_policy"), None)
-        self.assertIsNotNone(q)
-        self.assertEqual(5, q["station"])
-        option_ids = [opt["id"] for opt in q["options"]]
-        self.assertEqual(["inherit_only", "allow_strong"], option_ids)
+        self.assertIsNone(q)
 
     def test_SETUP_V2_005_questions_payload_contains_review_call_budget(self) -> None:
+        """REASON-INSTALL-002: questions payload still contains review_call_budget"""
         import wizard.questions as wq
         qs = wq.questions_payload(self.repo, "en")
         q = next((q for q in qs if q["id"] == "review_call_budget"), None)
@@ -3047,12 +3045,13 @@ class CleanInstallV2SpecificationTests(RepoCase):
         option_ids = [opt["id"] for opt in q["options"]]
         self.assertEqual(["10", "5", "20", "custom"], option_ids)
 
-    def test_SETUP_V2_006_review_model_policy_default_is_inherit_only(self) -> None:
+    def test_SETUP_V2_006_normalized_answers_contain_no_allow_model_escalation(self) -> None:
+        """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
         import wizard.questions as wq
-        qs = wq.questions_payload(self.repo, "en")
-        q = next(q for q in qs if q["id"] == "review_model_policy")
-        self.assertEqual("inherit_only", q["options"][0]["id"])
-        self.assertTrue(q["options"][0].get("recommended"))
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertNotIn("allow_model_escalation", res)
 
     def test_SETUP_V2_007_review_call_budget_default_is_10(self) -> None:
         import wizard.questions as wq
@@ -3079,10 +3078,11 @@ class CleanInstallV2SpecificationTests(RepoCase):
         errors = validate_answers_json({"schema": 2, "product": "P", "module": ":m", "unit_tests": "yes"})
         self.assertTrue(any("unknown normalized answers keys: unit_tests" in e for e in errors))
 
-    def test_SETUP_V2_011_invalid_review_model_policy_rejected(self) -> None:
+    def test_SETUP_V2_011_raw_review_model_policy_rejected_as_unknown(self) -> None:
+        """REASON-CLEAN-004: installer asks no model escalation question and rejects it"""
         from wizard.schema import validate_raw_answers
-        errors = validate_raw_answers({"review_model_policy": "turbo_plus"})
-        self.assertTrue(any("review_model_policy must be" in e for e in errors))
+        errors = validate_raw_answers({"review_model_policy": "inherit_only"})
+        self.assertTrue(any("unknown question keys in answers payload: review_model_policy" in e for e in errors))
 
     def test_SETUP_V2_012_invalid_review_call_budget_rejected(self) -> None:
         from wizard.schema import validate_raw_answers
@@ -3126,19 +3126,25 @@ class CleanInstallV2SpecificationTests(RepoCase):
         res = wq.normalize(raw, facts)
         self.assertEqual(10, res["model_call_budget"])
 
-    def test_SETUP_V2_019_default_allow_model_escalation_is_false(self) -> None:
+    def test_SETUP_V2_019_default_normalized_answers_have_no_allow_model_escalation(self) -> None:
+        """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
         import wizard.questions as wq
         raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
-        self.assertFalse(res["allow_model_escalation"])
+        self.assertNotIn("allow_model_escalation", res)
 
-    def test_SETUP_V2_020_allow_strong_maps_to_escalation_true(self) -> None:
+    def test_SETUP_V2_020_setup_answers_markdown_reviewer_lines(self) -> None:
+        """REASON-INSTALL-006 & 007: SETUP_ANSWERS says reviewer model = inherit parent and adaptive reasoning"""
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_model_policy": "allow_strong"}
-        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
-        res = wq.normalize(raw, facts)
-        self.assertTrue(res["allow_model_escalation"])
+        answers = {"model_call_budget": 10, "product": "TestApp"}
+        wq.write_answers(self.repo, answers)
+        md_file = self.repo / ".harness-setup" / "SETUP_ANSWERS.md"
+        content = md_file.read_text(encoding="utf-8")
+        self.assertIn("- Reviewer model: inherit parent model (fixed)", content)
+        self.assertIn("- Reviewer reasoning: adaptive / host-capability-aware", content)
+        self.assertIn("- Reviewer model-call budget: 10", content)
+        self.assertNotIn("Reviewer model escalation", content)
 
     def test_SETUP_V2_021_budget_5_maps_to_integer_5(self) -> None:
         import wizard.questions as wq
@@ -3183,18 +3189,20 @@ class CleanInstallV2SpecificationTests(RepoCase):
         content = out.read_text(encoding="utf-8")
         self.assertIn("MODEL_CALL_BUDGET = 10", content)
 
-    def test_PRODUCT_V2_003_allow_model_escalation_false_default(self) -> None:
+    def test_PRODUCT_V2_003_no_allow_model_escalation_in_product(self) -> None:
+        """REASON-INSTALL-004: generated _product.py contains no ALLOW_MODEL_ESCALATION"""
         import _installer_config as ic
-        out = ic.generate_product_py(self.repo, {"schema": 2, "allow_model_escalation": False, "product": "Test"})
+        out = ic.generate_product_py(self.repo, {"schema": 2, "product": "Test"})
         content = out.read_text(encoding="utf-8")
-        self.assertIn("ALLOW_MODEL_ESCALATION = False", content)
+        self.assertNotIn("ALLOW_MODEL_ESCALATION", content)
 
-    def test_PRODUCT_V2_004_allow_strong_and_20(self) -> None:
+    def test_PRODUCT_V2_004_keeps_model_call_budget(self) -> None:
+        """REASON-INSTALL-005: generated _product.py keeps MODEL_CALL_BUDGET"""
         import _installer_config as ic
-        out = ic.generate_product_py(self.repo, {"schema": 2, "allow_model_escalation": True, "model_call_budget": 20, "product": "Test"})
+        out = ic.generate_product_py(self.repo, {"schema": 2, "model_call_budget": 20, "product": "Test"})
         content = out.read_text(encoding="utf-8")
-        self.assertIn("ALLOW_MODEL_ESCALATION = True", content)
         self.assertIn("MODEL_CALL_BUDGET = 20", content)
+        self.assertNotIn("ALLOW_MODEL_ESCALATION", content)
 
     def test_PRODUCT_V2_005_device_verification_mode_manual_only(self) -> None:
         import _installer_config as ic
@@ -3342,9 +3350,8 @@ class CleanInstallV2SpecificationTests(RepoCase):
             )
             self.assertEqual("PASS", res["status"])
 
-    def test_REVIEW_SETUP_004_escalation_false_all_inherit(self) -> None:
+    def test_REVIEW_SETUP_004_all_reviewers_inherit_model(self) -> None:
         from review_execution import resolve_execution_profile
-        import _product
         task_id = "t_setup_004"
         policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
         policy_file = self.repo / "policy.json"
@@ -3354,16 +3361,18 @@ class CleanInstallV2SpecificationTests(RepoCase):
         current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
         plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
         plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
-        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", False):
-            prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-            for rev_info in prof["reviewers"].values():
-                self.assertEqual("inherit", rev_info["preferred_model"])
+        prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+        self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+        self.assertNotIn("allow_model_escalation", prof)
+        for rev_info in prof["reviewers"].values():
+            self.assertEqual("inherit", rev_info["required_model"])
+            self.assertNotIn("preferred_model", rev_info)
+            self.assertNotIn("fallback_model", rev_info)
 
-    def test_REVIEW_SETUP_005_escalation_true_with_strong_route(self) -> None:
+    def test_REVIEW_SETUP_005_antigravity_dispatch_contract_null_reasoning(self) -> None:
         from review_execution import resolve_execution_profile
-        import _product
         task_id = "t_setup_005"
-        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
+        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"], "severity": "HIGH"}
         policy_file = self.repo / "policy.json"
         policy_file.write_text(json.dumps(policy), encoding="utf-8")
         current_file = self.repo / f".agents/state/tasks/{task_id}/current-run.json"
@@ -3371,14 +3380,15 @@ class CleanInstallV2SpecificationTests(RepoCase):
         current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
         plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
         plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
-        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True):
-            with mock.patch("review_execution.load_host_model_routes", return_value={"STRONG": "pro"}):
-                prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-                self.assertEqual("pro", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+        prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+        sec_rev = prof["reviewers"]["security-reviewer-agent"]
+        self.assertEqual("DEEP", sec_rev["reasoning_intent"])
+        self.assertEqual("HOST_CONTROL_UNAVAILABLE", sec_rev["reasoning"]["resolution"])
+        self.assertIsNone(sec_rev["dispatch_contract"]["reasoning_argument"])
+        self.assertIsNone(sec_rev["dispatch_contract"]["reasoning_value"])
 
-    def test_REVIEW_SETUP_006_escalation_true_no_route_inherit_fallback(self) -> None:
+    def test_REVIEW_SETUP_006_legacy_env_routes_ignored(self) -> None:
         from review_execution import resolve_execution_profile
-        import _product
         task_id = "t_setup_006"
         policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
         policy_file = self.repo / "policy.json"
@@ -3388,10 +3398,10 @@ class CleanInstallV2SpecificationTests(RepoCase):
         current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
         plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
         plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
-        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True):
-            with mock.patch("review_execution.load_host_model_routes", return_value={}):
-                prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-                self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+        with mock.patch.dict("os.environ", {"HARNESS_MODEL_ROUTES": json.dumps({"antigravity": {"STRONG": "pro"}}), "HARNESS_ALLOW_MODEL_ESCALATION": "1"}):
+            prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+            self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["required_model"])
+            self.assertNotIn("preferred_model", prof["reviewers"]["security-reviewer-agent"])
 
     # -------------------------------------------------------------
     # 57. Kit Location Regression Tests
@@ -3596,7 +3606,6 @@ class CleanInstallV2SpecificationTests(RepoCase):
                 "i5": ":app",
                 "i6": "com.example.clean.MainActivity",
                 "i14": ["gemini"],
-                "review_model_policy": "inherit_only",
                 "review_call_budget": "10",
                 "i20": "none",
             }),
