@@ -48,7 +48,12 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         },
     ]
-    tool_opts = [{"id": tid, "label": labels[tid]} for tid in TOOL_IDS]
+    tool_opts = []
+    for tid in TOOL_IDS:
+        lbl = labels[tid]
+        if tid == "antigravity" and (d.get("antigravity") or not d.get("tools")):
+            lbl += " (Recommended)"
+        tool_opts.append({"id": tid, "label": lbl})
     tool_opts.append({"id": "all", "label": labels["all"]})
     qs.append(
         {
@@ -532,16 +537,16 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "prompt": t(lang, "review_call_budget"),
             "options": [
                 {
+                    "id": "20",
+                    "label": t(lang, "review_call_budget_20"),
+                },
+                {
                     "id": "10",
                     "label": t(lang, "review_call_budget_10"),
                 },
                 {
                     "id": "5",
                     "label": t(lang, "review_call_budget_5"),
-                },
-                {
-                    "id": "20",
-                    "label": t(lang, "review_call_budget_20"),
                 },
                 {
                     "id": "custom",
@@ -882,7 +887,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         pref_family_norm = raw.get("preferred_new_code_family") or auto.get("preferred_new_code_family")
     budget_choice = str(
         raw.get("review_call_budget")
-        or "10"
+        or "20"
     ).strip()
 
     if budget_choice == "custom":
@@ -894,7 +899,7 @@ def normalize(raw: dict, facts: dict) -> dict:
 
         if not custom_raw.isdigit():
             raise SystemExit(
-                "Reviewer model-call budget "
+                "Reviewer call safety cap "
                 "must be a whole number."
             )
 
@@ -902,7 +907,7 @@ def normalize(raw: dict, facts: dict) -> dict:
     else:
         if not budget_choice.isdigit():
             raise SystemExit(
-                "Reviewer model-call budget must be a whole number."
+                "Reviewer call safety cap must be a whole number."
             )
         model_call_budget = int(
             budget_choice
@@ -913,7 +918,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         or model_call_budget > 100
     ):
         raise SystemExit(
-            "Reviewer model-call budget "
+            "Reviewer call safety cap "
             "must be between 1 and 100."
         )
 
@@ -980,6 +985,11 @@ def write_answers(repo: Path, answers: dict) -> None:
     dest = setup_dir(repo)
     dest.mkdir(parents=True, exist_ok=True)
     atomic_write_json(answers_path(repo), answers)
+    tools = answers.get("tools") or []
+    tool_names = [TOOL_LABELS["en"].get(t, t) for t in tools]
+    ai_host_str = ", ".join(tool_names) if tool_names else "Google Antigravity"
+    ai_host = "Google Antigravity" if ("antigravity" in tools or not tools) else ai_host_str
+    budget = answers.get("model_call_budget", 20)
     md = [
         "# SETUP_ANSWERS",
         "",
@@ -1006,10 +1016,11 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- Device verification: {answers.get('device_verification', 'manual_only')}",
-        "- Reviewer model: inherit parent model (fixed)",
-        "- Reviewer reasoning: adaptive / host-capability-aware",
-        f"- Reviewer call limit: {answers.get('model_call_budget', 10)}",
-        f"- Reviewer model-call budget: {answers.get('model_call_budget', 10)}",
+        f"- AI host: {ai_host}",
+        "- Review protocol: trusted Antigravity V2",
+        "- Reviewer model: inherit parent by omission",
+        "- Reviewer reasoning: host-capability-aware; no override when unavailable",
+        f"- Reviewer call safety cap: {budget}",
         f"- Preferred new code architecture family: {answers.get('preferred_new_code_family') or '(none)'}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
@@ -1104,6 +1115,8 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         defaults["review_call_budget"] = budget_val if budget_val in {"5", "10", "20"} else "custom"
         if budget_val not in {"5", "10", "20"}:
             defaults["review_call_budget_text"] = budget_val
+    else:
+        defaults["review_call_budget"] = "20"
     tools = answers.get("tools")
     if isinstance(tools, list) and tools:
         defaults["i14"] = list(tools)

@@ -23,7 +23,7 @@ from _vnext_common import active_review_package_path, read_json, sha256_file, va
 MAX_STDIN_BYTES = 5 * 1024 * 1024
 AUDIT_MAX_RECORDS = 1000
 WRITE_TOOLS = {
-    "write_to_file", "replace_file_content", "apply_patch", "edit", "multiedit",
+    "write_to_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit",
     "create_file", "delete_file", "move_file", "rename_file",
 }
 SUBAGENT_TOOLS = {"define_subagent", "invoke_subagent", "manage_subagents", "manage_task", "schedule"}
@@ -170,13 +170,28 @@ def _target(args: dict) -> str:
     return ""
 
 
+def _extract_all_targets(args: dict) -> list[str]:
+    targets = []
+    single = _target(args)
+    if single:
+        targets.append(single)
+    for key in ("files", "Files", "paths", "Paths", "targets", "Targets", "edits", "Edits"):
+        val = args.get(key)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, str) and item.strip():
+                    targets.append(item.replace("\\", "/"))
+                elif isinstance(item, dict):
+                    t = _target(item)
+                    if t:
+                        targets.append(t)
+    return list(dict.fromkeys(targets))
+
+
 def _is_ide_artifact(resolved: Path) -> bool:
     try:
-        parts = {p.lower() for p in resolved.parts}
-        if ".gemini" in parts and "antigravity" in parts and "brain" in parts:
-            return True
-        brain_root = (Path.home() / ".gemini" / "antigravity" / "brain").resolve()
-        return resolved == brain_root or brain_root in resolved.parents
+        from antigravity_runtime import is_trusted_antigravity_path
+        return is_trusted_antigravity_path(resolved)
     except Exception:
         return False
 
@@ -381,26 +396,20 @@ def _handle_subagent(name: str, args: dict) -> None:
             r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
             key = r_role if r_role in reviewer_routes else r_type
 
-            req_model = str(
-                item.get("Model")
-                or item.get("model")
-                or "inherit"
-            ).strip().lower()
-
-            if req_model not in {
-                "",
-                "inherit",
-            }:
-                emit(
-                    "deny",
-                    (
-                        "Reviewer model switching is disabled. "
-                        "Every reviewer must inherit the "
-                        "parent model."
-                    ),
-                    tool=name,
-                )
-                return
+            # P0-03: Reviewer model inheritance is achieved by omission on Antigravity
+            if "model" in item or "Model" in item:
+                val = item.get("model") if "model" in item else item.get("Model")
+                if val is not None and str(val).strip():
+                    emit(
+                        "deny",
+                        (
+                            "REVIEWER_MODEL_OVERRIDE_FORBIDDEN: Do not send 'model' or 'Model' "
+                            "in reviewer invocation. Reviewer model inheritance is achieved by omission."
+                        ),
+                        tool=name,
+                        reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
+                    )
+                    return
 
             rev_info = reviewer_routes.get(key, {})
             rev_reasoning = rev_info.get("reasoning", {})
@@ -1112,11 +1121,24 @@ def main() -> None:
             return
         name, args = _tool_name_and_args(payload)
         if name in WRITE_TOOLS:
-            safe, detail, is_temp = _safe_target(_target(args))
-            if not safe:
-                emit("deny", detail, tool=name, reason_code="PROTECTED_PATH")
+            targets = _extract_all_targets(args)
+            if not targets:
+                targets = [""]
+            all_safe = True
+            all_temp = True
+            first_detail = ""
+            for t in targets:
+                safe, detail, is_temp = _safe_target(t)
+                if not safe:
+                    all_safe = False
+                    first_detail = detail
+                    break
+                if not is_temp:
+                    all_temp = False
+            if not all_safe:
+                emit("deny", first_detail, tool=name, reason_code="PROTECTED_PATH")
                 return
-            if is_temp:
+            if all_temp:
                 emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
                 return
             allowed, reason = file_mutation_allowed(REPO)

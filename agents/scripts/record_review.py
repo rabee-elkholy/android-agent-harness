@@ -110,10 +110,8 @@ def _extract_transcript_response(transcript_path: Path) -> str:
 
 
 def get_trusted_antigravity_root() -> Path:
-    app_data = os.environ.get("ANTIGRAVITY_APP_DATA")
-    if app_data:
-        return Path(app_data).resolve()
-    return (Path.home() / ".gemini" / "antigravity").resolve()
+    from antigravity_runtime import candidate_runtime_roots
+    return candidate_runtime_roots()[0]
 
 
 def resolve_trusted_subagent_transcript(host: str, subagent_id: str) -> Path | None:

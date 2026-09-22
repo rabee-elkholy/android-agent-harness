@@ -36,7 +36,7 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
     if "assemble" not in assemble_task:
         unit_test_task = ":app:testDebugUnitTest"
     tracker_language = answers.get("zoho_language") or answers.get("tracker_language") or "en_titles_ar_comments"
-    tools = answers.get("tools") or ["gemini"]
+    tools = answers.get("tools") or ["antigravity"]
     enforcement = detect(repo, tools if isinstance(tools, list) else str(tools).split(","))
     configured_src = answers.get("android_src")
     if not isinstance(configured_src, (list, tuple)) or not configured_src:
@@ -85,7 +85,7 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
 
 def configure_adapters_and_mcp(repo: Path, answers: dict) -> None:
     scripts_dir = repo / ".agents" / "scripts"
-    tools = answers.get("tools") or ["gemini"]
+    tools = answers.get("tools") or ["antigravity"]
     tools_arg = ",".join(tools) if isinstance(tools, list) else str(tools)
     adapter_script = scripts_dir / "install_tool_adapters.py"
     if adapter_script.is_file():

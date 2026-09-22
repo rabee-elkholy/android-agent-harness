@@ -274,6 +274,7 @@ def _candidate_adapter_paths(repo: Path) -> list[Path]:
         candidates.extend((f".claude/commands/{name}.md", f".github/prompts/{name}.prompt.md", f".codex/prompts/{name}.md"))
     for path in (Path(__file__).resolve().parents[1] / "subagents").glob("*.json"):
         candidates.append(f".claude/agents/{path.stem}.md")
+        candidates.append(f".agents/agents/{path.stem}/agent.md")
     result = [repo / rel for rel in sorted(set(candidates))]
     hooks = repo / ".githooks"
     if hooks.is_dir():

@@ -1335,6 +1335,72 @@ class LifecycleTests(RepoCase):
             ["git", "config", "--get", "core.hooksPath"], cwd=self.repo, text=True,
         ).strip())
 
+    def test_P0_02_antigravity_custom_agent_files_installed(self) -> None:
+        """P0-02: Clean install with Antigravity host must write .agents/agents/<reviewer>/agent.md for 7 core reviewers."""
+        self._answers()
+        answers_path = self.repo / ".harness-setup/answers.json"
+        answers = json.loads(answers_path.read_text(encoding="utf-8"))
+        answers["tools"] = ["antigravity"]
+        write(answers_path, json.dumps(answers))
+        result = install(self.repo, KIT)
+        core_7 = (
+            "bug-reviewer-agent",
+            "security-reviewer-agent",
+            "perf-anr-guardian-agent",
+            "convention-reviewer-agent",
+            "regression-impact-reviewer-agent",
+            "test-quality-reviewer-agent",
+            "spec-compliance-agent",
+        )
+        for role in core_7:
+            agent_file = self.repo / ".agents" / "agents" / role / "agent.md"
+            self.assertTrue(agent_file.is_file(), f"{agent_file} must exist")
+            text = agent_file.read_text(encoding="utf-8")
+            self.assertIn(f"name: {role}", text)
+            self.assertIn("subagent: true", text)
+            self.assertIn("mainAgent: false", text)
+            self.assertIn("view_file", text)
+            self.assertNotIn("write_to_file", text)
+            self.assertNotIn("replace_file_content", text)
+            self.assertNotIn("run_command", text)
+            self.assertNotIn("model:", text.lower())
+
+    def test_P0_02_antigravity_custom_agents_uninstalled(self) -> None:
+        """P0-02: Uninstall cleanly removes .agents/agents/ custom agents and restores pre-install state."""
+        self._answers()
+        answers_path = self.repo / ".harness-setup/answers.json"
+        answers = json.loads(answers_path.read_text(encoding="utf-8"))
+        answers["tools"] = ["antigravity"]
+        write(answers_path, json.dumps(answers))
+        install(self.repo, KIT)
+        uninstall(self.repo, apply=True)
+        self.assertFalse((self.repo / ".agents" / "agents").exists())
+
+    def test_P1_02_backup_snapshot_before_mutation(self) -> None:
+        """P1-02: If backup creation fails during clean install, zero project file mutations occur."""
+        self._answers()
+        original_app = (self.repo / "app/src/main/kotlin/A.kt").read_bytes()
+        def fail_backup(*args, **kwargs):
+            raise OSError("simulated backup failure")
+        with mock.patch.object(lifecycle_module, "_backup", side_effect=fail_backup):
+            with self.assertRaises(OSError):
+                install(self.repo, KIT)
+        self.assertFalse((self.repo / ".agents").exists())
+        self.assertEqual(original_app, (self.repo / "app/src/main/kotlin/A.kt").read_bytes())
+
+    def test_P1_03_partial_adapter_rollback(self) -> None:
+        """P1-03: If adapter configuration throws midway, partially created adapter files are rolled back."""
+        self._answers()
+        def fail_configure(*args, **kwargs):
+            partial = self.repo / ".agents" / "agents" / "bug-reviewer-agent" / "agent.md"
+            partial.parent.mkdir(parents=True, exist_ok=True)
+            partial.write_text("partial", encoding="utf-8")
+            raise RuntimeError("simulated adapter failure")
+        with mock.patch.object(lifecycle_module, "_configure", side_effect=fail_configure):
+            with self.assertRaises(RuntimeError):
+                install(self.repo, KIT)
+        self.assertFalse((self.repo / ".agents").exists())
+
     def test_installed_local_launcher_records_context_note_without_global_cli(self) -> None:
         self._answers()
         install(self.repo, KIT)
@@ -3043,7 +3109,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
         self.assertIsNotNone(q)
         self.assertEqual(5, q["station"])
         option_ids = [opt["id"] for opt in q["options"]]
-        self.assertEqual(["10", "5", "20", "custom"], option_ids)
+        self.assertEqual(["20", "10", "5", "custom"], option_ids)
 
     def test_SETUP_V2_006_normalized_answers_contain_no_allow_model_escalation(self) -> None:
         """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
@@ -3053,11 +3119,11 @@ class CleanInstallV2SpecificationTests(RepoCase):
         res = wq.normalize(raw, facts)
         self.assertNotIn("allow_model_escalation", res)
 
-    def test_SETUP_V2_007_review_call_budget_default_is_10(self) -> None:
+    def test_SETUP_V2_007_review_call_budget_default_is_20(self) -> None:
         import wizard.questions as wq
         qs = wq.questions_payload(self.repo, "en")
         q = next(q for q in qs if q["id"] == "review_call_budget")
-        self.assertEqual("10", q["options"][0]["id"])
+        self.assertEqual("20", q["options"][0]["id"])
         self.assertTrue(q["options"][0].get("recommended"))
 
     # -------------------------------------------------------------
@@ -3119,12 +3185,12 @@ class CleanInstallV2SpecificationTests(RepoCase):
         res = wq.normalize(raw, facts)
         self.assertEqual("never", res["git_policy"])
 
-    def test_SETUP_V2_018_default_model_call_budget_is_10(self) -> None:
+    def test_SETUP_V2_018_default_model_call_budget_is_20(self) -> None:
         import wizard.questions as wq
         raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
-        self.assertEqual(10, res["model_call_budget"])
+        self.assertEqual(20, res["model_call_budget"])
 
     def test_SETUP_V2_019_default_normalized_answers_have_no_allow_model_escalation(self) -> None:
         """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
@@ -3141,9 +3207,9 @@ class CleanInstallV2SpecificationTests(RepoCase):
         wq.write_answers(self.repo, answers)
         md_file = self.repo / ".harness-setup" / "SETUP_ANSWERS.md"
         content = md_file.read_text(encoding="utf-8")
-        self.assertIn("- Reviewer model: inherit parent model (fixed)", content)
-        self.assertIn("- Reviewer reasoning: adaptive / host-capability-aware", content)
-        self.assertIn("- Reviewer model-call budget: 10", content)
+        self.assertIn("- Reviewer model: inherit parent by omission", content)
+        self.assertIn("- Reviewer reasoning: host-capability-aware", content)
+        self.assertIn("- Reviewer call safety cap: 10", content)
         self.assertNotIn("Reviewer model escalation", content)
 
     def test_SETUP_V2_021_budget_5_maps_to_integer_5(self) -> None:

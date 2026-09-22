@@ -108,7 +108,7 @@ class HookTests(unittest.TestCase):
         policy = task / "policy.json"
         policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
+        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
         missing = {"Subagents": []}
         escalated = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "premium"}]}
         self.assertEqual("allow", self.call("invoke_subagent", good)["decision"])
@@ -132,7 +132,7 @@ class HookTests(unittest.TestCase):
         self.prepare_reviewer_run(task, policy)
         receipts_dir = task / "reviewer-dispatches"
         receipts_dir.write_text("not a directory", encoding="utf-8")
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
+        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
         res = self.call("invoke_subagent", good)
         self.assertEqual("deny", res["decision"])
         self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
@@ -143,7 +143,7 @@ class HookTests(unittest.TestCase):
         policy = task / "policy.json"
         policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy, create_package=False)
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
+        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
         res = self.call("invoke_subagent", good)
         self.assertEqual("deny", res["decision"])
         self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
@@ -159,7 +159,7 @@ class HookTests(unittest.TestCase):
         current = json.loads(current_path.read_text(encoding="utf-8"))
         current["run_id"] = "../escape"
         current_path.write_text(json.dumps(current), encoding="utf-8")
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "inherit"}]}
+        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
         res = self.call("invoke_subagent", good)
         self.assertEqual("deny", res["decision"])
         self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
@@ -356,6 +356,114 @@ class HookTests(unittest.TestCase):
         res_denied = self.call("grep_search", {"SearchPath": "app", "Query": "test"})
         self.assertEqual("deny", res_denied["decision"])
         self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res_denied.get("reason_code"))
+
+    def test_P0_03_explicit_model_argument_denied_and_omission_allowed(self):
+        self.activate("VERIFYING")
+        task = self.state / "tasks/task-one"
+        policy = task / "policy.json"
+        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        self.prepare_reviewer_run(task, policy)
+        # 1. explicit model="inherit" must be denied under Antigravity-first omission rule
+        res1 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "model": "inherit"}]})
+        self.assertEqual("deny", res1["decision"])
+        self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res1.get("reason_code"))
+        # 2. explicit Model="inherit" must be denied
+        res2 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "Model": "inherit"}]})
+        self.assertEqual("deny", res2["decision"])
+        self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res2.get("reason_code"))
+        # 3. other model must be denied
+        res3 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "model": "flash"}]})
+        self.assertEqual("deny", res3["decision"])
+        self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res3.get("reason_code"))
+        # 4. dispatch WITHOUT model key must be allowed
+        res4 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review"}]})
+        self.assertEqual("allow", res4["decision"])
+
+    def test_P0_05_multi_replace_file_content_unapproved_denied(self):
+        res = self.call("multi_replace_file_content", {
+            "TargetFile": "app/src/main/kotlin/com/example/MainActivity.kt",
+            "Replacements": [{"TargetContent": "class MainActivity", "ReplacementContent": "class MainActivity2"}],
+        })
+        self.assertEqual("deny", res["decision"])
+
+    def test_P0_05_multi_replace_file_content_approved_scope(self):
+        self.activate("IMPLEMENTING")
+        res1 = self.call("multi_replace_file_content", {
+            "TargetFile": "app/src/main/kotlin/com/example/MainActivity.kt",
+            "Replacements": [{"TargetContent": "class MainActivity", "ReplacementContent": "class MainActivity2"}],
+        })
+        self.assertEqual("allow", res1["decision"])
+
+        # Protected targets denied
+        res2 = self.call("multi_replace_file_content", {
+            "TargetFile": ".agents/scripts/workflow.py",
+            "Replacements": [{"TargetContent": "x", "ReplacementContent": "y"}],
+        })
+        self.assertEqual("deny", res2["decision"])
+
+    def test_P0_05_list_dir_intercepted(self):
+        res = self.call("list_dir", {"DirectoryPath": "app"})
+        self.assertIn("decision", res)
+
+    def test_P0_07_post_tool_reconcile_failed_invoke_sets_env_blocked(self):
+        post_script = SCRIPTS / "post_tool_reconcile.py"
+        self.assertTrue(post_script.is_file(), "post_tool_reconcile.py must exist")
+        self.activate("VERIFYING")
+        task = self.state / "tasks/task-one"
+        policy = task / "policy.json"
+        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        self.prepare_reviewer_run(task, policy)
+        current_run = json.loads((task / "current-run.json").read_text(encoding="utf-8"))
+        current_run["review_protocol_version"] = 2
+        current_run["review_host"] = "antigravity"
+        (task / "current-run.json").write_text(json.dumps(current_run), encoding="utf-8")
+        # First record dispatch in ledger
+        from review_orchestrator import record_dispatch, load_ledger, REVIEW_ENV_BLOCKED
+        record_dispatch(self.repo, "task-one", "bug-reviewer-agent")
+        # Run post_tool_reconcile with error
+        hook_payload = {
+            "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}},
+            "error": "Failed to launch subagent: timeout",
+        }
+        proc = subprocess.run(
+            [sys.executable, str(post_script)],
+            input=json.dumps(hook_payload),
+            capture_output=True,
+            text=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        current = json.loads((task / "current-run.json").read_text(encoding="utf-8"))
+        ledger = load_ledger(task, current["run_id"])
+        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertIn("timeout", ledger["reviewers"]["bug-reviewer-agent"]["last_error"])
+
+    def test_P1_06_tool_vocabulary_invariants(self):
+        try:
+            from policy_vocab import ANTIGRAVITY_TOOLS
+        except ImportError:
+            from antigravity_tools import ANTIGRAVITY_TOOLS
+        hooks_path = Path(__file__).resolve().parent.parent / "hooks.json"
+        hooks_json = json.loads(hooks_path.read_text(encoding="utf-8"))
+        pre_tools = set()
+        for feature in hooks_json.values():
+            if isinstance(feature, dict):
+                for hook in feature.get("PreToolUse", []):
+                    for tool in hook.get("matcher", "").split("|"):
+                        pre_tools.add(tool.strip())
+        self.assertIn("multi_replace_file_content", pre_tools)
+        self.assertIn("list_dir", pre_tools)
+        post_tools = set()
+        for feature in hooks_json.values():
+            if isinstance(feature, dict):
+                for hook in feature.get("PostToolUse", []):
+                    for tool in hook.get("matcher", "").split("|"):
+                        post_tools.add(tool.strip())
+        self.assertIn("invoke_subagent", post_tools)
+        for req in ("run_command", "write_to_file", "replace_file_content", "multi_replace_file_content", "invoke_subagent", "list_dir"):
+            self.assertIn(req, ANTIGRAVITY_TOOLS)
+
 
 
 class GenericMCPTests(unittest.TestCase):

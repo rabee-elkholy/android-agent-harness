@@ -519,6 +519,23 @@ def _flavor_pascal(name: str) -> str:
     return "".join(part.capitalize() for part in re.split(r"[^a-zA-Z0-9]", name) if part)
 
 
+def antigravity_exists() -> bool:
+    if os.environ.get("ANTIGRAVITY_APP_DATA"):
+        return True
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import antigravity_runtime
+        for root in antigravity_runtime.candidate_runtime_roots():
+            if root.is_dir():
+                return True
+    except Exception:
+        pass
+    for suffix in ("antigravity", "antigravity-cli", "antigravity-ide"):
+        if (Path.home() / ".gemini" / suffix).is_dir():
+            return True
+    return False
+
+
 def gemini_exists() -> bool:
     return (Path.home() / ".gemini" / "config.json").is_file() or (
         Path.home() / ".gemini" / "config" / "config.json"
@@ -641,6 +658,7 @@ def discover(repo: Path) -> dict:
         "project_structure": structure,
         "architectural_bases": arch_bases,
         "classic_app_src": has_classic_app_src(repo),
+        "antigravity": antigravity_exists(),
         "gemini": gemini_exists(),
         "zoho_config": zoho_config_present(),
         "gradlew": (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file(),

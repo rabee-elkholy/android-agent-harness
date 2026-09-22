@@ -10,60 +10,46 @@
 
 ## Chat installation (recommended)
 
-Open the Android project root in your coding agent and paste:
+Open the Android project root in your coding agent (select **Google Antigravity** during setup) and paste:
 
 ```text
 Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.60/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
-The agent interviews you in chat, preserves references, shows an explicit plan, provisions the pinned kit into `~/.android-harness/kit` (or `%USERPROFILE%\.android-harness\kit` on Windows), and runs doctor.
+The agent interviews you in chat, preserves references, shows an explicit plan, provisions the pinned kit into `~/.android-harness/kit` (or `%USERPROFILE%\.android-harness\kit` on Windows), and runs Doctor verification (`doctor --install-check`).
+
+Key configuration defaults for Google Antigravity:
+- **AI Host**: Select `Google Antigravity` (`antigravity`).
+- **Clean Install Only**: This architecture version supports deterministic clean installations.
+- **Reviewer Call Safety Cap**: Recommended clean-install value = `20` (acts as a safety ceiling, not a target).
+- **Installed Reviewer Subagents**: Seven dedicated custom reviewer agents are automatically generated under `.agents/agents/<reviewer>/agent.md`.
+- **Model & Reasoning**: Inherited by omission from the parent agent; no manual model or reasoning configuration required.
 
 ## Terminal installation (alternative)
 
 POSIX:
 ```bash
 python ~/.android-harness/kit/harness_cli.py init --repo /path/to/app --kit ~/.android-harness/kit
-python ~/.android-harness/kit/harness_cli.py doctor --repo /path/to/app --kit ~/.android-harness/kit --json
+python ~/.android-harness/kit/harness_cli.py doctor --install-check --repo /path/to/app --kit ~/.android-harness/kit --json
 ```
 
 Windows:
 ```powershell
 python "%USERPROFILE%\.android-harness\kit\harness_cli.py" init --repo C:\path\to\app --kit "%USERPROFILE%\.android-harness\kit"
-python "%USERPROFILE%\.android-harness\kit\harness_cli.py" doctor --repo C:\path\to\app --kit "%USERPROFILE%\.android-harness\kit" --json
+python "%USERPROFILE%\.android-harness\kit\harness_cli.py" doctor --install-check --repo C:\path\to\app --kit "%USERPROFILE%\.android-harness\kit" --json
 ```
 
-The setup wizard can be rerun before installation. Once v1 is installed, use the lifecycle updater rather than copying files manually.
+The setup wizard can be rerun before installation. Clean install is the supported onboarding path.
 
-## Update
+## Daily use (Antigravity-First)
 
-POSIX:
-```bash
-python ~/.android-harness/kit/harness_cli.py update --repo /path/to/app --kit /path/to/new-kit
-```
-
-Windows:
-```powershell
-python "%USERPROFILE%\.android-harness\kit\harness_cli.py" update --repo C:\path\to\app --kit C:\path\to\new-kit
-```
-
-Same-major updates are transactional. If a managed file was changed outside supported tailoring locations, the update stops and preserves the project. A major-version migration requires clean uninstall/install.
-
-## Remove
-
-POSIX:
-```bash
-python ~/.android-harness/kit/harness_cli.py uninstall --repo /path/to/app --kit ~/.android-harness/kit
-python ~/.android-harness/kit/harness_cli.py uninstall --repo /path/to/app --kit ~/.android-harness/kit --apply
-```
-
-Windows:
-```powershell
-python "%USERPROFILE%\.android-harness\kit\harness_cli.py" uninstall --repo C:\path\to\app --kit "%USERPROFILE%\.android-harness\kit"
-python "%USERPROFILE%\.android-harness\kit\harness_cli.py" uninstall --repo C:\path\to\app --kit "%USERPROFILE%\.android-harness\kit" --apply
-```
-
-The first command is a dry run. The applied command restores original adapters, backs up the current harness, and preserves modified harness material in recovery.
-
-## Daily use
-
-Ask the AI to analyze first. It must present a plan and wait for approval before editing or executing implementation commands. After approval, it follows `.agents/workflows/deliver.md` and the current immutable policy. It operates the harness via documented public command contracts without eagerly inspecting internal engine scripts. It does not automatically commit, push, or update Zoho. When the lifecycle state is unclear, `python ~/.android-harness/kit/harness_cli.py task status --repo /path/to/app --next` prints the safest next command without executing it.
+1. **Discovery & Plan**: Ask the AI to analyze first. It explores using bounded Task Context, drafts a plan, and waits for explicit developer approval before any file modification.
+2. **Approval**: Approve the plan in chat (reply "ابدأ" or "approve").
+3. **Implementation**: The agent applies only approved changes. Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
+4. **Prepare Verification**: Once changes are ready, the agent runs:
+   ```bash
+   python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity
+   ```
+5. **Parallel Reviewers**: Routed specialist subagents run concurrently via Antigravity `invoke_subagent` following Review Protocol V2. Structured results are recorded via `review complete` and aggregated via `review finalize`.
+6. **Assemble & Device**: After reviews pass cleanly, the agent builds the debug APK (`assemble`) and deploys to a physical device (`device install-start`).
+7. **Delivery**: When the lifecycle state is unclear, `python .agents/harness.py task status --repo . --task-id <id> --next` prints the authoritative next action. The agent never performs automatic git commits or pushes.

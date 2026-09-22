@@ -44,14 +44,19 @@ Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
 ## Phase 3: Authoritative interview
 Run: `python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>`
 The setup wizard payload is the sole interview authority. Ask **only** the questions returned; respect `recommended` (1 per question). Context preview: `python <kit-dir>/harness_cli.py context preview --repo <app-root>`.
+- For AI host: select **Google Antigravity** (`antigravity`).
+- No model selection or escalation questions are asked; reviewer model is inherited by omission.
+- For Reviewer Call Safety Cap: select recommended default of `20`.
 If a question contains `conditional_text_input`, and the selected option equals `when_option`, ask exactly that nested prompt and save the value under `answer_key`. Do not invent any other follow-up questions.
 
 ## Phase 4: Lifecycle approval and execution
 **STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.**
 create `<temp-answers>.json` outside `<app-root>`, then run:
 `python <kit-dir>/harness_cli.py init --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json`
+The installer takes a pre-install application backup, installs `.agents/hooks.json`, writes Antigravity reviewer agent definitions to `.agents/agents/<reviewer>/agent.md`, and generates `GEMINI.md`.
 
 ## Phase 5: Verification
 Run: `python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json`
+Doctor validates `.agents/hooks.json`, all 7 custom reviewer agents in `.agents/agents/`, Review Protocol V2, and runtime root paths.
 Optionally verify kit version: `python <kit-dir>/harness_cli.py version --kit <kit-dir>`
 On success show 0 changed app files and say: “Android Agent Harness is successfully configured. Open a NEW chat at the project root.”

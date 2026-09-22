@@ -104,6 +104,14 @@ COMMAND_DIRS: dict[str, tuple[str, str]] = {
 }
 
 EMPTY_DIR_CANDIDATES = (
+    ".agents/agents/bug-reviewer-agent",
+    ".agents/agents/security-reviewer-agent",
+    ".agents/agents/perf-anr-guardian-agent",
+    ".agents/agents/convention-reviewer-agent",
+    ".agents/agents/regression-impact-reviewer-agent",
+    ".agents/agents/test-quality-reviewer-agent",
+    ".agents/agents/spec-compliance-agent",
+    ".agents/agents",
     ".amazonq/rules",
     ".amazonq",
     ".claude/agents",
@@ -362,6 +370,52 @@ def generate_claude_agents(repo: Path, *, dry_run: bool) -> list[str]:
     return logs
 
 
+CORE_ROUTED_REVIEWERS = (
+    "bug-reviewer-agent",
+    "security-reviewer-agent",
+    "perf-anr-guardian-agent",
+    "convention-reviewer-agent",
+    "regression-impact-reviewer-agent",
+    "test-quality-reviewer-agent",
+    "spec-compliance-agent",
+)
+
+
+def antigravity_agent_markdown(data: dict) -> str:
+    name = str(data.get("name") or "").strip()
+    description = str(data.get("description") or name).strip()
+    prompt = str(data.get("system_prompt") or "").strip()
+    return (
+        f"---\n"
+        f"name: {name}\n"
+        f"description: {description}\n"
+        f"mainAgent: false\n"
+        f"subagent: true\n"
+        f"tools:\n"
+        f"  - view_file\n"
+        f"  - grep_search\n"
+        f"  - find_by_name\n"
+        f"  - list_dir\n"
+        f"---\n\n"
+        f"{prompt}\n"
+    )
+
+
+def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
+    logs: list[str] = []
+    src = subagents_dir(repo)
+    for role in CORE_ROUTED_REVIEWERS:
+        json_path = src / f"{role}.json"
+        if not json_path.is_file():
+            continue
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        dest = repo / ".agents" / "agents" / role / "agent.md"
+        logs.append(
+            write_file(dest, antigravity_agent_markdown(data), dry_run=dry_run, repo=repo)
+        )
+    return logs
+
+
 def bodies_for_tool(tool: str, mapping: dict[str, str], pointer: str) -> dict[str, str]:
     if tool == "cursor":
         return {
@@ -410,6 +464,9 @@ def keep_set(selected: set[str]) -> set[str]:
     for tool in selected:
         keep.update(TOOL_FILES[tool])
         keep.update(command_pack_rels(tool))
+    if "gemini" in selected:
+        for r in CORE_ROUTED_REVIEWERS:
+            keep.add(f".agents/agents/{r}/agent.md")
     return keep
 
 
@@ -435,6 +492,17 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
     claude_dir = repo / ".claude" / "agents"
     if "claude" not in selected and claude_dir.is_dir():
         for path in sorted(claude_dir.glob("*.md")):
+            if not is_managed_file(path):
+                continue
+            rel_s = rel_of(path, repo)
+            if dry_run:
+                logs.append(f"dry-run delete {rel_s}")
+                continue
+            path.unlink()
+            logs.append(f"deleted {rel_s}")
+    if "gemini" not in selected:
+        for r in CORE_ROUTED_REVIEWERS:
+            path = repo / ".agents" / "agents" / r / "agent.md"
             if not is_managed_file(path):
                 continue
             rel_s = rel_of(path, repo)
@@ -805,6 +873,8 @@ def install(args: argparse.Namespace) -> list[str]:
             logs.extend(generate_command_packs(repo, tool, mapping, dry_run=args.dry_run))
     if "claude" in selected and not args.skip_claude_agents:
         logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
+    if "gemini" in selected:
+        logs.extend(generate_antigravity_agents(repo, dry_run=args.dry_run))
     logs.extend(cleanup_legacy_git_gate(repo, dry_run=args.dry_run))
     if getattr(args, "cc_hooks", False) and "claude" in selected:
         logs.extend(ensure_cc_hooks(repo, mapping["PY"], dry_run=args.dry_run))

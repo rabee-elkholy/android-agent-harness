@@ -90,14 +90,16 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
             "required_model": "inherit",
             "reasoning": reasoning,
             "dispatch_contract": {
-                "model": "inherit",
+                "model_policy": "INHERIT_PARENT_BY_OMISSION",
+                "model_argument": None,
                 "reasoning_argument": reasoning["argument_name"],
                 "reasoning_value": reasoning["native_value"],
             },
             "brief_path": brief_file,
             "brief_content": brief_text,
             "review_package_path": review_pkg_str,
-            "evidence_footer_contract": "EVIDENCE pkg=<sha12> cites=<count>",
+            "output_contract": "HARNESS_REVIEW_RESULT_V2",
+            "v2_output_contract": "HARNESS_REVIEW_RESULT_V2",
         }
 
     return {

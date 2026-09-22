@@ -3,11 +3,23 @@
     "enabled": true,
     "PreToolUse": [
       {
-        "matcher": "run_command|grep_search|find_by_name|invoke_subagent|define_subagent|manage_subagents|manage_task|schedule|write_to_file|replace_file_content|call_mcp_tool",
+        "matcher": "run_command|grep_search|find_by_name|list_dir|invoke_subagent|define_subagent|manage_subagents|manage_task|schedule|write_to_file|replace_file_content|multi_replace_file_content|call_mcp_tool",
         "hooks": [
           {
             "type": "command",
             "command": "python scripts/pre_tool_safety.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "invoke_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python scripts/post_tool_reconcile.py",
             "timeout": 15
           }
         ]

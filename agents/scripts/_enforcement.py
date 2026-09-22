@@ -17,6 +17,17 @@ def _contains(path: Path, marker: str) -> bool:
 
 def detect(repo: Path, tools: list[str] | None = None) -> dict:
     root = repo.resolve()
+    if tools is None:
+        answers_file = root / ".harness-setup" / "answers.json"
+        if answers_file.is_file():
+            try:
+                data = json.loads(answers_file.read_text(encoding="utf-8"))
+                tools = data.get("tools")
+            except Exception:
+                pass
+        if not tools and (root / ".agents/hooks.json").is_file():
+            tools = ["antigravity"]
+
     selected = sorted({str(item).strip().lower() for item in (tools or []) if str(item).strip()})
     by_host: dict[str, str] = {}
     for host in selected:

@@ -26,6 +26,7 @@ SKIP_DIRS = {
 }
 
 TOOL_IDS = (
+    "antigravity",
     "cursor",
     "claude",
     "copilot",
@@ -44,10 +45,11 @@ TOOL_IDS = (
 
 TOOL_LABELS = {
     "en": {
+        "antigravity": "Google Antigravity",
         "cursor": "Cursor",
         "claude": "Claude Code",
         "copilot": "GitHub Copilot",
-        "gemini": "Gemini / Antigravity",
+        "gemini": "Gemini CLI",
         "codex": "Codex",
         "qwen": "Qwen Code",
         "windsurf": "Windsurf",
@@ -186,14 +188,14 @@ T = {
         "review_call_budget": (
             "Maximum reviewer calls allowed for one task before developer intervention?"
         ),
+        "review_call_budget_20": (
+            "20 — Review-heavy / large critical work (Recommended)"
+        ),
         "review_call_budget_10": (
-            "10 — Balanced (Recommended)"
+            "10 — Balanced"
         ),
         "review_call_budget_5": (
             "5 — Economy"
-        ),
-        "review_call_budget_20": (
-            "20 — Review-heavy / large critical work"
         ),
         "review_call_budget_custom": (
             "Custom value (1–100)"

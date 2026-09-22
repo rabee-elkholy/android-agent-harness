@@ -216,7 +216,7 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertEqual("security-reviewer-agent", rev_info["reviewer_role"])
         self.assertTrue(rev_info["brief_path"].endswith("brief-security-reviewer-agent.md"))
         self.assertEqual("# Security Brief", rev_info["brief_content"])
-        self.assertEqual("EVIDENCE pkg=<sha12> cites=<count>", rev_info["evidence_footer_contract"])
+        self.assertEqual("HARNESS_REVIEW_RESULT_V2", rev_info["output_contract"])
         self.assertEqual("inherit", rev_info["required_model"])
         self.assertIn("reasoning_intent", rev_info)
         self.assertIn("dispatch_contract", rev_info)

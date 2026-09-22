@@ -23,6 +23,7 @@ from _vnext_common import (  # noqa: E402
     git_text,
     read_json,
     repository_identity,
+    sha256_file,
     utc_now,
     validate_id,
     validate_repo_path_containment,
@@ -2568,15 +2569,43 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     retry_required = [r for r in required_reviewers if rev_states.get(r, {}).get("state") == REVIEW_PROTOCOL_RETRY_REQUIRED]
                     if retry_required:
                         r = retry_required[0]
+                        recipient = rev_states.get(r, {}).get("execution_id") or ""
+                        pkg_sha_full = sha256_file(pkg_path) if pkg_path.is_file() else ""
+                        correction_msg = (
+                            f"Your previous review response did not include a valid HARNESS_REVIEW_RESULT_V2 JSON block.\n\n"
+                            f"Please emit your final structured review result as exactly ONE JSON block matching schema_version 2:\n"
+                            f"```json\n"
+                            f'{{\n'
+                            f'  "schema_version": 2,\n'
+                            f'  "task_id": "{task_id}",\n'
+                            f'  "run_id": "{run_id}",\n'
+                            f'  "reviewer": "{r}",\n'
+                            f'  "review_package_sha256": "{pkg_sha_full}",\n'
+                            f'  "verdict": "PASS",\n'
+                            f'  "findings": []\n'
+                            f'}}\n'
+                            f"```\n"
+                            f"Or with verdict 'FINDINGS' and at least one finding object.\n\n"
+                            f"Requirements:\n"
+                            f"- Return the corrected final JSON block only.\n"
+                            f"- Do NOT redo the review unless needed to correct factual content.\n"
+                            f"- No prose after the final JSON code block.\n"
+                        )
                         return {
                             "code": "RETRY_REVIEW_PROTOCOL",
                             "kind": "HOST_ACTION",
                             "command": "",
                             "blocking": True,
+                            "tool": "send_message",
                             "reviewer": r,
-                            "reason": f"Reviewer '{r}' output was malformed: {rev_states.get(r, {}).get('last_error')}. Request structured result correction.",
-                            "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewer": r},
-                            "expected": {},
+                            "recipient": recipient,
+                            "message": correction_msg,
+                            "reason": f"Reviewer '{r}' output was malformed: {rev_states.get(r, {}).get('last_error')}. Request structured result correction via send_message to {recipient}.",
+                            "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewer": r, "recipient": recipient},
+                            "expected": {
+                                "same_execution_id": True,
+                                "new_dispatch": False,
+                            },
                         }
 
                     not_dispatched = [r for r in required_reviewers if rev_states.get(r, {}).get("state") in (REVIEW_NOT_DISPATCHED, None)]

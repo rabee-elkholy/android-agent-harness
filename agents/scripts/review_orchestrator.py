@@ -469,6 +469,15 @@ def complete_review(
                         raise ValidationError("different result for same completed execution is rejected")
                 return existing_result.get("result", {})
 
+        existing_bound_id = ledger["reviewers"][reviewer].get("execution_id")
+        if existing_bound_id and existing_bound_id != execution_id:
+            if ledger["reviewers"][reviewer].get("state") != REVIEW_ENV_BLOCKED:
+                raise ValidationError(f"reviewer '{reviewer}' already bound to execution '{existing_bound_id}', rejecting different execution '{execution_id}'")
+
+        ledger["reviewers"][reviewer]["execution_id"] = execution_id
+        ledger["reviewers"][reviewer]["execution_id_sha256"] = hashlib.sha256(execution_id.encode("utf-8")).hexdigest()
+        save_ledger(directory, run_id, ledger)
+
         # Resolve transcript text
         t_path = resolve_trusted_review_source(run_host, execution_id)
         if not t_path or not t_path.is_file():
@@ -598,6 +607,7 @@ def _finalize_review_execution_locked(
         "review_protocol_version": 2,
         "package_sha256": pkg_sha,
         "reviewers": sorted(required_reviewers),
+        "verdict": status,
         "reports": reports,
         "findings": all_findings,
         "blocking_findings": blocking,
@@ -641,6 +651,9 @@ def finalize_review_execution(
 ) -> dict[str, Any]:
     with StateLock(state_root(repo)):
         return _finalize_review_execution_locked(repo, task_id, run_id, ledger)
+
+
+finalize_reviews = finalize_review_execution
 
 
 def get_review_execution_status(repo: Path, task_id: str) -> dict[str, Any]:

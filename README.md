@@ -199,15 +199,31 @@ Final Verifier
 
 ---
 
+## Antigravity-First Architecture & Review Protocol V2
+
+The harness is engineered primary-first for **Google Antigravity**:
+
+- **Review Protocol V2**: Specialist reviewers return structured, machine-verifiable JSON (`HARNESS_REVIEW_RESULT_V2`) rather than fragile text tokens. Findings are typed, prioritized, and cryptographically bound to the frozen delivery snapshot, change set, and review package digest.
+- **Dedicated Custom Reviewer Subagents**: Seven core specialist reviewers are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md` (`bug-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `regression-impact-reviewer-agent`, `test-quality-reviewer-agent`, `spec-compliance-agent`).
+- **Reviewer Model Inheritance by Omission**: Reviewer subagents inherit the authoritative model of the lead agent by omission. No model escalation or manual model routing parameters are passed.
+- **Parallel Routed Reviews**: Dynamic review policies resolve the minimal required reviewer roster. All routed reviewers are dispatched concurrently via Antigravity `invoke_subagent` without intermediate prompt stops.
+- **Reviewer Call Safety Cap**: Maximum safety ceiling on total reviewer model calls (recommended: 20).
+- **Same-Conversation Protocol Recovery**: Malformed initial reviewer responses trigger exact `send_message` corrections within the same conversation ID, preventing runaway subagent spawns.
+- **PostToolUse Launch Reconciliation**: Subagent invocation errors are trapped by native `PostToolUse` hooks, transitioning pending reviewers to `ENV_BLOCKED` and returning actionable diagnostic guidance.
+- **Hard Mutation Interception**: `.agents/hooks.json` intercepts tool write calls (`multi_replace_file_content`, `replace_file_content`, `write_to_file`) to ensure changes stay strictly within approved scope and phases.
+
+---
+
 ## Supported hosts / enforcement model
 
 | Host | Adapter | Mutation Interception | Approval Trust | Notes |
 |---|---|---|---|---|
-| **Antigravity / Gemini CLI** | `agents/hooks.json`, rules, skills | `HARD_ENFORCED` / `RULE_ENFORCED` | Native hooks + rule gates | Intercepts tool calls directly |
+| **Google Antigravity** | `agents/hooks.json`, custom agents (`.agents/agents/`), rules, skills | `HARD_ENFORCED` | Native hooks + Review V2 | Primary production host; intercepts tool mutations directly |
 | **Claude Code** | Pre-tool execution hooks (`config.json`), rules | `HARD_ENFORCED` | Native tool hooks | Blocks unapproved writes |
 | **Cursor** | `.cursorrules` / `.cursor/rules` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
 | **Windsurf** | `.windsurfrules` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
 | **GitHub Copilot** | `.github/copilot-instructions.md` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
+| **Gemini CLI** | Rules, instructions | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement (legacy compatibility) |
 | **Roo Code / Continue** | Mode instructions, system rules | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
 
 Host-native hooks can intercept some mutation classes where supported. Other hosts rely on rule enforcement plus deterministic downstream verification. The harness reports the detected enforcement level honestly.

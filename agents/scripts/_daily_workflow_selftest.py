@@ -2734,7 +2734,10 @@ class ReviewerPrecisionTests(unittest.TestCase):
             prompt = data.get("system_prompt", "")
             self.assertIn("untrusted evidence", prompt.lower(), f"{sf.name} must have untrusted evidence boundary")
             self.assertNotIn("guarantee zero regressions across the entire app", prompt.lower(), f"{sf.name} must not claim impossible global zero-regression guarantee")
-            self.assertIn("evidence pkg=", prompt.lower(), f"{sf.name} must require evidence footer")
+            if sf.name in ("android-ui-expert-agent.json", "qa-diagnostics-agent.json"):
+                self.assertIn("evidence pkg=", prompt.lower(), f"{sf.name} must require evidence footer")
+            else:
+                self.assertIn("harness_review_result_v2", prompt.lower(), f"{sf.name} must require V2 contract")
 
     def test_review_package_untrusted_evidence_warning(self):
         """Review package generation and briefs must inject the UNTRUSTED_EVIDENCE_WARNING."""
@@ -5343,6 +5346,115 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual(run_id, b_data["run_id"])
         self.assertEqual(pkg_sha, b_data["review_package_sha256"])
 
+    def test_P0_01_core_reviewer_prompts_use_v2_contract(self) -> None:
+        """P0-01: Core 7 reviewer definitions must use V2 contract, no legacy PASS tokens, no EVIDENCE footer."""
+        subagents_dir = KIT / "agents" / "subagents"
+        core_7 = (
+            "bug-reviewer-agent",
+            "security-reviewer-agent",
+            "perf-anr-guardian-agent",
+            "convention-reviewer-agent",
+            "regression-impact-reviewer-agent",
+            "test-quality-reviewer-agent",
+            "spec-compliance-agent",
+        )
+        legacy_pass_tokens = (
+            "BUG_PASS", "SECURITY_PASS", "PERF_PASS", "CONVENTION_PASS",
+            "REGRESSION_PASS", "TEST_PASS", "SPEC_PASS",
+        )
+        for role in core_7:
+            p = subagents_dir / f"{role}.json"
+            self.assertTrue(p.is_file(), f"{role}.json missing")
+            data = json.loads(p.read_text(encoding="utf-8"))
+            prompt = data.get("system_prompt", "")
+            self.assertIn("HARNESS_REVIEW_RESULT_V2", prompt, f"{role} must mandate HARNESS_REVIEW_RESULT_V2")
+            for token in legacy_pass_tokens:
+                self.assertNotIn(token, prompt, f"{role} must not require legacy token {token}")
+            self.assertNotIn("last line of your reply MUST be: EVIDENCE", prompt, f"{role} must not require legacy EVIDENCE footer")
+            self.assertNotIn("last line MUST be: EVIDENCE", prompt, f"{role} must not require legacy EVIDENCE footer")
+            self.assertNotIn("A reply without a valid matching footer does not clear the delivery barrier", prompt)
+
+    def test_P0_04_antigravity_runtime_roots(self) -> None:
+        """P0-04: antigravity_runtime module candidate roots and transcript resolution."""
+        import antigravity_runtime
+        roots = antigravity_runtime.candidate_runtime_roots()
+        root_strs = [r.as_posix() for r in roots]
+        self.assertTrue(any("antigravity-cli" in r for r in root_strs), "CLI root missing")
+        self.assertTrue(any("antigravity-ide" in r for r in root_strs), "IDE root missing")
+        # Test traversal rejection
+        self.assertIsNone(antigravity_runtime.resolve_transcript("../../escape"))
+        self.assertIsNone(antigravity_runtime.resolve_transcript("c:/absolute"))
+        self.assertIsNone(antigravity_runtime.resolve_transcript("file:///uri"))
+
+    def test_P0_06_malformed_v2_result_stores_execution_id_and_rejects_different_id(self) -> None:
+        """P0-06: Malformed V2 result stores execution ID and rejects different execution ID on retry."""
+        from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_PROTOCOL_RETRY_REQUIRED
+        task_id = "test-p06-store-exec"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        self._create_mock_transcript("exec-p06-conv", "malformed not json")
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p06-conv")
+        ledger = load_ledger(tdir, run_id)
+        rev_entry = ledger["reviewers"]["bug-reviewer-agent"]
+        self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, rev_entry["state"])
+        self.assertEqual("exec-p06-conv", rev_entry.get("execution_id"))
+        self.assertTrue(rev_entry.get("execution_id_sha256"))
+
+        # Different execution ID must be rejected on retry
+        self._create_mock_transcript("exec-p06-other", "also malformed")
+        with self.assertRaises(ValidationError) as ctx:
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p06-other")
+        self.assertIn("different execution", str(ctx.exception).lower())
+
+    def test_P0_06_deterministic_send_message_retry_action(self) -> None:
+        """P0-06: resolve_next_action returns deterministic send_message host action on PROTOCOL_RETRY_REQUIRED."""
+        from review_orchestrator import record_dispatch, complete_review
+        from workflow import resolve_next_action
+        task_id = "test-p06-action"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        self._create_mock_transcript("exec-p06-msg", "malformed response")
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p06-msg")
+        plan = read_json(tdir / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("RETRY_REVIEW_PROTOCOL", act.get("code"))
+        self.assertEqual("HOST_ACTION", act.get("kind"))
+        self.assertEqual("send_message", act.get("tool"))
+        self.assertEqual("bug-reviewer-agent", act.get("reviewer"))
+        self.assertEqual("exec-p06-msg", act.get("recipient"))
+        self.assertIn("HARNESS_REVIEW_RESULT_V2", act.get("message", ""))
+        self.assertIn(task_id, act.get("message", ""))
+        self.assertIn(run_id, act.get("message", ""))
+        self.assertIn(pkg_sha, act.get("message", ""))
+        self.assertEqual({"same_execution_id": True, "new_dispatch": False}, act.get("expected"))
+
+    def test_P0_08_wizard_antigravity_identity_and_enforcement(self) -> None:
+        """P0-08: Setup wizard has antigravity ID and enforcement recognizes it as HARD_ENFORCED with hooks."""
+        from wizard.i18n import TOOL_IDS, TOOL_LABELS
+        self.assertIn("antigravity", TOOL_IDS)
+        labels = TOOL_LABELS["en"]
+        self.assertEqual("Google Antigravity", labels.get("antigravity"))
+        (self.repo / ".agents" / "hooks.json").write_text("{}", encoding="utf-8")
+        from _enforcement import detect
+        enf = detect(self.repo, ["antigravity"])
+        self.assertEqual("HARD_ENFORCED", enf["mutation_boundary_by_host"].get("antigravity"))
+
+    def test_P1_05_budget_correction_does_not_charge_new_call(self) -> None:
+        """P1-05: Protocol correction via send_message to same conversation does not charge a reviewer call."""
+        from review_orchestrator import record_dispatch, complete_review, load_ledger
+        task_id = "test-p105-budget"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        ledger_before = load_ledger(tdir, run_id)
+        calls_before = ledger_before.get("dispatched_calls_count", 1)
+        self._create_mock_transcript("exec-p105", "malformed")
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p105")
+        ledger_after = load_ledger(tdir, run_id)
+        self.assertEqual(calls_before, ledger_after.get("dispatched_calls_count", 1))
+
 
 class VerifyingScopeTests(unittest.TestCase):
     """VERIFY-SCOPE-001 through 007: Review search and list_dir scope enforcement during VERIFYING."""
@@ -5530,6 +5642,416 @@ class VerifyingScopeTests(unittest.TestCase):
         )
         self.assertEqual("allow", res["decision"])
         self.assertEqual("VERIFIER_SEARCH_ALLOWED", res.get("reason_code"))
+
+
+class AntigravityEndToEndScenarioTests(unittest.TestCase):
+    """Section 8: Mandatory End-to-End Antigravity Scenario."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="e2e_antigravity_")
+        self.repo = Path(self.temp_dir.name).resolve()
+        run_git(self.repo, "init", "-q")
+        run_git(self.repo, "config", "user.name", "Antigravity E2E")
+        run_git(self.repo, "config", "user.email", "antigravity@example.invalid")
+        run_git(self.repo, "config", "core.autocrlf", "true")
+        write_file(self.repo / "gradlew", "#!/bin/sh\nexit 0\n")
+        write_file(self.repo / "settings.gradle.kts", 'rootProject.name = "E2EFixture"\ninclude(":app")\n')
+        write_file(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        (self.repo / "app/src/main/kotlin/com/example").mkdir(parents=True, exist_ok=True)
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\nclass MainActivity\n")
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "init", "-q")
+
+        self.mock_transcripts: dict[str, Path] = {}
+        self._source_patcher = mock.patch(
+            "review_orchestrator.resolve_trusted_review_source",
+            side_effect=lambda host, eid: self.mock_transcripts.get(eid),
+        )
+        self._source_patcher.start()
+
+    def tearDown(self) -> None:
+        self._source_patcher.stop()
+        self.temp_dir.cleanup()
+
+    def _create_mock_transcript(self, execution_id: str, content: str) -> Path:
+        trans_dir = self.repo / ".mock_transcripts" / execution_id
+        trans_dir.mkdir(parents=True, exist_ok=True)
+        t_file = trans_dir / "transcript.jsonl"
+        t_file.write_text(json.dumps({"source": "MODEL", "content": content}) + "\n", encoding="utf-8")
+        self.mock_transcripts[execution_id] = t_file
+        return t_file
+
+    def test_e2e_antigravity_full_lifecycle_and_recovery(self) -> None:
+        # Step 1: Clean Android fixture has no .agents
+        self.assertFalse((self.repo / ".agents").exists())
+
+        # Step 2: Wizard selects antigravity
+        from wizard import questions
+        raw = {
+            "i0": "yes",
+            "i1": "App",
+            "i2": sys.executable,
+            "i5": ":app",
+            "i6": "com.example.MainActivity",
+            "i14": ["antigravity"],
+            "i20": "none",
+            "review_call_budget": "20",
+        }
+        facts = {
+            "repo": str(self.repo),
+            "project_name": "App",
+            "modules": [":app"],
+            "gradle": "gradlew",
+            "python": sys.executable,
+            "launcher": "com.example.MainActivity",
+            "application_id": "com.example",
+            "antigravity": True,
+        }
+        answers = questions.normalize(raw, facts)
+        questions.write_answers(self.repo, answers)
+
+        # Step 3: Installer writes files
+        from lifecycle import install
+        install_res = install(self.repo, KIT)
+        self.assertTrue((self.repo / ".agents" / "hooks.json").is_file())
+        self.assertTrue((self.repo / "GEMINI.md").is_file())
+        core_7 = (
+            "bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent",
+            "convention-reviewer-agent", "regression-impact-reviewer-agent",
+            "test-quality-reviewer-agent", "spec-compliance-agent",
+        )
+        for role in core_7:
+            self.assertTrue((self.repo / ".agents" / "agents" / role / "agent.md").is_file())
+
+        # Step 4: Doctor install-check passes
+        from doctor.engine import HarnessDoctor
+        doc = HarnessDoctor(self.repo, run_selftest=False)
+        doc.run_install_check()
+        failures = [r for r in doc.results if r.status == "FAIL"]
+        self.assertEqual([], failures, [f"{f.name}: {f.message}" for f in failures])
+
+        # Step 5: Task drafted
+        from workflow import draft, record_approval, begin_task, prepare_verification, resolve_next_action, task_dir
+        task_id = "task-e2e-ag-01"
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="E2E Antigravity Scenario", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+
+        # Step 6: Developer approval recorded
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"
+        ))
+
+        # Step 7: Implementation change created
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\nclass MainActivity { fun foo() = 42 }\n")
+
+        # Step 8: prepare-verification --host antigravity
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        tdir = task_dir(self.repo, task_id)
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        self.assertEqual(2, current["review_protocol_version"])
+        self.assertEqual("antigravity", current["review_host"])
+
+        # Configure 2 reviewers for the scenario: bug-reviewer-agent and security-reviewer-agent
+        import review_package
+        policy = read_json(Path(current["policy"]))
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = ["bug-reviewer-agent", "security-reviewer-agent"]
+        policy["assemble_required"] = False
+        atomic_write_json(Path(current["policy"]), policy)
+        from review_orchestrator import ledger_file
+        ledger_path = ledger_file(tdir, run_id)
+        if ledger_path.is_file():
+            ledger_path.unlink()
+        _, pkg = review_package.build_package(self.repo, task_id)
+        pkg_sha = pkg["package_sha256"]
+
+        # Record preflight pass evidence so gate passes to reviewers
+        store = EvidenceStore(state_root(self.repo))
+        manifest = read_json(Path(current["manifest"]))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={"result": "ok"},
+        )
+
+        # Step 9: Router selects reviewers
+        plan = read_json(tdir / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DISPATCH_REVIEWERS", act["code"])
+
+        # Step 10 & 11: PreToolUse allows one invoke_subagent batch (no model/reasoning fields), dispatch receipts exist before invocation
+        safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        subagent_call = {
+            "toolName": "invoke_subagent",
+            "toolArgs": {
+                "Subagents": [
+                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": "Review bug"},
+                    {"TypeName": "security-reviewer-agent", "Role": "security-reviewer-agent", "Prompt": "Review security"},
+                ]
+            }
+        }
+        env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_REPO_DIR": str(self.repo),
+            "PYTHONPATH": str(KIT / "agents" / "scripts"),
+        }
+        proc = subprocess.run(
+            [sys.executable, str(safety_script)],
+            input=json.dumps(subagent_call),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=15,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("allow", json.loads(proc.stdout)["decision"], proc.stdout)
+
+        from review_orchestrator import (
+            dispatch_receipt_file, complete_review, load_ledger,
+            REVIEW_COMPLETED, REVIEW_INGESTED, REVIEW_PROTOCOL_RETRY_REQUIRED, finalize_reviews,
+        )
+        # Dispatch receipts exist
+        self.assertTrue(dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent").is_file())
+        self.assertTrue(dispatch_receipt_file(tdir, run_id, "security-reviewer-agent").is_file())
+
+        # Step 12: One reviewer returns correct V2 PASS (bug-reviewer-agent)
+        v2_pass = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "PASS", "findings": []
+        })
+        self._create_mock_transcript("exec-bug-01", v2_pass)
+        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-bug-01")
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_COMPLETED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+
+        # Step 13: One reviewer returns malformed legacy output (security-reviewer-agent)
+        self._create_mock_transcript("exec-sec-01", "SECURITY_PASS\nEVIDENCE pkg=12345 cites=2")
+        with self.assertRaises(ValidationError):
+            complete_review(self.repo, task_id, "security-reviewer-agent", "exec-sec-01")
+
+        # Step 14: review complete moves only that reviewer to PROTOCOL_RETRY_REQUIRED
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, ledger["reviewers"]["security-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_COMPLETED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+
+        # Step 15: Router returns exact send_message retry to same conversation
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("RETRY_REVIEW_PROTOCOL", act["code"])
+        self.assertEqual("send_message", act.get("tool"))
+        self.assertEqual("security-reviewer-agent", act.get("reviewer"))
+        self.assertEqual("exec-sec-01", act.get("recipient"))
+        self.assertEqual({"same_execution_id": True, "new_dispatch": False}, act.get("expected"))
+
+        # Step 16 & 17: Corrected transcript returns V2 PASS; same execution ID completes; no new dispatch/call
+        v2_pass_sec = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": run_id,
+            "reviewer": "security-reviewer-agent", "review_package_sha256": pkg_sha,
+            "verdict": "PASS", "findings": []
+        })
+        self._create_mock_transcript("exec-sec-01", v2_pass_sec)
+        calls_before = ledger.get("dispatched_calls_count", 2)
+        complete_review(self.repo, task_id, "security-reviewer-agent", "exec-sec-01")
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["security-reviewer-agent"]["state"])
+        self.assertEqual(calls_before, ledger.get("dispatched_calls_count", 2))
+
+        # Step 18: Aggregate reviews finalize
+        finalize_res = finalize_reviews(self.repo, task_id)
+        self.assertEqual("PASS", finalize_res["verdict"])
+        self.assertEqual([], finalize_res["findings"])
+        ledger = load_ledger(tdir, run_id)
+        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["security-reviewer-agent"]["state"])
+
+        # Step 20: Final review evidence remains bound to run/package/snapshot/change set
+        manifest = read_json(Path(current["manifest"]))
+        store = EvidenceStore(state_root(self.repo))
+        evidence = store.read(manifest["delivery_snapshot_sha256"], run_id, "reviews")
+        self.assertIsNotNone(evidence)
+        self.assertEqual(manifest["change_set_sha256"], evidence.get("change_set_sha256"))
+
+    def test_e2e_antigravity_post_tool_error_produces_env_blocked(self) -> None:
+        # Step 19: Simulated invoke_subagent PostToolUse error produces ENV_BLOCKED, never WAIT forever
+        from wizard import questions
+        raw = {
+            "i0": "yes",
+            "i1": "App",
+            "i2": sys.executable,
+            "i5": ":app",
+            "i6": "com.example.MainActivity",
+            "i14": ["antigravity"],
+            "i20": "none",
+            "review_call_budget": "20",
+        }
+        facts = {
+            "repo": str(self.repo),
+            "project_name": "App",
+            "modules": [":app"],
+            "gradle": "gradlew",
+            "python": sys.executable,
+            "launcher": "com.example.MainActivity",
+            "application_id": "com.example",
+            "antigravity": True,
+        }
+        answers = questions.normalize(raw, facts)
+        questions.write_answers(self.repo, answers)
+        from lifecycle import install
+        install(self.repo, KIT)
+
+        from workflow import draft, record_approval, begin_task, prepare_verification, resolve_next_action, task_dir
+        task_id = "task-e2e-fail"
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Fail PostToolUse", kind="BUG",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        tdir = task_dir(self.repo, task_id)
+        current = read_json(tdir / "current-run.json")
+        policy = read_json(Path(current["policy"]))
+        policy["gates"] = []
+        policy["reviewers"] = ["bug-reviewer-agent"]
+        policy["assemble_required"] = False
+        atomic_write_json(Path(current["policy"]), policy)
+        import review_package
+        review_package.build_package(self.repo, task_id)
+        store = EvidenceStore(state_root(self.repo))
+        manifest = read_json(Path(current["manifest"]))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=current["run_id"],
+            name="preflight",
+            producer="test",
+            harness_version="1.0.0",
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+            evidence={"result": "ok"},
+        )
+
+        # PreToolUse allows and creates dispatch receipt
+        safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        subagent_call = {
+            "toolName": "invoke_subagent",
+            "toolArgs": {
+                "Subagents": [
+                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": "Review"}
+                ]
+            }
+        }
+        env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_REPO_DIR": str(self.repo),
+            "PYTHONPATH": str(KIT / "agents" / "scripts"),
+        }
+        subprocess.run([sys.executable, str(safety_script)], input=json.dumps(subagent_call), env=env, text=True, check=True)
+
+        # PostToolUse with error
+        post_script = KIT / "agents" / "scripts" / "post_tool_reconcile.py"
+        post_payload = {
+            "toolName": "invoke_subagent",
+            "toolArgs": subagent_call["toolArgs"],
+            "error": "Simulated host subagent launch failure: quota exhausted",
+        }
+        subprocess.run([sys.executable, str(post_script)], input=json.dumps(post_payload), capture_output=True, text=True, env=env, check=True)
+
+        from review_orchestrator import load_ledger, REVIEW_ENV_BLOCKED
+        ledger = load_ledger(tdir, current["run_id"])
+        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+
+        plan = read_json(tdir / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("REVIEW_ENV_BLOCKED", act["code"])
+        self.assertNotEqual("WAIT_FOR_REVIEWERS", act["code"])
+
+
+class DocumentationConsistencyTests(unittest.TestCase):
+    """Deterministic tests asserting active documentation consistency with Antigravity-First Review V2."""
+
+    def setUp(self) -> None:
+        self.root = KIT
+
+    def test_readme_contains_antigravity_first_review_v2(self) -> None:
+        content = (self.root / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Antigravity-First Architecture & Review Protocol V2", content)
+        self.assertIn("Google Antigravity", content)
+        self.assertIn("HARNESS_REVIEW_RESULT_V2", content)
+
+    def test_readme_does_not_tell_antigravity_to_explicitly_send_model_inherit(self) -> None:
+        content = (self.root / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn('model="inherit"', content)
+        self.assertNotIn("model='inherit'", content)
+
+    def test_quickstart_uses_semantic_host_antigravity(self) -> None:
+        content = (self.root / "docs" / "quickstart.md").read_text(encoding="utf-8")
+        self.assertIn("antigravity", content)
+        self.assertIn("Google Antigravity", content)
+
+    def test_tool_support_marks_antigravity_as_primary_hard_enforced_host(self) -> None:
+        content = (self.root / "docs" / "tool-support.md").read_text(encoding="utf-8")
+        self.assertIn("**Google Antigravity**", content)
+        self.assertIn("HARD_ENFORCED", content)
+
+    def test_setup_install_docs_do_not_contain_reviewer_model_question(self) -> None:
+        install_doc = (self.root / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        setup_doc = (self.root / "docs" / "setup-prompt.md").read_text(encoding="utf-8")
+        self.assertNotIn("reviewer-model", install_doc.lower())
+        self.assertNotIn("model escalation", install_doc.lower())
+        self.assertNotIn("reviewer-model", setup_doc.lower())
+
+    def test_active_docs_describe_reviewer_call_safety_cap(self) -> None:
+        for p in ["README.md", "docs/quickstart.md", "docs/install-or-update-prompt.md"]:
+            content = (self.root / p).read_text(encoding="utf-8")
+            self.assertIn("Reviewer Call Safety Cap", content, f"missing in {p}")
+
+    def test_antigravity_setup_docs_mention_agents_agents_dir(self) -> None:
+        for p in ["README.md", "docs/quickstart.md", "docs/install-or-update-prompt.md", "docs/setup-prompt.md"]:
+            content = (self.root / p).read_text(encoding="utf-8")
+            self.assertIn(".agents/agents/", content, f"missing in {p}")
+
+    def test_active_antigravity_docs_do_not_require_legacy_pass_tokens(self) -> None:
+        active_paths = [
+            self.root / "README.md",
+            self.root / "docs" / "quickstart.md",
+            self.root / "docs" / "setup-prompt.md",
+            self.root / "templates" / "gemini-runtime" / "android-harness-global.md.template",
+            self.root / "agents" / "tool-adapters" / "GEMINI.md.template",
+        ]
+        for p in active_paths:
+            if p.is_file():
+                content = p.read_text(encoding="utf-8")
+                self.assertNotIn("BUG_PASS", content, f"stale token in {p}")
+                self.assertNotIn("SECURITY_PASS", content, f"stale token in {p}")
+                self.assertNotIn("EVIDENCE pkg=", content, f"stale token in {p}")
+
+    def test_historical_adr_text_excluded_from_stale_guidance_assertions(self) -> None:
+        adr1 = (self.root / "docs" / "adr" / "001-five-leaf-review-gate.md").read_text(encoding="utf-8")
+        self.assertIn("superseded", adr1.lower())
+        adr7 = self.root / "docs" / "adr" / "007-antigravity-first-review-v2.md"
+        self.assertTrue(adr7.is_file())
+        adr7_content = adr7.read_text(encoding="utf-8")
+        self.assertIn("Review Protocol V2", adr7_content)
 
 
 if __name__ == "__main__":

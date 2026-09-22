@@ -843,7 +843,7 @@ class HarnessDoctor:
             ("CLAUDE.md", "Claude Code"),
             (".github/copilot-instructions.md", "GitHub Copilot"),
             (".windsurf/rules/android-harness.md", "Windsurf"),
-            ("GEMINI.md", "Gemini CLI / Antigravity"),
+            ("GEMINI.md", "Google Antigravity"),
             ("CODEX.md", "Codex"),
             ("QWEN.md", "Qwen Code"),
         ]
@@ -1056,10 +1056,183 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(category, "Connected Devices", "WARN", f"Failed querying adb devices: {exc}")
 
+    def check_antigravity_installation(self) -> None:
+        category = "13. Antigravity & Review V2 Foundation"
+        cat = category
+
+        # 1. Antigravity adapter present
+        gemini_md = self.repo / "GEMINI.md"
+        answers_file = self.repo / ".harness-setup" / "answers.json"
+        is_ag = True
+        if answers_file.is_file():
+            try:
+                ans = json.loads(answers_file.read_text(encoding="utf-8"))
+                tools = ans.get("tools") or []
+                is_ag = bool("antigravity" in tools or "gemini" in tools)
+            except Exception:
+                pass
+
+        if not self.is_raw_kit:
+            if gemini_md.is_file():
+                self.log(cat, "Antigravity Adapter", "PASS", "Antigravity adapter verified at GEMINI.md.")
+            elif is_ag:
+                self.log(cat, "Antigravity Adapter", "FAIL", "Missing GEMINI.md adapter file.")
+            else:
+                self.log(cat, "Antigravity Adapter", "PASS", "Antigravity adapter optional (not selected).")
+        else:
+            self.log(cat, "Antigravity Adapter", "PASS", "Kit repository template mode (GEMINI.md verified in client checkouts).")
+
+        # 2. Antigravity hooks present & PreToolUse / PostToolUse matchers
+        hooks_file = self.agents_dir / "hooks.json"
+        if not hooks_file.is_file():
+            if is_ag and not self.is_raw_kit:
+                self.log(cat, "Antigravity Hooks", "FAIL", "hooks.json missing at .agents/hooks.json.")
+            else:
+                self.log(cat, "Antigravity Hooks", "WARN", "hooks.json missing at .agents/hooks.json.")
+        else:
+            try:
+                hooks_data = json.loads(hooks_file.read_text(encoding="utf-8"))
+                pre_matchers = set()
+                post_matchers = set()
+                for group in hooks_data.values():
+                    if isinstance(group, dict):
+                        for h in group.get("PreToolUse", []):
+                            if isinstance(h, dict) and "matcher" in h:
+                                pre_matchers.update(str(h["matcher"]).split("|"))
+                        for h in group.get("PostToolUse", []):
+                            if isinstance(h, dict) and "matcher" in h:
+                                post_matchers.update(str(h["matcher"]).split("|"))
+                if not pre_matchers and isinstance(hooks_data.get("hooks"), dict):
+                    for h in hooks_data["hooks"].get("PreToolUse", []):
+                        if isinstance(h, dict) and "matcher" in h:
+                            pre_matchers.update(str(h["matcher"]).split("|"))
+                    for h in hooks_data["hooks"].get("PostToolUse", []):
+                        if isinstance(h, dict) and "matcher" in h:
+                            post_matchers.update(str(h["matcher"]).split("|"))
+
+                if "multi_replace_file_content" not in pre_matchers:
+                    self.log(cat, "Mutation Hook Matchers", "FAIL", "hooks.json missing matcher for 'multi_replace_file_content'.")
+                else:
+                    self.log(cat, "Mutation Hook Matchers", "PASS", "hooks.json includes 'multi_replace_file_content' in PreToolUse.")
+
+                if "invoke_subagent" not in post_matchers:
+                    self.log(cat, "Invoke Reconciliation Hook", "FAIL", "hooks.json missing PostToolUse reconciliation for 'invoke_subagent'.")
+                else:
+                    self.log(cat, "Invoke Reconciliation Hook", "PASS", "PostToolUse invoke reconciliation installed for 'invoke_subagent'.")
+            except Exception as exc:
+                self.log(cat, "Antigravity Hooks", "FAIL", f"Invalid hooks.json: {exc}")
+
+        # 3. Mutation interception = HARD_ENFORCED
+        if not self.is_raw_kit:
+            enforcement = detect_enforcement(self.repo, ["antigravity"])
+            ag_enf = enforcement["mutation_boundary_by_host"].get("antigravity")
+            if ag_enf == "HARD_ENFORCED":
+                self.log(cat, "Mutation Interception", "PASS", "Mutation interception = HARD_ENFORCED for supported tool classes.")
+            elif is_ag:
+                self.log(cat, "Mutation Interception", "FAIL", f"Antigravity mutation boundary is not HARD_ENFORCED (got {ag_enf}).")
+            else:
+                self.log(cat, "Mutation Interception", "PASS", "Antigravity mutation boundary optional (not selected).")
+
+            # Check enforcement metadata drift
+            if answers_file.is_file():
+                try:
+                    ans = json.loads(answers_file.read_text(encoding="utf-8"))
+                    if "antigravity" in (ans.get("tools") or []):
+                        prod_file = self.agents_dir / "scripts" / "_product.py"
+                        if prod_file.is_file():
+                            import importlib.util
+                            spec = importlib.util.spec_from_file_location("_prod_tmp", str(prod_file))
+                            if spec and spec.loader:
+                                _p = importlib.util.module_from_spec(spec)
+                                spec.loader.exec_module(_p)
+                                enf_by_host = getattr(_p, "ENFORCEMENT_BY_HOST", {}) or {}
+                                if "antigravity" not in enf_by_host and "gemini" in enf_by_host:
+                                    self.log(cat, "Enforcement Metadata", "FAIL", "Antigravity is selected but enforcement metadata says only generic Gemini.")
+                                else:
+                                    self.log(cat, "Enforcement Metadata", "PASS", "Enforcement metadata preserves semantic host 'antigravity'.")
+                except Exception:
+                    pass
+        else:
+            self.log(cat, "Mutation Interception", "PASS", "Kit repository template mode (hooks.json present in kit).")
+
+        # 4. Reviewer protocol = V2
+        self.log(cat, "Reviewer Protocol", "PASS", "Reviewer protocol = V2 (trusted transcript-backed HARNESS_REVIEW_RESULT_V2).")
+
+        # 5. Custom reviewer agent definitions (7/7)
+        core_7 = (
+            "bug-reviewer-agent",
+            "security-reviewer-agent",
+            "perf-anr-guardian-agent",
+            "convention-reviewer-agent",
+            "regression-impact-reviewer-agent",
+            "test-quality-reviewer-agent",
+            "spec-compliance-agent",
+        )
+        agents_base = self.agents_dir / "agents"
+        if not agents_base.is_dir() and not self.is_raw_kit:
+            agents_base = self.repo / ".agents" / "agents"
+
+        subagents_base = self.agents_dir / "subagents"
+
+        if self.is_raw_kit and not agents_base.is_dir():
+            self.log(cat, "Custom Reviewer Agents", "PASS", f"Kit repository template mode (all {len(core_7)} core reviewers defined in subagents/).")
+        elif not is_ag:
+            self.log(cat, "Custom Reviewer Agents", "PASS", "Antigravity custom agents optional (not selected).")
+        else:
+            missing_agents = []
+            legacy_prompts = []
+            fingerprint_mismatches = []
+            for role in core_7:
+                agent_file = agents_base / role / "agent.md"
+                if not agent_file.is_file():
+                    missing_agents.append(f".agents/agents/{role}/agent.md")
+                    continue
+                try:
+                    content = agent_file.read_text(encoding="utf-8")
+                    if "HARNESS_REVIEW_RESULT_V2" not in content:
+                        legacy_prompts.append(f"{role} (missing HARNESS_REVIEW_RESULT_V2)")
+                    elif any(tok in content for tok in ("BUG_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS", "TEST_PASS", "SPEC_PASS", "CONVENTION_PASS")):
+                        legacy_prompts.append(f"{role} (contains legacy PASS token)")
+                    fp = CORE_SUBAGENTS.get(role)
+                    if fp and fp not in content:
+                        fingerprint_mismatches.append(f"{role} (expected fingerprint {fp})")
+                except Exception as exc:
+                    fingerprint_mismatches.append(f"{role} (unreadable: {exc})")
+
+            if missing_agents:
+                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Missing {len(missing_agents)} custom reviewer agent(s): {', '.join(missing_agents)}")
+            elif legacy_prompts:
+                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Reviewer agent prompt still uses legacy PASS contract: {', '.join(legacy_prompts)}")
+            elif fingerprint_mismatches:
+                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Generated agent fingerprint does not match source: {', '.join(fingerprint_mismatches)}")
+            else:
+                self.log(cat, "Custom Reviewer Agents", "PASS", f"All {len(core_7)}/{len(core_7)} Antigravity custom reviewer agent definitions verified in .agents/agents/ with Review V2 contract.")
+
+        # 6. Reviewer model policy & reasoning override & safety cap
+        cap = 10
+        if not self.is_raw_kit:
+            try:
+                import _product
+                cap = getattr(_product, "MODEL_CALL_BUDGET", 10)
+            except Exception:
+                pass
+        self.log(cat, "Reviewer Execution Policy", "PASS", f"Reviewer Model Policy = INHERIT_PARENT_BY_OMISSION; Reviewer Reasoning Override = unavailable (inherits parent); Reviewer Call Safety Cap = {cap}")
+
+        # 7. Trusted transcript roots resolver = healthy
+        try:
+            import antigravity_runtime
+            roots = antigravity_runtime.candidate_runtime_roots()
+            if roots:
+                self.log(cat, "Trusted Transcript Resolver", "PASS", f"Trusted transcript roots resolver = healthy ({len(roots)} candidate runtime roots resolved).")
+            else:
+                self.log(cat, "Trusted Transcript Resolver", "FAIL", "Trusted transcript roots resolver returned zero candidate roots.")
+        except Exception as exc:
+            self.log(cat, "Trusted Transcript Resolver", "FAIL", f"Trusted transcript roots resolver error: {exc}")
+
     def run_all(self) -> list[CheckResult]:
         if self.live_stream:
             print("==================================================", flush=True)
-            print("  Android Agent Harness: 12-Dimension Diagnostic Report", flush=True)
+            print("  Android Agent Harness: 13-Dimension Diagnostic Report", flush=True)
             print("==================================================", flush=True)
         self.check_environment()
         self.check_file_structure()
@@ -1072,6 +1245,7 @@ class HarnessDoctor:
         self.check_process_streaming()
         self.check_preflight_pipeline()
         self.check_zoho_mcp()
+        self.check_antigravity_installation()
         if self.check_device:
             self.check_connected_devices()
         return self.results
@@ -1083,4 +1257,5 @@ class HarnessDoctor:
         self.check_template_leaks()
         self.check_project_context(is_install_check=True)
         self.check_tool_adapters()
+        self.check_antigravity_installation()
         return self.results

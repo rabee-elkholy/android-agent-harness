@@ -8,9 +8,10 @@ The harness has one engine and thin host adapters. The canonical rules are
 
 | Host | Installed entry points | Effective enforcement |
 |---|---|---|
-| Claude Code | `CLAUDE.md`, commands, named agents, `PreToolUse` bridge | Mutation hook where supported; conversational approval remains `RULE_ENFORCED` |
-| GitHub Copilot | instructions, prompts, optional `preToolUse` bridge | Mutation hook where supported; conversational approval remains `RULE_ENFORCED` |
-| Google Antigravity/Gemini | `GEMINI.md`, harness hook config | Host hook when the advertised protocol is available; otherwise rules |
+| **Google Antigravity** | `GEMINI.md`, `agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Primary production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and invoke_subagent pre/post calls; Review Protocol V2 with 7 custom reviewer subagents |
+| Claude Code | `CLAUDE.md`, commands, named agents, `PreToolUse` bridge | `HARD_ENFORCED`: Mutation hook where supported; conversational approval remains `RULE_ENFORCED` |
+| GitHub Copilot | instructions, prompts, optional `preToolUse` bridge | `RULE_ENFORCED`: Rule guidance + downstream verification gate |
+| Gemini CLI | `GEMINI.md` | `RULE_ENFORCED`: Downstream verification gate (legacy compatibility path) |
 | Codex | `AGENTS.md`, `CODEX.md`, prompt commands | `RULE_ENFORCED` |
 | Cursor | always-on `.mdc` rule and MCP path-only merge | `RULE_ENFORCED` |
 | Windsurf, Cline, Roo, Amazon Q, Continue, Junie, Kilo, Goose, Qwen | Host-specific rule pointer | `RULE_ENFORCED` |
@@ -65,19 +66,16 @@ a stable `operation_id`; terminal states such as Done remain developer-owned.
 
 ## Review behavior
 
-The final change classification selects the smallest valid reviewer set.
-Eligible documentation/localization/resource micro changes use
-`REVIEW_NOT_REQUIRED_BY_POLICY`. Normal business logic, UI, coroutine,
-network, persistence, native, and build changes select their relevant roles.
-Room schema changes use the focused `DATA` lane (Room gate, tests, correctness,
-and regression review) rather than automatically selecting all five roles.
-Critical security, billing, authentication, cryptography, or sensitive-data
-changes select all five specialist roles. Test changes add Test Quality.
+The final change classification selects the smallest valid reviewer set from the adaptive 6-tier risk policy. Eligible micro-changes use `REVIEW_NOT_REQUIRED_BY_POLICY`. Normal business logic, UI, coroutine, network, persistence, and build changes select their relevant specialist roles. Critical security, billing, authentication, cryptography, or sensitive-data changes select all applicable specialist roles.
 
-If a host cannot launch named children, run each reviewer prompt selected in
-the immutable policy against the same review package and ingest the structured
-reports. Missing, extra, malformed, stale, or truncated coverage cannot pass.
-The maximum is three rounds per candidate delivery.
+On **Google Antigravity**:
+- Seven custom reviewer subagents are provisioned under `.agents/agents/<reviewer>/agent.md`.
+- Routed reviewers execute concurrently in parallel via `invoke_subagent`.
+- Reviewer subagents inherit the parent agent's model by omission (no model override).
+- Review Protocol V2 enforces structured JSON output (`HARNESS_REVIEW_RESULT_V2`). Clean reviews report `findings: []` and `verdict: "PASS"`.
+- Initial malformed replies receive an exact `send_message` protocol retry within the same subagent execution without launching a new dispatch.
+- Review results are ingested from trusted conversation transcripts via `review complete` and aggregated via `review finalize`.
+- Total reviewer calls are bounded by the **Reviewer Call Safety Cap** (recommended: 20). Maximum 3 review rounds per delivery.
 
 ## Changing setup answers
 

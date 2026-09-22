@@ -845,7 +845,7 @@ class SecurityTests(unittest.TestCase):
         )
         data = json.loads(proc.stdout)
         self.assertEqual("deny", data["decision"])
-        self.assertIn("Reviewer model switching is disabled", data["reason"])
+        self.assertIn("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", data.get("reason_code", "") or data.get("reason", ""))
 
     def test_MODEL_HASH_001(self):
         """MODEL-HASH-001: legacy env vars do not change authoritative policy hash or outputs"""
@@ -1823,13 +1823,13 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         from wizard import questions, discovery
         questions.write_answers(self.repo, {"product": "App", "model_call_budget": 10})
         md = discovery.markdown_path(self.repo).read_text(encoding="utf-8")
-        self.assertIn("- Reviewer model: inherit parent model (fixed)", md)
+        self.assertIn("- Reviewer model: inherit parent by omission", md)
 
     def test_REASON_INSTALL_007_setup_answers_says_reviewer_reasoning_adaptive(self):
         from wizard import questions, discovery
         questions.write_answers(self.repo, {"product": "App", "model_call_budget": 10})
         md = discovery.markdown_path(self.repo).read_text(encoding="utf-8")
-        self.assertIn("- Reviewer reasoning: adaptive / host-capability-aware", md)
+        self.assertIn("- Reviewer reasoning: host-capability-aware", md)
 
     # --- Section 47: Tests — effort policy ---
     def test_REASON_POLICY_001_ordinary_bug_reviewer(self):
@@ -1985,7 +1985,8 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
             self.assertIn("dispatch_contract", info)
             # REASON-EXEC-009: Antigravity dispatch contract
             contract = info["dispatch_contract"]
-            self.assertEqual("inherit", contract["model"])
+            self.assertEqual("INHERIT_PARENT_BY_OMISSION", contract["model_policy"])
+            self.assertIsNone(contract["model_argument"])
             self.assertIsNone(contract["reasoning_argument"])
             self.assertIsNone(contract["reasoning_value"])
 
@@ -2003,24 +2004,25 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         res1 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review"}])
         self.assertEqual("allow", res1["decision"])
 
-        # SAME-MODEL-002: Model=inherit -> allowed
+        # SAME-MODEL-002: Model=inherit -> denied (omission required)
         res2 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Model": "inherit"}])
-        self.assertEqual("allow", res2["decision"])
+        self.assertEqual("deny", res2["decision"])
+        self.assertIn("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res2.get("reason_code", "") or res2.get("reason", ""))
 
         # SAME-MODEL-003: Model=flash -> denied
         res3 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Model": "flash"}])
         self.assertEqual("deny", res3["decision"])
-        self.assertIn("Reviewer model switching is disabled. Every reviewer must inherit the parent model.", res3["reason"])
+        self.assertIn("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res3.get("reason_code", "") or res3.get("reason", ""))
 
         # SAME-MODEL-004: Model=pro -> denied
         res4 = run_tool([{"Role": "security-reviewer-agent", "TypeName": "security-reviewer-agent", "Prompt": "review", "Model": "pro"}])
         self.assertEqual("deny", res4["decision"])
-        self.assertIn("Reviewer model switching is disabled. Every reviewer must inherit the parent model.", res4["reason"])
+        self.assertIn("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res4.get("reason_code", "") or res4.get("reason", ""))
 
         # SAME-MODEL-005: Model=<arbitrary> -> denied
         res5 = run_tool([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "review", "Model": "custom-gpt-model"}])
         self.assertEqual("deny", res5["decision"])
-        self.assertIn("Reviewer model switching is disabled. Every reviewer must inherit the parent model.", res5["reason"])
+        self.assertIn("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res5.get("reason_code", "") or res5.get("reason", ""))
 
     # --- Section 52: Tests — reasoning safety ---
     def test_SAME_REASON_001_through_004_antigravity_reasoning_safety(self):

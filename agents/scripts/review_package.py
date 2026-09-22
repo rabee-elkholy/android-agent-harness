@@ -401,9 +401,6 @@ def generate_task_brief(
             ],
         }, indent=2),
         "```",
-        "",
-        "Optional compatibility footer:",
-        f"```text\nEVIDENCE pkg={pkg_sha12} cites=<citation_count>\n```",
     ])
 
     brief_path = package_dir / f"brief-{reviewer}.md"
