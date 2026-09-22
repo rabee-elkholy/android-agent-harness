@@ -568,6 +568,12 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                     "label": t(lang, "review_call_budget_custom"),
                 },
             ],
+            "conditional_text_input": {
+                "when_option": "custom",
+                "answer_key": "review_call_budget_text",
+                "prompt": "Enter reviewer model-call budget (whole number 1–100).",
+                "required": True,
+            },
         }
     )
     return _reorder_with_previous_answers(qs, repo, lang, d)

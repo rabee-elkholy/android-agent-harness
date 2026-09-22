@@ -1132,6 +1132,17 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("developer-owned and immutable", reason)
 
+    @unittest.skipUnless(os.name == "nt", "Windows-only path contract")
+    def test_KIT_GUARD_WIN_001_windows_userprofile_harness_cache_clone_is_lifecycle_command(self):
+        """KIT-GUARD-WIN-001: real Windows quick lane accepts USERPROFILE harness cache path"""
+        import mutation_guard
+        cmd = (
+            'git clone --depth 1 '
+            'https://github.com/test/repo.git '
+            '"%USERPROFILE%\\.android-harness\\kit-stage-1.0.60-123"'
+        )
+        self.assertTrue(mutation_guard._is_lifecycle_command(cmd))
+
     def test_SPEC_PROD_001_architectural_reaches_spec_reviewer(self):
         """SPEC-PROD-001: architectural task reaches spec reviewer through normal lifecycle and planning_depth"""
         from plan_authority import create_plan

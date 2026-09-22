@@ -3572,12 +3572,19 @@ class CleanInstallV2SpecificationTests(RepoCase):
 
     def test_KIT_GUARD_004_bare_name_kit_stage_denied(self) -> None:
         import mutation_guard
-        self.assertFalse(mutation_guard._is_lifecycle_command("git clone --depth 1 https://github.com/test/repo.git kit-stage-1.0.59-123"))
+        self.assertFalse(mutation_guard._is_lifecycle_command("git clone --depth 1 https://github.com/test/repo.git kit-stage-1.0.60-123"))
 
-    def test_KIT_GUARD_005_quoted_windows_userprofile_accepted(self) -> None:
+    def test_KIT_GUARD_005_quoted_windows_userprofile_semantics(self) -> None:
         import mutation_guard
-        cmd = 'git clone --depth 1 https://github.com/test/repo.git "%USERPROFILE%\\.android-harness\\kit-stage-1.0.59-123"'
-        self.assertTrue(mutation_guard._is_lifecycle_command(cmd))
+        cmd = (
+            'git clone --depth 1 '
+            'https://github.com/test/repo.git '
+            '"%USERPROFILE%\\.android-harness\\kit-stage-1.0.60-123"'
+        )
+        if os.name == "nt":
+            self.assertTrue(mutation_guard._is_lifecycle_command(cmd))
+        else:
+            self.assertFalse(mutation_guard._is_lifecycle_command(cmd))
 
     # -------------------------------------------------------------
     # 60. Install Output Regression Test
@@ -3633,6 +3640,43 @@ class CleanInstallV2SpecificationTests(RepoCase):
     def test_PROMPT_KIT_004_prompt_identifies_setup_wizard_as_sole_authority(self) -> None:
         prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
         self.assertIn("The setup wizard payload is the sole interview authority", prompt_text)
+
+    def test_PROMPT_VERSION_001_no_stale_staging_literal(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertNotIn("kit-stage-v1.0.59", prompt_text)
+
+    def test_PROMPT_CLEAN_001_advertises_clean_install_only(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertIn("CLEAN INSTALL only", prompt_text)
+
+    def test_PROMPT_CLEAN_002_no_update_command(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertNotIn("update --no-refresh", prompt_text)
+
+    def test_PROMPT_CLEAN_003_no_replace_legacy_command(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertNotIn("--replace-legacy", prompt_text)
+
+    def test_QUICKSTART_KIT_001_quickstart_contains_no_kit_dot(self) -> None:
+        qs_text = (KIT / "docs" / "quickstart.md").read_text(encoding="utf-8")
+        self.assertNotIn("--kit .", qs_text)
+
+    def test_QUESTION_META_001_review_call_budget_conditional_metadata(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q = next(q for q in qs if q["id"] == "review_call_budget")
+        self.assertIn("conditional_text_input", q)
+        meta = q["conditional_text_input"]
+        self.assertEqual("custom", meta.get("when_option"))
+        self.assertEqual("review_call_budget_text", meta.get("answer_key"))
+        self.assertTrue(meta.get("required"))
+
+    def test_QUESTION_META_002_custom_answer_key_is_review_call_budget_text(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q = next(q for q in qs if q["id"] == "review_call_budget")
+        meta = q.get("conditional_text_input") or {}
+        self.assertEqual("review_call_budget_text", meta.get("answer_key"))
 
 
 if __name__ == "__main__":
