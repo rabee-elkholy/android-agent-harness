@@ -2506,6 +2506,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
             if not has_pass_evidence("reviews"):
                 briefs = {}
                 exec_profile = {}
+                profile_exc = None
                 try:
                     from review_execution import resolve_execution_profile
                     review_host = str(
@@ -2520,11 +2521,23 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     for r_name, r_info in exec_profile.get("reviewers", {}).items():
                         if r_info.get("brief_path"):
                             briefs[r_name] = r_info["brief_path"]
-                except Exception:
-                    pass
+                except Exception as exc:
+                    profile_exc = exc
+                    exec_profile = {}
 
                 review_protocol_version = int(current_run.get("review_protocol_version") or 1)
                 if review_protocol_version >= 2:
+                    if profile_exc is not None or not exec_profile:
+                        return {
+                            "code": "REVIEW_PROFILE_BLOCKED",
+                            "kind": "HOST_ACTION",
+                            "command": "",
+                            "blocking": True,
+                            "reason": f"Review execution profile resolution failed: {type(profile_exc).__name__ if profile_exc else 'missing profile'}.",
+                            "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                            "expected": {},
+                        }
+
                     from review_orchestrator import (
                         get_review_execution_status,
                         REVIEW_NOT_DISPATCHED,
@@ -2570,6 +2583,17 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     if retry_required:
                         r = retry_required[0]
                         recipient = rev_states.get(r, {}).get("execution_id") or ""
+                        if not recipient:
+                            return {
+                                "code": "REVIEW_PROTOCOL_BLOCKED",
+                                "kind": "HOST_ACTION",
+                                "command": "",
+                                "blocking": True,
+                                "reviewer": r,
+                                "reason": "PROTOCOL_RETRY_MISSING_EXECUTION_ID",
+                                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewer": r},
+                                "expected": {},
+                            }
                         pkg_sha_full = sha256_file(pkg_path) if pkg_path.is_file() else ""
                         correction_msg = (
                             f"Your previous review response did not include a valid HARNESS_REVIEW_RESULT_V2 JSON block.\n\n"
@@ -2610,6 +2634,30 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
 
                     not_dispatched = [r for r in required_reviewers if rev_states.get(r, {}).get("state") in (REVIEW_NOT_DISPATCHED, None)]
                     if not_dispatched:
+                        for r in not_dispatched:
+                            r_info = exec_profile.get("reviewers", {}).get(r)
+                            if not r_info:
+                                return {
+                                    "code": "REVIEW_PROFILE_BLOCKED",
+                                    "kind": "HOST_ACTION",
+                                    "command": "",
+                                    "blocking": True,
+                                    "reason": f"Reviewer '{r}' missing from execution profile.",
+                                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewer": r},
+                                    "expected": {},
+                                }
+                            brief_p = Path(r_info.get("brief_path") or "")
+                            if not brief_p.is_file() or brief_p.stat().st_size == 0:
+                                return {
+                                    "code": "REVIEW_PROFILE_BLOCKED",
+                                    "kind": "HOST_ACTION",
+                                    "command": "",
+                                    "blocking": True,
+                                    "reason": f"Reviewer brief missing or empty for '{r}': {brief_p.name}.",
+                                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewer": r},
+                                    "expected": {},
+                                }
+
                         return {
                             "code": "DISPATCH_REVIEWERS",
                             "kind": "HOST_ACTION",
@@ -2630,6 +2678,24 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                                 "review_execution_profile": exec_profile,
                             },
                             "expected": {"success_statuses": ["PASS"]},
+                        }
+
+                    reconcile_err_marker = tdir / "review-execution" / run_id / "post-tool-reconcile-error.json"
+                    if reconcile_err_marker.is_file():
+                        marker_data = {}
+                        try:
+                            marker_data = read_json(reconcile_err_marker)
+                        except Exception:
+                            pass
+                        err_code = marker_data.get("error_code") or "POST_TOOL_RECONCILE_FAILED"
+                        return {
+                            "code": "REVIEW_ENV_BLOCKED",
+                            "kind": "HOST_ACTION",
+                            "command": "",
+                            "blocking": True,
+                            "reason": f"Post-tool-use reviewer reconciliation failed: {err_code}.",
+                            "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                            "expected": {},
                         }
 
                     dispatched = [r for r in required_reviewers if rev_states.get(r, {}).get("state") == REVIEW_DISPATCHED]

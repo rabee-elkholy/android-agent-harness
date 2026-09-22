@@ -29,17 +29,25 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - Review Host Binding:
   - In Antigravity, prepare verification with:
     `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity`
-  - In Gemini CLI without a trusted transcript adapter, omit `--host` and use the Router's legacy-compatible review path.
   - Never claim Review Protocol V2 unless `current-run.json` says `review_protocol_version = 2`.
-- Reviewer Model & Reasoning:
-  - Every reviewer MUST use the same model as the parent.
-  - Never select flash/pro/another model for a reviewer.
-  - Read each reviewer dispatch_contract from review_execution_profile.
-  - model must remain inherit.
-  - If reasoning_argument and reasoning_value are both non-null, pass exactly that native override.
-  - If either is null, omit reasoning override completely.
-  - Never invent a reasoning level from provider/model knowledge.
-  - Current Antigravity invoke_subagent does not expose trusted per-subagent reasoning control through this Harness adapter, so reviewer reasoning normally inherits the parent setting.
+- Exact Reviewer Dispatch Procedure (Antigravity):
+  1. Run `python .agents/harness.py task status --task-id <id> --next` (or `workflow.py status`).
+  2. If code == DISPATCH_REVIEWERS:
+     - use exactly the returned reviewer set;
+     - one invoke_subagent call;
+     - for each reviewer:
+         TypeName = exact reviewer role
+         Role = exact reviewer role
+         Prompt = exact current reviewer brief
+         Workspace = inherit (or omit if host default is used consistently)
+     - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
+     - do not invent reasoning fields.
+  3. Yield; do not poll.
+  4. On reactive completion, run `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>`.
+  5. On RETRY_REVIEW_PROTOCOL, execute the exact router-provided send_message.
+  6. On REVIEW_ENV_BLOCKED / REVIEW_PROFILE_BLOCKED / REVIEW_PROTOCOL_BLOCKED, stop reviewer flow and report blocker.
+  7. After all completed, run `python .agents/harness.py review finalize --task <id>`.
+  No legacy PASS token. No EVIDENCE footer. No self-certification.
 
 ## Canonical Command Catalog & 4-Phase Lifecycle (PLAN → BUILD → VERIFY → SHIP)
 

@@ -74,14 +74,47 @@ def main() -> int:
 
         sanitized_err = str(err).strip()[:1000]
 
-        with StateLock(st_root):
-            ledger = load_ledger(tdir, run_id)
-            reviewers = ledger.get("reviewers", {})
-            for role in roles:
-                if role in reviewers and reviewers[role].get("state") == REVIEW_DISPATCHED:
-                    reviewers[role]["state"] = REVIEW_ENV_BLOCKED
-                    reviewers[role]["last_error"] = sanitized_err
-            save_ledger(tdir, run_id, ledger)
+        target_roles = set(roles)
+        try:
+            with StateLock(st_root):
+                ledger = load_ledger(tdir, run_id)
+                reviewers = ledger.get("reviewers", {})
+                to_transition = []
+                for r_name, r_data in reviewers.items():
+                    if r_data.get("state") == REVIEW_DISPATCHED and not r_data.get("execution_id"):
+                        if target_roles:
+                            if r_name in target_roles:
+                                to_transition.append(r_name)
+                        else:
+                            to_transition.append(r_name)
+
+                # Fallback if target_roles didn't match any dispatched reviewer
+                if not to_transition:
+                    to_transition = [
+                        r_name for r_name, r_data in reviewers.items()
+                        if r_data.get("state") == REVIEW_DISPATCHED and not r_data.get("execution_id")
+                    ]
+
+                for r in to_transition:
+                    reviewers[r]["state"] = REVIEW_ENV_BLOCKED
+                    reviewers[r]["last_error"] = sanitized_err
+
+                save_ledger(tdir, run_id, ledger)
+        except Exception as exc:
+            try:
+                marker_file = tdir / "review-execution" / run_id / "post-tool-reconcile-error.json"
+                marker_file.parent.mkdir(parents=True, exist_ok=True)
+                from _vnext_common import atomic_write_json, utc_now
+                atomic_write_json(marker_file, {
+                    "schema_version": 1,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "error_type": type(exc).__name__,
+                    "error_code": "POST_TOOL_RECONCILE_FAILED",
+                    "occurred_at": utc_now(),
+                })
+            except Exception:
+                pass
 
         print(json.dumps({}))
         return 0

@@ -65,7 +65,7 @@ class HookTests(unittest.TestCase):
         run_id = "run-one"
         snapshot = "a" * 64
         manifest = task / "manifest.json"
-        manifest.write_text(json.dumps({"delivery_snapshot_sha256": snapshot}), encoding="utf-8")
+        manifest.write_text(json.dumps({"delivery_snapshot_sha256": snapshot, "change_set_sha256": snapshot}), encoding="utf-8")
         (task / "current-run.json").write_text(
             json.dumps({"policy": str(policy), "run_id": run_id, "manifest": str(manifest)}),
             encoding="utf-8",

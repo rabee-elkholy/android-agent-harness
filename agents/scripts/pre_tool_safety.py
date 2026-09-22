@@ -20,13 +20,20 @@ from mutation_guard import _entry, active_plan, command_allowed, file_mutation_a
 from _vnext_common import active_review_package_path, read_json, sha256_file, validate_id  # noqa: E402
 
 
+from policy_vocab import (
+    ANTIGRAVITY_REVIEWER_TOOLS,
+    ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS,
+    CORE_ROUTED_REVIEWERS,
+    SUBAGENT_ORCHESTRATION_TOOLS,
+)
+
 MAX_STDIN_BYTES = 5 * 1024 * 1024
 AUDIT_MAX_RECORDS = 1000
 WRITE_TOOLS = {
     "write_to_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit",
     "create_file", "delete_file", "move_file", "rename_file",
 }
-SUBAGENT_TOOLS = {"define_subagent", "invoke_subagent", "manage_subagents", "manage_task", "schedule"}
+SUBAGENT_TOOLS = frozenset(SUBAGENT_ORCHESTRATION_TOOLS)
 SEARCH_TOOLS = {"grep_search", "find_by_name"}
 from integrations.registry import registry  # noqa: E402
 from integrations.base import validate_external_write  # noqa: E402
@@ -346,30 +353,163 @@ def _handle_subagent(name: str, args: dict) -> None:
         if status != "VERIFYING":
             emit("deny", f"Subagent action is unavailable while task status is {status or 'missing'}.", tool=name)
             return
+        if name == "send_message":
+            state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+            active = read_json(state / "active-task.json")
+            from workflow import resolve_next_action
+            act = resolve_next_action(REPO, str(active["task_id"]), plan)
+            if act.get("code") != "RETRY_REVIEW_PROTOCOL":
+                emit(
+                    "deny",
+                    f"send_message is not permitted during VERIFYING unless retrying review protocol (current router action: {act.get('code')}).",
+                    tool=name,
+                    reason_code="REVIEW_VERIFY_SEND_MESSAGE_FORBIDDEN",
+                )
+                return
+            expected_recipient = str(act.get("recipient") or "").strip()
+            expected_msg = str(act.get("message") or "").strip()
+            supplied_recipient = str(args.get("Recipient") or args.get("recipient") or "").strip()
+            supplied_msg = str(args.get("Message") or args.get("message") or "").strip()
+            if not supplied_recipient or supplied_recipient != expected_recipient:
+                emit(
+                    "deny",
+                    f"send_message recipient mismatch: expected '{expected_recipient}', got '{supplied_recipient}'.",
+                    tool=name,
+                    reason_code="RETRY_RECIPIENT_MISMATCH",
+                )
+                return
+            if not supplied_msg or supplied_msg.replace("\r\n", "\n").strip() != expected_msg.replace("\r\n", "\n").strip():
+                emit(
+                    "deny",
+                    "send_message message does not match the required protocol retry prompt.",
+                    tool=name,
+                    reason_code="RETRY_MESSAGE_MISMATCH",
+                )
+                return
+            emit("allow", "Protocol retry send_message matches router requirements.", tool=name, reason_code="RETRY_REVIEW_PROTOCOL_ALLOWED")
+            return
+
         if name != "invoke_subagent":
             emit("allow", "Reviewer management is allowed during verification.", tool=name)
             return
+
         state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
         active = read_json(state / "active-task.json")
         current = read_json(state / "tasks" / str(active["task_id"]) / "current-run.json")
         policy = read_json(Path(current["policy"]))
-        expected = set(policy.get("reviewers") or [])
+        protocol = int(current.get("review_protocol_version") or 1)
+        required_reviewers = list(policy.get("reviewers") or [])
+
+        # Determine dispatchable reviewers
+        if protocol >= 2:
+            from review_orchestrator import load_ledger, dispatchable_reviewers
+            directory = state / "tasks" / str(active["task_id"])
+            ledger = load_ledger(directory, str(current["run_id"]))
+            dispatchable = dispatchable_reviewers(ledger, required_reviewers)
+        else:
+            dispatchable = required_reviewers
+
         raw_subs = args.get("Subagents") or args.get("subagents") or []
-        actual = set()
+        if not isinstance(raw_subs, list) or not raw_subs:
+            emit("deny", "No reviewers specified in Subagents array.", tool=name, reason_code="REVIEWER_ROSTER_EMPTY")
+            return
+
+        # Check safety cap / round cap
+        if int(plan.get("review_rounds") or 0) >= int(policy.get("max_review_rounds") or 3):
+            emit("deny", "Review round cap reached; developer decision is required.", tool=name)
+            return
+        used_calls = int(plan.get("review_calls_used") or 0)
+        safety_cap = int(policy.get("model_call_budget") or 20)
+        if used_calls + len(dispatchable) > safety_cap:
+            emit(
+                "deny",
+                "Reviewer Call Safety Cap reached; developer decision is required.",
+                tool=name,
+                reason_code="REVIEWER_CALL_SAFETY_CAP_REACHED",
+            )
+            return
+
+        allowed_keys_lower = {k.lower(): k for k in ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS}
+        actual = []
         for item in raw_subs:
             if not isinstance(item, dict):
-                continue
+                emit("deny", "Each entry in Subagents array must be an object.", tool=name, reason_code="SUBAGENT_NOT_OBJECT")
+                return
+
+            # Check model/Model key rejection: ANY model key must be denied
+            if "model" in item or "Model" in item:
+                emit(
+                    "deny",
+                    (
+                        "REVIEWER_MODEL_OVERRIDE_FORBIDDEN: Do not send 'model' or 'Model' "
+                        "in reviewer invocation. Reviewer model inheritance is achieved by omission."
+                    ),
+                    tool=name,
+                    reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
+                )
+                return
+
+            # Check allowed keys
+            for k in item:
+                if k.lower() not in allowed_keys_lower:
+                    emit(
+                        "deny",
+                        f"Unexpected key '{k}' in subagent invocation. Allowed keys: {sorted(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS)}.",
+                        tool=name,
+                        reason_code="UNEXPECTED_SUBAGENT_KEY",
+                    )
+                    return
+
             r_role = str(item.get("Role") or item.get("role") or "").strip()
             r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
-            if r_role in expected:
-                actual.add(r_role)
-            elif r_type in expected:
-                actual.add(r_type)
-            else:
-                actual.add(r_role or r_type)
-        if not actual or not (actual <= expected):
-            emit("deny", f"Reviewer roster mismatch: expected subset of {sorted(expected)}, got unexpected {sorted(actual - expected)}.", tool=name)
-            return
+            if not r_type and not r_role:
+                emit("deny", "Subagent entry missing TypeName/Role.", tool=name, reason_code="MISSING_SUBAGENT_ROLE")
+                return
+
+            # Role/TypeName alignment
+            if r_type and r_role and r_type in dispatchable and r_role in dispatchable and r_type != r_role:
+                emit(
+                    "deny",
+                    f"Reviewer invocation mismatch: TypeName '{r_type}' does not match Role '{r_role}'. Both must refer to the same reviewer.",
+                    tool=name,
+                    reason_code="REVIEWER_ROLE_MISMATCH",
+                )
+                return
+
+            matched = r_type if r_type in dispatchable else (r_role if r_role in dispatchable else None)
+            if not matched:
+                all_exp = set(required_reviewers)
+                matched = r_type if r_type in all_exp else (r_role if r_role in all_exp else (r_type or r_role))
+
+            if matched in actual:
+                emit("deny", f"Reviewer batch contains duplicate reviewer: '{matched}'.", tool=name, reason_code="DUPLICATE_REVIEWER")
+                return
+            actual.append(matched)
+
+        # Exact batch check
+        actual_set = set(actual)
+        dispatchable_set = set(dispatchable)
+        if actual_set != dispatchable_set:
+            missing = dispatchable_set - actual_set
+            extra = actual_set - dispatchable_set
+            if missing:
+                emit(
+                    "deny",
+                    f"Reviewer batch incomplete: expected {len(dispatchable_set)} reviewers ({sorted(dispatchable_set)}), got {len(actual_set)} ({sorted(actual_set)}). All dispatchable reviewers must be launched in a single invoke_subagent call.",
+                    tool=name,
+                    reason_code="REVIEWER_ROSTER_INCOMPLETE",
+                )
+                return
+            if extra:
+                emit(
+                    "deny",
+                    f"Reviewer batch contains extra reviewers: expected {sorted(dispatchable_set)}, got {sorted(actual_set)}.",
+                    tool=name,
+                    reason_code="REVIEWER_ROSTER_EXTRA",
+                )
+                return
+
+        # Profile & Prompt verification
         try:
             from review_execution import resolve_execution_profile
             review_host = str(current.get("review_host") or "").strip().lower()
@@ -378,93 +518,22 @@ def _handle_subagent(name: str, args: dict) -> None:
         except Exception:
             reviewer_routes = {}
 
-        COMMON_REASONING_KEYS = {
-            "reasoning",
-            "Reasoning",
-            "reasoning_effort",
-            "ReasoningEffort",
-            "effort",
-            "Effort",
-            "thinking_level",
-            "ThinkingLevel",
-        }
-
-        for item in raw_subs:
-            if not isinstance(item, dict):
-                continue
-            r_role = str(item.get("Role") or item.get("role") or "").strip()
-            r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
-            key = r_role if r_role in reviewer_routes else r_type
-
-            # P0-03: Reviewer model inheritance is achieved by omission on Antigravity
-            if "model" in item or "Model" in item:
-                val = item.get("model") if "model" in item else item.get("Model")
-                if val is not None and str(val).strip():
+        if protocol >= 2 and reviewer_routes:
+            for item in raw_subs:
+                r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
+                r_role = str(item.get("Role") or item.get("role") or "").strip()
+                k = r_type if r_type in reviewer_routes else r_role
+                rev_info = reviewer_routes.get(k, {})
+                expected_prompt = str(rev_info.get("brief_content") or "").replace("\r\n", "\n").strip()
+                supplied_prompt = str(item.get("Prompt") or item.get("prompt") or "").replace("\r\n", "\n").strip()
+                if expected_prompt and supplied_prompt and supplied_prompt != expected_prompt:
                     emit(
                         "deny",
-                        (
-                            "REVIEWER_MODEL_OVERRIDE_FORBIDDEN: Do not send 'model' or 'Model' "
-                            "in reviewer invocation. Reviewer model inheritance is achieved by omission."
-                        ),
+                        f"Reviewer prompt for '{k}' does not match the generated reviewer brief.",
                         tool=name,
-                        reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
+                        reason_code="REVIEWER_PROMPT_MISMATCH",
                     )
                     return
-
-            rev_info = reviewer_routes.get(key, {})
-            rev_reasoning = rev_info.get("reasoning", {})
-            control = rev_reasoning.get("control")
-            native_val = rev_reasoning.get("native_value")
-            arg_name = rev_reasoning.get("argument_name")
-
-            supplied_reasoning_keys = [k for k in item if k in COMMON_REASONING_KEYS]
-
-            if control != "SUPPORTED":
-                if supplied_reasoning_keys:
-                    emit(
-                        "deny",
-                        (
-                            "This host does not expose trusted per-subagent reasoning control. "
-                            "Omit reasoning override and inherit the parent setting."
-                        ),
-                        tool=name,
-                    )
-                    return
-            else:
-                if native_val is not None:
-                    if arg_name not in item or str(item[arg_name]) != str(native_val):
-                        emit(
-                            "deny",
-                            f"Reviewer reasoning override for '{key}' must use '{arg_name}={native_val}'.",
-                            tool=name,
-                        )
-                        return
-                    other_keys = [k for k in supplied_reasoning_keys if k != arg_name]
-                    if other_keys:
-                        emit(
-                            "deny",
-                            f"Unexpected reasoning key '{other_keys[0]}' for '{key}'. Expected '{arg_name}'.",
-                            tool=name,
-                        )
-                        return
-                else:
-                    if supplied_reasoning_keys:
-                        emit(
-                            "deny",
-                            (
-                                "This host does not expose trusted per-subagent reasoning control. "
-                                "Omit reasoning override and inherit the parent setting."
-                            ),
-                            tool=name,
-                        )
-                        return
-        if int(plan.get("review_rounds") or 0) >= int(policy.get("max_review_rounds") or 3):
-            emit("deny", "Review round cap reached; developer decision is required.", tool=name)
-            return
-        used_calls = int(plan.get("review_calls_used") or 0)
-        if used_calls + len(actual) > int(policy.get("model_call_budget") or 0):
-            emit("deny", "Reviewer model-call budget reached; developer decision is required.", tool=name)
-            return
 
         # Persist reviewer dispatch receipts for provable independent execution
         try:
@@ -485,7 +554,6 @@ def _handle_subagent(name: str, args: dict) -> None:
             package_sha = sha256_file(package_path)
             if not re.fullmatch(r"[0-9a-f]{64}", package_sha):
                 raise RuntimeError("review package digest is invalid")
-            protocol = int(current.get("review_protocol_version") or 1)
             if protocol >= 2:
                 from review_orchestrator import record_dispatch_batch
                 review_host = str(current.get("review_host") or "").strip().lower()

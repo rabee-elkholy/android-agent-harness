@@ -26,6 +26,53 @@ from _enforcement import detect as detect_enforcement  # noqa: E402
 AGENTS_DIR = Path(__file__).resolve().parent.parent.parent
 
 
+def _parse_frontmatter(content: str) -> dict[str, Any]:
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fm_lines = []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        fm_lines.append(line)
+    result: dict[str, Any] = {}
+    current_key = None
+    list_items = []
+    for line in fm_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- "):
+            item = stripped[2:].strip().strip("\"'")
+            if current_key:
+                list_items.append(item)
+            continue
+        if current_key and list_items:
+            result[current_key] = list(list_items)
+            list_items = []
+            current_key = None
+        if ":" in stripped:
+            k, v = stripped.split(":", 1)
+            k = k.strip()
+            v = v.strip()
+            if not v:
+                current_key = k
+                list_items = []
+            else:
+                current_key = None
+                if v.lower() == "true":
+                    result[k] = True
+                elif v.lower() == "false":
+                    result[k] = False
+                elif v.isdigit():
+                    result[k] = int(v)
+                else:
+                    result[k] = v.strip("\"'")
+    if current_key and list_items:
+        result[current_key] = list(list_items)
+    return result
+
+
 class HarnessDoctor:
     def __init__(self, repo: Path, check_device: bool = False, run_selftest: bool = True, live_stream: bool = False):
         self.repo = repo
@@ -1068,7 +1115,7 @@ class HarnessDoctor:
             try:
                 ans = json.loads(answers_file.read_text(encoding="utf-8"))
                 tools = ans.get("tools") or []
-                is_ag = bool("antigravity" in tools or "gemini" in tools)
+                is_ag = bool("antigravity" in tools)
             except Exception:
                 pass
 
@@ -1115,6 +1162,11 @@ class HarnessDoctor:
                 else:
                     self.log(cat, "Mutation Hook Matchers", "PASS", "hooks.json includes 'multi_replace_file_content' in PreToolUse.")
 
+                if "send_message" not in pre_matchers:
+                    self.log(cat, "Verification Message Hook", "FAIL", "hooks.json missing PreToolUse matcher for 'send_message'.")
+                else:
+                    self.log(cat, "Verification Message Hook", "PASS", "hooks.json includes 'send_message' in PreToolUse.")
+
                 if "invoke_subagent" not in post_matchers:
                     self.log(cat, "Invoke Reconciliation Hook", "FAIL", "hooks.json missing PostToolUse reconciliation for 'invoke_subagent'.")
                 else:
@@ -1159,15 +1211,9 @@ class HarnessDoctor:
         self.log(cat, "Reviewer Protocol", "PASS", "Reviewer protocol = V2 (trusted transcript-backed HARNESS_REVIEW_RESULT_V2).")
 
         # 5. Custom reviewer agent definitions (7/7)
-        core_7 = (
-            "bug-reviewer-agent",
-            "security-reviewer-agent",
-            "perf-anr-guardian-agent",
-            "convention-reviewer-agent",
-            "regression-impact-reviewer-agent",
-            "test-quality-reviewer-agent",
-            "spec-compliance-agent",
-        )
+        from policy_vocab import CORE_ROUTED_REVIEWERS, ANTIGRAVITY_REVIEWER_TOOLS
+        core_7 = CORE_ROUTED_REVIEWERS
+        approved_tools = set(ANTIGRAVITY_REVIEWER_TOOLS)
         agents_base = self.agents_dir / "agents"
         if not agents_base.is_dir() and not self.is_raw_kit:
             agents_base = self.repo / ".agents" / "agents"
@@ -1175,45 +1221,77 @@ class HarnessDoctor:
         subagents_base = self.agents_dir / "subagents"
 
         if self.is_raw_kit and not agents_base.is_dir():
-            self.log(cat, "Custom Reviewer Agents", "PASS", f"Kit repository template mode (all {len(core_7)} core reviewers defined in subagents/).")
+            from install_tool_adapters import antigravity_agent_markdown
+            render_errors = []
+            for role in core_7:
+                json_path = subagents_base / f"{role}.json"
+                if not json_path.is_file():
+                    render_errors.append(f"Missing source JSON: {json_path.name}")
+                    continue
+                try:
+                    agent_def = json.loads(json_path.read_text(encoding="utf-8"))
+                    rendered = antigravity_agent_markdown(agent_def)
+                    fm = _parse_frontmatter(rendered)
+                    if fm.get("name") != role:
+                        render_errors.append(f"{role}: name mismatch in frontmatter")
+                    if fm.get("mainAgent") is not False:
+                        render_errors.append(f"{role}: mainAgent must be false")
+                    if fm.get("subagent") is not True:
+                        render_errors.append(f"{role}: subagent must be true")
+                    r_tools = set(fm.get("tools") or [])
+                    if r_tools != approved_tools:
+                        render_errors.append(f"{role}: tools {r_tools} != approved {approved_tools}")
+                    if "HARNESS_REVIEW_RESULT_V2" not in rendered:
+                        render_errors.append(f"{role}: missing HARNESS_REVIEW_RESULT_V2 contract")
+                except Exception as exc:
+                    render_errors.append(f"{role}: render failed ({exc})")
+
+            if render_errors:
+                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Kit repository mode: reviewer validation failed: {'; '.join(render_errors)}")
+            else:
+                self.log(cat, "Custom Reviewer Agents", "PASS", f"Kit repository mode: all {len(core_7)} core reviewers verified and rendered in memory with Review V2 contract.")
         elif not is_ag:
             self.log(cat, "Custom Reviewer Agents", "PASS", "Antigravity custom agents optional (not selected).")
         else:
-            missing_agents = []
-            legacy_prompts = []
-            fingerprint_mismatches = []
+            agent_errors = []
             for role in core_7:
                 agent_file = agents_base / role / "agent.md"
                 if not agent_file.is_file():
-                    missing_agents.append(f".agents/agents/{role}/agent.md")
+                    agent_errors.append(f"Missing agent file: .agents/agents/{role}/agent.md")
                     continue
                 try:
                     content = agent_file.read_text(encoding="utf-8")
+                    fm = _parse_frontmatter(content)
+                    if fm.get("name") != role:
+                        agent_errors.append(f"{role}: frontmatter name mismatch ({fm.get('name')})")
+                    if fm.get("mainAgent") is not False:
+                        agent_errors.append(f"{role}: mainAgent must be false")
+                    if fm.get("subagent") is not True:
+                        agent_errors.append(f"{role}: subagent must be true")
+                    r_tools = set(fm.get("tools") or [])
+                    if r_tools != approved_tools:
+                        agent_errors.append(f"{role}: tools {r_tools} != approved {approved_tools}")
                     if "HARNESS_REVIEW_RESULT_V2" not in content:
-                        legacy_prompts.append(f"{role} (missing HARNESS_REVIEW_RESULT_V2)")
+                        agent_errors.append(f"{role}: missing HARNESS_REVIEW_RESULT_V2")
                     elif any(tok in content for tok in ("BUG_PASS", "SECURITY_PASS", "PERF_PASS", "REGRESSION_PASS", "TEST_PASS", "SPEC_PASS", "CONVENTION_PASS")):
-                        legacy_prompts.append(f"{role} (contains legacy PASS token)")
+                        agent_errors.append(f"{role}: contains legacy PASS token")
                     fp = CORE_SUBAGENTS.get(role)
                     if fp and fp not in content:
-                        fingerprint_mismatches.append(f"{role} (expected fingerprint {fp})")
+                        agent_errors.append(f"{role}: expected fingerprint {fp}")
                 except Exception as exc:
-                    fingerprint_mismatches.append(f"{role} (unreadable: {exc})")
+                    agent_errors.append(f"{role}: unreadable ({exc})")
 
-            if missing_agents:
-                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Missing {len(missing_agents)} custom reviewer agent(s): {', '.join(missing_agents)}")
-            elif legacy_prompts:
-                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Reviewer agent prompt still uses legacy PASS contract: {', '.join(legacy_prompts)}")
-            elif fingerprint_mismatches:
-                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Generated agent fingerprint does not match source: {', '.join(fingerprint_mismatches)}")
+            if agent_errors:
+                self.log(cat, "Custom Reviewer Agents", "FAIL", f"Reviewer agent check failed: {'; '.join(agent_errors)}")
             else:
                 self.log(cat, "Custom Reviewer Agents", "PASS", f"All {len(core_7)}/{len(core_7)} Antigravity custom reviewer agent definitions verified in .agents/agents/ with Review V2 contract.")
 
         # 6. Reviewer model policy & reasoning override & safety cap
-        cap = 10
+        cap = 20
         if not self.is_raw_kit:
             try:
                 import _product
-                cap = getattr(_product, "MODEL_CALL_BUDGET", 10)
+                cap = getattr(_product, "MODEL_CALL_BUDGET", 20)
             except Exception:
                 pass
         self.log(cat, "Reviewer Execution Policy", "PASS", f"Reviewer Model Policy = INHERIT_PARENT_BY_OMISSION; Reviewer Reasoning Override = unavailable (inherits parent); Reviewer Call Safety Cap = {cap}")

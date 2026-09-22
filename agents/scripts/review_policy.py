@@ -60,7 +60,7 @@ def _configured_model_call_budget() -> int:
         from _product import MODEL_CALL_BUDGET
         return max(0, int(MODEL_CALL_BUDGET))
     except (ImportError, TypeError, ValueError):
-        return 10
+        return 20
 
 
 def _configured_device_verification_mode() -> str:

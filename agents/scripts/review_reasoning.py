@@ -73,7 +73,8 @@ def resolve_reasoning(
         }
 
     valid_levels = _valid_levels(capability.ordered_levels)
-    if not valid_levels:
+    arg_name = str(capability.argument_name or "").strip() if capability.argument_name else ""
+    if not valid_levels or not arg_name or not capability.current_level or capability.current_level not in valid_levels:
         return {
             "intent": intent,
             "control": "UNAVAILABLE",
@@ -83,15 +84,6 @@ def resolve_reasoning(
             "source": capability.source,
         }
 
-    if not capability.current_level or capability.current_level not in valid_levels:
-        return {
-            "intent": intent,
-            "control": "UNAVAILABLE",
-            "argument_name": None,
-            "native_value": None,
-            "resolution": "CURRENT_LEVEL_UNKNOWN",
-            "source": capability.source,
-        }
 
     if intent == "NORMAL":
         return {

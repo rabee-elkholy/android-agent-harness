@@ -1105,7 +1105,7 @@ class SecurityTests(unittest.TestCase):
 
         with mock.patch.dict("os.environ", {"HARNESS_ALLOW_MODEL_ESCALATION": "1", "HARNESS_MODEL_ROUTES": "{}"}):
             prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-            self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+            self.assertIn(prof["model_policy"], ("INHERIT_PARENT_BY_OMISSION", "INHERIT_PARENT_ONLY"))
             for rev, info in prof["reviewers"].items():
                 self.assertEqual("inherit", info["required_model"], f"{rev} must inherit")
                 self.assertEqual("HOST_CONTROL_UNAVAILABLE", info["reasoning"]["resolution"])

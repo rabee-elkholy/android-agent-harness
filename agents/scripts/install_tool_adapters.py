@@ -25,6 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _repo_files import ensure_local_git_privacy  # noqa: E402
+from policy_vocab import ANTIGRAVITY_REVIEWER_TOOLS, CORE_ROUTED_REVIEWERS  # noqa: E402
+
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = AGENTS_DIR / "tool-adapters"
@@ -65,8 +67,7 @@ GIT_TEXT = {
 CLAUDE_READ_TOOLS = "Read, Grep, Glob"
 
 TOOL_ALIASES = {
-    "antigravity": "gemini",
-    "google-antigravity": "gemini",
+    "google-antigravity": "antigravity",
     "vscode": "copilot",
     "github-copilot": "copilot",
     "amazon-q": "amazonq",
@@ -78,6 +79,7 @@ TOOL_FILES: dict[str, tuple[str, ...]] = {
     "cursor": (".cursor/rules/android-harness.mdc",),
     "claude": ("CLAUDE.md",),
     "gemini": ("GEMINI.md",),
+    "antigravity": ("GEMINI.md",),
     "codex": ("CODEX.md",),
     "qwen": ("QWEN.md",),
     "copilot": (
@@ -370,32 +372,27 @@ def generate_claude_agents(repo: Path, *, dry_run: bool) -> list[str]:
     return logs
 
 
-CORE_ROUTED_REVIEWERS = (
-    "bug-reviewer-agent",
-    "security-reviewer-agent",
-    "perf-anr-guardian-agent",
-    "convention-reviewer-agent",
-    "regression-impact-reviewer-agent",
-    "test-quality-reviewer-agent",
-    "spec-compliance-agent",
-)
-
-
 def antigravity_agent_markdown(data: dict) -> str:
     name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Custom agent name cannot be empty.")
     description = str(data.get("description") or name).strip()
     prompt = str(data.get("system_prompt") or "").strip()
+    if not prompt:
+        raise ValueError(f"Custom agent '{name}' system_prompt cannot be empty.")
+
+    name_yaml = json.dumps(name, ensure_ascii=False)
+    description_yaml = json.dumps(description, ensure_ascii=False)
+    tools_block = "\n".join(f"  - {t}" for t in ANTIGRAVITY_REVIEWER_TOOLS)
+
     return (
         f"---\n"
-        f"name: {name}\n"
-        f"description: {description}\n"
+        f"name: {name_yaml}\n"
+        f"description: {description_yaml}\n"
         f"mainAgent: false\n"
         f"subagent: true\n"
         f"tools:\n"
-        f"  - view_file\n"
-        f"  - grep_search\n"
-        f"  - find_by_name\n"
-        f"  - list_dir\n"
+        f"{tools_block}\n"
         f"---\n\n"
         f"{prompt}\n"
     )
@@ -407,8 +404,14 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
     for role in CORE_ROUTED_REVIEWERS:
         json_path = src / f"{role}.json"
         if not json_path.is_file():
-            continue
-        data = json.loads(json_path.read_text(encoding="utf-8"))
+            raise RuntimeError(f"Missing core subagent source definition: {json_path}")
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"Malformed subagent source JSON at {json_path}: {exc}")
+        source_name = str(data.get("name") or "").strip()
+        if source_name != role:
+            raise RuntimeError(f"Subagent source name mismatch in {json_path}: expected '{role}', got '{source_name}'")
         dest = repo / ".agents" / "agents" / role / "agent.md"
         logs.append(
             write_file(dest, antigravity_agent_markdown(data), dry_run=dry_run, repo=repo)
@@ -425,10 +428,11 @@ def bodies_for_tool(tool: str, mapping: dict[str, str], pointer: str) -> dict[st
         }
     if tool == "claude":
         return {"CLAUDE.md": fill(read_template("CLAUDE.md.template"), mapping)}
-    if tool == "gemini":
+    if tool in ("gemini", "antigravity"):
         return {"GEMINI.md": fill(read_template("GEMINI.md.template"), mapping)}
     if tool == "codex":
         return {"CODEX.md": fill(read_template("CODEX.md.template"), mapping)}
+
     if tool == "qwen":
         return {"QWEN.md": fill(read_template("QWEN.md.template"), mapping)}
     if tool == "copilot":
@@ -464,7 +468,7 @@ def keep_set(selected: set[str]) -> set[str]:
     for tool in selected:
         keep.update(TOOL_FILES[tool])
         keep.update(command_pack_rels(tool))
-    if "gemini" in selected:
+    if "antigravity" in selected:
         for r in CORE_ROUTED_REVIEWERS:
             keep.add(f".agents/agents/{r}/agent.md")
     return keep
@@ -500,7 +504,7 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
                 continue
             path.unlink()
             logs.append(f"deleted {rel_s}")
-    if "gemini" not in selected:
+    if "antigravity" not in selected:
         for r in CORE_ROUTED_REVIEWERS:
             path = repo / ".agents" / "agents" / r / "agent.md"
             if not is_managed_file(path):
@@ -873,7 +877,7 @@ def install(args: argparse.Namespace) -> list[str]:
             logs.extend(generate_command_packs(repo, tool, mapping, dry_run=args.dry_run))
     if "claude" in selected and not args.skip_claude_agents:
         logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
-    if "gemini" in selected:
+    if "antigravity" in selected:
         logs.extend(generate_antigravity_agents(repo, dry_run=args.dry_run))
     logs.extend(cleanup_legacy_git_gate(repo, dry_run=args.dry_run))
     if getattr(args, "cc_hooks", False) and "claude" in selected:

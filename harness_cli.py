@@ -1008,6 +1008,7 @@ FULL_SELFTEST_SUITES = (
     "_public_cli_selftest.py",
     "_project_intelligence_selftest.py",
     "_graph_discovery_selftest.py",
+    "_antigravity_stability_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
@@ -1017,6 +1018,7 @@ QUICK_SELFTEST_SUITES = (
     "_daily_workflow_selftest.py",
     "_public_cli_selftest.py",
     "_graph_discovery_selftest.py",
+    "_antigravity_stability_selftest.py",
 )
 
 assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)

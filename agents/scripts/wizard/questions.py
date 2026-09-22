@@ -526,12 +526,12 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         }
     )
 
-    # --- Station 5: Reviewer Budget ---
+    # --- Station 5: Reviewer Call Safety Cap ---
     qs.append(
         {
             "id": "review_call_budget",
             "station": 5,
-            "station_title": "Reviewer Budget",
+            "station_title": "Reviewer Call Safety Cap",
             "required": True,
             "allow_multiple": False,
             "prompt": t(lang, "review_call_budget"),

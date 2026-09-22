@@ -44,12 +44,6 @@ def is_trusted_antigravity_path(path: Path | str) -> bool:
         for brain_root in brain_roots:
             if resolved == brain_root or brain_root in resolved.parents:
                 return True
-        # Also check heuristic for mock tests or sandbox
-        parts = {p.lower() for p in resolved.parts}
-        if ".gemini" in parts and "brain" in parts and any(
-            x in parts for x in ("antigravity", "antigravity-cli", "antigravity-ide")
-        ):
-            return True
         return False
     except Exception:
         return False
@@ -58,8 +52,10 @@ def is_trusted_antigravity_path(path: Path | str) -> bool:
 def _is_invalid_conversation_id(conversation_id: str) -> bool:
     if not conversation_id or not isinstance(conversation_id, str):
         return True
+    if "\0" in conversation_id:
+        return True
     cid = conversation_id.strip().strip("'\"")
-    if not cid:
+    if not cid or len(cid) > 255:
         return True
     if "/" in cid or "\\" in cid or ".." in cid or ":" in cid or cid.startswith("file:"):
         return True

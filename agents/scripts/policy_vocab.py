@@ -59,3 +59,28 @@ SUBAGENT_ORCHESTRATION_TOOLS = frozenset({
     "manage_task",
     "schedule",
 })
+
+CORE_ROUTED_REVIEWERS = (
+    "bug-reviewer-agent",
+    "security-reviewer-agent",
+    "perf-anr-guardian-agent",
+    "convention-reviewer-agent",
+    "regression-impact-reviewer-agent",
+    "test-quality-reviewer-agent",
+    "spec-compliance-agent",
+)
+
+ANTIGRAVITY_REVIEWER_TOOLS = (
+    "view_file",
+    "grep_search",
+    "find_by_name",
+    "list_dir",
+)
+
+ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS = (
+    "Prompt",
+    "Role",
+    "TypeName",
+    "Workspace",
+)
+

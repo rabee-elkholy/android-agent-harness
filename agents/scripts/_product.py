@@ -42,4 +42,4 @@ DEVICE_VERIFICATION_MODE = "manual_only"
 # Report actual host capability. Setup recalculates this after adapters install.
 ENFORCEMENT_TIER = "RULE_ENFORCED"
 ENFORCEMENT_BY_HOST = {}
-MODEL_CALL_BUDGET = 10
+MODEL_CALL_BUDGET = 20

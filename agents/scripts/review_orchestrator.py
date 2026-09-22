@@ -101,6 +101,14 @@ def save_ledger(task_directory: Path, run_id: str, ledger: dict[str, Any]) -> No
     atomic_write_json(l_path, ledger)
 
 
+def dispatchable_reviewers(ledger: dict[str, Any], required_reviewers: list[str]) -> list[str]:
+    rev_map = ledger.get("reviewers", {})
+    return [
+        r for r in sorted(required_reviewers)
+        if rev_map.get(r, {}).get("state") in (REVIEW_NOT_DISPATCHED, None)
+    ]
+
+
 def init_ledger(
     task_directory: Path,
     task_id: str,
@@ -112,7 +120,18 @@ def init_ledger(
 ) -> dict[str, Any]:
     l_path = ledger_file(task_directory, run_id)
     if l_path.is_file():
-        return load_ledger(task_directory, run_id)
+        existing = load_ledger(task_directory, run_id)
+        if (
+            existing.get("schema_version") != 1
+            or existing.get("task_id") != task_id
+            or existing.get("run_id") != run_id
+            or existing.get("delivery_snapshot_sha256") != delivery_snapshot_sha256
+            or existing.get("change_set_sha256") != change_set_sha256
+            or existing.get("review_package_sha256") != review_package_sha256
+            or sorted(existing.get("required_reviewers") or []) != sorted(required_reviewers)
+        ):
+            raise ValidationError(f"existing review ledger at {l_path} does not match active task, run, or snapshot identity")
+        return existing
     reviewers_dict: dict[str, Any] = {}
     for rev in required_reviewers:
         reviewers_dict[rev] = {
@@ -140,6 +159,7 @@ def init_ledger(
     (review_execution_dir(task_directory, run_id) / "dispatch").mkdir(parents=True, exist_ok=True)
     (review_execution_dir(task_directory, run_id) / "results").mkdir(parents=True, exist_ok=True)
     return ledger
+
 
 
 def record_dispatch_batch(
@@ -176,9 +196,11 @@ def record_dispatch_batch(
         raise ValidationError("active run manifest is missing")
     manifest = read_json(manifest_path)
     snapshot = str(manifest.get("delivery_snapshot_sha256") or "").strip()
-    change_set = str(manifest.get("change_set_sha256") or "").strip()
+    change_set = str(manifest.get("change_set_sha256") or manifest.get("delivery_snapshot_sha256") or "").strip()
     if not re.fullmatch(r"[0-9a-f]{64}", snapshot):
         raise ValidationError("delivery snapshot identity is missing or invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", change_set):
+        raise ValidationError("change set identity is missing or invalid")
 
     pkg_path = active_review_package_path(repo, current)
     if not pkg_path.is_file():
@@ -208,6 +230,15 @@ def record_dispatch_batch(
             required_reviewers,
         )
 
+        dispatchable = set(dispatchable_reviewers(ledger, required_reviewers))
+        requested = set(reviewers)
+        if len(reviewers) != len(requested):
+            raise ValidationError(f"duplicate reviewers in dispatch batch: {reviewers}")
+        if requested != dispatchable:
+            raise ValidationError(
+                f"dispatch batch must exactly match dispatchable reviewers {sorted(dispatchable)}, got {sorted(requested)}"
+            )
+
         for r in reviewers:
             rev_entry = ledger.get("reviewers", {}).get(r)
             if not rev_entry:
@@ -227,8 +258,23 @@ def record_dispatch_batch(
             r_file = dispatch_receipt_file(directory, run_id, r)
 
             if st == REVIEW_DISPATCHED and r_file.is_file():
-                receipts[r] = read_json(r_file)
+                existing_r = read_json(r_file)
+                if (
+                    existing_r.get("task_id") != task_id
+                    or existing_r.get("run_id") != run_id
+                    or existing_r.get("reviewer") != r
+                    or str(existing_r.get("host") or "").strip().lower() != run_host
+                    or existing_r.get("review_package_sha256") != pkg_sha
+                    or existing_r.get("delivery_snapshot_sha256") != snapshot
+                    or existing_r.get("change_set_sha256") != change_set
+                ):
+                    raise ValidationError(f"existing dispatch receipt for '{r}' does not match active task, run, or snapshot identity")
+                expected_sha = canonical_sha256({k: v for k, v in existing_r.items() if k != "receipt_sha256"})
+                if existing_r.get("receipt_sha256") != expected_sha:
+                    raise ValidationError(f"existing dispatch receipt checksum mismatch for '{r}'")
+                receipts[r] = existing_r
                 continue
+
 
             dispatch_nonce = str(uuid.uuid4())
             receipt = {
@@ -268,6 +314,58 @@ def record_dispatch(
     return batch[reviewer]
 
 
+def _parse_nonnegative_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValidationError(f"field '{field_name}' must be an integer, got bool")
+    if value is None or value == "":
+        return 0
+    if isinstance(value, int):
+        if value < 0:
+            raise ValidationError(f"field '{field_name}' cannot be negative, got {value}")
+        return value
+    if isinstance(value, str):
+        val_s = value.strip()
+        if not val_s.isdigit():
+            raise ValidationError(f"field '{field_name}' must be numeric, got '{value}'")
+        num = int(val_s)
+        if num < 0:
+            raise ValidationError(f"field '{field_name}' cannot be negative, got {num}")
+        return num
+    raise ValidationError(f"field '{field_name}' must be an integer, got {type(value).__name__}")
+
+
+def _extract_v2_objects(text: str) -> list[dict[str, Any]]:
+    fenced_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    valid_fenced: list[dict[str, Any]] = []
+    for block in reversed(fenced_blocks):
+        try:
+            cand = json.loads(block.strip())
+            if isinstance(cand, dict) and cand.get("schema_version") == 2:
+                valid_fenced.append(cand)
+        except Exception:
+            continue
+    if valid_fenced:
+        return valid_fenced
+
+    decoder = json.JSONDecoder()
+    candidates: list[dict[str, Any]] = []
+    idx = 0
+    length = len(text)
+    while idx < length:
+        ch = text[idx]
+        if ch == '{':
+            try:
+                obj, end_idx = decoder.raw_decode(text, idx)
+                if isinstance(obj, dict) and obj.get("schema_version") == 2:
+                    candidates.append(obj)
+                idx = end_idx
+                continue
+            except Exception:
+                pass
+        idx += 1
+    return candidates
+
+
 def parse_structured_result(
     *,
     text: str,
@@ -279,43 +377,16 @@ def parse_structured_result(
     if not text or not text.strip():
         raise ValidationError("reviewer output is empty")
 
-    raw_json_obj = None
-    matches = re.findall(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text, re.IGNORECASE)
-    for m in reversed(matches):
-        try:
-            cand = json.loads(m.strip())
-            if isinstance(cand, dict) and cand.get("schema_version") == 2:
-                raw_json_obj = cand
-                break
-        except Exception:
-            continue
-
-    if raw_json_obj is None:
-        brace_pattern = re.compile(r"(\{[\s\S]*\"schema_version\"\s*:\s*2[\s\S]*\})")
-        m = brace_pattern.search(text)
-        if m:
-            candidate_text = m.group(1)
-            brace_depth = 0
-            start_idx = None
-            for idx, ch in enumerate(candidate_text):
-                if ch == '{':
-                    if start_idx is None:
-                        start_idx = idx
-                    brace_depth += 1
-                elif ch == '}':
-                    brace_depth -= 1
-                    if brace_depth == 0 and start_idx is not None:
-                        sub = candidate_text[start_idx:idx+1]
-                        try:
-                            cand = json.loads(sub)
-                            if isinstance(cand, dict) and cand.get("schema_version") == 2:
-                                raw_json_obj = cand
-                                break
-                        except Exception:
-                            pass
-
-    if raw_json_obj is None:
+    candidates = _extract_v2_objects(text)
+    if not candidates:
         raise ValidationError("no valid HARNESS_REVIEW_RESULT_V2 JSON block found in reviewer output")
+
+    first_sha = canonical_sha256(candidates[0])
+    for cand in candidates[1:]:
+        if canonical_sha256(cand) != first_sha:
+            raise ValidationError("multiple conflicting HARNESS_REVIEW_RESULT_V2 JSON blocks found in reviewer output")
+
+    raw_json_obj = candidates[0]
 
     if raw_json_obj.get("schema_version") != 2:
         raise ValidationError(f"expected schema_version == 2, got {raw_json_obj.get('schema_version')}")
@@ -362,6 +433,11 @@ def parse_structured_result(
         if not normalized_sev or normalized_sev not in VALID_SEVERITIES:
             raise ValidationError(f"invalid finding severity: '{raw_sev}'")
 
+        l_start = _parse_nonnegative_int(f.get("line_start"), "line_start")
+        l_end = _parse_nonnegative_int(f.get("line_end"), "line_end")
+        if l_start > 0 and l_end > 0 and l_end < l_start:
+            raise ValidationError(f"line_end ({l_end}) cannot be lower than line_start ({l_start})")
+
         finding_id = str(f.get("id") or "").strip()
         title = str(f.get("title") or "").strip()
         normalized_findings.append({
@@ -370,8 +446,8 @@ def parse_structured_result(
             "title": title or msg[:50],
             "message": msg,
             "file": str(f.get("file") or ""),
-            "line_start": int(f.get("line_start") or 0),
-            "line_end": int(f.get("line_end") or 0),
+            "line_start": l_start,
+            "line_end": l_end,
             "evidence": str(f.get("evidence") or ""),
             "recommended_fix": str(f.get("recommended_fix") or ""),
         })
@@ -388,6 +464,7 @@ def parse_structured_result(
 
 
 def complete_review(
+
     repo: Path,
     task_id: str,
     reviewer: str,
@@ -471,21 +548,36 @@ def complete_review(
 
         existing_bound_id = ledger["reviewers"][reviewer].get("execution_id")
         if existing_bound_id and existing_bound_id != execution_id:
-            if ledger["reviewers"][reviewer].get("state") != REVIEW_ENV_BLOCKED:
-                raise ValidationError(f"reviewer '{reviewer}' already bound to execution '{existing_bound_id}', rejecting different execution '{execution_id}'")
+            raise ValidationError(f"reviewer '{reviewer}' already bound to execution '{existing_bound_id}', rejecting different execution '{execution_id}'")
+
+        current_st = ledger["reviewers"][reviewer].get("state")
+        if current_st not in (REVIEW_DISPATCHED, REVIEW_PROTOCOL_RETRY_REQUIRED):
+            raise ValidationError(f"cannot complete review for '{reviewer}': state is '{current_st}', expected DISPATCHED or PROTOCOL_RETRY_REQUIRED")
 
         ledger["reviewers"][reviewer]["execution_id"] = execution_id
         ledger["reviewers"][reviewer]["execution_id_sha256"] = hashlib.sha256(execution_id.encode("utf-8")).hexdigest()
         save_ledger(directory, run_id, ledger)
 
-        # Resolve transcript text
-        t_path = resolve_trusted_review_source(run_host, execution_id)
-        if not t_path or not t_path.is_file():
+        # Resolve transcript text and extract response
+        try:
+            t_path = resolve_trusted_review_source(run_host, execution_id)
+            if not t_path or not t_path.is_file():
+                raise FileNotFoundError("trusted transcript not found")
+            text = _extract_transcript_response(t_path)
+            if not text or not text.strip():
+                raise ValueError("no model response in transcript")
+        except Exception as exc:
             ledger["reviewers"][reviewer]["state"] = REVIEW_ENV_BLOCKED
-            ledger["reviewers"][reviewer]["last_error"] = f"could not locate trusted transcript for {execution_id}"
+            if isinstance(exc, FileNotFoundError):
+                err_code = "TRUSTED_TRANSCRIPT_NOT_FOUND"
+            elif "no model response" in str(exc).lower():
+                err_code = "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE"
+            else:
+                err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
+            ledger["reviewers"][reviewer]["last_error"] = err_code
             save_ledger(directory, run_id, ledger)
-            raise ValidationError(f"could not locate trusted transcript for subagent '{execution_id}' inside host storage")
-        text = _extract_transcript_response(t_path)
+            raise ValidationError(f"could not extract trusted transcript for subagent '{execution_id}': {err_code}")
+
 
         # Parse structured result
         try:
@@ -585,8 +677,21 @@ def _finalize_review_execution_locked(
     all_findings = []
     for r in required_reviewers:
         res_p = result_file(directory, run_id, r)
+        if not res_p.is_file():
+            raise ValidationError(f"result file missing for reviewer '{r}'")
         res_data = read_json(res_p)
+        if res_data.get("task_id") != task_id or res_data.get("run_id") != run_id or res_data.get("reviewer") != r:
+            raise ValidationError(f"result file for '{r}' identity mismatch")
         result_body = res_data.get("result", {})
+        actual_res_sha = canonical_sha256(result_body)
+        if res_data.get("result_sha256") != actual_res_sha:
+            raise ValidationError(f"result file for '{r}' sha mismatch")
+        expected_exec_sha = hashlib.sha256(str(res_data.get("execution_id") or "").encode("utf-8")).hexdigest()
+        if res_data.get("execution_id_sha256") != expected_exec_sha:
+            raise ValidationError(f"result file for '{r}' execution id hash mismatch")
+        if str(result_body.get("review_package_sha256") or "").lower() != pkg_sha.lower():
+            raise ValidationError(f"result file for '{r}' review package digest mismatch")
+
         verdict = result_body.get("verdict", "PASS")
         r_findings = result_body.get("findings", [])
         reports.append({
@@ -634,11 +739,17 @@ def _finalize_review_execution_locked(
         ledger["reviewers"][r]["state"] = REVIEW_INGESTED
     save_ledger(directory, run_id, ledger)
 
-    if plan and blocking:
-        plan["status"] = "BLOCKED"
-        plan["blocked_reviewers"] = sorted({str(item.get("reviewer") or "") for item in blocking})
+    if plan is not None:
+        prev_rounds = int(plan.get("review_rounds") or 0)
+        prev_calls = int(plan.get("review_calls_used") or 0)
+        plan["review_rounds"] = round_number
+        plan["review_calls_used"] = prev_calls + len(required_reviewers)
+        if blocking:
+            plan["status"] = "BLOCKED"
+            plan["blocked_reviewers"] = sorted({str(item.get("reviewer") or "") for item in blocking})
         from plan_authority import save_plan
         save_plan(directory / "plan.json", plan)
+
 
     return evidence_payload
 
