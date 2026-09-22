@@ -144,12 +144,8 @@ class ChatInstallationDocsTests(unittest.TestCase):
 
     def test_chat_prompt_covers_approved_install_and_update_paths(self) -> None:
         for marker in (
-            "Clean Install",
-            "Same-Major Update",
-            "Legacy Replacement",
+            "CLEAN INSTALL only",
             "harness_cli.py init --repo",
-            "harness_cli.py update --no-refresh --repo",
-            "init --replace-legacy",
             "STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL",
             "Phase 1: Read-only discovery",
             "Phase 2: Kit bootstrap approval",
