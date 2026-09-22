@@ -324,7 +324,6 @@ HARNESS_INTERNAL_EXCLUSIONS = [
     "*.wizard_questions.json",
     ".wizard_questions.json",
     "scratch_*.py",
-    "android-agent-harness/",
     "fix_product.py",
     "script_step*.py",
     "update_worker.py",

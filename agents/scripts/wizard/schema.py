@@ -16,7 +16,6 @@ ALLOWED_QUESTION_KEYS = {
     "i1",
     "i1_text",
     "i2",
-    "i3",
     "i4",
     "i5",
     "i5_text",
@@ -31,7 +30,6 @@ ALLOWED_QUESTION_KEYS = {
     "i12",
     "i13",
     "i14",
-    "i15",
     "i16",
     "i17",
     "i18",
@@ -39,6 +37,9 @@ ALLOWED_QUESTION_KEYS = {
     "i19_text",
     "i20",
     "i22",
+    "review_model_policy",
+    "review_call_budget",
+    "review_call_budget_text",
     "b_platform",
     "b_arch",
     "b_di",
@@ -84,7 +85,8 @@ ALLOWED_NORMALIZED_KEYS = {
     "agents_git",
     "gemini_config",
     "assemble_now",
-    "unit_tests",
+    "model_call_budget",
+    "allow_model_escalation",
     "zoho_mcp",
     "chat_language",
     "zoho_language",
@@ -106,6 +108,13 @@ def validate_raw_answers(payload: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(payload, dict):
         return ["answers payload must be a JSON object"]
+
+    # Check unsupported schema
+    if "schema" in payload and payload.get("schema") != SCHEMA:
+        return [
+            "Existing setup answers use an unsupported schema.\n"
+            "Clean setup required. Remove/reset .harness-setup and rerun installer."
+        ]
 
     # If payload is already a fully normalized answers dict
     if payload.get("schema") == SCHEMA and "product" in payload and "module" in payload:
@@ -141,12 +150,6 @@ def validate_raw_answers(payload: Any) -> list[str]:
             if not isinstance(t_item, str) or t_item not in valid_tools:
                 errors.append(f"invalid tool id '{t_item}' in i14; valid tools: {', '.join(TOOL_IDS)}")
 
-    # Validate i3 (Git commit policy)
-    if "i3" in payload:
-        val = payload["i3"]
-        if val not in ("never", "agent-may-commit"):
-            errors.append("i3 (git_policy) must be 'never' or 'agent-may-commit'")
-
     # Validate i20 (PM provider)
     if "i20" in payload:
         pm_val = str(payload["i20"]).strip()
@@ -165,11 +168,25 @@ def validate_raw_answers(payload: Any) -> list[str]:
         if val not in ("enable", "skip", True, False):
             errors.append("i16 (zoho_mcp) must be 'enable' or 'skip'")
 
-    # Validate i15 (Unit tests)
-    if "i15" in payload:
-        val = payload["i15"]
-        if val not in ("yes", "no", True, False):
-            errors.append("i15 (unit_tests) must be 'yes' or 'no'")
+    # Validate review_model_policy
+    if "review_model_policy" in payload:
+        val = payload["review_model_policy"]
+        if val not in ("inherit_only", "allow_strong"):
+            errors.append("review_model_policy must be 'inherit_only' or 'allow_strong'")
+
+    # Validate review_call_budget
+    if "review_call_budget" in payload:
+        choice = str(payload["review_call_budget"]).strip()
+        if choice not in {"5", "10", "20", "custom"}:
+            errors.append("review_call_budget must be 5, 10, 20, or custom")
+        if choice == "custom":
+            raw_custom = str(payload.get("review_call_budget_text") or "").strip()
+            if not raw_custom.isdigit():
+                errors.append("review_call_budget_text must be a whole number")
+            else:
+                budget = int(raw_custom)
+                if budget < 1 or budget > 100:
+                    errors.append("review_call_budget_text must be between 1 and 100")
 
     # Validate i4 (Device testing policy)
     if "i4" in payload:
@@ -195,3 +212,6 @@ def validate_raw_answers(payload: Any) -> list[str]:
             errors.append(f"value for key '{key}' exceeds maximum permitted length (2048 characters)")
 
     return errors
+
+
+validate_answers_json = validate_raw_answers

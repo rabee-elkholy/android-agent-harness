@@ -235,7 +235,8 @@ class ChatInstallationLifecycleTests(RepoCase):
                 "i5": ":app",
                 "i6": "com.example.fixture.MainActivity",
                 "i14": ["codex"],
-                "i15": "yes",
+                "review_model_policy": "inherit_only",
+                "review_call_budget": "10",
                 "i20": "none",
             }),
         )
@@ -1172,6 +1173,7 @@ class LifecycleTests(RepoCase):
 
     def _answers(self) -> None:
         write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "schema": 2,
             "product": "Fixture",
             "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity",
@@ -3009,6 +3011,628 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
             cross_import_issues = [i for i in issues if i["type"] == "FEATURE_CROSS_IMPORT"]
             self.assertEqual(1, len(cross_import_issues))
             self.assertIn("training", cross_import_issues[0]["msg"])
+
+
+class CleanInstallV2SpecificationTests(RepoCase):
+    # -------------------------------------------------------------
+    # 50. Wizard Tests
+    # -------------------------------------------------------------
+    def test_SETUP_V2_001_schema_version_is_2(self) -> None:
+        from wizard.i18n import SCHEMA
+        self.assertEqual(2, SCHEMA)
+
+    def test_SETUP_V2_002_questions_payload_has_no_i3(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q_ids = [q["id"] for q in qs]
+        self.assertNotIn("i3", q_ids)
+
+    def test_SETUP_V2_003_questions_payload_has_no_i15(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q_ids = [q["id"] for q in qs]
+        self.assertNotIn("i15", q_ids)
+
+    def test_SETUP_V2_004_questions_payload_contains_review_model_policy(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q = next((q for q in qs if q["id"] == "review_model_policy"), None)
+        self.assertIsNotNone(q)
+        self.assertEqual(5, q["station"])
+        option_ids = [opt["id"] for opt in q["options"]]
+        self.assertEqual(["inherit_only", "allow_strong"], option_ids)
+
+    def test_SETUP_V2_005_questions_payload_contains_review_call_budget(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q = next((q for q in qs if q["id"] == "review_call_budget"), None)
+        self.assertIsNotNone(q)
+        self.assertEqual(5, q["station"])
+        option_ids = [opt["id"] for opt in q["options"]]
+        self.assertEqual(["10", "5", "20", "custom"], option_ids)
+
+    def test_SETUP_V2_006_review_model_policy_default_is_inherit_only(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q = next(q for q in qs if q["id"] == "review_model_policy")
+        self.assertEqual("inherit_only", q["options"][0]["id"])
+        self.assertTrue(q["options"][0].get("recommended"))
+
+    def test_SETUP_V2_007_review_call_budget_default_is_10(self) -> None:
+        import wizard.questions as wq
+        qs = wq.questions_payload(self.repo, "en")
+        q = next(q for q in qs if q["id"] == "review_call_budget")
+        self.assertEqual("10", q["options"][0]["id"])
+        self.assertTrue(q["options"][0].get("recommended"))
+
+    # -------------------------------------------------------------
+    # 51. Schema Tests
+    # -------------------------------------------------------------
+    def test_SETUP_V2_008_raw_i3_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"i3": "never"})
+        self.assertTrue(any("unknown question keys in answers payload: i3" in e for e in errors))
+
+    def test_SETUP_V2_009_raw_i15_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"i15": "yes"})
+        self.assertTrue(any("unknown question keys in answers payload: i15" in e for e in errors))
+
+    def test_SETUP_V2_010_normalized_unit_tests_rejected(self) -> None:
+        from wizard.schema import validate_answers_json
+        errors = validate_answers_json({"schema": 2, "product": "P", "module": ":m", "unit_tests": "yes"})
+        self.assertTrue(any("unknown normalized answers keys: unit_tests" in e for e in errors))
+
+    def test_SETUP_V2_011_invalid_review_model_policy_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"review_model_policy": "turbo_plus"})
+        self.assertTrue(any("review_model_policy must be" in e for e in errors))
+
+    def test_SETUP_V2_012_invalid_review_call_budget_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"review_call_budget": "50"})
+        self.assertTrue(any("review_call_budget must be 5, 10, 20, or custom" in e for e in errors))
+
+    def test_SETUP_V2_013_custom_budget_0_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "0"})
+        self.assertTrue(any("between 1 and 100" in e for e in errors))
+
+    def test_SETUP_V2_014_custom_budget_101_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "101"})
+        self.assertTrue(any("between 1 and 100" in e for e in errors))
+
+    def test_SETUP_V2_015_custom_budget_decimal_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "10.5"})
+        self.assertTrue(any("whole number" in e for e in errors))
+
+    def test_SETUP_V2_016_custom_budget_non_numeric_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "ten"})
+        self.assertTrue(any("whole number" in e for e in errors))
+
+    # -------------------------------------------------------------
+    # 52. Normalization Tests
+    # -------------------------------------------------------------
+    def test_SETUP_V2_017_git_policy_is_never(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertEqual("never", res["git_policy"])
+
+    def test_SETUP_V2_018_default_model_call_budget_is_10(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertEqual(10, res["model_call_budget"])
+
+    def test_SETUP_V2_019_default_allow_model_escalation_is_false(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertFalse(res["allow_model_escalation"])
+
+    def test_SETUP_V2_020_allow_strong_maps_to_escalation_true(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_model_policy": "allow_strong"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertTrue(res["allow_model_escalation"])
+
+    def test_SETUP_V2_021_budget_5_maps_to_integer_5(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "5"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertEqual(5, res["model_call_budget"])
+
+    def test_SETUP_V2_022_budget_20_maps_to_integer_20(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "20"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertEqual(20, res["model_call_budget"])
+
+    def test_SETUP_V2_023_custom_12_maps_to_integer_12(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "custom", "review_call_budget_text": "12"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertEqual(12, res["model_call_budget"])
+
+    def test_SETUP_V2_024_normalized_output_contains_no_unit_tests(self) -> None:
+        import wizard.questions as wq
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize(raw, facts)
+        self.assertNotIn("unit_tests", res)
+
+    # -------------------------------------------------------------
+    # 53. Product Generation Tests
+    # -------------------------------------------------------------
+    def test_PRODUCT_V2_001_git_policy_never_in_product(self) -> None:
+        import _installer_config as ic
+        out = ic.generate_product_py(self.repo, {"schema": 2, "git_policy": "never", "product": "Test"})
+        content = out.read_text(encoding="utf-8")
+        self.assertTrue("GIT_POLICY = 'never'" in content or 'GIT_POLICY = "never"' in content)
+
+    def test_PRODUCT_V2_002_model_call_budget_10_default(self) -> None:
+        import _installer_config as ic
+        out = ic.generate_product_py(self.repo, {"schema": 2, "model_call_budget": 10, "product": "Test"})
+        content = out.read_text(encoding="utf-8")
+        self.assertIn("MODEL_CALL_BUDGET = 10", content)
+
+    def test_PRODUCT_V2_003_allow_model_escalation_false_default(self) -> None:
+        import _installer_config as ic
+        out = ic.generate_product_py(self.repo, {"schema": 2, "allow_model_escalation": False, "product": "Test"})
+        content = out.read_text(encoding="utf-8")
+        self.assertIn("ALLOW_MODEL_ESCALATION = False", content)
+
+    def test_PRODUCT_V2_004_allow_strong_and_20(self) -> None:
+        import _installer_config as ic
+        out = ic.generate_product_py(self.repo, {"schema": 2, "allow_model_escalation": True, "model_call_budget": 20, "product": "Test"})
+        content = out.read_text(encoding="utf-8")
+        self.assertIn("ALLOW_MODEL_ESCALATION = True", content)
+        self.assertIn("MODEL_CALL_BUDGET = 20", content)
+
+    def test_PRODUCT_V2_005_device_verification_mode_manual_only(self) -> None:
+        import _installer_config as ic
+        out = ic.generate_product_py(self.repo, {"schema": 2, "device_verification": "manual_only", "product": "Test"})
+        content = out.read_text(encoding="utf-8")
+        self.assertTrue("DEVICE_VERIFICATION_MODE = 'manual_only'" in content or 'DEVICE_VERIFICATION_MODE = "manual_only"' in content)
+
+    def test_PRODUCT_V2_006_device_verification_mode_disabled(self) -> None:
+        import _installer_config as ic
+        out = ic.generate_product_py(self.repo, {"schema": 2, "device_verification": "disabled", "product": "Test"})
+        content = out.read_text(encoding="utf-8")
+        self.assertTrue("DEVICE_VERIFICATION_MODE = 'disabled'" in content or 'DEVICE_VERIFICATION_MODE = "disabled"' in content)
+
+    # -------------------------------------------------------------
+    # 54. Device Policy Tests
+    # -------------------------------------------------------------
+    def test_DEVICE_V2_001_manual_only_and_ui_behavior(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_device_verification_mode", return_value="manual_only"):
+            res = review_policy.decide(
+                {"tier": "T2_FEATURE", "surfaces": ["COMPOSE_UI"], "ui_verification_class": "UI_BEHAVIOR", "classified_files": []},
+                KIT / "agents" / "skills",
+            )
+            self.assertTrue(res["intrinsic_device_required"])
+            self.assertTrue(res["device_required"])
+            self.assertIn("device", res["gates"])
+
+    def test_DEVICE_V2_002_disabled_and_ui_behavior(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_device_verification_mode", return_value="disabled"):
+            res = review_policy.decide(
+                {"tier": "T2_FEATURE", "surfaces": ["COMPOSE_UI"], "ui_verification_class": "UI_BEHAVIOR", "classified_files": []},
+                KIT / "agents" / "skills",
+            )
+            self.assertTrue(res["intrinsic_device_required"])
+            self.assertFalse(res["device_required"])
+            self.assertNotIn("device", res["gates"])
+
+    def test_DEVICE_V2_003_disabled_and_device_api(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_device_verification_mode", return_value="disabled"):
+            res = review_policy.decide(
+                {"tier": "T4_DATA_DEVICE", "surfaces": ["DEVICE_API"], "ui_verification_class": "DEVICE_BEHAVIOR", "classified_files": []},
+                KIT / "agents" / "skills",
+            )
+            self.assertNotIn("device", res["gates"])
+            self.assertIn("preflight", res["gates"])
+            self.assertIn("assemble", res["gates"])
+            self.assertTrue(len(res["reviewers"]) > 0)
+
+    def test_DEVICE_V2_004_disabled_and_critical_surfaces(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_device_verification_mode", return_value="disabled"):
+            res = review_policy.decide(
+                {"tier": "T5_CRITICAL", "surfaces": ["BILLING", "AUTH", "SECURITY"], "ui_verification_class": "DEVICE_BEHAVIOR", "classified_files": []},
+                KIT / "agents" / "skills",
+            )
+            self.assertNotIn("device", res["gates"])
+            self.assertEqual("T5_CRITICAL", res["risk_tier"])
+            self.assertTrue(len(res["reviewers"]) >= 3)
+
+    def test_DEVICE_V2_005_manual_only_and_visual_micro(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_device_verification_mode", return_value="manual_only"):
+            res = review_policy.decide(
+                {"tier": "T1_LOW_RISK", "surfaces": ["COMPOSE_UI"], "severity": "LOW", "changed_files": 1, "changed_lines": 5, "details": {"COMPOSE_UI": {"reasons": ["VISUAL_ONLY"]}}},
+                KIT / "agents" / "skills",
+            )
+            self.assertFalse(res["intrinsic_device_required"])
+            self.assertFalse(res["device_required"])
+
+    def test_DEVICE_V2_006_library_project(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_device_verification_mode", return_value="manual_only"):
+            res = review_policy.decide(
+                {"tier": "T2_FEATURE", "surfaces": ["COMPOSE_UI"], "ui_verification_class": "UI_BEHAVIOR", "classified_files": []},
+                KIT / "agents" / "skills",
+                project_kind="library",
+            )
+            self.assertFalse(res["intrinsic_device_required"])
+            self.assertFalse(res["device_required"])
+
+    # -------------------------------------------------------------
+    # 55. Unit-Test Policy Tests
+    # -------------------------------------------------------------
+    def test_UNIT_V2_001_business_logic_requires_unit_tests(self) -> None:
+        import review_policy
+        res = review_policy.decide(
+            {"tier": "T2_FEATURE", "surfaces": ["BUSINESS_LOGIC"], "classified_files": []},
+            KIT / "agents" / "skills",
+        )
+        self.assertIn("unit_tests", res["gates"])
+
+    def test_UNIT_V2_002_coroutines_requires_unit_tests(self) -> None:
+        import review_policy
+        res = review_policy.decide(
+            {"tier": "T2_FEATURE", "surfaces": ["COROUTINES"], "classified_files": []},
+            KIT / "agents" / "skills",
+        )
+        self.assertIn("unit_tests", res["gates"])
+
+    def test_UNIT_V2_003_docs_only_no_unit_tests(self) -> None:
+        import review_policy
+        res = review_policy.decide(
+            {"tier": "T0_TRIVIAL", "surfaces": ["DOCS"], "classified_files": []},
+            KIT / "agents" / "skills",
+        )
+        self.assertNotIn("unit_tests", res["gates"])
+
+    def test_UNIT_V2_004_visual_micro_compose_preserves_policy(self) -> None:
+        import review_policy
+        res = review_policy.decide(
+            {"tier": "T1_LOW_RISK", "surfaces": ["COMPOSE_UI"], "severity": "LOW", "changed_files": 1, "changed_lines": 5, "details": {"COMPOSE_UI": {"reasons": ["VISUAL_ONLY"]}}},
+            KIT / "agents" / "skills",
+        )
+        self.assertNotIn("unit_tests", res["gates"])
+
+    # -------------------------------------------------------------
+    # 56. Reviewer Settings Tests
+    # -------------------------------------------------------------
+    def test_REVIEW_SETUP_001_model_call_budget_consumed_by_policy(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_model_call_budget", return_value=15):
+            res = review_policy.decide(
+                {"tier": "T5_CRITICAL", "surfaces": ["BILLING", "AUTH", "SECURITY"], "classified_files": []},
+                KIT / "agents" / "skills",
+            )
+            self.assertEqual("PASS", res["status"])
+
+    def test_REVIEW_SETUP_002_budget_exhausted_requires_decision(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_model_call_budget", return_value=1):
+            res = review_policy.decide(
+                {"tier": "T2_FEATURE", "surfaces": ["BUSINESS_LOGIC"], "classified_files": []},
+                KIT / "agents" / "skills",
+            )
+            self.assertEqual("USER_DECISION_REQUIRED", res["status"])
+
+    def test_REVIEW_SETUP_003_budget_10_normal_behavior(self) -> None:
+        import review_policy
+        with mock.patch("review_policy._configured_model_call_budget", return_value=10):
+            res = review_policy.decide(
+                {"tier": "T2_FEATURE", "surfaces": ["BUSINESS_LOGIC"], "classified_files": []},
+                KIT / "agents" / "skills",
+            )
+            self.assertEqual("PASS", res["status"])
+
+    def test_REVIEW_SETUP_004_escalation_false_all_inherit(self) -> None:
+        from review_execution import resolve_execution_profile
+        import _product
+        task_id = "t_setup_004"
+        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps(policy), encoding="utf-8")
+        current_file = self.repo / f".agents/state/tasks/{task_id}/current-run.json"
+        current_file.parent.mkdir(parents=True, exist_ok=True)
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+        plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
+        plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
+        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", False):
+            prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+            for rev_info in prof["reviewers"].values():
+                self.assertEqual("inherit", rev_info["preferred_model"])
+
+    def test_REVIEW_SETUP_005_escalation_true_with_strong_route(self) -> None:
+        from review_execution import resolve_execution_profile
+        import _product
+        task_id = "t_setup_005"
+        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps(policy), encoding="utf-8")
+        current_file = self.repo / f".agents/state/tasks/{task_id}/current-run.json"
+        current_file.parent.mkdir(parents=True, exist_ok=True)
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+        plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
+        plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
+        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True):
+            with mock.patch("review_execution.load_host_model_routes", return_value={"STRONG": "pro"}):
+                prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+                self.assertEqual("pro", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+
+    def test_REVIEW_SETUP_006_escalation_true_no_route_inherit_fallback(self) -> None:
+        from review_execution import resolve_execution_profile
+        import _product
+        task_id = "t_setup_006"
+        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
+        policy_file = self.repo / "policy.json"
+        policy_file.write_text(json.dumps(policy), encoding="utf-8")
+        current_file = self.repo / f".agents/state/tasks/{task_id}/current-run.json"
+        current_file.parent.mkdir(parents=True, exist_ok=True)
+        current_file.write_text(json.dumps({"task_id": task_id, "policy": str(policy_file), "delivery_snapshot_sha256": "snap", "run_id": "r1", "change_set_sha256": "cs"}), encoding="utf-8")
+        plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
+        plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
+        with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True):
+            with mock.patch("review_execution.load_host_model_routes", return_value={}):
+                prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+                self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["preferred_model"])
+
+    # -------------------------------------------------------------
+    # 57. Kit Location Regression Tests
+    # -------------------------------------------------------------
+    def test_KIT_LOC_001_default_kit_dir(self) -> None:
+        self.assertEqual(Path.home() / ".android-harness" / "kit", harness_cli.KIT_DIR)
+
+    def test_KIT_LOC_002_resolve_kit_no_nested_app_search(self) -> None:
+        nested_dir = self.repo / "android-agent-harness"
+        nested_dir.mkdir()
+        write(nested_dir / "agents/VERSION", "1.0.59")
+        write(nested_dir / "agents/scripts/lifecycle.py", "# dummy")
+        prev = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            resolved = harness_cli.resolve_kit(None)
+            self.assertNotEqual(nested_dir.resolve(), resolved.resolve())
+        finally:
+            os.chdir(prev)
+
+    def test_KIT_LOC_003_resolve_kit_no_parent_search(self) -> None:
+        parent_dir = self.repo.parent / "android-agent-harness"
+        parent_dir.mkdir(parents=True, exist_ok=True)
+        write(parent_dir / "agents/VERSION", "1.0.59")
+        write(parent_dir / "agents/scripts/lifecycle.py", "# dummy")
+        prev = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            resolved = harness_cli.resolve_kit(None)
+            self.assertNotEqual(parent_dir.resolve(), resolved.resolve())
+        finally:
+            os.chdir(prev)
+            shutil.rmtree(parent_dir, ignore_errors=True)
+
+    def test_KIT_LOC_004_explicit_external_kit_accepted(self) -> None:
+        resolved = harness_cli.resolve_kit(str(KIT))
+        self.assertEqual(KIT.resolve(), resolved.resolve())
+
+    def test_KIT_LOC_005_explicit_kit_inside_app_rejected_by_init(self) -> None:
+        nested_kit = self.repo / "nested_kit"
+        nested_kit.mkdir()
+        args = Namespace(repo=str(self.repo), kit=str(nested_kit), answers_json=None, lang="en")
+        with self.assertRaises(SystemExit) as ctx:
+            harness_cli.cmd_init(args)
+        self.assertIn("Harness kit checkout must live outside the Android project", str(ctx.exception))
+
+    def test_KIT_LOC_006_kit_equal_repo_rejected(self) -> None:
+        args = Namespace(repo=str(self.repo), kit=str(self.repo), answers_json=None, lang="en")
+        with self.assertRaises(SystemExit) as ctx:
+            harness_cli.cmd_init(args)
+        self.assertIn("Harness kit checkout must live outside the Android project", str(ctx.exception))
+
+    def test_KIT_LOC_007_symlinked_kit_resolving_inside_app_rejected(self) -> None:
+        nested_target = self.repo / "kit_target"
+        nested_target.mkdir()
+        symlink_dir = self.repo.parent / "external_symlink"
+        try:
+            try:
+                symlink_dir.symlink_to(nested_target, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                return
+            args = Namespace(repo=str(self.repo), kit=str(symlink_dir), answers_json=None, lang="en")
+            with self.assertRaises(SystemExit) as ctx:
+                harness_cli.cmd_init(args)
+            self.assertIn("Harness kit checkout must live outside the Android project", str(ctx.exception))
+        finally:
+            if symlink_dir.is_symlink():
+                symlink_dir.unlink()
+
+    def test_KIT_LOC_008_manual_remediation_clone_has_explicit_dest(self) -> None:
+        text = harness_cli._manual_remediation("1.0.59")
+        self.assertIn(f'"{harness_cli.KIT_DIR}"', text)
+
+    def test_KIT_LOC_009_manual_remediation_no_bare_clone(self) -> None:
+        text = harness_cli._manual_remediation("1.0.59")
+        self.assertNotIn(f"git clone {harness_cli.KIT_REPO_URL}\n", text)
+        lines = [line.strip() for line in text.splitlines() if "git clone" in line]
+        for line in lines:
+            self.assertTrue(line.endswith(f'"{harness_cli.KIT_DIR}"'))
+
+    # -------------------------------------------------------------
+    # 58. Nested Checkout Tests
+    # -------------------------------------------------------------
+    def test_NESTED_KIT_001_clean_app_accepted(self) -> None:
+        self.assertEqual([], harness_cli._find_nested_kit_checkouts(self.repo))
+
+    def test_NESTED_KIT_002_nested_full_kit_init_fails(self) -> None:
+        nested = self.repo / "android-agent-harness"
+        nested.mkdir()
+        (nested / ".git").mkdir()
+        write(nested / "harness_cli.py", "# dummy")
+        write(nested / "agents/VERSION", "1.0.59")
+        write(nested / "agents/scripts/lifecycle.py", "# dummy")
+        args = Namespace(repo=str(self.repo), kit=str(KIT), answers_json=None, lang="en")
+        with self.assertRaises(SystemExit) as ctx:
+            harness_cli.cmd_init(args)
+        self.assertIn("Full Android Agent Harness checkout found inside target project", str(ctx.exception))
+
+    def test_NESTED_KIT_003_renamed_child_with_kit_signature_init_fails(self) -> None:
+        nested = self.repo / "custom-kit-folder"
+        nested.mkdir()
+        (nested / ".git").mkdir()
+        write(nested / "harness_cli.py", "# dummy")
+        write(nested / "agents/VERSION", "1.0.59")
+        write(nested / "agents/scripts/lifecycle.py", "# dummy")
+        args = Namespace(repo=str(self.repo), kit=str(KIT), answers_json=None, lang="en")
+        with self.assertRaises(SystemExit) as ctx:
+            harness_cli.cmd_init(args)
+        self.assertIn("Full Android Agent Harness checkout found inside target project", str(ctx.exception))
+
+    def test_NESTED_KIT_004_ordinary_folder_named_android_agent_harness_not_rejected(self) -> None:
+        normal_dir = self.repo / "android-agent-harness"
+        normal_dir.mkdir()
+        write(normal_dir / "README.md", "# Docs")
+        self.assertEqual([], harness_cli._find_nested_kit_checkouts(self.repo))
+
+    def test_NESTED_KIT_005_lifecycle_direct_install_rejects_nested_kit(self) -> None:
+        nested = self.repo / "android-agent-harness"
+        nested.mkdir()
+        (nested / ".git").mkdir()
+        write(nested / "harness_cli.py", "# dummy")
+        write(nested / "agents/VERSION", "1.0.59")
+        write(nested / "agents/scripts/lifecycle.py", "# dummy")
+        write(self.repo / ".harness-setup/answers.json", json.dumps({"schema": 2, "product": "Test"}))
+        with self.assertRaises(ValidationError) as ctx:
+            lifecycle_module.install(self.repo, KIT)
+        self.assertIn("full harness kit checkout is nested", str(ctx.exception))
+
+    def test_NESTED_KIT_006_doctor_reports_fail_for_nested_kit(self) -> None:
+        from doctor.engine import HarnessDoctor
+        nested = self.repo / "android-agent-harness"
+        nested.mkdir()
+        (nested / ".git").mkdir()
+        write(nested / "harness_cli.py", "# dummy")
+        write(nested / "agents/VERSION", "1.0.59")
+        write(nested / "agents/scripts/lifecycle.py", "# dummy")
+        doc = HarnessDoctor(self.repo)
+        doc.check_file_structure()
+        failures = [r for r in doc.results if r.status == "FAIL" and r.name == "Nested Kit Checkout"]
+        self.assertEqual(1, len(failures))
+
+    def test_NESTED_KIT_007_doctor_prints_exact_offending_path(self) -> None:
+        from doctor.engine import HarnessDoctor
+        nested = self.repo / "android-agent-harness"
+        nested.mkdir()
+        (nested / ".git").mkdir()
+        write(nested / "harness_cli.py", "# dummy")
+        write(nested / "agents/VERSION", "1.0.59")
+        write(nested / "agents/scripts/lifecycle.py", "# dummy")
+        doc = HarnessDoctor(self.repo)
+        doc.check_file_structure()
+        res = next(r for r in doc.results if r.name == "Nested Kit Checkout")
+        self.assertIn(str(nested.resolve()), res.details)
+
+    def test_NESTED_KIT_008_nested_kit_not_hidden_by_exclusions(self) -> None:
+        import _repo_files
+        self.assertNotIn("android-agent-harness/", _repo_files.HARNESS_INTERNAL_EXCLUSIONS)
+
+    # -------------------------------------------------------------
+    # 59. Mutation Guard Bootstrap Tests
+    # -------------------------------------------------------------
+    def test_KIT_GUARD_001_harness_cache_clone_allowed(self) -> None:
+        import mutation_guard
+        target = (Path.home() / ".android-harness" / "kit-stage-1.0.59-123").as_posix()
+        self.assertTrue(mutation_guard._is_lifecycle_command(f"git clone --depth 1 https://github.com/test/repo.git {target}"))
+
+    def test_KIT_GUARD_002_app_kit_stage_clone_denied(self) -> None:
+        import mutation_guard
+        self.assertFalse(mutation_guard._is_lifecycle_command("git clone --depth 1 https://github.com/test/repo.git ./kit-stage-1.0.59-123"))
+
+    def test_KIT_GUARD_003_app_android_agent_harness_clone_denied(self) -> None:
+        import mutation_guard
+        self.assertFalse(mutation_guard._is_lifecycle_command("git clone --depth 1 https://github.com/test/repo.git ./android-agent-harness"))
+
+    def test_KIT_GUARD_004_bare_name_kit_stage_denied(self) -> None:
+        import mutation_guard
+        self.assertFalse(mutation_guard._is_lifecycle_command("git clone --depth 1 https://github.com/test/repo.git kit-stage-1.0.59-123"))
+
+    def test_KIT_GUARD_005_quoted_windows_userprofile_accepted(self) -> None:
+        import mutation_guard
+        cmd = 'git clone --depth 1 https://github.com/test/repo.git "%USERPROFILE%\\.android-harness\\kit-stage-1.0.59-123"'
+        self.assertTrue(mutation_guard._is_lifecycle_command(cmd))
+
+    # -------------------------------------------------------------
+    # 60. Install Output Regression Test
+    # -------------------------------------------------------------
+    def test_INSTALL_CLEAN_001_clean_install_output(self) -> None:
+        temp_answers = self.repo / "temp_answers.json"
+        write(
+            temp_answers,
+            json.dumps({
+                "i0": "yes",
+                "i1": "CleanApp",
+                "i2": sys.executable,
+                "i5": ":app",
+                "i6": "com.example.clean.MainActivity",
+                "i14": ["gemini"],
+                "review_model_policy": "inherit_only",
+                "review_call_budget": "10",
+                "i20": "none",
+            }),
+        )
+        args = Namespace(repo=str(self.repo), kit=str(KIT), answers_json=str(temp_answers), lang="en")
+        code = harness_cli.cmd_init(args)
+        self.assertEqual(0, code)
+        self.assertTrue((self.repo / ".agents").is_dir())
+        self.assertTrue((self.repo / ".harness-setup").is_dir())
+        self.assertEqual([], harness_cli._find_nested_kit_checkouts(self.repo))
+        self.assertFalse((self.repo / "android-agent-harness").exists())
+
+    # -------------------------------------------------------------
+    # 61. Chat Installer Contract Tests
+    # -------------------------------------------------------------
+    def test_PROMPT_KIT_001_prompt_states_kit_external(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertTrue(
+            "MUST NOT be inside `<app-root>`" in prompt_text
+            or "MUST NOT be inside <app-root>" in prompt_text
+        )
+        self.assertIn("external to the app repository", prompt_text)
+
+    def test_PROMPT_KIT_002_prompt_clone_has_explicit_dest(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertIn("git clone --depth 1 --branch v", prompt_text)
+        self.assertIn("<staging-dir>", prompt_text)
+        self.assertIn("Never run a clone command without an explicit destination", prompt_text)
+
+    def test_PROMPT_KIT_003_prompt_never_recommends_nested_clone(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertTrue(
+            "Never clone to `<app-root>/android-agent-harness" in prompt_text
+            or "Never clone to <app-root>/android-agent-harness" in prompt_text
+        )
+
+    def test_PROMPT_KIT_004_prompt_identifies_setup_wizard_as_sole_authority(self) -> None:
+        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.assertIn("The setup wizard payload is the sole interview authority", prompt_text)
 
 
 if __name__ == "__main__":

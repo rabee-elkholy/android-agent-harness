@@ -79,6 +79,7 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
     lines = ['"""Generated project identity and vNext policy configuration."""', "from __future__ import annotations", ""]
     lines.extend(f"{key} = {value!r}" for key, value in values.items())
     target = repo / ".agents" / "scripts" / "_product.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return target
 

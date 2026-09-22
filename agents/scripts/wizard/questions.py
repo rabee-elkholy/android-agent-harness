@@ -477,20 +477,6 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
     # --- Station 4: Device Testing & Verification ---
     qs.append(
         {
-            "id": "i15",
-            "station": 4,
-            "station_title": "Device Testing & Verification",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i15"),
-            "options": [
-                {"id": "yes", "label": t(lang, "i15_yes")},
-                {"id": "no", "label": t(lang, "i15_no")},
-            ],
-        }
-    )
-    qs.append(
-        {
             "id": "i22",
             "station": 4,
             "station_title": "Device Testing & Verification",
@@ -534,6 +520,56 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
+
+    # --- Station 5: Reviewer Cost & Quality ---
+    qs.append(
+        {
+            "id": "review_model_policy",
+            "station": 5,
+            "station_title": "Reviewer Cost & Quality",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "review_model_policy"),
+            "options": [
+                {
+                    "id": "inherit_only",
+                    "label": t(lang, "review_model_policy_inherit"),
+                },
+                {
+                    "id": "allow_strong",
+                    "label": t(lang, "review_model_policy_strong"),
+                },
+            ],
+        }
+    )
+    qs.append(
+        {
+            "id": "review_call_budget",
+            "station": 5,
+            "station_title": "Reviewer Cost & Quality",
+            "required": True,
+            "allow_multiple": False,
+            "prompt": t(lang, "review_call_budget"),
+            "options": [
+                {
+                    "id": "10",
+                    "label": t(lang, "review_call_budget_10"),
+                },
+                {
+                    "id": "5",
+                    "label": t(lang, "review_call_budget_5"),
+                },
+                {
+                    "id": "20",
+                    "label": t(lang, "review_call_budget_20"),
+                },
+                {
+                    "id": "custom",
+                    "label": t(lang, "review_call_budget_custom"),
+                },
+            ],
+        }
+    )
     return _reorder_with_previous_answers(qs, repo, lang, d)
 
 
@@ -546,7 +582,14 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
         try:
             loaded = json.loads(ans_file.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
+                if loaded.get("schema") not in (None, SCHEMA):
+                    raise SystemExit(
+                        "Existing setup answers use an unsupported schema.\n"
+                        "Clean setup required. Remove/reset .harness-setup and rerun installer."
+                    )
                 prev = loaded
+        except SystemExit:
+            raise
         except Exception:
             pass
 
@@ -569,20 +612,28 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
         if options and not recommended_found:
             options[0]["recommended"] = True
 
+    prev_budget = prev.get("model_call_budget")
+    if prev_budget is not None and str(prev_budget) in {"5", "10", "20"}:
+        prev_budget_choice = str(prev_budget)
+    elif prev_budget is not None:
+        prev_budget_choice = "custom"
+    else:
+        prev_budget_choice = None
+
     prev_map = {
         "i0": "yes" if prev.get("backup", True) else "skip",
         "i1": "discovered" if prev.get("product") == (d.get("product") or "App") else ("other" if prev.get("product") else "discovered"),
         "i2": prev.get("py"),
-        "i3": prev.get("git_policy"),
         "i4": prev.get("device_policy"),
         "i10": prev.get("install_confirm"),
-        "i15": prev.get("unit_tests"),
         "i5": prev.get("module"),
         "i6": prev.get("launcher"),
         "i16": prev.get("zoho_mcp"),
         "i18": prev.get("zoho_language"),
         "i20": prev.get("pm_provider"),
         "i22": prev.get("device_verification"),
+        "review_model_policy": "allow_strong" if prev.get("allow_model_escalation") else ("inherit_only" if "allow_model_escalation" in prev else None),
+        "review_call_budget": prev_budget_choice,
         "i19": prev.get("flavor") or "default",
         "pref_arch_family": prev.get("preferred_new_code_family") or prev.get("pref_arch_family"),
         "update_context_mode": prev.get("update_context_mode") or "preserve",
@@ -844,8 +895,72 @@ def normalize(raw: dict, facts: dict) -> dict:
         pref_family_norm = pref_arch
     else:
         pref_family_norm = raw.get("preferred_new_code_family") or auto.get("preferred_new_code_family")
+    review_model_policy = str(
+        raw.get("review_model_policy")
+        or "inherit_only"
+    ).strip()
+
+    if review_model_policy not in {
+        "inherit_only",
+        "allow_strong",
+    }:
+        raise SystemExit(
+            "Invalid reviewer model policy."
+        )
+
+    allow_model_escalation = (
+        review_model_policy == "allow_strong"
+    )
+
+    budget_choice = str(
+        raw.get("review_call_budget")
+        or "10"
+    ).strip()
+
+    if budget_choice == "custom":
+        custom_raw = str(
+            raw.get(
+                "review_call_budget_text"
+            ) or ""
+        ).strip()
+
+        if not custom_raw.isdigit():
+            raise SystemExit(
+                "Reviewer model-call budget "
+                "must be a whole number."
+            )
+
+        model_call_budget = int(custom_raw)
+    else:
+        if not budget_choice.isdigit():
+            raise SystemExit(
+                "Reviewer model-call budget must be a whole number."
+            )
+        model_call_budget = int(
+            budget_choice
+        )
+
+    if (
+        model_call_budget < 1
+        or model_call_budget > 100
+    ):
+        raise SystemExit(
+            "Reviewer model-call budget "
+            "must be between 1 and 100."
+        )
+
     asked = sorted(
-        k for k in raw if isinstance(k, str) and (re.fullmatch(r"i\d+[a-z]?", k) or re.fullmatch(r"b_[a-z]+", k) or k in ("pref_arch_family", "update_context_mode"))
+        k for k in raw if isinstance(k, str) and (
+            re.fullmatch(r"i\d+[a-z]?", k)
+            or re.fullmatch(r"b_[a-z]+", k)
+            or k in (
+                "pref_arch_family",
+                "update_context_mode",
+                "review_model_policy",
+                "review_call_budget",
+                "review_call_budget_text",
+            )
+        )
     )
     return {
         "schema": SCHEMA,
@@ -882,7 +997,6 @@ def normalize(raw: dict, facts: dict) -> dict:
         "agents_git": "gitignore",
         "gemini_config": gemini,
         "assemble_now": raw.get("i13") or auto["assemble_now"],
-        "unit_tests": "yes" if (raw.get("i15") or auto.get("unit_tests")) == "yes" else "no",
         "zoho_mcp": zoho,
         "chat_language": chat_lang,
         "zoho_language": zoho_lang,
@@ -890,6 +1004,8 @@ def normalize(raw: dict, facts: dict) -> dict:
         "tools": tools,
         "git_gate": "no",
         "device_verification": raw.get("i22") or auto.get("device_verification", "manual_only"),
+        "model_call_budget": model_call_budget,
+        "allow_model_escalation": allow_model_escalation,
         "asked": asked,
     }
 
@@ -905,7 +1021,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.0 Backup: {'yes' if answers.get('backup', True) else 'no'}",
         f"- I.1 Product: {answers.get('product')}",
         f"- I.2 Python: {answers.get('py')}",
-        f"- I.3 Git: {answers.get('git_policy')}",
+        "- Git authority: developer only",
         f"- I.4 Device: {answers.get('device_policy')}",
         f"- I.5 Module: {answers.get('module')}",
         f"- I.5 assemble: {answers.get('assemble')}",
@@ -918,12 +1034,14 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.11 .agents in git: {answers.get('agents_git')}",
         f"- I.12 Gemini config: {answers.get('gemini_config')}",
         f"- I.13 Assemble now: {answers.get('assemble_now')}",
-        f"- I.15 Unit tests: {answers.get('unit_tests')}",
+        "- Unit-test gates: adaptive / runtime risk policy",
         f"- I.16 Zoho Sprints: {answers.get('zoho_mcp')}",
         f"- I.18 Tracker Language: {answers.get('zoho_language', 'en_titles_ar_comments')}",
         f"- I.19 Daily flavor: {answers.get('flavor') or '(default variant)'}",
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
-        f"- I.22 Device verification: {answers.get('device_verification', 'manual_only')}",
+        f"- Device verification: {answers.get('device_verification', 'manual_only')}",
+        f"- Reviewer model escalation: {'enabled' if answers.get('allow_model_escalation') else 'disabled / inherit only'}",
+        f"- Reviewer model-call budget: {answers.get('model_call_budget', 10)}",
         f"- Preferred new code architecture family: {answers.get('preferred_new_code_family') or '(none)'}",
         f"- Assemble tasks per flavor: {json.dumps(answers.get('assemble_tasks') or {}, ensure_ascii=False)}",
         f"- I.14 Tools: {', '.join(answers.get('tools') or [])}",
@@ -992,15 +1110,18 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         return {}
     if not isinstance(answers, dict) or not answers.get("i0"):
         return {}
+    if answers.get("schema") not in (None, SCHEMA):
+        raise SystemExit(
+            "Existing setup answers use an unsupported schema.\n"
+            "Clean setup required. Remove/reset .harness-setup and rerun installer."
+        )
     defaults: dict[str, object] = {"i0": "yes" if answers.get("backup", True) else "skip", "i1": "discovered"}
     for qid, field in (
         ("i2", "py"),
-        ("i3", "git_policy"),
         ("i4", "device_policy"),
         ("i5", "module"),
         ("i6", "launcher"),
         ("i10", "install_confirm"),
-        ("i15", "unit_tests"),
         ("i16", "zoho_mcp"),
         ("i18", "zoho_language"),
         ("i19", "flavor"),
@@ -1010,6 +1131,13 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         value = answers.get(field)
         if value:
             defaults[qid] = value
+    if "allow_model_escalation" in answers:
+        defaults["review_model_policy"] = "allow_strong" if answers.get("allow_model_escalation") else "inherit_only"
+    if "model_call_budget" in answers:
+        budget_val = str(answers.get("model_call_budget"))
+        defaults["review_call_budget"] = budget_val if budget_val in {"5", "10", "20"} else "custom"
+        if budget_val not in {"5", "10", "20"}:
+            defaults["review_call_budget_text"] = budget_val
     tools = answers.get("tools")
     if isinstance(tools, list) and tools:
         defaults["i14"] = list(tools)
@@ -1043,6 +1171,8 @@ def interactive(repo: Path, lang: str) -> dict:
             raw[q["id"]] = chosen[0]
             if chosen[0] == "other":
                 raw[q["id"] + "_text"] = prompt_text(lang)
+            elif q["id"] == "review_call_budget" and chosen[0] == "custom":
+                raw["review_call_budget_text"] = prompt_text(lang)
         if q["id"] == "i2" and chosen[0] == "stop":
             print(t(lang, "no_python"))
             raise SystemExit(1)

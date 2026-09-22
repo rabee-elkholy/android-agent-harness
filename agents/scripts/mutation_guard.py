@@ -133,6 +133,28 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "android-harness"} and bool(args) and args[-1] in {"--help", "-h"}
 
 
+def _is_harness_cache_path(raw: str) -> bool:
+    cache = (Path.home() / ".android-harness").resolve()
+    clean = os.path.expandvars(str(raw).strip().strip('"\''))
+    candidate = Path(clean).expanduser()
+    if not candidate.is_absolute():
+        candidate = candidate.resolve()
+    else:
+        candidate = candidate.resolve()
+    try:
+        rel = candidate.relative_to(cache)
+    except ValueError:
+        return False
+    if not rel.parts:
+        return False
+    first = rel.parts[0]
+    return (
+        first == "kit"
+        or first.startswith("kit-stage-")
+        or first.startswith("staging_")
+    )
+
+
 def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     return (
@@ -141,7 +163,7 @@ def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
         or name == "repair"
         or name == "setup_wizard" and args[:1] == ["write"]
         or name == "git" and args[:1] == ["clone"] and len(args) >= 3
-        and ("/.android-harness/" in args[-1].replace("\\", "/") or Path(args[-1]).name.startswith("kit-stage"))
+        and _is_harness_cache_path(args[-1])
     )
 
 

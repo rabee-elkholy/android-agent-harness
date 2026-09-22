@@ -4,6 +4,26 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.60] - 2026-09-22
+
+### Clean Install V2 Specification & External Kit Architecture
+
+- **Setup Wizard Schema V2 (`wizard/i18n.py`, `wizard/schema.py`, `wizard/questions.py`)**:
+  - Bumped setup answer schema to `SCHEMA = 2`, rejecting legacy answers without backward migration.
+  - Locked Git commit authority strictly to the developer (`git_policy = "never"`), removing question `i3`.
+  - Removed unit tests question (`i15`) and normalized answer `unit_tests`, making test gates strictly runtime risk-policy driven.
+  - Added Station 5 (Reviewer Cost & Quality) with `review_model_policy` (`inherit_only` default, `allow_strong`) and `review_call_budget` (`10` default, `5`, `20`, or `custom` 1–100).
+- **External Kit Boundary Enforcement (`harness_cli.py`, `lifecycle.py`, `doctor/engine.py`)**:
+  - Enforced that full harness kit checkouts must live strictly outside target Android applications (`~/.android-harness/kit` or `%USERPROFILE%\.android-harness\kit`).
+  - Added deterministic nested kit detection (`_find_nested_kit_checkouts`) in `harness_cli.py`, `lifecycle.py`, and doctor diagnostics, failing closed when a nested kit checkout is discovered.
+  - Removed nested kit search heuristics from `resolve_kit()` and updated manual remediation to clone with explicit external destination.
+  - Tightened `mutation_guard.py` to permit git clone operations only within `~/.android-harness`.
+- **Runtime-Authoritative Device Verification (`review_policy.py`)**:
+  - Decoupled intrinsic device need (`intrinsic_device_required`) from configured gate activation (`device_required = intrinsic_device_required and mode != 'disabled'`).
+  - Added `device_verification_mode` output and integrated `_configured_device_verification_mode()`.
+- **Chat Installer Contract & Documentation (`docs/install-or-update-prompt.md`, `README.md`)**:
+  - Updated prompt rules and documentation to state clearly that the harness kit checkout remains external to the target app repository.
+
 ## [1.0.59] - 2026-09-21
 
 ### 6-Tier Dynamic Risk Model and Graph-First Discovery Architecture

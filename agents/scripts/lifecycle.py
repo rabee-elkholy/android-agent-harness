@@ -68,12 +68,52 @@ def _read_version(root: Path, relative: str = "agents/VERSION") -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def _is_within(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _assert_kit_outside_repo(repo: Path, kit: Path) -> None:
+    repo_r = repo.resolve()
+    kit_r = kit.resolve()
+    if kit_r == repo_r or _is_within(kit_r, repo_r):
+        raise ValidationError(
+            f"Harness kit checkout must live outside target Android repository: {kit_r} inside {repo_r}"
+        )
+
+
+def _find_nested_kit_checkouts(repo: Path) -> list[Path]:
+    found: list[Path] = []
+    try:
+        for child in repo.iterdir():
+            if (
+                child.is_dir()
+                and (child / ".git").exists()
+                and (child / "harness_cli.py").is_file()
+                and (child / "agents" / "VERSION").is_file()
+                and (child / "agents" / "scripts" / "lifecycle.py").is_file()
+            ):
+                found.append(child.resolve())
+    except (OSError, PermissionError):
+        pass
+    return sorted(found)
+
+
 def _validate_repo(repo: Path) -> Path:
     root = repo.resolve()
     if not (root / ".git").exists():
         raise ValidationError("target must be a Git checkout or worktree")
     if not ((root / "gradlew").is_file() or (root / "gradlew.bat").is_file()):
         raise ValidationError("target is outside the supported Gradle Wrapper boundary")
+    nested = _find_nested_kit_checkouts(root)
+    if nested:
+        raise ValidationError(
+            "full harness kit checkout is nested inside target Android repository: "
+            + ", ".join(str(p) for p in nested)
+        )
     return root
 
 
@@ -141,7 +181,14 @@ def _validate_kit(kit: Path) -> tuple[Path, str]:
 
 def _load_answers(repo: Path) -> dict:
     path = repo / ".harness-setup" / "answers.json"
-    return read_json(path)
+    data = read_json(path)
+    from wizard.i18n import SCHEMA
+    if isinstance(data, dict) and data.get("schema") not in (None, SCHEMA):
+        raise ValidationError(
+            "Existing setup answers use an unsupported schema.\n"
+            "Clean setup required. Remove/reset .harness-setup and rerun installer."
+        )
+    return data
 
 
 def _hash_or_none(path: Path) -> str | None:
@@ -785,6 +832,7 @@ def recover_interrupted_update(repo: Path) -> dict | None:
 
 def install(repo: Path, kit: Path) -> dict:
     repo = _validate_repo(repo)
+    _assert_kit_outside_repo(repo, kit)
     recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
     kit, version = _validate_kit(kit)
@@ -858,6 +906,7 @@ def require_update_idle(repo: Path) -> None:
 
 def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
     repo = _validate_repo(repo)
+    _assert_kit_outside_repo(repo, kit)
     answers = dict(answers or {})
     recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
@@ -1025,6 +1074,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
 def replace_legacy(repo: Path, kit: Path) -> dict:
     """Atomically replace a pre-v1 engine in one process with rollback."""
     repo = _validate_repo(repo)
+    _assert_kit_outside_repo(repo, kit)
     recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
     kit, target_version = _validate_kit(kit)

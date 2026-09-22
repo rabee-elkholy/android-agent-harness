@@ -258,6 +258,37 @@ class HarnessDoctor:
         else:
             self.log(category, "Safety Hooks Config", "WARN", "hooks.json missing (runtime hooks will not trigger).")
 
+        nested_kits: list[Path] = []
+        try:
+            for child in self.repo.iterdir():
+                if (
+                    child.is_dir()
+                    and (child / ".git").exists()
+                    and (child / "harness_cli.py").is_file()
+                    and (child / "agents" / "VERSION").is_file()
+                    and (child / "agents" / "scripts" / "lifecycle.py").is_file()
+                ):
+                    nested_kits.append(child.resolve())
+        except (OSError, PermissionError):
+            pass
+
+        if nested_kits:
+            self.log(
+                category,
+                "Nested Kit Checkout",
+                "FAIL",
+                "Full Android Agent Harness source checkout must not live inside the Android project. "
+                "Move/delete it outside the repo and use ~/.android-harness/kit.",
+                [str(p) for p in sorted(nested_kits)],
+            )
+        else:
+            self.log(
+                category,
+                "Nested Kit Checkout",
+                "PASS",
+                "No nested full harness kit checkout detected.",
+            )
+
         if self.is_raw_kit:
             return
         try:
@@ -346,6 +377,21 @@ class HarnessDoctor:
                 "Enforcement Capability",
                 "PASS",
                 f"overall={enforcement['overall']}; approval={enforcement['approval_trust']}; mutation hooks: {', '.join(f'{key}={value}' for key, value in enforcement['by_host'].items()) or 'no configured hosts'}",
+            )
+            budget = getattr(_product, "MODEL_CALL_BUDGET", 10)
+            escalation = getattr(_product, "ALLOW_MODEL_ESCALATION", False)
+            git_policy = getattr(_product, "GIT_POLICY", "never")
+            self.log(
+                category,
+                "Reviewer Settings",
+                "PASS",
+                f"MODEL_CALL_BUDGET = {budget}; ALLOW_MODEL_ESCALATION = {escalation}",
+            )
+            self.log(
+                category,
+                "Git Authority",
+                "PASS",
+                f"GIT_POLICY = {git_policy} (developer only)",
             )
 
             self._check_install_consistency(category)

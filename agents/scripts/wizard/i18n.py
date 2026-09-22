@@ -6,7 +6,7 @@ the tracker-language question (I.18), kept for Zoho compatibility.
 """
 from __future__ import annotations
 
-SCHEMA = 1
+SCHEMA = 2
 try:
     from pm_policy import WIZARD_PROVIDER_IDS as PM_PROVIDER_IDS  # noqa: E402
 except ImportError:  # pragma: no cover - kit layout always ships pm_policy
@@ -79,12 +79,6 @@ T = {
         "i1_other": "Other name (I will type it)",
         "i2": "Which Python command should the scripts use? On Windows this is usually python.",
         "i2_stop": "Stop — install Python 3.10+",
-        "i3": (
-            "Who should create git commits? If you are not sure, keep commits in your own hands "
-            "(you commit from the IDE)."
-        ),
-        "i3_never": "I commit myself (Recommended)",
-        "i3_may": "The agent may commit when I ask in chat",
         "i4": (
             "Will you test this app on a real phone, an emulator (AVD), or both? "
             "The selected policy controls install, launch, screenshots, and logcat."
@@ -131,12 +125,6 @@ T = {
         ),
         "i10_conf": "Ask me first (Recommended)",
         "i10_allow": "Install without asking",
-        "i15": (
-            "After the helper finishes code and review, should it run unit tests "
-            "(checks logic without opening the app)? Pick no if this project has no tests and you will not add them."
-        ),
-        "i15_yes": "Yes, run unit tests (Recommended)",
-        "i15_no": "No, skip unit tests",
         "i11": (
             "When someone clones this app from GitHub, should they get the same AI helper rules, "
             "or should those files stay only on your PC? If you work alone, keep them on your PC. "
@@ -195,6 +183,30 @@ T = {
         ),
         "i22_manual": "Interactive Manual Smoke Test — App is launched on device; you follow simple steps and confirm (Recommended)",
         "i22_off": "No device verification — assemble only (I test manually outside the harness)",
+        "review_model_policy": (
+            "How should specialist reviewers choose models?"
+        ),
+        "review_model_policy_inherit": (
+            "Use the current model for all reviewers (Recommended)"
+        ),
+        "review_model_policy_strong": (
+            "Allow stronger mapped reviewer models when risk policy requests them"
+        ),
+        "review_call_budget": (
+            "Maximum reviewer model calls allowed for one task before developer intervention?"
+        ),
+        "review_call_budget_10": (
+            "10 — Balanced (Recommended)"
+        ),
+        "review_call_budget_5": (
+            "5 — Economy"
+        ),
+        "review_call_budget_20": (
+            "20 — Review-heavy / large critical work"
+        ),
+        "review_call_budget_custom": (
+            "Custom value (1–100)"
+        ),
         "i19": (
             "This project defines Gradle product flavors. Which flavor do you test daily? "
             "Install/launch/logcat will target that variant automatically. "

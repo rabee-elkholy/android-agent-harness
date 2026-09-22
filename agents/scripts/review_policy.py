@@ -63,6 +63,22 @@ def _configured_model_call_budget() -> int:
         return 10
 
 
+def _configured_device_verification_mode() -> str:
+    try:
+        from _product import DEVICE_VERIFICATION_MODE
+        mode = str(DEVICE_VERIFICATION_MODE or "").strip().lower()
+    except Exception:
+        mode = "manual_only"
+
+    if mode not in {
+        "manual_only",
+        "disabled",
+    }:
+        return "manual_only"
+
+    return mode
+
+
 def _is_visual_compose(classification: dict) -> bool:
     details = classification.get("details") or {}
     compose_info = details.get("COMPOSE_UI")
@@ -275,13 +291,19 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         reviewers.clear()
 
     if project_kind != "application":
-        device_required = False
+        intrinsic_device_required = False
     elif ui_verification_class == "VISUAL_MICRO":
-        device_required = False
+        intrinsic_device_required = False
     elif ui_verification_class in ("UI_BEHAVIOR", "DEVICE_BEHAVIOR"):
-        device_required = True
+        intrinsic_device_required = True
     else:
-        device_required = False
+        intrinsic_device_required = False
+
+    device_verification_mode = _configured_device_verification_mode()
+    device_required = (
+        intrinsic_device_required
+        and device_verification_mode != "disabled"
+    )
 
     gates: set[str] = {"manifest", "preflight"}
     if surfaces & TEST_SURFACES:
@@ -314,6 +336,8 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "review_status": "REVIEW_NOT_REQUIRED_BY_POLICY" if micro else "REQUIRED" if reviewers else "NONE",
         "reviewers": sorted(reviewers),
         "gates": sorted(gates, key=lambda g: (PIPELINE_GATE_ORDER.index(g) if g in PIPELINE_GATE_ORDER else 99, g)),
+        "device_verification_mode": device_verification_mode,
+        "intrinsic_device_required": intrinsic_device_required,
         "device_required": device_required,
         "project_kind": project_kind,
         "max_review_rounds": 3,

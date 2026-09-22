@@ -62,11 +62,19 @@ def _prompt_url(version: str, doc: str) -> str:
 
 
 def _manual_remediation(version: str) -> str:
+    dest = KIT_DIR
+    clean_v = str(version).strip().lstrip("v")
+    if clean_v.lower() == "latest":
+        branch_arg = ""
+        checkout_ref = "HEAD"
+    else:
+        branch_arg = f"--branch v{clean_v} "
+        checkout_ref = f"v{clean_v}"
     return (
         "Remediate manually:\n"
-        f"    git clone {KIT_REPO_URL}\n"
-        f"    git -C android-agent-harness checkout v{version}\n"
-        "then rerun with --kit <path>."
+        f'    git clone --depth 1 {branch_arg}--single-branch {KIT_REPO_URL} "{dest}"\n'
+        f'    git -C "{dest}" checkout --detach {checkout_ref}\n'
+        f'then rerun with --kit "{dest}".'
     )
 
 
@@ -294,6 +302,43 @@ EXIT_INFRA_ERROR = 3
 EXIT_INCOMPLETE_OR_STALE = 2
 
 
+def _is_within(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _assert_kit_outside_repo(repo: Path, kit: Path) -> None:
+    repo_r = repo.resolve()
+    kit_r = kit.resolve()
+    if kit_r == repo_r or _is_within(kit_r, repo_r):
+        raise SystemExit(
+            "[ERROR] Harness kit checkout must live outside the Android project. "
+            f"Target app: {repo_r}. "
+            f"Kit: {kit_r}. "
+            f"Use {KIT_DIR}."
+        )
+
+
+def _find_nested_kit_checkouts(repo: Path) -> list[Path]:
+    found: list[Path] = []
+    try:
+        for child in repo.iterdir():
+            if (
+                child.is_dir()
+                and (child / ".git").exists()
+                and (child / "harness_cli.py").is_file()
+                and (child / "agents" / "VERSION").is_file()
+                and (child / "agents" / "scripts" / "lifecycle.py").is_file()
+            ):
+                found.append(child.resolve())
+    except (OSError, PermissionError):
+        pass
+    return sorted(found)
+
+
 def resolve_kit(explicit: str | None) -> Path:
     candidates: list[Path] = []
     if explicit:
@@ -304,9 +349,6 @@ def resolve_kit(explicit: str | None) -> Path:
     candidates.append(Path(__file__).resolve().parent)
     candidates.append(Path.cwd().resolve())
     candidates.append(KIT_DIR)
-    cwd = Path.cwd().resolve()
-    for parent in [cwd, *cwd.parents[:2]]:
-        candidates.append(parent / "android-agent-harness")
     for cand in candidates:
         if _has_engine(cand):
             return cand
@@ -478,7 +520,17 @@ def run_engine_script(
 
 def cmd_init(args: argparse.Namespace) -> int:
     repo = find_repo(args.repo)
+    nested = _find_nested_kit_checkouts(repo)
+    if nested:
+        raise SystemExit(
+            "[ERROR] Full Android Agent Harness checkout found inside target project: "
+            + ", ".join(map(str, nested))
+            + ". Remove/move it outside the app repository and rerun clean setup."
+        )
+    if getattr(args, "kit", None):
+        _assert_kit_outside_repo(repo, Path(args.kit).expanduser().resolve())
     kit = ensure_kit(args.kit)
+    _assert_kit_outside_repo(repo, kit)
     version = (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip()
     print("==================================================")
     print(f"[Android Agent Harness] v{version}")
@@ -559,7 +611,26 @@ def cmd_update(args: argparse.Namespace) -> int:
     print(f"[i] Local kit engine now at: v{new_version}")
     if args.repo:
         repo = find_repo(args.repo)
+        nested = _find_nested_kit_checkouts(repo)
+        if nested:
+            raise SystemExit(
+                "[ERROR] Full Android Agent Harness checkout found inside target project: "
+                + ", ".join(map(str, nested))
+                + ". Remove/move it outside the app repository and rerun clean setup."
+            )
+        _assert_kit_outside_repo(repo, kit)
         answers = repo / ".harness-setup" / "answers.json"
+        if answers.is_file():
+            try:
+                ans_data = json.loads(answers.read_text(encoding="utf-8"))
+                if isinstance(ans_data, dict) and ans_data.get("schema") not in (None, 2):
+                    print(
+                        "[FAIL] Existing setup answers use an unsupported schema.\n"
+                        "Clean setup required. Remove/reset .harness-setup and rerun installer."
+                    )
+                    return 1
+            except Exception:
+                pass
         answers_arg = getattr(args, "answers_json", None)
         temp_answers = Path(answers_arg).absolute() if answers_arg else None
         old_answers = answers.read_bytes() if answers.is_file() else None
@@ -776,8 +847,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_repair(args: argparse.Namespace) -> int:
-    kit = ensure_kit(args.kit)
     repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
+    if getattr(args, "kit", None):
+        _assert_kit_outside_repo(repo, Path(args.kit).expanduser().resolve())
+    kit = ensure_kit(args.kit)
+    _assert_kit_outside_repo(repo, kit)
+    nested = _find_nested_kit_checkouts(repo)
+    if nested:
+        raise SystemExit(
+            "[ERROR] Full Android Agent Harness checkout found inside target project: "
+            + ", ".join(map(str, nested))
+            + ". Remove/move it outside the app repository and rerun clean setup."
+        )
     cli_args = ["--repo", str(repo), "--kit", str(kit)]
     if getattr(args, "force", False):
         cli_args.append("--force")
