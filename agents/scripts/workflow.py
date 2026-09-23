@@ -2326,12 +2326,29 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
         atomic_write_json(phase_state_file, phase_state)
     else:
-        phase_state = set_phase_substate(directory, phase_id, PHASE_COMPLETE)
-        completed = list(phase_state.get("completed_phases") or [])
+        set_phase_substate(directory, phase_id, PHASE_COMPLETE)
         if phase_id not in completed:
             completed.append(phase_id)
         phase_state["completed_phases"] = completed
         phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
+        next_phase_idx = curr_idx + 1 if curr_idx != -1 and curr_idx + 1 < len(phases) else curr_idx
+        if curr_idx != -1 and curr_idx + 1 < len(phases):
+            next_phase = phases[curr_idx + 1]
+            phase_state["current_phase_id"] = next_phase["id"]
+            next_dir = directory / "phases" / next_phase["id"]
+            next_dir.mkdir(parents=True, exist_ok=True)
+            cur_man = build_manifest(repo)
+            next_baseline = {
+                "schema_version": 1,
+                "task_id": args.task_id,
+                "phase_id": next_phase["id"],
+                "repository": plan.get("repository"),
+                "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
+                "base_change_set_sha256": cur_man["change_set_sha256"],
+                "changes": cur_man.get("changes") or [],
+            }
+            next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
+            atomic_write_json(next_dir / "baseline.json", next_baseline)
         atomic_write_json(phase_state_file, phase_state)
 
     return {
