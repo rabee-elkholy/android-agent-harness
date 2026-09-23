@@ -989,7 +989,7 @@ def cmd_device(args: argparse.Namespace) -> int:
 
 
 def cmd_phase_review(args: argparse.Namespace) -> int:
-    """Build, complete, or finalize scoped phase reviews via phase_review.py."""
+    """Build, dispatch, complete, or finalize scoped phase reviews."""
     forward = list(args.phase_review_args)
     if forward and forward[0] == "--":
         forward = forward[1:]
@@ -1257,7 +1257,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("device_args", nargs=argparse.REMAINDER, help="Device arguments (default: install-start)")
     sp.set_defaults(func=cmd_device)
 
-    sp = sub.add_parser("phase-review", help="Build, complete, or finalize scoped phase delta reviews.")
+    sp = sub.add_parser("phase-review", help="Build, dispatch, complete, or finalize scoped phase delta reviews.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.add_argument("phase_review_args", nargs=argparse.REMAINDER, help="Arguments passed to phase_review.py")

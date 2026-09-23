@@ -509,6 +509,7 @@ class SecurityTests(unittest.TestCase):
         current_file.write_text(json.dumps({
             "task_id": task_id,
             "policy": str(policy_file),
+            "repository": manifest["repository"],
             "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
             "change_set_sha256": manifest["change_set_sha256"],
             "external_inputs_sha256": manifest["external_inputs_sha256"],
@@ -653,6 +654,8 @@ class SecurityTests(unittest.TestCase):
         plan["status"] = "VERIFYING"
         plan_file.write_text(json.dumps(plan), encoding="utf-8")
 
+        from delivery_manifest import build_manifest
+        repository = build_manifest(self.repo)["repository"]
         current_file = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
         current_file.write_text(json.dumps({
             "task_id": task_id,
@@ -661,6 +664,7 @@ class SecurityTests(unittest.TestCase):
             "delivery_snapshot_sha256": "old_snapshot",
             "change_set_sha256": "old_cs",
             "external_inputs_sha256": "old_ext",
+            "repository": repository,
             "manifest": str(self.repo / "agents/state/manifest.json"),
             "policy": str(self.repo / "policy.json"),
         }), encoding="utf-8")
@@ -1190,6 +1194,7 @@ class SecurityTests(unittest.TestCase):
         m = build_manifest(self.repo)
         (task_d / "current-run.json").write_text(json.dumps({
             "task_id": task_id, "run_id": "r1",
+            "repository": m["repository"],
             "delivery_snapshot_sha256": m["delivery_snapshot_sha256"],
             "change_set_sha256": m["change_set_sha256"],
             "external_inputs_sha256": "drifted_external_input_hash",
@@ -2191,10 +2196,13 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
             "reviewers": ["bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent"],
             "gates": ["reviews"],
         }), encoding="utf-8")
-        snapshot = "b" * 64
-        cs = "c" * 64
+        from delivery_manifest import build_manifest
+        frozen = build_manifest(self.repo)
+        snapshot = frozen["delivery_snapshot_sha256"]
+        cs = frozen["change_set_sha256"]
         manifest_p = task_d / "manifest.json"
         manifest_p.write_text(json.dumps({
+            "repository": frozen["repository"],
             "delivery_snapshot_sha256": snapshot,
             "change_set_sha256": cs,
         }), encoding="utf-8")
@@ -2216,6 +2224,10 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         current_run_file.write_text(json.dumps({
             "task_id": task_id, "run_id": "r1", "policy": str(policy_p),
             "manifest": str(manifest_p),
+            "repository": frozen["repository"],
+            "delivery_snapshot_sha256": snapshot,
+            "change_set_sha256": cs,
+            "external_inputs_sha256": frozen["external_inputs_sha256"],
             "review_protocol_version": 2,
             "package_path": str(pkg_file),
             "review_round": 1,
@@ -2265,6 +2277,10 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         current_run_file.write_text(json.dumps({
             "task_id": task_id, "run_id": "r2", "policy": str(policy_round2),
             "manifest": str(manifest_p),
+            "repository": frozen["repository"],
+            "delivery_snapshot_sha256": snapshot,
+            "change_set_sha256": cs,
+            "external_inputs_sha256": frozen["external_inputs_sha256"],
             "review_protocol_version": 2,
             "package_path": str(pkg_file_r2),
             "review_round": 2,

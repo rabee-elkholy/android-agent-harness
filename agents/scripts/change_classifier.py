@@ -22,6 +22,14 @@ CRITICAL_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
 HIGH_SURFACES = {"ROOM_SCHEMA", "MANIFEST_PERMISSION", "BUILD_CONFIG", "PUBLIC_API", "NATIVE_CODE", "HARNESS_CONFIG"}
 DEVICE_SURFACES = {"COMPOSE_UI", "XML_UI", "NAVIGATION", "DEVICE_API"}
 
+
+def is_documentation_path(relative: str) -> bool:
+    """Whether a path is documentation rather than an Android runtime asset."""
+    lower = relative.replace("\\", "/").lower()
+    if Path(lower).suffix not in {".md", ".txt", ".rst", ".adoc"}:
+        return False
+    return not ("/src/" in f"/{lower}" and "/assets/" in f"/{lower}/")
+
 PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("BILLING", re.compile(r"(?i)billingclient|purchase|subscription|productdetails|com\.android\.billingclient"), "BILLING_PATTERN"),
     ("AUTH", re.compile(r"(?i)oauth|authentication|authorization|login|sign.?in|jwt|androidx\.biometric|com\.google\.android\.gms\.auth"), "AUTH_PATTERN"),
@@ -575,10 +583,23 @@ def classify(
     task_changes: list | None = None,
     *,
     progress: bool = True,
+    candidate_paths: list[str] | None = None,
 ) -> dict:
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
     all_changes = changed_files(root, include_untracked=True)
+    if candidate_paths:
+        known = {item.rel_posix for item in all_changes}
+        for relative in candidate_paths:
+            candidate = (root / relative).resolve()
+            if not candidate.is_file() or not candidate.is_relative_to(root):
+                continue
+            rel = candidate.relative_to(root).as_posix()
+            if rel not in known and is_delivery_relevant(rel):
+                # Context discovery asks what a clean target could affect.
+                # Reuse the central classifier with its current file content.
+                all_changes.append(ChangedFile(candidate, rel, "CANDIDATE", exists=True, is_untracked=True))
+                known.add(rel)
 
     if task_changes is None and task_id:
         try:
@@ -620,7 +641,9 @@ def classify(
         test_path = "/test/" in f"/{lower}" or "/androidtest/" in f"/{lower}" or lower.endswith(("test.kt", "test.java"))
         if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
-        elif suffix in (".md", ".txt", ".rst"):
+        elif "/src/" in f"/{lower}" and "/assets/" in f"/{lower}/":
+            _add(found, "RESOURCE_UI", rel, "ANDROID_RUNTIME_ASSET")
+        elif is_documentation_path(rel):
             _add(found, "DOCS", rel, "DOCUMENTATION_PATH")
         if "/res/values" in f"/{lower}" and suffix == ".xml":
             if Path(lower).name in ("strings.xml", "plurals.xml", "arrays.xml"):

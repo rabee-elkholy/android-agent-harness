@@ -201,7 +201,7 @@ T = {
             "Custom value (1–100)"
         ),
         "i19": (
-            "This project defines Gradle product flavors. Which flavor do you test daily? "
+            "Which Gradle flavor or custom build type do you test daily? "
             "Install/launch/logcat will target that variant automatically. "
             "Pick the default variant if you do not use flavors daily."
         ),

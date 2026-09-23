@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from .i18n import DEFAULT_PM_PROVIDER, SKIP_DIRS, t
@@ -60,6 +61,26 @@ def python_ok(cmd: str) -> tuple[bool, str]:
 
 
 def discover_product(repo: Path) -> str:
+    android_label = "{http://schemas.android.com/apk/res/android}label"
+    for module in discover_android_modules(repo):
+        module_dir = repo.joinpath(*module.strip(":").split(":"))
+        manifest = module_dir / "src" / "main" / "AndroidManifest.xml"
+        manifest_text = read_text(manifest)
+        if "android.intent.category.LAUNCHER" not in manifest_text:
+            continue
+        try:
+            application = ET.fromstring(manifest_text).find("application")
+            label = str(application.get(android_label) or "").strip() if application is not None else ""
+            if label.startswith("@string/"):
+                key = label.removeprefix("@string/")
+                strings = module_dir / "src" / "main" / "res" / "values" / "strings.xml"
+                for entry in ET.parse(strings).getroot().iter("string"):
+                    if entry.get("name") == key and (entry.text or "").strip():
+                        return entry.text.strip()
+            elif label and not label.startswith("@"):
+                return label
+        except (OSError, ET.ParseError):
+            pass
     for name in ("settings.gradle.kts", "settings.gradle"):
         text = read_text(repo / name)
         m = re.search(r'rootProject\.name\s*=\s*["\']([^"\']+)["\']', text)

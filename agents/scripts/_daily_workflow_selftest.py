@@ -482,7 +482,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
 
         baseline = load_task_baseline(self.repo, task_id)
         task_manifest = build_task_manifest(self.repo, baseline)
-        changed_paths = [c["path"] for c in task_manifest["changes"]]
+        changed_paths = [c["path"] for c in task_manifest["task_changes"]]
 
         self.assertIn("app/src/main/kotlin/com/example/FeatureX.kt", changed_paths)
         self.assertNotIn("unrelated_dev_notes.md", changed_paths)
@@ -1319,6 +1319,65 @@ class StateAuthorityHardeningTests(DailyWorkflowSelftest):
         baseline_after = read_json(baseline_path)
         self.assertEqual(baseline_before, baseline_after)
 
+    def test_AUDIT_001_expected_pre_task_dirty_file_is_not_task_work(self) -> None:
+        asset = self.repo / "app/src/main/assets/preexisting.txt"
+        write_file(asset, "before approval\n")
+        baseline = build_manifest(self.repo)
+        expected = ["app/src/main/assets/preexisting.txt"]
+        self.assertEqual([], build_task_manifest(self.repo, baseline, expected_files=expected)["task_changes"])
+        write_file(asset, "changed by task\n")
+        self.assertEqual(expected, [item["path"] for item in build_task_manifest(self.repo, baseline, expected_files=expected)["task_changes"]])
+
+    def test_AUDIT_002_docs_changes_are_delivery_relevant(self) -> None:
+        write_file(self.repo / "docs/audit-note.md", "# Approved documentation\n")
+        manifest = build_manifest(self.repo)
+        self.assertIn("docs/audit-note.md", [item["path"] for item in manifest["changes"]])
+        self.assertIn("docs/audit-note.md", [item["path"] for item in manifest["files"]])
+
+    def test_AUDIT_002b_runtime_text_asset_is_not_documentation(self) -> None:
+        write_file(self.repo / "app/src/main/assets/runtime.txt", "runtime configuration\n")
+        result = classify(self.repo, task_changes=[{"path": "app/src/main/assets/runtime.txt"}], progress=False)
+        self.assertIn("RESOURCE_UI", result["surfaces"])
+        self.assertNotIn("DOCS", result["surfaces"])
+
+    def test_AUDIT_003_existing_kotlin_lint_debt_does_not_block_new_comment(self) -> None:
+        source = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        write_file(source, "package com.example\nimport java.util.*\nclass MainActivity\n")
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-qm", "legacy lint debt")
+        base_head = git_text(self.repo, "rev-parse", "HEAD")
+        write_file(source, source.read_text(encoding="utf-8") + "// harmless edit\n")
+        self.assertEqual([], workflow.new_kotlin_lint_issues(self.repo, "audit-lint", source, base_head))
+        write_file(source, source.read_text(encoding="utf-8") + "import kotlin.collections.*\n")
+        self.assertIn("WILDCARD_IMPORT", [issue["type"] for issue in workflow.new_kotlin_lint_issues(self.repo, "audit-lint", source, base_head)])
+
+    def test_AUDIT_012_new_head_invalidates_frozen_verification(self) -> None:
+        task_id = "audit-head-freshness"
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Update app text", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="LOCALIZATION,RESOURCE_UI",
+            expected_files="app/src/main/res/values/strings.xml", force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="approved", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/res/values/strings.xml", "<resources><string name='x'>Updated</string></resources>\n")
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertTrue(workflow.verification_freshness(self.repo, task_id)["fresh"])
+        write_file(self.repo / ".idea/local-note.txt", "Outside the delivery snapshot\n")
+        run_git(self.repo, "add", ".idea/local-note.txt")
+        run_git(self.repo, "commit", "-qm", "chore: local note")
+        stale = workflow.verification_freshness(self.repo, task_id)
+        self.assertFalse(stale["fresh"])
+        self.assertEqual("REPOSITORY_IDENTITY_CHANGED", stale["reason_code"])
+        routed = subprocess.run(
+            [sys.executable, str(KIT / "harness_cli.py"), "task", "status", "--repo", str(self.repo),
+             "--task-id", task_id, "--next"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, routed.returncode, routed.stderr)
+        self.assertIn("NEXT_ACTION=VERIFICATION_STALE", routed.stdout)
+        self.assertIn("REPOSITORY_IDENTITY_CHANGED", routed.stdout)
+
     def test_HOOK_PURE_001_reminder_hook_across_all_lifecycle_states_zero_writes(self) -> None:
         """HOOK-PURE-001: Reminder hook invoked across all lifecycle states causes zero state writes."""
         task_id = "hook-pure-task"
@@ -1715,6 +1774,33 @@ class TaskContextIntegrityTests(unittest.TestCase):
         self.assertTrue(path_scope_is_same_or_parent("feature/home", "feature/home/details"))
         self.assertFalse(path_scope_is_same_or_parent("feature/home", "feature/home2"))
         self.assertFalse(path_scope_is_same_or_parent("feature/home", "feature/home_new/details"))
+
+    def test_AUDIT_007_clean_target_has_candidate_surfaces(self) -> None:
+        from task_context import resolve_task_context
+        layout = self.repo / "app/src/main/res/layout/audit.xml"
+        write_file(layout, '<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" />\n')
+        run_git(self.repo, "add", "app/src/main/res/layout/audit.xml")
+        run_git(self.repo, "commit", "-qm", "add clean layout")
+        context = resolve_task_context(self.repo, file="app/src/main/res/layout/audit.xml")
+        self.assertEqual("RESOLVED", context["status"])
+        self.assertIn("XML_UI", context["target"]["candidate_surfaces"])
+
+    def test_AUDIT_008_unrelated_target_does_not_inherit_active_contract(self) -> None:
+        from task_context import resolve_task_context
+        from architecture_resolver import compute_contract_hash
+        target = "app/src/main/kotlin/com/example/home/HomeViewModel.kt"
+        contract = {"target_scope": target, "mode": "PRESERVE", "source_family_id": "home-family"}
+        contract["contract_sha256"] = compute_contract_hash(contract)
+        task_state = self.repo / ".agents/state/tasks/active-contract-audit"
+        atomic_write_json(task_state / "plan.json", {
+            "status": "IMPLEMENTING", "approval": {"source": "conversation"},
+            "architecture_contract": contract, "expected_files": [target],
+        })
+        atomic_write_json(self.repo / ".agents/state/active-task.json", {"task_id": "active-contract-audit"})
+        other = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home2/Home2ViewModel.kt")
+        self.assertEqual({}, other["architecture_contract"])
+        own = resolve_task_context(self.repo, file=target)
+        self.assertEqual("home-family", own["architecture_contract"]["source_family_id"])
 
     def test_CTX_001_and_002_collision_safe_task_context_resolution(self) -> None:
         """CTX-001 & CTX-002: Session A and Session B create distinct contexts; drafts bind specifically by ID."""
@@ -4360,6 +4446,44 @@ class AssembleResolveTests(unittest.TestCase):
             cmd_assemble(args)
         self.assertIn("ASSEMBLE_TASK_RESOLUTION_FAILED", str(ctx.exception))
 
+    def test_AUDIT_004_staging_artifact_never_falls_back_to_debug(self) -> None:
+        from artifact_set import resolve_artifacts
+        debug = self.repo / "app/build/outputs/apk/debug/app-debug.apk"
+        staging = self.repo / "app/build/outputs/apk/staging/app-staging.apk"
+        write_file(debug, b"debug")
+        with self.assertRaisesRegex(Exception, "matching variant"):
+            resolve_artifacts(self.repo, ":app:assembleStaging", "app/build/outputs/apk/debug/app-debug.apk")
+        write_file(staging, b"staging")
+        self.assertEqual([staging], resolve_artifacts(self.repo, ":app:assembleStaging", "app/build/outputs/apk/debug/app-debug.apk"))
+
+    def test_AUDIT_004b_project_name_does_not_select_wrong_variant(self) -> None:
+        from artifact_set import resolve_artifacts
+        with tempfile.TemporaryDirectory(prefix="staging-project-") as temp:
+            repo = Path(temp).resolve()
+            debug = repo / "app/build/outputs/apk/debug/app-debug.apk"
+            write_file(debug, b"debug")
+            with self.assertRaisesRegex(Exception, "matching variant"):
+                resolve_artifacts(repo, ":app:assembleStaging", "app/build/outputs/apk/debug/app-debug.apk")
+
+    def test_AUDIT_004c_metadata_without_variant_uses_output_directory(self) -> None:
+        from artifact_set import resolve_artifacts
+        debug = self.repo / "app/build/outputs/apk/debug/app-debug.apk"
+        write_file(debug, b"debug")
+        write_file(debug.parent / "output-metadata.json", json.dumps({"elements": [{"outputFile": debug.name}]}))
+        with self.assertRaisesRegex(Exception, "matching variant"):
+            resolve_artifacts(self.repo, ":app:assembleStaging")
+        staging = self.repo / "app/build/outputs/apk/free/staging/app-free-staging.apk"
+        write_file(staging, b"staging")
+        self.assertEqual([staging], resolve_artifacts(self.repo, ":app:assembleFreeStaging"))
+
+    def test_AUDIT_009_product_prefers_launcher_application_label(self) -> None:
+        from wizard.discovery import discover_product
+        write_file(self.repo / "settings.gradle", "rootProject.name = 'EngineeringRoot'\ninclude ':app'\n")
+        write_file(self.repo / "app/build.gradle", "plugins { id 'com.android.application' }\n")
+        write_file(self.repo / "app/src/main/AndroidManifest.xml", '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="@string/application_name"><activity android:name=".MainActivity"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity></application></manifest>')
+        write_file(self.repo / "app/src/main/res/values/strings.xml", '<resources><string name="application_name">Rashaqa</string></resources>')
+        self.assertEqual("Rashaqa", discover_product(self.repo))
+
 class ReviewOrchestrationTests(unittest.TestCase):
     """REVIEW-ORCH-001 through REVIEW-ORCH-020: Review orchestration, ledger, protocol v2 and evidence tests."""
 
@@ -6301,11 +6425,23 @@ class GitDeliveryTests(ReviewOrchestrationTests):
         run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
         run_git(self.repo, "commit", "-m", "feat(auth): biometric login flow")
 
-        # Developer creates non-delivery noise (e.g. documentation notes)
-        write_file(self.repo / "docs/notes.md", "# Some notes\n")
+        # Developer creates local IDE noise outside the delivery snapshot.
+        write_file(self.repo / ".idea/local-notes.txt", "Some notes\n")
 
         action = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("DELIVER", action.get("code"))
+
+    def test_AUDIT_010_documentation_created_after_verification_is_stale(self) -> None:
+        task_id = "audit-docs-stale"
+        plan, _ = self._setup_ready_task(task_id)
+        from workflow import resolve_next_action
+
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat(auth): verified change")
+        write_file(self.repo / "docs/notes.md", "# New documentation\n")
+
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DELIVERY_STALE_AFTER_COMMIT", action.get("code"))
 
     def test_GIT_DELIVERY_006_direct_deliver_on_dirty_tree_fails_closed(self) -> None:
         """GIT-DELIVERY-006: Direct deliver on dirty tree still fails closed."""

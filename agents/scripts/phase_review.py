@@ -28,6 +28,7 @@ from _vnext_common import (
     validate_id,
 )
 from delivery_manifest import build_manifest, build_task_diff, build_task_manifest, load_task_baseline
+from change_classifier import is_documentation_path
 from evidence_store import StateLock
 from record_review import _extract_transcript_response, is_blocking_finding, resolve_trusted_subagent_transcript
 from review_orchestrator import (
@@ -489,7 +490,7 @@ def is_phase_review_needed(
         return False, []
 
     # Skip docs-only phases
-    if all(p.endswith((".md", ".txt", ".rst", ".adoc")) for p in non_harness):
+    if all(is_documentation_path(p) for p in non_harness):
         return False, []
 
     # Explicit flag can disable or force
@@ -627,7 +628,7 @@ def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: d
     return True, ""
 
 
-def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, dict[str, Any]]:
+def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | None = None) -> tuple[Path, dict[str, Any]]:
     tdir = task_dir(repo, task_id)
     pdir = phase_dir(tdir, phase_id)
     rdir = phase_review_dir(tdir, phase_id)
@@ -676,7 +677,7 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, 
         if target.is_file():
             file_hashes[p] = sha256_file(target)
 
-    run_host = resolve_review_host(repo)
+    run_host = resolve_review_host(repo, host)
     metadata = {
         "schema_version": 2,
         "task_id": task_id,
@@ -1325,6 +1326,14 @@ def main(argv: list[str] | None = None) -> int:
     pkg_cmd.add_argument("--repo", default=".")
     pkg_cmd.add_argument("--task-id", required=True)
     pkg_cmd.add_argument("--phase-id", required=True)
+    pkg_cmd.add_argument("--host", help="Host that will execute this review run")
+
+    dispatch_cmd = sub.add_parser("dispatch")
+    dispatch_cmd.add_argument("--repo", default=".")
+    dispatch_cmd.add_argument("--task-id", required=True)
+    dispatch_cmd.add_argument("--phase-id", required=True)
+    dispatch_cmd.add_argument("--reviewer", action="append", required=True, help="One actually launched reviewer; repeat for the complete roster")
+    dispatch_cmd.add_argument("--host", required=True)
 
     complete_cmd = sub.add_parser("complete")
     complete_cmd.add_argument("--repo", default=".")
@@ -1343,9 +1352,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
     if args.subcommand == "package":
-        pkg_path, meta = build_phase_package(repo, args.task_id, args.phase_id)
+        pkg_path, meta = build_phase_package(repo, args.task_id, args.phase_id, host=args.host)
         print(f"PHASE_REVIEW_PACKAGE={pkg_path}")
         print(f"PACKAGE_SHA256={meta['package_sha256']}")
+        return 0
+    elif args.subcommand == "dispatch":
+        run_file = phase_run_file(task_dir(repo, args.task_id), args.phase_id)
+        if not run_file.is_file():
+            raise ValidationError(f"no active phase review run found for phase '{args.phase_id}'")
+        run_host = str(read_json(run_file).get("review_host") or "")
+        if has_trusted_review_source(run_host):
+            raise ValidationError("trusted host dispatch must be recorded by its native pre-tool hook")
+        ledger = record_phase_dispatch_batch(repo, args.task_id, args.phase_id, args.reviewer, host=args.host)
+        print(f"PHASE_REVIEW_DISPATCH_RECORDED={ledger['run_id']}")
+        print("INDEPENDENT_EXECUTION_VERIFIED=false")
         return 0
     elif args.subcommand == "complete":
         if args.response_file:

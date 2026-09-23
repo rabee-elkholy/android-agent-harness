@@ -27,13 +27,14 @@ from _vnext_common import (  # noqa: E402
 
 
 SCHEMA_VERSION = 1
-ROOT_EXCLUDED = {".git", ".agents", ".harness-setup", ".harness-backup", ".harness-backups", "docs"}
+ROOT_EXCLUDED = {".git", ".agents", ".harness-setup", ".harness-backup", ".harness-backups"}
 NESTED_EXCLUDED = {".gradle", ".idea", "build", "out", "node_modules", "__pycache__"}
 SOURCE_SUFFIXES = {
     ".kt", ".java", ".kts", ".gradle", ".groovy", ".toml", ".xml", ".json",
     ".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".pro", ".rules",
     ".properties", ".jar", ".aar", ".so", ".bin", ".png", ".jpg", ".jpeg", ".webp",
     ".gif", ".svg", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4",
+    ".md", ".rst", ".adoc",
 }
 SOURCE_SUFFIX_TUPLE = tuple(sorted(SOURCE_SUFFIXES))
 ROOT_BUILD_FILES = {
@@ -72,6 +73,8 @@ def is_delivery_relevant(relative: str) -> bool:
         return False
     name = lowered.rpartition("/")[2]
     if name in ROOT_BUILD_FILES or name in ("baseline-prof.txt", "startup-prof.txt"):
+        return True
+    if first == "docs" and name.endswith(".txt"):
         return True
     if lowered.endswith(("gradle-wrapper.jar", "gradle-wrapper.properties")):
         return True
@@ -578,7 +581,6 @@ def build_task_manifest(
     current_changes = manifest.get("changes") or []
     current_paths: set[str] = set()
 
-    expected_set = {_normal_rel(p) for p in (expected_files or []) if p}
     for cur in current_changes:
         if cur.get("status") == "U":
             raise HarnessError(f"Conflicted path in working tree: {cur.get('path')}")
@@ -589,9 +591,7 @@ def build_task_manifest(
         if path:
             current_paths.add(path)
 
-        if norm_path in expected_set or path in expected_set:
-            task_changes.append(cur)
-        elif path not in base_map and norm_path not in base_map:
+        if path not in base_map and norm_path not in base_map:
             task_changes.append(cur)
         else:
             base_entry = base_map.get(norm_path) or base_map.get(path)

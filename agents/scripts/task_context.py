@@ -201,7 +201,7 @@ def _matching_profiles(repo: Path, payload: dict[str, Any], node: GraphNode) -> 
     return sorted(fresh, key=lambda item: item.get("profile_id", ""))[:3], stale_seen
 
 
-def _active_contract(repo: Path) -> dict[str, Any] | None:
+def _active_contract(repo: Path, target_path: str) -> dict[str, Any] | None:
     active_path = repo / ".agents" / "state" / "active-task.json"
     if not active_path.is_file():
         return None
@@ -214,6 +214,11 @@ def _active_contract(repo: Path) -> dict[str, Any] | None:
             return None
         contract = plan.get("architecture_contract")
         if not isinstance(contract, dict):
+            return None
+        target = target_path.replace("\\", "/").strip("/")
+        scope = str(contract.get("target_scope") or "").replace("\\", "/").strip("/")
+        expected = {str(path).replace("\\", "/").strip("/") for path in plan.get("expected_files") or []}
+        if target not in expected and target != scope and not (scope and target.startswith(scope + "/")):
             return None
         from architecture_resolver import compute_contract_hash
         if contract.get("contract_sha256") != compute_contract_hash(contract):
@@ -380,7 +385,7 @@ def resolve_task_context(
 
     facts_payload = _load_facts(root)
     profiles, stale_seen = _matching_profiles(root, facts_payload, primary)
-    contract = _active_contract(root)
+    contract = _active_contract(root, primary.file_path)
     conflicts: list[str] = []
     local_family_ids = {str(profile.get("family_id")) for profile in profiles if profile.get("family_id")}
     if contract and contract.get("mode") in {"PRESERVE", "REFACTOR"}:
@@ -410,7 +415,7 @@ def resolve_task_context(
     target_surfaces: list[str] = []
     try:
         from change_classifier import classify
-        cl = classify(root, task_changes=[{"path": primary.file_path}])
+        cl = classify(root, task_changes=[{"path": primary.file_path}], candidate_paths=[primary.file_path], progress=False)
         target_surfaces = list(cl.get("surfaces") or [])
     except Exception:
         target_surfaces = []

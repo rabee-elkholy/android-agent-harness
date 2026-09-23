@@ -33,6 +33,10 @@ def _metadata_candidates(repo: Path, module: str, variant: str) -> list[Path]:
         recorded_variant = str(payload.get("variantName") or "")
         if recorded_variant and recorded_variant.lower() != variant.lower():
             continue
+        if not recorded_variant and variant.lower() not in re.sub(
+            r"[^a-z0-9]", "", metadata.parent.relative_to(output_root).as_posix().lower()
+        ):
+            continue
         for element in payload.get("elements") or []:
             if not isinstance(element, dict):
                 continue
@@ -51,23 +55,28 @@ def resolve_artifacts(repo: Path, task: str, configured_apk: str | None = None) 
     candidates = _metadata_candidates(root, module, variant)
     if candidates:
         return candidates
-    if configured_apk:
-        configured = (root / configured_apk).resolve()
-        if configured.is_file():
-            return [configured]
     output_root = root / module / "build" / "outputs" / "apk"
     fallback = [
         item.resolve()
         for item in output_root.rglob("*.apk")
         if item.is_file()
         and not item.name.endswith("-androidTest.apk")
-        and variant.lower() in item.as_posix().lower().replace("-", "")
+        and variant.lower() in re.sub(r"[^a-z0-9]", "", item.relative_to(output_root).as_posix().lower())
     ] if output_root.is_dir() else []
     fallback = sorted(set(fallback), key=lambda item: item.as_posix())
     if len(fallback) == 1:
         return fallback
+    if configured_apk and not fallback:
+        configured = (root / configured_apk).resolve()
+        module_root = root / module
+        relative = configured.relative_to(module_root).as_posix() if configured.is_relative_to(module_root) else (
+            configured.relative_to(root).as_posix() if configured.is_relative_to(root) else ""
+        )
+        normalized = re.sub(r"[^a-z0-9]", "", relative.lower())
+        if configured.is_file() and variant.lower() in normalized:
+            return [configured]
     if not fallback:
-        raise HarnessError(f"no APK output resolved for {task}")
+        raise HarnessError(f"no APK output matching variant '{variant}' resolved for {task}")
     raise HarnessError(
         f"ambiguous APK outputs for {task}; output-metadata.json or explicit project configuration is required"
     )

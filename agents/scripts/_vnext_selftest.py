@@ -474,12 +474,12 @@ class ManifestTests(RepoCase):
         self.assertTrue({"app/src/main/kotlin/C.kt", "app/src/main/kotlin/B.kt", "app/src/main/kotlin/D.kt"} <= paths)
         self.assertTrue({"R", "D", "A"} <= statuses)
 
-    def test_docs_do_not_stale_delivery_snapshot(self) -> None:
+    def test_docs_stale_delivery_snapshot(self) -> None:
         before = build_manifest(self.repo)
         write(self.repo / "README.md", "documentation only\n")
         after = build_manifest(self.repo)
-        self.assertEqual(before["delivery_snapshot_sha256"], after["delivery_snapshot_sha256"])
-        self.assertEqual(before["change_set_sha256"], after["change_set_sha256"])
+        self.assertNotEqual(before["delivery_snapshot_sha256"], after["delivery_snapshot_sha256"])
+        self.assertNotEqual(before["change_set_sha256"], after["change_set_sha256"])
 
     def test_ignored_external_input_changes_identity_without_leaking_value(self) -> None:
         write(self.repo / ".gitignore", "local.properties\n")

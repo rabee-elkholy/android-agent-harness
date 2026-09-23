@@ -4,11 +4,13 @@ Usage: python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcom
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -30,7 +32,7 @@ from _vnext_common import (  # noqa: E402
     validate_repo_path_containment,
 )
 from _variants import resolve_assemble_task  # noqa: E402
-from change_classifier import classify  # noqa: E402
+from change_classifier import classify, is_documentation_path  # noqa: E402
 from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline  # noqa: E402
 from final_verifier import verify  # noqa: E402
 from plan_authority import (  # noqa: E402
@@ -756,12 +758,25 @@ def _build_and_save_plan(
 
     # Resolve Evolutionary Architecture Contract
     arch_intent = str(getattr(args, "architecture_intent", "EXISTING_CHANGE") or "EXISTING_CHANGE").upper()
+    architecture_scope_files = list(norm_expected_files)
+    for phase in parsed_phases or []:
+        architecture_scope_files.extend(phase.get("expected_files") or [])
+    docs_only_scope = bool(architecture_scope_files) and all(
+        is_documentation_path(p) for p in architecture_scope_files
+    )
+    docs_only_architecture_exempt = (
+        docs_only_scope
+        and arch_intent == "EXISTING_CHANGE"
+        and not getattr(args, "architecture_target_scope", None)
+        and not getattr(args, "architecture_target_family", None)
+    )
     inferred_target_scope = str(getattr(args, "architecture_target_scope", "") or "").strip()
     if not inferred_target_scope and arch_intent != "MIGRATION":
         if norm_expected_files:
             impl_candidates = [
                 p for p in norm_expected_files
-                if not ("/test/" in p.lower() or p.lower().endswith(("test.kt", "test.java")))
+                if not is_documentation_path(p)
+                and not ("/test/" in p.lower() or p.lower().endswith(("test.kt", "test.java")))
             ]
             eval_files = impl_candidates or norm_expected_files
             if len(eval_files) == 1:
@@ -813,22 +828,25 @@ def _build_and_save_plan(
         if not inferred_target_scope:
             raise ValidationError("architecture migration requires a non-empty target scope")
 
-    with step_progress("Resolving architecture contract"):
-        sublog(f"Resolving architecture contract (intent={arch_intent}, scope='{inferred_target_scope or 'auto'}')...")
-        arch_res = resolve_architecture_contract(
-            repo,
-            architecture_intent=arch_intent,
-            target_scope=inferred_target_scope,
-            target_family_id=getattr(args, "architecture_target_family", None),
-            planning_depth=str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper(),
-        )
-        if arch_res["status"] != STATUS_RESOLVED:
-            raise ValidationError(f"architecture contract resolution failed ({arch_res['status']}): {arch_res['message']}")
+    arch_contract = None
+    arch_brief = None
+    if not docs_only_architecture_exempt:
+        with step_progress("Resolving architecture contract"):
+            sublog(f"Resolving architecture contract (intent={arch_intent}, scope='{inferred_target_scope or 'auto'}')...")
+            arch_res = resolve_architecture_contract(
+                repo,
+                architecture_intent=arch_intent,
+                target_scope=inferred_target_scope,
+                target_family_id=getattr(args, "architecture_target_family", None),
+                planning_depth=str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper(),
+            )
+            if arch_res["status"] != STATUS_RESOLVED:
+                raise ValidationError(f"architecture contract resolution failed ({arch_res['status']}): {arch_res['message']}")
 
-        arch_contract = arch_res.get("contract")
-        arch_brief = arch_res.get("brief_markdown")
-        fam_label = (arch_contract.get("family_id") or "standard") if arch_contract else "none"
-        sublog(f"Architecture contract resolved successfully (family={fam_label}).")
+            arch_contract = arch_res.get("contract")
+            arch_brief = arch_res.get("brief_markdown")
+            fam_label = (arch_contract.get("family_id") or "standard") if arch_contract else "none"
+            sublog(f"Architecture contract resolved successfully (family={fam_label}).")
 
     requested_outcome = getattr(args, "outcome", None) or (old_plan.get("requested_outcome") if old_plan else "")
     if not requested_outcome or not str(requested_outcome).strip():
@@ -877,10 +895,9 @@ def _build_and_save_plan(
         zoho_link = old_plan["zoho_link"]
 
     if is_revision and old_baseline:
-        base_manifest = {
-            "delivery_snapshot_sha256": old_baseline.get("base_delivery_snapshot_sha256"),
-            "change_set_sha256": old_baseline.get("base_change_set_sha256"),
-        }
+        # Approval binds to the tree the developer is reviewing now. The
+        # original task baseline remains separate for task-delta attribution.
+        base_manifest = build_manifest(repo)
         plan = create_plan(
             repo,
             task_id=task_id,
@@ -916,11 +933,50 @@ def _build_and_save_plan(
         atomic_write_json(directory / "preliminary-policy.json", preliminary_policy)
         atomic_write_json(state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(directory / "plan.json"), "updated_at": utc_now()})
         if parsed_phases:
-            atomic_write_json(directory / "phase-state.json", {
-                "current_phase_id": parsed_phases[0]["id"],
-                "completed_phases": [],
-                "phase_checkpoints": {},
+            phase_state_file = directory / "phase-state.json"
+            old_state = read_json(phase_state_file) if phase_state_file.is_file() else {}
+            old_phases = (old_plan or {}).get("phases") or []
+            preserved: list[str] = []
+            from phase_review import phase_path_states, validate_completed_phase_review_proof
+
+            for old_phase, new_phase in zip(old_phases, parsed_phases):
+                phase_id = new_phase["id"]
+                if old_phase != new_phase or phase_id not in (old_state.get("completed_phases") or []):
+                    break
+                checkpoint_file = directory / "phases" / phase_id / "checkpoint.json"
+                try:
+                    checkpoint = read_json(checkpoint_file)
+                    checkpoint_sha = checkpoint.get("checkpoint_sha256")
+                    if (
+                        checkpoint.get("status") != "CHECKPOINT_PASS"
+                        or checkpoint_sha != canonical_sha256({k: v for k, v in checkpoint.items() if k != "checkpoint_sha256"})
+                        or old_state.get("phase_checkpoints", {}).get(phase_id) != checkpoint_sha
+                        or checkpoint.get("phase_path_states") != phase_path_states(repo, checkpoint.get("manifest_delta") or [])
+                    ):
+                        break
+                    if (checkpoint.get("review") or {}).get("status") == "REVIEW_PACKAGE_REQUIRED":
+                        validate_completed_phase_review_proof(repo, task_id, phase_id, checkpoint_sha)
+                except (OSError, ValueError, ValidationError):
+                    break
+                preserved.append(phase_id)
+
+            next_index = min(len(preserved), len(parsed_phases) - 1)
+            next_id = parsed_phases[next_index]["id"]
+            # A pre-existing phase baseline is required to distinguish prior
+            # completed work from edits to the still-active phase.
+            if preserved and len(preserved) < len(parsed_phases) and not (directory / "phases" / next_id / "baseline.json").is_file():
+                preserved = []
+                next_index = 0
+                next_id = parsed_phases[0]["id"]
+            plan["active_phase_index"] = next_index
+            atomic_write_json(phase_state_file, {
+                "current_phase_id": next_id,
+                "completed_phases": preserved,
+                "phase_checkpoints": {key: old_state.get("phase_checkpoints", {})[key] for key in preserved},
+                "phase_substates": {key: {"substate": "COMPLETE", "updated_at": utc_now()} for key in preserved},
+                "substate": "COMPLETE" if next_id in preserved else "IMPLEMENTING",
             })
+            save_plan(directory / "plan.json", plan)
         return plan
 
     plan = create_plan(
@@ -1489,6 +1545,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "task_id": args.task_id,
         "run_id": run_id,
         "manifest": str(manifest_path),
+        "repository": manifest.get("repository"),
         "policy": str(policy_path),
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "change_set_sha256": manifest["change_set_sha256"],
@@ -1859,6 +1916,26 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
         }
 
     manifest = build_manifest(repo)
+    frozen_repo = current.get("repository")
+    if not isinstance(frozen_repo, dict) and current.get("manifest"):
+        # Runs created by earlier versions froze the repository identity only
+        # inside their manifest. Keep those runs recoverable after an update.
+        try:
+            frozen_manifest = read_json(Path(current["manifest"]))
+            if all(frozen_manifest.get(key) == current.get(key) for key in ("delivery_snapshot_sha256", "change_set_sha256")):
+                frozen_repo = frozen_manifest.get("repository")
+        except (OSError, ValueError):
+            pass
+    live_repo = manifest.get("repository") or {}
+    if not isinstance(frozen_repo, dict):
+        return {"fresh": False, "reason_code": "REPOSITORY_IDENTITY_MISSING", "reason": "verification run has no frozen repository identity"}
+    for field in ("root_sha256", "git_common_dir_sha256", "branch", "head"):
+        if frozen_repo.get(field) != live_repo.get(field):
+            return {
+                "fresh": False,
+                "reason_code": "REPOSITORY_IDENTITY_CHANGED",
+                "reason": f"STALE: repository {field} changed after verification freeze",
+            }
     checks = [
         ("delivery_snapshot_sha256", "DELIVERY_SNAPSHOT_CHANGED"),
         ("change_set_sha256", "CHANGE_SET_CHANGED"),
@@ -2091,6 +2168,49 @@ def check_phase_compile(repo: Path, modules: list[str], phase_changes: list[Any]
     return True, "PASS"
 
 
+def new_kotlin_lint_issues(repo: Path, task_id: str, source: Path, base_head: str | None) -> list[dict]:
+    """Report only lint findings introduced since this task's original baseline."""
+    from fast_kt_lint import lint_file
+
+    current = lint_file(source)
+    if not current:
+        return []
+    relative = source.relative_to(repo).as_posix()
+    saved_base = task_dir(repo, task_id) / "baseline-files" / relative
+    if saved_base.is_file():
+        original = saved_base.read_bytes()
+    else:
+        try:
+            original = git(repo, "show", f"{base_head or 'HEAD'}:{relative}")
+        except Exception:
+            return current  # A newly created file has no pre-task lint debt.
+
+    with tempfile.TemporaryDirectory(prefix="harness-lint-") as temp:
+        baseline_file = Path(temp) / relative
+        baseline_file.parent.mkdir(parents=True, exist_ok=True)
+        baseline_file.write_bytes(original)
+        before = lint_file(baseline_file)
+        before_lines = original.decode("utf-8", errors="replace").splitlines()
+
+    current_lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    def signature(issue: dict, lines: list[str]) -> tuple[str, str, str]:
+        line_no = int(issue.get("line") or 0)
+        file_level = {"MISSING_COMPOSE_PREVIEW", "MISSING_HILT_ENTRY_POINT", "VIEWBINDING_MEMORY_LEAK"}
+        source_line = lines[line_no - 1].strip() if 0 < line_no <= len(lines) and issue.get("type") not in file_level else ""
+        return str(issue.get("type") or ""), str(issue.get("msg") or ""), source_line
+
+    old_counts = Counter(signature(issue, before_lines) for issue in before)
+    introduced: list[dict] = []
+    for issue in current:
+        key = signature(issue, current_lines)
+        if old_counts[key]:
+            old_counts[key] -= 1
+        else:
+            introduced.append(issue)
+    return introduced
+
+
 def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tests: bool, phase_changes: list[Any] | None = None) -> tuple[bool, str]:
     if not needs_tests:
         return True, "NOT_REQUIRED"
@@ -2202,13 +2322,12 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     # 1. Deterministic Preflight
     # Fast Kotlin lint
     try:
-        from fast_kt_lint import lint_file
         kt_issues = []
         for c in phase_changes:
             rel_p = c.get("path", "") if isinstance(c, dict) else str(c or "")
             p = repo / rel_p
             if p.suffix == ".kt" and p.is_file():
-                kt_issues.extend(lint_file(p))
+                kt_issues.extend(new_kotlin_lint_issues(repo, args.task_id, p, plan.get("task_base_head") or (plan.get("repository") or {}).get("head")))
         if kt_issues:
             raise ValidationError(f"phase checkpoint Kotlin lint failed: {len(kt_issues)} issue(s) detected")
     except (ImportError, ValidationError):
@@ -2250,17 +2369,22 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
 
     preflight_status = {"status": "PASS"}
 
-    # 2. Targeted compile
+    # 2. Targeted compile only when the central policy calls for a build or
+    # tests. Documentation and other T0 changes must not trigger Gradle.
     resolved_modules = resolve_phase_modules(repo, manifest)
-    try:
-        compile_ok, compile_detail = check_phase_compile(repo, resolved_modules, phase_changes=phase_changes)
-        if not compile_ok:
-            raise ValidationError(f"phase checkpoint compile failed: {compile_detail}")
-        compile_status = {"status": compile_detail, "modules": resolved_modules}
-    except (ImportError, ValidationError):
-        raise
-    except Exception as exc:
-        raise ValidationError(f"phase checkpoint compile exception: {exc}")
+    build_gates = {"unit_tests", "instrumented_tests", "assemble"}
+    if build_gates.intersection(phase_policy.get("gates") or []):
+        try:
+            compile_ok, compile_detail = check_phase_compile(repo, resolved_modules, phase_changes=phase_changes)
+            if not compile_ok:
+                raise ValidationError(f"phase checkpoint compile failed: {compile_detail}")
+            compile_status = {"status": compile_detail, "modules": resolved_modules}
+        except (ImportError, ValidationError):
+            raise
+        except Exception as exc:
+            raise ValidationError(f"phase checkpoint compile exception: {exc}")
+    else:
+        compile_status = {"status": "NOT_REQUIRED", "modules": []}
 
     # 3. Policy-required tests
     needs_tests = "unit_tests" in (phase_policy.get("gates") or [])
@@ -2498,12 +2622,25 @@ def cmd_task_reconcile_handoff(args: argparse.Namespace) -> dict:
     return reconcile_handoff(repo, args.task_id)
 
 
-def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> dict[str, Any]:
+def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host: str | None = None) -> dict[str, Any]:
     """Canonical evidence-aware next-action engine resolving the single safest next action."""
     if plan is None:
         plan = _load_plan(repo, task_id)
     state = str(plan.get("status") or "").upper()
     identity = f'--repo . --task-id {task_id}'
+    run_host = resolve_review_host(repo, host)
+    if host is None:
+        from phase_review import phase_run_file
+        for phase in reversed(plan.get("phases") or []):
+            run_file = phase_run_file(task_dir(repo, task_id), str(phase.get("id") or ""))
+            if run_file.is_file():
+                try:
+                    frozen_host = str(read_json(run_file).get("review_host") or "")
+                    if frozen_host:
+                        run_host = frozen_host
+                        break
+                except (OSError, ValueError, ValidationError):
+                    pass
 
     if state in {"DRAFTED", "PLAN_APPROVAL_REQUIRED", "PLAN_DRAFTED", "AWAITING_DEVELOPER_APPROVAL"}:
         return {
@@ -2643,7 +2780,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 return {
                     "code": "PREPARE_VERIFICATION",
                     "kind": "HARNESS_COMMAND",
-                    "command": f"python .agents/harness.py task prepare-verification {identity} --host {resolve_review_host(repo)}",
+                    "command": f"python .agents/harness.py task prepare-verification {identity} --host {run_host}",
                     "blocking": True,
                     "reason": "All implementation phases complete. Freeze change set and prepare final verification.",
                     "inputs": {"repo": ".", "task_id": task_id},
@@ -2665,7 +2802,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 return {
                     "code": "BUILD_PHASE_REVIEW_PACKAGE",
                     "kind": "HARNESS_COMMAND",
-                    "command": f'python .agents/harness.py phase-review package --repo . --task-id {task_id} --phase-id "{phase_id}"',
+                    "command": f'python .agents/harness.py phase-review package --repo . --task-id {task_id} --phase-id "{phase_id}" --host {run_host}',
                     "blocking": True,
                     "reason": f"Build immutable phase review package for phase '{phase_id}'.",
                     "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
@@ -2778,6 +2915,21 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                         if r_info.get("state") == REVIEW_PROTOCOL_RETRY_REQUIRED:
                             exec_id = str(r_info.get("execution_id") or "")
                             err_msg = str(r_info.get("last_error") or r_info.get("protocol_error") or "")
+                            phase_host = str(run_meta.get("review_host") or run_host)
+                            if not has_trusted_review_source(phase_host):
+                                return {
+                                    "code": "RETRY_PHASE_REVIEW_RESPONSE",
+                                    "kind": "HOST_ACTION",
+                                    "command": (
+                                        f"python .agents/harness.py phase-review complete --repo . --task-id {task_id} "
+                                        f"--phase-id {phase_id} --reviewer {r_name} --execution-id {exec_id} "
+                                        f"--host {phase_host} --response-file <corrected-response-file>"
+                                    ),
+                                    "blocking": True,
+                                    "reason": f"Obtain a corrected response from the same reviewer execution and ingest it: {err_msg}.",
+                                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id, "reviewer": r_name, "execution_id": exec_id},
+                                    "expected": {},
+                                }
                             correction_msg = (
                                 f"Protocol error from `{r_name}`: {err_msg}.\n"
                                 "Please submit your review conforming strictly to HARNESS_REVIEW_RESULT_V2 JSON format."
@@ -2827,6 +2979,14 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
 
                         run_meta = read_json(prun_f) if prun_f.is_file() else {}
                         briefs = run_meta.get("briefs") or {}
+                        phase_host = str(run_meta.get("review_host") or run_host)
+                        dispatch_receipt_command = ""
+                        if not has_trusted_review_source(phase_host):
+                            roster_args = " ".join(f"--reviewer {reviewer}" for reviewer in sorted(not_dispatched))
+                            dispatch_receipt_command = (
+                                f"python .agents/harness.py phase-review dispatch --repo . --task-id {task_id} "
+                                f"--phase-id {phase_id} --host {phase_host} {roster_args}"
+                            )
                         exec_profile = {
                             "model_policy": "INHERIT_PARENT_BY_OMISSION" if has_trusted_review_source(str(run_meta.get("review_host") or "")) else "HOST_MANAGED_UNVERIFIED",
                             "workspace": "inherit",
@@ -2839,10 +2999,10 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                         return {
                             "code": "DISPATCH_PHASE_REVIEWERS",
                             "kind": "HOST_ACTION",
-                            "command": "",
+                            "command": dispatch_receipt_command,
                             "blocking": True,
                             "phase_id": phase_id,
-                            "reason": f"Dispatch phase reviewer subagents: {', '.join(sorted(not_dispatched))}.",
+                            "reason": f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))}.",
                             "reviewers": sorted(not_dispatched),
                             "package_path": run_meta.get("package_path", ""),
                             "briefs": briefs,
@@ -2902,7 +3062,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     return {
                         "code": "PREPARE_VERIFICATION",
                         "kind": "HARNESS_COMMAND",
-                        "command": f"python .agents/harness.py task prepare-verification {identity} --host {resolve_review_host(repo)}",
+                        "command": f"python .agents/harness.py task prepare-verification {identity} --host {run_host}",
                         "blocking": True,
                         "reason": "Final phase complete. Freeze change set and prepare final verification.",
                         "inputs": {"repo": ".", "task_id": task_id},
@@ -3693,6 +3853,17 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
             "expected": {"success_exit_codes": [0], "success_statuses": ["IMPLEMENTING"]},
         }
 
+    if state == "CANCELLED":
+        return {
+            "code": "CANCELLED",
+            "kind": "TASK_STATE",
+            "command": "",
+            "blocking": False,
+            "reason": "The task was cancelled; start a new task to continue work.",
+            "inputs": {"repo": ".", "task_id": task_id},
+            "expected": {},
+        }
+
     return {
         "code": "UNKNOWN_STATE",
         "kind": "BLOCKED",
@@ -3816,7 +3987,7 @@ def status(args: argparse.Namespace) -> dict:
     if bool(getattr(args, "next", False)):
         plan = dict(plan)
         plan["task_state"] = plan.get("status")
-        next_act = resolve_next_action(repo, task_id, plan)
+        next_act = resolve_next_action(repo, task_id, plan, host=getattr(args, "host", None))
         plan["next_action"] = next_act
         plan["next_actions"] = [
             {
@@ -3968,6 +4139,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     status_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
     status_cmd.add_argument("--next", action="store_true", help="Include the safest next lifecycle command without executing it")
+    status_cmd.add_argument("--host", default=None, help="Host running this task; binds routed review commands")
     status_cmd.set_defaults(handler=status)
     command = sub.add_parser("recover-stale")
     command.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")

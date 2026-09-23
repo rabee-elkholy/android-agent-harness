@@ -420,7 +420,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual("REVIEWER_CALL_SAFETY_CAP_REACHED", act["code"])
 
     def test_PHASE_V2_013_protocol_retry_no_new_call(self) -> None:
-        """PHASE_V2_013: protocol retry via send_message does not increment review_calls_used."""
+        """PHASE_V2_013: protocol retry on a generic host does not increment review_calls_used."""
         phases = [
             {"id": "p1", "name": "Phase 1", "description": "Auth Phase", "expected_files": ["app/src/main/java/com/example/Auth.kt"]},
             {"id": "p2", "name": "Phase 2", "description": "UI Phase", "expected_files": ["app/src/main/java/com/example/UI.kt"]},
@@ -449,8 +449,8 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         used_calls = plan.get("review_calls_used", 0)
 
         act = resolve_next_action(self.repo, task_id)
-        self.assertIn(act["code"], ("RETRY_REVIEW_PROTOCOL", "RETRY_PHASE_REVIEW_PROTOCOL"))
-        self.assertIn("send_message", act.get("command", "") or act.get("action", ""))
+        self.assertEqual("RETRY_PHASE_REVIEW_RESPONSE", act["code"])
+        self.assertIn("phase-review complete", act.get("command", ""))
 
         plan_after = read_json(task_dir(self.repo, task_id) / "plan.json")
         self.assertEqual(used_calls, plan_after.get("review_calls_used", 0))
@@ -926,6 +926,174 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual(0, exit_code)
         result_file = phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json"
         self.assertEqual("reviewer_response_text_unverified", read_json(result_file)["provenance"])
+
+    def test_AUDIT_005_nontrusted_dispatch_has_public_cli(self) -> None:
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'codex'\n")
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
+        status_result = subprocess.run(
+            [*public_cli, "task", "status", "--repo", str(self.repo), "--task-id", task_id, "--next", "--host", "codex"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, status_result.returncode, status_result.stderr)
+        self.assertIn("NEXT_ACTION=DISPATCH_PHASE_REVIEWERS", status_result.stdout)
+        self.assertIn("phase-review dispatch", status_result.stdout)
+        dispatch_result = subprocess.run(
+            [*public_cli, "phase-review", "dispatch", "--repo", str(self.repo), "--task-id", task_id,
+             "--phase-id", "p1", "--host", "codex",
+             *(argument for reviewer in reviewers for argument in ("--reviewer", reviewer))],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, dispatch_result.returncode, dispatch_result.stderr)
+        self.assertIn("INDEPENDENT_EXECUTION_VERIFIED=false", dispatch_result.stdout)
+        ok, _, ledger = load_phase_ledger(task_dir(self.repo, task_id), "p1", expected_run_id=meta["phase_review_run_id"])
+        self.assertTrue(ok)
+        self.assertTrue(all(entry["state"] == REVIEW_DISPATCHED for entry in ledger["reviewers"].values()))
+
+    def test_AUDIT_005b_trusted_dispatch_rejects_manual_receipt(self) -> None:
+        task_id, reviewers, _, _ = self._setup_dispatch_state()
+        with self.assertRaises(ValidationError):
+            phase_review.main([
+                "dispatch", "--repo", str(self.repo), "--task-id", task_id,
+                "--phase-id", "p1", "--host", "antigravity",
+                *(argument for reviewer in reviewers for argument in ("--reviewer", reviewer)),
+            ])
+
+    def test_AUDIT_001b_public_checkpoint_rejects_unchanged_dirty_expected_file(self) -> None:
+        asset = self.repo / "app/src/main/assets/preexisting.txt"
+        write_file(asset, "developer work before task\n")
+        task_id = self._create_phased_task([
+            {"id": "p1", "name": "Update asset", "expected_files": ["app/src/main/assets/preexisting.txt"]},
+            {"id": "p2", "name": "Follow-up", "expected_files": ["docs/next.md"]},
+        ])
+        command = [
+            sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py"),
+            "task", "checkpoint-phase", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
+        ]
+        unchanged = subprocess.run(command, cwd=self.repo, capture_output=True, text=True, check=False)
+        self.assertNotEqual(0, unchanged.returncode)
+        self.assertIn("no file changes detected", unchanged.stderr)
+        write_file(asset, "developer work before task\napproved task addition\n")
+        changed = subprocess.run(command, cwd=self.repo, capture_output=True, text=True, check=False)
+        self.assertEqual(0, changed.returncode, changed.stderr)
+
+    def test_AUDIT_006_revision_after_complete_phase_preserves_approved_work(self) -> None:
+        phases = [
+            {"id": "p1", "name": "Asset phase", "expected_files": ["app/src/main/assets/note.txt"]},
+            {"id": "p2", "name": "UI phase", "expected_files": ["app/src/main/res/layout/old.xml"]},
+        ]
+        task_id = self._create_phased_task(phases)
+        write_file(self.repo / "app/src/main/assets/note.txt", "approved work\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        revised_phases = [phases[0], {"id": "p2", "name": "UI phase", "expected_files": ["app/src/main/res/layout/new.xml"]}]
+        public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
+        revised = subprocess.run(
+            [*public_cli, "task", "revise", "--repo", str(self.repo), "--task-id", task_id,
+             "--outcome", "Implement revised UI phase", "--kind", "FEATURE", "--planning-depth", "BOUNDED",
+             "--phases", json.dumps(revised_phases),
+             "--expected-files", "app/src/main/assets/note.txt,app/src/main/res/layout/new.xml",
+             "--expected-modules", ":app"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, revised.returncode, revised.stderr)
+        revision = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", revision["status"])
+        self.assertEqual(1, revision["active_phase_index"])
+        approval = subprocess.run(
+            [*public_cli, "task", "approve", "--repo", str(self.repo), "--task-id", task_id,
+             "--source", "conversation", "--proof-reference", "approve revised UI scope",
+             "--enforcement-tier", "RULE_ENFORCED"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, approval.returncode, approval.stderr)
+        approved = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual("IMPLEMENTING", approved["status"])
+        phase_state = read_json(task_dir(self.repo, task_id) / "phase-state.json")
+        self.assertEqual(["p1"], phase_state["completed_phases"])
+        self.assertEqual("p2", phase_state["current_phase_id"])
+        next_action = resolve_next_action(self.repo, task_id)
+        self.assertEqual("IMPLEMENT_APPROVED_SCOPE", next_action["code"])
+        write_file(self.repo / "app/src/main/res/layout/new.xml", "<FrameLayout/>\n")
+        next_action = resolve_next_action(self.repo, task_id)
+        self.assertEqual("CHECKPOINT_PHASE", next_action["code"])
+        self.assertIn('--phase-id "p2"', next_action["command"])
+
+    def test_AUDIT_011_docs_only_phase_checkpoints_without_gradle(self) -> None:
+        task_id = self._create_phased_task([
+            {"id": "p1", "name": "Documentation", "expected_files": ["docs/usage.md"]},
+            {"id": "p2", "name": "Follow-up", "expected_files": ["docs/next.md"]},
+        ])
+        write_file(self.repo / "docs/usage.md", "# Usage\n")
+        completed = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py"), "task", "checkpoint-phase",
+             "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        checkpoint = read_json(task_dir(self.repo, task_id) / "phases" / "p1" / "checkpoint.json")
+        self.assertEqual("CHECKPOINT_PASS", checkpoint["status"])
+        self.assertEqual("NOT_REQUIRED", checkpoint["compile"]["status"])
+
+    def test_AUDIT_013_public_docs_plan_in_mixed_architecture_project(self) -> None:
+        """A docs-only task must not demand an Android architecture family."""
+        write_file(self.repo / "app/src/main/java/legacy/LegacyScreen.kt", "class LegacyScreen : Fragment()\n")
+        write_file(self.repo / "app/src/main/java/modern/CompScreen.kt", "@Composable fun CompScreen() {}\n")
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-qm", "mixed architecture baseline")
+        phases = [
+            {"id": "p1", "name": "Documentation", "expected_files": ["docs/guide.md"]},
+            {"id": "p2", "name": "Follow-up", "expected_files": ["docs/next.md"]},
+        ]
+        command = [
+            sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py"),
+            "task", "draft", "--repo", str(self.repo), "--task-id", "audit-013",
+            "--outcome", "Document onboarding", "--kind", "FEATURE",
+            "--expected-files", "docs/guide.md,docs/next.md", "--phases", json.dumps(phases),
+        ]
+        for paths in (
+            "docs/guide.md,app/src/main/java/unknown/Thing.kt",
+            "app/src/main/assets/runtime.txt",
+        ):
+            guarded = subprocess.run(
+                [*command[:], "--expected-files", paths],
+                cwd=self.repo, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(0, guarded.returncode)
+            self.assertIn("ARCHITECTURE_DECISION_REQUIRED", guarded.stderr)
+        code_phase = [*phases, {"id": "p3", "name": "Code", "expected_files": ["app/src/main/java/unknown/Thing.kt"]}]
+        guarded = subprocess.run(
+            [*command, "--phases", json.dumps(code_phase)],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, guarded.returncode)
+        self.assertIn("ARCHITECTURE_DECISION_REQUIRED", guarded.stderr)
+        drafted = subprocess.run(command, cwd=self.repo, capture_output=True, text=True, check=False)
+        self.assertEqual(0, drafted.returncode, drafted.stderr)
+        plan = read_json(task_dir(self.repo, "audit-013") / "plan.json")
+        self.assertFalse(plan.get("architecture_contract"))
+
+    def test_AUDIT_003b_public_checkpoint_allows_existing_lint_debt_only(self) -> None:
+        source = self.repo / "app/src/main/java/com/example/App.kt"
+        write_file(source, "package com.example\nimport java.util.*\nclass App\n")
+        run_git(self.repo, "add", "app/src/main/java/com/example/App.kt")
+        run_git(self.repo, "commit", "-qm", "legacy lint debt")
+        task_id = self._create_phased_task([
+            {"id": "p1", "name": "Safe Kotlin edit", "expected_files": ["app/src/main/java/com/example/App.kt"]},
+            {"id": "p2", "name": "Follow-up", "expected_files": ["docs/next.md"]},
+        ])
+        self._pass_phase_tests(task_id, "p1")
+        command = [
+            sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py"),
+            "task", "checkpoint-phase", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
+        ]
+        write_file(source, "package com.example\nimport java.util.*\nimport kotlin.collections.*\nclass App\n// task edit\n")
+        new_debt = subprocess.run(command, cwd=self.repo, capture_output=True, text=True, check=False)
+        self.assertNotEqual(0, new_debt.returncode)
+        self.assertIn("Kotlin lint failed", new_debt.stderr)
+        write_file(source, "package com.example\nimport java.util.*\nclass App\n// task edit\n")
+        old_debt = subprocess.run(command, cwd=self.repo, capture_output=True, text=True, check=False)
+        self.assertEqual(0, old_debt.returncode, old_debt.stderr)
 
     def test_PHASE_BUDGET_001_critical_plan_reserves_final_policy_roster(self) -> None:
         plan = {
