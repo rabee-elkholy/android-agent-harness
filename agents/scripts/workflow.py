@@ -47,6 +47,7 @@ from plan_authority import (  # noqa: E402
     save_plan,
 )
 from review_policy import decide, decide_later_round  # noqa: E402
+from review_sources import has_trusted_review_source, resolve_review_host  # noqa: E402
 from evidence_store import EvidenceStore, StateLock  # noqa: E402
 from _verification_recipes import get_verification_recipes  # noqa: E402
 
@@ -1465,17 +1466,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "max_graph_hops": 2,
     }
 
-    from review_sources import has_trusted_review_source
-    explicit_host = (
-        getattr(args, "host", None)
-        or os.environ.get("HARNESS_HOST")
-    )
-
-    configured_host = (
-        str(explicit_host).strip().lower()
-        if explicit_host
-        else "generic"
-    )
+    configured_host = resolve_review_host(repo, getattr(args, "host", None))
 
     review_protocol_version = (
         2 if has_trusted_review_source(configured_host) else 1
@@ -2270,6 +2261,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         set_phase_substate,
         compute_phase_diff_stats,
         compute_phase_delta_sha256,
+        phase_path_states,
+        derive_final_review_reserve,
         _compute_phase_diff,
         PHASE_REVIEW_PACKAGE_REQUIRED,
         PHASE_COMPLETE,
@@ -2295,6 +2288,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     else:
         review_status = {"status": "NOT_REQUIRED", "reviewers": []}
 
+    final_review_reserve = derive_final_review_reserve(repo, plan, phase_policy)
+
     checkpoint_record = {
         "schema_version": 2,
         "task_id": args.task_id,
@@ -2309,46 +2304,28 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "task_change_set_sha256": manifest["task_change_set_sha256"],
         "manifest_delta": phase_changes,
+        "phase_path_states": phase_path_states(repo, phase_changes),
         "preflight": preflight_status,
         "compile": compile_status,
         "tests": tests_status,
         "review": review_status,
+        "final_review_reserve": final_review_reserve,
     }
     checkpoint_record["checkpoint_sha256"] = canonical_sha256(checkpoint_record)
     atomic_write_json(phase_dir / "checkpoint.json", checkpoint_record)
 
     completed = list(phase_state.get("completed_phases") or [])
     curr_idx = next((i for i, p in enumerate(phases) if p.get("id") == phase_id), -1)
-    next_phase_idx = curr_idx
-
     if review_needed:
         phase_state = set_phase_substate(directory, phase_id, PHASE_REVIEW_PACKAGE_REQUIRED)
         phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
         atomic_write_json(phase_state_file, phase_state)
     else:
-        set_phase_substate(directory, phase_id, PHASE_COMPLETE)
+        phase_state = set_phase_substate(directory, phase_id, PHASE_COMPLETE)
         if phase_id not in completed:
             completed.append(phase_id)
         phase_state["completed_phases"] = completed
         phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
-        next_phase_idx = curr_idx + 1 if curr_idx != -1 and curr_idx + 1 < len(phases) else curr_idx
-        if curr_idx != -1 and curr_idx + 1 < len(phases):
-            next_phase = phases[curr_idx + 1]
-            phase_state["current_phase_id"] = next_phase["id"]
-            next_dir = directory / "phases" / next_phase["id"]
-            next_dir.mkdir(parents=True, exist_ok=True)
-            cur_man = build_manifest(repo)
-            next_baseline = {
-                "schema_version": 1,
-                "task_id": args.task_id,
-                "phase_id": next_phase["id"],
-                "repository": plan.get("repository"),
-                "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
-                "base_change_set_sha256": cur_man["change_set_sha256"],
-                "changes": cur_man.get("changes") or [],
-            }
-            next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
-            atomic_write_json(next_dir / "baseline.json", next_baseline)
         atomic_write_json(phase_state_file, phase_state)
 
     return {
@@ -2356,7 +2333,7 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         "phase_id": phase_id,
         "completed_phases": completed,
         "current_phase_id": phase_state.get("current_phase_id"),
-        "next_phase_index": next_phase_idx,
+        "next_phase_index": curr_idx + 1 if curr_idx + 1 < len(phases) else curr_idx,
         "checkpoint": checkpoint_record,
         "preflight": preflight_status,
         "compile": compile_status,
@@ -2568,7 +2545,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 return {
                     "code": "PREPARE_VERIFICATION",
                     "kind": "HARNESS_COMMAND",
-                    "command": f"python .agents/harness.py task prepare-verification {identity} --host antigravity",
+                    "command": f"python .agents/harness.py task prepare-verification {identity} --host {resolve_review_host(repo)}",
                     "blocking": True,
                     "reason": "All implementation phases complete. Freeze change set and prepare final verification.",
                     "inputs": {"repo": ".", "task_id": task_id},
@@ -2600,7 +2577,51 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
             if substate == PHASE_REVIEWING:
                 lpath = phase_ledger_file(tdir, phase_id)
                 prun_f = phase_run_file(tdir, phase_id)
-                run_id = read_json(prun_f).get("phase_review_run_id", "") if prun_f.is_file() else ""
+                try:
+                    run_meta = read_json(prun_f) if prun_f.is_file() else None
+                except Exception:
+                    run_meta = None
+                if not isinstance(run_meta, dict) or (
+                    run_meta.get("task_id") != task_id
+                    or run_meta.get("phase_id") != phase_id
+                    or not run_meta.get("phase_review_run_id")
+                ):
+                    return {
+                        "code": "PHASE_REVIEW_STATE_BLOCKED",
+                        "kind": "HARNESS_DIAGNOSTIC",
+                        "blocking": True,
+                        "reason": "Phase REVIEWING state has a missing, corrupt, or mismatched active review run. Re-checkpoint the phase after diagnosis.",
+                        "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                        "expected": {},
+                    }
+                run_id = str(run_meta["phase_review_run_id"])
+                roster = run_meta.get("selected_reviewers")
+                if (
+                    not isinstance(roster, list) or not roster
+                    or not all(isinstance(r, str) and r for r in roster)
+                    or len(roster) != len(set(roster))
+                ):
+                    return {
+                        "code": "PHASE_REVIEW_STATE_BLOCKED",
+                        "kind": "HARNESS_DIAGNOSTIC",
+                        "blocking": True,
+                        "reason": "Phase review run has an invalid reviewer roster. Re-checkpoint the phase after diagnosis.",
+                        "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                        "expected": {},
+                    }
+                ok, err, ledger = load_phase_ledger(
+                    tdir, phase_id, expected_run_id=run_id,
+                    expected_task_id=task_id, expected_reviewers=roster,
+                )
+                if not ok or not ledger:
+                    return {
+                        "code": "PHASE_REVIEW_LEDGER_BLOCKED",
+                        "kind": "HARNESS_DIAGNOSTIC",
+                        "blocking": True,
+                        "reason": f"Phase review ledger missing, corrupt, or mismatched: {err}",
+                        "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                        "expected": {},
+                    }
 
                 # Check for durable post-tool reconciliation error marker
                 rdir = phase_review_dir(tdir, phase_id)
@@ -2692,7 +2713,9 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     # 4. Not yet dispatched
                     not_dispatched = [r for r, d in revs.items() if d.get("state") == REVIEW_NOT_DISPATCHED]
                     if not_dispatched:
-                        cap_ok, cap_msg = check_phase_safety_cap(plan, len(not_dispatched))
+                        checkpoint_file = phase_dir(tdir, phase_id) / "checkpoint.json"
+                        reserve = (read_json(checkpoint_file).get("final_review_reserve") or {}) if checkpoint_file.is_file() else {}
+                        cap_ok, cap_msg = check_phase_safety_cap(plan, len(not_dispatched), reserve)
                         if not cap_ok:
                             return {
                                 "code": "REVIEWER_CALL_SAFETY_CAP_REACHED",
@@ -2707,7 +2730,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                         run_meta = read_json(prun_f) if prun_f.is_file() else {}
                         briefs = run_meta.get("briefs") or {}
                         exec_profile = {
-                            "model_policy": "INHERIT_PARENT_BY_OMISSION",
+                            "model_policy": "INHERIT_PARENT_BY_OMISSION" if has_trusted_review_source(str(run_meta.get("review_host") or "")) else "HOST_MANAGED_UNVERIFIED",
                             "workspace": "inherit",
                             "reviewers": {
                                 r: {"role": r, "type_name": r, "brief_path": briefs.get(r, "")}
@@ -2781,7 +2804,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                     return {
                         "code": "PREPARE_VERIFICATION",
                         "kind": "HARNESS_COMMAND",
-                        "command": f"python .agents/harness.py task prepare-verification {identity} --host antigravity",
+                        "command": f"python .agents/harness.py task prepare-verification {identity} --host {resolve_review_host(repo)}",
                         "blocking": True,
                         "reason": "Final phase complete. Freeze change set and prepare final verification.",
                         "inputs": {"repo": ".", "task_id": task_id},

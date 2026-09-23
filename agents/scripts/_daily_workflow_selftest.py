@@ -700,7 +700,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { fun fix() = Unit }\n")
-        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
 
         run_info = read_json(task_dir(self.repo, task_id) / "current-run.json")
         run_info["review_protocol_version"] = 1
@@ -879,10 +879,15 @@ class DailyWorkflowSelftest(unittest.TestCase):
         res1 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="phase-1"))
         self.assertEqual("PASS", res1["status"])
         self.assertEqual(["phase-1"], res1["completed_phases"])
-        self.assertEqual("phase-2", res1["current_phase_id"])
+        self.assertEqual("phase-1", res1["current_phase_id"])
+        self.assertEqual("BEGIN_NEXT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        p2_dir = task_dir(self.repo, task_id) / "phases" / "phase-2"
+        self.assertFalse((p2_dir / "baseline.json").exists())
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertTrue((p2_dir / "baseline.json").is_file())
+        self.assertEqual("phase-2", read_json(task_dir(self.repo, task_id) / "phase-state.json")["current_phase_id"])
 
         write_file(self.repo / "app/src/main/kotlin/com/example/UI.kt", "package com.example\n\nclass UI\n")
-        p2_dir = task_dir(self.repo, task_id) / "phases" / "phase-2"
         p2_dir.mkdir(parents=True, exist_ok=True)
         write_file(p2_dir / "unit_tests.json", json.dumps({"status": "PASS"}))
         res2 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="phase-2"))
@@ -2670,11 +2675,9 @@ class MultiPhaseAndroidTests(DailyWorkflowSelftest):
         res_p1 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         self.assertEqual("CHECKPOINT_PASS", res_p1.get("status"))
 
-        # Advance to p2
-        phase_state_file = task_dir(self.repo, task_id) / "phase-state.json"
-        pdata = read_json(phase_state_file)
-        pdata["current_phase_id"] = "p2"
-        atomic_write_json(phase_state_file, pdata)
+        # The public transition creates the Phase 2 baseline.
+        self.assertEqual("BEGIN_NEXT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
 
         auth_file = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Auth.kt"
         write_file(auth_file, "package com.example\nclass Auth\n")

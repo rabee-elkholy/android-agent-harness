@@ -356,6 +356,9 @@ class ReviewerProofV42Tests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _create_receipt(self, task_id: str, run_id: str, reviewer: str, pkg_sha: str, subagent_id: str = "") -> Path:
+        atomic_write_json(task_dir(self.tmp, task_id) / "current-run.json", {
+            "task_id": task_id, "run_id": run_id, "review_host": "antigravity", "review_protocol_version": 1,
+        })
         rc_dir = task_dir(self.tmp, task_id) / "reviewer-dispatches"
         rc_dir.mkdir(parents=True, exist_ok=True)
         rc_data = {
@@ -1495,4 +1498,3 @@ class PreflightScopeV42Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

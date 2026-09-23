@@ -1520,9 +1520,17 @@ class TestSpeedTests(unittest.TestCase):
     """TESTMODE-001 through TESTMODE-009: Fast/Full selftest strategy verification."""
 
     def test_testmode_001_selftest_defaults_to_full_registry(self) -> None:
-        """TESTMODE-001: selftest defaults to full registry (20 suites)."""
+        """TESTMODE-001: selftest defaults to a complete, unique suite registry."""
         import harness_cli
-        self.assertEqual(len(harness_cli.FULL_SELFTEST_SUITES), 20)
+        full = harness_cli.FULL_SELFTEST_SUITES
+        self.assertEqual(len(full), len(set(full)))
+        self.assertTrue({
+            "_daily_workflow_selftest.py",
+            "_public_cli_selftest.py",
+            "_phase_review_v2_selftest.py",
+            "_worktree_handoff_selftest.py",
+        } <= set(full))
+        self.assertTrue(set(harness_cli.QUICK_SELFTEST_SUITES) < set(full))
         parser = harness_cli.build_parser()
         args = parser.parse_args(["selftest"])
         self.assertFalse(args.quick)

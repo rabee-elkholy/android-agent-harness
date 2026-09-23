@@ -1,7 +1,7 @@
 <!-- managed-by: android-harness-kit -->
 # android-harness-kit — Gemini CLI / Antigravity
 
-Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
+Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AGENTS.md` and `agents/rules/harness-rules.md`.
 
 - Python: `python`
 - Assemble: `python .agents/harness.py assemble`
@@ -15,6 +15,8 @@ Follow `AGENTS.md` and `agents/rules/harness-rules.md`. That file wins.
 - Strict Verification Order: The Verification Plan in `implementation_plan.md` MUST use the 6-step headings (1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install -> 5. mobile walkthrough -> 6. verify). The agent MUST wait for ALL routed specialist reviewers (subagents) to finish, record their responses, and verify ZERO blocking findings BEFORE running `assemble` or starting device installation. Starting assemble or device deployment while any reviewer subagent is still running is strictly forbidden.
 - Reviewer Dispatch: 100% autonomous. Launch routed reviewers in parallel via subagents immediately; never pause, ask for permission, or demand 'Proceed'.
 - Review Protocol V2: On reactive reviewer completion, record trusted reviewer results with `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>`. Once all routed reviewers complete, finalize aggregate review evidence with `python .agents/harness.py review finalize --task <id>`. Clean reviews with findings: [] are recognized as PASS. Intermediate scratch files are forbidden.
+- Use `/grill-me` before planning when material design or compatibility questions remain. Carry resolved answers into the plan without repeating them.
+- After approval, `/goal` may sustain non-trivial work. The Harness router remains completion authority and all gates and developer decisions still apply.
 - Zero-Polling Invariant: Never poll background tasks or subagents in a loop using `manage_task(Action='status')`, `manage_subagents(Action='list')`, or `schedule`. Yield execution and wait for reactive wakeup messages from the system. Polling loops waste tokens, trigger safety blocks, and stall execution.
 - Harness Immutability & Diagnostic Protocol: The harness engine under `.agents/**` is immutable developer infrastructure. If any harness command or verification gate crashes with a Python traceback or system error, the agent is STRICTLY FORBIDDEN from attempting to edit or patch files in `.agents/**` using host tools, PowerShell, Python `-c`, or shell commands. Instead, stop immediately, report the exact traceback and root cause to the developer, and await instructions.
 - Task Resumption: If a task becomes BLOCKED or fixes are needed during verification, run `python .agents/scripts/workflow.py resume --repo . --task-id <id>` to return to implementation.

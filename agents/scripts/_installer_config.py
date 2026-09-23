@@ -9,6 +9,7 @@ from pathlib import Path
 
 def generate_product_py(repo: Path, answers: dict) -> Path:
     from _enforcement import detect
+    from review_sources import primary_host_from_tools
     product_name = answers.get("product") or repo.name
     application_id = answers.get("application_id")
     if not application_id:
@@ -36,7 +37,9 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
     if "assemble" not in assemble_task:
         unit_test_task = ":app:testDebugUnitTest"
     tracker_language = answers.get("zoho_language") or answers.get("tracker_language") or "en_titles_ar_comments"
-    tools = answers.get("tools") or ["antigravity"]
+    tools = answers.get("tools", ["antigravity"])
+    if tools is None:
+        tools = []
     enforcement = detect(repo, tools if isinstance(tools, list) else str(tools).split(","))
     configured_src = answers.get("android_src")
     if not isinstance(configured_src, (list, tuple)) or not configured_src:
@@ -73,6 +76,8 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
         "DEVICE_VERIFICATION_MODE": answers.get("device_verification") or "manual_only",
         "ENFORCEMENT_TIER": enforcement["overall"],
         "ENFORCEMENT_BY_HOST": enforcement["by_host"],
+        "SELECTED_AI_TOOLS": list(tools) if isinstance(tools, list) else [part.strip() for part in str(tools).split(",") if part.strip()],
+        "PRIMARY_AI_HOST": primary_host_from_tools(tools),
         "MODEL_CALL_BUDGET": int(answers.get("model_call_budget") or 20),
     }
     lines = ['"""Generated project identity and vNext policy configuration."""', "from __future__ import annotations", ""]
@@ -85,7 +90,9 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
 
 def configure_adapters_and_mcp(repo: Path, answers: dict) -> None:
     scripts_dir = repo / ".agents" / "scripts"
-    tools = answers.get("tools") or ["antigravity"]
+    tools = answers.get("tools", ["antigravity"])
+    if tools is None:
+        tools = []
     tools_arg = ",".join(tools) if isinstance(tools, list) else str(tools)
     adapter_script = scripts_dir / "install_tool_adapters.py"
     if adapter_script.is_file():

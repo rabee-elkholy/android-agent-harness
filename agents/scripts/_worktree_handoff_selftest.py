@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -380,6 +381,81 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         self.assertTrue(any("Feature.kt" in p for p in paths if p))
         self.assertFalse(any("dirty.txt" in p for p in paths if p))
 
+    def test_HANDOFF_BASELINE_001_pending_paths_exclude_pre_task_dirty(self) -> None:
+        unrelated = "app/src/main/java/com/example/Unrelated.kt"
+        write_file(self.repo / unrelated, "package com.example\nclass Unrelated\n")
+        task_id = self._create_task()
+        write_file(self.repo / "app/src/main/java/com/example/Feature.kt", "package com.example\nclass Feature\n")
+        result = create_pending_handoff(self.repo, task_id)
+        pending = read_json(task_dir(self.repo, task_id) / "pending-handoff.json")
+        self.assertEqual("DEVELOPER_WIP_COMMIT_REQUIRED", result["code"])
+        self.assertIn("app/src/main/java/com/example/Feature.kt", pending["full_task_paths"])
+        self.assertNotIn(unrelated, pending["full_task_paths"])
+        self.assertNotIn(unrelated, pending["checkpoint_paths"])
+
+    def test_HANDOFF_BASELINE_002_two_checkpoints_keep_full_task_and_isolate_candidate(self) -> None:
+        unrelated = "app/src/main/java/com/example/Unrelated.kt"
+        write_file(self.repo / unrelated, "package com.example\nclass Unrelated\n")
+        task_id = self._create_task()
+        first = "app/src/main/java/com/example/Feature.kt"
+        second = "app/src/main/java/com/example/Feature2.kt"
+        write_file(self.repo / first, "package com.example\nclass Feature\n")
+        create_pending_handoff(self.repo, task_id)
+        run_git(self.repo, "add", first)
+        run_git(self.repo, "commit", "-m", "wip: first checkpoint")
+        reconcile_handoff(self.repo, task_id)
+        write_file(self.repo / second, "package com.example\nclass Feature2\n")
+        create_pending_handoff(self.repo, task_id)
+        pending = read_json(task_dir(self.repo, task_id) / "pending-handoff.json")
+        self.assertEqual({first, second}, set(pending["full_task_paths"]))
+        self.assertEqual([second], pending["checkpoint_paths"])
+        self.assertNotIn(unrelated, pending["full_task_paths"])
+        run_git(self.repo, "add", second)
+        run_git(self.repo, "commit", "-m", "wip: second checkpoint")
+        result = reconcile_handoff(self.repo, task_id)
+        self.assertEqual("WORKTREE_SWITCH_READY", result["status"])
+        self.assertEqual(pending["parent_head"], read_json(Path(result["receipt_path"]))["parent_head"])
+
+    def test_HANDOFF_BASELINE_003_overlapping_dirty_text_uses_pre_task_content(self) -> None:
+        path = "app/src/main/java/com/example/App.kt"
+        write_file(self.repo / path, "package com.example\nclass AppBeforeTask\n")
+        task_id = self._create_task(expected_files=[path])
+        write_file(self.repo / path, "package com.example\nclass AppChangedByTask\n")
+        create_pending_handoff(self.repo, task_id)
+        pending = read_json(task_dir(self.repo, task_id) / "pending-handoff.json")
+        baseline = read_json(task_dir(self.repo, task_id) / "task-baseline.json")
+        isolated = build_task_manifest(self.repo, baseline, expected_files=[path], task_base_head=pending["parent_head"])
+        self.assertEqual([path], pending["checkpoint_paths"])
+        self.assertEqual(isolated["task_change_set_sha256"], pending["checkpoint_delta_sha256"])
+
+    def test_HANDOFF_BASELINE_004_overlapping_dirty_binary_blocks(self) -> None:
+        path = "app/src/main/assets/data.bin"
+        write_file(self.repo / path, b"before-task\x00")
+        task_id = self._create_task(expected_files=[path])
+        write_file(self.repo / path, b"changed-by-task\x00")
+        with self.assertRaisesRegex(ValidationError, "HANDOFF_DIRTY_BASE_UNPROVABLE_BINARY"):
+            create_pending_handoff(self.repo, task_id)
+
+    def test_HANDOFF_BASELINE_005_unrelated_dirty_commit_is_rejected(self) -> None:
+        unrelated = "app/src/main/java/com/example/Unrelated.kt"
+        write_file(self.repo / unrelated, "package com.example\nclass Unrelated\n")
+        task_id = self._create_task()
+        task_path = "app/src/main/java/com/example/Feature.kt"
+        write_file(self.repo / task_path, "package com.example\nclass Feature\n")
+        create_pending_handoff(self.repo, task_id)
+        run_git(self.repo, "add", task_path, unrelated)
+        run_git(self.repo, "commit", "-m", "wip: mixed checkpoint")
+        with self.assertRaisesRegex(ValidationError, "HANDOFF_COMMIT_SCOPE_MISMATCH"):
+            reconcile_handoff(self.repo, task_id)
+
+    def test_HANDOFF_COMPILE_001_failed_targeted_compile_blocks_safe_checkpoint(self) -> None:
+        task_id = self._create_task()
+        write_file(self.repo / "app/src/main/java/com/example/Feature.kt", "package com.example\nclass Feature\n")
+        with mock.patch("workflow.check_phase_compile", return_value=(False, "compile failed")) as compile_check:
+            result = create_pending_handoff(self.repo, task_id)
+        compile_check.assert_called_once()
+        self.assertEqual("HANDOFF_ENV_BLOCKED", result["code"])
+
     def test_HANDOFF_017_unprovable_overlapping_dirty_baseline_fails_closed(self) -> None:
         """HANDOFF_017: unprovable overlapping dirty baseline fails closed."""
         if task_git_lineage is None:
@@ -573,13 +649,8 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         t_id = self._create_task(expected_files=["app/sample.bin"])
         write_file(self.repo / "app" / "sample.bin", b"\x00\x01\x02\x03_task_a")
         
-        create_pending_handoff(self.repo, t_id)
-        run_git(self.repo, "add", ".")
-        run_git(self.repo, "commit", "-m", "wip: checkpoint")
-        reconcile_handoff(self.repo, t_id)
-        
         with self.assertRaises(ValidationError) as ctx:
-            build_task_manifest(self.repo, t_id)
+            create_pending_handoff(self.repo, t_id)
         self.assertIn("HANDOFF_DIRTY_BASE_UNPROVABLE_BINARY", str(ctx.exception))
 
     def test_HANDOFF_DIRTY_BASE_004_secret_overlap_fails_closed(self) -> None:
@@ -630,6 +701,27 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         ok, err, receipt = validate_checkpoint_receipt(self.repo, t_id, base_head, r_path, set())
         self.assertTrue(ok, err)
         self.assertIsNotNone(receipt)
+
+    def test_LINEAGE_RECEIPT_001b_missing_or_corrupt_plan_blocks_receipt(self) -> None:
+        from task_git_lineage import validate_checkpoint_receipt
+        task_id = self._create_task()
+        write_file(self.repo / "app/src/main/java/com/example/Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, task_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        result = reconcile_handoff(self.repo, task_id)
+        plan_file = task_dir(self.repo, task_id) / "plan.json"
+        plan = read_json(plan_file)
+        receipt_file = Path(result["receipt_path"])
+        base = plan["task_base_head"]
+        plan_file.write_text("{broken", encoding="utf-8")
+        valid, reason, _ = validate_checkpoint_receipt(self.repo, task_id, base, receipt_file, set())
+        self.assertFalse(valid)
+        self.assertIn("plan", reason)
+        plan_file.unlink()
+        valid, reason, _ = validate_checkpoint_receipt(self.repo, task_id, base, receipt_file, set())
+        self.assertFalse(valid)
+        self.assertIn("plan", reason)
 
     def test_LINEAGE_RECEIPT_002_plan_only_head_rejected(self) -> None:
         """LINEAGE_RECEIPT_002: plan-only head with missing receipt file rejected."""

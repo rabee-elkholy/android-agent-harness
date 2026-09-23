@@ -9,7 +9,7 @@ The harness has one engine and thin host adapters. The canonical rules are
 | Host | Installed entry points | Effective enforcement |
 |---|---|---|
 | **Google Antigravity** | `GEMINI.md`, `agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Primary production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and invoke_subagent pre/post calls; Review Protocol V2 with 7 custom reviewer subagents |
-| Claude Code | `CLAUDE.md`, commands, named agents, `PreToolUse` bridge | `HARD_ENFORCED`: Mutation hook where supported; conversational approval remains `RULE_ENFORCED` |
+| Claude Code | `CLAUDE.md`, `.claude/settings.json`, commands, named agents, `PreToolUse` bridge | `HARD_ENFORCED` for covered mutations where the installed hook runs; conversational approval remains `RULE_ENFORCED` |
 | GitHub Copilot | instructions, prompts, optional `preToolUse` bridge | `RULE_ENFORCED`: Rule guidance + downstream verification gate |
 | Gemini CLI | `GEMINI.md` | `RULE_ENFORCED`: Downstream verification gate (legacy compatibility path) |
 | Codex | `AGENTS.md`, `CODEX.md`, prompt commands | `RULE_ENFORCED` |
@@ -76,6 +76,8 @@ On **Google Antigravity**:
 - Initial malformed replies receive an exact `send_message` protocol retry within the same subagent execution without launching a new dispatch.
 - Review results are ingested from trusted conversation transcripts via `review complete` and aggregated via `review finalize`.
 - Total reviewer calls are bounded by the **Reviewer Call Safety Cap** (recommended: 20). Maximum 3 review rounds per delivery.
+
+On **Claude Code, Codex, and other hosts without a trusted transcript adapter**, the final run freezes Review Protocol V1. Record the unchanged reviewer response with `record_review.py --response <role>=<path>` or `--response-text <role>=<text>`; the evidence identifies independent execution as unverified. Phase reviews accept `phase-review complete --response-file <path>` after an exact dispatch batch and record the same provenance limit. These hosts retain deterministic policy, immutable packages, gates, and the final verifier. Antigravity's `--from-subagent` transcript path is not a portable ingestion command.
 
 ## Changing setup answers
 

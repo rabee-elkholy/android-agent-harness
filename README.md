@@ -123,7 +123,7 @@ Task A
 
 ### Chat installation (recommended)
 
-Open your Android project in your AI coding agent (Claude Code, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
+Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
 Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.0.60/docs/install-or-update-prompt.md and follow all instructions.
@@ -245,7 +245,7 @@ python .agents/harness.py context note \
 
 - Stored in `.agents/project-context/project-notes.md`.
 - Preserved across context refreshes.
-- Automatically provided to future task planning and reviewer sessions.
+- Informs future task discovery and planning. Applicable scoped Developer Instructions are pinned into the plan and review package.
 - Clarifies developer intent; cannot overrule contradictory source code facts.
 
 ### 3. Scoped Developer Instructions
@@ -334,6 +334,8 @@ Final Verifier
 
 The harness is engineered primary-first for **Google Antigravity**:
 
+For materially ambiguous work, Antigravity's `/grill-me` can clarify design decisions before plan drafting. After approval, `/goal` can sustain execution while the Harness router remains the authority for next actions and completion.
+
 - **Review Protocol V2**: Specialist reviewers return structured, machine-verifiable JSON (`HARNESS_REVIEW_RESULT_V2`) rather than fragile text tokens. Findings are typed, prioritized, and cryptographically bound to the frozen delivery snapshot, change set, and review package digest.
 - **Dedicated Custom Reviewer Subagents**: Seven core specialist reviewers are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md` (`bug-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `regression-impact-reviewer-agent`, `test-quality-reviewer-agent`, `spec-compliance-agent`).
 - **Reviewer Model Inheritance by Omission**: Reviewer subagents inherit the authoritative model of the lead agent by omission. No model escalation or manual model routing parameters are passed.
@@ -347,15 +349,16 @@ The harness is engineered primary-first for **Google Antigravity**:
 
 ## Supported hosts / enforcement model
 
-| Host | Adapter | Mutation Interception | Approval Trust | Notes |
+| Host | Adapter | Mutation Interception | Review proof | Downstream verifier |
 |---|---|---|---|---|
-| **Google Antigravity** | `agents/hooks.json`, custom agents (`.agents/agents/`), rules, skills | `HARD_ENFORCED` | Native hooks + Review V2 | Primary production host; intercepts tool mutations directly |
-| **Claude Code** | Pre-tool execution hooks (`config.json`), rules | `HARD_ENFORCED` | Native tool hooks | Blocks unapproved writes |
-| **Cursor** | `.cursorrules` / `.cursor/rules` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
-| **Windsurf** | `.windsurfrules` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
-| **GitHub Copilot** | `.github/copilot-instructions.md` | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
-| **Gemini CLI** | Rules, instructions | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement (legacy compatibility) |
-| **Roo Code / Continue** | Mode instructions, system rules | `RULE_ENFORCED` | Rule guidance + verifier | Downstream verification enforcement |
+| **Google Antigravity** | `agents/hooks.json`, custom agents (`.agents/agents/`), rules, skills | Native hooks (`HARD_ENFORCED`) | Trusted transcript Review V2 | Yes |
+| **Claude Code** | `.claude/settings.json`, rules | Installed pre-tool hooks where available | V1 response ingestion; independence not natively verified | Yes |
+| **Codex** | Root `AGENTS.md`, `.codex/` instructions | Rule/sandbox dependent | V1 response ingestion; independence not natively verified | Yes |
+| **Cursor** | `.cursorrules` / `.cursor/rules` | `RULE_ENFORCED` | V1 response ingestion | Yes |
+| **Windsurf** | `.windsurfrules` | `RULE_ENFORCED` | V1 response ingestion | Yes |
+| **GitHub Copilot** | `.github/copilot-instructions.md` | `RULE_ENFORCED` | V1 response ingestion | Yes |
+| **Gemini CLI** | Rules, instructions | `RULE_ENFORCED` | V1 response ingestion | Yes |
+| **Roo Code / Continue** | Mode instructions, system rules | `RULE_ENFORCED` | V1 response ingestion | Yes |
 
 Host-native hooks can intercept some mutation classes where supported. Other hosts rely on rule enforcement plus deterministic downstream verification. The harness reports the detected enforcement level honestly.
 

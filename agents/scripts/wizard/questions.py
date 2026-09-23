@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _vnext_common import atomic_write_bytes, atomic_write_json  # noqa: E402
+from review_sources import has_trusted_review_source, primary_host_from_tools  # noqa: E402
 from .schema import validate_raw_answers  # noqa: E402
 from .discovery import (
     _flavor_pascal,
@@ -987,8 +988,9 @@ def write_answers(repo: Path, answers: dict) -> None:
     atomic_write_json(answers_path(repo), answers)
     tools = answers.get("tools") or []
     tool_names = [TOOL_LABELS["en"].get(t, t) for t in tools]
-    ai_host_str = ", ".join(tool_names) if tool_names else "Google Antigravity"
-    ai_host = "Google Antigravity" if ("antigravity" in tools or not tools) else ai_host_str
+    ai_host = ", ".join(tool_names) if tool_names else "generic"
+    primary_host = primary_host_from_tools(tools)
+    trusted_review = has_trusted_review_source(primary_host)
     budget = answers.get("model_call_budget", 20)
     md = [
         "# SETUP_ANSWERS",
@@ -1017,8 +1019,9 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- I.20 Project tracker: {answers.get('pm_provider') or DEFAULT_PM_PROVIDER}",
         f"- Device verification: {answers.get('device_verification', 'manual_only')}",
         f"- AI host: {ai_host}",
-        "- Review protocol: trusted Antigravity V2",
-        "- Reviewer model: inherit parent by omission",
+        f"- Primary AI host: {primary_host}",
+        "- Review protocol: trusted Antigravity Review V2" if trusted_review else "- Review protocol: V1 rule-enforced response ingestion; independent execution is not natively verified",
+        "- Reviewer model: parent model inheritance by omission" if trusted_review else "- Reviewer model: host-managed; no guaranteed inheritance",
         "- Reviewer reasoning: host-capability-aware; no override when unavailable",
         f"- Reviewer call safety cap: {budget}",
         f"- Preferred new code architecture family: {answers.get('preferred_new_code_family') or '(none)'}",

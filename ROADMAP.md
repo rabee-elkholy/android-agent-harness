@@ -1,48 +1,12 @@
 # Roadmap
 
-> Archive note: pre-v1 completion history below is retained for provenance.
-> Current behavior is documented in `docs/architecture.md`, `docs/workflows.md`,
-> and `docs/compatibility-matrix.md`.
+Current capabilities and compatibility are documented in [Architecture](docs/architecture.md), [Workflows](docs/workflows.md), and the [Compatibility Matrix](docs/compatibility-matrix.md). Completed historical milestones remain in the Git history and ADRs.
 
-## Phase 1 — Supply-chain integrity
-- [x] Pin-to-tag CLI provisioning, never floats to `main` (v0.9.0)
-- [x] Threat-model table in SECURITY.md mapping attack classes to proving tests (v0.10.0)
-- [x] One-click prompt URLs pinned to an immutable release tag with tamper-evident checksum headers
-- [x] Dedicated threat model (`docs/threat-model.md`) covering prompt injection, config tampering, traversal, exfiltration, and MCP poisoning
-- [x] SECURITY.md and threat-model cross-linking without duplication
-- [x] Engine hardening: adb exfiltration verbs device-bound, `cmd package clear|uninstall` denied
-- [x] GitHub Actions pinned to immutable commit SHAs
+## Planned, not committed to a release
 
-## Phase 2 — Machine-verifiable evidence
-- [x] `verdict.json` schema with task id, git SHA, per-file hashes, leaves, findings, and timestamps
-- [x] Review gate emits the verdict artifact alongside the text evidence footer convention
-- [x] `android-harness verify` subcommand validating artifacts against actual repo state
-- [x] `explain` reads the installed checkout's audit log
+- Evaluate signed release artifacts after the existing checksum and cross-platform validation gates are stable.
+- Add native enforcement bridges for additional hosts only after their supported hook contracts can be validated. Keep rule-enforced integrations truthful in the meantime.
+- Expand CI to new Python versions after dependency and platform validation.
+- Consider opt-in benchmark telemetry with explicit privacy and retention rules.
 
-## Phase 3 — Contributor onboarding & truth-in-docs
-- [x] README restructured under 150 lines with zero-loss relocation into `docs/`
-- [x] Tool -> template -> enforcement-tier mapping table
-- [x] macOS CI coverage
-- [x] Architecture decision records (`docs/adr/`)
-- [x] Contributor recipes: reviewer / policy rule / tool adapter (`docs/recipes/`)
-- [x] Compatibility matrix (`docs/compatibility-matrix.md`)
-- [x] Issue template YAML repair
-
-## Phase 4 — Proof scaffold
-- [x] Committed golden Android fixture projects regenerated from the fixture generator
-- [x] Benchmark task list, metrics collector, and results template (`docs/benchmark/`)
-- [x] Demo-media placeholder section with recording shot list (`docs/media/`)
-
-## Phase 5 — Modular Architecture & Enterprise Governance
-- [x] Monolith splits: `setup_wizard.py` modularized into `agents/scripts/wizard/` (discovery, i18n, questions)
-- [x] Monolith splits: `harness_doctor.py` modularized into `agents/scripts/doctor/` (models, engine)
-- [x] Monolith splits: `zoho_sprints/server.py` modularized into `_client.py`, `_dns.py`, and `_formatter.py`
-- [x] Reviewer conflict adjudication model & ADR-006 (`docs/adr/006-reviewer-conflict-adjudication.md`)
-- [x] Structured findings schema & severity classification (`HARD_BLOCKER` vs `SOFT_FINDING`) in `_hook_state.py` and `pre_tool_safety.py`
-
-## Future
-
-- Signed release artifacts (Sigstore/cosign) for the kit distribution
-- Native hook bridges for Windsurf / Cursor / Codex when their hook protocols ship
-- Python 3.14 CI coverage extension
-- Opt-in telemetry to automate benchmark collection
+These are future candidates. No item here authorizes a release or weakens the approval, evidence, or developer Git boundaries.

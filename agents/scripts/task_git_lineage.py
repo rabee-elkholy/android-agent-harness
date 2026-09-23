@@ -91,18 +91,19 @@ def validate_checkpoint_receipt(
 
     tdir = task_dir(repo, task_id)
     plan_f = tdir / "plan.json"
-    if plan_f.is_file():
-        try:
-            plan = read_json(plan_f)
-            approved_shas = {plan.get("plan_sha256")}
-            for sp in plan.get("superseded_plans", []):
-                if isinstance(sp, dict) and sp.get("plan_sha256"):
-                    approved_shas.add(sp.get("plan_sha256"))
-            rec_plan_sha = receipt.get("plan_sha256")
-            if rec_plan_sha and approved_shas and (rec_plan_sha not in approved_shas):
-                return False, f"receipt plan_sha256 '{rec_plan_sha[:8]}' not in approved plan chain", None
-        except Exception:
-            pass
+    if not plan_f.is_file():
+        return False, "checkpoint task plan is missing", None
+    try:
+        plan = read_json(plan_f)
+        approved_shas = {plan.get("plan_sha256")}
+        for sp in plan.get("superseded_plans", []):
+            if isinstance(sp, dict) and sp.get("plan_sha256"):
+                approved_shas.add(sp.get("plan_sha256"))
+        rec_plan_sha = receipt.get("plan_sha256")
+        if not rec_plan_sha or rec_plan_sha not in approved_shas:
+            return False, f"receipt plan_sha256 '{str(rec_plan_sha)[:8]}' not in approved plan chain", None
+    except Exception as exc:
+        return False, f"cannot validate checkpoint against plan: {exc}", None
 
     # Supported one-commit transition
     proc_cnt = subprocess.run(
@@ -279,17 +280,50 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
         plan["task_base_head"] = task_base_head
         save_plan(plan_f, plan)
 
-    # Build full task manifest and current candidate delta
-    full_manifest = build_task_manifest(repo, task_base_head=task_base_head)
+    # The original baseline attributes all generations of Task A. The checkpoint
+    # parent baseline attributes only work since the last accepted WIP commit.
+    if not isinstance(task_base, dict):
+        raise ValidationError("HANDOFF_TASK_BASELINE_MISSING: immutable task baseline is required")
+    expected_scope = plan.get("expected_files")
+    full_manifest = build_task_manifest(
+        repo, task_base, expected_files=expected_scope, task_base_head=task_base_head,
+    )
     full_changes = full_manifest.get("task_changes") or full_manifest.get("changes") or []
+    dirty_at_start = {
+        str(entry.get("path") or "").replace("\\", "/")
+        for entry in task_base.get("changes") or [] if isinstance(entry, dict)
+    }
+    binary_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".jar", ".aar", ".so", ".bin", ".gif"}
+    for change in full_changes:
+        path = str(change.get("path") or "").replace("\\", "/")
+        if path in dirty_at_start and Path(path).suffix.lower() in binary_suffixes:
+            raise ValidationError(
+                f"HANDOFF_DIRTY_BASE_UNPROVABLE_BINARY: cannot safely attribute binary file '{path}' overlapping dirty baseline"
+            )
     full_task_paths = sorted({c.get("path") for c in full_changes if c.get("path")})
     full_task_change_set_sha256 = full_manifest.get("task_change_set_sha256")
     delivery_snapshot_sha256 = full_manifest.get("delivery_snapshot_sha256")
 
     curr_manifest = build_manifest(repo)
-    curr_changes = curr_manifest.get("changes") or []
+    checkpoint_base = task_base
+    accepted_head = plan.get("accepted_checkpoint_head")
+    if accepted_head:
+        receipt_file = checkpoints_dir(tdir) / f"{accepted_head}.json"
+        valid_heads = resolve_valid_checkpoint_heads(repo, task_id, task_base_head)
+        if accepted_head != current_head or accepted_head not in valid_heads:
+            raise ValidationError("HANDOFF_CHECKPOINT_LINEAGE_INVALID: current HEAD is not the accepted checkpoint")
+        ok, reason, receipt = validate_checkpoint_receipt(
+            repo, task_id, task_base_head, receipt_file, valid_heads,
+        )
+        if not ok or not receipt or not isinstance(receipt.get("checkpoint_baseline_changes"), list):
+            raise ValidationError(f"HANDOFF_CHECKPOINT_BASELINE_INVALID: {reason or 'accepted checkpoint baseline missing'}")
+        checkpoint_base = {"changes": receipt["checkpoint_baseline_changes"], "task_base_head": current_head}
+    checkpoint_manifest = build_task_manifest(
+        repo, checkpoint_base, expected_files=expected_scope, task_base_head=current_head,
+    )
+    curr_changes = checkpoint_manifest.get("task_changes") or []
     checkpoint_paths = sorted({c.get("path") for c in curr_changes if c.get("path")})
-    checkpoint_delta_sha256 = curr_manifest.get("change_set_sha256")
+    checkpoint_delta_sha256 = checkpoint_manifest.get("task_change_set_sha256")
 
     # Lightweight deterministic safety check before returning DEVELOPER_WIP_COMMIT_REQUIRED
     try:
@@ -314,6 +348,33 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
             "inputs": {"repo": ".", "task_id": task_id},
             "expected": {},
         }
+
+    if curr_changes:
+        try:
+            from workflow import check_phase_compile, resolve_phase_modules
+            modules = resolve_phase_modules(repo, checkpoint_manifest)
+            if modules:
+                compile_ok, compile_detail = check_phase_compile(repo, modules, phase_changes=curr_changes)
+                if not compile_ok:
+                    return {
+                        "code": "HANDOFF_ENV_BLOCKED",
+                        "kind": "DEVELOPER_ACTION",
+                        "command": "",
+                        "blocking": True,
+                        "reason": f"Targeted handoff compile did not pass: {compile_detail}",
+                        "inputs": {"repo": ".", "task_id": task_id, "modules": modules},
+                        "expected": {},
+                    }
+        except Exception as exc:
+            return {
+                "code": "HANDOFF_ENV_BLOCKED",
+                "kind": "DEVELOPER_ACTION",
+                "command": "",
+                "blocking": True,
+                "reason": f"Environment blocked targeted handoff compile: {exc}",
+                "inputs": {"repo": ".", "task_id": task_id},
+                "expected": {},
+            }
 
     pending_data = {
         "schema_version": 2,
@@ -406,6 +467,24 @@ def reconcile_handoff(repo: Path, task_id: str) -> dict[str, Any]:
             f"HANDOFF_COMMIT_COUNT_MISMATCH: lineage check failed: expected exactly 1 developer checkpoint commit between {parent_head[:8]} and {current_head[:8]}, found {commit_count}"
         )
 
+    committed_paths_proc = subprocess.run(
+        ["git", "diff", "--name-only", "-z", parent_head, current_head],
+        cwd=str(repo), capture_output=True, check=False,
+    )
+    if committed_paths_proc.returncode != 0:
+        raise ValidationError("HANDOFF_COMMIT_SCOPE_UNVERIFIABLE: cannot inspect checkpoint commit paths")
+    committed_paths = {
+        path.decode("utf-8", errors="surrogateescape").replace("\\", "/")
+        for path in committed_paths_proc.stdout.split(b"\0") if path
+    }
+    checkpoint_paths = set(pending.get("checkpoint_paths") or [])
+    unexpected_paths = sorted(committed_paths - checkpoint_paths)
+    if unexpected_paths:
+        raise ValidationError(
+            "HANDOFF_COMMIT_SCOPE_MISMATCH: checkpoint commit includes paths outside the task delta: "
+            + ", ".join(unexpected_paths)
+        )
+
     # Section 15.1: Task files must be clean
     manifest = build_manifest(repo)
     expected_files = set(pending.get("expected_files") or [])
@@ -438,6 +517,7 @@ def reconcile_handoff(repo: Path, task_id: str) -> dict[str, Any]:
         "full_task_paths": pending.get("full_task_paths"),
         "checkpoint_delta_sha256": pending.get("checkpoint_delta_sha256"),
         "checkpoint_paths": pending.get("checkpoint_paths"),
+        "checkpoint_baseline_changes": manifest.get("changes") or [],
         "task_change_set_sha256": pending.get("task_change_set_sha256"),
         "expected_files": pending.get("expected_files"),
         "created_at": utc_now(),

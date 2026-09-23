@@ -121,7 +121,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def _create_phased_task(self, phases: list[dict], kind: str = "FEATURE", scoped_phase_review: bool | None = None) -> str:
+    def _create_phased_task(self, phases: list[dict], kind: str = "FEATURE", scoped_phase_review: bool | None = None, expected_modules: str | None = None) -> str:
         import uuid
         task_id = f"phase-{uuid.uuid4().hex[:6]}"
         draft_args = argparse.Namespace(
@@ -132,6 +132,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
             kind=kind,
             phases=phases,
             scoped_phase_review_enabled=scoped_phase_review,
+            expected_modules=expected_modules,
         )
         task_id = draft(draft_args)["task_id"]
 
@@ -263,6 +264,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         pkg_path, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
 
         # Mock reviewer completion with PASS
         for rev in meta["selected_reviewers"]:
@@ -280,7 +282,12 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual("PASS", fin["verdict"])
 
         act = resolve_next_action(self.repo, task_id)
-        self.assertIn(act["code"], ("BEGIN_NEXT_PHASE", "IMPLEMENT_APPROVED_SCOPE"))
+        self.assertEqual("BEGIN_NEXT_PHASE", act["code"])
+        self.assertEqual("p1", read_json(task_dir(self.repo, task_id) / "phase-state.json")["current_phase_id"])
+        self.assertFalse((task_dir(self.repo, task_id) / "phases" / "p2" / "baseline.json").exists())
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("p2", read_json(task_dir(self.repo, task_id) / "phase-state.json")["current_phase_id"])
+        self.assertTrue((task_dir(self.repo, task_id) / "phases" / "p2" / "baseline.json").is_file())
 
     def test_PHASE_V2_008_phase_findings_keep_same_phase_active(self) -> None:
         """PHASE_V2_008: phase findings keep same phase active."""
@@ -293,6 +300,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         pkg_path, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
 
         for rev in meta["selected_reviewers"]:
             complete_phase_review(
@@ -322,6 +330,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         pkg_path, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
 
         for rev in meta["selected_reviewers"]:
             complete_phase_review(
@@ -357,6 +366,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
         for rev in meta["selected_reviewers"]:
             complete_phase_review(
                 repo=self.repo,
@@ -420,6 +430,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
 
         rev = meta["selected_reviewers"][0]
         # Simulate invalid review format requiring protocol retry
@@ -455,6 +466,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
         for rev in meta["selected_reviewers"]:
             complete_phase_review(
                 repo=self.repo,
@@ -480,6 +492,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         act2 = resolve_next_action(self.repo, task_id)
         if act2["code"] == "BUILD_PHASE_REVIEW_PACKAGE":
             _, meta2 = build_phase_package(self.repo, task_id, "p2")
+            record_phase_dispatch_batch(self.repo, task_id, "p2", meta2["selected_reviewers"])
             for rev in meta2["selected_reviewers"]:
                 complete_phase_review(
                     repo=self.repo,
@@ -506,6 +519,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
         for rev in meta["selected_reviewers"]:
             complete_phase_review(
                 repo=self.repo,
@@ -575,6 +589,53 @@ class PhaseReviewV2Selftest(unittest.TestCase):
             )
         self.assertIn("stale", str(ctx.exception).lower())
 
+    def test_STALE_PHASE_002_deleted_path_recreated_during_review(self) -> None:
+        old_file = self.repo / "app" / "src" / "main" / "res" / "values" / "obsolete.xml"
+        write_file(old_file, "<resources><string name='old'>Old</string></resources>\n")
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-m", "add obsolete resource", "-q")
+        phases = [
+            {"id": "p1", "name": "Remove obsolete resource", "expected_files": ["app/src/main/res/values/obsolete.xml"]},
+            {"id": "p2", "name": "Update UI", "expected_files": ["app/src/main/res/values/new.xml"]},
+        ]
+        task_id = self._create_phased_task(phases, scoped_phase_review=True)
+        old_file.unlink()
+        self._pass_phase_tests(task_id, "p1")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
+        write_file(old_file, "<resources><string name='old'>Returned</string></resources>\n")
+        with self.assertRaisesRegex(ValidationError, "PHASE_REVIEW_STALE"):
+            complete_phase_review(
+                repo=self.repo, task_id=task_id, phase_id="p1",
+                reviewer=meta["selected_reviewers"][0], execution_id="conv-stale-deletion",
+                verdict="PASS", findings=[], package_sha256=meta["package_sha256"],
+            )
+
+    def test_STALE_PHASE_003_renamed_source_recreated_during_review(self) -> None:
+        old_file = self.repo / "app" / "src" / "main" / "res" / "values" / "old.xml"
+        new_file = old_file.with_name("new.xml")
+        write_file(old_file, "<resources><string name='old'>Old</string></resources>\n")
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-m", "add old resource", "-q")
+        phases = [
+            {"id": "p1", "name": "Rename resource", "expected_files": ["app/src/main/res/values/old.xml", "app/src/main/res/values/new.xml"]},
+            {"id": "p2", "name": "Update UI", "expected_files": ["app/src/main/res/values/ui.xml"]},
+        ]
+        task_id = self._create_phased_task(phases, scoped_phase_review=True)
+        old_file.rename(new_file)
+        self._pass_phase_tests(task_id, "p1")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
+        write_file(old_file, "<resources><string name='old'>Returned</string></resources>\n")
+        with self.assertRaisesRegex(ValidationError, "PHASE_REVIEW_STALE"):
+            complete_phase_review(
+                repo=self.repo, task_id=task_id, phase_id="p1",
+                reviewer=meta["selected_reviewers"][0], execution_id="conv-stale-rename",
+                verdict="PASS", findings=[], package_sha256=meta["package_sha256"],
+            )
+
     def test_PHASE_STATE_001_review_required_checkpoint_persists_review_package_required(self) -> None:
         """PHASE_STATE_001: review-required checkpoint persists REVIEW_PACKAGE_REQUIRED."""
         phases = [
@@ -623,9 +684,177 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         pstate = read_json(task_dir(self.repo, task_id) / "phase-state.json")
         self.assertIn("p1", pstate.get("completed_phases", []))
         self.assertEqual(PHASE_COMPLETE, phase_review.get_phase_substate(pstate, "p1"))
+        self.assertEqual("p1", pstate["current_phase_id"])
+        self.assertIn("p1", pstate["phase_checkpoints"])
+        self.assertIn("updated_at", pstate["phase_substates"]["p1"])
+        self.assertFalse((task_dir(self.repo, task_id) / "phases" / "p2" / "baseline.json").exists())
+        self.assertEqual(0, read_json(task_dir(self.repo, task_id) / "plan.json").get("active_phase_index", 0))
 
         act = resolve_next_action(self.repo, task_id)
         self.assertEqual("BEGIN_NEXT_PHASE", act["code"])
+
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        advanced = read_json(task_dir(self.repo, task_id) / "phase-state.json")
+        self.assertEqual("p2", advanced["current_phase_id"])
+        self.assertEqual(PHASE_IMPLEMENTING, phase_review.get_phase_substate(advanced, "p2"))
+        self.assertTrue((task_dir(self.repo, task_id) / "phases" / "p2" / "baseline.json").is_file())
+        self.assertEqual(1, read_json(task_dir(self.repo, task_id) / "plan.json")["active_phase_index"])
+
+    def test_HOST_PHASE_001_completed_phases_route_to_configured_host(self) -> None:
+        phases = [
+            {"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]},
+            {"id": "p2", "name": "Style", "expected_files": ["app/src/main/res/values/two.xml"]},
+        ]
+        task_id = self._create_phased_task(phases, expected_modules="app,:")
+        write_file(self.repo / "app/src/main/res/values/one.xml", "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/res/values/two.xml", "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+        product_file = self.repo / ".agents" / "scripts" / "_product.py"
+        for host in ("antigravity", "claude", "codex", "generic"):
+            with self.subTest(host=host), mock.patch.dict(os.environ, {"HARNESS_HOST": ""}):
+                write_file(product_file, f"PRIMARY_AI_HOST = {host!r}\n")
+                action = resolve_next_action(self.repo, task_id)
+                self.assertEqual("PREPARE_VERIFICATION", action["code"])
+                self.assertIn(f"--host {host}", action["command"])
+
+    def test_HOST_PHASE_002_phase_response_ingestion_freezes_nontrusted_host(self) -> None:
+        product_file = self.repo / ".agents" / "scripts" / "_product.py"
+        write_file(product_file, "PRIMARY_AI_HOST = 'codex'\n")
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        reviewer = reviewers[0]
+        self.assertEqual("codex", meta["review_host"])
+        self.assertEqual(1, meta["review_protocol_version"])
+        self.assertEqual("HOST_MANAGED_UNVERIFIED", resolve_next_action(self.repo, task_id)["review_execution_profile"]["model_policy"])
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        with self.assertRaisesRegex(ValidationError, "HOST_REVIEW_RESPONSE_REQUIRED"):
+            complete_phase_review(self.repo, task_id, "p1", reviewer, "codex-review-1")
+        with self.assertRaisesRegex(ValidationError, "host cannot change mid-run"):
+            complete_phase_review(self.repo, task_id, "p1", reviewer, "codex-review-1", host="antigravity")
+        response = json.dumps({
+            "schema_version": 2,
+            "task_id": task_id,
+            "run_id": meta["phase_review_run_id"],
+            "reviewer": reviewer,
+            "review_package_sha256": meta["package_sha256"],
+            "verdict": "PASS",
+            "findings": [],
+        })
+        self.assertEqual("PASS", complete_phase_review(
+            self.repo, task_id, "p1", reviewer, "codex-review-1", raw_response=response,
+        )["verdict"])
+        result = read_json(phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json")
+        self.assertEqual("reviewer_response_text_unverified", result["provenance"])
+        self.assertFalse(result["independent_execution_verified"])
+
+    def test_HOST_PHASE_003_claude_multiphase_freezes_v1_final_run(self) -> None:
+        product_file = self.repo / ".agents" / "scripts" / "_product.py"
+        write_file(product_file, "PRIMARY_AI_HOST = 'claude'\n")
+        phases = [
+            {"id": "p1", "name": "First", "expected_files": ["app/src/main/res/values/one.xml"]},
+            {"id": "p2", "name": "Second", "expected_files": ["app/src/main/res/values/two.xml"]},
+        ]
+        task_id = self._create_phased_task(phases, expected_modules="app,:")
+        write_file(self.repo / "app/src/main/res/values/one.xml", "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/res/values/two.xml", "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+        self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
+        current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("claude", current["review_host"])
+        self.assertEqual(1, current["review_protocol_version"])
+
+    def test_HOST_PHASE_004_nontrusted_cli_uses_response_file(self) -> None:
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        reviewer = reviewers[0]
+        response = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": meta["phase_review_run_id"],
+            "reviewer": reviewer, "review_package_sha256": meta["package_sha256"],
+            "verdict": "PASS", "findings": [],
+        })
+        response_file = self.repo / "reviewer-response.txt"
+        write_file(response_file, response)
+        with mock.patch("builtins.print"):
+            exit_code = phase_review.main([
+                "complete", "--repo", str(self.repo), "--task-id", task_id,
+                "--phase-id", "p1", "--reviewer", reviewer,
+                "--execution-id", "claude-review-1", "--response-file", str(response_file),
+            ])
+        self.assertEqual(0, exit_code)
+        result_file = phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json"
+        self.assertEqual("reviewer_response_text_unverified", read_json(result_file)["provenance"])
+
+    def test_PHASE_BUDGET_001_critical_plan_reserves_final_policy_roster(self) -> None:
+        plan = {
+            "task_kind": "FEATURE", "expected_surfaces": ["AUTH", "SECURITY"],
+            "phases": [{"expected_surfaces": ["TEST_ONLY"]}],
+            "model_call_budget": 6, "review_calls_used": 0,
+        }
+        reserve = phase_review.derive_final_review_reserve(self.repo, plan, {"surfaces": ["AUTH"], "severity": "CRITICAL"})
+        self.assertEqual("T5_CRITICAL", reserve["risk_tier"])
+        self.assertIn("test-quality-reviewer-agent", reserve["reviewers"])
+        self.assertGreaterEqual(reserve["reserved_calls"], 6)
+        allowed, reason = phase_review.check_phase_safety_cap(plan, 1, reserve)
+        self.assertFalse(allowed)
+        self.assertIn("reserved_final", reason)
+
+    def test_PHASE_DISPATCH_001_replay_requires_exact_cohort_and_receipts(self) -> None:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        plan_file = task_dir(self.repo, task_id) / "plan.json"
+        used = read_json(plan_file)["review_calls_used"]
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        self.assertEqual(used, read_json(plan_file)["review_calls_used"])
+        with self.assertRaisesRegex(ValidationError, "dispatch batch mismatch"):
+            record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers[:1])
+        receipt_file = phase_review_dir(task_dir(self.repo, task_id), "p1") / "dispatch" / meta["phase_review_run_id"] / f"{reviewers[0]}.json"
+        receipt = read_json(receipt_file)
+        receipt["host"] = "tampered"
+        atomic_write_json(receipt_file, receipt)
+        with self.assertRaisesRegex(ValidationError, "receipt mismatch"):
+            record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+
+    def test_PHASE_DISPATCH_002_partial_receipt_blocks_retry(self) -> None:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        tdir = task_dir(self.repo, task_id)
+        receipt_file = phase_review_dir(tdir, "p1") / "dispatch" / meta["phase_review_run_id"] / f"{reviewers[0]}.json"
+        receipt_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(receipt_file, {"host": "unproven-partial-dispatch"})
+        used_before = read_json(tdir / "plan.json").get("review_calls_used", 0)
+        with self.assertRaisesRegex(ValidationError, "partial dispatch receipt"):
+            record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        self.assertEqual(used_before, read_json(tdir / "plan.json").get("review_calls_used", 0))
+        ok, err, ledger = load_phase_ledger(tdir, "p1", expected_run_id=meta["phase_review_run_id"])
+        self.assertTrue(ok, err)
+        self.assertTrue(all(ledger["reviewers"][r]["state"] == REVIEW_NOT_DISPATCHED for r in reviewers))
+
+    def _completed_dispatch_for_finalization(self) -> tuple[str, list[str], dict[str, Any]]:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        for reviewer in reviewers:
+            complete_phase_review(
+                repo=self.repo, task_id=task_id, phase_id="p1", reviewer=reviewer,
+                execution_id=f"conv-{reviewer}", verdict="PASS", findings=[],
+                package_sha256=meta["package_sha256"],
+            )
+        return task_id, reviewers, meta
+
+    def test_PHASE_FINALIZE_001_stale_change_blocks_pass(self) -> None:
+        task_id, _, _ = self._completed_dispatch_for_finalization()
+        write_file(self.repo / "app/src/main/java/com/example/Auth.kt", "package com.example\nclass AuthChanged\n")
+        with self.assertRaisesRegex(ValidationError, "PHASE_REVIEW_STALE"):
+            finalize_phase_review(self.repo, task_id, "p1")
+
+    def test_PHASE_FINALIZE_002_missing_result_blocks_pass(self) -> None:
+        task_id, reviewers, _ = self._completed_dispatch_for_finalization()
+        result_file = phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewers[0]}.json"
+        result_file.unlink()
+        with self.assertRaisesRegex(ValidationError, "PHASE_REVIEW_RESULT_BLOCKED"):
+            finalize_phase_review(self.repo, task_id, "p1")
 
     def test_PHASE_STATE_004_review_pass_remains_complete_after_all_writes(self) -> None:
         """PHASE_STATE_004: review PASS remains COMPLETE after all writes."""
@@ -638,6 +867,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
 
         for rev in meta["selected_reviewers"]:
             complete_phase_review(
@@ -672,6 +902,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         _, meta = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", meta["selected_reviewers"])
 
         rev = meta["selected_reviewers"][0]
         complete_phase_review(
@@ -751,6 +982,9 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         return proc.returncode, res
 
     def _setup_dispatch_state(self) -> tuple[str, list[str], dict[str, str], dict[str, Any]]:
+        product_file = self.repo / ".agents" / "scripts" / "_product.py"
+        if not product_file.exists():
+            write_file(product_file, "PRIMARY_AI_HOST = 'antigravity'\n")
         phases = [
             {"id": "p1", "name": "Auth Phase", "description": "Implement TokenStorage with cryptographic tokens", "expected_files": ["app/src/main/java/com/example/Auth.kt"]},
             {"id": "p2", "name": "UI Phase", "description": "Implement UI", "expected_files": ["app/src/main/java/com/example/UI.kt"]},
@@ -1072,6 +1306,102 @@ class PhaseReviewV2Selftest(unittest.TestCase):
                 package_sha256=meta["package_sha256"],
             )
         self.assertIn("not in selected", str(ctx.exception))
+
+    def test_PHASE_PROOF_001_completion_cannot_create_dispatch(self) -> None:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        reviewer = reviewers[0]
+        with self.assertRaisesRegex(ValidationError, "PHASE_REVIEW_NOT_DISPATCHED"):
+            complete_phase_review(
+                repo=self.repo,
+                task_id=task_id,
+                phase_id="p1",
+                reviewer=reviewer,
+                execution_id="conv-untrusted",
+                raw_response=json.dumps({
+                    "schema_version": 2,
+                    "task_id": task_id,
+                    "run_id": meta["phase_review_run_id"],
+                    "reviewer": reviewer,
+                    "review_package_sha256": meta["package_sha256"],
+                    "verdict": "PASS",
+                    "findings": [],
+                }),
+                package_sha256=meta["package_sha256"],
+            )
+        ok, err, ledger = load_phase_ledger(task_dir(self.repo, task_id), "p1", expected_run_id=meta["phase_review_run_id"])
+        self.assertTrue(ok, err)
+        self.assertEqual(REVIEW_NOT_DISPATCHED, ledger["reviewers"][reviewer]["state"])
+        self.assertFalse((phase_review_dir(task_dir(self.repo, task_id), "p1") / "dispatch").exists())
+
+    def test_PHASE_PROOF_002_reviewing_missing_run_blocks_router(self) -> None:
+        task_id, _, _, _ = self._setup_dispatch_state()
+        phase_run_file(task_dir(self.repo, task_id), "p1").unlink()
+        self.assertEqual("PHASE_REVIEW_STATE_BLOCKED", resolve_next_action(self.repo, task_id)["code"])
+
+    def test_PHASE_PROOF_003_reviewing_missing_ledger_blocks_router(self) -> None:
+        task_id, _, _, _ = self._setup_dispatch_state()
+        phase_review.phase_ledger_file(task_dir(self.repo, task_id), "p1").unlink()
+        self.assertEqual("PHASE_REVIEW_LEDGER_BLOCKED", resolve_next_action(self.repo, task_id)["code"])
+
+    def test_PHASE_PROOF_004_reviewing_corrupt_or_mismatched_artifacts_block_router(self) -> None:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        tdir = task_dir(self.repo, task_id)
+        run_file = phase_run_file(tdir, "p1")
+        ledger_file = phase_review.phase_ledger_file(tdir, "p1")
+        original_run = read_json(run_file)
+        original_ledger = read_json(ledger_file)
+        for mutation, expected in (
+            ({"run": "corrupt"}, "PHASE_REVIEW_STATE_BLOCKED"),
+            ({"run": {**original_run, "task_id": "other-task"}}, "PHASE_REVIEW_STATE_BLOCKED"),
+            ({"ledger": "corrupt"}, "PHASE_REVIEW_LEDGER_BLOCKED"),
+            ({"ledger": {**original_ledger, "run_id": "other-run"}}, "PHASE_REVIEW_LEDGER_BLOCKED"),
+            ({"ledger": {**original_ledger, "reviewers": {}}}, "PHASE_REVIEW_LEDGER_BLOCKED"),
+        ):
+            with self.subTest(mutation=mutation):
+                if "run" in mutation:
+                    run_file.write_text("not json" if mutation["run"] == "corrupt" else json.dumps(mutation["run"]), encoding="utf-8")
+                if "ledger" in mutation:
+                    ledger_file.write_text("not json" if mutation["ledger"] == "corrupt" else json.dumps(mutation["ledger"]), encoding="utf-8")
+                self.assertEqual(expected, resolve_next_action(self.repo, task_id)["code"])
+                atomic_write_json(run_file, original_run)
+                atomic_write_json(ledger_file, original_ledger)
+
+    def test_ROUTER_MATRIX_001_phase_review_states_are_actionable(self) -> None:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        ledger_file = phase_review.phase_ledger_file(task_dir(self.repo, task_id), "p1")
+        run_file = phase_run_file(task_dir(self.repo, task_id), "p1")
+        expected = [
+            ("not dispatched", "DISPATCH_PHASE_REVIEWERS", "HOST_ACTION"),
+        ]
+        for label, code, kind in expected:
+            with self.subTest(state=label):
+                action = resolve_next_action(self.repo, task_id)
+                self.assertEqual((code, kind), (action["code"], action["kind"]))
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        original_ledger = read_json(ledger_file)
+        for label, state, code, kind in (
+            ("dispatched", REVIEW_DISPATCHED, "WAIT_FOR_PHASE_REVIEWERS", "HOST_ACTION"),
+            ("environment blocked", REVIEW_ENV_BLOCKED, "PHASE_REVIEW_ENV_BLOCKED", "HARNESS_DIAGNOSTIC"),
+            ("protocol retry", REVIEW_PROTOCOL_RETRY_REQUIRED, "RETRY_PHASE_REVIEW_PROTOCOL", "HOST_ACTION"),
+        ):
+            ledger = json.loads(json.dumps(original_ledger))
+            ledger["reviewers"][reviewers[0]]["state"] = state
+            if state == REVIEW_PROTOCOL_RETRY_REQUIRED:
+                ledger["reviewers"][reviewers[0]]["execution_id"] = "conv-matrix"
+            ledger["ledger_sha256"] = phase_review.compute_ledger_sha(ledger)
+            atomic_write_json(ledger_file, ledger)
+            with self.subTest(state=label):
+                action = resolve_next_action(self.repo, task_id)
+                self.assertEqual((code, kind), (action["code"], action["kind"]))
+        atomic_write_json(ledger_file, original_ledger)
+        saved_run = read_json(run_file)
+        run_file.unlink()
+        action = resolve_next_action(self.repo, task_id)
+        self.assertEqual(("PHASE_REVIEW_STATE_BLOCKED", "HARNESS_DIAGNOSTIC"), (action["code"], action["kind"]))
+        atomic_write_json(run_file, saved_run)
+        ledger_file.unlink()
+        action = resolve_next_action(self.repo, task_id)
+        self.assertEqual(("PHASE_REVIEW_LEDGER_BLOCKED", "HARNESS_DIAGNOSTIC"), (action["code"], action["kind"]))
 
     def test_PHASE_EXEC_002_first_completion_binds_id(self) -> None:
         """PHASE_EXEC_002: first completion binds execution ID."""

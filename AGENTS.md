@@ -1,7 +1,7 @@
 <!-- managed-by: android-agent-harness -->
 # Android Agent Harness repository instructions
 
-The compact source of truth is `agents/rules/harness-rules.md`. Read it before changing this repository.
+Read `PROJECT_CONSTITUTION.md` before changing this repository. The compact runtime source of truth is `agents/rules/harness-rules.md`.
 
 This checkout is the harness kit itself, not a client Android application:
 

@@ -26,6 +26,7 @@ from _vnext_common import (
     utc_now,
 )
 from delivery_manifest import build_manifest, build_task_diff, build_task_manifest, load_task_baseline
+from evidence_store import StateLock
 from record_review import _extract_transcript_response, is_blocking_finding, resolve_trusted_subagent_transcript
 from review_orchestrator import (
     compute_ledger_sha,
@@ -38,8 +39,8 @@ from review_orchestrator import (
     REVIEW_NOT_DISPATCHED,
     REVIEW_PROTOCOL_RETRY_REQUIRED,
 )
-from review_policy import canonical_risk_tier
-from review_sources import resolve_trusted_review_source
+from review_policy import canonical_risk_tier, decide
+from review_sources import has_trusted_review_source, resolve_review_host, resolve_trusted_review_source
 from workflow import _load_plan, state_root, task_dir
 
 # Phase substates
@@ -204,10 +205,59 @@ def compute_phase_delta_sha256(phase_id: str, phase_changes: list[Any]) -> str:
     return canonical_sha256(payload)
 
 
+def phase_path_states(repo: Path, phase_changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bind every phase operation, including missing and renamed paths, to live content."""
+    states = []
+    for change in phase_changes:
+        path = str(change.get("path") or "").replace("\\", "/")
+        old_path = str(change.get("old_path") or "").replace("\\", "/")
+        status = str(change.get("status") or "")
+        target = repo / path
+        exists = target.is_file()
+        entry = {
+            "path": path,
+            "old_path": old_path,
+            "status": status,
+            "exists": exists,
+            "content_identity": f"sha256:{sha256_file(target)}" if exists else f"tombstone:{change.get('content_identity') or path}",
+        }
+        if old_path:
+            old_target = repo / old_path
+            entry["old_path_exists"] = old_target.is_file()
+            entry["old_path_content_identity"] = (
+                f"sha256:{sha256_file(old_target)}" if old_target.is_file() else f"tombstone:{old_path}"
+            )
+        states.append(entry)
+    return sorted(states, key=lambda item: (item["path"], item["old_path"], item["status"]))
+
+
+def live_phase_changes(repo: Path, task_id: str, phase_id: str, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    phases = plan.get("phases") or []
+    target_phase = next((p for p in phases if p.get("id") == phase_id), None)
+    if target_phase is None:
+        raise ValidationError(f"phase '{phase_id}' is absent from the approved plan")
+    baseline_file = phase_dir(task_dir(repo, task_id), phase_id) / "baseline.json"
+    if baseline_file.is_file():
+        baseline = read_json(baseline_file)
+    elif phases[0].get("id") == phase_id:
+        baseline = load_task_baseline(repo, task_id)
+    else:
+        raise ValidationError(f"phase '{phase_id}' baseline is missing")
+    if not isinstance(baseline, dict):
+        raise ValidationError(f"phase '{phase_id}' baseline is missing or corrupt")
+    manifest = build_task_manifest(
+        repo, baseline,
+        expected_files=target_phase.get("expected_files") or plan.get("expected_files"),
+    )
+    return manifest.get("task_changes") or []
+
+
 def load_phase_ledger(
     task_directory: Path,
     phase_id: str,
     expected_run_id: str | None = None,
+    expected_task_id: str | None = None,
+    expected_reviewers: list[str] | None = None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
     lpath = phase_ledger_file(task_directory, phase_id)
     if not lpath.is_file():
@@ -222,6 +272,8 @@ def load_phase_ledger(
         return False, f"unsupported schema version: {ledger.get('schema_version')}", None
     if ledger.get("phase_id") != phase_id:
         return False, f"phase_id mismatch: expected '{phase_id}', got '{ledger.get('phase_id')}'", None
+    if expected_task_id and ledger.get("task_id") != expected_task_id:
+        return False, f"task_id mismatch: expected '{expected_task_id}', got '{ledger.get('task_id')}'", None
     run_id = ledger.get("run_id")
     if not run_id:
         return False, "ledger missing run_id", None
@@ -229,6 +281,8 @@ def load_phase_ledger(
         return False, f"run_id mismatch: expected '{expected_run_id}', got '{run_id}'", None
     if not isinstance(ledger.get("reviewers"), dict):
         return False, "ledger missing or invalid reviewers dictionary", None
+    if expected_reviewers is not None and set(ledger["reviewers"]) != set(expected_reviewers):
+        return False, "ledger reviewer roster mismatch", None
     calc_sha = compute_ledger_sha(ledger)
     if ledger.get("ledger_sha256") != calc_sha:
         return False, f"ledger checksum mismatch: expected {ledger.get('ledger_sha256')}, got {calc_sha}", None
@@ -267,10 +321,23 @@ def phase_review_freshness(
         if run_meta.get("plan_sha256") and plan.get("plan_sha256") != run_meta.get("plan_sha256"):
             return False, "task plan modified since phase review package creation"
 
-    phase_changes = ckpt.get("manifest_delta") or []
+    try:
+        plan = _load_plan(repo, task_id)
+        phase_changes = live_phase_changes(repo, task_id, phase_id, plan)
+        current_states = phase_path_states(repo, phase_changes)
+    except Exception as exc:
+        return False, f"could not derive live phase delta: {exc}"
     current_delta_sha = compute_phase_delta_sha256(phase_id, phase_changes)
     if run_meta.get("phase_delta_sha256") and current_delta_sha != run_meta.get("phase_delta_sha256"):
         return False, "phase delta SHA-256 changed"
+    if current_states != run_meta.get("phase_path_states"):
+        return False, "phase path-state identity changed"
+    if current_states != ckpt.get("phase_path_states"):
+        return False, "phase checkpoint path-state identity changed"
+    if run_meta.get("task_base_head") != plan.get("task_base_head", ""):
+        return False, "task baseline lineage changed"
+    if run_meta.get("accepted_checkpoint_head") != plan.get("accepted_checkpoint_head", ""):
+        return False, "accepted checkpoint lineage changed"
 
     expected_hashes = run_meta.get("phase_file_hashes") or {}
     for p, exp_hash in expected_hashes.items():
@@ -407,11 +474,40 @@ def is_phase_review_needed(
     return True, selected[:2]
 
 
-def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int) -> tuple[bool, str]:
+def derive_final_review_reserve(repo: Path, plan: dict[str, Any], phase_policy: dict[str, Any]) -> dict[str, Any]:
+    """Reserve the central policy's likely final roster using all declared task surfaces."""
+    surfaces = set(plan.get("expected_surfaces") or []) | set(phase_policy.get("surfaces") or [])
+    for phase in plan.get("phases") or []:
+        surfaces.update(phase.get("expected_surfaces") or [])
+    surfaces = {str(surface).upper() for surface in surfaces if surface}
+    severity = "CRITICAL" if surfaces & {"AUTH", "SECURITY", "BILLING", "CRYPTO", "SENSITIVE_DATA"} else str(phase_policy.get("severity") or "HIGH")
+    classification = {
+        "surfaces": sorted(surfaces),
+        "severity": severity,
+        "planning_depth": plan.get("planning_depth") or "BOUNDED",
+    }
+    policy = decide(
+        classification,
+        (repo / "agents" / "skills") if (repo / "agents" / "skills").is_dir() else (repo / ".agents" / "skills"),
+        project_kind="application",
+        task_kind=str(plan.get("task_kind") or "FEATURE"),
+        plan=plan,
+    )
+    roster = sorted(set(policy.get("reviewers") or []) | set(plan.get("expected_final_reviewers") or []))
+    return {
+        "risk_tier": policy.get("risk_tier"),
+        "surfaces": sorted(surfaces),
+        "reviewers": roster,
+        "reserved_calls": max(MIN_RESERVED_FINAL_REVIEWERS, len(roster)),
+        "source": "central_review_policy",
+    }
+
+
+def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: dict[str, Any] | None = None) -> tuple[bool, str]:
     used = int(plan.get("review_calls_used") or 0)
     cap = int(plan.get("max_review_calls") or plan.get("model_call_budget") or DEFAULT_SAFETY_CAP)
-    expected_final = plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
-    reserved = max(MIN_RESERVED_FINAL_REVIEWERS, len(expected_final))
+    expected_final = (reserve or {}).get("reviewers") or plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
+    reserved = max(MIN_RESERVED_FINAL_REVIEWERS, int((reserve or {}).get("reserved_calls") or len(expected_final)))
     if used + dispatch_count + reserved > cap:
         return False, (
             f"Reviewer call safety cap reached: used={used}, new_dispatch={dispatch_count}, "
@@ -444,6 +540,12 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, 
         raise ValidationError(f"phase '{phase_id}' not found in plan phases")
 
     phase_changes = ckpt.get("manifest_delta") or []
+    live_changes = live_phase_changes(repo, task_id, phase_id, plan)
+    if compute_phase_delta_sha256(phase_id, live_changes) != ckpt.get("phase_delta_sha256"):
+        raise ValidationError("PHASE_REVIEW_STALE: phase delta changed after checkpoint")
+    live_states = phase_path_states(repo, live_changes)
+    if live_states != ckpt.get("phase_path_states"):
+        raise ValidationError("PHASE_REVIEW_STALE: phase path-state identity changed after checkpoint")
     paths = [c.get("path") if isinstance(c, dict) else str(c) for c in phase_changes if c]
 
     needed, selected_reviewers = is_phase_review_needed(repo, task_id, plan, target_phase, phase_changes)
@@ -463,11 +565,14 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, 
         if target.is_file():
             file_hashes[p] = sha256_file(target)
 
+    run_host = resolve_review_host(repo)
     metadata = {
         "schema_version": 2,
         "task_id": task_id,
         "phase_id": phase_id,
         "phase_review_run_id": run_id,
+        "review_host": run_host,
+        "review_protocol_version": 2 if has_trusted_review_source(run_host) else 1,
         "phase_delta_sha256": phase_delta_sha256,
         "diff_stats": diff_stats,
         "checkpoint_sha256": ckpt.get("checkpoint_sha256"),
@@ -476,6 +581,8 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, 
         "selected_reviewers": selected_reviewers,
         "changed_files": len(paths),
         "phase_file_hashes": file_hashes,
+        "phase_path_states": live_states,
+        "final_review_reserve": ckpt.get("final_review_reserve"),
         "created_at": utc_now(),
     }
 
@@ -576,7 +683,18 @@ def record_phase_dispatch_batch(
     task_id: str,
     phase_id: str,
     reviewers: list[str],
-    host: str = "antigravity",
+    host: str | None = None,
+) -> dict[str, Any]:
+    with StateLock(phase_review_dir(task_dir(repo, task_id), phase_id)):
+        return _record_phase_dispatch_batch_locked(repo, task_id, phase_id, reviewers, host)
+
+
+def _record_phase_dispatch_batch_locked(
+    repo: Path,
+    task_id: str,
+    phase_id: str,
+    reviewers: list[str],
+    host: str | None = None,
 ) -> dict[str, Any]:
     tdir = task_dir(repo, task_id)
     prun_f = phase_run_file(tdir, phase_id)
@@ -584,6 +702,10 @@ def record_phase_dispatch_batch(
         raise ValidationError(f"no active phase review run found for phase '{phase_id}'")
     run_meta = read_json(prun_f)
     run_id = str(run_meta.get("phase_review_run_id") or "")
+    run_host = str(run_meta.get("review_host") or "generic")
+    if host is not None and host != run_host:
+        raise ValidationError(f"host cannot change mid-run: phase host is '{run_host}', got '{host}'")
+    host = run_host
 
     ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id)
     if not ok or not ledger:
@@ -601,22 +723,36 @@ def record_phase_dispatch_batch(
     ]
 
     req_set = set(reviewers)
-    disp_set = set(dispatchable)
-    if req_set != disp_set:
-        # Check if already dispatched identically (idempotent replay)
-        already_dispatched = all(
-            ledger_revs.get(r, {}).get("state") == REVIEW_DISPATCHED
-            for r in reviewers
-        )
-        if not already_dispatched:
-            raise ValidationError(f"dispatch batch mismatch: requested {sorted(req_set)} != dispatchable {sorted(disp_set)}")
+    if len(reviewers) != len(selected_roster) or req_set != selected_roster:
+        raise ValidationError(f"dispatch batch mismatch: requested {sorted(req_set)} != authoritative roster {sorted(selected_roster)}")
+    dispatch_dir = phase_review_dir(tdir, phase_id) / "dispatch" / run_id
+    if not dispatchable:
+        if not all(ledger_revs.get(r, {}).get("state") == REVIEW_DISPATCHED for r in reviewers):
+            raise ValidationError("dispatch batch replay requires the entire cohort to remain DISPATCHED")
+        for r in reviewers:
+            receipt_f = dispatch_dir / f"{r}.json"
+            if not receipt_f.is_file():
+                raise ValidationError(f"dispatch batch replay missing receipt for '{r}'")
+            receipt = read_json(receipt_f)
+            if any(receipt.get(key) != value for key, value in {
+                "task_id": task_id, "phase_id": phase_id, "phase_review_run_id": run_id,
+                "reviewer": r, "host": host, "package_sha256": run_meta.get("package_sha256", ""),
+            }.items()):
+                raise ValidationError(f"dispatch batch replay receipt mismatch for '{r}'")
+            if receipt.get("receipt_sha256") != canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"}):
+                raise ValidationError(f"dispatch batch replay receipt hash mismatch for '{r}'")
+        return ledger
+    if set(dispatchable) != selected_roster:
+        raise ValidationError("dispatch batch has a partial authoritative cohort")
 
     plan_f = tdir / "plan.json"
     plan = read_json(plan_f) if plan_f.is_file() else {}
     used_calls = int(plan.get("review_calls_used") or 0)
     safety_cap = int(plan.get("model_call_budget") or DEFAULT_SAFETY_CAP)
     expected_final = plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
-    reserved_final = max(MIN_RESERVED_FINAL_REVIEWERS, len(expected_final))
+    checkpoint_file = phase_dir(tdir, phase_id) / "checkpoint.json"
+    reserve = (read_json(checkpoint_file).get("final_review_reserve") or {}) if checkpoint_file.is_file() else {}
+    reserved_final = max(MIN_RESERVED_FINAL_REVIEWERS, int(reserve.get("reserved_calls") or len(expected_final)))
 
     new_dispatches = [
         r for r in reviewers
@@ -630,7 +766,9 @@ def record_phase_dispatch_batch(
                 f"reserved_final={reserved_final} > budget={safety_cap}"
             )
 
-    dispatch_dir = phase_review_dir(tdir, phase_id) / "dispatch" / run_id
+    if any((dispatch_dir / f"{reviewer}.json").exists() for reviewer in reviewers):
+        raise ValidationError("partial dispatch receipt exists before ledger dispatch; diagnose before retry")
+
     dispatch_dir.mkdir(parents=True, exist_ok=True)
 
     for r in reviewers:
@@ -657,32 +795,13 @@ def record_phase_dispatch_batch(
         r_entry["execution_id"] = None
         r_entry["dispatched_at"] = utc_now()
 
-    ledger["ledger_sha256"] = compute_ledger_sha(ledger)
-    atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
-
     if new_dispatches and plan_f.is_file():
         plan["review_calls_used"] = used_calls + len(new_dispatches)
         atomic_write_json(plan_f, plan)
 
-    return ledger
+    ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+    atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
 
-
-def record_phase_dispatch(
-    repo: Path,
-    task_id: str,
-    phase_id: str,
-    reviewer: str,
-    execution_id: str | None = None,
-) -> dict[str, Any]:
-    ledger = record_phase_dispatch_batch(repo, task_id, phase_id, [reviewer])
-    if execution_id:
-        tdir = task_dir(repo, task_id)
-        rev_entry = ledger.setdefault("reviewers", {}).setdefault(reviewer, {})
-        rev_entry["execution_id"] = execution_id
-        import hashlib
-        rev_entry["execution_id_sha256"] = hashlib.sha256(execution_id.encode("utf-8")).hexdigest()
-        ledger["ledger_sha256"] = compute_ledger_sha(ledger)
-        atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
     return ledger
 
 
@@ -692,7 +811,26 @@ def complete_phase_review(
     phase_id: str,
     reviewer: str,
     execution_id: str,
-    host: str = "antigravity",
+    host: str | None = None,
+    raw_response: str | None = None,
+    verdict: str | None = None,
+    findings: list[Any] | None = None,
+    package_sha256: str | None = None,
+) -> dict[str, Any]:
+    with StateLock(phase_review_dir(task_dir(repo, task_id), phase_id)):
+        return _complete_phase_review_locked(
+            repo, task_id, phase_id, reviewer, execution_id, host,
+            raw_response, verdict, findings, package_sha256,
+        )
+
+
+def _complete_phase_review_locked(
+    repo: Path,
+    task_id: str,
+    phase_id: str,
+    reviewer: str,
+    execution_id: str,
+    host: str | None = None,
     raw_response: str | None = None,
     verdict: str | None = None,
     findings: list[Any] | None = None,
@@ -704,6 +842,16 @@ def complete_phase_review(
         raise ValidationError(f"no active phase review run found for phase '{phase_id}'")
     run_meta = read_json(prun_f)
     run_id = str(run_meta.get("phase_review_run_id") or "")
+    run_host = str(run_meta.get("review_host") or "generic")
+    if host is not None and host != run_host:
+        raise ValidationError(f"host cannot change mid-run: phase host is '{run_host}', got '{host}'")
+    host = run_host
+    if raw_response is None and verdict is None and not has_trusted_review_source(host):
+        raise ValidationError(
+            f"HOST_REVIEW_RESPONSE_REQUIRED: '{host}' has no trusted transcript adapter; "
+            "provide the unchanged reviewer response with --response-file"
+        )
+    trusted_transcript_ingestion = raw_response is None and verdict is None and has_trusted_review_source(host)
 
     # Stale run detection: canonical freshness check
     fresh, fresh_msg = phase_review_freshness(repo, task_id, phase_id, run_meta)
@@ -735,15 +883,7 @@ def complete_phase_review(
 
     current_st = rev_entry.get("state")
     if current_st == REVIEW_NOT_DISPATCHED:
-        disp = [
-            r for r in run_meta.get("selected_reviewers", [])
-            if ledger.get("reviewers", {}).get(r, {}).get("state") == REVIEW_NOT_DISPATCHED
-        ]
-        if disp:
-            record_phase_dispatch_batch(repo, task_id, phase_id, disp)
-            ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id)
-            rev_entry = ledger.get("reviewers", {}).get(reviewer, {})
-            current_st = rev_entry.get("state")
+        raise ValidationError(f"PHASE_REVIEW_NOT_DISPATCHED: reviewer '{reviewer}' has no prior dispatch receipt")
 
     if current_st == REVIEW_COMPLETED:
         raise ValidationError(f"reviewer '{reviewer}' already completed; cannot be silently redispatched")
@@ -754,16 +894,16 @@ def complete_phase_review(
             f"cannot complete phase review for '{reviewer}': state is '{current_st}', expected DISPATCHED or PROTOCOL_RETRY_REQUIRED"
         )
 
-    # Bind execution ID
+    expected_sha = run_meta.get("package_sha256")
+    if package_sha256 and expected_sha and package_sha256 != expected_sha:
+        raise ValidationError(f"package SHA-256 mismatch for phase review: expected {expected_sha}, got {package_sha256}")
+
+    # Bind execution ID only after the supplied package identity is accepted.
     rev_entry["execution_id"] = execution_id
     import hashlib
     rev_entry["execution_id_sha256"] = hashlib.sha256(execution_id.encode("utf-8")).hexdigest()
     ledger["ledger_sha256"] = compute_ledger_sha(ledger)
     atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
-
-    expected_sha = run_meta.get("package_sha256")
-    if package_sha256 and expected_sha and package_sha256 != expected_sha:
-        raise ValidationError(f"package SHA-256 mismatch for phase review: expected {expected_sha}, got {package_sha256}")
 
     # Resolve trusted transcript if raw response or verdict not directly provided
     if raw_response is None and verdict is None:
@@ -842,6 +982,9 @@ def complete_phase_review(
         "reviewer": reviewer,
         "execution_id": execution_id,
         "execution_id_sha256": hashlib.sha256(execution_id.encode("utf-8")).hexdigest(),
+        "review_host": host,
+        "provenance": "trusted_host_transcript" if trusted_transcript_ingestion else "reviewer_response_text_unverified",
+        "independent_execution_verified": trusted_transcript_ingestion,
         "completed_at": utc_now(),
         "result": parsed,
         "result_sha256": result_sha,
@@ -864,10 +1007,29 @@ def complete_phase_review(
 
 
 def finalize_phase_review(repo: Path, task_id: str, phase_id: str) -> dict[str, Any]:
+    with StateLock(phase_review_dir(task_dir(repo, task_id), phase_id)):
+        return _finalize_phase_review_locked(repo, task_id, phase_id)
+
+
+def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> dict[str, Any]:
     tdir = task_dir(repo, task_id)
     prun_f = phase_run_file(tdir, phase_id)
-    run_id = read_json(prun_f).get("phase_review_run_id") if prun_f.is_file() else None
-    ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id)
+    try:
+        run_meta = read_json(prun_f)
+    except Exception as exc:
+        raise ValidationError(f"PHASE_REVIEW_STATE_BLOCKED: active run unavailable: {exc}") from exc
+    if not isinstance(run_meta, dict) or run_meta.get("task_id") != task_id or run_meta.get("phase_id") != phase_id:
+        raise ValidationError("PHASE_REVIEW_STATE_BLOCKED: active run identity mismatch")
+    run_id = run_meta.get("phase_review_run_id")
+    if not run_id:
+        raise ValidationError("PHASE_REVIEW_STATE_BLOCKED: active run ID missing")
+    fresh, reason = phase_review_freshness(repo, task_id, phase_id, run_meta)
+    if not fresh:
+        raise ValidationError(f"PHASE_REVIEW_STALE: {reason}")
+    ok, err, ledger = load_phase_ledger(
+        tdir, phase_id, expected_run_id=run_id,
+        expected_task_id=task_id, expected_reviewers=run_meta.get("selected_reviewers"),
+    )
     if not ok or not ledger:
         raise ValidationError(f"PHASE_REVIEW_LEDGER_BLOCKED: {err}")
     reviewers = ledger.get("reviewers") or {}
@@ -877,6 +1039,27 @@ def finalize_phase_review(repo: Path, task_id: str, phase_id: str) -> dict[str, 
     not_done = [r for r, d in reviewers.items() if d.get("state") != REVIEW_COMPLETED]
     if not_done:
         raise ValidationError(f"cannot finalize phase review: reviewers not completed: {', '.join(not_done)}")
+
+    for reviewer, entry in reviewers.items():
+        result_file = phase_review_dir(tdir, phase_id) / "results" / f"{reviewer}.json"
+        try:
+            result = read_json(result_file)
+        except Exception as exc:
+            raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: missing or unreadable result for '{reviewer}': {exc}") from exc
+        parsed = result.get("result") if isinstance(result, dict) else None
+        if (
+            not isinstance(parsed, dict)
+            or result.get("task_id") != task_id
+            or result.get("phase_id") != phase_id
+            or result.get("run_id") != run_id
+            or result.get("reviewer") != reviewer
+            or result.get("execution_id") != entry.get("execution_id")
+            or result.get("result_sha256") != entry.get("result_sha256")
+            or result.get("result_sha256") != canonical_sha256(parsed)
+            or parsed.get("verdict") != entry.get("verdict")
+            or parsed.get("findings") != (entry.get("findings") or [])
+        ):
+            raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: result identity mismatch for '{reviewer}'")
 
     all_findings = []
     has_findings = False
@@ -997,7 +1180,8 @@ def main(argv: list[str] | None = None) -> int:
     complete_cmd.add_argument("--phase-id", required=True)
     complete_cmd.add_argument("--reviewer", required=True)
     complete_cmd.add_argument("--execution-id", required=True)
-    complete_cmd.add_argument("--host", default="antigravity")
+    complete_cmd.add_argument("--host")
+    complete_cmd.add_argument("--response-file", help="Unchanged reviewer response text for hosts without a trusted transcript source")
 
     finalize_cmd = sub.add_parser("finalize")
     finalize_cmd.add_argument("--repo", default=".")
@@ -1012,6 +1196,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PACKAGE_SHA256={meta['package_sha256']}")
         return 0
     elif args.subcommand == "complete":
+        if args.response_file:
+            run_file = phase_run_file(task_dir(repo, args.task_id), args.phase_id)
+            if not run_file.is_file():
+                raise ValidationError(f"no active phase review run found for phase '{args.phase_id}'")
+            if has_trusted_review_source(str(read_json(run_file).get("review_host") or "")):
+                raise ValidationError("trusted host phase reviews require transcript ingestion; --response-file is unavailable")
+        raw_response = Path(args.response_file).read_text(encoding="utf-8") if args.response_file else None
         res = complete_phase_review(
             repo,
             args.task_id,
@@ -1019,6 +1210,7 @@ def main(argv: list[str] | None = None) -> int:
             args.reviewer,
             args.execution_id,
             host=args.host,
+            raw_response=raw_response,
         )
         print(json.dumps(res, indent=2))
         return 0

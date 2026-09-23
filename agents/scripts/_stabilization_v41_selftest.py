@@ -57,10 +57,12 @@ from review_policy import decide
 from workflow import (
     record_approval as approve,
     begin_task,
+    begin_next_phase,
     checkpoint_phase,
     complete,
     draft,
     prepare_verification,
+    resolve_next_action,
     task_dir,
     state_root,
 )
@@ -185,7 +187,7 @@ class ReviewerIndependenceTests(unittest.TestCase):
         approve(Namespace(repo=str(self.tmp), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
         begin_task(Namespace(repo=str(self.tmp), task_id=task_id))
         _write_text(self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Auth.kt", "class Auth { val token = 123 }\n")
-        prep = prepare_verification(Namespace(repo=str(self.tmp), task_id=task_id))
+        prep = prepare_verification(Namespace(repo=str(self.tmp), task_id=task_id, host="antigravity"))
         pkg_file, _ = build_package(self.tmp, task_id)
         pkg_sha = hashlib.sha256(pkg_file.read_bytes()).hexdigest()
 
@@ -269,6 +271,9 @@ class ReviewerIndependenceTests(unittest.TestCase):
             "subagent_id": "sub-5", "receipt_sha256": "bad-hash",
         }
         _write_json(rc_dir / "security-reviewer-agent.json", rc_data)
+        _write_json(task_dir(self.tmp, task_id) / "current-run.json", {
+            "task_id": task_id, "run_id": "run-1", "review_host": "antigravity", "review_protocol_version": 1,
+        })
 
         app_data_dir = self.tmp / "test_app_data"
         old_env = os.environ.get("ANTIGRAVITY_APP_DATA")
@@ -543,7 +548,14 @@ class PhaseCheckpointsTests(unittest.TestCase):
         self.assertEqual(1, res.get("next_phase_index"))
 
         plan = read_json(task_dir(self.tmp, task_id) / "plan.json")
-        self.assertEqual(1, plan.get("active_phase_index"))
+        self.assertEqual(0, plan.get("active_phase_index", 0))
+        self.assertEqual("p1", read_json(task_dir(self.tmp, task_id) / "phase-state.json")["current_phase_id"])
+        self.assertFalse((task_dir(self.tmp, task_id) / "phases" / "p2" / "baseline.json").exists())
+        self.assertEqual("BEGIN_NEXT_PHASE", resolve_next_action(self.tmp, task_id)["code"])
+        begin_next_phase(Namespace(repo=str(self.tmp), task_id=task_id))
+        self.assertEqual(1, read_json(task_dir(self.tmp, task_id) / "plan.json")["active_phase_index"])
+        self.assertEqual("p2", read_json(task_dir(self.tmp, task_id) / "phase-state.json")["current_phase_id"])
+        self.assertTrue((task_dir(self.tmp, task_id) / "phases" / "p2" / "baseline.json").is_file())
 
 
 class ArchitectureResolutionAndDriftTests(unittest.TestCase):

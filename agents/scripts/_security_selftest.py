@@ -1824,9 +1824,10 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
 
     def test_REASON_INSTALL_006_setup_answers_says_reviewer_model_inherit_parent(self):
         from wizard import questions, discovery
-        questions.write_answers(self.repo, {"product": "App", "model_call_budget": 10})
+        questions.write_answers(self.repo, {"product": "App", "tools": ["antigravity"], "model_call_budget": 10})
         md = discovery.markdown_path(self.repo).read_text(encoding="utf-8")
-        self.assertIn("- Reviewer model: inherit parent by omission", md)
+        self.assertIn("- Primary AI host: antigravity", md)
+        self.assertIn("- Reviewer model: parent model inheritance by omission", md)
 
     def test_REASON_INSTALL_007_setup_answers_says_reviewer_reasoning_adaptive(self):
         from wizard import questions, discovery

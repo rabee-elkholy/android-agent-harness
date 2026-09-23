@@ -264,6 +264,16 @@ def verify_independent_reviewer_execution(
     if "/" in clean_id or "\\" in clean_id or ".." in clean_id or ":" in clean_id or clean_id.startswith("file:"):
         return False, {"verified": False, "reason": f"invalid subagent_id (file paths or traversal not permitted): {subagent_id}"}
 
+    current_p = task_dir(repo, task_id) / "current-run.json"
+    try:
+        current_run = read_json(current_p)
+    except Exception:
+        return False, {"verified": False, "reason": "active review run is missing or unreadable"}
+    if str(current_run.get("run_id") or "") != run_id:
+        return False, {"verified": False, "reason": "active review run identity mismatch"}
+    if str(current_run.get("review_host") or "").strip().lower() != "antigravity":
+        return False, {"verified": False, "reason": "active review host has no Antigravity transcript capability"}
+
     trusted_root = (get_trusted_antigravity_root() / "brain").resolve()
 
     if transcript_path is not None:
@@ -287,13 +297,7 @@ def verify_independent_reviewer_execution(
     elif legacy_receipt.is_file():
         receipt_file = legacy_receipt
 
-    current_p = task_dir(repo, task_id) / "current-run.json"
-    protocol_version = 1
-    if current_p.is_file():
-        try:
-            protocol_version = int(read_json(current_p).get("review_protocol_version") or 1)
-        except Exception:
-            pass
+    protocol_version = int(current_run.get("review_protocol_version") or 1)
 
     if receipt_file is None:
         if protocol_version >= 2:

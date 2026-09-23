@@ -86,6 +86,49 @@ class RepoCase(unittest.TestCase):
         self.temp.cleanup()
 
 class GuidanceTests(unittest.TestCase):
+    def test_non_antigravity_review_cannot_claim_trusted_transcript_proof(self) -> None:
+        from record_review import verify_independent_reviewer_execution
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            run_file = task_dir(repo, "task-1") / "current-run.json"
+            run_file.parent.mkdir(parents=True)
+            run_file.write_text(json.dumps({"run_id": "run-1", "review_host": "codex", "review_protocol_version": 1}), encoding="utf-8")
+            verified, proof = verify_independent_reviewer_execution(
+                repo, task_id="task-1", run_id="run-1", reviewer="bug-reviewer-agent",
+                package_sha256="a" * 64, subagent_id="fake-antigravity-id",
+            )
+            self.assertFalse(verified)
+            self.assertIn("no Antigravity transcript capability", proof["reason"])
+
+    def test_review_host_resolver_precedence(self) -> None:
+        from review_sources import resolve_review_host
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            product = repo / ".agents" / "scripts" / "_product.py"
+            product.parent.mkdir(parents=True)
+            product.write_text("PRIMARY_AI_HOST = 'claude'\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"HARNESS_HOST": ""}):
+                self.assertEqual("claude", resolve_review_host(repo))
+                self.assertEqual("codex", resolve_review_host(repo, "codex"))
+            with mock.patch.dict(os.environ, {"HARNESS_HOST": "codex"}):
+                self.assertEqual("codex", resolve_review_host(repo))
+                self.assertEqual("antigravity", resolve_review_host(repo, "antigravity"))
+            product.unlink()
+            with mock.patch.dict(os.environ, {"HARNESS_HOST": ""}):
+                self.assertEqual("generic", resolve_review_host(repo))
+
+    def test_repository_constitution_guard(self) -> None:
+        constitution = (KIT / "PROJECT_CONSTITUTION.md").read_text(encoding="utf-8")
+        for pointer in ("AGENTS.md", "GEMINI.md", "CLAUDE.md"):
+            self.assertIn("PROJECT_CONSTITUTION.md", (KIT / pointer).read_text(encoding="utf-8"))
+        for marker in (
+            "Stricter proof, not heavier workflow", "Approval-first", "Human Git Authority",
+            "Antigravity-first, not Antigravity-hardcoded", "Router is completion authority",
+            "Six-tier policy is the routing authority", "Conflict procedure", "Test-Driven Maintenance Contract",
+        ):
+            self.assertIn(marker.lower(), constitution.lower())
+
     def test_status_next_guidance_is_state_specific_and_non_mutating(self) -> None:
         repo = Path("C:/fixture")
         approved = {"status": "APPROVED"}
@@ -1712,6 +1755,8 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertEqual("IMPLEMENTING", begin_task(Namespace(**common))["status"])
         write(self.repo / "app/src/main/kotlin/A.kt", "internal class Changed\n")
         current = prepare_verification(Namespace(**common))
+        self.assertEqual("codex", current["review_host"])
+        self.assertEqual(1, current["review_protocol_version"])
         package, _ = build_package(self.repo, task_id)
         directory = self.repo / ".harness-setup/reviewer-fixtures"
         policy = json.loads(Path(current["policy"]).read_text(encoding="utf-8"))
@@ -1737,6 +1782,53 @@ class EndToEndWorkflowTests(RepoCase):
         ready = complete(Namespace(**common))
         self.assertEqual("READY_FOR_DELIVERY", ready["status"])
         self.assertEqual(current["delivery_snapshot_sha256"], ready["ready_delivery_snapshot_sha256"])
+
+    def test_claude_v1_unchanged_response_reaches_final_verifier(self) -> None:
+        from record_review import response_text_to_report
+        write(self.repo / ".harness-setup/answers.json", json.dumps({
+            "product": "Fixture", "application_id": "com.example.fixture",
+            "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest",
+            "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["claude"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+        }))
+        install(self.repo, KIT)
+        task_id = "claude-v1-review"
+        common = {"repo": str(self.repo), "task_id": task_id}
+        draft(Namespace(**common, outcome="Change business behavior", expected_surfaces="BUSINESS_LOGIC",
+                        expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
+                        risks="", rollback="Restore changed source"))
+        record_approval(Namespace(**common, source="conversation", proof_reference="approve-claude-task",
+                                  enforcement_tier="RULE_ENFORCED"))
+        begin_task(Namespace(**common))
+        write(self.repo / "app/src/main/kotlin/A.kt", "internal class ClaudeChange\n")
+        current = prepare_verification(Namespace(**common))
+        self.assertEqual("claude", current["review_host"])
+        self.assertEqual(1, current["review_protocol_version"])
+        package, _ = build_package(self.repo, task_id)
+        package_sha = sha256_file(package)
+        policy = json.loads(Path(current["policy"]).read_text(encoding="utf-8"))
+        self.assertTrue(policy["reviewers"])
+        reports = []
+        for reviewer in policy["reviewers"]:
+            response = f"VERDICT: PASS\nNo issues found.\nEVIDENCE pkg={package_sha[:12]} cites=0"
+            report = response_text_to_report(self.repo, task_id, reviewer, response)
+            report["provenance"] = "reviewer_response_text"
+            report["independent_execution_verified"] = False
+            report_file = self.repo / ".harness-setup" / f"{reviewer}.json"
+            write(report_file, json.dumps(report))
+            reports.append(report_file)
+        evidence_path = ingest(self.repo, task_id, reports)
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        self.assertEqual("PASS", evidence["status"])
+        self.assertTrue(all(not report["independent_execution_verified"] for report in evidence["evidence"]["reports"]))
+        store = EvidenceStore(state_root(self.repo))
+        evidence_common = dict(snapshot=current["delivery_snapshot_sha256"], run_id=current["run_id"],
+                               harness_version=HARNESS_VERSION, change_set=current["change_set_sha256"], status="PASS")
+        store.write(**evidence_common, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
+        store.write(**evidence_common, name="preflight", producer="preflight_check", evidence={})
+        store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+        self.assertEqual("READY_FOR_DELIVERY", complete(Namespace(**common))["status"])
 
     def test_sensitive_approval_via_conversation_passes_verifier(self) -> None:
         write(self.repo / ".harness-setup/answers.json", json.dumps({
@@ -3019,7 +3111,7 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
             KIT / "agents" / "tool-adapters" / "copilot-instructions.md.template",
             KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
         ]
-        for optional_name in ("CLAUDE.md", "CODEX.md", "QWEN.md"):
+        for optional_name in ("CODEX.md", "QWEN.md"):
             p = KIT / optional_name
             if p.is_file():
                 files_to_check.append(p)
@@ -3201,16 +3293,39 @@ class CleanInstallV2SpecificationTests(RepoCase):
         self.assertNotIn("allow_model_escalation", res)
 
     def test_SETUP_V2_020_setup_answers_markdown_reviewer_lines(self) -> None:
-        """REASON-INSTALL-006 & 007: SETUP_ANSWERS says reviewer model = inherit parent and adaptive reasoning"""
+        """SETUP_ANSWERS describes the selected host's actual review capability."""
         import wizard.questions as wq
         answers = {"model_call_budget": 10, "product": "TestApp"}
         wq.write_answers(self.repo, answers)
         md_file = self.repo / ".harness-setup" / "SETUP_ANSWERS.md"
         content = md_file.read_text(encoding="utf-8")
-        self.assertIn("- Reviewer model: inherit parent by omission", content)
+        self.assertIn("- Primary AI host: generic", content)
+        self.assertIn("- Review protocol: V1 rule-enforced response ingestion", content)
+        self.assertIn("- Reviewer model: host-managed; no guaranteed inheritance", content)
         self.assertIn("- Reviewer reasoning: host-capability-aware", content)
         self.assertIn("- Reviewer call safety cap: 10", content)
         self.assertNotIn("Reviewer model escalation", content)
+
+    def test_SETUP_HOST_001_primary_host_and_protocol_matrix(self) -> None:
+        import wizard.questions as wq
+        from _installer_config import generate_product_py
+        matrix = (
+            (["antigravity"], "antigravity", True),
+            (["claude"], "claude", False),
+            (["codex"], "codex", False),
+            (["antigravity", "codex"], "antigravity", True),
+            (["claude", "codex"], "generic", False),
+            ([], "generic", False),
+        )
+        for tools, primary, trusted in matrix:
+            with self.subTest(tools=tools):
+                answers = {"product": "TestApp", "tools": tools}
+                wq.write_answers(self.repo, answers)
+                text = (self.repo / ".harness-setup" / "SETUP_ANSWERS.md").read_text(encoding="utf-8")
+                self.assertIn(f"- Primary AI host: {primary}", text)
+                self.assertIn("trusted Antigravity Review V2" if trusted else "V1 rule-enforced response ingestion", text)
+                product = generate_product_py(self.repo, answers).read_text(encoding="utf-8")
+                self.assertIn(f"PRIMARY_AI_HOST = {primary!r}", product)
 
     def test_SETUP_V2_021_budget_5_maps_to_integer_5(self) -> None:
         import wizard.questions as wq
