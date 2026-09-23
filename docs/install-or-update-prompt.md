@@ -6,7 +6,7 @@
 Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
 
 ## Phase 1: Read-only discovery
-This v1.0.60 onboarding performs CLEAN INSTALL only.
+This onboarding performs CLEAN INSTALL only.
 
 Require:
 - root Gradle Wrapper
@@ -24,7 +24,7 @@ Active task check: If `.agents/state/active-task.json` exists with an active tas
 
 Path and Location Rules:
 `<cache-root>` is `%USERPROFILE%\.android-harness` or `~/.android-harness`.
-`<version>` is `v1.0.60`.
+`<version>` is the Kit version shown in the header above.
 `<kit-dir>` is `<cache-root>\kit` or `<cache-root>/kit` at detached `v1.0.61`.
 `<staging-dir>` is `<cache-root>\kit-stage-<version>-<nonce>` or `<cache-root>/kit-stage-<version>-<nonce>`.
 `<kit-dir>` and `<staging-dir>` MUST NOT be inside `<app-root>`. Both must be strictly external to the app repository.
