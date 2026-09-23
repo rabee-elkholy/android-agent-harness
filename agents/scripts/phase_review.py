@@ -877,9 +877,46 @@ def _complete_phase_review_locked(
     res_dir = phase_review_dir(tdir, phase_id) / "results"
     res_file = res_dir / f"{reviewer}.json"
     if res_file.is_file():
-        existing_res = read_json(res_file)
-        if existing_res.get("execution_id") == execution_id:
-            return existing_res.get("result", {})
+        try:
+            existing_res = read_json(res_file)
+        except Exception as exc:
+            raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: unreadable result for '{reviewer}': {exc}") from exc
+        parsed_result = existing_res.get("result") if isinstance(existing_res, dict) else None
+        result_hash = canonical_sha256(parsed_result) if isinstance(parsed_result, dict) else None
+        if (
+            not isinstance(parsed_result, dict)
+            or existing_res.get("task_id") != task_id
+            or existing_res.get("phase_id") != phase_id
+            or existing_res.get("run_id") != run_id
+            or existing_res.get("reviewer") != reviewer
+            or existing_res.get("execution_id") != execution_id
+            or existing_res.get("review_host") != host
+            or existing_res.get("result_sha256") != result_hash
+            or parsed_result.get("review_package_sha256") != run_meta.get("package_sha256")
+            or parsed_result.get("verdict") not in ("PASS", "FINDINGS")
+        ):
+            raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: result identity mismatch for '{reviewer}'")
+        current_st = rev_entry.get("state")
+        if current_st == REVIEW_COMPLETED:
+            if (
+                rev_entry.get("result_sha256") != result_hash
+                or rev_entry.get("verdict") != parsed_result.get("verdict")
+                or (rev_entry.get("findings") or []) != (parsed_result.get("findings") or [])
+            ):
+                raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: completed ledger mismatch for '{reviewer}'")
+            return parsed_result
+        if current_st not in (REVIEW_DISPATCHED, REVIEW_PROTOCOL_RETRY_REQUIRED) or existing_bound_id != execution_id:
+            raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: result and ledger state mismatch for '{reviewer}'")
+        rev_entry["state"] = REVIEW_COMPLETED
+        rev_entry["verdict"] = parsed_result["verdict"]
+        rev_entry["findings"] = parsed_result.get("findings") or []
+        rev_entry["completed_at"] = existing_res.get("completed_at")
+        rev_entry["result_sha256"] = result_hash
+        rev_entry["last_error"] = None
+        rev_entry["last_error_code"] = None
+        ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+        atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+        return parsed_result
 
     current_st = rev_entry.get("state")
     if current_st == REVIEW_NOT_DISPATCHED:

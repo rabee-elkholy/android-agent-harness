@@ -1449,6 +1449,52 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         )
         self.assertEqual(res1.get("verdict"), res2.get("verdict"))
 
+    def test_PHASE_EXEC_003a_result_replay_restores_incomplete_ledger(self) -> None:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        reviewer = reviewers[0]
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        complete_phase_review(
+            repo=self.repo, task_id=task_id, phase_id="p1", reviewer=reviewer,
+            execution_id="conv-replay", verdict="PASS", findings=[],
+            package_sha256=meta["package_sha256"],
+        )
+        tdir = task_dir(self.repo, task_id)
+        ledger_file = phase_review.phase_ledger_file(tdir, "p1")
+        ledger = read_json(ledger_file)
+        entry = ledger["reviewers"][reviewer]
+        entry["state"] = REVIEW_DISPATCHED
+        for key in ("verdict", "findings", "completed_at", "result_sha256"):
+            entry.pop(key, None)
+        ledger["ledger_sha256"] = phase_review.compute_ledger_sha(ledger)
+        atomic_write_json(ledger_file, ledger)
+        replay = complete_phase_review(
+            repo=self.repo, task_id=task_id, phase_id="p1", reviewer=reviewer,
+            execution_id="conv-replay", verdict="PASS", findings=[],
+            package_sha256=meta["package_sha256"],
+        )
+        self.assertEqual("PASS", replay["verdict"])
+        self.assertEqual(REVIEW_COMPLETED, read_json(ledger_file)["reviewers"][reviewer]["state"])
+
+    def test_PHASE_EXEC_003b_corrupt_result_replay_rejected(self) -> None:
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        reviewer = reviewers[0]
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        complete_phase_review(
+            repo=self.repo, task_id=task_id, phase_id="p1", reviewer=reviewer,
+            execution_id="conv-replay", verdict="PASS", findings=[],
+            package_sha256=meta["package_sha256"],
+        )
+        result_file = phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json"
+        result = read_json(result_file)
+        result["result"]["verdict"] = "FINDINGS"
+        atomic_write_json(result_file, result)
+        with self.assertRaisesRegex(ValidationError, "PHASE_REVIEW_RESULT_BLOCKED"):
+            complete_phase_review(
+                repo=self.repo, task_id=task_id, phase_id="p1", reviewer=reviewer,
+                execution_id="conv-replay", verdict="PASS", findings=[],
+                package_sha256=meta["package_sha256"],
+            )
+
     def test_PHASE_EXEC_004_different_id_rejected(self) -> None:
         """PHASE_EXEC_004: different execution ID rejected after binding."""
         task_id, reviewers, briefs, meta = self._setup_dispatch_state()
