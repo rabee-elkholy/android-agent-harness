@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import (  # noqa: E402
     HarnessError,
+    ValidationError,
     atomic_write_json,
     canonical_sha256,
     git,
@@ -31,7 +32,7 @@ NESTED_EXCLUDED = {".gradle", ".idea", "build", "out", "node_modules", "__pycach
 SOURCE_SUFFIXES = {
     ".kt", ".java", ".kts", ".gradle", ".groovy", ".toml", ".xml", ".json",
     ".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".pro", ".rules",
-    ".properties", ".jar", ".aar", ".so", ".png", ".jpg", ".jpeg", ".webp",
+    ".properties", ".jar", ".aar", ".so", ".bin", ".png", ".jpg", ".jpeg", ".webp",
     ".gif", ".svg", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4",
 }
 SOURCE_SUFFIX_TUPLE = tuple(sorted(SOURCE_SUFFIXES))
@@ -366,12 +367,25 @@ def _is_tracked_in_head(repo: Path, rel: str) -> bool:
         return False
 
 
-def build_task_diff(repo: Path, task_id: str | None, task_manifest: dict) -> str:
+def build_task_diff(
+    repo: Path,
+    task_id_or_manifest: str | dict | None = None,
+    task_manifest: dict | None = None,
+    *,
+    task_id: str | None = None,
+) -> str:
     """Build unified diff for changes introduced by this task, isolating pre-existing dirty baseline."""
     root = repo.resolve()
-    task_changes = task_manifest.get("task_changes")
-    if task_changes is None or task_manifest.get("task_delta_mode") == "LEGACY_FULL_WORKTREE":
-        raw_changes = task_manifest.get("changes") or []
+    if isinstance(task_id_or_manifest, dict):
+        manifest = task_id_or_manifest
+        resolved_task_id = task_id or (task_manifest if isinstance(task_manifest, str) else None)
+    else:
+        manifest = task_manifest if task_manifest is not None else {}
+        resolved_task_id = task_id or (task_id_or_manifest if isinstance(task_id_or_manifest, str) else None)
+
+    task_changes = manifest.get("task_changes")
+    if task_changes is None or manifest.get("task_delta_mode") == "LEGACY_FULL_WORKTREE":
+        raw_changes = manifest.get("changes") or []
         paths = sorted({str(c.get("path") or "") for c in raw_changes if c.get("path")} | {str(c.get("old_path") or "") for c in raw_changes if c.get("old_path")})
         secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
         safe_paths = [p for p in paths if not any(m in p.lower() for m in secret_markers)]
@@ -387,13 +401,13 @@ def build_task_diff(repo: Path, task_id: str | None, task_manifest: dict) -> str
         return "".join(chunks)
 
     baseline_files_dir: Path | None = None
-    task_base_head: str | None = task_manifest.get("task_base_head")
-    if task_id:
+    task_base_head: str | None = manifest.get("task_base_head")
+    if resolved_task_id:
         for candidate_state in (root / ".agents" / "state", root / "agents" / "state"):
-            c_dir = candidate_state / "tasks" / task_id / "baseline-files"
+            c_dir = candidate_state / "tasks" / resolved_task_id / "baseline-files"
             if c_dir.is_dir():
                 baseline_files_dir = c_dir
-            plan_file = candidate_state / "tasks" / task_id / "plan.json"
+            plan_file = candidate_state / "tasks" / resolved_task_id / "plan.json"
             if plan_file.is_file() and not task_base_head:
                 try:
                     pdata = json.loads(plan_file.read_text(encoding="utf-8"))
@@ -456,11 +470,29 @@ def build_task_diff(repo: Path, task_id: str | None, task_manifest: dict) -> str
 
 def build_task_manifest(
     repo: Path,
-    baseline: dict | list | None = None,
+    baseline: dict | list | str | None = None,
     expected_files: list[str] | set[str] | None = None,
     task_base_head: str | None = None,
 ) -> dict:
     manifest = build_manifest(repo)
+    task_id: str | None = None
+    if isinstance(baseline, str):
+        task_id = baseline
+        baseline = load_task_baseline(repo, task_id)
+        if task_id:
+            for state_dir in (repo.resolve() / ".agents" / "state", repo.resolve() / "agents" / "state"):
+                plan_file = state_dir / "tasks" / task_id / "plan.json"
+                if plan_file.is_file():
+                    try:
+                        pdata = json.loads(plan_file.read_text(encoding="utf-8"))
+                        if task_base_head is None:
+                            task_base_head = pdata.get("task_base_head") or pdata.get("repository", {}).get("head")
+                        if expected_files is None:
+                            expected_files = pdata.get("expected_files")
+                        break
+                    except Exception:
+                        pass
+
     if task_base_head is None and isinstance(baseline, dict):
         task_base_head = baseline.get("task_base_head")
 
@@ -487,9 +519,14 @@ def build_task_manifest(
                         if is_delivery_relevant(p):
                             target_p = repo / p
                             if target_p.is_file():
-                                oid = git(repo, "hash-object", "--path", p, "--stdin", input_bytes=target_p.read_bytes()).decode("utf-8").strip()
+                                raw_oid = git(repo, "hash-object", "--path", p, "--stdin", input_bytes=target_p.read_bytes()).decode("utf-8").strip()
+                                oid = f"git:{raw_oid}"
                             else:
-                                oid = "git:deleted"
+                                try:
+                                    base_blob = git_text(repo, "rev-parse", f"{task_base_head}:{p}").strip()
+                                    oid = f"tombstone:git:{base_blob}"
+                                except Exception:
+                                    oid = "tombstone:git:unknown"
                             committed_task_changes.append({
                                 "status": stat,
                                 "path": _normal_rel(p),
@@ -517,15 +554,25 @@ def build_task_manifest(
 
     if isinstance(baseline, dict):
         base_changes = baseline.get("changes") or []
-    else:
+    elif isinstance(baseline, list):
         base_changes = list(baseline)
+    else:
+        base_changes = []
 
     base_map: dict[str, dict] = {}
     for entry in base_changes:
-        p = entry.get("path")
+        if isinstance(entry, dict):
+            p = entry.get("path")
+            base_entry = entry
+        elif hasattr(entry, "path"):
+            p = entry.path
+            base_entry = asdict(entry) if hasattr(entry, "__dataclass_fields__") else vars(entry)
+        else:
+            p = str(entry)
+            base_entry = {"path": p, "status": "M", "content_identity": ""}
         if p:
-            base_map[_normal_rel(p)] = entry
-            base_map[p] = entry
+            base_map[_normal_rel(p)] = base_entry
+            base_map[p] = base_entry
 
     task_changes: list[dict] = []
     current_changes = manifest.get("changes") or []
@@ -549,29 +596,58 @@ def build_task_manifest(
         else:
             base_entry = base_map.get(norm_path) or base_map.get(path)
             # Changed if identity, status, or old_path differ
-            if (cur.get("content_identity") != base_entry.get("content_identity") or
-                cur.get("status") != base_entry.get("status") or
-                cur.get("old_path") != base_entry.get("old_path")):
-                task_changes.append(cur)
+            if base_entry:
+                if (cur.get("content_identity") != base_entry.get("content_identity") or
+                    cur.get("status") != base_entry.get("status") or
+                    cur.get("old_path") != base_entry.get("old_path")):
+                    task_changes.append(cur)
+
+    # Add committed task changes not present in working tree changes
+    for comm in committed_task_changes:
+        p = comm.get("path")
+        norm_p = _normal_rel(p) if p else ""
+        if not norm_p:
+            continue
+        if norm_p not in current_paths and p not in current_paths:
+            if norm_p in base_map or p in base_map:
+                base_entry = base_map.get(norm_p) or base_map.get(p) or {}
+                # Check for sensitive/secret marker
+                if any(m in norm_p.lower() for m in SECRET_PATH_MARKERS):
+                    raise ValidationError("HANDOFF_COMMIT_UNSAFE_DIRTY_BASELINE: pre-existing dirty sensitive file overlaps intended commit")
+                target_p = repo / norm_p
+                if target_p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".jar", ".aar", ".so", ".bin", ".gif"):
+                    raise ValidationError(f"HANDOFF_DIRTY_BASE_UNPROVABLE_BINARY: cannot safely attribute binary file '{norm_p}' overlapping dirty baseline")
+                # Compare committed content to baseline content
+                if comm.get("content_identity") != base_entry.get("content_identity"):
+                    task_changes.append(comm)
+                current_paths.add(norm_p)
+                if p:
+                    current_paths.add(p)
+            else:
+                task_changes.append(comm)
+                current_paths.add(norm_p)
+                if p:
+                    current_paths.add(p)
 
     # Detect disappeared dirty files (pre-existing dirty changes reverted or removed)
     for base_entry in base_changes:
-        b_path = base_entry.get("path")
+        if isinstance(base_entry, dict):
+            b_path = base_entry.get("path")
+            b_old = base_entry.get("old_path")
+        elif hasattr(base_entry, "path"):
+            b_path = base_entry.path
+            b_old = getattr(base_entry, "old_path", None)
+        else:
+            b_path = str(base_entry)
+            b_old = None
         b_norm = _normal_rel(b_path) if b_path else ""
         if b_norm and b_norm not in current_paths and b_path not in current_paths:
             task_changes.append({
                 "path": b_path,
                 "status": "BASELINE_DIRTY_REMOVED",
-                "old_path": base_entry.get("old_path"),
+                "old_path": b_old,
                 "content_identity": "git:head_or_reverted",
             })
-
-    # Add committed task changes not present in working tree changes
-    for comm in committed_task_changes:
-        p = comm.get("path")
-        if p and p not in current_paths and p not in base_map:
-            task_changes.append(comm)
-            current_paths.add(p)
 
     task_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))
     change_identities = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in task_changes]

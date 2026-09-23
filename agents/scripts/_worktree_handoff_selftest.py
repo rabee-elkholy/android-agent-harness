@@ -512,6 +512,342 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         self.assertIn("checkpoint_head", receipt)
         self.assertIn("task_base_head", receipt)
 
+    def test_HANDOFF_IDENTITY_001_committed_and_dirty_identities_consistent(self) -> None:
+        """HANDOFF_IDENTITY_001: moving same content from dirty tree to accepted commit uses consistent git:<oid> identity format."""
+        t_id = self._create_task()
+        target_path = self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt"
+        write_file(target_path, "package com.example\nclass Feature\n")
+        
+        m_dirty = build_task_manifest(self.repo, t_id)
+        dirty_change = next(c for c in m_dirty["task_changes"] if c["path"] == "app/src/main/java/com/example/Feature.kt")
+        self.assertTrue(dirty_change["content_identity"].startswith("git:"))
+        
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        reconcile_handoff(self.repo, t_id)
+        
+        m_committed = build_task_manifest(self.repo, t_id)
+        comm_change = next(c for c in m_committed["task_changes"] if c["path"] == "app/src/main/java/com/example/Feature.kt")
+        self.assertTrue(comm_change["content_identity"].startswith("git:"))
+        self.assertEqual(dirty_change["content_identity"], comm_change["content_identity"])
+
+    def test_HANDOFF_DIRTY_BASE_001_dirty_text_plus_task_edit_plus_checkpoint_remains_in_final_manifest(self) -> None:
+        """HANDOFF_DIRTY_BASE_001: pre-existing dirty tracked text file + task edit + checkpoint remains in final manifest."""
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\n// dirty before task\nclass App\n")
+        t_id = self._create_task(expected_files=["app/src/main/java/com/example/App.kt"])
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\n// dirty before task\n// task A edit\nclass App\n")
+        
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        reconcile_handoff(self.repo, t_id)
+        
+        m = build_task_manifest(self.repo, t_id)
+        app_changes = [c for c in m["task_changes"] if c["path"] == "app/src/main/java/com/example/App.kt"]
+        self.assertEqual(1, len(app_changes))
+
+    def test_HANDOFF_DIRTY_BASE_002_final_diff_shows_baseline_to_task_delta_only(self) -> None:
+        """HANDOFF_DIRTY_BASE_002: final diff shows baseline->task delta only (pre-task dirty delta excluded)."""
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\n// PRE_TASK_DIRTY_CONTENT\nclass App\n")
+        t_id = self._create_task(expected_files=["app/src/main/java/com/example/App.kt"])
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\n// PRE_TASK_DIRTY_CONTENT\n// TASK_A_EDIT_CONTENT\nclass App\n")
+        
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        reconcile_handoff(self.repo, t_id)
+        
+        m = build_task_manifest(self.repo, t_id)
+        diff = build_task_diff(self.repo, m, task_id=t_id)
+        self.assertIn("TASK_A_EDIT_CONTENT", diff)
+        self.assertNotIn("+// PRE_TASK_DIRTY_CONTENT", diff)
+
+    def test_HANDOFF_DIRTY_BASE_003_unprovable_binary_overlap_fails_closed(self) -> None:
+        """HANDOFF_DIRTY_BASE_003: unprovable binary overlap fails closed."""
+        write_file(self.repo / "app" / "sample.bin", b"\x00\x01\x02")
+        run_git(self.repo, "add", "app/sample.bin")
+        run_git(self.repo, "commit", "-m", "chore: add binary")
+        write_file(self.repo / "app" / "sample.bin", b"\x00\x01\x02\x03_dirty")
+        
+        t_id = self._create_task(expected_files=["app/sample.bin"])
+        write_file(self.repo / "app" / "sample.bin", b"\x00\x01\x02\x03_task_a")
+        
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        reconcile_handoff(self.repo, t_id)
+        
+        with self.assertRaises(ValidationError) as ctx:
+            build_task_manifest(self.repo, t_id)
+        self.assertIn("HANDOFF_DIRTY_BASE_UNPROVABLE_BINARY", str(ctx.exception))
+
+    def test_HANDOFF_DIRTY_BASE_004_secret_overlap_fails_closed(self) -> None:
+        """HANDOFF_DIRTY_BASE_004: secret overlap fails closed."""
+        write_file(self.repo / "app" / "credentials.txt", "API_KEY=dirty_before_task\n")
+        run_git(self.repo, "add", "app/credentials.txt")
+        run_git(self.repo, "commit", "-m", "chore: add creds")
+        write_file(self.repo / "app" / "credentials.txt", "API_KEY=dirty_modified\n")
+        
+        t_id = self._create_task(expected_files=["app/credentials.txt"])
+        write_file(self.repo / "app" / "credentials.txt", "API_KEY=dirty_modified_by_task\n")
+        
+        with self.assertRaises(ValidationError) as ctx:
+            create_pending_handoff(self.repo, t_id)
+        self.assertIn("HANDOFF_COMMIT_UNSAFE_DIRTY_BASELINE", str(ctx.exception))
+
+    def test_HANDOFF_DIRTY_BASE_005_unrelated_pre_existing_dirty_path_stays_excluded(self) -> None:
+        """HANDOFF_DIRTY_BASE_005: unrelated pre-existing dirty path stays excluded."""
+        write_file(self.repo / "unrelated.txt", "unrelated dirty\n")
+        
+        t_id = self._create_task(expected_files=["app/src/main/java/com/example/Feature.kt"])
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", "app/src/main/java/com/example/Feature.kt")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        reconcile_handoff(self.repo, t_id)
+        
+        m = build_task_manifest(self.repo, t_id)
+        paths = [c["path"] for c in m["task_changes"]]
+        self.assertIn("app/src/main/java/com/example/Feature.kt", paths)
+        self.assertNotIn("unrelated.txt", paths)
+
+    def test_LINEAGE_RECEIPT_001_valid_receipt_chain_accepted(self) -> None:
+        """LINEAGE_RECEIPT_001: valid receipt chain accepted."""
+        from task_git_lineage import validate_checkpoint_receipt
+        t_id = self._create_task()
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        res = reconcile_handoff(self.repo, t_id)
+        head = res["checkpoint_head"]
+        r_path = task_dir(self.repo, t_id) / "git-checkpoints" / f"{head}.json"
+        plan = read_json(task_dir(self.repo, t_id) / "plan.json")
+        base_head = plan.get("task_base_head")
+        
+        ok, err, receipt = validate_checkpoint_receipt(self.repo, t_id, base_head, r_path, set())
+        self.assertTrue(ok, err)
+        self.assertIsNotNone(receipt)
+
+    def test_LINEAGE_RECEIPT_002_plan_only_head_rejected(self) -> None:
+        """LINEAGE_RECEIPT_002: plan-only head with missing receipt file rejected."""
+        from task_git_lineage import is_valid_task_lineage
+        t_id = self._create_task()
+        plan_f = task_dir(self.repo, t_id) / "plan.json"
+        plan = read_json(plan_f)
+        fake_head = "a" * 40
+        plan["accepted_checkpoint_heads"] = [fake_head]
+        save_plan(plan_f, plan)
+        
+        valid, reason = is_valid_task_lineage(self.repo, t_id, fake_head)
+        self.assertFalse(valid)
+        self.assertTrue("lineage" in reason.lower() or "receipt" in reason.lower())
+
+    def test_LINEAGE_RECEIPT_003_wrong_task_rejected(self) -> None:
+        """LINEAGE_RECEIPT_003: wrong task ID in receipt rejected."""
+        from task_git_lineage import validate_checkpoint_receipt
+        t_id = self._create_task()
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        res = reconcile_handoff(self.repo, t_id)
+        head = res["checkpoint_head"]
+        r_path = task_dir(self.repo, t_id) / "git-checkpoints" / f"{head}.json"
+        plan = read_json(task_dir(self.repo, t_id) / "plan.json")
+        base_head = plan.get("task_base_head")
+        
+        ok, err, _ = validate_checkpoint_receipt(self.repo, "other-task", base_head, r_path, set())
+        self.assertFalse(ok)
+        self.assertIn("task_id", err)
+
+    def test_LINEAGE_RECEIPT_004_wrong_base_rejected(self) -> None:
+        """LINEAGE_RECEIPT_004: wrong base HEAD in receipt rejected."""
+        from task_git_lineage import validate_checkpoint_receipt
+        t_id = self._create_task()
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        res = reconcile_handoff(self.repo, t_id)
+        head = res["checkpoint_head"]
+        r_path = task_dir(self.repo, t_id) / "git-checkpoints" / f"{head}.json"
+        
+        ok, err, _ = validate_checkpoint_receipt(self.repo, t_id, "b" * 40, r_path, set())
+        self.assertFalse(ok)
+        self.assertIn("task_base_head", err)
+
+    def test_LINEAGE_RECEIPT_005_filename_head_mismatch_rejected(self) -> None:
+        """LINEAGE_RECEIPT_005: filename and checkpoint_head mismatch rejected."""
+        from task_git_lineage import validate_checkpoint_receipt
+        t_id = self._create_task()
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        res = reconcile_handoff(self.repo, t_id)
+        head = res["checkpoint_head"]
+        r_path = task_dir(self.repo, t_id) / "git-checkpoints" / f"{head}.json"
+        plan = read_json(task_dir(self.repo, t_id) / "plan.json")
+        base_head = plan.get("task_base_head")
+        
+        mismatch_path = task_dir(self.repo, t_id) / "git-checkpoints" / f"{'c'*40}.json"
+        r_path.rename(mismatch_path)
+        
+        ok, err, _ = validate_checkpoint_receipt(self.repo, t_id, base_head, mismatch_path, set())
+        self.assertFalse(ok)
+        self.assertIn("mismatch", err)
+
+    def test_LINEAGE_RECEIPT_006_broken_parent_chain_rejected(self) -> None:
+        """LINEAGE_RECEIPT_006: broken parent chain rejected."""
+        from task_git_lineage import compute_receipt_sha, validate_checkpoint_receipt
+        t_id = self._create_task()
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        res = reconcile_handoff(self.repo, t_id)
+        head = res["checkpoint_head"]
+        r_path = task_dir(self.repo, t_id) / "git-checkpoints" / f"{head}.json"
+        plan = read_json(task_dir(self.repo, t_id) / "plan.json")
+        base_head = plan.get("task_base_head")
+        
+        receipt = read_json(r_path)
+        receipt["parent_head"] = "d" * 40
+        receipt["receipt_sha256"] = compute_receipt_sha(receipt)
+        atomic_write_json(r_path, receipt)
+        
+        ok, err, _ = validate_checkpoint_receipt(self.repo, t_id, base_head, r_path, set())
+        self.assertFalse(ok)
+        self.assertIn("parent_head", err)
+
+    def test_LINEAGE_RECEIPT_007_bad_integrity_rejected(self) -> None:
+        """LINEAGE_RECEIPT_007: bad receipt integrity hash rejected."""
+        from task_git_lineage import validate_checkpoint_receipt
+        t_id = self._create_task()
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint")
+        res = reconcile_handoff(self.repo, t_id)
+        head = res["checkpoint_head"]
+        r_path = task_dir(self.repo, t_id) / "git-checkpoints" / f"{head}.json"
+        plan = read_json(task_dir(self.repo, t_id) / "plan.json")
+        base_head = plan.get("task_base_head")
+        
+        receipt = read_json(r_path)
+        receipt["tampered"] = True
+        atomic_write_json(r_path, receipt)
+        
+        ok, err, _ = validate_checkpoint_receipt(self.repo, t_id, base_head, r_path, set())
+        self.assertFalse(ok)
+        self.assertIn("checksum", err)
+
+    def test_LINEAGE_RECEIPT_008_valid_second_checkpoint_accepted(self) -> None:
+        """LINEAGE_RECEIPT_008: valid second checkpoint receipt accepted in chain."""
+        from task_git_lineage import validate_checkpoint_receipt
+        t_id = self._create_task()
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "class Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint 1")
+        res1 = reconcile_handoff(self.repo, t_id)
+        head1 = res1["checkpoint_head"]
+        
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature2.kt", "class Feature2\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint 2")
+        res2 = reconcile_handoff(self.repo, t_id)
+        head2 = res2["checkpoint_head"]
+        
+        plan = read_json(task_dir(self.repo, t_id) / "plan.json")
+        base_head = plan.get("task_base_head")
+        r_path2 = task_dir(self.repo, t_id) / "git-checkpoints" / f"{head2}.json"
+        
+        ok, err, _ = validate_checkpoint_receipt(self.repo, t_id, base_head, r_path2, {head1})
+        self.assertTrue(ok, err)
+
+    def test_HANDOFF_ATTRIBUTION_E2E_001(self) -> None:
+        """HANDOFF_ATTRIBUTION_E2E_001: complete worktree dirty baseline handoff E2E."""
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\n// dirty before task\nclass App\n")
+        
+        t_id = self._create_task(expected_files=[
+            "app/src/main/java/com/example/App.kt",
+            "app/src/main/java/com/example/Feature.kt",
+        ])
+        
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\n// dirty before task\n// task edit\nclass App\n")
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "package com.example\nclass Feature\n")
+        
+        h_res = create_pending_handoff(self.repo, t_id)
+        self.assertEqual("DEVELOPER_WIP_COMMIT_REQUIRED", h_res["code"])
+        
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint 1")
+        
+        rec_res = reconcile_handoff(self.repo, t_id)
+        self.assertEqual("WORKTREE_SWITCH_READY", rec_res["status"])
+        
+        status_out = run_git(self.repo, "status", "--porcelain")
+        self.assertEqual("", status_out)
+        
+        m = build_task_manifest(self.repo, t_id)
+        task_paths = {c["path"] for c in m["task_changes"]}
+        
+        self.assertIn("app/src/main/java/com/example/App.kt", task_paths)
+        self.assertIn("app/src/main/java/com/example/Feature.kt", task_paths)
+        
+        diff = build_task_diff(self.repo, m, task_id=t_id)
+        self.assertIn("task edit", diff)
+        self.assertNotIn("+// dirty before task", diff)
+        
+        res_prep = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=t_id, host="antigravity"))
+        self.assertIn("run_id", res_prep)
+        self.assertEqual("VERIFYING", read_json(task_dir(self.repo, t_id) / "plan.json").get("status"))
+
+    def test_HANDOFF_SECOND_CHECKPOINT_001(self) -> None:
+        """HANDOFF_SECOND_CHECKPOINT_001: two sequential handoffs retain full final delta."""
+        t_id = self._create_task(expected_files=[
+            "app/src/main/java/com/example/Feature.kt",
+            "app/src/main/java/com/example/Feature2.kt",
+        ])
+        
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature.kt", "package com.example\nclass Feature\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint 1")
+        reconcile_handoff(self.repo, t_id)
+        
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Feature2.kt", "package com.example\nclass Feature2\n")
+        
+        h2 = create_pending_handoff(self.repo, t_id)
+        self.assertEqual("DEVELOPER_WIP_COMMIT_REQUIRED", h2["code"])
+        
+        pending = read_json(task_dir(self.repo, t_id) / "pending-handoff.json")
+        self.assertIn("full_task_change_set_sha256", pending)
+        self.assertIn("checkpoint_delta_sha256", pending)
+        self.assertIn("full_task_paths", pending)
+        self.assertIn("checkpoint_paths", pending)
+        self.assertIn("app/src/main/java/com/example/Feature.kt", pending["full_task_paths"])
+        self.assertIn("app/src/main/java/com/example/Feature2.kt", pending["full_task_paths"])
+        self.assertIn("app/src/main/java/com/example/Feature2.kt", pending["checkpoint_paths"])
+        
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "wip: checkpoint 2")
+        rec2 = reconcile_handoff(self.repo, t_id)
+        self.assertEqual("WORKTREE_SWITCH_READY", rec2["status"])
+        
+        plan = read_json(task_dir(self.repo, t_id) / "plan.json")
+        self.assertEqual(2, len(plan.get("accepted_checkpoint_heads", [])))
+        
+        m = build_task_manifest(self.repo, t_id)
+        diff = build_task_diff(self.repo, m, task_id=t_id)
+        self.assertIn("Feature", diff)
+        self.assertIn("Feature2", diff)
+
 
 if __name__ == "__main__":
     unittest.main()

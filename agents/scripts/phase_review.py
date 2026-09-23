@@ -29,6 +29,7 @@ from delivery_manifest import build_manifest, build_task_diff, build_task_manife
 from record_review import _extract_transcript_response, is_blocking_finding, resolve_trusted_subagent_transcript
 from review_orchestrator import (
     compute_ledger_sha,
+    parse_structured_result,
     REVIEW_COMPLETED,
     REVIEW_DISPATCHED,
     REVIEW_ENV_BLOCKED,
@@ -37,6 +38,8 @@ from review_orchestrator import (
     REVIEW_NOT_DISPATCHED,
     REVIEW_PROTOCOL_RETRY_REQUIRED,
 )
+from review_policy import canonical_risk_tier
+from review_sources import resolve_trusted_review_source
 from workflow import _load_plan, state_root, task_dir
 
 # Phase substates
@@ -58,6 +61,7 @@ ALL_PHASE_SUBSTATES = frozenset({
 
 DEFAULT_SAFETY_CAP = 20
 MIN_RESERVED_FINAL_REVIEWERS = 2
+PHASE_REVIEW_CHANGED_LINES_TRIGGER = 180
 
 
 def phase_dir(task_directory: Path, phase_id: str) -> Path:
@@ -112,8 +116,169 @@ def set_phase_substate(
     if details:
         entry.update(details)
     state["substate"] = new_substate
+    if new_substate == PHASE_COMPLETE:
+        completed = list(state.get("completed_phases") or [])
+        if phase_id not in completed:
+            completed.append(phase_id)
+        state["completed_phases"] = completed
+    else:
+        completed = [p for p in (state.get("completed_phases") or []) if p != phase_id]
+        state["completed_phases"] = completed
     atomic_write_json(sfile, state)
     return state
+
+
+def _compute_phase_diff(repo: Path, paths: list[str], base_ref: str | None = None) -> str:
+    if not paths:
+        return ""
+    import difflib
+    from delivery_manifest import _is_tracked_in_head
+    chunks: list[str] = []
+    git_paths = []
+    for p in paths:
+        target = repo / p
+        if target.is_file() and not _is_tracked_in_head(repo, p):
+            cur_lines = target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            chunk = "".join(difflib.unified_diff([], cur_lines, fromfile="/dev/null", tofile=f"b/{p}"))
+            if chunk:
+                chunks.append(chunk)
+        else:
+            git_paths.append(p)
+    if git_paths:
+        cmd = ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10"]
+        if base_ref:
+            cmd.append(base_ref)
+        else:
+            cmd.append("HEAD")
+        cmd.extend(["--", *git_paths])
+        proc = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        if proc.returncode == 0 and proc.stdout:
+            chunks.append(proc.stdout)
+    return "".join(chunks)
+
+
+def compute_phase_diff_stats(diff_text: str, paths: list[str]) -> dict[str, int]:
+    added = 0
+    deleted = 0
+    for line in diff_text.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            deleted += 1
+    return {
+        "changed_files": len(paths),
+        "added_lines": added,
+        "deleted_lines": deleted,
+        "changed_lines": added + deleted,
+    }
+
+
+def compute_phase_delta_sha256(phase_id: str, phase_changes: list[Any]) -> str:
+    norm_changes = []
+    for c in phase_changes:
+        if isinstance(c, dict):
+            status = c.get("status") or ("DELETED" if str(c.get("content_identity", "")).startswith("tombstone:") else "MODIFIED")
+            path = c.get("path") or ""
+            old_path = c.get("old_path") or ""
+            content_id = c.get("content_identity") or c.get("blob_sha256") or c.get("sha256") or ""
+            norm_changes.append({
+                "status": status,
+                "path": path,
+                "old_path": old_path,
+                "content_identity": content_id,
+            })
+        else:
+            norm_changes.append({
+                "status": "MODIFIED",
+                "path": str(c or ""),
+                "old_path": "",
+                "content_identity": "",
+            })
+    norm_changes.sort(key=lambda x: (x["path"], x["status"]))
+    payload = {
+        "phase_id": phase_id,
+        "changes": norm_changes,
+    }
+    return canonical_sha256(payload)
+
+
+def load_phase_ledger(
+    task_directory: Path,
+    phase_id: str,
+    expected_run_id: str | None = None,
+) -> tuple[bool, str, dict[str, Any] | None]:
+    lpath = phase_ledger_file(task_directory, phase_id)
+    if not lpath.is_file():
+        return False, f"phase ledger not found at {lpath}", None
+    try:
+        ledger = read_json(lpath)
+    except Exception as exc:
+        return False, f"corrupt phase ledger json: {exc}", None
+    if not isinstance(ledger, dict):
+        return False, "phase ledger is not a dict", None
+    if ledger.get("schema_version") != 2:
+        return False, f"unsupported schema version: {ledger.get('schema_version')}", None
+    if ledger.get("phase_id") != phase_id:
+        return False, f"phase_id mismatch: expected '{phase_id}', got '{ledger.get('phase_id')}'", None
+    run_id = ledger.get("run_id")
+    if not run_id:
+        return False, "ledger missing run_id", None
+    if expected_run_id and run_id != expected_run_id:
+        return False, f"run_id mismatch: expected '{expected_run_id}', got '{run_id}'", None
+    if not isinstance(ledger.get("reviewers"), dict):
+        return False, "ledger missing or invalid reviewers dictionary", None
+    calc_sha = compute_ledger_sha(ledger)
+    if ledger.get("ledger_sha256") != calc_sha:
+        return False, f"ledger checksum mismatch: expected {ledger.get('ledger_sha256')}, got {calc_sha}", None
+    return True, "", ledger
+
+
+def phase_review_freshness(
+    repo: Path,
+    task_id: str,
+    phase_id: str,
+    run_meta: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    tdir = task_dir(repo, task_id)
+    if run_meta is None:
+        prun_f = phase_run_file(tdir, phase_id)
+        if not prun_f.is_file():
+            return False, "no active phase review run found"
+        run_meta = read_json(prun_f)
+
+    ckpt_f = phase_dir(tdir, phase_id) / "checkpoint.json"
+    if not ckpt_f.is_file():
+        return False, "phase checkpoint missing"
+    ckpt = read_json(ckpt_f)
+    if ckpt.get("checkpoint_sha256") != run_meta.get("checkpoint_sha256"):
+        return False, "checkpoint SHA mismatch"
+
+    pkg_p = Path(run_meta.get("package_path", ""))
+    if not pkg_p.is_file():
+        return False, f"phase review package missing at {pkg_p}"
+    if sha256_file(pkg_p) != run_meta.get("package_sha256"):
+        return False, "phase review package modified or corrupted"
+
+    plan_f = tdir / "plan.json"
+    if plan_f.is_file():
+        plan = read_json(plan_f)
+        if run_meta.get("plan_sha256") and plan.get("plan_sha256") != run_meta.get("plan_sha256"):
+            return False, "task plan modified since phase review package creation"
+
+    phase_changes = ckpt.get("manifest_delta") or []
+    current_delta_sha = compute_phase_delta_sha256(phase_id, phase_changes)
+    if run_meta.get("phase_delta_sha256") and current_delta_sha != run_meta.get("phase_delta_sha256"):
+        return False, "phase delta SHA-256 changed"
+
+    expected_hashes = run_meta.get("phase_file_hashes") or {}
+    for p, exp_hash in expected_hashes.items():
+        target = repo / p
+        if not target.is_file() or sha256_file(target) != exp_hash:
+            return False, f"phase file '{p}' changed while reviewer running"
+
+    return True, ""
 
 
 def is_phase_review_needed(
@@ -123,9 +288,13 @@ def is_phase_review_needed(
     target_phase: dict[str, Any],
     phase_changes: list[Any],
     phase_policy: dict[str, Any] | None = None,
+    diff_stats: dict[str, int] | None = None,
 ) -> tuple[bool, list[str]]:
     phases = plan.get("phases") or []
-    if len(phases) <= 1:
+    if not phases:
+        return False, []
+    explicit_flag = plan.get("scoped_phase_review_enabled")
+    if len(phases) <= 1 and not explicit_flag:
         return False, []
 
     if not phase_changes:
@@ -157,8 +326,8 @@ def is_phase_review_needed(
             skills_root = (repo / "agents" / "skills") if (repo / "agents" / "skills").is_dir() else (repo / ".agents" / "skills")
             classification = classify(repo, task_changes=phase_changes)
             phase_policy = decide(classification, skills_root, plan=plan)
-        except Exception:
-            phase_policy = {}
+        except Exception as exc:
+            raise ValidationError(f"PHASE_POLICY_DERIVATION_FAILED: could not derive policy for phase '{target_phase.get('id')}': {exc}")
 
     surfaces = set(phase_policy.get("surfaces") or [])
     for s in (target_phase.get("expected_surfaces") or []):
@@ -168,53 +337,79 @@ def is_phase_review_needed(
     phase_desc = (target_phase.get("description") or "").lower()
     paths_str = " ".join(p.lower() for p in non_harness)
 
+    raw_risk = phase_policy.get("risk_tier") or ""
+    risk_tier = canonical_risk_tier(raw_risk)
+    is_elevated_risk = risk_tier in ("T4_DATA_DEVICE", "T5_CRITICAL")
+
     is_critical = (
         target_phase.get("critical_boundary") is True
         or any(k in phase_name or k in phase_desc or k in paths_str for k in ("auth", "security", "crypto", "billing", "token", "keystore", "migration"))
         or any(s in surfaces for s in ("SECURITY", "AUTH", "CRYPTO", "BILLING", "ROOM_SCHEMA", "MIGRATION"))
+        or is_elevated_risk
     )
 
-    risk_tier = str(phase_policy.get("risk_tier") or "")
+    if diff_stats is None:
+        diff_text = _compute_phase_diff(repo, non_harness)
+        diff_stats = compute_phase_diff_stats(diff_text, non_harness)
+
+    changed_lines = diff_stats.get("changed_lines", 0)
+    is_large_delta = changed_lines >= PHASE_REVIEW_CHANGED_LINES_TRIGGER
+
     is_large = (
         explicit_flag is True
         or (plan.get("task_kind") in ("REFACTOR", "FEATURE") and len(non_harness) >= 5)
-        or risk_tier in ("T4_SENSITIVE", "T5_CRITICAL")
+        or is_large_delta
+        or is_elevated_risk
     )
 
     if not (is_critical or is_large):
         return False, []
 
-    # Select narrow roster (1-2 reviewers max)
+    # Select narrow roster strictly from policy reviewers (1-2 reviewers max)
     policy_reviewers = list(phase_policy.get("reviewers") or [])
+    if not policy_reviewers:
+        if explicit_flag is True:
+            return True, ["bug-reviewer-agent"]
+        return False, []
+
     selected: list[str] = []
 
-    if any(k in phase_name or k in phase_desc or k in paths_str for k in ("auth", "security", "crypto", "token")) or any(s in surfaces for s in ("SECURITY", "AUTH", "CRYPTO")):
+    if "security-reviewer-agent" in policy_reviewers and (
+        any(k in phase_name or k in phase_desc or k in paths_str for k in ("auth", "security", "crypto", "token"))
+        or any(s in surfaces for s in ("SECURITY", "AUTH", "CRYPTO"))
+    ):
         selected.append("security-reviewer-agent")
-    if any(k in paths_str for k in ("coroutine", "flow", "dispatch", "thread", "channel", "service", "background", "job")):
+
+    if "perf-anr-guardian-agent" in policy_reviewers and (
+        any(k in paths_str for k in ("coroutine", "flow", "dispatch", "thread", "channel", "service", "background", "job"))
+        or any(s in surfaces for s in ("PERFORMANCE", "COROUTINES", "THREADING"))
+    ):
         selected.append("perf-anr-guardian-agent")
-    if any(k in phase_name or k in paths_str for k in ("test", "selftest")):
-        selected.append("test-quality-reviewer-agent")
-    if any(k in phase_name or k in phase_desc for k in ("convention", "architecture", "structure")):
+
+    if "convention-reviewer-agent" in policy_reviewers and (
+        any(k in phase_name or k in phase_desc for k in ("convention", "architecture", "structure"))
+        or any(s in surfaces for s in ("CONVENTIONS", "ARCHITECTURE"))
+    ):
         selected.append("convention-reviewer-agent")
 
-    if not selected:
-        if "bug-reviewer-agent" in policy_reviewers:
-            selected.append("bug-reviewer-agent")
-        elif policy_reviewers:
-            selected.append(policy_reviewers[0])
-        else:
-            selected.append("bug-reviewer-agent")
+    if "test-quality-reviewer-agent" in policy_reviewers and (
+        any(k in phase_name or k in paths_str for k in ("test", "selftest"))
+        or any(s in surfaces for s in ("TESTS", "TESTING"))
+    ):
+        selected.append("test-quality-reviewer-agent")
 
-    if len(selected) == 1 and "bug-reviewer-agent" in policy_reviewers and "bug-reviewer-agent" not in selected:
-        if is_critical or is_large:
-            selected.append("bug-reviewer-agent")
+    for r in policy_reviewers:
+        if len(selected) >= 2:
+            break
+        if r not in selected:
+            selected.append(r)
 
     return True, selected[:2]
 
 
 def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int) -> tuple[bool, str]:
     used = int(plan.get("review_calls_used") or 0)
-    cap = int(plan.get("max_review_calls") or DEFAULT_SAFETY_CAP)
+    cap = int(plan.get("max_review_calls") or plan.get("model_call_budget") or DEFAULT_SAFETY_CAP)
     expected_final = plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
     reserved = max(MIN_RESERVED_FINAL_REVIEWERS, len(expected_final))
     if used + dispatch_count + reserved > cap:
@@ -223,35 +418,6 @@ def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int) -> tuple[b
             f"reserved_final={reserved}, total={used + dispatch_count + reserved} > cap={cap}"
         )
     return True, ""
-
-
-def _compute_phase_diff(repo: Path, paths: list[str], base_ref: str | None = None) -> str:
-    if not paths:
-        return ""
-    import difflib
-    from delivery_manifest import _is_tracked_in_head
-    chunks: list[str] = []
-    git_paths = []
-    for p in paths:
-        target = repo / p
-        if target.is_file() and not _is_tracked_in_head(repo, p):
-            cur_lines = target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-            chunk = "".join(difflib.unified_diff([], cur_lines, fromfile="/dev/null", tofile=f"b/{p}"))
-            if chunk:
-                chunks.append(chunk)
-        else:
-            git_paths.append(p)
-    if git_paths:
-        cmd = ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10"]
-        if base_ref:
-            cmd.append(base_ref)
-        else:
-            cmd.append("HEAD")
-        cmd.extend(["--", *git_paths])
-        proc = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
-        if proc.returncode == 0 and proc.stdout:
-            chunks.append(proc.stdout)
-    return "".join(chunks)
 
 
 def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, dict[str, Any]]:
@@ -285,6 +451,8 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, 
         raise ValidationError(f"phase review is not required for phase '{phase_id}'")
 
     diff = _compute_phase_diff(repo, paths)
+    diff_stats = compute_phase_diff_stats(diff, paths)
+    phase_delta_sha256 = ckpt.get("phase_delta_sha256") or compute_phase_delta_sha256(phase_id, phase_changes)
 
     run_id = f"phase-{phase_id}-{str(uuid.uuid4())[:8]}"
     package_path = rdir / "phase-review-package.md"
@@ -300,6 +468,8 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, 
         "task_id": task_id,
         "phase_id": phase_id,
         "phase_review_run_id": run_id,
+        "phase_delta_sha256": phase_delta_sha256,
+        "diff_stats": diff_stats,
         "checkpoint_sha256": ckpt.get("checkpoint_sha256"),
         "delivery_snapshot_sha256": ckpt.get("delivery_snapshot_sha256"),
         "task_change_set_sha256": ckpt.get("task_change_set_sha256"),
@@ -401,24 +571,118 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str) -> tuple[Path, 
     return package_path, metadata
 
 
+def record_phase_dispatch_batch(
+    repo: Path,
+    task_id: str,
+    phase_id: str,
+    reviewers: list[str],
+    host: str = "antigravity",
+) -> dict[str, Any]:
+    tdir = task_dir(repo, task_id)
+    prun_f = phase_run_file(tdir, phase_id)
+    if not prun_f.is_file():
+        raise ValidationError(f"no active phase review run found for phase '{phase_id}'")
+    run_meta = read_json(prun_f)
+    run_id = str(run_meta.get("phase_review_run_id") or "")
+
+    ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id)
+    if not ok or not ledger:
+        raise ValidationError(f"phase ledger invalid: {err}")
+
+    selected_roster = set(run_meta.get("selected_reviewers") or [])
+    for r in reviewers:
+        if r not in selected_roster:
+            raise ValidationError(f"reviewer '{r}' is not in selected phase review roster: {sorted(selected_roster)}")
+
+    ledger_revs = ledger.setdefault("reviewers", {})
+    dispatchable = [
+        r for r in run_meta.get("selected_reviewers", [])
+        if ledger_revs.get(r, {}).get("state") == REVIEW_NOT_DISPATCHED
+    ]
+
+    req_set = set(reviewers)
+    disp_set = set(dispatchable)
+    if req_set != disp_set:
+        # Check if already dispatched identically (idempotent replay)
+        already_dispatched = all(
+            ledger_revs.get(r, {}).get("state") == REVIEW_DISPATCHED
+            for r in reviewers
+        )
+        if not already_dispatched:
+            raise ValidationError(f"dispatch batch mismatch: requested {sorted(req_set)} != dispatchable {sorted(disp_set)}")
+
+    plan_f = tdir / "plan.json"
+    plan = read_json(plan_f) if plan_f.is_file() else {}
+    used_calls = int(plan.get("review_calls_used") or 0)
+    safety_cap = int(plan.get("model_call_budget") or DEFAULT_SAFETY_CAP)
+    expected_final = plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
+    reserved_final = max(MIN_RESERVED_FINAL_REVIEWERS, len(expected_final))
+
+    new_dispatches = [
+        r for r in reviewers
+        if ledger_revs.get(r, {}).get("state") != REVIEW_DISPATCHED
+    ]
+
+    if new_dispatches:
+        if used_calls + len(new_dispatches) + reserved_final > safety_cap:
+            raise ValidationError(
+                f"Reviewer call safety cap reached: used={used_calls}, new={len(new_dispatches)}, "
+                f"reserved_final={reserved_final} > budget={safety_cap}"
+            )
+
+    dispatch_dir = phase_review_dir(tdir, phase_id) / "dispatch" / run_id
+    dispatch_dir.mkdir(parents=True, exist_ok=True)
+
+    for r in reviewers:
+        receipt_f = dispatch_dir / f"{r}.json"
+        if not receipt_f.is_file():
+            receipt = {
+                "schema_version": 2,
+                "task_id": task_id,
+                "phase_id": phase_id,
+                "phase_review_run_id": run_id,
+                "reviewer": r,
+                "phase_delta_sha256": run_meta.get("phase_delta_sha256", ""),
+                "package_sha256": run_meta.get("package_sha256", ""),
+                "checkpoint_sha256": run_meta.get("checkpoint_sha256", ""),
+                "host": host,
+                "dispatch_nonce": str(uuid.uuid4())[:8],
+                "dispatched_at": utc_now(),
+            }
+            receipt["receipt_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+            atomic_write_json(receipt_f, receipt)
+
+        r_entry = ledger_revs.setdefault(r, {})
+        r_entry["state"] = REVIEW_DISPATCHED
+        r_entry["execution_id"] = None
+        r_entry["dispatched_at"] = utc_now()
+
+    ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+    atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+
+    if new_dispatches and plan_f.is_file():
+        plan["review_calls_used"] = used_calls + len(new_dispatches)
+        atomic_write_json(plan_f, plan)
+
+    return ledger
+
+
 def record_phase_dispatch(
     repo: Path,
     task_id: str,
     phase_id: str,
     reviewer: str,
-    execution_id: str,
+    execution_id: str | None = None,
 ) -> dict[str, Any]:
-    tdir = task_dir(repo, task_id)
-    lpath = phase_ledger_file(tdir, phase_id)
-    if not lpath.is_file():
-        raise ValidationError(f"phase review ledger not found at {lpath}")
-    ledger = read_json(lpath)
-    rev_entry = ledger.setdefault("reviewers", {}).setdefault(reviewer, {})
-    rev_entry["state"] = REVIEW_DISPATCHED
-    rev_entry["execution_id"] = execution_id
-    rev_entry["dispatched_at"] = utc_now()
-    ledger["ledger_sha256"] = compute_ledger_sha(ledger)
-    atomic_write_json(lpath, ledger)
+    ledger = record_phase_dispatch_batch(repo, task_id, phase_id, [reviewer])
+    if execution_id:
+        tdir = task_dir(repo, task_id)
+        rev_entry = ledger.setdefault("reviewers", {}).setdefault(reviewer, {})
+        rev_entry["execution_id"] = execution_id
+        import hashlib
+        rev_entry["execution_id_sha256"] = hashlib.sha256(execution_id.encode("utf-8")).hexdigest()
+        ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+        atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
     return ledger
 
 
@@ -428,6 +692,7 @@ def complete_phase_review(
     phase_id: str,
     reviewer: str,
     execution_id: str,
+    host: str = "antigravity",
     raw_response: str | None = None,
     verdict: str | None = None,
     findings: list[Any] | None = None,
@@ -438,97 +703,173 @@ def complete_phase_review(
     if not prun_f.is_file():
         raise ValidationError(f"no active phase review run found for phase '{phase_id}'")
     run_meta = read_json(prun_f)
+    run_id = str(run_meta.get("phase_review_run_id") or "")
 
-    # Stale run detection: verify phase delta has not mutated while reviewer was running
-    expected_hashes = run_meta.get("phase_file_hashes") or {}
-    for p, exp_hash in expected_hashes.items():
-        target = repo / p
-        if not target.is_file() or sha256_file(target) != exp_hash:
-            raise ValidationError("phase baseline/delta changed while phase reviewer running; review result stale")
+    # Stale run detection: canonical freshness check
+    fresh, fresh_msg = phase_review_freshness(repo, task_id, phase_id, run_meta)
+    if not fresh:
+        raise ValidationError(f"PHASE_REVIEW_STALE: {fresh_msg}")
 
-    ckpt_f = phase_dir(tdir, phase_id) / "checkpoint.json"
-    if not ckpt_f.is_file():
-        raise ValidationError("phase checkpoint missing during review ingestion")
-    ckpt = read_json(ckpt_f)
-    paths = [c.get("path") if isinstance(c, dict) else str(c) for c in (ckpt.get("manifest_delta") or []) if c]
-    live_diff = _compute_phase_diff(repo, paths)
-    pkg_p = Path(run_meta["package_path"])
-    if not pkg_p.is_file():
-        raise ValidationError(f"phase review package missing at {pkg_p}")
-    pkg_content = pkg_p.read_text(encoding="utf-8")
-    if redact_text(live_diff).strip() not in pkg_content:
-        raise ValidationError("phase baseline/delta changed while phase reviewer running; review result stale")
+    # Validate ledger integrity
+    ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id)
+    if not ok or not ledger:
+        raise ValidationError(f"PHASE_REVIEW_LEDGER_BLOCKED: {err}")
+
+    reviewers = ledger.get("reviewers") or {}
+    if reviewer not in reviewers:
+        raise ValidationError(f"reviewer '{reviewer}' is not in selected phase reviewer roster")
+
+    rev_entry = reviewers[reviewer]
+    existing_bound_id = rev_entry.get("execution_id")
+    if existing_bound_id and existing_bound_id != execution_id:
+        raise ValidationError(
+            f"reviewer '{reviewer}' already bound to execution '{existing_bound_id}', rejecting different execution '{execution_id}'"
+        )
+
+    res_dir = phase_review_dir(tdir, phase_id) / "results"
+    res_file = res_dir / f"{reviewer}.json"
+    if res_file.is_file():
+        existing_res = read_json(res_file)
+        if existing_res.get("execution_id") == execution_id:
+            return existing_res.get("result", {})
+
+    current_st = rev_entry.get("state")
+    if current_st == REVIEW_NOT_DISPATCHED:
+        disp = [
+            r for r in run_meta.get("selected_reviewers", [])
+            if ledger.get("reviewers", {}).get(r, {}).get("state") == REVIEW_NOT_DISPATCHED
+        ]
+        if disp:
+            record_phase_dispatch_batch(repo, task_id, phase_id, disp)
+            ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id)
+            rev_entry = ledger.get("reviewers", {}).get(reviewer, {})
+            current_st = rev_entry.get("state")
+
+    if current_st == REVIEW_COMPLETED:
+        raise ValidationError(f"reviewer '{reviewer}' already completed; cannot be silently redispatched")
+    if current_st in (REVIEW_ENV_BLOCKED, REVIEW_FAILED_PROTOCOL):
+        raise ValidationError(f"reviewer '{reviewer}' in failed state '{current_st}'; cannot be completed")
+    if current_st not in (REVIEW_DISPATCHED, REVIEW_PROTOCOL_RETRY_REQUIRED):
+        raise ValidationError(
+            f"cannot complete phase review for '{reviewer}': state is '{current_st}', expected DISPATCHED or PROTOCOL_RETRY_REQUIRED"
+        )
+
+    # Bind execution ID
+    rev_entry["execution_id"] = execution_id
+    import hashlib
+    rev_entry["execution_id_sha256"] = hashlib.sha256(execution_id.encode("utf-8")).hexdigest()
+    ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+    atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
 
     expected_sha = run_meta.get("package_sha256")
     if package_sha256 and expected_sha and package_sha256 != expected_sha:
         raise ValidationError(f"package SHA-256 mismatch for phase review: expected {expected_sha}, got {package_sha256}")
 
-    lpath = phase_ledger_file(tdir, phase_id)
-    if not lpath.is_file():
-        raise ValidationError(f"phase review ledger not found at {lpath}")
-    ledger = read_json(lpath)
-    rev_entry = ledger.setdefault("reviewers", {}).setdefault(reviewer, {})
-
-    parsed_verdict = verdict
-    parsed_findings = findings or []
+    # Resolve trusted transcript if raw response or verdict not directly provided
+    if raw_response is None and verdict is None:
+        try:
+            t_path = resolve_trusted_review_source(host, execution_id)
+            if not t_path or not t_path.is_file():
+                raise FileNotFoundError(f"trusted transcript not found for execution '{execution_id}'")
+            raw_response = _extract_transcript_response(t_path)
+            if not raw_response or not raw_response.strip():
+                raise ValueError("no model response in transcript")
+        except Exception as exc:
+            rev_entry["state"] = REVIEW_ENV_BLOCKED
+            if isinstance(exc, FileNotFoundError):
+                err_code = "TRUSTED_TRANSCRIPT_NOT_FOUND"
+            elif "no model response" in str(exc).lower():
+                err_code = "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE"
+            else:
+                err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
+            rev_entry["last_error"] = err_code
+            rev_entry["last_error_code"] = err_code
+            ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+            atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+            raise ValidationError(f"could not extract trusted transcript for subagent '{execution_id}': {err_code}")
 
     if raw_response is not None:
         try:
-            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_response, re.DOTALL)
-            if not m:
-                raise ValueError("missing JSON code block in review response")
-            payload = json.loads(m.group(1))
-            if payload.get("schema_version") != 2:
-                raise ValueError(f"unsupported schema_version: {payload.get('schema_version')}")
-            if payload.get("reviewer") and payload["reviewer"] != reviewer:
-                raise ValueError(f"reviewer mismatch: expected '{reviewer}', got '{payload.get('reviewer')}'")
-            r_sha = payload.get("review_package_sha256")
-            if r_sha and expected_sha and r_sha != expected_sha:
-                raise ValueError(f"package SHA mismatch in result payload: {r_sha} != {expected_sha}")
-            parsed_verdict = str(payload.get("verdict") or "").upper()
-            if parsed_verdict not in ("PASS", "FINDINGS"):
-                raise ValueError(f"invalid verdict: {parsed_verdict}")
-            parsed_findings = payload.get("findings") or []
-        except Exception as exc:
-            rev_entry["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED
-            rev_entry["protocol_error"] = str(exc)
-            ledger["ledger_sha256"] = compute_ledger_sha(ledger)
-            atomic_write_json(lpath, ledger)
-            return {
-                "status": "PROTOCOL_RETRY_REQUIRED",
-                "reviewer": reviewer,
-                "error": str(exc),
-                "retry_prompt": (
-                    f"Protocol error from `{reviewer}`: {exc}.\n"
-                    "Please submit your review conforming strictly to HARNESS_REVIEW_RESULT_V2 JSON format."
-                ),
-            }
+            parsed = parse_structured_result(
+                text=raw_response,
+                expected_task_id=task_id,
+                expected_run_id=run_id,
+                expected_reviewer=reviewer,
+                expected_package_sha256=expected_sha,
+            )
+        except ValidationError as exc:
+            attempts = int(rev_entry.get("protocol_attempts") or 0) + 1
+            rev_entry["protocol_attempts"] = attempts
+            rev_entry["last_error"] = str(exc)
+            rev_entry["last_error_code"] = "MALFORMED_PROTOCOL_RESPONSE"
+            if attempts <= 1:
+                rev_entry["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED
+                ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+                atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+                return {
+                    "status": "PROTOCOL_RETRY_REQUIRED",
+                    "reviewer": reviewer,
+                    "error": str(exc),
+                    "retry_prompt": (
+                        f"Protocol error from `{reviewer}`: {exc}.\n"
+                        "Please submit your review conforming strictly to HARNESS_REVIEW_RESULT_V2 JSON format."
+                    ),
+                }
+            else:
+                rev_entry["state"] = REVIEW_FAILED_PROTOCOL
+                ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+                atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+                raise ValidationError(f"phase reviewer '{reviewer}' failed protocol repeatedly: {exc}")
+    else:
+        # Private unit-test helper path only
+        parsed = {
+            "schema_version": 2,
+            "task_id": task_id,
+            "run_id": run_id,
+            "reviewer": reviewer,
+            "review_package_sha256": expected_sha,
+            "verdict": verdict,
+            "findings": findings or [],
+        }
 
-    if parsed_verdict not in ("PASS", "FINDINGS"):
-        raise ValidationError(f"invalid verdict '{parsed_verdict}' for phase review")
+    # Save result JSON
+    result_sha = canonical_sha256(parsed)
+    res_payload = {
+        "schema_version": 2,
+        "task_id": task_id,
+        "phase_id": phase_id,
+        "run_id": run_id,
+        "reviewer": reviewer,
+        "execution_id": execution_id,
+        "execution_id_sha256": hashlib.sha256(execution_id.encode("utf-8")).hexdigest(),
+        "completed_at": utc_now(),
+        "result": parsed,
+        "result_sha256": result_sha,
+    }
+    res_file.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(res_file, res_payload)
 
     rev_entry["state"] = REVIEW_COMPLETED
-    rev_entry["verdict"] = parsed_verdict
-    rev_entry["findings"] = parsed_findings
-    rev_entry["completed_at"] = utc_now()
-    rev_entry["execution_id"] = execution_id
+    rev_entry["verdict"] = parsed["verdict"]
+    rev_entry["findings"] = parsed.get("findings") or []
+    rev_entry["completed_at"] = res_payload["completed_at"]
+    rev_entry["result_sha256"] = result_sha
+    rev_entry["last_error"] = None
+    rev_entry["last_error_code"] = None
 
     ledger["ledger_sha256"] = compute_ledger_sha(ledger)
-    atomic_write_json(lpath, ledger)
-    return {
-        "status": "COMPLETED",
-        "reviewer": reviewer,
-        "verdict": parsed_verdict,
-        "findings": parsed_findings,
-    }
+    atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+
+    return parsed
 
 
 def finalize_phase_review(repo: Path, task_id: str, phase_id: str) -> dict[str, Any]:
     tdir = task_dir(repo, task_id)
-    lpath = phase_ledger_file(tdir, phase_id)
-    if not lpath.is_file():
-        raise ValidationError(f"phase review ledger not found at {lpath}")
-    ledger = read_json(lpath)
+    prun_f = phase_run_file(tdir, phase_id)
+    run_id = read_json(prun_f).get("phase_review_run_id") if prun_f.is_file() else None
+    ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id)
+    if not ok or not ledger:
+        raise ValidationError(f"PHASE_REVIEW_LEDGER_BLOCKED: {err}")
     reviewers = ledger.get("reviewers") or {}
     if not reviewers:
         raise ValidationError(f"no reviewers found in ledger for phase '{phase_id}'")
@@ -585,6 +926,7 @@ def invalidate_phase_review(repo: Path, task_id: str, phase_id: str) -> None:
     pkg_f = rdir / "phase-review-package.md"
     if pkg_f.is_file():
         pkg_f.unlink()
+    set_phase_substate(tdir, phase_id, PHASE_IMPLEMENTING)
 
 
 def format_phase_provenance_section(repo: Path, task_id: str) -> str:
@@ -613,7 +955,7 @@ def format_phase_provenance_section(repo: Path, task_id: str) -> str:
             try:
                 res_data = read_json(res_f)
                 run_data = read_json(run_f)
-                delta_sha = str(run_data.get("phase_delta_sha256") or run_data.get("delivery_snapshot_sha256") or "")[:12]
+                delta_sha = str(run_data.get("phase_delta_sha256") or "")[:12]
                 pkg_sha = str(run_data.get("package_sha256") or "")[:12]
                 revs = ", ".join(sorted(run_data.get("selected_reviewers") or []))
                 verdict = res_data.get("verdict", "UNKNOWN")
@@ -649,6 +991,14 @@ def main(argv: list[str] | None = None) -> int:
     pkg_cmd.add_argument("--task-id", required=True)
     pkg_cmd.add_argument("--phase-id", required=True)
 
+    complete_cmd = sub.add_parser("complete")
+    complete_cmd.add_argument("--repo", default=".")
+    complete_cmd.add_argument("--task-id", required=True)
+    complete_cmd.add_argument("--phase-id", required=True)
+    complete_cmd.add_argument("--reviewer", required=True)
+    complete_cmd.add_argument("--execution-id", required=True)
+    complete_cmd.add_argument("--host", default="antigravity")
+
     finalize_cmd = sub.add_parser("finalize")
     finalize_cmd.add_argument("--repo", default=".")
     finalize_cmd.add_argument("--task-id", required=True)
@@ -660,6 +1010,17 @@ def main(argv: list[str] | None = None) -> int:
         pkg_path, meta = build_phase_package(repo, args.task_id, args.phase_id)
         print(f"PHASE_REVIEW_PACKAGE={pkg_path}")
         print(f"PACKAGE_SHA256={meta['package_sha256']}")
+        return 0
+    elif args.subcommand == "complete":
+        res = complete_phase_review(
+            repo,
+            args.task_id,
+            args.phase_id,
+            args.reviewer,
+            args.execution_id,
+            host=args.host,
+        )
+        print(json.dumps(res, indent=2))
         return 0
     elif args.subcommand == "finalize":
         res = finalize_phase_review(repo, args.task_id, args.phase_id)

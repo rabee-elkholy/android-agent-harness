@@ -42,6 +42,118 @@ def compute_receipt_sha(receipt: dict[str, Any]) -> str:
     return canonical_sha256(clean)
 
 
+def validate_checkpoint_receipt(
+    repo: Path,
+    task_id: str,
+    base_head: str,
+    receipt_path: Path,
+    known_valid_heads: set[str],
+) -> tuple[bool, str, dict[str, Any] | None]:
+    if not receipt_path.is_file():
+        return False, f"receipt file not found: {receipt_path}", None
+    try:
+        receipt = read_json(receipt_path)
+    except Exception as exc:
+        return False, f"corrupt receipt json: {exc}", None
+
+    if not isinstance(receipt, dict):
+        return False, "receipt is not a dict", None
+
+    head = str(receipt.get("checkpoint_head") or "").strip()
+    if not head or receipt_path.stem != head:
+        return False, f"receipt filename '{receipt_path.name}' mismatch: does not match checkpoint_head '{head}'", None
+
+    if receipt.get("task_id") != task_id:
+        return False, f"receipt task_id '{receipt.get('task_id')}' mismatch: expected '{task_id}'", None
+
+    if receipt.get("task_base_head") != base_head:
+        return False, f"receipt task_base_head '{receipt.get('task_base_head')}' mismatch: expected '{base_head}'", None
+
+    if receipt.get("receipt_sha256") != compute_receipt_sha(receipt):
+        return False, f"receipt checksum invalid for '{head[:8]}'", None
+
+    parent_head = str(receipt.get("parent_head") or "").strip()
+    if not parent_head:
+        return False, "receipt missing parent_head", None
+
+    if parent_head != base_head and parent_head not in known_valid_heads:
+        return False, f"parent_head '{parent_head[:8]}' is not base_head or a previously validated checkpoint", None
+
+    # Check that head is a descendant of parent_head
+    proc_anc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", parent_head, head],
+        cwd=str(repo),
+        capture_output=True,
+        check=False,
+    )
+    if proc_anc.returncode != 0:
+        return False, f"checkpoint '{head[:8]}' is not a descendant of parent '{parent_head[:8]}'", None
+
+    tdir = task_dir(repo, task_id)
+    plan_f = tdir / "plan.json"
+    if plan_f.is_file():
+        try:
+            plan = read_json(plan_f)
+            approved_shas = {plan.get("plan_sha256")}
+            for sp in plan.get("superseded_plans", []):
+                if isinstance(sp, dict) and sp.get("plan_sha256"):
+                    approved_shas.add(sp.get("plan_sha256"))
+            rec_plan_sha = receipt.get("plan_sha256")
+            if rec_plan_sha and approved_shas and (rec_plan_sha not in approved_shas):
+                return False, f"receipt plan_sha256 '{rec_plan_sha[:8]}' not in approved plan chain", None
+        except Exception:
+            pass
+
+    # Supported one-commit transition
+    proc_cnt = subprocess.run(
+        ["git", "rev-list", "--count", f"{parent_head}..{head}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc_cnt.returncode != 0:
+        return False, f"cannot inspect commit count between '{parent_head[:8]}' and '{head[:8]}'", None
+    if int(proc_cnt.stdout.strip() or 0) != 1:
+        return False, f"checkpoint '{head[:8]}' is not a single-commit transition from parent '{parent_head[:8]}'", None
+
+    # No merge parent
+    proc_merges = subprocess.run(
+        ["git", "rev-list", "--merges", f"{parent_head}..{head}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc_merges.returncode != 0 or proc_merges.stdout.strip():
+        return False, f"merge commit detected in checkpoint '{head[:8]}'", None
+
+    return True, "", receipt
+
+
+def resolve_valid_checkpoint_heads(repo: Path, task_id: str, base_head: str) -> set[str]:
+    tdir = task_dir(repo, task_id)
+    cdir = checkpoints_dir(tdir)
+    if not cdir.is_dir():
+        return set()
+
+    receipt_files = list(cdir.glob("*.json"))
+    valid_heads: set[str] = set()
+
+    changed = True
+    while changed:
+        changed = False
+        for rf in receipt_files:
+            if rf.stem in valid_heads:
+                continue
+            ok, _, rec = validate_checkpoint_receipt(repo, task_id, base_head, rf, valid_heads)
+            if ok and rec:
+                valid_heads.add(rec["checkpoint_head"])
+                changed = True
+
+    return valid_heads
+
+
 def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[bool, str]:
     tdir = task_dir(repo, task_id)
     plan_f = tdir / "plan.json"
@@ -56,23 +168,7 @@ def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[
     if current_head == base_head:
         return True, "head matches immutable task base head"
 
-    # Inspect checkpoint receipts
-    cdir = checkpoints_dir(tdir)
-    accepted_heads: set[str] = set()
-    if cdir.is_dir():
-        for r_file in cdir.glob("*.json"):
-            try:
-                receipt = read_json(r_file)
-                if receipt.get("receipt_sha256") == compute_receipt_sha(receipt):
-                    accepted_heads.add(receipt.get("checkpoint_head", ""))
-            except Exception:
-                continue
-
-    plan_accepted = set(plan.get("accepted_checkpoint_heads") or [])
-    if plan.get("accepted_checkpoint_head"):
-        plan_accepted.add(plan["accepted_checkpoint_head"])
-
-    valid_heads = accepted_heads | plan_accepted
+    valid_heads = resolve_valid_checkpoint_heads(repo, task_id, base_head)
     if current_head not in valid_heads:
         return False, f"HEAD/branch lineage mismatch: commit {current_head[:8]} is not in accepted checkpoints"
 
@@ -111,8 +207,8 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
     if status == "VERIFYING":
         return {
             "code": "RESUME_IMPLEMENTATION",
-            "kind": "HOST_ACTION",
-            "command": "",
+            "kind": "HARNESS_COMMAND",
+            "command": f"python .agents/harness.py task resume --task-id {task_id}",
             "blocking": True,
             "reason": "Task is in VERIFYING state. Must resume to IMPLEMENTING before creating a handoff.",
             "inputs": {"repo": ".", "task_id": task_id},
@@ -177,26 +273,61 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
             if line.startswith("U ") or line.startswith("AA") or line.startswith("UU") or line.startswith("DD"):
                 raise ValidationError(f"Conflicted path in working tree: {line}")
 
-    # Build manifest
-    manifest = build_task_manifest(repo)
-    task_changes = manifest.get("task_changes") or manifest.get("changes") or []
-    expected_files = sorted({c.get("path") for c in task_changes if c.get("path")})
-
     current_head = git_text(repo, "rev-parse", "HEAD")
     task_base_head = plan.get("task_base_head") or plan.get("repository", {}).get("head") or current_head
     if not plan.get("task_base_head"):
         plan["task_base_head"] = task_base_head
         save_plan(plan_f, plan)
 
+    # Build full task manifest and current candidate delta
+    full_manifest = build_task_manifest(repo, task_base_head=task_base_head)
+    full_changes = full_manifest.get("task_changes") or full_manifest.get("changes") or []
+    full_task_paths = sorted({c.get("path") for c in full_changes if c.get("path")})
+    full_task_change_set_sha256 = full_manifest.get("task_change_set_sha256")
+    delivery_snapshot_sha256 = full_manifest.get("delivery_snapshot_sha256")
+
+    curr_manifest = build_manifest(repo)
+    curr_changes = curr_manifest.get("changes") or []
+    checkpoint_paths = sorted({c.get("path") for c in curr_changes if c.get("path")})
+    checkpoint_delta_sha256 = curr_manifest.get("change_set_sha256")
+
+    # Lightweight deterministic safety check before returning DEVELOPER_WIP_COMMIT_REQUIRED
+    try:
+        from fast_kt_lint import lint_file
+        kt_issues = []
+        for c in curr_changes:
+            rel_p = c.get("path", "") if isinstance(c, dict) else str(c or "")
+            p = repo / rel_p
+            if p.suffix == ".kt" and p.is_file():
+                kt_issues.extend(lint_file(p))
+        if kt_issues:
+            raise ValidationError(f"handoff Kotlin lint failed: {len(kt_issues)} issue(s) detected")
+    except ValidationError:
+        raise
+    except Exception as exc:
+        return {
+            "code": "HANDOFF_ENV_BLOCKED",
+            "kind": "DEVELOPER_ACTION",
+            "command": "",
+            "blocking": True,
+            "reason": f"Environment blocked handoff safety preflight check: {exc}",
+            "inputs": {"repo": ".", "task_id": task_id},
+            "expected": {},
+        }
+
     pending_data = {
-        "schema_version": 1,
+        "schema_version": 2,
         "task_id": task_id,
         "plan_sha256": plan.get("plan_sha256"),
         "task_base_head": task_base_head,
         "parent_head": current_head,
-        "delivery_snapshot_sha256": manifest.get("delivery_snapshot_sha256"),
-        "task_change_set_sha256": manifest.get("task_change_set_sha256"),
-        "expected_files": expected_files,
+        "full_task_change_set_sha256": full_task_change_set_sha256,
+        "full_task_paths": full_task_paths,
+        "delivery_snapshot_sha256": delivery_snapshot_sha256,
+        "checkpoint_delta_sha256": checkpoint_delta_sha256,
+        "checkpoint_paths": checkpoint_paths,
+        "expected_files": full_task_paths,
+        "task_change_set_sha256": full_task_change_set_sha256,
         "created_at": utc_now(),
     }
     pending_f = pending_handoff_file(tdir)
@@ -216,7 +347,7 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
             "repo": ".",
             "task_id": task_id,
             "parent_head": current_head,
-            "expected_files": expected_files,
+            "expected_files": full_task_paths,
             "suggested_commit": suggested_commit,
         },
         "expected": {},
@@ -257,7 +388,23 @@ def reconcile_handoff(repo: Path, task_id: str) -> dict[str, Any]:
         check=False,
     )
     if merges_proc.returncode == 0 and merges_proc.stdout.strip():
-        raise ValidationError("TASK_HEAD_LINEAGE_RECONCILIATION_REQUIRED: merge commit detected during handoff")
+        raise ValidationError("TASK_HEAD_LINEAGE_RECONCILIATION_REQUIRED: merge commit detected during handoff lineage check")
+
+    # Section 25: Check for exactly one commit
+    count_proc = subprocess.run(
+        ["git", "rev-list", "--count", f"{parent_head}..{current_head}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if count_proc.returncode != 0:
+        raise ValidationError(f"cannot inspect lineage commit count between '{parent_head[:8]}' and '{current_head[:8]}'")
+    commit_count = int(count_proc.stdout.strip() or "0")
+    if commit_count != 1:
+        raise ValidationError(
+            f"HANDOFF_COMMIT_COUNT_MISMATCH: lineage check failed: expected exactly 1 developer checkpoint commit between {parent_head[:8]} and {current_head[:8]}, found {commit_count}"
+        )
 
     # Section 15.1: Task files must be clean
     manifest = build_manifest(repo)
@@ -280,13 +427,17 @@ def reconcile_handoff(repo: Path, task_id: str) -> dict[str, Any]:
     cdir = checkpoints_dir(tdir)
     cdir.mkdir(parents=True, exist_ok=True)
     receipt_data = {
-        "schema_version": 1,
+        "schema_version": 2,
         "task_id": task_id,
         "plan_sha256": pending.get("plan_sha256"),
         "task_base_head": pending.get("task_base_head"),
         "parent_head": parent_head,
         "checkpoint_head": current_head,
         "delivery_snapshot_sha256": live_snapshot,
+        "full_task_change_set_sha256": pending.get("full_task_change_set_sha256"),
+        "full_task_paths": pending.get("full_task_paths"),
+        "checkpoint_delta_sha256": pending.get("checkpoint_delta_sha256"),
+        "checkpoint_paths": pending.get("checkpoint_paths"),
         "task_change_set_sha256": pending.get("task_change_set_sha256"),
         "expected_files": pending.get("expected_files"),
         "created_at": utc_now(),

@@ -23,7 +23,7 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
 - Antigravity Planning Lifecycle: The interactive Proceed button appears ONLY on initial task plan approval. Subsequent updates show only Review. Never tell the developer to click 'Proceed' on follow-ups or bug fixes during active tasks; execute, compile, and deploy directly. When the developer approves in chat (e.g. replies 'ابدأ' or 'موافق'), the agent MUST immediately record approval via `{{PY}} .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` (which atomically transitions directly to `IMPLEMENTING`); NEVER instruct the developer to run PowerShell commands manually.
 - 6-Tier Dynamic Risk Model: Review policy (`review_policy.py`) evaluates changes into 6 risk tiers (`T0_TRIVIAL` through `T5_CRITICAL`) and is the sole runtime authority for risk tier, required gates, reviewer roster, and device requirements. Execute exactly the policy-resolved roster; when reviewers are omitted by policy, do not dispatch subagents.
 - Next-Action Command Router: After every lifecycle transition or verification step, query `{{PY}} .agents/harness.py task status --task-id <id> --next` (or `workflow.py status`) for the authoritative next action instead of memorizing long sequential stages.
-- Mobile Verification Walkthrough & Device Verification: When device verification is required, Next Action router presents the decision (`MOBILE_VALIDATION_DECISION`). Execute `{{PY}} .agents/harness.py device install-start` to install and launch on target device. If the developer explicitly chooses to skip device verification, record honest skip evidence via `{{PY}} .agents/harness.py device skip-validation --task-id <id> --proof-reference "<phrase>"`. Honest skip records `status: "SKIPPED"` (never synthetic PASS). When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking for sign-off.
+- Mobile Verification Walkthrough & Device Verification: When device verification is required, Next Action router presents the decision (`MOBILE_VALIDATION_DECISION`). Execute `{{PY}} .agents/harness.py device install-start` to install and launch on target device. If the developer explicitly chooses to skip device verification, record honest skip evidence via `{{PY}} .agents/harness.py device skip-validation --task-id <id> --source conversation --proof-reference "<phrase>"`. Honest skip records `status: "SKIPPED"` (never synthetic PASS). When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking for sign-off. Once developer replies with explicit PASS, record device sign-off via `{{PY}} .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<phrase>"`. Never run signoff before developer replies.
 - Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `{{PY}} .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `{{PY}} .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit.
 - Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes is an administrative context action, NOT an Android code delivery task. Directly record the note using `{{PY}} .agents/harness.py context note "<note>"`.
 - Review Host Binding:
@@ -48,6 +48,24 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
   6. On REVIEW_ENV_BLOCKED / REVIEW_PROFILE_BLOCKED / REVIEW_PROTOCOL_BLOCKED, stop reviewer flow and report blocker.
   7. After all completed, run `{{PY}} .agents/harness.py review finalize --task <id>`.
   No legacy PASS token. No EVIDENCE footer. No self-certification.
+- Exact Scoped Phase Review V2 Procedure (Antigravity):
+  1. On `BUILD_PHASE_REVIEW_PACKAGE`: run `{{PY}} .agents/harness.py phase-review package --task-id <id> --phase-id <phase>`.
+  2. On `DISPATCH_PHASE_REVIEWERS`:
+     - use exactly the returned reviewer set;
+     - one `invoke_subagent` call;
+     - for each reviewer:
+         TypeName = exact reviewer role
+         Role = exact reviewer role
+         Prompt = exact current phase brief
+         Workspace = inherit (or omit if host default is used consistently)
+     - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
+     - do not invent reasoning fields.
+  3. Yield; do not poll.
+  4. On reactive reviewer completion, run `{{PY}} .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>`.
+  5. On `RETRY_PHASE_REVIEW_PROTOCOL`, execute the exact router-provided `send_message`.
+  6. On `PHASE_REVIEW_ENV_BLOCKED` / `PHASE_REVIEW_PROTOCOL_BLOCKED` / `PHASE_REVIEW_LEDGER_BLOCKED`, stop reviewer flow and report blocker.
+  7. After all phase reviewers completed, run `{{PY}} .agents/harness.py phase-review finalize --task-id <id> --phase-id <phase>`.
+  8. Advance to next phase via `{{PY}} .agents/harness.py task begin-next-phase --task-id <id>` (no second approval needed).
 
 Antigravity may load `.agents/hooks.json`; Gemini CLI may be rule-enforced only. Report the detected enforcement tier honestly.
 
@@ -63,6 +81,11 @@ Execute commands in this strict sequential order. Every command is fully specifi
 | 3 | **Approve Task** | `{{PY}} .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Record chat approval & atomically transition to IMPLEMENTING |
 | 4 | **(Compat) Begin Task** | `{{PY}} .agents/scripts/workflow.py begin --repo . --task-id <id>` | Idempotent begin compatibility command |
 | 4b | **Zoho Start Sync** | `{{PY}} .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item (when plan has approved zoho_link) |
+| 4c | **Task Handoff** | `{{PY}} .agents/harness.py task handoff --task-id <id>` | Freeze WIP checkpoint for safe worktree switch |
+| 4d | **Reconcile Handoff** | `{{PY}} .agents/harness.py task reconcile-handoff --task-id <id>` | Validate developer WIP commit and update lineage |
+| 4e | **Phase Package** | `{{PY}} .agents/harness.py phase-review package --task-id <id> --phase-id <phase>` | Build immutable phase review package markdown and lean briefs |
+| 4f | **Phase Review Complete** | `{{PY}} .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` | Record trusted specialist phase review completion |
+| 4g | **Phase Review Finalize** | `{{PY}} .agents/harness.py phase-review finalize --task-id <id> --phase-id <phase>` | Finalize phase review evidence and substate |
 | 5 | **Diagnostic Build** | `{{PY}} .agents/scripts/run_gradle_task.py {{ASSEMBLE}}` | Optional diagnostic compile during implementation |
 | 6 | **Prepare Verification** | `{{PY}} .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity` | Freeze review package & transition to VERIFYING. Required: `--task-id` |
 | 7 | **Preflight Gate** | `{{PY}} .agents/scripts/preflight_check.py` (or `{{PY}} .agents/harness.py preflight`) | Deterministic check: room, fast ktlint, string parity. Zero flags required |
@@ -73,10 +96,12 @@ Execute commands in this strict sequential order. Every command is fully specifi
 | 10c | **Resume Task** | `{{PY}} .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume to IMPLEMENTING if fixes needed. Required: `--task-id` |
 | 10d | **Finalize Reviews** | `{{PY}} .agents/harness.py review finalize --task <id>` | Finalize aggregate review evidence once all routed reviewers complete |
 | 11 | **Assemble** | `{{PY}} .agents/harness.py assemble` | Build debug APK (ONLY after all reviewers pass or REVIEWERS=NONE; derived assemble task) |
-| 12 | **Device Deploy / Skip** | `{{PY}} .agents/harness.py device install-start` (or `device skip-validation`) | Install & launch on device (when required), or record explicit developer skip |
+| 12 | **Device Deploy / Skip** | `{{PY}} .agents/harness.py device install-start` (or `device skip-validation --source conversation --proof-reference "<phrase>"`) | Install & launch on device (when required), or record explicit developer skip |
 | 12b | **Screen Capture** | `{{PY}} .agents/scripts/capture_screen.py --output-name <name>` | Optional screenshot verification proof |
+| 12c | **Device Signoff** | `{{PY}} .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<phrase>"` | Record explicit developer device verification sign-off |
 | 13 | **Final Verify** | `{{PY}} .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check. Required: `--task-id` |
 | 14 | **Complete Task** | `{{PY}} .agents/scripts/workflow.py complete --repo . --task-id <id>` | Transition task to READY_FOR_DELIVERY. Required: `--task-id` |
 | 15 | **Deliver Task** | `{{PY}} .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit. Required: `--task-id` |
 | 15b | **Zoho Delivery Sync** | `{{PY}} .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item (when plan has zoho_link) |
 | - | **Context Note** | `{{PY}} .agents/harness.py context note "<note>"` | Record architectural convention/note |
+| - | **Context Instruct** | `{{PY}} .agents/harness.py context instruct "<instruction>" --scope "<scope>" --source conversation --proof-reference "<phrase>" --strength REQUIREMENT` | Add scoped developer instruction to developer-instructions.json |

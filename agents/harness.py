@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|device|verify|zoho|version|commands> [args...]"
+            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|phase-review|device|verify|zoho|version|commands> [args...]"
         )
         return 0
 

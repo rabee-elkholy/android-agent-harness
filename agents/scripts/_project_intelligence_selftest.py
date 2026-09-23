@@ -216,6 +216,259 @@ class ProjectIntelligenceTests(unittest.TestCase):
                 write_project_context(self.repo, after)
         self.assertEqual(original, {name: (context_dir / name).read_bytes() for name in tracked})
 
+    def test_PROJECT_NOTE_001_note_survives_context_refresh(self) -> None:
+        """PROJECT_NOTE_001: human project-notes.md survives context refresh."""
+        self.mixed_project()
+        notes_p = self.repo / ".agents" / "project-context" / "project-notes.md"
+        notes_p.parent.mkdir(parents=True, exist_ok=True)
+        note_content = "# Project Notes\n- Legacy checkout module must stay XML + MVVM until migration approved.\n"
+        notes_p.write_text(note_content, encoding="utf-8")
+
+        payload = extract_consistent_project_context(self.repo)
+        write_project_context(self.repo, payload)
+
+        self.assertTrue(notes_p.is_file())
+        self.assertEqual(note_content, notes_p.read_text(encoding="utf-8"))
+
+    def test_PROJECT_NOTE_002_note_file_not_overwritten_by_generated_context(self) -> None:
+        """PROJECT_NOTE_002: write_project_context does not overwrite or touch project-notes.md."""
+        self.mixed_project()
+        notes_p = self.repo / ".agents" / "project-context" / "project-notes.md"
+        notes_p.parent.mkdir(parents=True, exist_ok=True)
+        note_content = "Custom human note\n"
+        notes_p.write_text(note_content, encoding="utf-8")
+
+        facts = extract_project_facts(self.repo)
+        ctx_dir = write_project_context(self.repo, facts)
+        self.assertEqual(note_content, (ctx_dir / "project-notes.md").read_text(encoding="utf-8"))
+
+    def test_PROJECT_INST_001_global_instruction_reaches_applicable_future_task_context(self) -> None:
+        """PROJECT_INST_001: global instruction reaches applicable future task context."""
+        self.mixed_project()
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_p.write_text(json.dumps({
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "pi-global-01",
+                    "status": "ACTIVE",
+                    "scope": {"kind": "GLOBAL", "value": "*"},
+                    "strength": "REQUIREMENT",
+                    "text": "All new public classes must have KDoc",
+                    "applies_to": ["ANY"],
+                }
+            ]
+        }), encoding="utf-8")
+
+        res = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertEqual("RESOLVED", res.get("status"))
+        app_inst = res.get("developer_instructions", [])
+        self.assertTrue(any(i.get("id") == "pi-global-01" for i in app_inst))
+
+    def test_PROJECT_INST_002_module_instruction_applies_only_to_matching_module(self) -> None:
+        """PROJECT_INST_002: MODULE instruction applies only to matching module."""
+        self.mixed_project()
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_p.write_text(json.dumps({
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "pi-profile-mod",
+                    "status": "ACTIVE",
+                    "scope": {"kind": "MODULE", "value": ":feature:profile"},
+                    "strength": "REQUIREMENT",
+                    "text": "Profile module must maintain MVP contract pattern",
+                    "applies_to": ["ANY"],
+                }
+            ]
+        }), encoding="utf-8")
+
+        res_profile = resolve_task_context(self.repo, file="feature/profile/src/main/java/com/example/profile/ProfilePresenter.java")
+        self.assertTrue(any(i.get("id") == "pi-profile-mod" for i in res_profile.get("developer_instructions", [])))
+
+        res_home = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertFalse(any(i.get("id") == "pi-profile-mod" for i in res_home.get("developer_instructions", [])))
+
+    def test_PROJECT_INST_003_package_instruction_respects_package_ancestry(self) -> None:
+        """PROJECT_INST_003: PACKAGE instruction respects package ancestry."""
+        self.mixed_project()
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_p.write_text(json.dumps({
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "pi-pkg-profile",
+                    "status": "ACTIVE",
+                    "scope": {"kind": "PACKAGE", "value": "com.example.profile"},
+                    "strength": "REQUIREMENT",
+                    "text": "Profile package requires presenter isolation",
+                    "applies_to": ["ANY"],
+                }
+            ]
+        }), encoding="utf-8")
+
+        res_pkg = resolve_task_context(self.repo, file="feature/profile/src/main/java/com/example/profile/ProfileContract.java")
+        self.assertTrue(any(i.get("id") == "pi-pkg-profile" for i in res_pkg.get("developer_instructions", [])))
+
+        res_other = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertFalse(any(i.get("id") == "pi-pkg-profile" for i in res_other.get("developer_instructions", [])))
+
+    def test_PROJECT_INST_004_path_instruction_respects_path_boundaries(self) -> None:
+        """PROJECT_INST_004: PATH instruction respects path boundaries."""
+        self.mixed_project()
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_p.write_text(json.dumps({
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "pi-path-feature",
+                    "status": "ACTIVE",
+                    "scope": {"kind": "PATH", "value": "feature/profile"},
+                    "strength": "REQUIREMENT",
+                    "text": "Feature profile path convention",
+                    "applies_to": ["ANY"],
+                }
+            ]
+        }), encoding="utf-8")
+
+        res_match = resolve_task_context(self.repo, file="feature/profile/src/main/java/com/example/profile/ProfileFragment.java")
+        self.assertTrue(any(i.get("id") == "pi-path-feature" for i in res_match.get("developer_instructions", [])))
+
+        res_outside = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertFalse(any(i.get("id") == "pi-path-feature" for i in res_outside.get("developer_instructions", [])))
+
+    def test_PROJECT_INST_005_superseded_instruction_is_inactive(self) -> None:
+        """PROJECT_INST_005: superseded instruction is inactive."""
+        self.mixed_project()
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_p.write_text(json.dumps({
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "pi-old",
+                    "status": "SUPERSEDED",
+                    "scope": {"kind": "GLOBAL", "value": "*"},
+                    "strength": "REQUIREMENT",
+                    "text": "Deprecated rule",
+                    "applies_to": ["ANY"],
+                }
+            ]
+        }), encoding="utf-8")
+
+        res = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertFalse(any(i.get("id") == "pi-old" for i in res.get("developer_instructions", [])))
+
+    def test_PROJECT_INST_006_conflicting_applicable_instructions_produce_deterministic_conflict_state(self) -> None:
+        """PROJECT_INST_006: conflicting applicable instructions produce deterministic conflict state."""
+        self.mixed_project()
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_p.write_text(json.dumps({
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "pi-req-1",
+                    "status": "ACTIVE",
+                    "scope": {"kind": "MODULE", "value": ":feature:profile"},
+                    "strength": "REQUIREMENT",
+                    "text": "Always use MVVM pattern in this module",
+                    "applies_to": ["ANY"],
+                },
+                {
+                    "id": "pi-req-2",
+                    "status": "ACTIVE",
+                    "scope": {"kind": "MODULE", "value": ":feature:profile"},
+                    "strength": "REQUIREMENT",
+                    "text": "Never use MVVM pattern in this module",
+                    "applies_to": ["ANY"],
+                },
+            ]
+        }), encoding="utf-8")
+
+        res = resolve_task_context(self.repo, file="feature/profile/src/main/java/com/example/profile/ProfilePresenter.java")
+        self.assertEqual("DEVELOPER_INSTRUCTION_CONFLICT", res.get("status"))
+
+    def test_PROJECT_INST_007_plan_binds_applicable_instruction_ids_and_hashes(self) -> None:
+        """PROJECT_INST_007: plan binds applicable instruction IDs and hashes."""
+        import argparse
+        import subprocess
+        import uuid
+        import workflow
+        from _vnext_common import atomic_write_json, canonical_sha256, utc_now
+
+        subprocess.run(["git", "init", "-q"], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "config", "user.email", "test@invalid"], cwd=str(self.repo), check=True)
+
+        manifest = {
+            "schema_version": 1,
+            "architecture_major": 1,
+            "harness_version": "1.0.60",
+            "installed_at": utc_now(),
+            "install_backup": None,
+            "latest_backup": None,
+            "managed_exclude_block": {"begin": "# BEGIN", "end": "# END"},
+            "entries": [],
+        }
+        manifest["ownership_sha256"] = canonical_sha256({k: v for k, v in manifest.items() if k != "ownership_sha256"})
+        atomic_write_json(self.repo / ".agents" / "ownership.json", manifest)
+
+        self.mixed_project()
+        subprocess.run(["git", "add", "."], cwd=str(self.repo), check=True)
+        subprocess.run(["git", "commit", "-m", "init", "-q"], cwd=str(self.repo), check=True)
+
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_data = {
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "pi-plan-bound",
+                    "status": "ACTIVE",
+                    "scope": {"kind": "GLOBAL", "value": "*"},
+                    "strength": "REQUIREMENT",
+                    "text": "Always write unit tests for public methods",
+                    "proof_reference_sha256": "abcdef123456",
+                    "applies_to": ["ANY"],
+                }
+            ]
+        }
+        inst_p.write_text(json.dumps(inst_data), encoding="utf-8")
+
+        task_id = f"task-{uuid.uuid4().hex[:6]}"
+        draft_args = argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Add feature",
+            kind="FEATURE",
+            prompt="Add feature",
+            task_file=None,
+            expected_files="app/src/main/kotlin/com/example/home/HomeScreen.kt",
+        )
+        res = workflow.draft(draft_args)
+        plan_f = workflow.task_dir(self.repo, res["task_id"]) / "plan.json"
+        self.assertTrue(plan_f.is_file())
+        plan = json.loads(plan_f.read_text(encoding="utf-8"))
+        bound_insts = plan.get("developer_instructions", [])
+        self.assertTrue(any(i.get("id") == "pi-plan-bound" and i.get("sha256") == "abcdef123456" for i in bound_insts))
+
+    def test_PROJECT_INST_008_current_source_evidence_remains_higher_authority_than_contradictory_generic_note(self) -> None:
+        """PROJECT_INST_008: current source evidence remains higher authority than contradictory generic note."""
+        self.mixed_project()
+        notes_p = self.repo / ".agents" / "project-context" / "project-notes.md"
+        notes_p.parent.mkdir(parents=True, exist_ok=True)
+        notes_p.write_text("# Notes\nAll UI is written exclusively in XML.\n", encoding="utf-8")
+
+        facts = extract_project_facts(self.repo)
+        app_profiles = [p for p in facts["advisory_knowledge"]["local_profiles"] if "home" in str(p.get("logical_scope", ""))]
+        if app_profiles:
+            self.assertIn("compose", app_profiles[0]["ui_toolkits"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

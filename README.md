@@ -29,8 +29,9 @@ Prompt rules help guide behavior. Android Agent Harness moves selected guarantee
 
 ## What the harness adds
 
-The harness adds five deterministic capabilities around your AI coding assistant:
+The harness adds six engineering capabilities around your AI coding assistant:
 
+- **Persistent project knowledge**: Generated project facts plus human project notes and scoped developer instructions give future task sessions durable repo-local context without depending on one chat history.
 - **Project-aware discovery**: Bounded AST slicing via Task Context, symbol dependency mapping via Project Graph, source-set awareness, and automatic detection of local architecture families in mixed codebases.
 - **Approval-first execution**: Strict plan-before-mutation flow, single-use cryptographic approval nonces, immutable scope and plan hashing, and zero silent scope creep.
 - **Adaptive Android verification**: Canonical 6-tier risk classification matching blast radius to verification requirements, including specialized checks for Room schemas, localized string parity, coroutine dispatchers, and device APIs.
@@ -73,6 +74,8 @@ Evidence-Bound Result
 
 ### Large-Task & Multi-Phase Flow
 
+> Large tasks can be split into coherent phases. When a phase is substantial or risk-sensitive, reviewers inspect the immutable delta for that phase instead of seeing the whole large change for the first time at the end. Final verification still performs an integration-focused review across the completed task.
+
 Complex tasks execute through sequential phases under a single initial approval:
 ```text
 one task approval
@@ -88,6 +91,10 @@ one task approval
 → deliver
 ```
 
+- **Semantic boundaries**: Phases represent coherent engineering steps, not mechanical 200-line splits.
+- **Proportional review**: Small or trivial phases skip AI review; substantial deltas (e.g. >= 180 changed lines) or elevated risks trigger 1–2 policy-routed specialists.
+- **Final integration review**: Intermediate phase reviews do not replace the final integration review across the completed task.
+
 ### Urgent Task Interruption & Worktree Handoff
 
 When an urgent hotfix or bug interrupts an in-progress task (Task A):
@@ -102,11 +109,13 @@ Task A
 → task status --next
 ```
 
-**Key Invariants:**
-- One live task per worktree with isolated state.
-- Model never executes Git mutations (100% developer-owned).
-- Mid-task Git commits must follow the handoff protocol; raw unregistered commits remain lineage violations.
-- Final integration review is mandatory even when all phase reviews pass.
+**Key Invariants & Boundaries:**
+- **One live task per worktree**: Each worktree maintains isolated task state. Never run multiple concurrent tasks in the same worktree.
+- **Lineage preservation**: An accepted WIP commit does not cancel or pause Task A; it preserves Task A's lineage receipt chain.
+- **Model never executes Git mutations**: Git commit, worktree, branch, merge, and rebase operations are strictly 100% developer-owned.
+- **Raw commits blocked**: Random unregistered commits in Task A remain lineage violations; only a validated handoff checkpoint commit with accepted lineage receipt is allowed.
+- **Arbitrary merges blocked**: Arbitrary external merge/rebase into an active Task A worktree remains blocked; finish or hand off first.
+- **Chat independence**: Returning to Task A uses persisted harness state on disk (`task status --next`), never chat memory.
 
 ---
 
@@ -163,6 +172,7 @@ For advanced configuration, see [docs/install-or-update-prompt.md](https://githu
 | Capability | Prompt / AGENTS.md only | Android Agent Harness |
 |---|---|---|
 | Architecture guidance | Model remembers it | Local project evidence |
+| Cross-chat project conventions | Repeated manually / prompt-dependent | Repo-local Project Notes + scoped Developer Instructions |
 | Scope control | Instruction | Plan + deterministic drift checks |
 | Approval | Conversational convention | Recorded and plan-bound |
 | Tests | Model may run/report them | Execution evidence gate |
@@ -205,6 +215,90 @@ legacy/profile  → Java + XML + MVP
 home            → Kotlin + XML + MVVM
 tracking        → Kotlin + Compose + MVI
 ```
+
+---
+
+## Persistent Project Knowledge
+
+> **The project remembers, even when the chat doesn’t.**
+>
+> Android Agent Harness keeps durable engineering context inside the repository instead of relying on one chat session or one model’s memory.
+
+Persistent project knowledge is structured across three distinct layers:
+
+### 1. Generated Project Facts
+Machine-derived local architecture, Gradle modules, source sets, UI frameworks (Compose, XML, ViewBinding), persistence patterns (Room, SQLite, DataStore), conventions, and symbol dependency graphs. These live in `.agents/project-context/` (`project-facts.json`, `architecture.md`, `ui.md`, `persistence.md`, `conventions.md`) and are refreshed deterministically from source code.
+
+### 2. Human Project Notes
+For durable domain knowledge, team conventions, and non-obvious engineering decisions that cannot be inferred from code alone.
+
+```text
+Developer:
+"Never inject or call Retrofit APIs directly from ViewModels. Always route through Repository interfaces, map DTOs to domain models, and expose state via StateFlow."
+```
+
+Command:
+```bash
+python .agents/harness.py context note \
+  "Never inject or call Retrofit APIs directly from ViewModels. Always route through Repository interfaces, map DTOs to domain models, and expose state via StateFlow."
+```
+
+- Stored in `.agents/project-context/project-notes.md`.
+- Preserved across context refreshes.
+- Automatically provided to future task planning and reviewer sessions.
+- Clarifies developer intent; cannot overrule contradictory source code facts.
+
+### 3. Scoped Developer Instructions
+For explicit engineering rules intended to apply to future matching tasks based on module, package, path, or feature scope.
+
+```text
+Developer:
+"Whenever we touch payments, preserve the existing callback bridge. Do not migrate it to Flow unless I explicitly ask."
+```
+
+Command:
+```bash
+python .agents/harness.py context instruct \
+  "Preserve the existing callback bridge. Do not migrate it to Flow unless explicitly requested." \
+  --scope "MODULE::payments" \
+  --source conversation \
+  --proof-reference "<developer phrase>" \
+  --strength REQUIREMENT
+```
+
+Supported scopes: `GLOBAL`, `MODULE`, `SOURCE_SET`, `PACKAGE`, `FEATURE`, `ARCH_FAMILY`, `PATH`.
+
+### Truth Hierarchy
+
+When resolving context for task planning and review, the harness applies a strict hierarchy of authority:
+
+```text
+Current source evidence
+    ↓
+Generated project facts
+    ↓
+Developer notes / scoped instructions
+    ↓
+Generic Android guidance
+```
+
+Current source code evidence is always the highest truth. Project notes and scoped instructions explain developer intent and constraints. Generic model advice or external best-practices never override local codebase evidence.
+
+### Cross-Chat Example
+
+```text
+Monday — Chat A
+Developer: "Never use destructive Room migration in this app."
+→ record as project instruction
+
+Two weeks later — Chat B
+Developer: "Add a field to UserEntity."
+→ Task Context resolves the applicable persistence instruction
+→ plan includes the existing migration constraint
+→ agent does not depend on remembering Chat A
+```
+
+The harness rehydrates and matches repo-local context; the chat provider itself is not claimed to remember.
 
 ---
 
@@ -278,6 +372,8 @@ See [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harnes
 - It does not make every host OS-sandboxed.
 - It does not automatically modernize legacy architecture.
 - It does not remove developer authority over Git/release decisions.
+- It is not a general-purpose cross-project/cloud chat-memory system; persistent project knowledge is repo-local harness context.
+- It does not automatically merge/rebase concurrent worktrees or infer ownership of arbitrary external commits.
 
 ---
 
@@ -371,6 +467,15 @@ Never. Git commits, branches, pushes, and release decisions remain 100% develope
 
 **8. What happens if the harness itself is corrupted?**
 The harness includes deterministic health diagnostics (`doctor`) and self-healing repair (`repair`) that can restore managed engine files from the pinned kit without touching your application source code.
+
+**9. Will a new chat remember my project rules?**
+Yes, through repo-local context. Project notes (`project-notes.md`) and scoped developer instructions (`developer-instructions.json`) persist inside the repository. When a new chat begins, Task Context and Discovery automatically carry applicable instructions into task planning. The chat provider itself does not need to remember previous conversations. Current source evidence remains the highest authority.
+
+**10. Can I interrupt a large task for an urgent fix?**
+Yes. Run `python .agents/harness.py task handoff --task-id <id>` to freeze a safe WIP checkpoint, create one developer WIP commit, and validate it with `python .agents/harness.py task reconcile-handoff --task-id <id>`. Then create a separate Git worktree for the urgent fix (Task B). When finished, return to Task A's worktree and resume via `python .agents/harness.py task status --next`. Never run two live tasks in the same worktree.
+
+**11. Does every phase run AI reviewers?**
+No. Deterministic checks (Room schema guards, string parity, fast ktlint, and targeted unit tests) remain primary. Scoped phase delta review runs only when the phase delta is substantial (e.g. >= 180 changed lines), elevates canonical risk (such as `T4_DATA_DEVICE` or `T5_CRITICAL`), touches critical surfaces, or is explicitly requested. Even then, only 1–2 policy-routed specialists review the phase delta. Final integration review across the completed task remains authoritative.
 
 ---
 

@@ -63,6 +63,84 @@ def main() -> int:
         tdir = task_dir(repo, task_id)
         current_run_file = tdir / "current-run.json"
         if not current_run_file.is_file():
+            plan_f = tdir / "plan.json"
+            plan = read_json(plan_f) if plan_f.is_file() else {}
+            status = str(plan.get("status") or "")
+            phases = plan.get("phases") or []
+            phase_state_f = tdir / "phase-state.json"
+
+            if status == "IMPLEMENTING" and phases and phase_state_f.is_file():
+                from phase_review import (
+                    phase_review_dir,
+                    phase_run_file,
+                    phase_ledger_file,
+                    load_phase_ledger,
+                    compute_ledger_sha,
+                    get_phase_substate,
+                    PHASE_REVIEWING,
+                )
+                p_state = read_json(phase_state_f)
+                phase_id = str(p_state.get("current_phase_id") or "")
+                if not phase_id:
+                    active_idx = int(plan.get("active_phase_index") or 0)
+                    if 0 <= active_idx < len(phases):
+                        phase_id = str(phases[active_idx].get("id") or "")
+                substate = get_phase_substate(p_state, phase_id)
+                if substate == PHASE_REVIEWING:
+                    rdir = phase_review_dir(tdir, phase_id)
+                    prun_f = phase_run_file(tdir, phase_id)
+                    run_id = read_json(prun_f).get("phase_review_run_id", "") if prun_f.is_file() else ""
+                    target_roles = set(roles)
+                    sanitized_err = str(err).strip()[:1000]
+
+                    try:
+                        with StateLock(st_root):
+                            ok, err_msg, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id or None)
+                            if not ok or not ledger:
+                                raise RuntimeError(f"Corrupt phase ledger: {err_msg}")
+                            reviewers = ledger.get("reviewers", {})
+                            to_transition = []
+                            for r_name, r_data in reviewers.items():
+                                if r_data.get("state") == REVIEW_DISPATCHED and not r_data.get("execution_id"):
+                                    if target_roles:
+                                        if r_name in target_roles:
+                                            to_transition.append(r_name)
+                                    else:
+                                        to_transition.append(r_name)
+                            if not to_transition and not target_roles:
+                                to_transition = [
+                                    r_name for r_name, r_data in reviewers.items()
+                                    if r_data.get("state") == REVIEW_DISPATCHED and not r_data.get("execution_id")
+                                ]
+                            for r in to_transition:
+                                reviewers[r]["state"] = REVIEW_ENV_BLOCKED
+                                reviewers[r]["last_error"] = sanitized_err
+
+                            ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+                            from _vnext_common import atomic_write_json
+                            atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+                    except Exception as exc:
+                        try:
+                            from _vnext_common import atomic_write_json, utc_now
+                            marker_data = {
+                                "schema_version": 1,
+                                "task_id": task_id,
+                                "phase_id": phase_id,
+                                "run_id": run_id,
+                                "error_type": type(exc).__name__,
+                                "error_code": "POST_TOOL_RECONCILE_FAILED",
+                                "occurred_at": utc_now(),
+                            }
+                            marker_file1 = rdir / "post-tool-reconcile-error.json"
+                            marker_file1.parent.mkdir(parents=True, exist_ok=True)
+                            atomic_write_json(marker_file1, marker_data)
+                            if run_id:
+                                marker_file2 = rdir / run_id / "post-tool-reconcile-error.json"
+                                marker_file2.parent.mkdir(parents=True, exist_ok=True)
+                                atomic_write_json(marker_file2, marker_data)
+                        except Exception:
+                            pass
+
             print(json.dumps({}))
             return 0
 

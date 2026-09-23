@@ -2268,9 +2268,17 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     from phase_review import (
         is_phase_review_needed,
         set_phase_substate,
+        compute_phase_diff_stats,
+        compute_phase_delta_sha256,
+        _compute_phase_diff,
         PHASE_REVIEW_PACKAGE_REQUIRED,
         PHASE_COMPLETE,
     )
+
+    diff_paths = [c.get("path") if isinstance(c, dict) else str(c) for c in phase_changes if c]
+    diff_text = _compute_phase_diff(repo, diff_paths)
+    diff_stats = compute_phase_diff_stats(diff_text, diff_paths)
+    phase_delta_sha256 = compute_phase_delta_sha256(phase_id, phase_changes)
 
     review_needed, selected_reviewers = is_phase_review_needed(
         repo=repo,
@@ -2279,6 +2287,7 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         target_phase=target_phase,
         phase_changes=phase_changes,
         phase_policy=phase_policy,
+        diff_stats=diff_stats,
     )
 
     if review_needed:
@@ -2287,11 +2296,16 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         review_status = {"status": "NOT_REQUIRED", "reviewers": []}
 
     checkpoint_record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "task_id": args.task_id,
         "phase_id": phase_id,
         "status": "CHECKPOINT_PASS",
         "checkpoint_at": utc_now(),
+        "phase_delta_sha256": phase_delta_sha256,
+        "changed_files": diff_stats["changed_files"],
+        "added_lines": diff_stats["added_lines"],
+        "deleted_lines": diff_stats["deleted_lines"],
+        "changed_lines": diff_stats["changed_lines"],
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "task_change_set_sha256": manifest["task_change_set_sha256"],
         "manifest_delta": phase_changes,
@@ -2308,36 +2322,16 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     next_phase_idx = curr_idx
 
     if review_needed:
-        set_phase_substate(directory, phase_id, PHASE_REVIEW_PACKAGE_REQUIRED)
+        phase_state = set_phase_substate(directory, phase_id, PHASE_REVIEW_PACKAGE_REQUIRED)
         phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
         atomic_write_json(phase_state_file, phase_state)
     else:
-        set_phase_substate(directory, phase_id, PHASE_COMPLETE)
+        phase_state = set_phase_substate(directory, phase_id, PHASE_COMPLETE)
+        completed = list(phase_state.get("completed_phases") or [])
         if phase_id not in completed:
             completed.append(phase_id)
         phase_state["completed_phases"] = completed
         phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
-        next_phase_idx = curr_idx + 1 if curr_idx != -1 and curr_idx + 1 < len(phases) else curr_idx
-        if next_phase_idx != curr_idx:
-            plan["active_phase_index"] = next_phase_idx
-            save_plan(directory / "plan.json", plan)
-        if curr_idx != -1 and curr_idx + 1 < len(phases):
-            next_phase = phases[curr_idx + 1]
-            phase_state["current_phase_id"] = next_phase["id"]
-            next_dir = directory / "phases" / next_phase["id"]
-            next_dir.mkdir(parents=True, exist_ok=True)
-            cur_man = build_manifest(repo)
-            next_baseline = {
-                "schema_version": 1,
-                "task_id": args.task_id,
-                "phase_id": next_phase["id"],
-                "repository": plan.get("repository"),
-                "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
-                "base_change_set_sha256": cur_man["change_set_sha256"],
-                "changes": cur_man.get("changes") or [],
-            }
-            next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
-            atomic_write_json(next_dir / "baseline.json", next_baseline)
         atomic_write_json(phase_state_file, phase_state)
 
     return {
@@ -2384,9 +2378,9 @@ def begin_next_phase(args: argparse.Namespace) -> dict[str, Any]:
     plan["active_phase_index"] = next_idx
     save_plan(directory / "plan.json", plan)
 
-    phase_state["current_phase_id"] = next_id
     from phase_review import set_phase_substate, PHASE_IMPLEMENTING
-    set_phase_substate(directory, next_id, PHASE_IMPLEMENTING)
+    phase_state = set_phase_substate(directory, next_id, PHASE_IMPLEMENTING)
+    phase_state["current_phase_id"] = next_id
 
     next_dir = directory / "phases" / next_id
     next_dir.mkdir(parents=True, exist_ok=True)
@@ -2515,7 +2509,9 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 set_phase_substate,
                 is_phase_review_needed,
                 check_phase_safety_cap,
+                load_phase_ledger,
                 phase_dir,
+                phase_review_dir,
                 phase_run_file,
                 phase_ledger_file,
                 PHASE_IMPLEMENTING,
@@ -2529,6 +2525,8 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 REVIEW_NOT_DISPATCHED,
                 REVIEW_DISPATCHED,
                 REVIEW_COMPLETED,
+                REVIEW_ENV_BLOCKED,
+                REVIEW_FAILED_PROTOCOL,
                 REVIEW_PROTOCOL_RETRY_REQUIRED,
             )
 
@@ -2584,31 +2582,97 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
 
             if substate == PHASE_REVIEWING:
                 lpath = phase_ledger_file(tdir, phase_id)
+                prun_f = phase_run_file(tdir, phase_id)
+                run_id = read_json(prun_f).get("phase_review_run_id", "") if prun_f.is_file() else ""
+
+                # Check for durable post-tool reconciliation error marker
+                rdir = phase_review_dir(tdir, phase_id)
+                marker_1 = rdir / "post-tool-reconcile-error.json"
+                marker_2 = rdir / run_id / "post-tool-reconcile-error.json" if run_id else None
+                if marker_1.is_file() or (marker_2 and marker_2.is_file()):
+                    return {
+                        "code": "PHASE_REVIEW_ENV_BLOCKED",
+                        "kind": "HARNESS_DIAGNOSTIC",
+                        "blocking": True,
+                        "reason": "Phase reviewer subagent launch failed and post-tool reconciliation encountered an error.",
+                        "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                        "expected": {},
+                    }
+
                 if lpath.is_file():
-                    ledger = read_json(lpath)
+                    ok, err, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run_id or None)
+                    if not ok or not ledger:
+                        return {
+                            "code": "PHASE_REVIEW_LEDGER_BLOCKED",
+                            "kind": "HARNESS_DIAGNOSTIC",
+                            "blocking": True,
+                            "reason": f"Phase review ledger corrupted or invalid: {err}",
+                            "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                            "expected": {},
+                        }
+
                     revs = ledger.get("reviewers") or {}
+
+                    # 1. Environment blocked reviewers
+                    for r_name, r_info in revs.items():
+                        if r_info.get("state") == REVIEW_ENV_BLOCKED:
+                            return {
+                                "code": "PHASE_REVIEW_ENV_BLOCKED",
+                                "kind": "HARNESS_DIAGNOSTIC",
+                                "blocking": True,
+                                "reason": f"Phase reviewer '{r_name}' launch/execution blocked by host environment: {r_info.get('last_error') or 'launch failed'}.",
+                                "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                                "expected": {},
+                            }
+
+                    # 2. Failed protocol reviewers
+                    for r_name, r_info in revs.items():
+                        if r_info.get("state") == REVIEW_FAILED_PROTOCOL:
+                            return {
+                                "code": "PHASE_REVIEW_PROTOCOL_BLOCKED",
+                                "kind": "HARNESS_DIAGNOSTIC",
+                                "blocking": True,
+                                "reason": f"Phase reviewer '{r_name}' failed review protocol repeatedly: {r_info.get('last_error')}.",
+                                "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                                "expected": {},
+                            }
+
+                    # 3. Protocol retry required
                     for r_name, r_info in revs.items():
                         if r_info.get("state") == REVIEW_PROTOCOL_RETRY_REQUIRED:
+                            exec_id = str(r_info.get("execution_id") or "")
+                            err_msg = str(r_info.get("last_error") or r_info.get("protocol_error") or "")
+                            correction_msg = (
+                                f"Protocol error from `{r_name}`: {err_msg}.\n"
+                                "Please submit your review conforming strictly to HARNESS_REVIEW_RESULT_V2 JSON format."
+                            )
                             return {
                                 "action": "send_message",
-                                "code": "RETRY_REVIEW_PROTOCOL",
+                                "code": "RETRY_PHASE_REVIEW_PROTOCOL",
                                 "kind": "HOST_ACTION",
                                 "command": "send_message",
                                 "blocking": True,
-                                "reason": f"Protocol retry required for phase reviewer '{r_name}': {r_info.get('protocol_error')}.",
+                                "reason": f"Protocol retry required for phase reviewer '{r_name}': {err_msg}.",
+                                "reviewer": r_name,
+                                "recipient": exec_id,
+                                "message": correction_msg,
+                                "retry_prompt": correction_msg,
                                 "inputs": {
                                     "repo": ".",
                                     "task_id": task_id,
                                     "phase_id": phase_id,
                                     "reviewer": r_name,
+                                    "recipient": exec_id,
+                                    "message": correction_msg,
                                     "send_message": {
-                                        "recipient": r_info.get("execution_id") or r_name,
-                                        "prompt": f"Protocol error in review: {r_info.get('protocol_error')}. Resubmit valid JSON v2.",
+                                        "recipient": exec_id,
+                                        "prompt": correction_msg,
                                     },
                                 },
                                 "expected": {},
                             }
 
+                    # 4. Not yet dispatched
                     not_dispatched = [r for r, d in revs.items() if d.get("state") == REVIEW_NOT_DISPATCHED]
                     if not_dispatched:
                         cap_ok, cap_msg = check_phase_safety_cap(plan, len(not_dispatched))
@@ -2623,7 +2687,6 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                                 "expected": {},
                             }
 
-                        prun_f = phase_run_file(tdir, phase_id)
                         run_meta = read_json(prun_f) if prun_f.is_file() else {}
                         briefs = run_meta.get("briefs") or {}
                         exec_profile = {
@@ -2640,6 +2703,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                             "kind": "HOST_ACTION",
                             "command": "",
                             "blocking": True,
+                            "phase_id": phase_id,
                             "reason": f"Dispatch phase reviewer subagents: {', '.join(sorted(not_dispatched))}.",
                             "reviewers": sorted(not_dispatched),
                             "package_path": run_meta.get("package_path", ""),
@@ -2656,6 +2720,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                             "expected": {"success_statuses": ["PASS"]},
                         }
 
+                    # 5. Waiting for dispatched reviewers
                     dispatched = [r for r, d in revs.items() if d.get("state") == REVIEW_DISPATCHED]
                     if dispatched:
                         return {
@@ -2669,6 +2734,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                             "expected": {"success_statuses": ["PASS"]},
                         }
 
+                    # 6. Finalize
                     all_completed = all(d.get("state") == REVIEW_COMPLETED for d in revs.values())
                     if all_completed:
                         return {

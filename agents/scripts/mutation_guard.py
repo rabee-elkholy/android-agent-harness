@@ -14,8 +14,13 @@ VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
+    "phase_review", "task_git_lineage",
 }
-BOOTSTRAP_ACTIONS = {"draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification", "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery"}
+BOOTSTRAP_ACTIONS = {
+    "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
+    "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery",
+    "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff",
+}
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 

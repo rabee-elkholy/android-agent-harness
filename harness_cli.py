@@ -988,6 +988,14 @@ def cmd_device(args: argparse.Namespace) -> int:
     return _dispatch_pipeline_script(args, "run_device.py", forward)
 
 
+def cmd_phase_review(args: argparse.Namespace) -> int:
+    """Build, complete, or finalize scoped phase reviews via phase_review.py."""
+    forward = list(args.phase_review_args)
+    if forward and forward[0] == "--":
+        forward = forward[1:]
+    return _dispatch_pipeline_script(args, "phase_review.py", forward)
+
+
 FULL_SELFTEST_SUITES = (
     "_vnext_selftest.py",
     "_hook_selftest.py",
@@ -1009,6 +1017,8 @@ FULL_SELFTEST_SUITES = (
     "_project_intelligence_selftest.py",
     "_graph_discovery_selftest.py",
     "_antigravity_stability_selftest.py",
+    "_phase_review_v2_selftest.py",
+    "_worktree_handoff_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
@@ -1246,6 +1256,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.add_argument("device_args", nargs=argparse.REMAINDER, help="Device arguments (default: install-start)")
     sp.set_defaults(func=cmd_device)
+
+    sp = sub.add_parser("phase-review", help="Build, complete, or finalize scoped phase delta reviews.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("phase_review_args", nargs=argparse.REMAINDER, help="Arguments passed to phase_review.py")
+    sp.set_defaults(func=cmd_phase_review)
 
     sp = sub.add_parser("context", help="Inspect, preview, refresh, or add notes/instructions to derived project context.")
     sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note", "instruct"), help="Context action.")

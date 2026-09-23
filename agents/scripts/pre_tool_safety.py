@@ -331,6 +331,176 @@ def _handle_command(command: str) -> None:
             pass
     emit("allow" if allowed else "deny", reason, tool="run_command", command=command, reason_code="HARNESS_COMMAND" if allowed else "COMMAND_MUTATION_GUARD", task_id=active_tid)
 
+def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], args: dict, tool_name: str) -> None:
+    raw_subs = args.get("Subagents") or args.get("subagents") or []
+    if not isinstance(raw_subs, list) or not raw_subs:
+        emit("deny", "No reviewers specified in Subagents array.", tool=tool_name, reason_code="REVIEWER_ROSTER_EMPTY")
+        return
+
+    dispatchable = list(act.get("reviewers") or [])
+    phase_id = str(act.get("phase_id") or act.get("inputs", {}).get("phase_id") or "")
+    if not phase_id:
+        try:
+            state_dir = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+            ps_file = state_dir / "tasks" / str(plan.get("task_id") or "") / "phase-state.json"
+            if ps_file.is_file():
+                phase_id = str(read_json(ps_file).get("current_phase_id") or "")
+        except Exception:
+            pass
+    briefs = dict(act.get("briefs") or {})
+
+    from phase_review import check_phase_safety_cap
+    cap_ok, cap_msg = check_phase_safety_cap(plan, len(dispatchable))
+    if not cap_ok:
+        emit("deny", cap_msg, tool=tool_name, reason_code="REVIEWER_CALL_SAFETY_CAP_REACHED")
+        return
+
+    allowed_keys_set = set(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS)
+    actual = []
+    for item in raw_subs:
+        if not isinstance(item, dict):
+            emit("deny", "Each entry in Subagents array must be an object.", tool=tool_name, reason_code="SUBAGENT_NOT_OBJECT")
+            return
+
+        if "model" in item or "Model" in item:
+            emit(
+                "deny",
+                (
+                    "REVIEWER_MODEL_OVERRIDE_FORBIDDEN: Do not send 'model' or 'Model' "
+                    "in reviewer invocation. Reviewer model inheritance is achieved by omission."
+                ),
+                tool=tool_name,
+                reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
+            )
+            return
+
+        supplied_reasoning_keys = [k for k in item if k in COMMON_REASONING_KEYS]
+        if supplied_reasoning_keys:
+            emit(
+                "deny",
+                "This host does not expose trusted per-subagent reasoning control. Omit reasoning override and inherit the parent setting.",
+                tool=tool_name,
+                reason_code="UNSUPPORTED_REASONING_KEY",
+            )
+            return
+
+        for k in item:
+            if k not in allowed_keys_set:
+                emit(
+                    "deny",
+                    f"Unexpected key '{k}' in subagent invocation. Allowed keys: {sorted(allowed_keys_set)}.",
+                    tool=tool_name,
+                    reason_code="UNEXPECTED_SUBAGENT_KEY",
+                )
+                return
+
+        if "Role" not in item:
+            emit("deny", "Subagent entry missing mandatory Role.", tool=tool_name, reason_code="MISSING_SUBAGENT_ROLE")
+            return
+        r_role = str(item["Role"]).strip()
+        if not r_role:
+            emit("deny", "Subagent entry Role is empty.", tool=tool_name, reason_code="MISSING_SUBAGENT_ROLE")
+            return
+
+        if "TypeName" not in item:
+            emit("deny", "Subagent entry missing mandatory TypeName.", tool=tool_name, reason_code="MISSING_SUBAGENT_TYPENAME")
+            return
+        r_type = str(item["TypeName"]).strip()
+        if not r_type:
+            emit("deny", "Subagent entry TypeName is empty.", tool=tool_name, reason_code="MISSING_SUBAGENT_TYPENAME")
+            return
+
+        if r_type != r_role:
+            emit(
+                "deny",
+                f"Reviewer invocation mismatch: TypeName '{r_type}' does not match Role '{r_role}'. Both must refer to the same reviewer.",
+                tool=tool_name,
+                reason_code="REVIEWER_ROLE_MISMATCH",
+            )
+            return
+
+        if r_role not in dispatchable:
+            emit(
+                "deny",
+                f"Reviewer '{r_role}' is not in dispatchable reviewers: {sorted(dispatchable)}.",
+                tool=tool_name,
+                reason_code="REVIEWER_ROSTER_EXTRA",
+            )
+            return
+
+        if r_role in actual:
+            emit("deny", f"Reviewer batch contains duplicate reviewer: '{r_role}'.", tool=tool_name, reason_code="DUPLICATE_REVIEWER")
+            return
+        actual.append(r_role)
+
+        if "Prompt" not in item:
+            emit("deny", "Subagent entry missing mandatory Prompt.", tool=tool_name, reason_code="MISSING_SUBAGENT_PROMPT")
+            return
+        supplied_prompt = str(item["Prompt"]).replace("\r\n", "\n").strip()
+        if not supplied_prompt:
+            emit("deny", "Subagent entry Prompt is empty.", tool=tool_name, reason_code="MISSING_SUBAGENT_PROMPT")
+            return
+
+        brief_val = briefs.get(r_role)
+        if brief_val and Path(str(brief_val)).is_file():
+            expected_prompt = Path(str(brief_val)).read_text(encoding="utf-8").replace("\r\n", "\n").strip()
+        elif isinstance(brief_val, str) and brief_val.strip():
+            expected_prompt = brief_val.replace("\r\n", "\n").strip()
+        else:
+            emit("deny", f"Reviewer brief missing or unreadable for '{r_role}'.", tool=tool_name, reason_code="REVIEW_PROFILE_BLOCKED")
+            return
+
+        if supplied_prompt != expected_prompt:
+            emit(
+                "deny",
+                f"Reviewer prompt for '{r_role}' does not match the generated reviewer brief.",
+                tool=tool_name,
+                reason_code="REVIEWER_PROMPT_MISMATCH",
+            )
+            return
+
+    actual_set = set(actual)
+    disp_set = set(dispatchable)
+    if actual_set != disp_set:
+        missing = disp_set - actual_set
+        extra = actual_set - disp_set
+        if missing:
+            emit(
+                "deny",
+                f"Reviewer batch incomplete: expected {len(disp_set)} reviewers ({sorted(disp_set)}), got {len(actual_set)} ({sorted(actual_set)}). All dispatchable reviewers must be launched in a single invoke_subagent call.",
+                tool=tool_name,
+                reason_code="REVIEWER_ROSTER_INCOMPLETE",
+            )
+            return
+        if extra:
+            emit(
+                "deny",
+                f"Reviewer batch contains extra reviewers: expected {sorted(disp_set)}, got {sorted(actual_set)}.",
+                tool=tool_name,
+                reason_code="REVIEWER_ROSTER_EXTRA",
+            )
+            return
+
+    try:
+        from phase_review import record_phase_dispatch_batch
+        record_phase_dispatch_batch(
+            REPO,
+            str(plan.get("task_id") or ""),
+            phase_id,
+            sorted(actual),
+            host="antigravity",
+        )
+    except Exception as exc:
+        emit(
+            "deny",
+            f"[PHASE_REVIEW_RECEIPT_WRITE_FAILED] Failed creating phase reviewer dispatch receipt ({type(exc).__name__}): {exc}",
+            tool=tool_name,
+            reason_code="PHASE_REVIEW_RECEIPT_WRITE_FAILED",
+        )
+        return
+
+    emit("allow", "Phase reviewer roster exactly matches the approved phase review plan.", tool=tool_name, reason_code="DISPATCH_PHASE_REVIEWERS_ALLOWED")
+
 
 def _handle_subagent(name: str, args: dict) -> None:
     # Zero-polling invariant: block busy-waiting loops
@@ -355,6 +525,60 @@ def _handle_subagent(name: str, args: dict) -> None:
         plan = active_plan(REPO)
         status = str(plan.get("status") or "")
         if status == "IMPLEMENTING":
+            task_id = str(plan.get("task_id") or "")
+            if not task_id:
+                state_dir = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+                active_f = state_dir / "active-task.json"
+                if active_f.is_file():
+                    task_id = str(read_json(active_f).get("task_id") or "")
+            from workflow import resolve_next_action
+            act = resolve_next_action(REPO, task_id, plan)
+            act_code = act.get("code")
+
+            if act_code == "RETRY_PHASE_REVIEW_PROTOCOL":
+                if name != "send_message":
+                    emit(
+                        "deny",
+                        f"send_message is required to retry phase review protocol (got tool '{name}').",
+                        tool=name,
+                        reason_code="RETRY_PHASE_REVIEW_PROTOCOL_REQUIRED",
+                    )
+                    return
+                expected_recipient = str(act.get("recipient") or "").strip()
+                expected_msg = str(act.get("message") or "").strip()
+                supplied_recipient = str(args.get("Recipient") or args.get("recipient") or "").strip()
+                supplied_msg = str(args.get("Message") or args.get("message") or "").strip()
+                if not supplied_recipient or supplied_recipient != expected_recipient:
+                    emit(
+                        "deny",
+                        f"send_message recipient mismatch: expected '{expected_recipient}', got '{supplied_recipient}'.",
+                        tool=name,
+                        reason_code="RETRY_RECIPIENT_MISMATCH",
+                    )
+                    return
+                if not supplied_msg or supplied_msg.replace("\r\n", "\n").strip() != expected_msg.replace("\r\n", "\n").strip():
+                    emit(
+                        "deny",
+                        "send_message message does not match the required protocol retry prompt.",
+                        tool=name,
+                        reason_code="RETRY_MESSAGE_MISMATCH",
+                    )
+                    return
+                emit("allow", "Protocol retry send_message matches router requirements.", tool=name, reason_code="RETRY_PHASE_REVIEW_PROTOCOL_ALLOWED")
+                return
+
+            if act_code == "DISPATCH_PHASE_REVIEWERS":
+                if name != "invoke_subagent":
+                    emit(
+                        "deny",
+                        f"invoke_subagent is required to dispatch phase reviewers (got tool '{name}').",
+                        tool=name,
+                        reason_code="DISPATCH_PHASE_REVIEWERS_REQUIRED",
+                    )
+                    return
+                _handle_phase_reviewer_dispatch(act, plan, args, name)
+                return
+
             raw_subs = args.get("Subagents") or args.get("subagents") or []
             if isinstance(raw_subs, list) and len(raw_subs) > 5:
                 emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
