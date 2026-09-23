@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "agents/.gitignore": "8a0eaa7cc8e55d17da96f31f6863b5e9b5aba15bb03fd6e8fb07a8cb89e5715c",
-    "agents/VERSION": "ec046849c5fdce6e4600cf10c6f09097d12fe2b5a10fae338dc454733ac4f195",
+    "agents/VERSION": "773eba583c31f6e4851a4d609e3532113283539dbeca3ef706d7f8a902cde68e",
     "agents/command-packs/check-strings.md.template": "688d464d69849d4b5bc68faae49bf79a196d882765ac5eaf9b829bd8df8b9c0b",
     "agents/command-packs/commit-msg.md.template": "cf8bd58a510a6953a66e2c705c8c9515f0369e4fa454af9bbc9c7f6b1805b80e",
     "agents/command-packs/crash-triage.md.template": "acea2311229cc8d4f7d1eae515a4d3f3b52246437df25ee75dfa40d3407dc69a",

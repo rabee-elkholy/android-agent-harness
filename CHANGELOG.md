@@ -4,6 +4,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.61] - 2026-09-23
+
+### Production hardening
+
+- Restored a single phase transition authority: checkpoint completes the current phase, and `begin-next-phase` alone advances the plan and creates the next baseline.
+- Bound Phase Review V2 dispatch, completion, and finalization to the active run, immutable reviewer roster, fresh file identities, durable receipts, and validated result artifacts. Interrupted result ingestion now recovers without losing the reviewer verdict.
+- Corrected handoff attribution against the original task baseline, including dirty files and consecutive developer checkpoints, with tighter commit scope and receipt validation.
+- Resolved review hosts from explicit selection or installed configuration so Antigravity, Claude Code, Codex, and generic hosts report their actual review proof capabilities.
+- Added the Project Constitution, optional Antigravity `/grill-me` and `/goal` guidance, corrected public documentation, and refreshed release checksums.
+
 ## [1.0.60] - 2026-09-22
 
 ### Same-Model Adaptive Reviewer Reasoning
