@@ -1356,7 +1356,7 @@ class LifecycleTests(RepoCase):
             agent_file = self.repo / ".agents" / "agents" / role / "agent.md"
             self.assertTrue(agent_file.is_file(), f"{agent_file} must exist")
             text = agent_file.read_text(encoding="utf-8")
-            self.assertIn(f"name: {role}", text)
+            self.assertTrue(f'name: "{role}"' in text or f"name: {role}" in text)
             self.assertIn("subagent: true", text)
             self.assertIn("mainAgent: false", text)
             self.assertIn("view_file", text)
@@ -3428,10 +3428,10 @@ class CleanInstallV2SpecificationTests(RepoCase):
         plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
         plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
         prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-        self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+        self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof["model_policy"])
         self.assertNotIn("allow_model_escalation", prof)
         for rev_info in prof["reviewers"].values():
-            self.assertEqual("inherit", rev_info["required_model"])
+            self.assertNotIn("required_model", rev_info)
             self.assertNotIn("preferred_model", rev_info)
             self.assertNotIn("fallback_model", rev_info)
 
@@ -3466,7 +3466,8 @@ class CleanInstallV2SpecificationTests(RepoCase):
         plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
         with mock.patch.dict("os.environ", {"HARNESS_MODEL_ROUTES": json.dumps({"antigravity": {"STRONG": "pro"}}), "HARNESS_ALLOW_MODEL_ESCALATION": "1"}):
             prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-            self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["required_model"])
+            self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof["model_policy"])
+            self.assertNotIn("required_model", prof["reviewers"]["security-reviewer-agent"])
             self.assertNotIn("preferred_model", prof["reviewers"]["security-reviewer-agent"])
 
     # -------------------------------------------------------------

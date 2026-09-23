@@ -431,7 +431,7 @@ class HarnessDoctor:
                 category,
                 "Reviewer Settings",
                 "PASS",
-                f"MODEL_CALL_BUDGET = {budget}; Reviewer Model Policy = INHERIT_PARENT_ONLY; Reviewer Reasoning = ADAPTIVE_HOST_CAPABILITY (Antigravity per-subagent reasoning control = UNAVAILABLE; fallback = inherit current reasoning)",
+                f"MODEL_CALL_BUDGET = {budget}; Reviewer Model Policy = INHERIT_PARENT_BY_OMISSION; Reviewer Reasoning = ADAPTIVE_HOST_CAPABILITY (Antigravity per-subagent reasoning control = UNAVAILABLE; fallback = inherit current reasoning)",
             )
             self.log(
                 category,
@@ -1171,6 +1171,67 @@ class HarnessDoctor:
                     self.log(cat, "Invoke Reconciliation Hook", "FAIL", "hooks.json missing PostToolUse reconciliation for 'invoke_subagent'.")
                 else:
                     self.log(cat, "Invoke Reconciliation Hook", "PASS", "PostToolUse invoke reconciliation installed for 'invoke_subagent'.")
+
+                # Section 21: Hook Runtime Smoke Validation
+                hook_errors = []
+                checked_cmds = set()
+                for group_name, group in hooks_data.items():
+                    if not isinstance(group, dict):
+                        continue
+                    for event_type, hook_list in group.items():
+                        if not isinstance(hook_list, list):
+                            continue
+                        for hook_entry in hook_list:
+                            if not isinstance(hook_entry, dict):
+                                continue
+                            sub_hooks = hook_entry.get("hooks") if "hooks" in hook_entry else [hook_entry]
+                            for sh in sub_hooks:
+                                cmd_str = str(sh.get("command") or "").strip()
+                                if not cmd_str or cmd_str in checked_cmds:
+                                    continue
+                                checked_cmds.add(cmd_str)
+                                parts = cmd_str.split()
+                                py_exe = parts[0]
+                                resolved_py = shutil.which(py_exe)
+                                if not resolved_py:
+                                    hook_errors.append(f"Python executable '{py_exe}' not found for hook '{cmd_str}'")
+                                    continue
+                                script_rel = parts[1] if len(parts) > 1 else ""
+                                resolved_script = None
+                                for base in (self.repo, self.agents_dir, self.repo / ".agents"):
+                                    cand = base / script_rel
+                                    if cand.is_file():
+                                        resolved_script = cand
+                                        break
+                                if not resolved_script:
+                                    hook_errors.append(f"Hook script '{script_rel}' not resolved from project context")
+                                    continue
+                                if "pre_tool_safety" in script_rel:
+                                    smoke_payload = json.dumps({"tool": "view_file", "arguments": {"AbsolutePath": "README.md"}}).encode("utf-8")
+                                    try:
+                                        p_proc = subprocess.run(
+                                            [resolved_py, str(resolved_script)],
+                                            input=smoke_payload,
+                                            cwd=str(self.repo),
+                                            capture_output=True,
+                                            timeout=5,
+                                            check=False,
+                                        )
+                                        if p_proc.returncode != 0:
+                                            hook_errors.append(f"pre_tool_safety smoke test exited with code {p_proc.returncode}")
+                                        else:
+                                            try:
+                                                out_json = json.loads(p_proc.stdout)
+                                                if out_json.get("decision") != "allow":
+                                                    hook_errors.append(f"pre_tool_safety smoke decision was '{out_json.get('decision')}', expected 'allow'")
+                                            except Exception as exc:
+                                                hook_errors.append(f"pre_tool_safety smoke stdout is not valid JSON ({exc})")
+                                    except Exception as exc:
+                                        hook_errors.append(f"pre_tool_safety smoke invocation failed ({exc})")
+                if hook_errors:
+                    self.log(cat, "Hook Runtime Smoke", "FAIL", "; ".join(hook_errors))
+                else:
+                    self.log(cat, "Hook Runtime Smoke", "PASS", f"Verified {len(checked_cmds)} hook command(s) resolve executable/script and execute JSON contract.")
             except Exception as exc:
                 self.log(cat, "Antigravity Hooks", "FAIL", f"Invalid hooks.json: {exc}")
 

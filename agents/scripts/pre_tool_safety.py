@@ -27,6 +27,17 @@ from policy_vocab import (
     SUBAGENT_ORCHESTRATION_TOOLS,
 )
 
+COMMON_REASONING_KEYS = {
+    "reasoning",
+    "Reasoning",
+    "reasoning_effort",
+    "ReasoningEffort",
+    "effort",
+    "Effort",
+    "thinking_level",
+    "ThinkingLevel",
+}
+
 MAX_STDIN_BYTES = 5 * 1024 * 1024
 AUDIT_MAX_RECORDS = 1000
 WRITE_TOOLS = {
@@ -393,21 +404,66 @@ def _handle_subagent(name: str, args: dict) -> None:
             emit("allow", "Reviewer management is allowed during verification.", tool=name)
             return
 
-        state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
-        active = read_json(state / "active-task.json")
-        current = read_json(state / "tasks" / str(active["task_id"]) / "current-run.json")
-        policy = read_json(Path(current["policy"]))
-        protocol = int(current.get("review_protocol_version") or 1)
+        try:
+            state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+            active = read_json(state / "active-task.json")
+            current = read_json(state / "tasks" / str(active["task_id"]) / "current-run.json")
+            protocol = int(current.get("review_protocol_version") or 1)
+            policy = read_json(Path(current["policy"]))
+        except Exception:
+            emit("deny", "Review execution profile resolution failed.", tool=name, reason_code="REVIEW_PROFILE_BLOCKED")
+            return
         required_reviewers = list(policy.get("reviewers") or [])
 
         # Determine dispatchable reviewers
         if protocol >= 2:
-            from review_orchestrator import load_ledger, dispatchable_reviewers
+            from review_orchestrator import load_ledger, dispatchable_reviewers, ledger_file
             directory = state / "tasks" / str(active["task_id"])
-            ledger = load_ledger(directory, str(current["run_id"]))
-            dispatchable = dispatchable_reviewers(ledger, required_reviewers)
+            run_id_val = str(current.get("run_id") or "")
+            l_path = ledger_file(directory, run_id_val)
+            if l_path.is_file():
+                ledger = load_ledger(directory, run_id_val)
+                dispatchable = dispatchable_reviewers(ledger, required_reviewers)
+            else:
+                dispatchable = list(required_reviewers)
         else:
-            dispatchable = required_reviewers
+            dispatchable = list(required_reviewers)
+
+        reviewer_routes = {}
+        if protocol >= 2:
+            try:
+                from review_execution import resolve_execution_profile
+                review_host = str(current.get("review_host") or "").strip().lower()
+                profile = resolve_execution_profile(REPO, str(active["task_id"]), host=review_host)
+                if not isinstance(profile, dict) or not profile.get("reviewers"):
+                    emit("deny", "Review execution profile is empty or invalid.", tool=name, reason_code="REVIEW_PROFILE_BLOCKED")
+                    return
+                reviewer_routes = profile.get("reviewers", {})
+            except Exception:
+                emit("deny", "Review execution profile resolution failed.", tool=name, reason_code="REVIEW_PROFILE_BLOCKED")
+                return
+
+            for r in dispatchable:
+                r_info = reviewer_routes.get(r)
+                if not r_info:
+                    emit("deny", f"Reviewer '{r}' missing from execution profile.", tool=name, reason_code="REVIEW_PROFILE_BLOCKED")
+                    return
+                brief_p = Path(r_info.get("brief_path") or "")
+                if not brief_p.is_file() or brief_p.stat().st_size == 0:
+                    emit("deny", f"Reviewer brief missing or empty for '{r}'.", tool=name, reason_code="REVIEW_PROFILE_BLOCKED")
+                    return
+                brief_content = str(r_info.get("brief_content") or "").replace("\r\n", "\n").strip()
+                if not brief_content:
+                    emit("deny", f"Reviewer brief unreadable or empty for '{r}'.", tool=name, reason_code="REVIEW_PROFILE_BLOCKED")
+                    return
+        else:
+            try:
+                from review_execution import resolve_execution_profile
+                review_host = str(current.get("review_host") or "").strip().lower()
+                profile = resolve_execution_profile(REPO, str(active["task_id"]), host=review_host)
+                reviewer_routes = profile.get("reviewers", {}) if isinstance(profile, dict) else {}
+            except Exception:
+                reviewer_routes = {}
 
         raw_subs = args.get("Subagents") or args.get("subagents") or []
         if not isinstance(raw_subs, list) or not raw_subs:
@@ -429,7 +485,7 @@ def _handle_subagent(name: str, args: dict) -> None:
             )
             return
 
-        allowed_keys_lower = {k.lower(): k for k in ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS}
+        allowed_keys_set = set(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS)
         actual = []
         for item in raw_subs:
             if not isinstance(item, dict):
@@ -449,42 +505,135 @@ def _handle_subagent(name: str, args: dict) -> None:
                 )
                 return
 
-            # Check allowed keys
-            for k in item:
-                if k.lower() not in allowed_keys_lower:
+            if protocol >= 2:
+                if "Role" not in item:
+                    emit("deny", "Subagent entry missing mandatory Role.", tool=name, reason_code="MISSING_SUBAGENT_ROLE")
+                    return
+                r_role = str(item["Role"]).strip()
+                if not r_role:
+                    emit("deny", "Subagent entry Role is empty.", tool=name, reason_code="MISSING_SUBAGENT_ROLE")
+                    return
+
+                if "TypeName" not in item:
+                    emit("deny", "Subagent entry missing mandatory TypeName.", tool=name, reason_code="MISSING_SUBAGENT_TYPENAME")
+                    return
+                r_type = str(item["TypeName"]).strip()
+                if not r_type:
+                    emit("deny", "Subagent entry TypeName is empty.", tool=name, reason_code="MISSING_SUBAGENT_TYPENAME")
+                    return
+
+                if r_type != r_role:
                     emit(
                         "deny",
-                        f"Unexpected key '{k}' in subagent invocation. Allowed keys: {sorted(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS)}.",
+                        f"Reviewer invocation mismatch: TypeName '{r_type}' does not match Role '{r_role}'. Both must refer to the same reviewer.",
+                        tool=name,
+                        reason_code="REVIEWER_ROLE_MISMATCH",
+                    )
+                    return
+
+                matched = r_role
+                if matched not in dispatchable:
+                    emit(
+                        "deny",
+                        f"Reviewer '{matched}' is not in dispatchable reviewers: {sorted(dispatchable)}.",
+                        tool=name,
+                        reason_code="REVIEWER_ROSTER_EXTRA",
+                    )
+                    return
+            else:
+                r_role = str(item.get("Role") or item.get("role") or "").strip()
+                r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
+                if not r_type and not r_role:
+                    emit("deny", "Subagent entry missing TypeName/Role.", tool=name, reason_code="MISSING_SUBAGENT_ROLE")
+                    return
+                matched = r_type if r_type in dispatchable else (r_role if r_role in dispatchable else None)
+                if not matched:
+                    all_exp = set(required_reviewers)
+                    matched = r_type if r_type in all_exp else (r_role if r_role in all_exp else (r_type or r_role))
+
+            rev_info = reviewer_routes.get(matched, {})
+            rev_reasoning = rev_info.get("reasoning", {}) if isinstance(rev_info, dict) else {}
+            control = rev_reasoning.get("control")
+            native_val = rev_reasoning.get("native_value")
+            arg_name = rev_reasoning.get("argument_name")
+
+            item_allowed_keys = set(allowed_keys_set)
+            if control == "SUPPORTED" and arg_name:
+                item_allowed_keys.add(arg_name)
+
+            supplied_reasoning_keys = [k for k in item if k in COMMON_REASONING_KEYS]
+            if control != "SUPPORTED":
+                if supplied_reasoning_keys:
+                    emit(
+                        "deny",
+                        (
+                            "This host does not expose trusted per-subagent reasoning control. "
+                            "Omit reasoning override and inherit the parent setting."
+                        ),
+                        tool=name,
+                    )
+                    return
+            else:
+                if native_val is not None:
+                    if arg_name not in item or str(item[arg_name]) != str(native_val):
+                        emit(
+                            "deny",
+                            f"Reviewer reasoning override for '{matched}' must use '{arg_name}={native_val}'.",
+                            tool=name,
+                        )
+                        return
+                    other_keys = [k for k in supplied_reasoning_keys if k != arg_name]
+                    if other_keys:
+                        emit(
+                            "deny",
+                            f"Unexpected reasoning key '{other_keys[0]}' for '{matched}'. Expected '{arg_name}'.",
+                            tool=name,
+                        )
+                        return
+                else:
+                    if supplied_reasoning_keys:
+                        emit(
+                            "deny",
+                            (
+                                "This host does not expose trusted per-subagent reasoning control. "
+                                "Omit reasoning override and inherit the parent setting."
+                            ),
+                            tool=name,
+                        )
+                        return
+
+            for k in item:
+                if k not in item_allowed_keys:
+                    emit(
+                        "deny",
+                        f"Unexpected key '{k}' in subagent invocation. Allowed keys: {sorted(item_allowed_keys)}.",
                         tool=name,
                         reason_code="UNEXPECTED_SUBAGENT_KEY",
                     )
                     return
 
-            r_role = str(item.get("Role") or item.get("role") or "").strip()
-            r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
-            if not r_type and not r_role:
-                emit("deny", "Subagent entry missing TypeName/Role.", tool=name, reason_code="MISSING_SUBAGENT_ROLE")
-                return
-
-            # Role/TypeName alignment
-            if r_type and r_role and r_type in dispatchable and r_role in dispatchable and r_type != r_role:
-                emit(
-                    "deny",
-                    f"Reviewer invocation mismatch: TypeName '{r_type}' does not match Role '{r_role}'. Both must refer to the same reviewer.",
-                    tool=name,
-                    reason_code="REVIEWER_ROLE_MISMATCH",
-                )
-                return
-
-            matched = r_type if r_type in dispatchable else (r_role if r_role in dispatchable else None)
-            if not matched:
-                all_exp = set(required_reviewers)
-                matched = r_type if r_type in all_exp else (r_role if r_role in all_exp else (r_type or r_role))
-
             if matched in actual:
                 emit("deny", f"Reviewer batch contains duplicate reviewer: '{matched}'.", tool=name, reason_code="DUPLICATE_REVIEWER")
                 return
             actual.append(matched)
+
+            if protocol >= 2:
+                if "Prompt" not in item:
+                    emit("deny", "Subagent entry missing mandatory Prompt.", tool=name, reason_code="MISSING_SUBAGENT_PROMPT")
+                    return
+                supplied_prompt = str(item["Prompt"]).replace("\r\n", "\n").strip()
+                if not supplied_prompt:
+                    emit("deny", "Subagent entry Prompt is empty.", tool=name, reason_code="MISSING_SUBAGENT_PROMPT")
+                    return
+                expected_prompt = str(reviewer_routes[matched].get("brief_content") or "").replace("\r\n", "\n").strip()
+                if supplied_prompt != expected_prompt:
+                    emit(
+                        "deny",
+                        f"Reviewer prompt for '{matched}' does not match the generated reviewer brief.",
+                        tool=name,
+                        reason_code="REVIEWER_PROMPT_MISMATCH",
+                    )
+                    return
 
         # Exact batch check
         actual_set = set(actual)
@@ -508,32 +657,6 @@ def _handle_subagent(name: str, args: dict) -> None:
                     reason_code="REVIEWER_ROSTER_EXTRA",
                 )
                 return
-
-        # Profile & Prompt verification
-        try:
-            from review_execution import resolve_execution_profile
-            review_host = str(current.get("review_host") or "").strip().lower()
-            profile = resolve_execution_profile(REPO, str(active["task_id"]), host=review_host)
-            reviewer_routes = profile.get("reviewers", {})
-        except Exception:
-            reviewer_routes = {}
-
-        if protocol >= 2 and reviewer_routes:
-            for item in raw_subs:
-                r_type = str(item.get("TypeName") or item.get("typeName") or item.get("name") or "").strip()
-                r_role = str(item.get("Role") or item.get("role") or "").strip()
-                k = r_type if r_type in reviewer_routes else r_role
-                rev_info = reviewer_routes.get(k, {})
-                expected_prompt = str(rev_info.get("brief_content") or "").replace("\r\n", "\n").strip()
-                supplied_prompt = str(item.get("Prompt") or item.get("prompt") or "").replace("\r\n", "\n").strip()
-                if expected_prompt and supplied_prompt and supplied_prompt != expected_prompt:
-                    emit(
-                        "deny",
-                        f"Reviewer prompt for '{k}' does not match the generated reviewer brief.",
-                        tool=name,
-                        reason_code="REVIEWER_PROMPT_MISMATCH",
-                    )
-                    return
 
         # Persist reviewer dispatch receipts for provable independent execution
         try:

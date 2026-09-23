@@ -20,6 +20,7 @@ from _vnext_common import (  # noqa: E402
     active_review_package_path,
     atomic_write_json,
     canonical_sha256,
+    git,
     git_text,
     read_json,
     repository_identity,
@@ -858,6 +859,18 @@ def _build_and_save_plan(
     else:
         resolved_expected_modules = []
 
+    scoped_phase_review_val = None
+    raw_spr = getattr(args, "scoped_phase_review", None)
+    if raw_spr is not None:
+        if isinstance(raw_spr, bool):
+            scoped_phase_review_val = raw_spr
+        elif str(raw_spr).lower() in ("true", "1", "yes"):
+            scoped_phase_review_val = True
+        elif str(raw_spr).lower() in ("false", "0", "no"):
+            scoped_phase_review_val = False
+    elif getattr(args, "scoped_phase_review_enabled", None) is not None:
+        scoped_phase_review_val = bool(args.scoped_phase_review_enabled)
+
     zoho_link = _parse_zoho_link(args)
     if is_revision and zoho_link is None and old_plan and old_plan.get("zoho_link"):
         zoho_link = old_plan["zoho_link"]
@@ -888,6 +901,7 @@ def _build_and_save_plan(
             supersedes_plan_sha256=old_plan_sha,
             revision_number=int((old_plan or {}).get("revision_number", 1)) + 1,
             zoho_link=zoho_link,
+            scoped_phase_review_enabled=scoped_phase_review_val,
         )
         plan["task_baseline"] = old_baseline
         plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
@@ -926,6 +940,7 @@ def _build_and_save_plan(
         architecture_contract=arch_contract,
         phases=parsed_phases,
         zoho_link=zoho_link,
+        scoped_phase_review_enabled=scoped_phase_review_val,
     )
     if cached_ctx and cached_ctx.get("context_id"):
         plan["task_context_id"] = cached_ctx["context_id"]
@@ -958,6 +973,39 @@ def _build_and_save_plan(
     atomic_write_json(state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(directory / "plan.json"), "updated_at": utc_now()})
 
     base_man = build_manifest(repo)
+    sensitive_changes = []
+    try:
+        raw_status = git(repo, "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all")
+        secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
+        chunks = raw_status.split(b"\0")
+        idx = 0
+        while idx < len(chunks):
+            chunk = chunks[idx]
+            idx += 1
+            if not chunk:
+                continue
+            line = chunk.decode("utf-8", errors="surrogateescape")
+            rel = ""
+            if line.startswith("1 "):
+                parts = line.split(" ", 8)
+                if len(parts) >= 9:
+                    rel = parts[8]
+            elif line.startswith("2 "):
+                parts = line.split(" ", 9)
+                if len(parts) >= 10:
+                    rel = parts[9]
+                idx += 1
+            elif line.startswith("? "):
+                rel = line[2:]
+            rel_norm = rel.replace("\\", "/").strip("/")
+            if rel_norm and any(m in rel_norm.lower() for m in secret_markers):
+                p = repo / rel_norm
+                if p.is_file():
+                    h_oid = git_text(repo, "hash-object", "--path", rel_norm, "--stdin", input_bytes=p.read_bytes()).strip()
+                    sensitive_changes.append({"path": rel_norm, "content_identity": f"git:{h_oid}"})
+    except Exception:
+        pass
+
     task_baseline = {
         "schema_version": 1,
         "task_id": task_id,
@@ -965,6 +1013,7 @@ def _build_and_save_plan(
         "base_delivery_snapshot_sha256": plan.get("base_delivery_snapshot_sha256"),
         "base_change_set_sha256": plan.get("base_change_set_sha256"),
         "changes": base_man.get("changes") or [],
+        "sensitive_changes": sensitive_changes,
     }
     task_baseline["baseline_sha256"] = canonical_sha256({
         "schema_version": task_baseline["schema_version"],
@@ -1273,15 +1322,20 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 f"HEAD/branch lineage mismatch: repository branch changed from '{base_repo.get('branch')}' "
                 f"to '{current_identity.get('branch')}' after task approval"
             )
-        if base_repo.get("head") and current_identity.get("head") != base_repo.get("head"):
-            raise ValidationError(
-                f"HEAD/branch lineage mismatch: repository HEAD commit changed from '{base_repo.get('head')[:12]}' "
-                f"to '{current_identity.get('head')[:12]}' after task approval"
-            )
+        cur_head = current_identity.get("head")
+        if base_repo.get("head") and cur_head != base_repo.get("head"):
+            from task_git_lineage import is_valid_task_lineage
+            valid_lineage, lineage_msg = is_valid_task_lineage(repo, args.task_id, cur_head)
+            if not valid_lineage:
+                raise ValidationError(
+                    f"HEAD/branch lineage mismatch: repository HEAD commit changed from '{base_repo.get('head')[:12]}' "
+                    f"to '{cur_head[:12]}' after task approval ({lineage_msg})"
+                )
     with step_progress("Building delivery manifest & snapshot"):
         sublog("Loading task baseline and building manifest...")
         task_baseline = load_task_baseline(repo, args.task_id)
-        manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"))
+        task_base_head = plan.get("task_base_head") or base_repo.get("head")
+        manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"), task_base_head=task_base_head)
         sublog(f"Manifest ready with change set: {manifest.get('change_set_sha256', '')[:12]}")
     with step_progress("Classifying changed surfaces"):
         sublog("Classifying task changes...")
@@ -1434,6 +1488,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "policy": str(policy_path),
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "change_set_sha256": manifest["change_set_sha256"],
+        "task_change_set_sha256": manifest.get("task_change_set_sha256") or "",
         "external_inputs_sha256": manifest.get("external_inputs_sha256") or "",
         "verification_recipes": recipes,
         "review_protocol_version": review_protocol_version,
@@ -1442,22 +1497,6 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "created_at": utc_now(),
     }
     atomic_write_json(directory / "current-run.json", current)
-
-    req_revs = list(policy.get("reviewers") or [])
-    if req_revs:
-        try:
-            from review_orchestrator import init_ledger
-            init_ledger(
-                directory,
-                args.task_id,
-                run_id,
-                manifest["delivery_snapshot_sha256"],
-                manifest["change_set_sha256"],
-                "",
-                req_revs,
-            )
-        except Exception:
-            pass
 
     # Bridge valid pre-existing gate results into EvidenceStore for this new run_id
     try:
@@ -1780,6 +1819,88 @@ def cmd_reconcile_delivery(args: argparse.Namespace) -> dict:
     return {"status": "PASS", "task_id": tid, "task_state": plan.get("status")}
 
 
+def verification_freshness(repo: Path, task_id: str, current_run: dict | None = None) -> dict:
+    """Non-mutating verification freshness resolver comparing live repository state with frozen run."""
+    try:
+        plan = _load_plan(repo, task_id)
+    except Exception as exc:
+        return {"fresh": False, "reason_code": "PLAN_LOAD_FAILED", "reason": str(exc)}
+    if plan.get("status") != "VERIFYING":
+        return {
+            "fresh": False,
+            "reason_code": "NOT_VERIFYING",
+            "reason": f"task '{task_id}' is in status '{plan.get('status')}', not VERIFYING",
+        }
+
+    current = current_run
+    if current is None:
+        directory = task_dir(repo, task_id)
+        current_path = directory / "current-run.json"
+        if not current_path.is_file():
+            return {
+                "fresh": False,
+                "reason_code": "RUN_NOT_INITIALIZED",
+                "reason": f"task '{task_id}' verification run is not initialized",
+            }
+        try:
+            current = read_json(current_path)
+        except Exception as exc:
+            return {"fresh": False, "reason_code": "CURRENT_RUN_CORRUPTED", "reason": str(exc)}
+
+    if str(current.get("task_id") or "") != task_id:
+        return {
+            "fresh": False,
+            "reason_code": "TASK_MISMATCH",
+            "reason": f"current-run task mismatch: expected '{task_id}', found '{current.get('task_id')}'",
+        }
+
+    manifest = build_manifest(repo)
+    checks = [
+        ("delivery_snapshot_sha256", "DELIVERY_SNAPSHOT_CHANGED"),
+        ("change_set_sha256", "CHANGE_SET_CHANGED"),
+        ("external_inputs_sha256", "EXTERNAL_INPUTS_CHANGED"),
+    ]
+    for key, reason_code in checks:
+        curr_val = current.get(key)
+        if not curr_val and key == "external_inputs_sha256" and current.get("manifest"):
+            try:
+                curr_val = read_json(Path(current["manifest"])).get("external_inputs_sha256")
+            except Exception:
+                pass
+        live_val = manifest.get(key)
+        if curr_val and live_val and curr_val != live_val:
+            return {
+                "fresh": False,
+                "reason_code": reason_code,
+                "frozen": curr_val,
+                "live": live_val,
+                "reason": f"STALE: repository {key} modified after verification freeze: {curr_val[:12]} != live {live_val[:12]}",
+            }
+
+    task_cs = current.get("task_change_set_sha256")
+    if task_cs:
+        try:
+            task_manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"))
+            live_task_cs = task_manifest.get("task_change_set_sha256")
+            if live_task_cs and task_cs != live_task_cs:
+                return {
+                    "fresh": False,
+                    "reason_code": "TASK_CHANGE_SET_CHANGED",
+                    "frozen": task_cs,
+                    "live": live_task_cs,
+                    "reason": f"STALE: task change set modified after verification freeze: {task_cs[:12]} != live {live_task_cs[:12]}",
+                }
+        except Exception:
+            pass
+
+    return {
+        "fresh": True,
+        "reason_code": "FRESH",
+        "frozen": current.get("delivery_snapshot_sha256"),
+        "live": manifest.get("delivery_snapshot_sha256"),
+    }
+
+
 def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None) -> dict:
     """Validate that the active verification run is fresh and matches current repository state."""
     plan = _load_plan(repo, task_id)
@@ -1795,19 +1916,9 @@ def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None)
     active_run_id = str(current.get("run_id") or "")
     if run_id and active_run_id != run_id:
         raise ValidationError(f"verification run mismatch: expected run '{run_id}', found '{active_run_id}'")
-    manifest = build_manifest(repo)
-    for key in ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256"):
-        curr_val = current.get(key)
-        if not curr_val and key == "external_inputs_sha256" and current.get("manifest"):
-            try:
-                curr_val = read_json(Path(current["manifest"])).get("external_inputs_sha256")
-            except Exception:
-                pass
-        live_val = manifest.get(key)
-        if curr_val and live_val and curr_val != live_val:
-            raise ValidationError(
-                f"STALE: repository {key} modified after verification freeze: {curr_val[:12]} != live {live_val[:12]}"
-            )
+    freshness = verification_freshness(repo, task_id, current)
+    if not freshness.get("fresh"):
+        raise ValidationError(freshness.get("reason", "Verification run is stale"))
     return current
 
 
@@ -2011,48 +2122,6 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
     return False, "phase policy requires unit tests but no gradle wrapper or passing test evidence was found"
 
 
-def check_phase_reviews(repo: Path, phase_dir: Path, required_reviewers: list[str]) -> tuple[bool, str, list[str]]:
-    if not required_reviewers:
-        return True, "NOT_REQUIRED", []
-    reports: list[dict] = []
-    reviews_file = phase_dir / "reviews.json"
-    if reviews_file.is_file():
-        try:
-            data = json.loads(reviews_file.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                reports = data
-            elif isinstance(data, dict):
-                reports = data.get("reports") or [data]
-        except Exception:
-            pass
-    else:
-        reviews_dir = phase_dir / "reviews"
-        if reviews_dir.is_dir():
-            for f in sorted(reviews_dir.glob("*.json")):
-                try:
-                    rep = read_json(f)
-                    if isinstance(rep, dict):
-                        reports.append(rep)
-                except Exception:
-                    pass
-
-    if not reports:
-        return False, f"phase requires review from {', '.join(sorted(required_reviewers))}, but no review evidence was found", []
-
-    recorded_reviewers = {str(r.get("reviewer") or "") for r in reports}
-    missing = set(required_reviewers) - recorded_reviewers
-    if missing:
-        return False, f"phase review missing required reviewer(s): {', '.join(sorted(missing))}", []
-
-    for r in reports:
-        rev_name = str(r.get("reviewer") or "unknown")
-        verdict = str(r.get("verdict") or "").upper()
-        if verdict == "FINDINGS" or r.get("blocking_findings"):
-            return False, f"phase review from {rev_name} contains unresolved blocking findings", []
-        if verdict != "PASS":
-            return False, f"phase review from {rev_name} verdict is {verdict}, expected PASS", []
-
-    return True, "PASS", sorted(required_reviewers)
 
 
 def checkpoint_phase(args: argparse.Namespace) -> dict:
@@ -2074,6 +2143,15 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     target_phase = next((p for p in phases if p.get("id") == phase_id), None)
     if not target_phase:
         raise ValidationError(f"phase '{phase_id}' not found in plan phases")
+
+    from phase_review import (
+        get_phase_substate,
+        invalidate_phase_review,
+        PHASE_REVIEW_BLOCKED,
+        PHASE_REVIEWING,
+    )
+    if get_phase_substate(phase_state, phase_id) in (PHASE_REVIEW_BLOCKED, PHASE_REVIEWING):
+        invalidate_phase_review(repo, args.task_id, phase_id)
 
     phase_dir = directory / "phases" / phase_id
     phase_dir.mkdir(parents=True, exist_ok=True)
@@ -2187,49 +2265,26 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     except Exception as exc:
         raise ValidationError(f"phase checkpoint unit tests exception: {exc}")
 
-    # 4. Elevated intermediate review (only when justified by critical phase boundary)
-    all_reviewers = list(phase_policy.get("reviewers") or [])
-    is_multi_phase = len(phases) > 1
-    is_critical_boundary = (
-        bool(target_phase.get("critical_boundary"))
-        or bool(target_phase.get("review_required"))
-        or any(s in ("AUTH", "BILLING", "SECURITY", "CRYPTO", "MIGRATION") for s in (phase_policy.get("surfaces") or []))
-        or phase_policy.get("risk_lane") == "CRITICAL"
-        or phase_policy.get("risk_tier") == 5
+    from phase_review import (
+        is_phase_review_needed,
+        set_phase_substate,
+        PHASE_REVIEW_PACKAGE_REQUIRED,
+        PHASE_COMPLETE,
     )
 
-    if is_multi_phase and not is_critical_boundary:
-        # Routine intermediate phases in multi-phase tasks are deterministic-first;
-        # remove duplicate mandatory generic AI reviews.
-        required_reviewers = []
+    review_needed, selected_reviewers = is_phase_review_needed(
+        repo=repo,
+        task_id=args.task_id,
+        plan=plan,
+        target_phase=target_phase,
+        phase_changes=phase_changes,
+        phase_policy=phase_policy,
+    )
+
+    if review_needed:
+        review_status = {"status": "REVIEW_PACKAGE_REQUIRED", "reviewers": selected_reviewers}
     else:
-        if target_phase.get("reviewers"):
-            required_reviewers = list(target_phase["reviewers"])
-        elif is_critical_boundary and all_reviewers:
-            critical_surfaces = {"AUTH", "BILLING", "SECURITY", "CRYPTO"} & (set(phase_policy.get("surfaces") or []) | set(target_phase.get("surfaces") or []))
-            if critical_surfaces and "security-reviewer-agent" in all_reviewers:
-                required_reviewers = ["security-reviewer-agent"]
-            else:
-                required_reviewers = [all_reviewers[0]]
-        else:
-            required_reviewers = all_reviewers
-
-    try:
-        rev_ok, rev_detail, active_reviewers = check_phase_reviews(repo, phase_dir, required_reviewers)
-        if not rev_ok:
-            raise ValidationError(f"phase checkpoint review failed: {rev_detail}")
-        review_status = {"status": rev_detail, "reviewers": active_reviewers}
-    except (ImportError, ValidationError):
-        raise
-    except Exception as exc:
-        raise ValidationError(f"phase checkpoint review exception: {exc}")
-
-    call_budget = 10
-    try:
-        from _product import MODEL_CALL_BUDGET
-        call_budget = max(0, int(MODEL_CALL_BUDGET))
-    except Exception:
-        pass
+        review_status = {"status": "NOT_REQUIRED", "reviewers": []}
 
     checkpoint_record = {
         "schema_version": 1,
@@ -2244,40 +2299,47 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         "compile": compile_status,
         "tests": tests_status,
         "review": review_status,
-        "scoped_review": {"budget": call_budget, "status": review_status["status"], "reviewers": review_status.get("reviewers", [])},
     }
     checkpoint_record["checkpoint_sha256"] = canonical_sha256(checkpoint_record)
     atomic_write_json(phase_dir / "checkpoint.json", checkpoint_record)
 
     completed = list(phase_state.get("completed_phases") or [])
-    if phase_id not in completed:
-        completed.append(phase_id)
-    phase_state["completed_phases"] = completed
-    phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
-
     curr_idx = next((i for i, p in enumerate(phases) if p.get("id") == phase_id), -1)
-    next_phase_idx = curr_idx + 1 if curr_idx != -1 and curr_idx + 1 < len(phases) else curr_idx
-    if next_phase_idx != curr_idx:
-        plan["active_phase_index"] = next_phase_idx
-        save_plan(directory / "plan.json", plan)
-    if curr_idx != -1 and curr_idx + 1 < len(phases):
-        next_phase = phases[curr_idx + 1]
-        phase_state["current_phase_id"] = next_phase["id"]
-        next_dir = directory / "phases" / next_phase["id"]
-        next_dir.mkdir(parents=True, exist_ok=True)
-        cur_man = build_manifest(repo)
-        next_baseline = {
-            "schema_version": 1,
-            "task_id": args.task_id,
-            "phase_id": next_phase["id"],
-            "repository": plan.get("repository"),
-            "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
-            "base_change_set_sha256": cur_man["change_set_sha256"],
-            "changes": cur_man.get("changes") or [],
-        }
-        next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
-        atomic_write_json(next_dir / "baseline.json", next_baseline)
-    atomic_write_json(phase_state_file, phase_state)
+    next_phase_idx = curr_idx
+
+    if review_needed:
+        set_phase_substate(directory, phase_id, PHASE_REVIEW_PACKAGE_REQUIRED)
+        phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
+        atomic_write_json(phase_state_file, phase_state)
+    else:
+        set_phase_substate(directory, phase_id, PHASE_COMPLETE)
+        if phase_id not in completed:
+            completed.append(phase_id)
+        phase_state["completed_phases"] = completed
+        phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
+        next_phase_idx = curr_idx + 1 if curr_idx != -1 and curr_idx + 1 < len(phases) else curr_idx
+        if next_phase_idx != curr_idx:
+            plan["active_phase_index"] = next_phase_idx
+            save_plan(directory / "plan.json", plan)
+        if curr_idx != -1 and curr_idx + 1 < len(phases):
+            next_phase = phases[curr_idx + 1]
+            phase_state["current_phase_id"] = next_phase["id"]
+            next_dir = directory / "phases" / next_phase["id"]
+            next_dir.mkdir(parents=True, exist_ok=True)
+            cur_man = build_manifest(repo)
+            next_baseline = {
+                "schema_version": 1,
+                "task_id": args.task_id,
+                "phase_id": next_phase["id"],
+                "repository": plan.get("repository"),
+                "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
+                "base_change_set_sha256": cur_man["change_set_sha256"],
+                "changes": cur_man.get("changes") or [],
+            }
+            next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
+            atomic_write_json(next_dir / "baseline.json", next_baseline)
+        atomic_write_json(phase_state_file, phase_state)
+
     return {
         "status": CheckpointStatus("CHECKPOINT_PASS"),
         "phase_id": phase_id,
@@ -2290,6 +2352,78 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         "tests": tests_status,
         "review": review_status,
     }
+
+
+def begin_next_phase(args: argparse.Namespace) -> dict[str, Any]:
+    repo = Path(args.repo).resolve()
+    plan = _load_plan(repo, args.task_id)
+    if plan.get("status") != "IMPLEMENTING":
+        raise ValidationError("begin-next-phase requires an IMPLEMENTING plan")
+    phases = plan.get("phases") or []
+    if not phases:
+        raise ValidationError("plan does not define any phases")
+    directory = task_dir(repo, args.task_id)
+    phase_state_file = directory / "phase-state.json"
+    phase_state = read_json(phase_state_file) if phase_state_file.is_file() else {}
+    completed = set(phase_state.get("completed_phases") or [])
+    try:
+        active_idx = int(plan.get("active_phase_index") or 0)
+    except (TypeError, ValueError):
+        active_idx = 0
+    cur_phase = phases[active_idx] if active_idx < len(phases) else phases[-1]
+    cur_id = cur_phase.get("id")
+    if cur_id not in completed:
+        raise ValidationError(f"cannot advance to next phase: current phase '{cur_id}' is not complete")
+
+    next_idx = active_idx + 1
+    if next_idx >= len(phases):
+        raise ValidationError("no next phase to advance to; all phases complete")
+
+    next_phase = phases[next_idx]
+    next_id = next_phase["id"]
+    plan["active_phase_index"] = next_idx
+    save_plan(directory / "plan.json", plan)
+
+    phase_state["current_phase_id"] = next_id
+    from phase_review import set_phase_substate, PHASE_IMPLEMENTING
+    set_phase_substate(directory, next_id, PHASE_IMPLEMENTING)
+
+    next_dir = directory / "phases" / next_id
+    next_dir.mkdir(parents=True, exist_ok=True)
+    baseline_f = next_dir / "baseline.json"
+    if not baseline_f.is_file():
+        cur_man = build_manifest(repo)
+        next_baseline = {
+            "schema_version": 1,
+            "task_id": args.task_id,
+            "phase_id": next_id,
+            "repository": plan.get("repository"),
+            "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
+            "base_change_set_sha256": cur_man["change_set_sha256"],
+            "changes": cur_man.get("changes") or [],
+        }
+        next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
+        atomic_write_json(baseline_f, next_baseline)
+
+    atomic_write_json(phase_state_file, phase_state)
+    return {
+        "status": "ADVANCED",
+        "task_id": args.task_id,
+        "active_phase_index": next_idx,
+        "current_phase_id": next_id,
+    }
+
+
+def cmd_task_handoff(args: argparse.Namespace) -> dict:
+    repo = Path(args.repo).resolve()
+    from task_git_lineage import create_pending_handoff
+    return create_pending_handoff(repo, args.task_id)
+
+
+def cmd_task_reconcile_handoff(args: argparse.Namespace) -> dict:
+    repo = Path(args.repo).resolve()
+    from task_git_lineage import reconcile_handoff
+    return reconcile_handoff(repo, args.task_id)
 
 
 def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> dict[str, Any]:
@@ -2348,26 +2482,257 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 "inputs": {"repo": ".", "task_id": task_id},
                 "expected": {"success_exit_codes": [0]},
             }
-        phases = plan.get("phases") or []
-        if phases:
-            phase_state_file = tdir / "phase-state.json"
-            cur_phase_id = ""
-            if phase_state_file.is_file():
-                try:
-                    p_data = read_json(phase_state_file)
-                    cur_phase_id = str(p_data.get("current_phase_id") or "")
-                except Exception:
-                    pass
-            if not cur_phase_id and isinstance(phases[0], dict):
-                cur_phase_id = phases[0].get("id", "p1")
+
+        pending_handoff_f = tdir / "pending-handoff.json"
+        if pending_handoff_f.is_file():
+            pending = read_json(pending_handoff_f)
+            parent_head = pending.get("parent_head")
+            cur_head = git_text(repo, "rev-parse", "HEAD")
+            if cur_head != parent_head:
+                return {
+                    "code": "RECONCILE_HANDOFF",
+                    "kind": "HARNESS_COMMAND",
+                    "command": f"python .agents/harness.py task reconcile-handoff --repo . --task-id {task_id}",
+                    "blocking": True,
+                    "reason": "Developer WIP commit detected. Reconcile handoff to validate checkpoint receipt.",
+                    "inputs": {"repo": ".", "task_id": task_id},
+                    "expected": {"success_statuses": ["WORKTREE_SWITCH_READY"]},
+                }
             return {
-                "code": "IMPLEMENT_APPROVED_SCOPE",
-                "kind": "MODEL_ACTION",
+                "code": "DEVELOPER_WIP_COMMIT_REQUIRED",
+                "kind": "DEVELOPER_ACTION",
                 "command": "",
                 "blocking": True,
-                "reason": f"Implement code changes within approved scope (active phase: {cur_phase_id}).",
-                "inputs": {"repo": ".", "task_id": task_id, "current_phase_id": cur_phase_id},
+                "reason": "Developer WIP commit required for task checkpoint.",
+                "inputs": {"repo": ".", "task_id": task_id, "parent_head": parent_head},
                 "expected": {},
+            }
+
+        phases = plan.get("phases") or []
+        if phases:
+            from phase_review import (
+                get_phase_substate,
+                set_phase_substate,
+                is_phase_review_needed,
+                check_phase_safety_cap,
+                phase_dir,
+                phase_run_file,
+                phase_ledger_file,
+                PHASE_IMPLEMENTING,
+                PHASE_CHECKS_PASSED,
+                PHASE_REVIEW_PACKAGE_REQUIRED,
+                PHASE_REVIEWING,
+                PHASE_REVIEW_BLOCKED,
+                PHASE_COMPLETE,
+            )
+            from review_orchestrator import (
+                REVIEW_NOT_DISPATCHED,
+                REVIEW_DISPATCHED,
+                REVIEW_COMPLETED,
+                REVIEW_PROTOCOL_RETRY_REQUIRED,
+            )
+
+            phase_state_f = tdir / "phase-state.json"
+            p_state = read_json(phase_state_f) if phase_state_f.is_file() else {
+                "current_phase_id": phases[0]["id"],
+                "completed_phases": [],
+                "phase_checkpoints": {},
+            }
+            try:
+                active_idx = int(plan.get("active_phase_index") or 0)
+            except (TypeError, ValueError):
+                active_idx = 0
+            active_idx = max(0, min(active_idx, len(phases) - 1))
+            cur_phase = phases[active_idx] if isinstance(phases[active_idx], dict) else {}
+            phase_id = str(cur_phase.get("id") or p_state.get("current_phase_id") or "")
+            substate = get_phase_substate(p_state, phase_id)
+
+            completed_set = set(p_state.get("completed_phases") or [])
+            all_done = all(p.get("id") in completed_set for p in phases)
+            if all_done:
+                return {
+                    "code": "PREPARE_VERIFICATION",
+                    "kind": "HARNESS_COMMAND",
+                    "command": f"python .agents/harness.py task prepare-verification {identity} --host antigravity",
+                    "blocking": True,
+                    "reason": "All implementation phases complete. Freeze change set and prepare final verification.",
+                    "inputs": {"repo": ".", "task_id": task_id},
+                    "expected": {"success_statuses": ["VERIFYING"]},
+                }
+
+            if substate == PHASE_REVIEW_BLOCKED:
+                return {
+                    "code": "FIX_PHASE_FINDINGS",
+                    "kind": "MODEL_ACTION",
+                    "command": "",
+                    "blocking": True,
+                    "reason": f"Phase '{phase_id}' review identified findings. Fix defects in active phase before re-checkpointing.",
+                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                    "expected": {},
+                }
+
+            if substate == PHASE_REVIEW_PACKAGE_REQUIRED:
+                return {
+                    "code": "BUILD_PHASE_REVIEW_PACKAGE",
+                    "kind": "HARNESS_COMMAND",
+                    "command": f'python .agents/harness.py phase-review package --repo . --task-id {task_id} --phase-id "{phase_id}"',
+                    "blocking": True,
+                    "reason": f"Build immutable phase review package for phase '{phase_id}'.",
+                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                    "expected": {"success_exit_codes": [0]},
+                }
+
+            if substate == PHASE_REVIEWING:
+                lpath = phase_ledger_file(tdir, phase_id)
+                if lpath.is_file():
+                    ledger = read_json(lpath)
+                    revs = ledger.get("reviewers") or {}
+                    for r_name, r_info in revs.items():
+                        if r_info.get("state") == REVIEW_PROTOCOL_RETRY_REQUIRED:
+                            return {
+                                "action": "send_message",
+                                "code": "RETRY_REVIEW_PROTOCOL",
+                                "kind": "HOST_ACTION",
+                                "command": "send_message",
+                                "blocking": True,
+                                "reason": f"Protocol retry required for phase reviewer '{r_name}': {r_info.get('protocol_error')}.",
+                                "inputs": {
+                                    "repo": ".",
+                                    "task_id": task_id,
+                                    "phase_id": phase_id,
+                                    "reviewer": r_name,
+                                    "send_message": {
+                                        "recipient": r_info.get("execution_id") or r_name,
+                                        "prompt": f"Protocol error in review: {r_info.get('protocol_error')}. Resubmit valid JSON v2.",
+                                    },
+                                },
+                                "expected": {},
+                            }
+
+                    not_dispatched = [r for r, d in revs.items() if d.get("state") == REVIEW_NOT_DISPATCHED]
+                    if not_dispatched:
+                        cap_ok, cap_msg = check_phase_safety_cap(plan, len(not_dispatched))
+                        if not cap_ok:
+                            return {
+                                "code": "REVIEWER_CALL_SAFETY_CAP_REACHED",
+                                "kind": "DEVELOPER_ACTION",
+                                "command": "",
+                                "blocking": True,
+                                "reason": cap_msg,
+                                "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                                "expected": {},
+                            }
+
+                        prun_f = phase_run_file(tdir, phase_id)
+                        run_meta = read_json(prun_f) if prun_f.is_file() else {}
+                        briefs = run_meta.get("briefs") or {}
+                        exec_profile = {
+                            "model_policy": "INHERIT_PARENT_BY_OMISSION",
+                            "workspace": "inherit",
+                            "reviewers": {
+                                r: {"role": r, "type_name": r, "brief_path": briefs.get(r, "")}
+                                for r in not_dispatched
+                            },
+                        }
+
+                        return {
+                            "code": "DISPATCH_PHASE_REVIEWERS",
+                            "kind": "HOST_ACTION",
+                            "command": "",
+                            "blocking": True,
+                            "reason": f"Dispatch phase reviewer subagents: {', '.join(sorted(not_dispatched))}.",
+                            "reviewers": sorted(not_dispatched),
+                            "package_path": run_meta.get("package_path", ""),
+                            "briefs": briefs,
+                            "review_execution_profile": exec_profile,
+                            "inputs": {
+                                "repo": ".",
+                                "task_id": task_id,
+                                "phase_id": phase_id,
+                                "reviewers": sorted(not_dispatched),
+                                "briefs": briefs,
+                                "review_execution_profile": exec_profile,
+                            },
+                            "expected": {"success_statuses": ["PASS"]},
+                        }
+
+                    dispatched = [r for r, d in revs.items() if d.get("state") == REVIEW_DISPATCHED]
+                    if dispatched:
+                        return {
+                            "code": "WAIT_FOR_PHASE_REVIEWERS",
+                            "kind": "HOST_ACTION",
+                            "command": "",
+                            "blocking": True,
+                            "reason": f"Waiting for phase reviewer subagents: {', '.join(sorted(dispatched))}.",
+                            "pending_reviewers": sorted(dispatched),
+                            "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                            "expected": {"success_statuses": ["PASS"]},
+                        }
+
+                    all_completed = all(d.get("state") == REVIEW_COMPLETED for d in revs.values())
+                    if all_completed:
+                        return {
+                            "code": "FINALIZE_PHASE_REVIEW",
+                            "kind": "HARNESS_COMMAND",
+                            "command": f'python .agents/harness.py phase-review finalize --repo . --task-id {task_id} --phase-id "{phase_id}"',
+                            "blocking": True,
+                            "reason": f"Finalize review results for phase '{phase_id}'.",
+                            "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                            "expected": {"success_statuses": ["PASS"]},
+                        }
+
+            if substate == PHASE_COMPLETE:
+                if active_idx + 1 < len(phases):
+                    next_phase = phases[active_idx + 1]
+                    next_id = next_phase.get("id", f"p{active_idx+2}")
+                    return {
+                        "code": "BEGIN_NEXT_PHASE",
+                        "kind": "HARNESS_COMMAND",
+                        "command": f'python .agents/harness.py task begin-next-phase {identity}',
+                        "blocking": True,
+                        "reason": f"Phase '{phase_id}' complete. Advance to next phase '{next_id}'.",
+                        "inputs": {"repo": ".", "task_id": task_id, "next_phase_id": next_id},
+                        "expected": {"success_statuses": ["IMPLEMENTING"]},
+                    }
+                else:
+                    return {
+                        "code": "PREPARE_VERIFICATION",
+                        "kind": "HARNESS_COMMAND",
+                        "command": f"python .agents/harness.py task prepare-verification {identity} --host antigravity",
+                        "blocking": True,
+                        "reason": "Final phase complete. Freeze change set and prepare final verification.",
+                        "inputs": {"repo": ".", "task_id": task_id},
+                        "expected": {"success_statuses": ["VERIFYING"]},
+                    }
+
+            phase_dir_path = phase_dir(tdir, phase_id)
+            baseline_file = phase_dir_path / "baseline.json"
+            base_data = read_json(baseline_file) if baseline_file.is_file() else load_task_baseline(repo, task_id)
+            phase_changes = []
+            try:
+                manifest = build_task_manifest(repo, base_data, expected_files=cur_phase.get("expected_files") or plan.get("expected_files"))
+                phase_changes = manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes") or []
+            except Exception:
+                pass
+            if not phase_changes:
+                return {
+                    "code": "IMPLEMENT_APPROVED_SCOPE",
+                    "kind": "MODEL_ACTION",
+                    "command": "",
+                    "blocking": True,
+                    "reason": f"Implement code changes within approved scope (active phase: {phase_id}).",
+                    "inputs": {"repo": ".", "task_id": task_id, "current_phase_id": phase_id},
+                    "expected": {},
+                }
+
+            return {
+                "code": "CHECKPOINT_PHASE",
+                "kind": "HARNESS_COMMAND",
+                "command": f'python .agents/harness.py task checkpoint-phase {identity} --phase-id "{phase_id}"',
+                "blocking": True,
+                "reason": f"Validate and checkpoint phase '{phase_id}'.",
+                "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                "expected": {"success_exit_codes": [0]},
             }
         return {
             "code": "IMPLEMENT_APPROVED_SCOPE",
@@ -2407,6 +2772,22 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                 "reason": "Verification run artifacts are corrupted; re-run prepare-verification.",
                 "inputs": {"repo": ".", "task_id": task_id},
                 "expected": {"success_exit_codes": [0], "success_statuses": ["VERIFYING"]},
+            }
+
+        freshness = verification_freshness(repo, task_id, current_run)
+        if not freshness.get("fresh"):
+            return {
+                "code": "VERIFICATION_STALE",
+                "kind": "TASK_STATE",
+                "command": f"python .agents/harness.py task resume --task-id {task_id}",
+                "blocking": True,
+                "reason": (
+                    "The frozen verification run no longer represents current repository content "
+                    f"({freshness.get('reason_code')}: {freshness.get('reason', '')}). "
+                    "No further gates or reviewers will be consumed. Resume task to return to implementing."
+                ),
+                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                "expected": {"success_statuses": ["IMPLEMENTING"]},
             }
 
         snapshot = str(manifest.get("delivery_snapshot_sha256") or "")
@@ -2854,14 +3235,44 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
                         "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
                         "expected": {},
                     }
+                try:
+                    sign_rec = store.read(snapshot, run_id, "device_signoff")
+                    if str(sign_rec.get("status") or "").upper() == "FAIL":
+                        return {
+                            "code": "RESUME_IMPLEMENTATION",
+                            "kind": "TASK_STATE",
+                            "command": f"python .agents/harness.py task resume --task-id {task_id}",
+                            "blocking": True,
+                            "reason": "Developer marked device sign-off as FAIL; resume implementation to resolve issues.",
+                            "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                            "expected": {"success_statuses": ["IMPLEMENTING"]},
+                        }
+                except Exception:
+                    pass
+
                 if not has_pass_evidence("device_signoff"):
+                    inst_ev = {}
+                    try:
+                        inst_ev = store.read(snapshot, run_id, "device_install").get("evidence") or {}
+                    except Exception:
+                        pass
+                    app_id = str(inst_ev.get("application_id") or "")
+                    serial_hash = str(inst_ev.get("serial_sha256") or inst_ev.get("serial_hash") or "")[:12]
                     return {
-                        "code": "DEVICE_SIGNOFF",
+                        "code": "DEVICE_SIGNOFF_REQUIRED",
                         "kind": "DEVELOPER_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": "Present mobile verification walkthrough to developer and obtain sign-off.",
-                        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                        "reason": "Present mobile verification walkthrough to developer and obtain explicit PASS or FAIL sign-off.",
+                        "inputs": {
+                            "repo": ".",
+                            "task_id": task_id,
+                            "run_id": run_id,
+                            "application_id": app_id,
+                            "device_target_identity": serial_hash,
+                        },
+                        "instructions": "Present mobile verification walkthrough to developer and await explicit PASS / FAIL response in conversation.",
+                        "accepted_responses": ["PASS", "FAIL"],
                         "expected": {"success_statuses": ["PASS"]},
                     }
 
@@ -2890,6 +3301,105 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
         }
 
     if state == "READY_FOR_DELIVERY":
+        ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
+        ready_run_id = str(plan.get("ready_run_id") or "")
+        if not ready_snapshot or not ready_run_id:
+            tdir = task_dir(repo, task_id)
+            crun_path = tdir / "current-run.json"
+            if crun_path.is_file():
+                try:
+                    crun = read_json(crun_path)
+                    if not ready_snapshot:
+                        ready_snapshot = str(crun.get("delivery_snapshot_sha256") or "")
+                    if not ready_run_id:
+                        ready_run_id = str(crun.get("run_id") or "")
+                except Exception:
+                    pass
+
+        live_manifest = build_manifest(repo)
+        live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
+        if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
+            return {
+                "code": "DELIVERY_STALE_AFTER_COMMIT",
+                "kind": "TASK_STATE",
+                "command": f"python .agents/harness.py task resume --task-id {task_id}",
+                "blocking": True,
+                "reason": (
+                    f"Delivery snapshot mismatch: current repository ({live_snapshot[:12]}) differs from verified ready snapshot ({ready_snapshot[:12]}). "
+                    "Content was modified after verification (e.g. by a commit hook or formatter). Resume task to reverify."
+                ),
+                "inputs": {
+                    "repo": ".",
+                    "task_id": task_id,
+                    "ready_snapshot": ready_snapshot,
+                    "live_snapshot": live_snapshot,
+                },
+                "expected": {"success_statuses": ["IMPLEMENTING"]},
+            }
+
+        dirty = _find_uncommitted_task_files(repo, task_id, plan)
+        if dirty:
+            kind = str(plan.get("task_kind") or "AUTO").upper()
+            outcome = str(plan.get("requested_outcome") or "deliver verified changes").strip().rstrip(".")
+            if outcome:
+                outcome = outcome[0].lower() + outcome[1:]
+
+            if kind == "FEATURE":
+                prefix = "feat"
+            elif kind == "BUG":
+                prefix = "fix"
+            elif kind == "REFACTOR":
+                prefix = "refactor"
+            else:
+                outcome_lower = outcome.lower()
+                if "fix" in outcome_lower or "bug" in outcome_lower:
+                    prefix = "fix"
+                elif "refactor" in outcome_lower or "clean" in outcome_lower:
+                    prefix = "refactor"
+                elif "doc" in outcome_lower:
+                    prefix = "docs"
+                elif "test" in outcome_lower:
+                    prefix = "test"
+                else:
+                    prefix = "feat"
+
+            surfaces = plan.get("expected_surfaces") or []
+            modules = plan.get("expected_modules") or []
+            scope = ""
+            if surfaces:
+                scope = str(surfaces[0]).lower()
+            elif modules:
+                scope = str(modules[0]).lstrip(":").replace(":", "-").lower()
+
+            scope_part = f"({scope})" if scope else ""
+            suggested_commit = f"{prefix}{scope_part}: {outcome}"
+
+            return {
+                "code": "DEVELOPER_GIT_COMMIT_REQUIRED",
+                "kind": "DEVELOPER_ACTION",
+                "command": "",
+                "blocking": True,
+                "reason": (
+                    f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}. "
+                    "Human Git Authority requires the developer to review and commit changes before final delivery."
+                ),
+                "suggested_commit": suggested_commit,
+                "inputs": {
+                    "repo": ".",
+                    "task_id": task_id,
+                    "verified_run_id": ready_run_id,
+                    "verified_snapshot_sha256": ready_snapshot,
+                    "dirty_task_files": sorted(dirty),
+                    "suggested_commit_message": suggested_commit,
+                },
+                "instructions": (
+                    f"Developer action required: Commit uncommitted task files ({', '.join(sorted(dirty))}).\n"
+                    f"Suggested commit: {suggested_commit}\n"
+                    "The model must NOT run git commit commands. Await developer commit."
+                ),
+                "expected": {},
+            }
+
         return {
             "code": "DELIVER",
             "kind": "HARNESS_COMMAND",
@@ -3013,7 +3523,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         }]
     if state == "IMPLEMENTING":
         phases = plan.get("phases") or []
-        if phases:
+        if phases and "active_phase_index" in plan:
             try:
                 requested_index = int(plan.get("active_phase_index") or 0)
             except (TypeError, ValueError):
@@ -3029,13 +3539,6 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
                     "command": f'{base} checkpoint-phase {identity} --phase-id "{phase_id}"',
                     "reason": "Validate the active implementation phase before advancing.",
                 }]
-        return [{
-            "action": "prepare-verification",
-            "code": "PREPARE_VERIFICATION",
-            "kind": "HARNESS_COMMAND",
-            "command": f"{base} prepare-verification {identity}",
-            "reason": "Freeze the finished change set and derive its gates and reviewers.",
-        }]
     act = resolve_next_action(repo, task_id, plan)
     legacy_action = {
         "RUN_PREFLIGHT": "preflight",
@@ -3050,6 +3553,14 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "FINAL_VERIFY": "verify",
         "DELIVER": "deliver",
         "RESUME_IMPLEMENTATION": "resume",
+        "CHECKPOINT_PHASE": "checkpoint-phase",
+        "BUILD_PHASE_REVIEW_PACKAGE": "phase-review-package",
+        "DISPATCH_PHASE_REVIEWERS": "review",
+        "WAIT_FOR_PHASE_REVIEWERS": "review",
+        "FINALIZE_PHASE_REVIEW": "phase-review-finalize",
+        "FIX_PHASE_FINDINGS": "fix-phase-findings",
+        "BEGIN_NEXT_PHASE": "begin-next-phase",
+        "RETRY_REVIEW_PROTOCOL": "send_message",
     }.get(act.get("code") or "", act.get("code", "").lower().replace("_", "-"))
     res_entry = {
         "action": legacy_action,
@@ -3061,8 +3572,9 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "inputs": act.get("inputs", {}),
         "expected": act.get("expected", {}),
     }
-    if "choices" in act:
-        res_entry["choices"] = act["choices"]
+    for k in ("choices", "reviewers", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
+        if k in act:
+            res_entry[k] = act[k]
     return [res_entry]
 
 
@@ -3203,6 +3715,8 @@ def build_parser() -> argparse.ArgumentParser:
     command = sub.add_parser("checkpoint-phase", parents=[common])
     command.add_argument("--phase-id", default=None, help="Phase ID to checkpoint")
     command.set_defaults(handler=checkpoint_phase)
+    bnp_cmd = sub.add_parser("begin-next-phase", parents=[common])
+    bnp_cmd.set_defaults(handler=begin_next_phase)
     pp_cmd = sub.add_parser("present-plan", parents=[common])
     pp_cmd.add_argument("--artifact-path", required=True, help="Path to host-native plan presentation artifact")
     pp_cmd.add_argument("--no-feedback", action="store_true", help="Do not request interactive feedback on artifact")
@@ -3242,6 +3756,8 @@ def build_parser() -> argparse.ArgumentParser:
     command.set_defaults(handler=deliver_task)
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
     sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
+    sub.add_parser("handoff", parents=[common]).set_defaults(handler=cmd_task_handoff)
+    sub.add_parser("reconcile-handoff", parents=[common]).set_defaults(handler=cmd_task_reconcile_handoff)
     reconcile_cmd = sub.add_parser("reconcile-delivery", parents=[common])
     reconcile_cmd.set_defaults(handler=cmd_reconcile_delivery)
     status_cmd = sub.add_parser("status")

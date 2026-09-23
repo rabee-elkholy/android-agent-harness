@@ -71,6 +71,43 @@ Adaptive Verification
 Evidence-Bound Result
 ```
 
+### Large-Task & Multi-Phase Flow
+
+Complex tasks execute through sequential phases under a single initial approval:
+```text
+one task approval
+→ phase implementation
+→ deterministic checkpoint
+→ scoped phase delta review (when selected)
+→ next phase
+→ final integration review
+→ assemble/device
+→ developer signoff
+→ final verify
+→ developer Git commit
+→ deliver
+```
+
+### Urgent Task Interruption & Worktree Handoff
+
+When an urgent hotfix or bug interrupts an in-progress task (Task A):
+```text
+Task A
+→ task handoff (freeze WIP snapshot)
+→ developer WIP commit
+→ reconcile handoff (lineage receipt verified)
+→ developer creates separate worktree (git worktree add ../repo-task-b HEAD)
+→ Task B in new chat / worktree
+→ return to Task A worktree / chat
+→ task status --next
+```
+
+**Key Invariants:**
+- One live task per worktree with isolated state.
+- Model never executes Git mutations (100% developer-owned).
+- Mid-task Git commits must follow the handoff protocol; raw unregistered commits remain lineage violations.
+- Final integration review is mandatory even when all phase reviews pass.
+
 ---
 
 ## Quick Start

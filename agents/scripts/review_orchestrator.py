@@ -121,16 +121,21 @@ def init_ledger(
     l_path = ledger_file(task_directory, run_id)
     if l_path.is_file():
         existing = load_ledger(task_directory, run_id)
+        existing_pkg = existing.get("review_package_sha256") or ""
+        pkg_mismatch = bool(existing_pkg and review_package_sha256 and existing_pkg != review_package_sha256)
         if (
             existing.get("schema_version") != 1
             or existing.get("task_id") != task_id
             or existing.get("run_id") != run_id
             or existing.get("delivery_snapshot_sha256") != delivery_snapshot_sha256
             or existing.get("change_set_sha256") != change_set_sha256
-            or existing.get("review_package_sha256") != review_package_sha256
+            or pkg_mismatch
             or sorted(existing.get("required_reviewers") or []) != sorted(required_reviewers)
         ):
             raise ValidationError(f"existing review ledger at {l_path} does not match active task, run, or snapshot identity")
+        if not existing_pkg and review_package_sha256:
+            existing["review_package_sha256"] = review_package_sha256
+            save_ledger(task_directory, run_id, existing)
         return existing
     reviewers_dict: dict[str, Any] = {}
     for rev in required_reviewers:
@@ -314,6 +319,33 @@ def record_dispatch(
     return batch[reviewer]
 
 
+def dispatch_batch(
+    repo: Path,
+    task_id: str,
+    host: str = "antigravity",
+) -> dict[str, Any]:
+    directory = task_dir(repo, task_id)
+    current = read_json(directory / "current-run.json")
+    run_id = str(current["run_id"])
+    policy = read_json(Path(current["policy"]))
+    required_reviewers = list(policy.get("reviewers") or [])
+    review_protocol_version = int(current.get("review_protocol_version") or 1)
+
+    if review_protocol_version >= 2:
+        l_file = ledger_file(directory, run_id)
+        if l_file.is_file():
+            ledger = load_ledger(directory, run_id)
+            dispatchable = dispatchable_reviewers(ledger, required_reviewers)
+        else:
+            dispatchable = list(required_reviewers)
+    else:
+        dispatchable = list(required_reviewers)
+
+    if not dispatchable:
+        return {}
+    return record_dispatch_batch(repo, task_id, dispatchable, host=host)
+
+
 def _parse_nonnegative_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool):
         raise ValidationError(f"field '{field_name}' must be an integer, got bool")
@@ -491,6 +523,15 @@ def complete_review(
     elif not host:
         host = run_host or "generic"
 
+    from workflow import verification_freshness
+    freshness = verification_freshness(repo, task_id, current)
+    if not freshness.get("fresh"):
+        raise ValidationError(
+            f"STALE_VERIFICATION_RUN: repository modified after verification freeze ({freshness.get('reason_code')}). "
+            f"Result from reviewer '{reviewer}' cannot be ingested into stale run '{run_id}'. "
+            f"Run 'python .agents/harness.py task resume --task-id {task_id}' to resume implementation."
+        )
+
     if reviewer not in required_reviewers:
         raise ValidationError(f"reviewer '{reviewer}' is not in policy required reviewers: {required_reviewers}")
 
@@ -652,6 +693,14 @@ def _finalize_review_execution_locked(
     pkg_path = active_review_package_path(repo, current)
     pkg_sha = sha256_file(pkg_path) if pkg_path.is_file() else ""
     required_reviewers = list(policy.get("reviewers") or [])
+    from workflow import verification_freshness
+    freshness = verification_freshness(repo, task_id, current)
+    if not freshness.get("fresh"):
+        raise ValidationError(
+            f"STALE_VERIFICATION_RUN: repository modified after verification freeze ({freshness.get('reason_code')}). "
+            f"Cannot finalize reviews for stale run '{run_id}'. "
+            f"Run 'python .agents/harness.py task resume --task-id {task_id}' to resume implementation."
+        )
 
     if ledger is None:
         ledger = load_ledger(directory, run_id)
@@ -813,6 +862,11 @@ def main(argv: list[str] | None = None) -> int:
     dispatch_p.add_argument("--reviewer", required=True, help="Reviewer role")
     dispatch_p.add_argument("--host", default="antigravity", help="Host environment")
 
+    dispatch_batch_p = subparsers.add_parser("dispatch-batch", help="Record dispatch receipts for all dispatchable reviewers")
+    dispatch_batch_p.add_argument("--repo", default=".")
+    dispatch_batch_p.add_argument("--task", required=True, help="Task ID")
+    dispatch_batch_p.add_argument("--host", default="antigravity", help="Host environment")
+
     status_p = subparsers.add_parser("status", help="Review execution status")
     status_p.add_argument("--repo", default=".")
     status_p.add_argument("--task", required=True, help="Task ID")
@@ -841,6 +895,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.subcommand == "dispatch":
             receipt = record_dispatch(repo, args.task, args.reviewer, host=args.host)
             print(f"REVIEW_DISPATCHED: {args.reviewer} receipt={receipt.get('receipt_sha256')[:12]}")
+            return 0
+        elif args.subcommand in ("dispatch-batch", "dispatch_batch"):
+            receipts = dispatch_batch(repo, args.task, host=args.host)
+            print(f"REVIEW_BATCH_DISPATCHED: {len(receipts)} reviewers ({', '.join(sorted(receipts.keys()))})")
             return 0
         elif args.subcommand == "status":
             st = get_review_execution_status(repo, args.task)

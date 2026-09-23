@@ -139,8 +139,8 @@ def git(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
     return proc.stdout or b""
 
 
-def git_text(repo: Path, *args: str) -> str:
-    return git(repo, *args).decode("utf-8", errors="replace").strip()
+def git_text(repo: Path, *args: str, input_bytes: bytes | None = None) -> str:
+    return git(repo, *args, input_bytes=input_bytes).decode("utf-8", errors="replace").strip()
 
 
 def _norm_path_str(p: Path) -> str:

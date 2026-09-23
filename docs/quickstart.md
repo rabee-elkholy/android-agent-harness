@@ -44,7 +44,7 @@ The setup wizard can be rerun before installation. Clean install is the supporte
 ## Daily use (Antigravity-First)
 
 1. **Discovery & Plan**: Ask the AI to analyze first. It explores using bounded Task Context, drafts a plan, and waits for explicit developer approval before any file modification.
-2. **Approval**: Approve the plan in chat (reply "ابدأ" or "approve").
+2. **Approval**: Approve the plan in chat (reply "ابدأ" or "approve"). Single intake approval covers all phases in a multi-phase task without pauses.
 3. **Implementation**: The agent applies only approved changes. Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
 4. **Prepare Verification**: Once changes are ready, the agent runs:
    ```bash
@@ -53,3 +53,40 @@ The setup wizard can be rerun before installation. Clean install is the supporte
 5. **Parallel Reviewers**: Routed specialist subagents run concurrently via Antigravity `invoke_subagent` following Review Protocol V2. Structured results are recorded via `review complete` and aggregated via `review finalize`.
 6. **Assemble & Device**: After reviews pass cleanly, the agent builds the debug APK (`assemble`) and deploys to a physical device (`device install-start`).
 7. **Delivery**: When the lifecycle state is unclear, `python .agents/harness.py task status --repo . --task-id <id> --next` prints the authoritative next action. The agent never performs automatic git commits or pushes.
+
+## Canonical Large-Task & Phased Execution
+
+For multi-phase tasks, the workflow executes sequentially and autonomously:
+```text
+one task approval
+→ phase implementation
+→ deterministic checkpoint
+→ scoped phase delta review when selected
+→ next phase
+→ final integration review
+→ assemble/device
+→ developer signoff
+→ final verify
+→ developer Git commit
+→ deliver
+```
+
+## Urgent Task Interruption & Worktree Handoff
+
+When an urgent bug or hotfix interrupts an active in-progress task (Task A):
+```text
+Task A
+→ task handoff (python .agents/harness.py task handoff --task-id <id>)
+→ developer WIP commit (developer creates Git commit for checkpoint)
+→ reconcile handoff (python .agents/harness.py task reconcile-handoff --task-id <id>)
+→ developer creates separate worktree (git worktree add ../repo-task-b HEAD)
+→ Task B in new chat/worktree
+→ return to Task A worktree/chat
+→ task status --next (python .agents/harness.py task status --task-id <id> --next)
+```
+
+### Core Invariants
+- **One live task per worktree**: Each worktree maintains isolated task state.
+- **Model never executes Git mutations**: Git operations are strictly developer-owned.
+- **Lineage enforcement**: Mid-task Git commits must follow the handoff protocol; raw unregistered commits remain lineage violations.
+- **Final review required**: Even when all phase reviews pass cleanly, final integration review remains required.

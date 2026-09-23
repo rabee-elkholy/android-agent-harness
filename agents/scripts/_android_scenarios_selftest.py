@@ -21,6 +21,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+import argparse
 from argparse import Namespace
 from pathlib import Path
 
@@ -28,6 +30,9 @@ SCRIPTS = Path(__file__).resolve().parent
 KIT = SCRIPTS.parents[1]
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(KIT))
+
+from evidence_store import EvidenceStore
+from workflow import state_root
 
 from _env_codes import EXIT_ENV, classify_adb_failure
 from _repo_files import ChangedFile
@@ -1755,6 +1760,251 @@ class MobileValidationTests(unittest.TestCase):
             run_id=run_id,
         )
         self.assertEqual("STALE", res["status"])
+
+
+
+class DeviceFlowTests(MobileValidationTests):
+    """DEVICE_FLOW_001 through 012: Deterministic device sign-off authority and flow tests."""
+
+    def _setup_install_and_launch(self, task_id: str, artifact_sha: str = "art123"):
+        plan, tdir, policy, manifest = self._setup_verifying_task(task_id)
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = False
+        policy["device_required"] = True
+        atomic_write_json(Path(current["policy"]), policy)
+        self._record_evidence(manifest, run_id, "preflight", "PASS", producer="preflight_check")
+
+        store = EvidenceStore(state_root(self.repo))
+        snapshot = manifest["delivery_snapshot_sha256"]
+        cs = manifest["change_set_sha256"]
+
+        store.write(
+            snapshot=snapshot,
+            run_id=run_id,
+            name="device_install",
+            producer="run_device",
+            harness_version=self.harness_version,
+            change_set=cs,
+            status="PASS",
+            evidence={
+                "task_id": task_id,
+                "run_id": run_id,
+                "artifact_set_sha256": artifact_sha,
+                "target_user": "0",
+                "serial_sha256": "serial123",
+                "application_id": "com.example",
+            },
+        )
+        store.write(
+            snapshot=snapshot,
+            run_id=run_id,
+            name="device_launch",
+            producer="run_device",
+            harness_version=self.harness_version,
+            change_set=cs,
+            status="PASS",
+            evidence={
+                "task_id": task_id,
+                "run_id": run_id,
+                "artifact_set_sha256": artifact_sha,
+                "application_id": "com.example",
+            },
+        )
+        return plan, tdir, policy, manifest, current, run_id
+
+    def test_DEVICE_FLOW_001_install_and_launch_requires_signoff(self) -> None:
+        """DEVICE_FLOW_001: install+launch -> DEVICE_SIGNOFF_REQUIRED."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-001")
+        from workflow import resolve_next_action
+        act = resolve_next_action(self.repo, "dev-flow-001", read_json(tdir / "plan.json"))
+        self.assertEqual("DEVICE_SIGNOFF_REQUIRED", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertEqual("", act["command"])
+        self.assertTrue(act["blocking"])
+        self.assertEqual(["PASS", "FAIL"], act.get("accepted_responses"))
+
+    def test_DEVICE_FLOW_002_no_developer_approval_means_no_pass(self) -> None:
+        """DEVICE_FLOW_002: no developer approval means no PASS evidence in store."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-002")
+        store = EvidenceStore(state_root(self.repo))
+        with self.assertRaises(Exception):
+            store.read(manifest["delivery_snapshot_sha256"], run_id, "device_signoff")
+
+    def test_DEVICE_FLOW_003_conversation_pass_records_rule_enforced(self) -> None:
+        """DEVICE_FLOW_003: conversation PASS records RULE_ENFORCED without fake token."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-003")
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff",
+            task_id="dev-flow-003",
+            verdict="PASS",
+            source="conversation",
+            proof_reference="looks great on my Pixel 8",
+            approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+        self.assertEqual(0, code)
+        store = EvidenceStore(state_root(self.repo))
+        rec = store.read(manifest["delivery_snapshot_sha256"], run_id, "device_signoff")
+        self.assertEqual("PASS", rec["status"])
+        ev = rec["evidence"]
+        self.assertEqual("RULE_ENFORCED", ev["enforcement_tier"])
+        self.assertEqual("conversation", ev["approval_source"])
+        self.assertEqual("looks great on my Pixel 8", ev["proof_reference"])
+
+    def test_DEVICE_FLOW_004_host_native_pass_hard_enforced(self) -> None:
+        """DEVICE_FLOW_004: host-native PASS only HARD_ENFORCED when verified primitive is supplied."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-004")
+        from run_device import _handle_signoff
+        # Without token -> fails
+        args_no_tok = argparse.Namespace(
+            action="signoff", task_id="dev-flow-004", verdict="PASS",
+            source="host_native", proof_reference="native approved", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code_fail = _handle_signoff(args_no_tok)
+        self.assertEqual(1, code_fail)
+
+        # With verified token -> succeeds and records HARD_ENFORCED
+        args_tok = argparse.Namespace(
+            action="signoff", task_id="dev-flow-004", verdict="PASS",
+            source="host_native", proof_reference="native approved", approval_token="tok_verified_123",
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code_ok = _handle_signoff(args_tok)
+        self.assertEqual(0, code_ok)
+        store = EvidenceStore(state_root(self.repo))
+        rec = store.read(manifest["delivery_snapshot_sha256"], run_id, "device_signoff")
+        self.assertEqual("HARD_ENFORCED", rec["evidence"]["enforcement_tier"])
+        self.assertEqual("host_native", rec["evidence"]["approval_source"])
+
+    def test_DEVICE_FLOW_005_model_cannot_self_certify(self) -> None:
+        """DEVICE_FLOW_005: model cannot self-certify PASS without source."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-005")
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="dev-flow-005", verdict="PASS",
+            source=None, proof_reference="self certified", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+        self.assertEqual(1, code)
+
+    def test_DEVICE_FLOW_006_pass_without_install_evidence_denied(self) -> None:
+        """DEVICE_FLOW_006: PASS without install evidence denied."""
+        plan, tdir, policy, manifest = self._setup_verifying_task("dev-flow-006")
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="dev-flow-006", verdict="PASS",
+            source="conversation", proof_reference="user approved", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+        self.assertEqual(1, code)
+
+    def test_DEVICE_FLOW_007_pass_without_launch_evidence_denied(self) -> None:
+        """DEVICE_FLOW_007: PASS without launch evidence denied."""
+        plan, tdir, policy, manifest = self._setup_verifying_task("dev-flow-007")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"], run_id=run_id, name="device_install",
+            producer="run_device", harness_version=self.harness_version, change_set=manifest["change_set_sha256"],
+            status="PASS", evidence={"task_id": "dev-flow-007", "run_id": run_id, "artifact_set_sha256": "art1"},
+        )
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="dev-flow-007", verdict="PASS",
+            source="conversation", proof_reference="user approved", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+        self.assertEqual(1, code)
+
+    def test_DEVICE_FLOW_008_artifact_mismatch_denied(self) -> None:
+        """DEVICE_FLOW_008: artifact mismatch denied."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-008", artifact_sha="sha_installed")
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest["delivery_snapshot_sha256"], run_id=run_id, name="assemble",
+            producer="test", harness_version=self.harness_version, change_set=manifest["change_set_sha256"],
+            status="PASS", evidence={"artifact_set_sha256": "sha_assembled_mismatched"},
+        )
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="dev-flow-008", verdict="PASS",
+            source="conversation", proof_reference="user approved", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+        self.assertEqual(1, code)
+
+    def test_DEVICE_FLOW_009_developer_fail_routes_to_resume(self) -> None:
+        """DEVICE_FLOW_009: developer FAIL routes back to implementation."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-009")
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="dev-flow-009", verdict="FAIL",
+            source="conversation", proof_reference="app crashed on start", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+        self.assertEqual(0, code)
+        from workflow import resolve_next_action
+        act = resolve_next_action(self.repo, "dev-flow-009", read_json(tdir / "plan.json"))
+        self.assertEqual("RESUME_IMPLEMENTATION", act["code"])
+        self.assertIn("task resume", act["command"])
+
+    def test_DEVICE_FLOW_010_explicit_skip_recorded(self) -> None:
+        """DEVICE_FLOW_010: explicit skip remains separately recorded."""
+        plan, tdir, policy, manifest = self._setup_verifying_task("dev-flow-010")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy["device_required"] = True
+        atomic_write_json(Path(current["policy"]), policy)
+        from run_device import _handle_skip_validation
+        args = argparse.Namespace(
+            action="skip-validation", task_id="dev-flow-010",
+            source="conversation", proof_reference="developer skip phrase",
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_skip_validation(args)
+        self.assertEqual(0, code)
+        store = EvidenceStore(state_root(self.repo))
+        rec = store.read(manifest["delivery_snapshot_sha256"], run_id, "mobile_validation_skip")
+        self.assertEqual("SKIPPED", rec["status"])
+
+    def test_DEVICE_FLOW_011_stale_run_cannot_sign_off(self) -> None:
+        """DEVICE_FLOW_011: stale run cannot sign off."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-011")
+        _write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// stale edit\nclass MainActivity\n")
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="dev-flow-011", verdict="PASS",
+            source="conversation", proof_reference="late approval", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code = _handle_signoff(args)
+        self.assertEqual(1, code)
+
+    def test_DEVICE_FLOW_012_repeated_pass_idempotent(self) -> None:
+        """DEVICE_FLOW_012: repeated identical PASS is idempotent."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-012")
+        from run_device import _handle_signoff
+        args = argparse.Namespace(
+            action="signoff", task_id="dev-flow-012", verdict="PASS",
+            source="conversation", proof_reference="looks great", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            code1 = _handle_signoff(args)
+            code2 = _handle_signoff(args)
+        self.assertEqual(0, code1)
+        self.assertEqual(0, code2)
 
 
 if __name__ == "__main__":

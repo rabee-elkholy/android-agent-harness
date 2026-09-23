@@ -396,13 +396,15 @@ def _handle_signoff(args: argparse.Namespace) -> int:
         if not source or source not in ("developer_terminal", "host_native", "conversation"):
             live_print(
                 "[FAIL] Device sign-off with verdict PASS requires explicit developer authority via "
-                "--source developer_terminal or host-native approval.",
+                "--source developer_terminal, host_native, or conversation.",
                 err=True,
             )
             return 1
-        if source == "conversation" and not getattr(args, "approval_token", None):
-            live_print("[FAIL] Conversation device signoff requires a trusted host approval token.", err=True)
-            return 1
+        if source == "host_native":
+            token = getattr(args, "approval_token", None) or os.environ.get("HARNESS_APPROVAL_TOKEN")
+            if not token:
+                live_print("[FAIL] host_native device sign-off requires verified host primitive/token.", err=True)
+                return 1
 
     proof_ref = str(args.proof_reference or "").strip()
     if not proof_ref:
@@ -426,36 +428,72 @@ def _handle_signoff(args: argparse.Namespace) -> int:
     store = EvidenceStore(state)
     harness_version = _read_harness_version(REPO)
 
-    # Artifact chain validation: device_install evidence must exist for this run
+    # Idempotency check: repeated identical signoff returns 0 without corrupting store
+    try:
+        existing = store.read(snapshot, run_id, "device_signoff")
+        existing_ev = existing.get("evidence") or {}
+        if (
+            str(existing.get("status") or "").upper() == verdict
+            and existing_ev.get("proof_reference") == proof_ref
+        ):
+            live_print(f"[SUCCESS] Device sign-off already recorded (idempotent): verdict={verdict} for task {task_id}")
+            return 0
+    except Exception:
+        pass
+
     install_sha = ""
     install_ev = {}
-    try:
-        rec_inst = store.read(snapshot, run_id, "device_install")
-        install_ev = rec_inst.get("evidence") or {}
-        install_sha = str(install_ev.get("artifact_set_sha256") or "")
-    except Exception:
-        pass
+    if verdict == "PASS":
+        try:
+            rec_inst = store.read(snapshot, run_id, "device_install")
+            install_ev = rec_inst.get("evidence") or {}
+            if str(rec_inst.get("status") or "").upper() == "PASS":
+                install_sha = str(install_ev.get("artifact_set_sha256") or "") or "PASS"
+        except Exception:
+            pass
 
-    if verdict == "PASS" and not install_sha:
-        live_print(f"[FAIL] Device sign-off requires prior successful device_install evidence for run {run_id[:12]}.", err=True)
-        return 1
+        if not install_sha:
+            live_print(f"[FAIL] Device sign-off requires prior successful device_install evidence for run {run_id[:12]}.", err=True)
+            return 1
 
-    assemble_sha = ""
-    try:
-        rec_asm = store.read(snapshot, run_id, "assemble")
-        assemble_ev = rec_asm.get("evidence") or {}
-        assemble_sha = str(assemble_ev.get("artifact_set_sha256") or (assemble_ev.get("artifact_set") or {}).get("artifact_set_sha256") or "")
-    except Exception:
-        pass
+        launch_sha = ""
+        launch_ev = {}
+        try:
+            rec_launch = store.read(snapshot, run_id, "device_launch")
+            launch_ev = rec_launch.get("evidence") or {}
+            if str(rec_launch.get("status") or "").upper() == "PASS":
+                launch_sha = str(launch_ev.get("artifact_set_sha256") or "") or "PASS"
+        except Exception:
+            pass
 
-    if assemble_sha and install_sha and assemble_sha != install_sha:
-        live_print(
-            f"[FAIL] Device sign-off artifact set mismatch: assemble ({assemble_sha[:12]}) != device_install ({install_sha[:12]}).",
-            err=True,
-        )
-        return 1
+        if not launch_sha:
+            live_print(f"[FAIL] Device sign-off requires prior successful device_launch evidence for run {run_id[:12]}.", err=True)
+            return 1
 
-    final_art_sha = install_sha or assemble_sha
+        assemble_sha = ""
+        try:
+            rec_asm = store.read(snapshot, run_id, "assemble")
+            assemble_ev = rec_asm.get("evidence") or {}
+            assemble_sha = str(assemble_ev.get("artifact_set_sha256") or (assemble_ev.get("artifact_set") or {}).get("artifact_set_sha256") or "")
+        except Exception:
+            pass
+
+        if assemble_sha and install_sha and install_sha != "PASS" and assemble_sha != install_sha:
+            live_print(
+                f"[FAIL] Device sign-off artifact set mismatch: assemble ({assemble_sha[:12]}) != device_install ({install_sha[:12]}).",
+                err=True,
+            )
+            return 1
+
+        if launch_sha and launch_sha != "PASS" and install_sha and install_sha != "PASS" and launch_sha != install_sha:
+            live_print(
+                f"[FAIL] Device sign-off artifact set mismatch: device_launch ({launch_sha[:12]}) != device_install ({install_sha[:12]}).",
+                err=True,
+            )
+            return 1
+
+    final_art_sha = install_sha if (install_sha and install_sha != "PASS") else (install_ev.get("artifact_set_sha256") or "")
+    tier = "HARD_ENFORCED" if source == "host_native" else "RULE_ENFORCED"
     store.write(
         snapshot=snapshot,
         run_id=run_id,
@@ -472,7 +510,7 @@ def _handle_signoff(args: argparse.Namespace) -> int:
             "change_set_sha256": change_set,
             "artifact_set_sha256": final_art_sha,
             "approval_source": source or "developer_terminal",
-            "enforcement_tier": "HARD_ENFORCED" if source == "host_native" else "RULE_ENFORCED",
+            "enforcement_tier": tier,
             "proof_reference": proof_ref,
             "proof_reference_sha256": canonical_sha256(proof_ref),
             "verdict": verdict,
@@ -484,7 +522,7 @@ def _handle_signoff(args: argparse.Namespace) -> int:
         },
     )
     live_print(f"[SUCCESS] Device sign-off recorded: verdict={verdict} for task {task_id} (run {run_id[:12]})")
-    return 0 if verdict == "PASS" else 1
+    return 0
 
 
 def _handle_skip_validation(args: argparse.Namespace) -> int:

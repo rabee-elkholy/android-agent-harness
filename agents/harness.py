@@ -86,9 +86,11 @@ def main(argv: list[str] | None = None) -> int:
             return _run("review_execution.py", args[1:])
         if args and args[0] == "ingest":
             return _run("record_review.py", args[1:])
-        if args and args[0] in ("complete", "finalize", "dispatch", "status"):
+        if args and args[0] in ("complete", "finalize", "dispatch", "dispatch-batch", "status"):
             return _run("review_orchestrator.py", args)
         return _run("record_review.py", args)
+    if command == "phase-review":
+        return _run("phase_review.py", args)
     if command == "device":
         return _run("run_device.py", args)
     if command == "verify":

@@ -565,9 +565,9 @@ class SecurityTests(unittest.TestCase):
 
         # In the new architecture, every reviewer unconditionally inherits the parent model
         prof_default = resolve_execution_profile(self.repo, task_id, host="antigravity")
-        self.assertEqual("INHERIT_PARENT_ONLY", prof_default["model_policy"])
-        self.assertEqual("inherit", prof_default["reviewers"]["security-reviewer-agent"]["required_model"])
-        self.assertEqual("inherit", prof_default["reviewers"]["convention-reviewer-agent"]["required_model"])
+        self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof_default["model_policy"])
+        self.assertNotIn("required_model", prof_default["reviewers"]["security-reviewer-agent"])
+        self.assertNotIn("required_model", prof_default["reviewers"]["convention-reviewer-agent"])
         self.assertNotIn("preferred_model", prof_default["reviewers"]["security-reviewer-agent"])
 
     def test_DELIVERY_CLEAN_001(self):
@@ -822,7 +822,8 @@ class SecurityTests(unittest.TestCase):
         env_routes = json.dumps({"antigravity": {"STANDARD": "inherit"}})
         with mock.patch.dict(os.environ, {"HARNESS_MODEL_ROUTES": env_routes}):
             prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-            self.assertEqual("inherit", prof["reviewers"]["security-reviewer-agent"]["required_model"])
+            self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof["model_policy"])
+            self.assertNotIn("required_model", prof["reviewers"]["security-reviewer-agent"])
             self.assertIsNone(prof["reviewers"]["security-reviewer-agent"]["dispatch_contract"]["reasoning_argument"])
 
     def test_MODEL_AUTH_001(self):
@@ -1107,7 +1108,7 @@ class SecurityTests(unittest.TestCase):
             prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
             self.assertIn(prof["model_policy"], ("INHERIT_PARENT_BY_OMISSION", "INHERIT_PARENT_ONLY"))
             for rev, info in prof["reviewers"].items():
-                self.assertEqual("inherit", info["required_model"], f"{rev} must inherit")
+                self.assertNotIn("required_model", info)
                 self.assertEqual("HOST_CONTROL_UNAVAILABLE", info["reasoning"]["resolution"])
 
     def test_MODEL_NAME_001_core_requires_no_provider_literals(self):
@@ -1758,7 +1759,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         policy_file.write_text(json.dumps({
             "surfaces": ["AUTH", "BUSINESS_LOGIC"],
             "severity": "HIGH",
-            "reviewers": ["bug-reviewer-agent", "security-reviewer-agent"],
+            "reviewers": ["bug-reviewer-agent"],
             "max_review_rounds": 3,
             "model_call_budget": 10,
         }), encoding="utf-8")
@@ -1769,6 +1770,8 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         package = state_dir / "runs" / snapshot / run_id / "review-package.md"
         package.parent.mkdir(parents=True, exist_ok=True)
         package.write_text("# Bound review package\n", encoding="utf-8")
+        (package.parent / "brief-bug-reviewer-agent.md").write_text("review\n", encoding="utf-8")
+        (package.parent / "brief-security-reviewer-agent.md").write_text("review\n", encoding="utf-8")
 
         current_file = task_dir / "current-run.json"
         current_file.write_text(json.dumps({
@@ -1928,7 +1931,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         cap_unk = HostReasoningCapability(host="test", supported=True, argument_name="effort", ordered_levels=("low", "high"), current_level=None, source="test")
         r_unk = resolve_reasoning(cap_unk, "DEEP")
         self.assertIsNone(r_unk["native_value"])
-        self.assertEqual("CURRENT_LEVEL_UNKNOWN", r_unk["resolution"])
+        self.assertEqual("INVALID_HOST_CAPABILITY", r_unk["resolution"])
 
         # Malformed levels (duplicates)
         cap_dup = HostReasoningCapability(host="test", supported=True, argument_name="effort", ordered_levels=("low", "low"), current_level="low", source="test")
@@ -1965,14 +1968,14 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
 
         prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
 
-        # REASON-EXEC-002: root model_policy == INHERIT_PARENT_ONLY
-        self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+        # REASON-EXEC-002: root model_policy == INHERIT_PARENT_BY_OMISSION
+        self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof["model_policy"])
         # REASON-EXEC-003: no allow_model_escalation
         self.assertNotIn("allow_model_escalation", prof)
 
         for rev, info in prof["reviewers"].items():
-            # REASON-EXEC-001: required_model == inherit
-            self.assertEqual("inherit", info["required_model"])
+            # REASON-EXEC-001: no required_model
+            self.assertNotIn("required_model", info)
             # REASON-EXEC-004: no preferred_model
             self.assertNotIn("preferred_model", info)
             # REASON-EXEC-005: no fallback_model
@@ -2082,6 +2085,13 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
                 }
             }
         }
+        (self.repo / "agents/state/tasks/t/policy.json").write_text(json.dumps({
+            "surfaces": ["AUTH"],
+            "severity": "HIGH",
+            "reviewers": ["security-reviewer-agent"],
+            "max_review_rounds": 3,
+            "model_call_budget": 10,
+        }), encoding="utf-8")
         with mock.patch("review_execution.resolve_execution_profile", return_value=mock_prof):
             # effort=deep -> allowed
             res1 = run_tool([{"Role": "security-reviewer-agent", "TypeName": "security-reviewer-agent", "Prompt": "review", "effort": "deep"}])
@@ -2122,10 +2132,10 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         }):
             with mock.patch.object(_product, "ALLOW_MODEL_ESCALATION", True, create=True):
                 prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-                self.assertEqual("INHERIT_PARENT_ONLY", prof["model_policy"])
+                self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof["model_policy"])
                 self.assertNotIn("allow_model_escalation", prof)
                 sec_rev = prof["reviewers"]["security-reviewer-agent"]
-                self.assertEqual("inherit", sec_rev["required_model"])
+                self.assertNotIn("required_model", sec_rev)
                 self.assertNotIn("preferred_model", sec_rev)
 
     # --- Section A: Tests — reviewer definitions ---
@@ -2191,6 +2201,8 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         runs_dir.mkdir(parents=True, exist_ok=True)
         pkg_file = runs_dir / "review-package.md"
         pkg_file.write_text("# Review Package", encoding="utf-8")
+        for r in ("bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent"):
+            (runs_dir / f"brief-{r}.md").write_text(f"# Brief for {r}\n", encoding="utf-8")
         current_run_file = task_d / "current-run.json"
 
         # Initialize ledger for r1
@@ -2228,6 +2240,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         # SAME-MODEL-BATCH-004: protocol retry returns only reviewer requiring correction
         ledger["reviewers"]["bug-reviewer-agent"]["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED
         ledger["reviewers"]["bug-reviewer-agent"]["last_error"] = "missing signature"
+        ledger["reviewers"]["bug-reviewer-agent"]["execution_id"] = "conv-bug-123"
         ledger["reviewers"]["convention-reviewer-agent"]["state"] = REVIEW_COMPLETED
         ledger["reviewers"]["security-reviewer-agent"]["state"] = REVIEW_COMPLETED
         save_ledger(task_d, "r1", ledger)
@@ -2240,6 +2253,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         runs_dir_r2.mkdir(parents=True, exist_ok=True)
         pkg_file_r2 = runs_dir_r2 / "review-package.md"
         pkg_file_r2.write_text("# Review Package R2", encoding="utf-8")
+        (runs_dir_r2 / "brief-security-reviewer-agent.md").write_text("# Brief\n", encoding="utf-8")
         policy_round2 = task_d / "policy_r2.json"
         policy_round2.write_text(json.dumps({
             "surfaces": ["AUTH"],

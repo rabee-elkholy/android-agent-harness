@@ -176,16 +176,16 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
             encoding="utf-8",
         )
         (t_dir / "current-run.json").write_text(
-            json.dumps({"run_id": "run-1", "policy": str(policy_path)}), encoding="utf-8"
+            json.dumps({"run_id": "run-1", "policy": str(policy_path), "review_host": "antigravity"}), encoding="utf-8"
         )
 
-        # Legacy env vars cannot change the invariant: model_policy is INHERIT_PARENT_ONLY and required_model is inherit
+        # Legacy env vars cannot change the invariant: model_policy is INHERIT_PARENT_BY_OMISSION and required_model is omitted
         with mock.patch.dict("os.environ", {"HARNESS_ALLOW_MODEL_ESCALATION": "1", "HARNESS_MODEL_ROUTES": "{}"}):
             profile = resolve_execution_profile(self.repo, t_id)
-            self.assertEqual("INHERIT_PARENT_ONLY", profile["model_policy"])
+            self.assertEqual("INHERIT_PARENT_BY_OMISSION", profile["model_policy"])
             self.assertNotIn("allow_model_escalation", profile)
             for rev, r_data in profile["reviewers"].items():
-                self.assertEqual("inherit", r_data["required_model"])
+                self.assertNotIn("required_model", r_data)
                 self.assertNotIn("preferred_model", r_data)
 
     # --- 6. Hardening HARD-004 & HARD-005: Reviewer Dispatch Payload & Strict Schema ---
@@ -203,7 +203,7 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
             encoding="utf-8",
         )
         (t_dir / "current-run.json").write_text(
-            json.dumps({"run_id": "run-1", "policy": str(policy_path)}), encoding="utf-8"
+            json.dumps({"run_id": "run-1", "policy": str(policy_path), "review_host": "antigravity"}), encoding="utf-8"
         )
         # Create a lean role brief
         (t_dir / "brief-security-reviewer-agent.md").write_text("# Security Brief", encoding="utf-8")
@@ -217,7 +217,7 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertTrue(rev_info["brief_path"].endswith("brief-security-reviewer-agent.md"))
         self.assertEqual("# Security Brief", rev_info["brief_content"])
         self.assertEqual("HARNESS_REVIEW_RESULT_V2", rev_info["output_contract"])
-        self.assertEqual("inherit", rev_info["required_model"])
+        self.assertNotIn("required_model", rev_info)
         self.assertIn("reasoning_intent", rev_info)
         self.assertIn("dispatch_contract", rev_info)
 

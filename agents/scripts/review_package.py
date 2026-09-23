@@ -210,6 +210,14 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         inst_lines.append("\n")
         extras.append("\n".join(inst_lines))
 
+    try:
+        from phase_review import format_phase_provenance_section
+        provenance = format_phase_provenance_section(repo, task_id)
+        if provenance:
+            extras.append("\n" + provenance + "\n")
+    except Exception:
+        pass
+
     metadata = {
         "schema_version": 1,
         "task_id": task_id,
@@ -331,6 +339,10 @@ def generate_task_brief(
         brief_lines.extend([
             f"- **Architecture Mode**: `{contract.get('mode', 'PRESERVE')}`",
             f"- **Architecture Scope**: `{contract.get('target_scope') or 'whole task'}`",
+        ])
+    if plan.get("phases"):
+        brief_lines.extend([
+            "- **Final Integration Focus**: Prioritize cross-phase contract mismatch, integration regressions, state flow between layers, navigation wiring, and regressions introduced after earlier phase PASS.",
         ])
     brief_lines.extend([
         "",

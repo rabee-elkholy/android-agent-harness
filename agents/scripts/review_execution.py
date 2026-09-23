@@ -139,10 +139,9 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
                 except Exception:
                     brief_text = ""
 
-        resolved_reviewers[rev] = {
+        rev_entry = {
             **req,
             "reviewer_role": rev,
-            "required_model": "inherit",
             "reasoning": reasoning,
             "dispatch_contract": {
                 "model_policy": "INHERIT_PARENT_BY_OMISSION",
@@ -156,6 +155,17 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
             "output_contract": "HARNESS_REVIEW_RESULT_V2",
             "v2_output_contract": "HARNESS_REVIEW_RESULT_V2",
         }
+        is_antigravity = (
+            str(host).strip().lower() == "antigravity"
+            or str(current.get("review_host") or "").strip().lower() == "antigravity"
+        )
+        if is_antigravity or protocol >= 2:
+            rev_entry.pop("required_model", None)
+            rev_entry["model_policy"] = "INHERIT_PARENT_BY_OMISSION"
+            rev_entry["model_argument"] = None
+        else:
+            rev_entry["required_model"] = "inherit"
+        resolved_reviewers[rev] = rev_entry
 
     return {
         "schema_version": 2,

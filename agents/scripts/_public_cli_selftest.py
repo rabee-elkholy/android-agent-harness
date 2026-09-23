@@ -1520,17 +1520,17 @@ class TestSpeedTests(unittest.TestCase):
     """TESTMODE-001 through TESTMODE-009: Fast/Full selftest strategy verification."""
 
     def test_testmode_001_selftest_defaults_to_full_registry(self) -> None:
-        """TESTMODE-001: selftest defaults to full registry (19 suites)."""
+        """TESTMODE-001: selftest defaults to full registry (20 suites)."""
         import harness_cli
-        self.assertEqual(len(harness_cli.FULL_SELFTEST_SUITES), 19)
+        self.assertEqual(len(harness_cli.FULL_SELFTEST_SUITES), 20)
         parser = harness_cli.build_parser()
         args = parser.parse_args(["selftest"])
         self.assertFalse(args.quick)
 
     def test_testmode_002_selftest_quick_flag(self) -> None:
-        """TESTMODE-002: selftest --quick selects quick registry (6 suites)."""
+        """TESTMODE-002: selftest --quick selects quick registry (7 suites)."""
         import harness_cli
-        self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), 6)
+        self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), 7)
         parser = harness_cli.build_parser()
         args = parser.parse_args(["selftest", "--quick"])
         self.assertTrue(args.quick)

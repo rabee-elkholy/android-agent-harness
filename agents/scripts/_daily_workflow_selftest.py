@@ -876,10 +876,6 @@ class DailyWorkflowSelftest(unittest.TestCase):
         p1_dir = task_dir(self.repo, task_id) / "phases" / "phase-1"
         p1_dir.mkdir(parents=True, exist_ok=True)
         write_file(p1_dir / "unit_tests.json", json.dumps({"status": "PASS"}))
-        write_file(p1_dir / "reviews.json", json.dumps([
-            {"reviewer": "bug-reviewer-agent", "verdict": "PASS"},
-            {"reviewer": "regression-impact-reviewer-agent", "verdict": "PASS"},
-        ]))
         res1 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="phase-1"))
         self.assertEqual("PASS", res1["status"])
         self.assertEqual(["phase-1"], res1["completed_phases"])
@@ -889,10 +885,6 @@ class DailyWorkflowSelftest(unittest.TestCase):
         p2_dir = task_dir(self.repo, task_id) / "phases" / "phase-2"
         p2_dir.mkdir(parents=True, exist_ok=True)
         write_file(p2_dir / "unit_tests.json", json.dumps({"status": "PASS"}))
-        write_file(p2_dir / "reviews.json", json.dumps([
-            {"reviewer": "bug-reviewer-agent", "verdict": "PASS"},
-            {"reviewer": "regression-impact-reviewer-agent", "verdict": "PASS"},
-        ]))
         res2 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="phase-2"))
         self.assertEqual("PASS", res2["status"])
         self.assertEqual(["phase-1", "phase-2"], res2["completed_phases"])
@@ -2689,18 +2681,9 @@ class MultiPhaseAndroidTests(DailyWorkflowSelftest):
         p2_dir = task_dir(self.repo, task_id) / "phases" / "p2"
         write_file(p2_dir / "unit_tests.json", json.dumps({"status": "PASS"}))
 
-        # Critical phase without review fails
-        with self.assertRaises(ValidationError) as cm:
-            checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
-        self.assertIn("requires review from", str(cm.exception).lower())
-
-        # With minimum justified review, it passes
-        write_file(p2_dir / "reviews.json", json.dumps([
-            {"reviewer": "security-reviewer-agent", "verdict": "PASS"}
-        ]))
+        # Checkpoint p2 succeeds deterministically without legacy reviews.json
         res_p2 = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
         self.assertEqual("CHECKPOINT_PASS", res_p2.get("status"))
-        self.assertEqual("PASS", res_p2.get("review", {}).get("status"))
 
 
 class ReviewerPrecisionTests(unittest.TestCase):
@@ -4900,11 +4883,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
         task_id = "test-rhost-004"
         current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
+        brief_content = brief_p.read_text(encoding="utf-8")
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "self", "Role": "bug-reviewer-agent", "Prompt": "Review code"}
+                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": brief_content}
                 ]
             }
         }
@@ -5148,11 +5133,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual("DISPATCH_REVIEWERS", act1["code"])
 
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
+        brief_content = brief_p.read_text(encoding="utf-8")
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "self", "Role": "bug-reviewer-agent", "Prompt": "Please review code"}
+                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": brief_content}
                 ]
             }
         }
@@ -5267,11 +5254,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
 
         # 6. Simulate actual pre_tool_safety invoke_subagent
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
+        brief_content = brief_p.read_text(encoding="utf-8")
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "self", "Role": "bug-reviewer-agent", "Prompt": "Review"}
+                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": brief_content}
                 ]
             }
         }
@@ -5792,13 +5781,17 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         self.assertEqual("DISPATCH_REVIEWERS", act["code"])
 
         # Step 10 & 11: PreToolUse allows one invoke_subagent batch (no model/reasoning fields), dispatch receipts exist before invocation
+        from review_execution import resolve_execution_profile
+        prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+        prompt_bug = prof["reviewers"]["bug-reviewer-agent"]["brief_content"]
+        prompt_sec = prof["reviewers"]["security-reviewer-agent"]["brief_content"]
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": "Review bug"},
-                    {"TypeName": "security-reviewer-agent", "Role": "security-reviewer-agent", "Prompt": "Review security"},
+                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": prompt_bug},
+                    {"TypeName": "security-reviewer-agent", "Role": "security-reviewer-agent", "Prompt": prompt_sec},
                 ]
             }
         }
@@ -5950,12 +5943,15 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         )
 
         # PreToolUse allows and creates dispatch receipt
+        from review_execution import resolve_execution_profile
+        prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
+        prompt_bug = prof["reviewers"]["bug-reviewer-agent"]["brief_content"]
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": "Review"}
+                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": prompt_bug}
                 ]
             }
         }
@@ -6052,6 +6048,286 @@ class DocumentationConsistencyTests(unittest.TestCase):
         self.assertTrue(adr7.is_file())
         adr7_content = adr7.read_text(encoding="utf-8")
         self.assertIn("Review Protocol V2", adr7_content)
+
+
+
+class StaleRunVerificationTests(ReviewOrchestrationTests):
+    """STALE-NEXT-001 through 008 and STALE-FINAL-001: Verification freshness and stale-run router gates."""
+
+    def test_STALE_NEXT_001_edit_after_freeze_returns_verification_stale_before_preflight(self) -> None:
+        """STALE-NEXT-001: Edit after freeze returns VERIFICATION_STALE before preflight."""
+        task_id = "test-stale-001"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        plan = read_json(tdir / "plan.json")
+        store = EvidenceStore(state_root(self.repo))
+        manifest = read_json(Path(current["manifest"]))
+        (store.run_dir(manifest["delivery_snapshot_sha256"], run_id) / "preflight.json").unlink(missing_ok=True)
+
+        # Edit a file after freeze
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// stale edit\nclass MainActivity\n")
+
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("VERIFICATION_STALE", action.get("code"))
+        self.assertEqual("TASK_STATE", action.get("kind"))
+        self.assertTrue(action.get("blocking"))
+        self.assertIn("task resume", action.get("command", ""))
+        self.assertIn("STALE", action.get("reason", "").upper())
+
+    def test_STALE_NEXT_002_edit_after_preflight_returns_stale_before_reviewer_dispatch(self) -> None:
+        """STALE-NEXT-002: Edit after preflight returns stale before reviewer dispatch."""
+        task_id = "test-stale-002"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        plan = read_json(tdir / "plan.json")
+
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// post preflight edit\nclass MainActivity\n")
+
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("VERIFICATION_STALE", action.get("code"))
+        self.assertNotEqual("DISPATCH_REVIEWERS", action.get("code"))
+        self.assertNotEqual("BUILD_REVIEW_PACKAGE", action.get("code"))
+
+    def test_STALE_NEXT_003_edit_while_reviewers_run_prevents_result_ingestion(self) -> None:
+        """STALE-NEXT-003: Edit while reviewers run prevents result ingestion."""
+        task_id = "test-stale-003"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        from review_orchestrator import record_dispatch_batch, complete_review
+        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"], host="antigravity")
+
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// mid-review edit\nclass MainActivity\n")
+
+        eid = "exec-mid-review-stale"
+        valid_response = f'```json\n{{"schema_version": 2, "task_id": "{task_id}", "run_id": "{run_id}", "reviewer": "bug-reviewer-agent", "verdict": "PASS", "review_package_sha256": "{pkg_sha}", "summary": "Looks good", "findings": []}}\n```'
+        self._create_mock_transcript(eid, valid_response)
+
+        with self.assertRaises(ValidationError) as ctx:
+            complete_review(self.repo, task_id, "bug-reviewer-agent", eid, host="antigravity")
+        self.assertIn("STALE", str(ctx.exception).upper())
+        from review_orchestrator import result_file
+        self.assertFalse(result_file(tdir, run_id, "bug-reviewer-agent").is_file())
+
+    def test_STALE_NEXT_004_external_input_identity_change_returns_stale(self) -> None:
+        """STALE-NEXT-004: External input identity change returns stale."""
+        task_id = "test-stale-004"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        plan = read_json(tdir / "plan.json")
+        current["external_inputs_sha256"] = "x" * 64
+        atomic_write_json(tdir / "current-run.json", current)
+
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("VERIFICATION_STALE", action.get("code"))
+
+    def test_STALE_NEXT_005_unchanged_repo_continues_normal_action(self) -> None:
+        """STALE-NEXT-005: Unchanged repo continues normal action."""
+        task_id = "test-stale-005"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        plan = read_json(tdir / "plan.json")
+
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertNotEqual("VERIFICATION_STALE", action.get("code"))
+        self.assertEqual("DISPATCH_REVIEWERS", action.get("code"))
+
+    def test_STALE_NEXT_006_stale_run_consumes_zero_additional_reviewer_calls(self) -> None:
+        """STALE-NEXT-006: Stale run consumes zero additional reviewer calls."""
+        task_id = "test-stale-006"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        plan = read_json(tdir / "plan.json")
+        initial_calls = plan.get("review_calls_used", 0)
+
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// stale edit\nclass MainActivity\n")
+
+        from workflow import resolve_next_action
+        for _ in range(3):
+            action = resolve_next_action(self.repo, task_id, plan)
+            self.assertEqual("VERIFICATION_STALE", action.get("code"))
+
+        plan_after = read_json(tdir / "plan.json")
+        self.assertEqual(initial_calls, plan_after.get("review_calls_used", 0))
+
+    def test_STALE_NEXT_007_stale_run_never_returns_wait_for_reviewers(self) -> None:
+        """STALE-NEXT-007: Stale run never returns WAIT_FOR_REVIEWERS as authoritative next action."""
+        task_id = "test-stale-007"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        from review_orchestrator import record_dispatch_batch
+        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"], host="antigravity")
+
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// stale edit\nclass MainActivity\n")
+
+        plan = read_json(tdir / "plan.json")
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("VERIFICATION_STALE", action.get("code"))
+        self.assertNotEqual("WAIT_FOR_REVIEWERS", action.get("code"))
+
+    def test_STALE_NEXT_008_resume_plus_prepare_verification_creates_distinct_run_id(self) -> None:
+        """STALE-NEXT-008: Resume + prepare-verification creates a distinct run id."""
+        task_id = "test-stale-008"
+        current1, run_id1, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+
+        from workflow import resume, prepare_verification
+        resume(argparse.Namespace(repo=str(self.repo), task_id=task_id, reason="recovering from stale"))
+
+        plan = read_json(tdir / "plan.json")
+        self.assertEqual("IMPLEMENTING", plan.get("status"))
+
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// fresh code\nclass MainActivity { fun f() = 2 }\n")
+        prep_res = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        current2 = read_json(tdir / "current-run.json")
+        run_id2 = current2["run_id"]
+        self.assertNotEqual(run_id1, run_id2)
+        plan_after = read_json(tdir / "plan.json")
+        self.assertEqual("VERIFYING", plan_after.get("status"))
+
+    def test_STALE_FINAL_001_final_reviewer_return_after_user_edit_cannot_be_ingested(self) -> None:
+        """STALE-FINAL-001: Final reviewer return after user edit cannot be ingested as current evidence."""
+        task_id = "test-stale-final-001"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        from review_orchestrator import record_dispatch_batch, complete_review, finalize_review_execution
+        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"], host="antigravity")
+
+        eid = "exec-final-stale"
+        valid_response = f'```json\n{{"schema_version": 2, "task_id": "{task_id}", "run_id": "{run_id}", "reviewer": "bug-reviewer-agent", "verdict": "PASS", "review_package_sha256": "{pkg_sha}", "summary": "Looks good", "findings": []}}\n```'
+        self._create_mock_transcript(eid, valid_response)
+        complete_review(self.repo, task_id, "bug-reviewer-agent", eid, host="antigravity")
+
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// post review edit\nclass MainActivity\n")
+
+        with self.assertRaises(ValidationError) as ctx:
+            finalize_review_execution(self.repo, task_id, run_id=run_id)
+        self.assertIn("STALE", str(ctx.exception).upper())
+
+
+class GitDeliveryTests(ReviewOrchestrationTests):
+    """GIT-DELIVERY-001 through 007: Human Git authority before delivery."""
+
+    def _setup_ready_task(self, task_id: str) -> tuple[dict, Path]:
+        from workflow import state_root, task_dir
+        tdir = task_dir(self.repo, task_id)
+        tdir.mkdir(parents=True, exist_ok=True)
+        # Modify the app file so it is dirty in the working tree
+        target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt"
+        write_file(target, "package com.example\nclass MainActivity { fun auth() = true }\n")
+        manifest = build_manifest(self.repo)
+        snapshot = manifest["delivery_snapshot_sha256"]
+        change_set = manifest["change_set_sha256"]
+        plan = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "task_kind": "FEATURE",
+            "requested_outcome": "Biometric login flow",
+            "status": "READY_FOR_DELIVERY",
+            "ready_delivery_snapshot_sha256": snapshot,
+            "ready_change_set_sha256": change_set,
+            "ready_run_id": f"run-{task_id}",
+            "expected_surfaces": ["AUTH"],
+            "expected_modules": [":app"],
+            "expected_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+        }
+        p_path = tdir / "plan.json"
+        atomic_write_json(p_path, plan)
+        active = {"task_id": task_id, "plan_path": str(p_path)}
+        atomic_write_json(state_root(self.repo) / "active-task.json", active)
+        return plan, tdir
+
+    def test_GIT_DELIVERY_001_ready_plus_dirty_returns_developer_git_commit_required(self) -> None:
+        """GIT-DELIVERY-001: READY_FOR_DELIVERY with dirty files returns DEVELOPER_GIT_COMMIT_REQUIRED."""
+        task_id = "test-git-001"
+        plan, tdir = self._setup_ready_task(task_id)
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", action.get("code"))
+        self.assertEqual("DEVELOPER_ACTION", action.get("kind"))
+        self.assertTrue(action.get("blocking"))
+        self.assertEqual("", action.get("command"))
+
+    def test_GIT_DELIVERY_002_model_is_not_given_executable_git_mutation(self) -> None:
+        """GIT-DELIVERY-002: Model is not given an executable Git mutation command."""
+        task_id = "test-git-002"
+        plan, tdir = self._setup_ready_task(task_id)
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("", action.get("command"))
+        self.assertNotIn("git commit", action.get("command", ""))
+        self.assertIn("suggested_commit", action)
+        inputs = action.get("inputs", {})
+        self.assertIn("dirty_task_files", inputs)
+        self.assertIn("suggested_commit_message", inputs)
+
+    def test_GIT_DELIVERY_003_developer_commit_with_identical_content_returns_deliver(self) -> None:
+        """GIT-DELIVERY-003: Developer commit preserving content returns DELIVER."""
+        task_id = "test-git-003"
+        plan, tdir = self._setup_ready_task(task_id)
+        from workflow import resolve_next_action
+
+        # Developer commits the uncommitted change
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat(auth): biometric login flow")
+
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DELIVER", action.get("code"))
+        self.assertEqual("HARNESS_COMMAND", action.get("kind"))
+        self.assertIn("task deliver", action.get("command", ""))
+
+    def test_GIT_DELIVERY_004_commit_hook_changes_content_returns_stale(self) -> None:
+        """GIT-DELIVERY-004: Commit hook modifies content -> returns DELIVERY_STALE_AFTER_COMMIT."""
+        task_id = "test-git-004"
+        plan, tdir = self._setup_ready_task(task_id)
+        from workflow import resolve_next_action
+
+        # Simulate commit hook modifying content
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// formatted\nclass MainActivity { fun auth() = true }\n")
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat(auth): biometric login flow with autofix")
+
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DELIVERY_STALE_AFTER_COMMIT", action.get("code"))
+        self.assertEqual("TASK_STATE", action.get("kind"))
+        self.assertTrue(action.get("blocking"))
+        self.assertIn("task resume", action.get("command", ""))
+
+    def test_GIT_DELIVERY_005_unrelated_non_delivery_noise_does_not_create_false_blocker(self) -> None:
+        """GIT-DELIVERY-005: Unrelated non-delivery noise does not create a false blocker."""
+        task_id = "test-git-005"
+        plan, tdir = self._setup_ready_task(task_id)
+        from workflow import resolve_next_action
+
+        # Developer commits the verified change
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat(auth): biometric login flow")
+
+        # Developer creates non-delivery noise (e.g. documentation notes)
+        write_file(self.repo / "docs/notes.md", "# Some notes\n")
+
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DELIVER", action.get("code"))
+
+    def test_GIT_DELIVERY_006_direct_deliver_on_dirty_tree_fails_closed(self) -> None:
+        """GIT-DELIVERY-006: Direct deliver on dirty tree still fails closed."""
+        task_id = "test-git-006"
+        plan, tdir = self._setup_ready_task(task_id)
+        from workflow import deliver_task
+        with self.assertRaises(ValidationError) as ctx:
+            deliver_task(self.repo, task_id)
+        self.assertIn("dirty", str(ctx.exception).lower())
+
+    def test_GIT_DELIVERY_007_clean_ready_task_delivers_normally(self) -> None:
+        """GIT-DELIVERY-007: Clean ready task delivers normally."""
+        task_id = "test-git-007"
+        plan, tdir = self._setup_ready_task(task_id)
+        from workflow import deliver_task, resolve_next_action
+
+        # Developer commits
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat(auth): biometric login flow")
+
+        delivered_plan = deliver_task(self.repo, task_id)
+        self.assertEqual("DELIVERED", delivered_plan.get("status"))
+
+        action = resolve_next_action(self.repo, task_id, delivered_plan)
+        self.assertEqual("TASK_DELIVERED", action.get("code"))
 
 
 if __name__ == "__main__":

@@ -188,6 +188,8 @@ def plan_payload(plan: dict) -> dict:
         payload["supersedes_plan_sha256"] = plan["supersedes_plan_sha256"]
     if "zoho_link" in plan and plan.get("zoho_link") is not None:
         payload["zoho_link"] = plan["zoho_link"]
+    if "scoped_phase_review_enabled" in plan and plan.get("scoped_phase_review_enabled") is not None:
+        payload["scoped_phase_review_enabled"] = plan["scoped_phase_review_enabled"]
     return payload
 
 
@@ -238,6 +240,7 @@ def create_plan(
     supersedes_plan_sha256: str | None = None,
     revision_number: int = 1,
     zoho_link: dict | None = None,
+    scoped_phase_review_enabled: bool | None = None,
 ) -> dict:
     task_id = validate_id(task_id, "task id")
     if not requested_outcome.strip():
@@ -277,6 +280,8 @@ def create_plan(
         record["architecture_contract"] = architecture_contract
     if zoho_link is not None:
         record["zoho_link"] = zoho_link
+    if scoped_phase_review_enabled is not None:
+        record["scoped_phase_review_enabled"] = scoped_phase_review_enabled
     record["plan_sha256"] = canonical_sha256(plan_payload(record))
     return record
 

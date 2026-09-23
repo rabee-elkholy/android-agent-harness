@@ -44,6 +44,7 @@ EXTERNAL_CANDIDATES = {
     "google-services.json",
     "app/google-services.json",
 }
+SECRET_PATH_MARKERS = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
 
 
 @dataclass(frozen=True)
@@ -386,12 +387,19 @@ def build_task_diff(repo: Path, task_id: str | None, task_manifest: dict) -> str
         return "".join(chunks)
 
     baseline_files_dir: Path | None = None
+    task_base_head: str | None = task_manifest.get("task_base_head")
     if task_id:
         for candidate_state in (root / ".agents" / "state", root / "agents" / "state"):
             c_dir = candidate_state / "tasks" / task_id / "baseline-files"
             if c_dir.is_dir():
                 baseline_files_dir = c_dir
-                break
+            plan_file = candidate_state / "tasks" / task_id / "plan.json"
+            if plan_file.is_file() and not task_base_head:
+                try:
+                    pdata = json.loads(plan_file.read_text(encoding="utf-8"))
+                    task_base_head = pdata.get("task_base_head") or pdata.get("repository", {}).get("head")
+                except Exception:
+                    pass
 
     secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
     diff_chunks: list[str] = []
@@ -435,8 +443,9 @@ def build_task_diff(repo: Path, task_id: str | None, task_manifest: dict) -> str
                 if chunk:
                     diff_chunks.append(chunk)
         else:
+            base_ref = task_base_head or "HEAD"
             proc = subprocess.run(
-                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", "HEAD", "--", rel],
+                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", base_ref, "--", rel],
                 cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
             if proc.stdout:
@@ -449,12 +458,61 @@ def build_task_manifest(
     repo: Path,
     baseline: dict | list | None = None,
     expected_files: list[str] | set[str] | None = None,
+    task_base_head: str | None = None,
 ) -> dict:
     manifest = build_manifest(repo)
+    if task_base_head is None and isinstance(baseline, dict):
+        task_base_head = baseline.get("task_base_head")
+
+    committed_task_changes: list[dict] = []
+    if task_base_head:
+        try:
+            current_head = git_text(repo, "rev-parse", "HEAD")
+            if current_head != task_base_head:
+                proc = subprocess.run(
+                    ["git", "diff", "--name-status", task_base_head, current_head],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    for line in proc.stdout.splitlines():
+                        if not line.strip():
+                            continue
+                        parts = line.split("\t")
+                        stat = parts[0][0]
+                        p = parts[-1]
+                        old_p = parts[1] if len(parts) > 2 else None
+                        if is_delivery_relevant(p):
+                            target_p = repo / p
+                            if target_p.is_file():
+                                oid = git(repo, "hash-object", "--path", p, "--stdin", input_bytes=target_p.read_bytes()).decode("utf-8").strip()
+                            else:
+                                oid = "git:deleted"
+                            committed_task_changes.append({
+                                "status": stat,
+                                "path": _normal_rel(p),
+                                "old_path": _normal_rel(old_p) if old_p else None,
+                                "content_identity": oid,
+                            })
+        except Exception:
+            pass
+
     if baseline is None:
-        manifest["task_changes"] = list(manifest.get("changes") or [])
-        manifest["task_change_set_sha256"] = manifest["change_set_sha256"]
-        manifest["task_delta_mode"] = "LEGACY_FULL_WORKTREE"
+        all_changes = list(manifest.get("changes") or [])
+        cur_paths = {_normal_rel(c.get("path") or "") for c in all_changes if c.get("path")}
+        for comm in committed_task_changes:
+            if comm.get("path") not in cur_paths:
+                all_changes.append(comm)
+                cur_paths.add(comm.get("path"))
+        all_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))
+        change_identities = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in all_changes]
+        manifest["task_changes"] = all_changes
+        manifest["task_change_set_sha256"] = canonical_sha256(change_identities)
+        manifest["task_delta_mode"] = "TASK_COMMITTED_OR_WORKTREE" if task_base_head else "LEGACY_FULL_WORKTREE"
+        if task_base_head:
+            manifest["task_base_head"] = task_base_head
         return manifest
 
     if isinstance(baseline, dict):
@@ -508,6 +566,13 @@ def build_task_manifest(
                 "content_identity": "git:head_or_reverted",
             })
 
+    # Add committed task changes not present in working tree changes
+    for comm in committed_task_changes:
+        p = comm.get("path")
+        if p and p not in current_paths and p not in base_map:
+            task_changes.append(comm)
+            current_paths.add(p)
+
     task_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))
     change_identities = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in task_changes]
     manifest["task_changes"] = task_changes
@@ -516,6 +581,8 @@ def build_task_manifest(
     ]
     manifest["task_change_set_sha256"] = canonical_sha256(change_identities)
     manifest["task_delta_mode"] = "TASK_ISOLATED"
+    if task_base_head:
+        manifest["task_base_head"] = task_base_head
     return manifest
 
 

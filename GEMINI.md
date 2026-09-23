@@ -61,6 +61,8 @@ Follow the simplified 4-phase lifecycle driven by `python .agents/harness.py tas
 | **PLAN** | 3. Approve | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Record approval & atomically transition to IMPLEMENTING |
 | **BUILD** | 4. (Compat) Begin | `python .agents/scripts/workflow.py begin --repo . --task-id <id>` | Idempotent begin compatibility command |
 | **BUILD** | 4b. Zoho Start Sync | `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item (when plan has approved zoho_link) |
+| **BUILD** | 4c. Task Handoff | `python .agents/harness.py task handoff --task-id <id>` | Freeze WIP checkpoint for safe worktree switch |
+| **BUILD** | 4d. Reconcile Handoff | `python .agents/harness.py task reconcile-handoff --task-id <id>` | Validate developer WIP commit and update lineage |
 | **BUILD** | 5. Diagnostic Build | `python .agents/harness.py assemble` | Optional diagnostic build during implementation |
 | **VERIFY** | 6. Prepare | `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity` | Freeze review package & transition to VERIFYING |
 | **VERIFY** | 7. Preflight | `python .agents/harness.py preflight` | Deterministic preflight: strings, Room, architecture |
@@ -78,5 +80,40 @@ Follow the simplified 4-phase lifecycle driven by `python .agents/harness.py tas
 | **SHIP** | 15. Reconcile / Deliver | `python .agents/scripts/workflow.py reconcile-delivery --repo . --task-id <id>` | Finalize to DELIVERED after developer git commit |
 | **SHIP** | 15b. Zoho Delivery Sync | `python .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item (when plan has zoho_link) |
 | - | Context Note | `python harness_cli.py context note "<note>"` | Record architectural convention/note |
+
+## Canonical Large-Task & Phased Execution Flow
+
+```text
+one task approval
+→ phase implementation
+→ deterministic checkpoint
+→ scoped phase delta review when selected
+→ next phase
+→ final integration review
+→ assemble/device
+→ developer signoff
+→ final verify
+→ developer Git commit
+→ deliver
+```
+
+## Urgent Interruption & Worktree Handoff Flow
+
+```text
+Task A
+→ task handoff (python .agents/harness.py task handoff --task-id <id>)
+→ developer WIP commit (developer creates Git commit for checkpoint)
+→ reconcile handoff (python .agents/harness.py task reconcile-handoff --task-id <id>)
+→ developer creates separate worktree (git worktree add ../repo-task-b HEAD)
+→ Task B in new chat/worktree
+→ return to Task A worktree/chat
+→ task status --next (python .agents/harness.py task status --task-id <id> --next)
+```
+
+### Core Invariants:
+- **One live task per worktree**: each worktree maintains isolated task state; never run multiple concurrent tasks in the same worktree.
+- **Model never executes Git mutations**: Git add, commit, tag, push, checkout, merge, and worktree operations are strictly developer-owned.
+- **Lineage enforcement**: a raw unregistered mid-task commit is a lineage violation; only a validated handoff checkpoint commit with accepted lineage receipt is allowed.
+- **Final review required**: aggregate final integration review remains required even when all intermediate phase reviews pass.
 
 Antigravity loads `agents/hooks.json` in this repo. Gemini CLI does not; still execute the policy-resolved reviewer roster before assemble. No `code-review-guard-agent`. No `LGTM`.
