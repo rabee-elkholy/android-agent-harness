@@ -800,6 +800,45 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual("generic", current["review_host"])
         self.assertEqual("VERIFYING", read_json(task_dir(self.repo, task_id) / "plan.json")["status"])
 
+    def test_PHASE_TRANSITION_010_completed_review_can_be_recheckpointed(self) -> None:
+        phases = [
+            {"id": "p1", "name": "Auth", "expected_files": ["app/src/main/java/com/example/Auth.kt"]},
+            {"id": "p2", "name": "UI", "expected_files": ["app/src/main/java/com/example/UI.kt"]},
+        ]
+        task_id = self._create_phased_task(phases, scoped_phase_review=True)
+        source = self.repo / "app/src/main/java/com/example/Auth.kt"
+        write_file(source, "package com.example\nclass Auth\n")
+        self._pass_phase_tests(task_id, "p1")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        _, first = build_phase_package(self.repo, task_id, "p1")
+        record_phase_dispatch_batch(self.repo, task_id, "p1", first["selected_reviewers"])
+        for reviewer in first["selected_reviewers"]:
+            complete_phase_review(
+                self.repo, task_id, "p1", reviewer, f"first-{reviewer}",
+                verdict="PASS", findings=[], package_sha256=first["package_sha256"],
+            )
+        finalize_phase_review(self.repo, task_id, "p1")
+
+        write_file(source, "package com.example\nclass AuthFixed\n")
+        self.assertEqual("CHECKPOINT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        self._pass_phase_tests(task_id, "p1")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        review_dir = phase_review_dir(task_dir(self.repo, task_id), "p1")
+        archived = review_dir.parent / "review-history" / first["phase_review_run_id"]
+        self.assertTrue((archived / "current-phase-run.json").is_file())
+        self.assertTrue((archived / "results" / f"{first['selected_reviewers'][0]}.json").is_file())
+
+        _, second = build_phase_package(self.repo, task_id, "p1")
+        self.assertNotEqual(first["phase_review_run_id"], second["phase_review_run_id"])
+        record_phase_dispatch_batch(self.repo, task_id, "p1", second["selected_reviewers"])
+        for reviewer in second["selected_reviewers"]:
+            complete_phase_review(
+                self.repo, task_id, "p1", reviewer, f"second-{reviewer}",
+                verdict="PASS", findings=[], package_sha256=second["package_sha256"],
+            )
+        finalize_phase_review(self.repo, task_id, "p1")
+        self.assertEqual("BEGIN_NEXT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+
     def test_HOST_PHASE_001_completed_phases_route_to_configured_host(self) -> None:
         phases = [
             {"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]},
@@ -1437,6 +1476,8 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         task_id, _, _, _ = self._setup_dispatch_state()
         phase_run_file(task_dir(self.repo, task_id), "p1").unlink()
         self.assertEqual("PHASE_REVIEW_STATE_BLOCKED", resolve_next_action(self.repo, task_id)["code"])
+        with self.assertRaisesRegex(ValidationError, "without a run identity"):
+            checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
 
     def test_PHASE_PROOF_003_reviewing_missing_ledger_blocks_router(self) -> None:
         task_id, _, _, _ = self._setup_dispatch_state()

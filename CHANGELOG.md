@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Recheck a completed phase's checkpoint and live file identities before starting the next phase or final verification, so edits made after checkpointing must pass a fresh checkpoint.
 - Persist the next phase baseline and state before advancing the plan index, allowing an interrupted transition to be retried without losing the original phase boundary.
 - Route stale completed phases back to checkpointing and cover interrupted writes, post-checkpoint edits, and final-phase verification with regression tests.
+- Archive the prior review run before re-checkpointing a completed or blocked phase, so a new reviewer cohort can finish without colliding with earlier result files.
 
 ## [1.0.61] - 2026-09-23
 

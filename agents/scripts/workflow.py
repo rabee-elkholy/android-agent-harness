@@ -2151,11 +2151,16 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     from phase_review import (
         get_phase_substate,
         invalidate_phase_review,
+        phase_run_file,
         PHASE_REVIEW_BLOCKED,
         PHASE_REVIEWING,
     )
-    if get_phase_substate(phase_state, phase_id) in (PHASE_REVIEW_BLOCKED, PHASE_REVIEWING):
+    if (
+        get_phase_substate(phase_state, phase_id) in (PHASE_REVIEW_BLOCKED, PHASE_REVIEWING)
+        or phase_run_file(directory, phase_id).is_file()
+    ):
         invalidate_phase_review(repo, args.task_id, phase_id)
+        phase_state = read_json(phase_state_file)
 
     phase_dir = directory / "phases" / phase_id
     phase_dir.mkdir(parents=True, exist_ok=True)

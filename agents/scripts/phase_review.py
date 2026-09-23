@@ -24,6 +24,7 @@ from _vnext_common import (
     redact_text,
     sha256_file,
     utc_now,
+    validate_id,
 )
 from delivery_manifest import build_manifest, build_task_diff, build_task_manifest, load_task_baseline
 from evidence_store import StateLock
@@ -1134,19 +1135,23 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
 def invalidate_phase_review(repo: Path, task_id: str, phase_id: str) -> None:
     tdir = task_dir(repo, task_id)
     rdir = phase_review_dir(tdir, phase_id)
-    prun_f = phase_run_file(tdir, phase_id)
-    if prun_f.is_file():
-        prun_f.unlink()
-    lpath = phase_ledger_file(tdir, phase_id)
-    if lpath.is_file():
-        lpath.unlink()
-    res_f = rdir / "phase_review_result.json"
-    if res_f.is_file():
-        res_f.unlink()
-    pkg_f = rdir / "phase-review-package.md"
-    if pkg_f.is_file():
-        pkg_f.unlink()
-    set_phase_substate(tdir, phase_id, PHASE_IMPLEMENTING)
+    with StateLock(rdir):
+        prun_f = phase_run_file(tdir, phase_id)
+        if prun_f.is_file():
+            run = read_json(prun_f)
+            if not isinstance(run, dict) or run.get("task_id") != task_id or run.get("phase_id") != phase_id:
+                raise ValidationError("cannot archive phase review with mismatched run identity")
+            run_id = validate_id(str(run.get("phase_review_run_id") or ""), "phase review run id")
+            archive = phase_dir(tdir, phase_id) / "review-history" / run_id
+            if archive.exists():
+                raise ValidationError(f"phase review archive already exists for '{run_id}'")
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            rdir.rename(archive)
+            (archive / ".write.lock").unlink(missing_ok=True)
+            rdir.mkdir()
+        elif any(child.name != ".write.lock" for child in rdir.iterdir()):
+            raise ValidationError("cannot invalidate orphaned phase review artifacts without a run identity")
+        set_phase_substate(tdir, phase_id, PHASE_IMPLEMENTING)
 
 
 def format_phase_provenance_section(repo: Path, task_id: str) -> str:
