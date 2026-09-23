@@ -2399,6 +2399,15 @@ def validated_completed_phase_manifest(
         phase_path_states(repo, changes) != checkpoint.get("phase_path_states"),
     )):
         raise ValidationError("phase checkpoint is stale; re-checkpoint the current phase before advancing")
+    review_status = checkpoint.get("review")
+    if not isinstance(review_status, dict):
+        raise ValidationError("phase checkpoint review decision is missing")
+    if review_status.get("status") == "REVIEW_PACKAGE_REQUIRED":
+        from phase_review import validate_completed_phase_review_proof
+
+        validate_completed_phase_review_proof(repo, task_id, phase_id, checkpoint_sha)
+    elif review_status.get("status") != "NOT_REQUIRED":
+        raise ValidationError("phase checkpoint review decision is invalid")
     return manifest
 
 

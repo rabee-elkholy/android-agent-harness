@@ -5,6 +5,7 @@ Implements Sections 7, 8, 19, 20 of ANTIGRAVITY_FINAL_WORKFLOW_STABILITY_REPAIR_
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -347,6 +348,115 @@ def phase_review_freshness(
             return False, f"phase file '{p}' changed while reviewer running"
 
     return True, ""
+
+
+def validate_completed_phase_review_proof(
+    repo: Path, task_id: str, phase_id: str, checkpoint_sha256: str,
+) -> None:
+    """Revalidate the active PASS run before a completed phase can advance."""
+    tdir = task_dir(repo, task_id)
+    rdir = phase_review_dir(tdir, phase_id)
+    run_file = phase_run_file(tdir, phase_id)
+    if not run_file.is_file():
+        raise ValidationError("phase review proof is missing its active run")
+    run = read_json(run_file)
+    if not isinstance(run, dict) or run.get("task_id") != task_id or run.get("phase_id") != phase_id:
+        raise ValidationError("phase review proof has a mismatched active run")
+    run_id = validate_id(str(run.get("phase_review_run_id") or ""), "phase review run id")
+    roster = run.get("selected_reviewers")
+    if (
+        run.get("checkpoint_sha256") != checkpoint_sha256
+        or not isinstance(roster, list) or not roster
+        or not all(isinstance(reviewer, str) for reviewer in roster)
+        or len(roster) != len(set(roster))
+        or not isinstance(run.get("review_host"), str) or not run["review_host"]
+    ):
+        raise ValidationError("phase review proof has an invalid checkpoint or reviewer roster")
+    for reviewer in roster:
+        validate_id(reviewer, "reviewer")
+    try:
+        fresh, reason = phase_review_freshness(repo, task_id, phase_id, run)
+    except Exception as exc:
+        raise ValidationError(f"phase review proof freshness cannot be verified: {exc}") from exc
+    if not fresh:
+        raise ValidationError(f"phase review proof is stale: {reason}")
+    ok, reason, ledger = load_phase_ledger(
+        tdir, phase_id, expected_run_id=run_id,
+        expected_task_id=task_id, expected_reviewers=roster,
+    )
+    if not ok or not ledger:
+        raise ValidationError(f"phase review proof ledger is invalid: {reason}")
+    aggregate_file = rdir / "phase_review_result.json"
+    if not aggregate_file.is_file():
+        raise ValidationError("phase review proof is missing its finalized result")
+    aggregate = read_json(aggregate_file)
+    if (
+        not isinstance(aggregate, dict)
+        or aggregate.get("schema_version") != 2
+        or aggregate.get("task_id") != task_id
+        or aggregate.get("phase_id") != phase_id
+        or aggregate.get("verdict") != "PASS"
+        or aggregate.get("findings") != []
+        or not isinstance(aggregate.get("reviewers"), dict)
+        or set(aggregate["reviewers"]) != set(roster)
+    ):
+        raise ValidationError("phase review proof finalized result is invalid")
+
+    for reviewer in roster:
+        entry = ledger["reviewers"][reviewer]
+        if not isinstance(entry, dict):
+            raise ValidationError(f"phase review proof reviewer entry is invalid for '{reviewer}'")
+        execution_id = entry.get("execution_id")
+        if (
+            entry.get("state") != REVIEW_COMPLETED
+            or entry.get("verdict") != "PASS"
+            or entry.get("findings") != []
+            or not isinstance(execution_id, str) or not execution_id
+            or aggregate["reviewers"].get(reviewer) != {"verdict": "PASS", "findings": []}
+        ):
+            raise ValidationError(f"phase review proof reviewer state is invalid for '{reviewer}'")
+        receipt_file = rdir / "dispatch" / run_id / f"{reviewer}.json"
+        if not receipt_file.is_file():
+            raise ValidationError(f"phase review proof dispatch receipt is missing for '{reviewer}'")
+        receipt = read_json(receipt_file)
+        if not isinstance(receipt, dict) or any(receipt.get(key) != value for key, value in {
+            "schema_version": 2,
+            "task_id": task_id,
+            "phase_id": phase_id,
+            "phase_review_run_id": run_id,
+            "reviewer": reviewer,
+            "phase_delta_sha256": run.get("phase_delta_sha256"),
+            "package_sha256": run.get("package_sha256"),
+            "checkpoint_sha256": checkpoint_sha256,
+            "host": run.get("review_host"),
+        }.items()) or receipt.get("receipt_sha256") != canonical_sha256({
+            key: value for key, value in receipt.items() if key != "receipt_sha256"
+        }):
+            raise ValidationError(f"phase review proof dispatch receipt is invalid for '{reviewer}'")
+        result_file = rdir / "results" / f"{reviewer}.json"
+        if not result_file.is_file():
+            raise ValidationError(f"phase review proof result is missing for '{reviewer}'")
+        result = read_json(result_file)
+        parsed = result.get("result") if isinstance(result, dict) else None
+        if not isinstance(parsed, dict) or any(result.get(key) != value for key, value in {
+            "schema_version": 2,
+            "task_id": task_id,
+            "phase_id": phase_id,
+            "run_id": run_id,
+            "reviewer": reviewer,
+            "execution_id": execution_id,
+            "execution_id_sha256": hashlib.sha256(execution_id.encode("utf-8")).hexdigest(),
+            "review_host": run.get("review_host"),
+            "result_sha256": entry.get("result_sha256"),
+        }.items()) or any(parsed.get(key) != value for key, value in {
+            "task_id": task_id,
+            "run_id": run_id,
+            "reviewer": reviewer,
+            "review_package_sha256": run.get("package_sha256"),
+            "verdict": "PASS",
+            "findings": [],
+        }.items()) or result.get("result_sha256") != canonical_sha256(parsed):
+            raise ValidationError(f"phase review proof result is invalid for '{reviewer}'")
 
 
 def is_phase_review_needed(

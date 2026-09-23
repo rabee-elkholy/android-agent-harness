@@ -1507,6 +1507,39 @@ class PhaseReviewV2Selftest(unittest.TestCase):
                 atomic_write_json(run_file, original_run)
                 atomic_write_json(ledger_file, original_ledger)
 
+    def test_PHASE_PROOF_005_completed_review_requires_live_proof_to_advance(self) -> None:
+        task_id, reviewers, meta = self._completed_dispatch_for_finalization()
+        finalize_phase_review(self.repo, task_id, "p1")
+        self.assertEqual("BEGIN_NEXT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        directory = task_dir(self.repo, task_id)
+        review_dir = phase_review_dir(directory, "p1")
+        proof_files = [
+            phase_run_file(directory, "p1"),
+            phase_review.phase_ledger_file(directory, "p1"),
+            review_dir / "phase-review-package.md",
+            review_dir / "phase_review_result.json",
+            review_dir / "dispatch" / meta["phase_review_run_id"] / f"{reviewers[0]}.json",
+            review_dir / "results" / f"{reviewers[0]}.json",
+        ]
+        for proof_file in proof_files:
+            with self.subTest(missing=proof_file.name):
+                saved = proof_file.read_bytes()
+                proof_file.unlink()
+                try:
+                    self.assertEqual("PHASE_CHECKPOINT_STATE_BLOCKED", resolve_next_action(self.repo, task_id)["code"])
+                    with self.assertRaisesRegex(ValidationError, "phase review proof"):
+                        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+                finally:
+                    proof_file.write_bytes(saved)
+        result_file = review_dir / "results" / f"{reviewers[0]}.json"
+        original_result = read_json(result_file)
+        tampered_result = json.loads(json.dumps(original_result))
+        tampered_result["result"]["verdict"] = "FINDINGS"
+        tampered_result["result_sha256"] = canonical_sha256(tampered_result["result"])
+        atomic_write_json(result_file, tampered_result)
+        self.assertEqual("PHASE_CHECKPOINT_STATE_BLOCKED", resolve_next_action(self.repo, task_id)["code"])
+        atomic_write_json(result_file, original_result)
+
     def test_ROUTER_MATRIX_001_phase_review_states_are_actionable(self) -> None:
         task_id, reviewers, _, meta = self._setup_dispatch_state()
         ledger_file = phase_review.phase_ledger_file(task_dir(self.repo, task_id), "p1")
