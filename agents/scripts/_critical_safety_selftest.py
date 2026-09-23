@@ -319,20 +319,20 @@ class CriticalSafetyTests(unittest.TestCase):
         fixture.setUp()
         try:
             root = fixture.repo
-            fixtures.write(root / "app/src/main/assets/notes.md", "Documentation notes\n")
+            fixtures.write(root / "docs/notes.md", "Documentation notes\n")
             fixtures.run_git(root, "add", ".")
             fixtures.run_git(root, "commit", "-qm", "baseline doc")
 
-            # 1. Modifying notes.md and an unclassified delivery config.json
-            fixtures.write(root / "app/src/main/assets/notes.md", "Updated notes\n")
-            fixtures.write(root / "app/src/main/assets/config.json", '{"theme": "dark"}\n')
+            # 1. Modifying documentation and an unclassified delivery config.json
+            fixtures.write(root / "docs/notes.md", "Updated notes\n")
+            fixtures.write(root / "app/config.json", '{"theme": "dark"}\n')
             result = change_classifier.classify(root)
             self.assertIn("DOCS", result["surfaces"])
             self.assertIn("UNKNOWN", result["surfaces"])
             self.assertEqual("LOW", result["confidence"])
 
-            # 2. Positive neighboring case: modifying only notes.md stays pure DOCS
-            (root / "app/src/main/assets/config.json").unlink()
+            # 2. Positive neighboring case: modifying only documentation stays pure DOCS
+            (root / "app/config.json").unlink()
             clean_result = change_classifier.classify(root)
             self.assertEqual(["DOCS"], clean_result["surfaces"])
             self.assertEqual("HIGH", clean_result["confidence"])
