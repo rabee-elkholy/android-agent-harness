@@ -700,6 +700,106 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertTrue((task_dir(self.repo, task_id) / "phases" / "p2" / "baseline.json").is_file())
         self.assertEqual(1, read_json(task_dir(self.repo, task_id) / "plan.json")["active_phase_index"])
 
+    def test_PHASE_TRANSITION_005_plan_commit_is_last_and_retryable(self) -> None:
+        phases = [
+            {"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]},
+            {"id": "p2", "name": "Style", "expected_files": ["app/src/main/res/values/two.xml"]},
+        ]
+        task_id = self._create_phased_task(phases)
+        write_file(self.repo / "app/src/main/res/values/one.xml", "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        directory = task_dir(self.repo, task_id)
+        baseline_file = directory / "phases" / "p2" / "baseline.json"
+        plan_file = directory / "plan.json"
+        state_file = directory / "phase-state.json"
+
+        def interrupt_before_plan_commit(path: Path, plan: dict) -> None:
+            self.assertEqual(plan_file, path)
+            self.assertTrue(baseline_file.is_file())
+            self.assertEqual("p2", read_json(state_file)["current_phase_id"])
+            self.assertEqual(0, read_json(plan_file).get("active_phase_index", 0))
+            raise OSError("simulated interruption before plan commit")
+
+        with mock.patch.object(workflow, "save_plan", side_effect=interrupt_before_plan_commit):
+            with self.assertRaisesRegex(OSError, "simulated interruption"):
+                workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        baseline_sha = read_json(baseline_file)["baseline_sha256"]
+        self.assertEqual("BEGIN_NEXT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual(baseline_sha, read_json(baseline_file)["baseline_sha256"])
+        self.assertEqual(1, read_json(plan_file)["active_phase_index"])
+        self.assertEqual("p2", read_json(state_file)["current_phase_id"])
+
+    def test_PHASE_TRANSITION_006_state_write_failure_keeps_plan_on_old_phase(self) -> None:
+        phases = [
+            {"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]},
+            {"id": "p2", "name": "Style", "expected_files": ["app/src/main/res/values/two.xml"]},
+        ]
+        task_id = self._create_phased_task(phases)
+        write_file(self.repo / "app/src/main/res/values/one.xml", "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        directory = task_dir(self.repo, task_id)
+        plan_file = directory / "plan.json"
+        state_file = directory / "phase-state.json"
+        original_write = workflow.atomic_write_json
+
+        def interrupt_state_write(path: Path, payload: dict) -> None:
+            if path == state_file:
+                raise OSError("simulated state write failure")
+            original_write(path, payload)
+
+        with mock.patch.object(workflow, "atomic_write_json", side_effect=interrupt_state_write):
+            with self.assertRaisesRegex(OSError, "simulated state write failure"):
+                workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual(0, read_json(plan_file).get("active_phase_index", 0))
+        self.assertEqual("BEGIN_NEXT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual(1, read_json(plan_file)["active_phase_index"])
+        self.assertEqual("p2", read_json(state_file)["current_phase_id"])
+
+    def test_PHASE_TRANSITION_007_stale_checkpoint_cannot_become_next_baseline(self) -> None:
+        phases = [
+            {"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]},
+            {"id": "p2", "name": "Style", "expected_files": ["app/src/main/res/values/two.xml"]},
+        ]
+        task_id = self._create_phased_task(phases)
+        source = self.repo / "app/src/main/res/values/one.xml"
+        write_file(source, "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        write_file(source, "<resources><string name='late'>late edit</string></resources>\n")
+        with self.assertRaisesRegex(ValidationError, "phase checkpoint is stale"):
+            workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        directory = task_dir(self.repo, task_id)
+        self.assertEqual(0, read_json(directory / "plan.json").get("active_phase_index", 0))
+        self.assertFalse((directory / "phases" / "p2" / "baseline.json").exists())
+        self.assertEqual("CHECKPOINT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual(1, read_json(directory / "plan.json")["active_phase_index"])
+
+    def test_PHASE_TRANSITION_008_stale_final_phase_routes_to_recheckpoint(self) -> None:
+        phases = [{"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]}]
+        task_id = self._create_phased_task(phases)
+        source = self.repo / "app/src/main/res/values/one.xml"
+        write_file(source, "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
+        write_file(source, "<resources><string name='late'>late edit</string></resources>\n")
+        self.assertEqual("CHECKPOINT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        with mock.patch.object(workflow, "check_material_drift", return_value={}):
+            with self.assertRaisesRegex(ValidationError, "phase checkpoint is stale"):
+                workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="generic"))
+
+    def test_PHASE_TRANSITION_009_fresh_final_phase_can_prepare_verification(self) -> None:
+        phases = [{"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]}]
+        task_id = self._create_phased_task(phases)
+        write_file(self.repo / "app/src/main/res/values/one.xml", "<resources/>\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        with mock.patch.object(workflow, "check_material_drift", return_value={}):
+            current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="generic"))
+        self.assertEqual("generic", current["review_host"])
+        self.assertEqual("VERIFYING", read_json(task_dir(self.repo, task_id) / "plan.json")["status"])
+
     def test_HOST_PHASE_001_completed_phases_route_to_configured_host(self) -> None:
         phases = [
             {"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]},

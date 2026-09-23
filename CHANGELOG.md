@@ -4,6 +4,14 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.0.62] - 2026-09-23
+
+### Phase transition integrity
+
+- Recheck a completed phase's checkpoint and live file identities before starting the next phase or final verification, so edits made after checkpointing must pass a fresh checkpoint.
+- Persist the next phase baseline and state before advancing the plan index, allowing an interrupted transition to be retried without losing the original phase boundary.
+- Route stale completed phases back to checkpointing and cover interrupted writes, post-checkpoint edits, and final-phase verification with regression tests.
+
 ## [1.0.61] - 2026-09-23
 
 ### Production hardening

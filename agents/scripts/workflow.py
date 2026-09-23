@@ -1315,6 +1315,19 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("verification preparation requires an IMPLEMENTING plan")
+    phases = plan.get("phases") or []
+    if phases:
+        directory = task_dir(repo, args.task_id)
+        phase_state_f = directory / "phase-state.json"
+        phase_state = read_json(phase_state_f) if phase_state_f.is_file() else {}
+        final_phase = phases[-1]
+        if (
+            int(plan.get("active_phase_index") or 0) != len(phases) - 1
+            or phase_state.get("current_phase_id") != final_phase.get("id")
+            or not all(phase.get("id") in (phase_state.get("completed_phases") or []) for phase in phases)
+        ):
+            raise ValidationError("all approved phases must be complete before verification preparation")
+        validated_completed_phase_manifest(repo, args.task_id, plan, phase_state, final_phase)
     base_repo = plan.get("repository") or {}
     if base_repo:
         current_identity = repository_identity(repo)
@@ -2342,6 +2355,48 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     }
 
 
+def validated_completed_phase_manifest(
+    repo: Path, task_id: str, plan: dict, phase_state: dict, phase: dict,
+) -> dict:
+    """Return the live manifest only when it still matches a completed phase checkpoint."""
+    from phase_review import PHASE_COMPLETE, compute_phase_delta_sha256, get_phase_substate, phase_path_states
+
+    phase_id = phase.get("id")
+    if phase_id not in (phase_state.get("completed_phases") or []):
+        raise ValidationError("current phase is not marked complete")
+    if get_phase_substate(phase_state, phase_id) != PHASE_COMPLETE:
+        raise ValidationError("completed phase substate disagrees with phase completion list")
+    directory = task_dir(repo, task_id)
+    checkpoint_f = directory / "phases" / phase_id / "checkpoint.json"
+    checkpoint = read_json(checkpoint_f) if checkpoint_f.is_file() else None
+    if not isinstance(checkpoint, dict) or any(checkpoint.get(key) != value for key, value in {
+        "task_id": task_id, "phase_id": phase_id, "status": "CHECKPOINT_PASS",
+    }.items()):
+        raise ValidationError("current phase checkpoint is missing or invalid")
+    checkpoint_sha = checkpoint.get("checkpoint_sha256")
+    if (
+        not checkpoint_sha
+        or checkpoint_sha != canonical_sha256({k: v for k, v in checkpoint.items() if k != "checkpoint_sha256"})
+        or phase_state.get("phase_checkpoints", {}).get(phase_id) != checkpoint_sha
+    ):
+        raise ValidationError("current phase checkpoint integrity or identity mismatch")
+    baseline_f = directory / "phases" / phase_id / "baseline.json"
+    baseline = read_json(baseline_f) if baseline_f.is_file() else load_task_baseline(repo, task_id)
+    manifest = build_task_manifest(
+        repo, baseline,
+        expected_files=phase.get("expected_files") or plan.get("expected_files"),
+    )
+    changes = manifest.get("task_changes") or []
+    if any((
+        manifest["delivery_snapshot_sha256"] != checkpoint.get("delivery_snapshot_sha256"),
+        manifest["task_change_set_sha256"] != checkpoint.get("task_change_set_sha256"),
+        compute_phase_delta_sha256(phase_id, changes) != checkpoint.get("phase_delta_sha256"),
+        phase_path_states(repo, changes) != checkpoint.get("phase_path_states"),
+    )):
+        raise ValidationError("phase checkpoint is stale; re-checkpoint the current phase before advancing")
+    return manifest
+
+
 def begin_next_phase(args: argparse.Namespace) -> dict[str, Any]:
     repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
@@ -2369,31 +2424,46 @@ def begin_next_phase(args: argparse.Namespace) -> dict[str, Any]:
 
     next_phase = phases[next_idx]
     next_id = next_phase["id"]
-    plan["active_phase_index"] = next_idx
-    save_plan(directory / "plan.json", plan)
+    if phase_state.get("current_phase_id") not in (cur_id, next_id):
+        raise ValidationError("phase state does not match the active or pending next phase")
+    if next_id in completed:
+        raise ValidationError("next phase is already marked complete before transition")
 
-    from phase_review import set_phase_substate, PHASE_IMPLEMENTING
-    phase_state = set_phase_substate(directory, next_id, PHASE_IMPLEMENTING)
-    phase_state["current_phase_id"] = next_id
+    cur_man = validated_completed_phase_manifest(repo, args.task_id, plan, phase_state, cur_phase)
 
     next_dir = directory / "phases" / next_id
     next_dir.mkdir(parents=True, exist_ok=True)
     baseline_f = next_dir / "baseline.json"
-    if not baseline_f.is_file():
-        cur_man = build_manifest(repo)
-        next_baseline = {
-            "schema_version": 1,
-            "task_id": args.task_id,
-            "phase_id": next_id,
-            "repository": plan.get("repository"),
-            "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
-            "base_change_set_sha256": cur_man["change_set_sha256"],
-            "changes": cur_man.get("changes") or [],
-        }
-        next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
+    next_baseline = {
+        "schema_version": 1,
+        "task_id": args.task_id,
+        "phase_id": next_id,
+        "repository": plan.get("repository"),
+        "base_delivery_snapshot_sha256": cur_man["delivery_snapshot_sha256"],
+        "base_change_set_sha256": cur_man["change_set_sha256"],
+        "changes": cur_man.get("changes") or [],
+    }
+    next_baseline["baseline_sha256"] = canonical_sha256(next_baseline)
+    if baseline_f.is_file():
+        if read_json(baseline_f) != next_baseline:
+            raise ValidationError("next phase baseline differs from the current delivery snapshot")
+    else:
         atomic_write_json(baseline_f, next_baseline)
 
+    # Commit the plan index last. Earlier writes can be retried while the
+    # completed current phase remains authoritative in the plan.
+    from phase_review import PHASE_IMPLEMENTING
+
+    substates = phase_state.setdefault("phase_substates", {})
+    entry = substates.setdefault(next_id, {})
+    entry["substate"] = PHASE_IMPLEMENTING
+    entry["updated_at"] = utc_now()
+    phase_state["substate"] = PHASE_IMPLEMENTING
+    phase_state["current_phase_id"] = next_id
     atomic_write_json(phase_state_file, phase_state)
+
+    plan["active_phase_index"] = next_idx
+    save_plan(directory / "plan.json", plan)
     return {
         "status": "ADVANCED",
         "task_id": args.task_id,
@@ -2541,6 +2611,20 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None) -> d
 
             completed_set = set(p_state.get("completed_phases") or [])
             all_done = all(p.get("id") in completed_set for p in phases)
+            if all_done or substate == PHASE_COMPLETE:
+                try:
+                    validated_completed_phase_manifest(repo, task_id, plan, p_state, cur_phase)
+                except Exception as exc:
+                    stale = isinstance(exc, ValidationError) and str(exc).startswith("phase checkpoint is stale")
+                    return {
+                        "code": "CHECKPOINT_PHASE" if stale else "PHASE_CHECKPOINT_STATE_BLOCKED",
+                        "kind": "HARNESS_COMMAND" if stale else "HARNESS_DIAGNOSTIC",
+                        "command": f'python .agents/harness.py task checkpoint-phase {identity} --phase-id "{phase_id}"' if stale else "",
+                        "blocking": True,
+                        "reason": f"Completed phase '{phase_id}' cannot advance: {exc}",
+                        "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                        "expected": {"success_statuses": ["CHECKPOINT_PASS"]} if stale else {},
+                    }
             if all_done:
                 return {
                     "code": "PREPARE_VERIFICATION",
