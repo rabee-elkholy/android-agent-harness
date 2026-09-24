@@ -31,6 +31,8 @@ TEST_SURFACES = {
     "SENSITIVE_DATA", "CRYPTO", "TEST_ONLY",
 }
 
+UNKNOWN_APPROVED_REVIEWERS = {"regression-impact-reviewer-agent"}
+
 ROUTING = {
     "BUSINESS_LOGIC": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
     "PUBLIC_API": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
@@ -236,6 +238,17 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         elif set(surfaces) & HIGH_SURFACES:
             severity = "HIGH"
 
+    unknown_files = set(((classification.get("details") or {}).get("UNKNOWN") or {}).get("files") or [])
+    approved_files = {str(f).replace("\\", "/").strip("/") for f in (plan or {}).get("expected_files") or []}
+    # Approving a plan that names the unclassifiable file is the developer's decision
+    # about it; the file is then reviewed at a feature-level floor, never as trivial.
+    unknown_resolved = bool(
+        "UNKNOWN" in surfaces
+        and unknown_files
+        and isinstance((plan or {}).get("approval"), dict)
+        and unknown_files <= approved_files
+    )
+
     micro = _micro_eligible(classification, plan=plan, task_kind=task_kind)
     planning_depth = str(classification.get("planning_depth") or (plan or {}).get("planning_depth") or "BOUNDED").upper()
     arch_intent = str((plan or {}).get("architecture_intent") or "").upper()
@@ -291,6 +304,8 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         reviewers.clear()
     if "UNKNOWN" in surfaces:
         reviewers.clear()
+        if unknown_resolved:
+            reviewers = set(FIVE_REVIEWERS) if risk_tier == "T5_CRITICAL" else set(UNKNOWN_APPROVED_REVIEWERS)
 
     if project_kind != "application":
         intrinsic_device_required = False
@@ -321,7 +336,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
 
     skills = route(skills_root, sorted(surfaces), task_kind=task_kind)
     call_budget = _configured_model_call_budget()
-    status = "NO_DELIVERY_CHANGES" if not surfaces else "USER_DECISION_REQUIRED" if "UNKNOWN" in surfaces else skills["status"]
+    status = "NO_DELIVERY_CHANGES" if not surfaces else "USER_DECISION_REQUIRED" if ("UNKNOWN" in surfaces and not unknown_resolved) else skills["status"]
     if len(reviewers) > call_budget:
         status = "USER_DECISION_REQUIRED"
     result = {
@@ -347,6 +362,8 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "estimated_calls_this_round": len(reviewers),
         "skills": skills,
     }
+    if unknown_resolved:
+        result["unknown_resolution"] = "APPROVED_PLAN_FILES"
     result["policy_sha256"] = canonical_sha256(result)
     return result
 

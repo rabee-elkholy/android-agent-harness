@@ -109,6 +109,7 @@ CODE_SURFACES: set[str] = {
     "PERSISTENCE", "DEVICE_API", "NAVIGATION", "ROOM_SCHEMA",
 }
 COMPANION_SURFACES: set[str] = {"NAVIGATION", "RESOURCE_UI", "XML_UI", "COMPOSE_UI", "LOCALIZATION"}
+PRESENTATIONAL_RESOURCE_SURFACES: set[str] = {"RESOURCE_UI", "LOCALIZATION"}
 
 OUTCOME_SURFACE_KEYWORDS: dict[str, set[str]] = {
     "BILLING": {"billing", "payment", "subscription", "purchase", "revenuecat", "in-app purchase", "iap", "paywall"},
@@ -458,8 +459,9 @@ def check_material_drift(
         unplanned_surfaces.remove("COROUTINES")
     if expected_surfaces & CODE_SURFACES:
         unplanned_surfaces -= COMPANION_SURFACES
-    elif expected_surfaces & {"LOCALIZATION", "RESOURCE_UI", "XML_UI"}:
-        unplanned_surfaces -= {"LOCALIZATION", "RESOURCE_UI", "XML_UI"}
+    elif expected_surfaces & PRESENTATIONAL_RESOURCE_SURFACES:
+        # A values/strings resource is inherently both; neither admits behavioural XML_UI.
+        unplanned_surfaces -= PRESENTATIONAL_RESOURCE_SURFACES
 
     outcome = str(plan.get("requested_outcome") or "").lower()
     for surface, keywords in OUTCOME_SURFACE_KEYWORDS.items():

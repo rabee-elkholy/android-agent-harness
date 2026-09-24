@@ -139,6 +139,42 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", res["decision"])
         self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
 
+    def test_MUTATION_SCOPE_002b_strings_plan_does_not_admit_layout_ui(self):
+        # Behavioural XML UI is a device surface; a strings-only approval must not cover it.
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml"],
+            expected_surfaces=["LOCALIZATION"],
+            expected_modules=[":app"],
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/main/res/layout/activity_main.xml"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
+
+        from plan_authority import check_material_drift
+        plan = {
+            "expected_files": ["app/src/main/res/values/strings.xml"],
+            "expected_surfaces": ["LOCALIZATION"],
+            "expected_modules": [":app"],
+        }
+        self.assertIn(
+            "surface:XML_UI",
+            check_material_drift(plan, ["RESOURCE_UI", "XML_UI"], [":app"], actual_files=["app/src/main/res/layout/activity_main.xml"]),
+        )
+        self.assertEqual(
+            [],
+            check_material_drift(plan, ["LOCALIZATION", "RESOURCE_UI"], [":app"], actual_files=["app/src/main/res/values/strings.xml"]),
+        )
+
+    def test_MUTATION_SCOPE_002c_module_inference_uses_plan_modules(self):
+        # A plan scoped to the root module must not have app/ targets rewritten to :app.
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml"],
+            expected_surfaces=["LOCALIZATION"],
+            expected_modules=[":"],
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/main/res/values/strings.xml"})
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+
     def test_MUTATION_SCOPE_003_test_companion_allowed_when_test_strategy_permits(self):
         self.activate(
             expected_files=["app/src/main/kotlin/com/example/Feature.kt"],

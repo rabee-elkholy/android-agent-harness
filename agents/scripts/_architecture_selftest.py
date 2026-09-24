@@ -402,6 +402,51 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertIsNone(res["contract"])
         self.assertIn("not a valid fallback", res["message"])
 
+    def _hybrid_with_existing_util(self) -> None:
+        self._write("app/src/main/kotlin/com/example/legacy/LegacyFragment.kt", "class LegacyFragment : Fragment()")
+        self._write("app/src/main/kotlin/com/example/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")
+        self._write("app/src/main/kotlin/com/example/domain/util/ErrorUtils.kt", "object ErrorUtils { fun isNetwork(t: Throwable) = false }")
+
+    def test_existing_file_outside_every_family_preserves_local_code(self) -> None:
+        """A bug fix in an existing domain/data file must not demand a UI-family decision."""
+        self._hybrid_with_existing_util()
+        res = resolve_architecture_contract(
+            self.repo,
+            architecture_intent="EXISTING_CHANGE",
+            target_scope="app/src/main/kotlin/com/example/domain/util/ErrorUtils.kt",
+        )
+        self.assertEqual(STATUS_RESOLVED, res["status"], res.get("message"))
+        self.assertIsNone(res["contract"]["target_family_id"])
+        self.assertEqual("LOW", res["contract"]["resolution_confidence"])
+
+    def test_shared_source_root_is_not_a_family_match(self) -> None:
+        """Sharing only the source root with several families is not ambiguity, it is no family."""
+        from architecture_resolver import _resolve_scope_match
+        families = [
+            {"id": "legacy", "scopes": ["app/src/main/kotlin/com/example/legacy"], "exemplars": ["app/src/main/kotlin/com/example/legacy/LegacyFragment.kt"]},
+            {"id": "modern", "scopes": ["app/src/main/kotlin/com/example/modern"], "exemplars": ["app/src/main/kotlin/com/example/modern/ModernScreen.kt"]},
+        ]
+        self.assertEqual(("NONE"), _resolve_scope_match(families, "app/src/main/kotlin/com/example/domain/util/ErrorUtils.kt")[1])
+        # A sibling of an exemplar is still local to that family.
+        fam, match = _resolve_scope_match(families, "app/src/main/kotlin/com/example/modern/ModernViewModel.kt")
+        self.assertEqual("modern", fam["id"])
+
+    def test_new_file_outside_every_family_still_requires_decision(self) -> None:
+        self._hybrid_with_existing_util()
+        res = resolve_architecture_contract(
+            self.repo,
+            architecture_intent="EXISTING_CHANGE",
+            target_scope="app/src/main/kotlin/com/example/domain/util/NewHelper.kt",
+        )
+        self.assertEqual(STATUS_DECISION_REQUIRED, res["status"])
+        # Refactoring changes structure, so it keeps requiring an explicit family decision.
+        res = resolve_architecture_contract(
+            self.repo,
+            architecture_intent="REFACTOR",
+            target_scope="app/src/main/kotlin/com/example/domain/util/ErrorUtils.kt",
+        )
+        self.assertEqual(STATUS_DECISION_REQUIRED, res["status"])
+
     def test_ambiguous_refactor_never_uses_preferred_new_code_family(self) -> None:
         self._write("app/src/main/kotlin/legacy/LegacyFragment.kt", "class LegacyFragment : Fragment()")
         self._write("app/src/main/kotlin/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")

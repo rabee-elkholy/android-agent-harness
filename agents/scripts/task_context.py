@@ -76,13 +76,7 @@ def _resolve_file(repo: Path, value: str, engine: GraphEngine) -> tuple[str, lis
     from delivery_manifest import is_delivery_relevant
     from change_classifier import is_documentation_path
 
-    valid_fallback = (
-        is_delivery_relevant(rel)
-        or is_documentation_path(rel)
-        or candidate.suffix.lower() in {".xml", ".gradle", ".kts", ".properties", ".toml", ".pro", ".txt", ".json", ".yaml", ".yml", ".md"}
-        or candidate.name.lower() in {"gradlew", "gradlew.bat"}
-    )
-    if valid_fallback:
+    if is_delivery_relevant(rel) or is_documentation_path(rel):
         return "FILE_FALLBACK", [rel], None
 
     return "NOT_FOUND", [], "Target file is not represented in the live graph."
@@ -306,6 +300,24 @@ def _instruction_subject_tokens(text: str) -> set[str]:
     return tokens - INSTRUCTION_STOPWORDS
 
 
+INSTRUCTION_NEGATIVE_MARKERS = ("never", "do not", "must not", "don't", "avoid", "no ")
+INSTRUCTION_POSITIVE_MARKERS = ("always", "must use", "require", "mandatory", "use ")
+ARCHITECTURE_PATTERN_TOKENS = {"mvi", "mvvm", "mvp", "mvc"}
+
+
+def _instruction_polarity(text: str) -> str | None:
+    # A prohibition ("never use X") also contains "use "; negation decides the polarity.
+    if any(marker in text for marker in INSTRUCTION_NEGATIVE_MARKERS):
+        return "NEGATIVE"
+    if any(marker in text for marker in INSTRUCTION_POSITIVE_MARKERS):
+        return "POSITIVE"
+    return None
+
+
+def _required_architecture_patterns(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9_]+", text)) & ARCHITECTURE_PATTERN_TOKENS
+
+
 def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | None:
     active_instructions = [
         inst for inst in instructions
@@ -326,18 +338,17 @@ def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | No
                 t1 = i1.get("text", "").lower()
                 t2 = i2.get("text", "").lower()
 
-                # 2. Architecture structured conflict (e.g. MVI vs MVVM)
-                if ("mvi" in t1 and "mvvm" in t2) or ("mvvm" in t1 and "mvi" in t2):
+                p1 = _instruction_polarity(t1)
+                p2 = _instruction_polarity(t2)
+
+                # 2. Architecture structured conflict: two requirements naming different patterns
+                a1 = _required_architecture_patterns(t1) if p1 == "POSITIVE" else set()
+                a2 = _required_architecture_patterns(t2) if p2 == "POSITIVE" else set()
+                if len(a1) == 1 and len(a2) == 1 and a1 != a2:
                     return f"Conflicting developer architecture instructions '{i1.get('id')}' and '{i2.get('id')}' in scope {s1.get('kind')}:{s1.get('value')}."
 
                 # 3. Positive vs negative polarity conflict ONLY if they share a meaningful technical subject
-                negatives = ("never", "do not", "must not", "don't", "avoid", "no ")
-                positives = ("always", "must use", "require", "mandatory", "use ")
-                has_neg_1 = any(n in t1 for n in negatives)
-                has_pos_1 = any(p in t1 for p in positives)
-                has_neg_2 = any(n in t2 for n in negatives)
-                has_pos_2 = any(p in t2 for p in positives)
-                if (has_neg_1 and has_pos_2) or (has_pos_1 and has_neg_2):
+                if {p1, p2} == {"POSITIVE", "NEGATIVE"}:
                     subj1 = _instruction_subject_tokens(t1)
                     subj2 = _instruction_subject_tokens(t2)
                     shared = subj1 & subj2
@@ -345,6 +356,60 @@ def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | No
                         return f"Conflicting developer instructions '{i1.get('id')}' and '{i2.get('id')}' in same scope {s1.get('kind')}:{s1.get('value')} regarding {', '.join(sorted(shared))}."
 
     return None
+
+
+def _persist_task_context(
+    root: Path,
+    base: dict[str, Any],
+    *,
+    target_file: str,
+    module: str,
+    source_set: str,
+    query: str,
+    status: str,
+    candidate_surfaces: list[str],
+) -> None:
+    """Record a resolved context in the bounded cache that workflow draft consumes."""
+    try:
+        import time
+        from _vnext_common import atomic_write_json
+        id_material = f"{root.as_posix()}:{target_file}:{module}:{source_set}:{query}"
+        context_id = f"ctx-{hashlib.sha256(id_material.encode('utf-8')).hexdigest()[:16]}"
+        base["context_id"] = context_id
+
+        cache_dir = root / ".agents" / "cache" / "task-context"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        now = time.time()
+        for cf in cache_dir.glob("ctx-*.json"):
+            try:
+                if now - cf.stat().st_mtime > 1800:
+                    cf.unlink(missing_ok=True)
+            except OSError:
+                pass
+        remaining = sorted(cache_dir.glob("ctx-*.json"), key=lambda p: p.stat().st_mtime)
+        if len(remaining) > 50:
+            for old_p in remaining[:-50]:
+                try:
+                    old_p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        cache_entry = {
+            "context_id": context_id,
+            "repo_path": root.as_posix(),
+            "target_file": target_file,
+            "module": module,
+            "source_set": source_set,
+            "query": query,
+            "timestamp": now,
+            "status": status,
+            "candidate_surfaces": candidate_surfaces,
+            "developer_instructions": base.get("developer_instructions", []),
+        }
+        atomic_write_json(cache_dir / f"{context_id}.json", cache_entry)
+    except Exception:
+        pass
 
 
 def resolve_task_context(
@@ -410,20 +475,14 @@ def resolve_task_context(
 
         contract = _active_contract(root, rel_posix)
 
-        all_instructions = _load_developer_instructions(root)
-        matched_instructions = []
-        for inst in all_instructions:
-            if inst.get("status") != "ACTIVE":
-                continue
-            scope = inst.get("scope", {})
-            skind = str(scope.get("kind") or "GLOBAL").upper()
-            sval = str(scope.get("value") or "*")
-            if skind == "GLOBAL" or sval == "*":
-                matched_instructions.append(inst)
-            elif skind == "MODULE" and sval == target_module:
-                matched_instructions.append(inst)
-            elif skind == "FILE" and sval.replace("\\", "/").strip("/") == rel_posix:
-                matched_instructions.append(inst)
+        # Match instructions with the same scope rules as graph-backed targets; the
+        # file has no graph node, so it carries no package or architecture profile.
+        file_target = GraphNode(id=f"file:{rel_posix}", name=Path(rel_posix).name, type="FILE", file_path=rel_posix, module=target_module, package="")
+        matched_instructions = [
+            inst for inst in _load_developer_instructions(root)
+            if _instruction_matches_node(inst, file_target, target_source_set, [])
+        ]
+        inst_conflict = _detect_instruction_conflict(matched_instructions)
 
         graph_fp = str(sync.get("graph_fingerprint") or getattr(engine, "graph_fingerprint", "") or "")
         receipt = None
@@ -442,8 +501,9 @@ def resolve_task_context(
         except Exception:
             pass
 
+        fallback_status = "DEVELOPER_INSTRUCTION_CONFLICT" if inst_conflict else "RESOLVED"
         base.update({
-            "status": "RESOLVED",
+            "status": fallback_status,
             "context_mode": "FILE_FALLBACK",
             "graph_basis": {
                 "used": False,
@@ -489,24 +549,21 @@ def resolve_task_context(
             "tests": [],
             "interop_boundaries": [],
             "confidence": "HIGH",
-            "warnings": base["warnings"] + ["Graph relationships are unavailable for this non-AST file fallback target."],
+            "warnings": base["warnings"] + ([inst_conflict] if inst_conflict else []) + ["Graph relationships are unavailable for this non-AST file fallback target."],
         })
         if receipt:
             base["discovery"] = receipt
 
-        try:
-            from _vnext_common import atomic_write_json
-            id_material = f"{root.as_posix()}:{rel_posix}:{target_module}:{target_source_set}:{query}"
-            ctx_id = f"ctx-{hashlib.sha256(id_material.encode('utf-8')).hexdigest()[:12]}"
-            base["context_id"] = ctx_id
-            state_dir = root / ".agents" / "state"
-            state_dir.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(state_dir / "last-task-context.json", base)
-            task_ctx_dir = state_dir / "task-contexts"
-            task_ctx_dir.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(task_ctx_dir / f"{ctx_id}.json", base)
-        except Exception:
-            pass
+        if fallback_status == "RESOLVED":
+            _persist_task_context(
+                root, base,
+                target_file=rel_posix,
+                module=target_module,
+                source_set=target_source_set,
+                query=query,
+                status=fallback_status,
+                candidate_surfaces=target_surfaces,
+            )
 
         return base
 
@@ -688,48 +745,16 @@ def resolve_task_context(
     if expansion_action:
         base["recommended_action"] = expansion_action
     if result_status in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
-        target_path = primary.file_path
-        if target_path and (root / target_path).is_file():
-            try:
-                import time
-                from _vnext_common import atomic_write_json
-                id_material = f"{root.as_posix()}:{primary.file_path}:{primary.module}:{_source_set(primary.file_path)}:{query}"
-                context_id = f"ctx-{hashlib.sha256(id_material.encode('utf-8')).hexdigest()[:16]}"
-                base["context_id"] = context_id
-
-                cache_dir = root / ".agents" / "cache" / "task-context"
-                cache_dir.mkdir(parents=True, exist_ok=True)
-
-                now = time.time()
-                for cf in cache_dir.glob("ctx-*.json"):
-                    try:
-                        if now - cf.stat().st_mtime > 1800:
-                            cf.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                remaining = sorted(cache_dir.glob("ctx-*.json"), key=lambda p: p.stat().st_mtime)
-                if len(remaining) > 50:
-                    for old_p in remaining[:-50]:
-                        try:
-                            old_p.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-
-                cache_entry = {
-                    "context_id": context_id,
-                    "repo_path": root.as_posix(),
-                    "target_file": primary.file_path,
-                    "module": primary.module,
-                    "source_set": _source_set(primary.file_path),
-                    "query": query,
-                    "timestamp": now,
-                    "status": result_status,
-                    "candidate_surfaces": target_surfaces,
-                    "developer_instructions": base.get("developer_instructions", []),
-                }
-                atomic_write_json(cache_dir / f"{context_id}.json", cache_entry)
-            except Exception:
-                pass
+        if primary.file_path and (root / primary.file_path).is_file():
+            _persist_task_context(
+                root, base,
+                target_file=primary.file_path,
+                module=primary.module,
+                source_set=_source_set(primary.file_path),
+                query=query,
+                status=result_status,
+                candidate_surfaces=target_surfaces,
+            )
     return base
 
 

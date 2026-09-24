@@ -261,6 +261,7 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     external_writes = set(plan.get("external_writes") or [])
     expected_files = set(plan.get("expected_files") or [])
     expected_surfaces = set(plan.get("expected_surfaces") or [])
+    expected_modules = set(plan.get("expected_modules") or [])
 
     if not expected_files and not expected_surfaces:
         return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"

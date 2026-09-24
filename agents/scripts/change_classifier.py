@@ -21,7 +21,7 @@ SEVERITY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 CRITICAL_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
 HIGH_SURFACES = {"ROOM_SCHEMA", "MANIFEST_PERMISSION", "BUILD_CONFIG", "PUBLIC_API", "NATIVE_CODE", "HARNESS_CONFIG"}
 DEVICE_SURFACES = {"COMPOSE_UI", "XML_UI", "NAVIGATION", "DEVICE_API"}
-VISUAL_ASSET_EXTENSIONS = {
+PRESENTATIONAL_ASSET_EXTENSIONS = {
     ".png",
     ".jpg",
     ".jpeg",
@@ -34,7 +34,16 @@ VISUAL_ASSET_EXTENSIONS = {
     ".otf",
     ".woff",
     ".woff2",
+    # Audio/video played as-is by the UI.
+    ".mp4",
+    ".webm",
+    ".mp3",
+    ".ogg",
+    ".wav",
+    ".m4a",
+    ".aac",
 }
+ROOM_EXPORTED_SCHEMA_RE = re.compile(r"(^|/)schemas/[a-z0-9_.]+\.[a-z0-9_]+/\d+\.json$")
 
 
 def is_documentation_path(relative: str) -> bool:
@@ -657,10 +666,16 @@ def classify(
         if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
         elif "/src/" in f"/{lower}" and "/assets/" in f"/{lower}/":
-            if suffix in VISUAL_ASSET_EXTENSIONS:
+            if suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
                 _add(found, "RESOURCE_UI", rel, "ANDROID_RUNTIME_ASSET")
         elif is_documentation_path(rel):
             _add(found, "DOCS", rel, "DOCUMENTATION_PATH")
+        elif "/src/" in f"/{lower}" and "/res/" not in f"/{lower}/" and suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
+            _add(found, "RESOURCE_UI", rel, "SOURCE_SET_MEDIA")
+        if ROOM_EXPORTED_SCHEMA_RE.search(lower) and "/src/" not in f"/{lower}":
+            _add(found, "ROOM_SCHEMA", rel, "ROOM_EXPORTED_SCHEMA")
+        if suffix in (".jar", ".aar") and "/src/" not in f"/{lower}":
+            _add(found, "BUILD_CONFIG", rel, "DEPENDENCY_BINARY")
         if "/res/values" in f"/{lower}" and suffix == ".xml":
             if Path(lower).name in ("strings.xml", "plurals.xml", "arrays.xml"):
                 _add(found, "LOCALIZATION", rel, "LOCALIZED_RESOURCE")
@@ -671,7 +686,9 @@ def classify(
         if "/res/navigation" in f"/{lower}" and suffix == ".xml":
             _add(found, "NAVIGATION", rel, "NAVIGATION_GRAPH")
         if "/res/" in f"/{lower}" and suffix not in (".md", ".txt"):
-            _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
+            # res/raw holds arbitrary runtime data, like src/*/assets: only visual media is UI.
+            if "/res/raw/" not in f"/{lower}" or suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
+                _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
         if suffix in (".kt", ".kts") and ("@composable" in full_text.lower() or "androidx.compose" in full_text.lower()):
             if _is_visual_only_compose(diff_text):
                 _add(found, "COMPOSE_UI", rel, "COMPOSE_VISUAL_ONLY")

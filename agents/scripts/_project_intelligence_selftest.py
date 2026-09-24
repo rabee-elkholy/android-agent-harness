@@ -603,6 +603,45 @@ class InstructionConflictResolutionTests(unittest.TestCase):
         conflict = _detect_instruction_conflict(instructions)
         self.assertIsNone(conflict)
 
+    def test_INSTRUCT_CONFLICT_007_same_polarity_prohibitions_coexist(self) -> None:
+        from task_context import _detect_instruction_conflict
+
+        def inst(iid: str, text: str) -> dict:
+            return {"id": iid, "status": "ACTIVE", "scope": {"kind": "GLOBAL", "value": "*"}, "strength": "REQUIREMENT", "text": text}
+
+        # Two prohibitions sharing a subject word are compatible, not contradictory.
+        self.assertIsNone(_detect_instruction_conflict([
+            inst("no-retrofit-tests", "Never use Retrofit in tests."),
+            inst("no-mockito-tests", "Never use Mockito in tests."),
+        ]))
+        # Two requirements sharing a subject word are compatible too.
+        self.assertIsNone(_detect_instruction_conflict([
+            inst("vm-stateflow", "ViewModel must expose StateFlow."),
+            inst("vm-hilt", "ViewModel must use Hilt injection."),
+        ]))
+        # A negated prohibition still contradicts a requirement on the same subject.
+        self.assertIsNotNone(_detect_instruction_conflict([
+            inst("no-retrofit-tests", "Never use Retrofit in tests."),
+            inst("retrofit-tests", "Tests must use Retrofit fakes."),
+        ]))
+
+    def test_INSTRUCT_CONFLICT_008_consistent_mvi_mvvm_statements_do_not_conflict(self) -> None:
+        from task_context import _detect_instruction_conflict
+
+        def inst(iid: str, text: str) -> dict:
+            return {"id": iid, "status": "ACTIVE", "scope": {"kind": "GLOBAL", "value": "*"}, "strength": "REQUIREMENT", "text": text}
+
+        # Forbidding MVI while requiring MVVM is one consistent architecture decision.
+        self.assertIsNone(_detect_instruction_conflict([
+            inst("no-mvi", "Do not use MVI."),
+            inst("mvvm", "Architecture must use MVVM."),
+        ]))
+        # Identifiers that merely contain the letters are not architecture patterns.
+        self.assertIsNone(_detect_instruction_conflict([
+            inst("mvvm", "Architecture must use MVVM."),
+            inst("mvi-lib", "Keep the mvikotlin dependency pinned."),
+        ]))
+
 
 class TaskContextFallbackTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -709,6 +748,55 @@ class TaskContextFallbackTests(unittest.TestCase):
         self.assertEqual("FILE_FALLBACK", res.get("context_mode"))
         self.assertEqual({}, res.get("architecture_contract", {}))
         self.assertEqual([], res.get("local_profiles", []))
+
+    def test_TASKCTX_FALLBACK_008_fallback_context_is_consumable_by_draft(self) -> None:
+        # Fallback contexts use the canonical task-context cache, not a second store.
+        from task_context import resolve_task_context
+        from workflow import _resolve_task_context_for_draft
+        res = resolve_task_context(self.repo, file="app/src/main/res/values/strings.xml")
+        ctx_id = res.get("context_id")
+        self.assertTrue(ctx_id)
+        self.assertTrue((self.repo / ".agents" / "cache" / "task-context" / f"{ctx_id}.json").is_file())
+        self.assertFalse((self.repo / ".agents" / "state" / "last-task-context.json").exists())
+        self.assertFalse((self.repo / ".agents" / "state" / "task-contexts").exists())
+        ctx = _resolve_task_context_for_draft(self.repo, ctx_id)
+        self.assertEqual("app/src/main/res/values/strings.xml", ctx.get("target_file"))
+        self.assertIn("LOCALIZATION", ctx.get("candidate_surfaces") or [])
+
+    def test_TASKCTX_FALLBACK_009_fallback_applies_canonical_instruction_scope_and_conflicts(self) -> None:
+        from task_context import resolve_task_context
+        ctx_dir = self.repo / ".agents" / "project-context"
+        ctx_dir.mkdir(parents=True, exist_ok=True)
+
+        def inst(iid: str, text: str, scope: dict) -> dict:
+            return {"id": iid, "status": "ACTIVE", "scope": scope, "strength": "REQUIREMENT", "text": text}
+
+        instructions = [
+            inst("res-path", "Keep resource names snake_case.", {"kind": "PATH", "value": "app/src/main/res"}),
+            inst("other-path", "Payments must use Stripe.", {"kind": "PATH", "value": "payments/src"}),
+        ]
+        (ctx_dir / "developer-instructions.json").write_text(json.dumps({"instructions": instructions}), encoding="utf-8")
+        res = resolve_task_context(self.repo, file="app/src/main/res/values/strings.xml")
+        ids = {item["id"] for item in res.get("developer_instructions", [])}
+        self.assertIn("res-path", ids)
+        self.assertNotIn("other-path", ids)
+
+        instructions += [
+            inst("no-retrofit", "Never use Retrofit.", {"kind": "GLOBAL", "value": "*"}),
+            inst("retrofit", "Networking must use Retrofit.", {"kind": "GLOBAL", "value": "*"}),
+        ]
+        (ctx_dir / "developer-instructions.json").write_text(json.dumps({"instructions": instructions}), encoding="utf-8")
+        res = resolve_task_context(self.repo, file="app/src/main/res/values/strings.xml")
+        self.assertEqual("DEVELOPER_INSTRUCTION_CONFLICT", res["status"])
+        self.assertEqual({"no-retrofit", "retrofit"} & {i["id"] for i in res["developer_instructions"]}, {"no-retrofit", "retrofit"})
+
+    def test_TASKCTX_FALLBACK_010_non_delivery_files_are_not_resolved(self) -> None:
+        from task_context import resolve_task_context
+        stray = self.repo / "scratch" / "config.yaml"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("key: value", encoding="utf-8")
+        res = resolve_task_context(self.repo, file="scratch/config.yaml")
+        self.assertNotEqual("RESOLVED", res["status"])
 
 
 if __name__ == "__main__":

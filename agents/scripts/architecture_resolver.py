@@ -141,19 +141,19 @@ def _resolve_scope_match(families: list[dict[str, Any]], target_scope: str) -> t
     elif len(component_matches) > 1:
         return None, "AMBIGUOUS"
 
-    # 3. Path component based prefix match
+    # 3. Containing-directory match: the target lives inside a family scope or
+    # next to a family exemplar. A shared source root alone is not a match.
     best_matches: list[dict[str, Any]] = []
     max_depth = 0
     for f in families:
         f_best_depth = 0
-        for ex in f.get("exemplars") or []:
-            depth = _common_path_parts_len(ex, norm_scope)
-            if depth > f_best_depth:
-                f_best_depth = depth
-        for sc in f.get("scopes") or []:
-            depth = _common_path_parts_len(sc, norm_scope)
-            if depth > f_best_depth:
-                f_best_depth = depth
+        containers = [ex.replace("\\", "/").strip("/").rpartition("/")[0] for ex in f.get("exemplars") or []]
+        containers += [sc.replace("\\", "/").strip("/") for sc in f.get("scopes") or []]
+        for container in containers:
+            if container and _is_path_prefix(container, norm_scope):
+                depth = _common_path_parts_len(container, norm_scope)
+                if depth > f_best_depth:
+                    f_best_depth = depth
 
         if f_best_depth > max_depth:
             max_depth = f_best_depth
@@ -275,6 +275,16 @@ def resolve_architecture_contract(
             source_family = families[0]
             target_family = families[0]
             match_type = "UNIQUE_LOCAL"
+        elif (
+            mode == "PRESERVE"
+            and m_type == "NONE"
+            and target_scope.strip()
+            and (repo / target_scope.replace("\\", "/").strip("/")).is_file()
+        ):
+            # An existing file outside every family (domain, data, core code) keeps
+            # its own local conventions; no family is being chosen or extended.
+            source_family = None
+            target_family = None
         elif len(families) > 1:
             return {
                 "status": STATUS_DECISION_REQUIRED,
