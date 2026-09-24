@@ -8,7 +8,7 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .i18n import DEFAULT_PM_PROVIDER, SKIP_DIRS, t
+from .i18n import DEFAULT_PM_PROVIDER, SCHEMA, SKIP_DIRS, t
 
 
 def setup_dir(repo: Path) -> Path:
@@ -704,6 +704,7 @@ def auto_from_facts(facts: dict) -> dict:
     clean_locales = facts.get("clean_locales") or ["en"]
     selected_module = modules[0] if modules else ""
     return {
+        "schema": SCHEMA,
         "product": facts.get("product") or "App",
         "py": pythons[0] if pythons else "",
         "module": selected_module,
@@ -726,7 +727,7 @@ def auto_from_facts(facts: dict) -> dict:
         "agents_git": "gitignore",
         "gemini_config": "merge-allowlist" if facts.get("gemini") else "skip",
         "assemble_now": "tests-only",
-        "review_call_budget": "10",
+        "model_call_budget": 10,
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
         "chat_language": "mirror",
         "zoho_language": "en_titles_ar_comments",

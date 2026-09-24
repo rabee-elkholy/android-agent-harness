@@ -340,6 +340,63 @@ class ChatInstallationLifecycleTests(RepoCase):
         self.assertNotEqual(0, code)
         self.assertTrue(temp_answers.exists())
 
+    def test_INSTALL_SCHEMA_001_auto_from_facts_includes_canonical_schema_and_validates(self) -> None:
+        from wizard.discovery import auto_from_facts
+        from wizard.schema import validate_raw_answers
+        from wizard.i18n import SCHEMA
+        facts = {"product": "TestApp", "module": ":app", "pythons": [sys.executable], "repo": str(self.repo)}
+        answers = auto_from_facts(facts)
+        self.assertIn("schema", answers)
+        self.assertEqual(SCHEMA, answers["schema"])
+        errors = validate_raw_answers(answers)
+        self.assertEqual([], errors)
+
+    def test_INSTALL_SCHEMA_002_unsupported_schema_rejected(self) -> None:
+        from wizard.schema import validate_raw_answers
+        errors = validate_raw_answers({"schema": 9999, "product": "App", "module": ":app"})
+        self.assertTrue(any("unsupported schema" in e.lower() for e in errors))
+
+    def test_INSTALL_SCHEMA_003_unknown_normalized_key_rejected(self) -> None:
+        from wizard.discovery import auto_from_facts
+        from wizard.schema import validate_raw_answers
+        facts = {"product": "TestApp", "module": ":app", "pythons": [sys.executable], "repo": str(self.repo)}
+        answers = auto_from_facts(facts)
+        answers["unknown_normalized_key_xyz"] = "bad"
+        errors = validate_raw_answers(answers)
+        self.assertTrue(any("unknown normalized answers keys" in e for e in errors))
+
+    def test_INSTALL_SCHEMA_004_interactive_setup_unchanged(self) -> None:
+        from wizard.schema import validate_raw_answers
+        raw_interactive = {
+            "i0": "yes",
+            "i1": "App",
+            "i2": sys.executable,
+            "i5": ":app",
+            "i6": "com.example.MainActivity",
+            "review_call_budget": "10",
+        }
+        errors = validate_raw_answers(raw_interactive)
+        self.assertEqual([], errors)
+
+    def test_INSTALL_SCHEMA_005_non_interactive_setup_from_generated_answers_succeeds(self) -> None:
+        from wizard.discovery import auto_from_facts
+        from wizard.schema import validate_raw_answers
+        import setup_wizard
+        facts = {
+            "repo": str(self.repo),
+            "product": "FixtureApp",
+            "module": ":app",
+            "pythons": [sys.executable],
+            "launchers": ["com.example.MainActivity"],
+        }
+        answers = auto_from_facts(facts)
+        errors = validate_raw_answers(answers)
+        self.assertEqual([], errors)
+        answers_file = self.repo / "auto_answers.json"
+        write(answers_file, json.dumps(answers))
+        loaded = setup_wizard.load_write_payload(answers_file)
+        self.assertEqual(answers["schema"], loaded.get("schema"))
+
     def test_pre_execution_checksums_verifier_rejects_tampered_kit(self) -> None:
         temp_kit_dir = tempfile.TemporaryDirectory()
         try:
