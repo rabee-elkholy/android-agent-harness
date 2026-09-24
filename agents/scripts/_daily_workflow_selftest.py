@@ -6730,5 +6730,146 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         )
 
 
+class ArchitectureNeutralScopeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="arch_neutral_")
+        self.repo = Path(self.temp.name).resolve()
+        run_git(self.repo, "init", "-q")
+        run_git(self.repo, "config", "user.name", "Arch Test")
+        run_git(self.repo, "config", "user.email", "arch@example.invalid")
+        setup_ownership(self.repo)
+
+        # Basic Android fixture
+        write_file(self.repo / "gradlew", "#!/bin/sh\nexit 0\n")
+        write_file(self.repo / "gradlew.bat", "@echo off\nexit /b 0\n")
+        write_file(self.repo / "settings.gradle", "include ':app'\n")
+        write_file(self.repo / "app/build.gradle", "plugins { id 'com.android.application' }\n")
+
+        # Hybrid project with multiple families causing ambiguity / DECISION_REQUIRED
+        write_file(self.repo / "app/src/main/kotlin/scope1/VM1.kt", "package com.example\nabstract class VM1 : ViewModel()\n")
+        write_file(self.repo / "app/src/main/kotlin/scope2/VM2.kt", "package com.example\nabstract class VM2 : ViewModel()\n")
+        write_file(self.repo / "app/src/main/kotlin/comp/CompScreen.kt", "package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun CompScreen() {}\n")
+        write_file(self.repo / "app/src/main/kotlin/legacy/LegacyFrag.kt", "package com.example\nimport androidx.fragment.app.Fragment\nclass LegacyFrag : Fragment()\n")
+
+        # Non-code assets
+        write_file(self.repo / "app/src/main/res/values/strings.xml", "<resources><string name=\"app_name\">App</string></resources>\n")
+        write_file(self.repo / "app/src/main/res/drawable/ic_logo.png", b"\x89PNG\r\n\x1a\n")
+
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "initial hybrid setup")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_ARCH_NEUTRAL_001_hybrid_project_strings_only_draft_succeeds(self) -> None:
+        from workflow import draft
+        task_id = "task-neutral-001"
+        args = argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Update localization string",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="LOCALIZATION",
+            expected_modules=":app",
+            expected_files="app/src/main/res/values/strings.xml",
+            test_strategy="NONE",
+            device_strategy="NONE",
+            risks="",
+            rollback="git checkout",
+            external_write=[],
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="",
+            architecture_target_family="",
+            force=True,
+        )
+        plan = draft(args)
+        self.assertIsNotNone(plan)
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", plan.get("status"))
+        self.assertIsNone(plan.get("architecture_contract"))
+
+    def test_ARCH_NEUTRAL_002_hybrid_project_resource_ui_draft_succeeds(self) -> None:
+        from workflow import draft
+        task_id = "task-neutral-002"
+        args = argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Add logo drawable",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="RESOURCE_UI",
+            expected_modules=":app",
+            expected_files="app/src/main/res/drawable/ic_logo.png",
+            test_strategy="NONE",
+            device_strategy="NONE",
+            risks="",
+            rollback="git checkout",
+            external_write=[],
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="",
+            architecture_target_family="",
+            force=True,
+        )
+        plan = draft(args)
+        self.assertIsNotNone(plan)
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", plan.get("status"))
+        self.assertIsNone(plan.get("architecture_contract"))
+
+    def test_ARCH_NEUTRAL_003_resource_plus_kotlin_retains_architecture_resolution(self) -> None:
+        from workflow import draft
+        task_id = "task-neutral-003"
+        args = argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Update string and viewmodel",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="LOCALIZATION,BUSINESS_LOGIC",
+            expected_modules=":app",
+            expected_files="app/src/main/res/values/strings.xml,app/src/main/kotlin/scope1/VM1.kt",
+            test_strategy="NONE",
+            device_strategy="NONE",
+            risks="",
+            rollback="git checkout",
+            external_write=[],
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="",
+            architecture_target_family="",
+            force=True,
+        )
+        # In hybrid project with ambiguous targets and no explicit policy, architecture resolution fails
+        with self.assertRaises(ValidationError) as ctx:
+            draft(args)
+        self.assertTrue("architecture contract resolution failed" in str(ctx.exception).lower() or "decision_required" in str(ctx.exception).lower())
+
+    def test_ARCH_NEUTRAL_004_migration_intent_not_exempt(self) -> None:
+        from workflow import draft
+        task_id = "task-neutral-004"
+        args = argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Migrate strings to new structure",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="LOCALIZATION",
+            expected_modules=":app",
+            expected_files="app/src/main/res/values/strings.xml",
+            test_strategy="NONE",
+            device_strategy="NONE",
+            risks="",
+            rollback="git checkout",
+            external_write=[],
+            architecture_intent="MIGRATION",
+            architecture_target_scope="app/src/main/res/values/strings.xml",
+            architecture_target_family="",
+            force=True,
+        )
+        # Migration requires planning_depth=ARCHITECTURAL and target family, not exempt
+        with self.assertRaises(ValidationError) as ctx:
+            draft(args)
+        self.assertTrue("migration" in str(ctx.exception).lower())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

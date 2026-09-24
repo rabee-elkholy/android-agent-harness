@@ -543,6 +543,46 @@ def _applicable_developer_instructions_for_task(
     return applicable
 
 
+NEUTRAL_ARCHITECTURE_SURFACES = {"DOCS", "LOCALIZATION", "RESOURCE_UI"}
+
+
+def is_architecture_neutral_path(path: str) -> bool:
+    norm = str(path).replace("\\", "/").strip().lower()
+    if is_documentation_path(norm):
+        return True
+    if norm.endswith((".kt", ".java", ".gradle", ".kts", ".toml", ".properties")):
+        return False
+    if norm.endswith("androidmanifest.xml"):
+        return False
+    if "/res/layout" in norm or norm.startswith("res/layout"):
+        return False
+    if "/res/navigation" in norm or norm.startswith("res/navigation"):
+        return False
+    if "/res/" in norm or norm.startswith("res/"):
+        return True
+    if ("/assets/" in norm or norm.startswith("assets/")) and norm.endswith((".png", ".webp", ".jpg", ".jpeg", ".svg", ".gif")):
+        return True
+    return False
+
+
+def is_architecture_neutral_scope(
+    scope_files: list[str],
+    surfaces: set[str],
+    arch_intent: str,
+    target_scope: str | None = None,
+    target_family: str | None = None,
+) -> bool:
+    if not scope_files:
+        return False
+    if arch_intent != "EXISTING_CHANGE":
+        return False
+    if target_scope or target_family:
+        return False
+    if not surfaces or not (surfaces <= NEUTRAL_ARCHITECTURE_SURFACES):
+        return False
+    return all(is_architecture_neutral_path(p) for p in scope_files)
+
+
 def _build_and_save_plan(
     repo: Path,
     args: argparse.Namespace,
@@ -761,14 +801,18 @@ def _build_and_save_plan(
     architecture_scope_files = list(norm_expected_files)
     for phase in parsed_phases or []:
         architecture_scope_files.extend(phase.get("expected_files") or [])
-    docs_only_scope = bool(architecture_scope_files) and all(
-        is_documentation_path(p) for p in architecture_scope_files
-    )
-    docs_only_architecture_exempt = (
-        docs_only_scope
-        and arch_intent == "EXISTING_CHANGE"
-        and not getattr(args, "architecture_target_scope", None)
-        and not getattr(args, "architecture_target_family", None)
+
+    target_surfaces = set(expected) if expected else set(raw_expected)
+    if not target_surfaces and norm_expected_files:
+        ef_class = classify(repo, task_changes=[{"path": p} for p in norm_expected_files])
+        target_surfaces = set(ef_class.get("surfaces") or [])
+
+    architecture_neutral_exempt = is_architecture_neutral_scope(
+        scope_files=architecture_scope_files,
+        surfaces=target_surfaces,
+        arch_intent=arch_intent,
+        target_scope=getattr(args, "architecture_target_scope", None),
+        target_family=getattr(args, "architecture_target_family", None),
     )
     inferred_target_scope = str(getattr(args, "architecture_target_scope", "") or "").strip()
     if not inferred_target_scope and arch_intent != "MIGRATION":
@@ -830,7 +874,7 @@ def _build_and_save_plan(
 
     arch_contract = None
     arch_brief = None
-    if not docs_only_architecture_exempt:
+    if not architecture_neutral_exempt:
         with step_progress("Resolving architecture contract"):
             sublog(f"Resolving architecture contract (intent={arch_intent}, scope='{inferred_target_scope or 'auto'}')...")
             arch_res = resolve_architecture_contract(
