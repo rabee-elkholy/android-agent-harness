@@ -53,20 +53,39 @@ def _candidate_summaries(nodes: list[GraphNode]) -> list[dict[str, Any]]:
     return [_node_summary(node) for node in sorted(nodes, key=lambda item: (item.file_path, item.id))]
 
 
-def _resolve_file(repo: Path, value: str, engine: GraphEngine) -> tuple[str, list[GraphNode], str | None]:
+def _resolve_file(repo: Path, value: str, engine: GraphEngine) -> tuple[str, list[Any], str | None]:
     raw = Path(value)
     candidate = (raw if raw.is_absolute() else repo / raw).resolve(strict=False)
     if not _inside_repo(repo, candidate):
         return "INVALID_TARGET_PATH", [], "Target resolves outside the repository."
     if not candidate.exists() or not candidate.is_file():
         return "NOT_FOUND", [], "Target file does not exist."
-    if candidate.suffix.lower() not in SUPPORTED_TARGET_SUFFIXES:
-        return "INVALID_TARGET_PATH", [], "Target file type is not supported."
     rel = candidate.relative_to(repo).as_posix()
-    nodes = [node for node in engine.graph.nodes.values() if node.file_path == rel]
-    if not nodes:
+    lowered = rel.lower()
+    if any(p in f"/{lowered}/" for p in ("/build/", "/.git/", "/.agents/", "/.gradle/")):
+        return "INVALID_TARGET_PATH", [], "Target path is inside excluded or generated directory."
+    if candidate.suffix.lower() in {".class", ".apk", ".aab", ".so", ".jar", ".hprof", ".dex"}:
+        return "INVALID_TARGET_PATH", [], "Target binary artifact type is not supported."
+
+    if candidate.suffix.lower() in {".kt", ".java"}:
+        nodes = [node for node in engine.graph.nodes.values() if node.file_path == rel and node.type not in {"MODULE"}]
+        if nodes:
+            return "RESOLVED", sorted(nodes, key=lambda item: item.id), None
         return "NOT_FOUND", [], "Target file is not represented in the live graph."
-    return "RESOLVED", sorted(nodes, key=lambda item: item.id), None
+
+    from delivery_manifest import is_delivery_relevant
+    from change_classifier import is_documentation_path
+
+    valid_fallback = (
+        is_delivery_relevant(rel)
+        or is_documentation_path(rel)
+        or candidate.suffix.lower() in {".xml", ".gradle", ".kts", ".properties", ".toml", ".pro", ".txt", ".json", ".yaml", ".yml", ".md"}
+        or candidate.name.lower() in {"gradlew", "gradlew.bat"}
+    )
+    if valid_fallback:
+        return "FILE_FALLBACK", [rel], None
+
+    return "NOT_FOUND", [], "Target file is not represented in the live graph."
 
 
 def _resolve_symbol(
@@ -362,6 +381,133 @@ def resolve_task_context(
     }
     if status in {"AMBIGUOUS", "NOT_FOUND", "INVALID_TARGET_PATH"}:
         base["candidates"] = _candidate_summaries(candidates)[:bounded_limit]
+        return base
+
+    if status == "FILE_FALLBACK":
+        rel_posix = str(candidates[0])
+        try:
+            from plan_authority import changed_modules
+            mods = changed_modules(root, {"task_changes": [{"path": rel_posix}]})
+            if mods == [":"] and (rel_posix.startswith("app/") or rel_posix == "app"):
+                target_module = ":app"
+            else:
+                target_module = mods[0] if mods else ":"
+        except Exception:
+            target_module = ":app" if rel_posix.startswith("app/") else ":"
+
+        target_source_set = _source_set(rel_posix)
+
+        target_surfaces = []
+        try:
+            from change_classifier import classify
+            cl = classify(root, task_changes=[{"path": rel_posix}], candidate_paths=[rel_posix], progress=False)
+            target_surfaces = list(cl.get("surfaces") or [])
+        except Exception:
+            target_surfaces = []
+
+        facts_payload = _load_facts(root)
+        facts = facts_payload.get("facts", {})
+
+        contract = _active_contract(root, rel_posix)
+
+        all_instructions = _load_developer_instructions(root)
+        matched_instructions = []
+        for inst in all_instructions:
+            if inst.get("status") != "ACTIVE":
+                continue
+            scope = inst.get("scope", {})
+            skind = str(scope.get("kind") or "GLOBAL").upper()
+            sval = str(scope.get("value") or "*")
+            if skind == "GLOBAL" or sval == "*":
+                matched_instructions.append(inst)
+            elif skind == "MODULE" and sval == target_module:
+                matched_instructions.append(inst)
+            elif skind == "FILE" and sval.replace("\\", "/").strip("/") == rel_posix:
+                matched_instructions.append(inst)
+
+        graph_fp = str(sync.get("graph_fingerprint") or getattr(engine, "graph_fingerprint", "") or "")
+        receipt = None
+        try:
+            from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+            receipt = create_discovery_receipt(
+                mode="TARGETED_GRAPH_CONTEXT",
+                query_kind="file",
+                query_value=query,
+                graph_fingerprint=graph_fp,
+                resolved_modules=[target_module] if target_module else [],
+                resolved_paths=[rel_posix],
+                resolved_symbols=[],
+            )
+            save_discovery_receipt(root, receipt)
+        except Exception:
+            pass
+
+        base.update({
+            "status": "RESOLVED",
+            "context_mode": "FILE_FALLBACK",
+            "graph_basis": {
+                "used": False,
+                "sync_mode": "none",
+                "graph_fingerprint": graph_fp,
+                "target_node_ids": [],
+                "dependency_nodes_considered": 0,
+                "dependent_nodes_considered": 0,
+            },
+            "graph_expansion_required": False,
+            "target": {
+                "path": rel_posix,
+                "module": target_module,
+                "source_set": target_source_set,
+                "package": "",
+                "candidate_surfaces": target_surfaces,
+                "symbols": [],
+                "nodes": [],
+            },
+            "developer_instructions": [
+                {
+                    "id": inst["id"],
+                    "text": inst["text"],
+                    "scope": inst.get("scope", {}),
+                    "strength": inst.get("strength", "REQUIREMENT"),
+                    "applies_to": inst.get("applies_to", ["ANY"]),
+                    "sha256": inst.get("sha256", ""),
+                    "status": inst.get("status", "ACTIVE"),
+                }
+                for inst in matched_instructions
+            ],
+            "test_discovery": {
+                "candidate_files": 0,
+                "files_opened": 0,
+                "status": "NOT_APPLICABLE",
+            },
+            "project_facts": facts,
+            "local_profiles": [],
+            "architecture_contract": contract or {},
+            "relevant_files": [rel_posix],
+            "direct_dependencies": [],
+            "direct_dependents": [],
+            "tests": [],
+            "interop_boundaries": [],
+            "confidence": "HIGH",
+            "warnings": base["warnings"] + ["Graph relationships are unavailable for this non-AST file fallback target."],
+        })
+        if receipt:
+            base["discovery"] = receipt
+
+        try:
+            from _vnext_common import atomic_write_json
+            id_material = f"{root.as_posix()}:{rel_posix}:{target_module}:{target_source_set}:{query}"
+            ctx_id = f"ctx-{hashlib.sha256(id_material.encode('utf-8')).hexdigest()[:12]}"
+            base["context_id"] = ctx_id
+            state_dir = root / ".agents" / "state"
+            state_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(state_dir / "last-task-context.json", base)
+            task_ctx_dir = state_dir / "task-contexts"
+            task_ctx_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(task_ctx_dir / f"{ctx_id}.json", base)
+        except Exception:
+            pass
+
         return base
 
     target_nodes = candidates

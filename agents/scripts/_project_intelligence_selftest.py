@@ -604,5 +604,112 @@ class InstructionConflictResolutionTests(unittest.TestCase):
         self.assertIsNone(conflict)
 
 
+class TaskContextFallbackTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="taskctx_fallback_")
+        self.repo = Path(self.temp.name).resolve()
+        # Create minimal Android project
+        (self.repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+        (self.repo / "app/build.gradle.kts").parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+
+        # Kotlin source
+        kt = self.repo / "app/src/main/kotlin/com/example/home/HomeScreen.kt"
+        kt.parent.mkdir(parents=True, exist_ok=True)
+        kt.write_text("package com.example.home\nclass HomeScreen {}\n", encoding="utf-8")
+
+        # Manifest
+        manifest = self.repo / "app/src/main/AndroidManifest.xml"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android"><uses-permission android:name="android.permission.INTERNET"/></manifest>\n', encoding="utf-8")
+
+        # Strings
+        strings = self.repo / "app/src/main/res/values/strings.xml"
+        strings.parent.mkdir(parents=True, exist_ok=True)
+        strings.write_text('<resources><string name="app_name">Test</string></resources>\n', encoding="utf-8")
+
+        # Layout
+        layout = self.repo / "app/src/main/res/layout/activity_main.xml"
+        layout.parent.mkdir(parents=True, exist_ok=True)
+        layout.write_text('<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"/>\n', encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_TASKCTX_FALLBACK_001_kotlin_source_graph_context_unchanged(self) -> None:
+        from task_context import resolve_task_context
+        res = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertEqual("RESOLVED", res["status"])
+        self.assertNotEqual("FILE_FALLBACK", res.get("context_mode"))
+        self.assertTrue(res["graph_basis"]["used"])
+        self.assertIn("HomeScreen", res["target"]["symbols"])
+
+    def test_TASKCTX_FALLBACK_002_gradle_resolved_file_fallback_build_config(self) -> None:
+        from task_context import resolve_task_context
+        res = resolve_task_context(self.repo, file="app/build.gradle.kts")
+        self.assertEqual("RESOLVED", res["status"])
+        self.assertEqual("FILE_FALLBACK", res.get("context_mode"))
+        self.assertIn("BUILD_CONFIG", res["target"]["candidate_surfaces"])
+        self.assertEqual([], res["direct_dependencies"])
+        self.assertEqual([], res["direct_dependents"])
+        self.assertTrue(any("graph relationships are unavailable" in w.lower() for w in res.get("warnings", [])))
+
+    def test_TASKCTX_FALLBACK_003_manifest_resolved_fallback(self) -> None:
+        from task_context import resolve_task_context
+        res = resolve_task_context(self.repo, file="app/src/main/AndroidManifest.xml")
+        self.assertEqual("RESOLVED", res["status"])
+        self.assertEqual("FILE_FALLBACK", res.get("context_mode"))
+        surfaces = res["target"]["candidate_surfaces"]
+        self.assertTrue("MANIFEST_PERMISSION" in surfaces or "BUILD_CONFIG" in surfaces)
+
+    def test_TASKCTX_FALLBACK_004_strings_xml_localization(self) -> None:
+        from task_context import resolve_task_context
+        res = resolve_task_context(self.repo, file="app/src/main/res/values/strings.xml")
+        self.assertEqual("RESOLVED", res["status"])
+        self.assertEqual("FILE_FALLBACK", res.get("context_mode"))
+        self.assertIn("LOCALIZATION", res["target"]["candidate_surfaces"])
+
+    def test_TASKCTX_FALLBACK_005_layout_xml_ui(self) -> None:
+        from task_context import resolve_task_context
+        res = resolve_task_context(self.repo, file="app/src/main/res/layout/activity_main.xml")
+        self.assertEqual("RESOLVED", res["status"])
+        self.assertEqual("FILE_FALLBACK", res.get("context_mode"))
+        self.assertIn("XML_UI", res["target"]["candidate_surfaces"])
+
+    def test_TASKCTX_FALLBACK_006_missing_outside_repo_fails(self) -> None:
+        from task_context import resolve_task_context
+        res_missing = resolve_task_context(self.repo, file="app/src/main/res/values/nonexistent.xml")
+        self.assertEqual("NOT_FOUND", res_missing["status"])
+
+        res_outside = resolve_task_context(self.repo, file="../outside.xml")
+        self.assertEqual("INVALID_TARGET_PATH", res_outside["status"])
+
+    def test_TASKCTX_FALLBACK_007_fallback_does_not_inherit_unrelated_active_architecture(self) -> None:
+        from task_context import resolve_task_context
+        state = self.repo / ".agents" / "state"
+        task = state / "tasks" / "task-unrelated"
+        task.mkdir(parents=True, exist_ok=True)
+        contract = {
+            "family_id": "MVI",
+            "target_scope": "payments/src/main/kotlin/PaymentViewModel.kt",
+            "contract_sha256": "dummy",
+        }
+        plan = {
+            "task_id": "task-unrelated",
+            "status": "IMPLEMENTING",
+            "approval": {"single_use_nonce": "n"},
+            "expected_files": ["payments/src/main/kotlin/PaymentViewModel.kt"],
+            "architecture_contract": contract,
+        }
+        (task / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        (state / "active-task.json").write_text(json.dumps({"task_id": "task-unrelated", "plan_path": str(task / "plan.json")}), encoding="utf-8")
+
+        res = resolve_task_context(self.repo, file="app/src/main/res/values/strings.xml")
+        self.assertEqual("RESOLVED", res["status"])
+        self.assertEqual("FILE_FALLBACK", res.get("context_mode"))
+        self.assertEqual({}, res.get("architecture_contract", {}))
+        self.assertEqual([], res.get("local_profiles", []))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
