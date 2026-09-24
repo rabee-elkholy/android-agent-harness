@@ -16,6 +16,20 @@ SCRIPTS = Path(__file__).resolve().parent
 ENGINE = SCRIPTS / "pre_tool_safety.py"
 
 
+def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
+    """Hook stdout carries only decision/reason; the reason code is in the audit log."""
+    state = env.get("HARNESS_HOOK_STATE")
+    audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
+    lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
+    if not lines:
+        return out
+    record = json.loads(lines[-1])
+    enriched = {**out, "reason_code": record.get("reason_code")}
+    if record.get("mcp_fingerprint"):
+        enriched["mcp_fingerprint"] = record["mcp_fingerprint"]
+    return enriched
+
+
 class HookTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -44,7 +58,7 @@ class HookTests(unittest.TestCase):
             text=True, encoding="utf-8", errors="replace", env=self.env, check=False, timeout=15,
         )
         self.assertEqual(0, proc.returncode, proc.stderr)
-        return json.loads(proc.stdout)
+        return _with_audit_reason(json.loads(proc.stdout), self.env, ENGINE)
 
     def activate(
         self,
@@ -92,6 +106,27 @@ class HookTests(unittest.TestCase):
             package.parent.mkdir(parents=True, exist_ok=True)
             package.write_text("# Bound review package\n", encoding="utf-8")
         return package
+
+    def test_hook_stdout_matches_antigravity_result_schema(self):
+        """Antigravity unmarshals hook stdout with protojson: only decision and reason are known fields."""
+        payloads = [
+            {"toolCall": {"name": "run_command", "args": {"CommandLine": "git status"}}},
+            {"toolCall": {"name": "run_command", "args": {"CommandLine": "git commit -m x"}}},
+            {"toolCall": {"name": "write_to_file", "args": {"TargetFile": "app/A.kt"}}},
+            {"toolCall": {"name": "call_mcp_tool", "args": {"ServerName": "x", "ToolName": "create_item"}}},
+            {"terminationReason": "model_stop"},
+        ]
+        for payload in payloads:
+            proc = subprocess.run(
+                [sys.executable, str(ENGINE)], input=json.dumps(payload), capture_output=True,
+                text=True, encoding="utf-8", errors="replace", env=self.env, check=False, timeout=15,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            out = json.loads(proc.stdout)
+            self.assertEqual({"decision", "reason"}, set(out), payload)
+        # The machine-readable reason code is still recorded, in the audit log.
+        audit = [json.loads(line) for line in (self.state / "audit_log.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(all(record.get("reason_code") for record in audit))
 
     def test_file_write_requires_plan(self):
         self.assertEqual("deny", self.call("write_to_file", {"TargetFile": "app/A.kt"})["decision"])
@@ -628,7 +663,7 @@ class GenericMCPTests(unittest.TestCase):
             text=True, encoding="utf-8", errors="replace", env=self.env, check=False, timeout=15,
         )
         self.assertEqual(0, proc.returncode, proc.stderr)
-        return json.loads(proc.stdout)
+        return _with_audit_reason(json.loads(proc.stdout), self.env, ENGINE)
 
     def activate(self, status: str = "IMPLEMENTING", *, external_writes: list[str] | None = None, nonce: str = "nonce") -> None:
         task = self.state / "tasks/task-mcp"

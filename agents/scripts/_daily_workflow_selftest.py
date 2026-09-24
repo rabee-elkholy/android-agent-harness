@@ -89,6 +89,16 @@ from workflow import (
 KIT = Path(__file__).resolve().parents[2]
 
 
+def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
+    """Hook stdout carries only decision/reason; the reason code is in the audit log."""
+    state = env.get("HARNESS_HOOK_STATE")
+    audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
+    lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
+    if not lines:
+        return out
+    return {**out, "reason_code": json.loads(lines[-1]).get("reason_code")}
+
+
 def run_git(repo: Path, *args: str) -> None:
     proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=False)
     if proc.returncode != 0:
@@ -5282,7 +5292,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
                 timeout=15,
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
-            res = json.loads(proc.stdout)
+            res = _with_audit_reason(json.loads(proc.stdout), env, safety_script)
             self.assertEqual("deny", res.get("decision"))
             self.assertEqual("REVIEW_HOST_REQUIRED", res.get("reason_code"))
             self.assertIn("Antigravity verification must be prepared with --host antigravity", res.get("reason", ""))
@@ -5696,7 +5706,7 @@ class VerifyingScopeTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, proc.returncode, f"stderr: {proc.stderr}\nstdout: {proc.stdout}")
-        return json.loads(proc.stdout.strip())
+        return _with_audit_reason(json.loads(proc.stdout.strip()), self.env, self.safety_script)
 
     def _setup_verifying_task(self, task_id: str, review_scope: dict) -> Path:
         tdir = task_dir(self.repo, task_id)

@@ -17,6 +17,20 @@ REPO_ROOT = SCRIPTS.parent.parent
 sys.path.insert(0, str(SCRIPTS))
 
 
+def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
+    """Hook stdout carries only decision/reason; the reason code is in the audit log."""
+    state = env.get("HARNESS_HOOK_STATE")
+    audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
+    lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
+    if not lines:
+        return out
+    record = json.loads(lines[-1])
+    enriched = {**out, "reason_code": record.get("reason_code")}
+    if record.get("mcp_fingerprint"):
+        enriched["mcp_fingerprint"] = record["mcp_fingerprint"]
+    return enriched
+
+
 class TestAgentYaml(unittest.TestCase):
     """P0: Generated custom agent frontmatter and safety checks."""
 
@@ -666,7 +680,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
             check=False,
             timeout=15,
         )
-        return json.loads(proc.stdout)
+        return _with_audit_reason(json.loads(proc.stdout), self.env, SCRIPTS / "pre_tool_safety.py")
 
     def test_V2_BOUNDARY_PROFILE_001_profile_exception_denies_dispatch(self):
         self.current_f.write_text(json.dumps({

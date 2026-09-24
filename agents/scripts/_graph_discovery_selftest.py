@@ -59,6 +59,20 @@ def _run_git(repo: Path, *args: str) -> None:
         raise AssertionError(f"git {' '.join(args)} failed in {repo}:\n{proc.stderr}\n{proc.stdout}")
 
 
+def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
+    """Hook stdout carries only decision/reason; the reason code is in the audit log."""
+    state = env.get("HARNESS_HOOK_STATE")
+    audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
+    lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
+    if not lines:
+        return out
+    record = json.loads(lines[-1])
+    enriched = {**out, "reason_code": record.get("reason_code")}
+    if record.get("mcp_fingerprint"):
+        enriched["mcp_fingerprint"] = record["mcp_fingerprint"]
+    return enriched
+
+
 class GraphDiscoverySelftest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="graph_disc_test_")
@@ -116,7 +130,7 @@ class GraphDiscoverySelftest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, proc.returncode, f"stderr: {proc.stderr}\nstdout: {proc.stdout}")
-        return json.loads(proc.stdout.strip())
+        return _with_audit_reason(json.loads(proc.stdout.strip()), self.env, self.safety_script)
 
     def test_graph_001_exact_view_model(self) -> None:
         """GRAPH-001: Exact ViewModel routes to D1 TARGETED_GRAPH_CONTEXT with task-context anchor."""

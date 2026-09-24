@@ -161,12 +161,9 @@ def emit(
     mcp_fingerprint: str = "",
 ) -> None:
     _audit(decision, reason, tool, command, reason_code=reason_code, conv_hint=conv_hint, task_id=task_id, mcp_fingerprint=mcp_fingerprint)
-    out: dict[str, Any] = {"decision": decision, "reason": reason}
-    if reason_code:
-        out["reason_code"] = reason_code
-    if mcp_fingerprint:
-        out["mcp_fingerprint"] = mcp_fingerprint
-    print(json.dumps(out, ensure_ascii=False))
+    # Antigravity decodes hook stdout with protojson and rejects unknown fields, so the
+    # result carries only its schema; reason codes and fingerprints live in the audit log.
+    print(json.dumps({"decision": decision, "reason": reason}, ensure_ascii=False))
 
 
 def _tool_name_and_args(payload: dict) -> tuple[str, dict]:
