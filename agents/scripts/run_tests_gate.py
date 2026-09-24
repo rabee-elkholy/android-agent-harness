@@ -166,6 +166,89 @@ def resolve_target_task(repo: Path, requested_task: str | None) -> str:
     return default_task
 
 
+def evaluate_unit_test_execution(
+    repo: Path,
+    task: str,
+    code: int,
+    reports_before: dict[str, tuple[int, int]] | None = None,
+    outcome: dict | None = None,
+    baseline: dict | None = None,
+) -> tuple[bool, str, dict]:
+    """Evaluate unit-test execution results with baseline-aware regression semantics.
+
+    Returns:
+        (passed: bool, detail: str, evidence_data: dict)
+    """
+    if code == EXIT_ENV:
+        return False, f"unit-test Gradle run failed environmentally; exit code {code}", {
+            "status": "ENV",
+            "exit_code": code,
+            "env_class": "ENV",
+        }
+
+    summary = collect_test_summary(repo, task)
+    summary["executed_tests"] = collect_executed_tests(repo, task)
+    failed = collect_task_failures(repo, task)
+    reports_after = report_signatures(repo, task)
+    failing_paths = [path.resolve().as_posix() for path in report_paths(repo, task) if parse_report(path)]
+    fresh_failures = bool(failing_paths) and (
+        reports_before is None or all(
+            path in reports_after and reports_before.get(path) != reports_after[path]
+            for path in failing_paths
+        )
+    )
+
+    if code == 0 and summary.get("executed", 0) == 0:
+        return False, "Gradle succeeded but zero tests were executed; required test evidence is absent", {
+            "status": "FAIL",
+            "exit_code": 1,
+            **summary,
+        }
+
+    test_failure_only = outcome.get("test_failure_only") if outcome is not None and "test_failure_only" in outcome else True
+    if code != 0 and (not failed or not fresh_failures or not test_failure_only):
+        return False, f"Gradle failure is not attributable exclusively to fresh failing-test reports (exit code {code})", {
+            "status": "FAIL",
+            "exit_code": code,
+            **summary,
+        }
+
+    if baseline is None:
+        try:
+            baseline = load_baseline(repo)
+        except TypeError:
+            baseline = load_baseline()
+        except Exception:
+            baseline = None
+
+    if not failed and not baseline:
+        return True, "no failing tests in the parsed reports", {
+            "status": "PASS",
+            "exit_code": 0,
+            **summary,
+        }
+
+    new_regressions, ignored, baseline_size = classify_failures(failed, baseline)
+    if new_regressions:
+        names = [item["test_name"] for item in new_regressions]
+        return False, f"{len(new_regressions)} NEW_REGRESSION failure(s): {', '.join(names[:5])}", {
+            "status": "FAIL",
+            "exit_code": 1,
+            "new_regressions": names,
+            "baseline_ignored": len(ignored),
+            "total_failed": len(failed),
+            **summary,
+        }
+
+    return True, f"{len(ignored)} pre-existing failure(s) ignored via baseline ({baseline_size} known)", {
+        "status": "PASS",
+        "exit_code": 0,
+        "baseline_ignored": len(ignored),
+        "total_failed": len(failed),
+        **summary,
+    }
+
+
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Baseline-aware unit-test delivery gate")
@@ -314,90 +397,35 @@ def main(argv=None) -> int:
         except Exception as exc:
             live_print(f"[FAIL] Could not record RED evidence: {exc}", err=True)
             return 1
-    summary = collect_test_summary(REPO, task)
-    summary["executed_tests"] = collect_executed_tests(REPO, task)
-    reports_after = report_signatures(REPO, task)
-    failing_paths = [path.resolve().as_posix() for path in report_paths(REPO, task) if parse_report(path)]
-    fresh_failures = bool(failing_paths) and all(
-        path in reports_after and reports_before.get(path) != reports_after[path] for path in failing_paths
+
+    ok, detail, data = evaluate_unit_test_execution(
+        repo=REPO,
+        task=task,
+        code=code,
+        reports_before=reports_before,
+        outcome=outcome,
+        baseline=baseline,
     )
-    if code == 0 and summary["executed"] == 0:
-        write_gate_result("unit_tests", {
-            "schema_version": 2,
-            "producer": "run_tests_gate",
-            "status": "FAIL",
-            "exit_code": 1,
-            "env_class": "",
-            "git_sha": head,
-            "detail": "Gradle succeeded but zero tests were executed; required test evidence is absent",
-            **summary,
-        })
-        live_print("[FAIL] Unit-test gate blocked: zero tests were executed.", err=True)
-        return 1
-    if code != 0 and (not failed or not fresh_failures or not outcome.get("test_failure_only")):
-        write_gate_result("unit_tests", {
-            "schema_version": 2,
-            "producer": "run_tests_gate",
-            "status": "FAIL",
-            "exit_code": code,
-            "env_class": "",
-            "git_sha": head,
-            "detail": "Gradle failure is not attributable exclusively to fresh failing-test reports for this task; stale reports and unrelated build failures cannot satisfy the gate",
-            **summary,
-        })
-        live_print(f"[FAIL] Unit-test gate blocked: gradle exited {code} (build/compilation failure).", err=True)
-        return code
-
-    if not failed and not baseline:
-        write_gate_result("unit_tests", {
-            "schema_version": 2,
-            "producer": "run_tests_gate",
-            "status": "PASS",
-            "exit_code": 0,
-            "env_class": "",
-            "git_sha": head,
-            "detail": "no failing tests in the parsed reports",
-            **summary,
-        })
-        live_print("[SUCCESS] Unit-test gate passed: no failures, no baseline.")
-        return 0
-
-    new_regressions, ignored, baseline_size = classify_failures(failed, baseline)
+    new_regressions = data.get("new_regressions", [])
     if new_regressions:
         live_print(f"[FAIL] NEW_REGRESSION: {len(new_regressions)} test(s) failed that are absent from the baseline:", err=True)
         for item in new_regressions[:30]:
-            live_print(f"  - {item['test_name']}  ({str(item.get('message') or '')[:120]})", err=True)
+            live_print(f"  - {item}", err=True)
         if len(new_regressions) > 30:
             live_print(f"  ... and {len(new_regressions) - 30} more", err=True)
-        write_gate_result("unit_tests", {
-            "schema_version": 2,
-            "producer": "run_tests_gate",
-            "status": "FAIL",
-            "exit_code": 1,
-            "env_class": "",
-            "git_sha": head,
-            "detail": f"{len(new_regressions)} NEW_REGRESSION failure(s)",
-            "new_regressions": [item["test_name"] for item in new_regressions],
-            "baseline_ignored": len(ignored),
-            "total_failed": len(failed),
-            **summary,
-        })
-        return 1
+    elif not ok:
+        live_print(f"[FAIL] Unit-test gate blocked: {detail}", err=True)
+    else:
+        live_print(f"[SUCCESS] Unit-test gate passed: {detail}")
 
     write_gate_result("unit_tests", {
         "schema_version": 2,
         "producer": "run_tests_gate",
-        "status": "PASS",
-        "exit_code": 0,
-        "env_class": "",
         "git_sha": head,
-        "detail": f"{len(ignored)} pre-existing failure(s) ignored via baseline ({baseline_size} known)",
-        "baseline_ignored": len(ignored),
-        "total_failed": len(failed),
-        **summary,
+        "detail": detail,
+        **data,
     })
-    live_print(f"[SUCCESS] Unit-test gate passed: {len(ignored)} failure(s) ignored via baseline, 0 new regressions.")
-    return 0
+    return 0 if ok else (code if code != 0 else 1)
 
 
 if __name__ == "__main__":

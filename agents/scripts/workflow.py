@@ -2265,30 +2265,66 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
         if str(data.get("status") or "").upper() == "PASS":
             return True, "PASS"
         return False, str(data.get("detail") or "unit test failure in phase evidence")
+
     gradle_wrapper = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
+    run_gradle_fn = None
     if gradle_wrapper:
         from run_gradle_task import run_gradle
-        for m in modules:
-            try:
-                task = resolve_module_gradle_task(repo, m, task_type="test", phase_changes=phase_changes)
-            except ValidationError as exc:
-                return False, str(exc)
-            res = run_gradle([task], cwd=repo)
-            if res != 0:
-                return False, f"unit tests failed for module '{m}' with task '{task}' (exit code {res})"
-        return True, "PASS"
-    try:
-        from run_gradle_task import run_gradle
-        if hasattr(run_gradle, "assert_called") or hasattr(run_gradle, "side_effect") or hasattr(run_gradle, "return_value"):
-            for m in modules:
-                task = resolve_module_gradle_task(repo, m, task_type="test", phase_changes=phase_changes)
-                res = run_gradle([task], cwd=repo)
-                if res != 0:
-                    return False, f"mocked unit tests failed for module '{m}' with task '{task}' (exit code {res})"
-            return True, "PASS"
-    except Exception:
-        pass
-    return False, "phase policy requires unit tests but no gradle wrapper or passing test evidence was found"
+        run_gradle_fn = run_gradle
+    else:
+        try:
+            from run_gradle_task import run_gradle
+            if hasattr(run_gradle, "assert_called") or hasattr(run_gradle, "side_effect") or hasattr(run_gradle, "return_value"):
+                run_gradle_fn = run_gradle
+        except Exception:
+            pass
+
+    if run_gradle_fn is None:
+        return False, "phase policy requires unit tests but no gradle wrapper or passing test evidence was found"
+
+    from run_tests_gate import evaluate_unit_test_execution, report_signatures
+    aggregated_evidence: dict[str, Any] = {"status": "PASS", "modules": {}}
+    total_ignored = 0
+    total_failed = 0
+
+    for m in modules:
+        try:
+            task = resolve_module_gradle_task(repo, m, task_type="test", phase_changes=phase_changes)
+        except ValidationError as exc:
+            return False, str(exc)
+
+        is_mock = hasattr(run_gradle_fn, "assert_called") or hasattr(run_gradle_fn, "side_effect") or hasattr(run_gradle_fn, "return_value")
+        reports_before = None if is_mock else report_signatures(repo, task)
+        outcome: dict = {}
+        try:
+            res = run_gradle_fn([task], cwd=repo, outcome=outcome)
+        except TypeError:
+            res = run_gradle_fn([task], cwd=repo)
+
+        ok, detail, data = evaluate_unit_test_execution(
+            repo=repo,
+            task=task,
+            code=res,
+            reports_before=reports_before,
+            outcome=outcome,
+        )
+        if not ok:
+            atomic_write_json(test_file, {
+                "status": "FAIL",
+                "detail": detail,
+                **data,
+            })
+            return False, f"unit tests failed for module '{m}': {detail}"
+
+        total_ignored += data.get("baseline_ignored", 0)
+        total_failed += data.get("total_failed", 0)
+        aggregated_evidence["modules"][m] = data
+
+    aggregated_evidence["baseline_ignored"] = total_ignored
+    aggregated_evidence["total_failed"] = total_failed
+    atomic_write_json(test_file, aggregated_evidence)
+    return True, "PASS"
+
 
 
 

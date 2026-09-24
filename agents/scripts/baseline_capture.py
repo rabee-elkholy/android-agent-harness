@@ -141,13 +141,23 @@ def collect_failures(repo: Path) -> list[dict]:
     return sorted(entries.values(), key=lambda item: item["test_name"])
 
 
-def baseline_path() -> Path:
+def baseline_path(repo: Path | None = None) -> Path:
     override = os.environ.get("HARNESS_HOOK_STATE", "").strip()
-    return Path(override).with_name("baseline.json") if override else Path(__file__).resolve().parent.parent / "state" / "baseline.json"
+    if override:
+        return Path(override).with_name("baseline.json")
+    if repo is not None:
+        target1 = repo / ".agents" / "state" / "baseline.json"
+        if target1.is_file():
+            return target1
+        target2 = repo / "agents" / "state" / "baseline.json"
+        if target2.is_file():
+            return target2
+        return target1
+    return Path(__file__).resolve().parent.parent / "state" / "baseline.json"
 
 
-def write_baseline(data: dict) -> Path | None:
-    target = baseline_path()
+def write_baseline(data: dict, repo: Path | None = None) -> Path | None:
+    target = baseline_path(repo)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(".tmp")
@@ -160,9 +170,9 @@ def write_baseline(data: dict) -> Path | None:
         return None
 
 
-def load_baseline() -> dict | None:
+def load_baseline(repo: Path | None = None) -> dict | None:
     try:
-        path = baseline_path()
+        path = baseline_path(repo)
         if not path.is_file():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))

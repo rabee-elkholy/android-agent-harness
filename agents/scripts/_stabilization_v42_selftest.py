@@ -1496,5 +1496,170 @@ class PreflightScopeV42Tests(unittest.TestCase):
         self.assertNotIn("BUSINESS_LOGIC", surfaces)
 
 
+class PhaseBaselineDebtToleranceTests(unittest.TestCase):
+    """PHASE-BASELINE-001..006: Baseline debt tolerance for phase checkpoints."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="test_phase_baseline_")).resolve()
+        _setup_mock_repo(self.tmp)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _setup_phased_task(self, task_id: str) -> tuple[dict, Path, Path]:
+        from workflow import draft, record_approval, begin_task, task_dir
+        phases_def = [
+            {"id": "p1", "title": "Phase 1 Logic", "expected_files": ["app/src/main/kotlin/com/example/Logic.kt"]},
+        ]
+        draft(argparse.Namespace(
+            repo=str(self.tmp), task_id=task_id, outcome="Phased task",
+            kind="FEATURE", planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":app", expected_files="app/src/main/kotlin/com/example/Logic.kt",
+            test_strategy="UNIT_ONLY", device_strategy="NONE", risks="", rollback="none", external_write=[],
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family="",
+            phases=json.dumps(phases_def), force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.tmp), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.tmp), task_id=task_id))
+
+        logic_file = self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Logic.kt"
+        logic_file.parent.mkdir(parents=True, exist_ok=True)
+        logic_file.write_text("package com.example\nclass Logic\n", encoding="utf-8")
+
+        p1_dir = task_dir(self.tmp, task_id) / "phases" / "p1"
+        p1_dir.mkdir(parents=True, exist_ok=True)
+        plan = read_json(task_dir(self.tmp, task_id) / "plan.json")
+        return plan, task_dir(self.tmp, task_id), p1_dir
+
+    def _write_baseline(self, unit_tests: list[dict]) -> None:
+        baseline_file = self.tmp / ".agents" / "state" / "baseline.json"
+        baseline_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(baseline_file, {
+            "schema_version": 1,
+            "project": "TestApp",
+            "baseline_commit": "abc123456789",
+            "unit_tests": unit_tests,
+        })
+
+    def _write_test_report(self, classname: str, test_name: str, message: str, error_type: str = "AssertionError") -> None:
+        report_dir = self.tmp / "app" / "build" / "test-results" / "testDebugUnitTest"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_xml = (
+            f'<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<testsuite name="{classname}" tests="1" skipped="0" failures="1" errors="0" time="0.05">\n'
+            f'  <testcase name="{test_name}" classname="{classname}" time="0.05">\n'
+            f'    <failure message="{message}" type="{error_type}">{error_type}: {message}</failure>\n'
+            f'  </testcase>\n'
+            f'</testsuite>\n'
+        )
+        (report_dir / f"TEST-{classname}.xml").write_text(report_xml, encoding="utf-8")
+
+    def test_PHASE_BASELINE_001_preexisting_baseline_failure_tolerated(self) -> None:
+        from workflow import check_phase_tests
+        from baseline_capture import fingerprint, test_key
+        task_id = "phase-base-001"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+
+        # Baseline contains pre-existing failure
+        t_key = test_key("com.example.PreExistingTest", "testOld")
+        fp = fingerprint(t_key, "AssertionError", "expected true but was false")
+        self._write_baseline([{
+            "test_name": t_key,
+            "fingerprint": fp,
+            "error_type": "AssertionError",
+            "message": "expected true but was false",
+        }])
+
+        # Generate report matching baseline failure
+        self._write_test_report("com.example.PreExistingTest", "testOld", "expected true but was false")
+
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
+            self.assertTrue(ok)
+            self.assertEqual("PASS", detail)
+            evidence = read_json(p1_dir / "unit_tests.json")
+            self.assertEqual("PASS", evidence.get("status"))
+            self.assertEqual(1, evidence.get("baseline_ignored"))
+
+    def test_PHASE_BASELINE_002_new_failing_test_blocks(self) -> None:
+        from workflow import check_phase_tests
+        task_id = "phase-base-002"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+
+        # Empty baseline (no known failures)
+        self._write_baseline([])
+
+        # Report contains a new failing test
+        self._write_test_report("com.example.NewTest", "testNew", "unexpected null")
+
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
+            self.assertFalse(ok)
+            self.assertIn("NEW_REGRESSION", detail)
+
+    def test_PHASE_BASELINE_003_same_test_different_fingerprint_blocks(self) -> None:
+        from workflow import check_phase_tests
+        from baseline_capture import fingerprint, test_key
+        task_id = "phase-base-003"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+
+        # Baseline has failure with "NullPointerException"
+        t_key = test_key("com.example.PreExistingTest", "testOld")
+        fp = fingerprint(t_key, "NullPointerException", "npe occurred")
+        self._write_baseline([{
+            "test_name": t_key,
+            "fingerprint": fp,
+            "error_type": "NullPointerException",
+            "message": "npe occurred",
+        }])
+
+        # Report now has different failure: "IndexOutOfBoundsException"
+        self._write_test_report("com.example.PreExistingTest", "testOld", "index out of bounds", "IndexOutOfBoundsException")
+
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
+            self.assertFalse(ok)
+            self.assertIn("NEW_REGRESSION", detail)
+
+    def test_PHASE_BASELINE_004_compilation_failure_blocks(self) -> None:
+        from workflow import check_phase_tests
+        task_id = "phase-base-004"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+
+        self._write_baseline([])
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
+            self.assertFalse(ok)
+            self.assertTrue("compilation" in detail.lower() or "build" in detail.lower() or "failed" in detail.lower())
+
+    def test_PHASE_BASELINE_005_env_failure_blocks(self) -> None:
+        from workflow import check_phase_tests
+        from _env_codes import EXIT_ENV
+        task_id = "phase-base-005"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", return_value=EXIT_ENV):
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
+            self.assertFalse(ok)
+            self.assertTrue("environment" in detail.lower() or str(EXIT_ENV) in detail)
+
+    def test_PHASE_BASELINE_006_no_test_gate_skips_gradle(self) -> None:
+        from workflow import check_phase_tests
+        task_id = "phase-base-006"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle") as mock_gradle:
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=False)
+            self.assertTrue(ok)
+            self.assertEqual("NOT_REQUIRED", detail)
+            mock_gradle.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
