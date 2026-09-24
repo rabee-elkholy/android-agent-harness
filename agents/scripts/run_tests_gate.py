@@ -166,6 +166,42 @@ def resolve_target_task(repo: Path, requested_task: str | None) -> str:
     return default_task
 
 
+def _failures_with_freshness(
+    repo: Path,
+    task: str,
+    reports_before: dict[str, tuple[int, int]] | None,
+) -> tuple[list[dict], bool]:
+    """Failing tests in the reports, and whether every failing report was written by this run."""
+    failed = collect_task_failures(repo, task)
+    reports_after = report_signatures(repo, task)
+    failing_paths = [path.resolve().as_posix() for path in report_paths(repo, task) if parse_report(path)]
+    fresh = bool(failing_paths) and (
+        reports_before is None or all(
+            path in reports_after and reports_before.get(path) != reports_after[path]
+            for path in failing_paths
+        )
+    )
+    return failed, fresh
+
+
+def _test_class_simple_name(test_name: str) -> str:
+    return test_name.partition("#")[0].rpartition(".")[2].partition("$")[0]
+
+
+def select_red_reproduction(failed: list[dict], baseline: dict | None, task_test_paths: list[str]) -> list[dict]:
+    """Failing tests that reproduce this task's defect.
+
+    Known baseline failures are never a reproduction. When the task added or changed
+    test files, only failures from those files count; otherwise an existing failing
+    test may itself be the reproduction.
+    """
+    candidates, _ignored, _known = classify_failures(failed, baseline)
+    task_test_classes = {Path(p).stem for p in task_test_paths}
+    if not task_test_classes:
+        return candidates
+    return [item for item in candidates if _test_class_simple_name(str(item.get("test_name") or "")) in task_test_classes]
+
+
 def evaluate_unit_test_execution(
     repo: Path,
     task: str,
@@ -188,15 +224,7 @@ def evaluate_unit_test_execution(
 
     summary = collect_test_summary(repo, task)
     summary["executed_tests"] = collect_executed_tests(repo, task)
-    failed = collect_task_failures(repo, task)
-    reports_after = report_signatures(repo, task)
-    failing_paths = [path.resolve().as_posix() for path in report_paths(repo, task) if parse_report(path)]
-    fresh_failures = bool(failing_paths) and (
-        reports_before is None or all(
-            path in reports_after and reports_before.get(path) != reports_after[path]
-            for path in failing_paths
-        )
-    )
+    failed, fresh_failures = _failures_with_freshness(repo, task, reports_before)
 
     if code == 0 and summary.get("executed", 0) == 0:
         return False, "Gradle succeeded but zero tests were executed; required test evidence is absent", {
@@ -205,7 +233,7 @@ def evaluate_unit_test_execution(
             **summary,
         }
 
-    test_failure_only = outcome.get("test_failure_only") if outcome is not None and "test_failure_only" in outcome else True
+    test_failure_only = bool((outcome or {}).get("test_failure_only"))
     if code != 0 and (not failed or not fresh_failures or not test_failure_only):
         return False, f"Gradle failure is not attributable exclusively to fresh failing-test reports (exit code {code})", {
             "status": "FAIL",
@@ -216,8 +244,6 @@ def evaluate_unit_test_execution(
     if baseline is None:
         try:
             baseline = load_baseline(repo)
-        except TypeError:
-            baseline = load_baseline()
         except Exception:
             baseline = None
 
@@ -231,7 +257,13 @@ def evaluate_unit_test_execution(
     new_regressions, ignored, baseline_size = classify_failures(failed, baseline)
     if new_regressions:
         names = [item["test_name"] for item in new_regressions]
-        return False, f"{len(new_regressions)} NEW_REGRESSION failure(s): {', '.join(names[:5])}", {
+        detail = f"{len(new_regressions)} NEW_REGRESSION failure(s): {', '.join(names[:5])}"
+        if baseline is None:
+            detail += (
+                ". No pre-existing-failure baseline exists; if these failures predate the task, the developer "
+                "captures one on a clean working tree: python .agents/scripts/baseline_capture.py --run-tests"
+            )
+        return False, detail, {
             "status": "FAIL",
             "exit_code": 1,
             "new_regressions": names,
@@ -278,7 +310,7 @@ def main(argv=None) -> int:
         return code
 
     head = current_head_sha()
-    baseline = load_baseline()
+    baseline = load_baseline(REPO)
     advisory = baseline_advisory(baseline, head)
     if advisory:
         live_print(advisory, err=True)
@@ -288,15 +320,14 @@ def main(argv=None) -> int:
         if not failed:
             live_print("[FAIL] --capture-red requested but no failing tests were detected.", err=True)
             return 1
-        repro_entries = [
-            {
-                "kind": "failing_test",
-                "test_name": item.get("test_name"),
-                "message": item.get("message"),
-                "fingerprint": item.get("fingerprint"),
-            }
-            for item in failed
-        ]
+        _failed, fresh = _failures_with_freshness(REPO, task, reports_before)
+        if not fresh or (code != 0 and not outcome.get("test_failure_only")):
+            live_print(
+                f"[FAIL] Cannot capture RED evidence: Gradle failure (exit {code}) is not attributable exclusively to fresh failing-test reports from this run.",
+                err=True,
+            )
+            return 1
+        test_baseline = baseline
         try:
             from mutation_guard import active_plan
             from _vnext_common import atomic_write_json, canonical_sha256, read_json, utc_now
@@ -338,6 +369,25 @@ def main(argv=None) -> int:
             if has_fix_code:
                 live_print("[FAIL] Cannot capture RED evidence: application source modifications already detected before capture.", err=True)
                 return 1
+
+            task_test_paths = [_change_p(c) for c in pre_red_changes if is_test_repro_path(_change_p(c))]
+            failed = select_red_reproduction(failed, test_baseline, task_test_paths)
+            if not failed:
+                live_print(
+                    "[FAIL] Cannot capture RED evidence: no failing test reproduces this task's defect "
+                    "(failures are known baseline debt or come from tests outside the task's test changes).",
+                    err=True,
+                )
+                return 1
+            repro_entries = [
+                {
+                    "kind": "failing_test",
+                    "test_name": item.get("test_name"),
+                    "message": item.get("message"),
+                    "fingerprint": item.get("fingerprint"),
+                }
+                for item in failed
+            ]
 
             current_p = task_d / "current-run.json"
             current_run = read_json(current_p) if current_p.is_file() else {}

@@ -81,6 +81,18 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8", newline="\n")
 
 
+def _gradle_writing_reports(reports: dict, *, test_failure_only: bool = True):
+    """Mimic a Gradle test run: fresh reports appear during the run, with run_gradle's attribution."""
+    def _run(task_args, *, outcome=None, cwd=None):
+        for path, xml in reports.items():
+            _write_text(path, xml)
+        if outcome is not None:
+            outcome.clear()
+            outcome["test_failure_only"] = test_failure_only
+        return 1 if (reports or not test_failure_only) else 0
+    return _run
+
+
 def _run_git(repo: Path, *args: str) -> None:
     proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=False)
     if proc.returncode != 0:
@@ -361,12 +373,11 @@ class RedGreenTemporalTests(unittest.TestCase):
             '</testsuite>\n'
         )
         report_path = self.tmp / "app" / "build" / "test-results" / "testDebugUnitTest" / "TEST-com.example.CalcTest.xml"
-        _write_text(report_path, report_xml)
 
         from run_tests_gate import main as tests_gate_main
         with mock.patch("run_tests_gate.REPO", self.tmp), \
              mock.patch("_repo_files.REPO", self.tmp), \
-             mock.patch("run_gradle_task.run_gradle", return_value=1), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=_gradle_writing_reports({report_path: report_xml})), \
              mock.patch("sys.argv", ["run_tests_gate.py", "--capture-red"]):
             code = tests_gate_main()
             self.assertEqual(0, code)
@@ -430,6 +441,84 @@ class RedGreenTemporalTests(unittest.TestCase):
 
         t_dir = task_dir(self.tmp, task_id)
         self.assertFalse((t_dir / "red-evidence.json").is_file())
+
+    def _begin_bug(self, task_id: str) -> None:
+        draft(Namespace(
+            repo=str(self.tmp), task_id=task_id, outcome="Fix calculation bug",
+            kind="BUG", planning_depth="STANDARD", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", expected_files="app/src/main/kotlin/com/example/Calc.kt,app/src/test/kotlin/com/example/CalcTest.kt",
+            test_strategy="UNIT_ONLY", device_strategy="NONE", risks="", rollback="none", external_write=[],
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family="",
+            phases=None,
+        ))
+        approve(Namespace(repo=str(self.tmp), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(Namespace(repo=str(self.tmp), task_id=task_id))
+
+    def _capture_red(self, gradle) -> int:
+        from run_tests_gate import main as tests_gate_main
+        with mock.patch("run_tests_gate.REPO", self.tmp), \
+             mock.patch("_repo_files.REPO", self.tmp), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=gradle), \
+             mock.patch("sys.argv", ["run_tests_gate.py", "--capture-red"]):
+            return tests_gate_main()
+
+    def _report(self, classname: str, test: str, message: str) -> tuple[Path, str]:
+        path = self.tmp / "app" / "build" / "test-results" / "testDebugUnitTest" / f"TEST-{classname}.xml"
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<testsuite name="{classname}" tests="1" skipped="0" failures="1" errors="0" time="0.05">\n'
+            f'  <testcase name="{test}" classname="{classname}" time="0.05">\n'
+            f'    <failure message="{message}" type="AssertionError">AssertionError</failure>\n'
+            '  </testcase>\n'
+            '</testsuite>\n'
+        )
+        return path, xml
+
+    def test_RED_004_stale_reports_with_build_failure_rejected(self) -> None:
+        """A compile failure must not turn reports left by an earlier run into RED evidence."""
+        task_id = "task-red-004"
+        self._begin_bug(task_id)
+        _write_text(self.tmp / "app/src/test/kotlin/com/example/CalcTest.kt", "class CalcTest\n")
+        path, xml = self._report("com.example.CalcTest", "testAdd", "old failure")
+        _write_text(path, xml)  # left over from a previous Gradle run
+        code = self._capture_red(_gradle_writing_reports({}, test_failure_only=False))
+        self.assertNotEqual(0, code)
+        self.assertFalse((task_dir(self.tmp, task_id) / "red-evidence.json").is_file())
+
+    def test_RED_005_unrelated_failures_are_not_task_defects(self) -> None:
+        """Only the failing tests this task added or changed become its RED defects."""
+        task_id = "task-red-005"
+        self._begin_bug(task_id)
+        _write_text(self.tmp / "app/src/test/kotlin/com/example/CalcTest.kt", "class CalcTest\n")
+        own = self._report("com.example.CalcTest", "testAdd", "expected 5")
+        unrelated = self._report("com.example.streak.StreakTest", "testLegacy", "legacy debt")
+        self.assertEqual(0, self._capture_red(_gradle_writing_reports(dict([own, unrelated]))))
+        red = read_json(task_dir(self.tmp, task_id) / "red-evidence.json")
+        self.assertEqual(["com.example.CalcTest#testAdd"], [t["test_id"] for t in red["failed_tests"]])
+        debug = read_json(task_dir(self.tmp, task_id) / "debug-evidence.json")
+        self.assertEqual(["com.example.CalcTest#testAdd"], [e["test_name"] for e in debug["entries"]])
+
+    def test_RED_006_baseline_failures_never_become_red(self) -> None:
+        """An existing failing test may be the reproduction, but known baseline debt never is."""
+        from baseline_capture import fingerprint, test_key
+        task_id = "task-red-006"
+        self._begin_bug(task_id)
+        debt_key = test_key("com.example.streak.StreakTest", "testLegacy")
+        _write_json(self.tmp / ".agents" / "state" / "baseline.json", {
+            "schema_version": 1, "baseline_commit": "abc",
+            "unit_tests": [{"test_name": debt_key, "fingerprint": fingerprint(debt_key, "AssertionError", "legacy debt"),
+                            "error_type": "AssertionError", "message": "legacy debt"}],
+        })
+        debt = self._report("com.example.streak.StreakTest", "testLegacy", "legacy debt")
+        repro = self._report("com.example.CalcSpec", "testOverflow", "overflow")
+        self.assertEqual(0, self._capture_red(_gradle_writing_reports(dict([debt, repro]))))
+        red = read_json(task_dir(self.tmp, task_id) / "red-evidence.json")
+        self.assertEqual(["com.example.CalcSpec#testOverflow"], [t["test_id"] for t in red["failed_tests"]])
+
+        # Only baseline debt failing: there is no reproduction to record.
+        (task_dir(self.tmp, task_id) / "red-evidence.json").unlink()
+        self.assertNotEqual(0, self._capture_red(_gradle_writing_reports(dict([debt]))))
+        self.assertFalse((task_dir(self.tmp, task_id) / "red-evidence.json").is_file())
 
     def test_RED_002_pre_red_code_fix_rejected(self) -> None:
         task_id = "task-red-002"

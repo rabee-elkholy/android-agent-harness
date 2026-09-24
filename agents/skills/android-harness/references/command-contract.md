@@ -47,6 +47,7 @@ python .agents/scripts/review_policy.py --repo . --json
   - `reviewers`: List of specialist reviewer roles.
   - `gates`: List of mandatory deterministic verification gates.
 - Exit code: `0` on success.
+- `UNKNOWN` surfaces block verification until the developer decides: name the unclassifiable file explicitly in `--expected-files`, and approving that plan resolves it (`unknown_resolution: APPROVED_PLAN_FILES`, reviewed at T2 or higher, never T0). An UNKNOWN file outside the approved plan stays blocked.
 
 > **Instruction**: Do not inspect implementation source of the classifier or policy engine before execution.
 
@@ -174,8 +175,10 @@ python .agents/scripts/run_tests_gate.py --capture-red
 - Preconditions for `--capture-red`:
   - Active task kind must be `BUG`.
   - Must occur BEFORE modifying production/application files (enforces pre-RED task-delta check; fails if non-test files are modified).
-  - Requires genuine assertion test failure (exit code 1); compilation failure (exit code 2) or clean pass (exit code 0) is rejected.
+  - Requires genuine assertion test failure (exit code 1); compilation failure (exit code 2) or clean pass (exit code 0) is rejected, and failing reports must be written by this run (stale reports are rejected).
+  - Only failures that reproduce this task are recorded: known baseline failures never count, and when the task added or changed test files, only failures from those files count.
   - Debug evidence or logs cannot substitute for executable RED evidence.
+- Pre-existing failures: with no `.agents/state/baseline.json`, every old failing test reads as `NEW_REGRESSION`. Install captures the baseline once on a clean tree; otherwise the developer runs `python .agents/scripts/baseline_capture.py --run-tests` on a clean working tree.
 
 > **Instruction**: Do not inspect test gate script before execution.
 

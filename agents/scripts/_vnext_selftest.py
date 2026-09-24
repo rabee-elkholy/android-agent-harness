@@ -1309,6 +1309,48 @@ class LifecycleTests(RepoCase):
         self.assertFalse((self.repo / ".harness-backup").exists())
         self.assertEqual(original, (self.repo / "AGENTS.md").read_text(encoding="utf-8"))
 
+    def test_update_preserves_rendered_project_context_views(self) -> None:
+        """Doctor requires the rendered views; an update must not delete them."""
+        self._answers()
+        install(self.repo, KIT)
+        views = ("architecture.md", "ui.md", "persistence.md", "conventions.md")
+        context = self.repo / ".agents/project-context"
+        for name in views:
+            self.assertTrue((context / name).is_file(), name)
+        updated = update(self.repo, KIT)
+        self.assertEqual("PASS", updated["status"])
+        for name in views:
+            self.assertTrue((context / name).is_file(), f"update removed {name}")
+
+    def test_install_captures_unit_test_baseline_for_real_gradle_projects(self) -> None:
+        """Pre-existing test failures are only tolerable once a clean-tree baseline exists."""
+        self._answers()
+        write(self.repo / "gradle/wrapper/gradle-wrapper.properties", "distributionUrl=https\\://services.gradle.org/gradle.zip\n")
+        with mock.patch.object(lifecycle_module, "_run_baseline_capture", return_value=0) as capture:
+            installed = install(self.repo, KIT)
+        self.assertEqual("PASS", installed["status"])
+        self.assertEqual("CAPTURED", installed["test_baseline"]["status"])
+        capture.assert_called_once()
+
+        # An existing baseline is never replaced by setup.
+        write(self.repo / ".agents/state/baseline.json", "{}")
+        self.assertEqual("EXISTS", lifecycle_module._capture_test_baseline(self.repo)["status"])
+
+    def test_install_baseline_failure_is_non_fatal_and_actionable(self) -> None:
+        self._answers()
+        write(self.repo / "gradle/wrapper/gradle-wrapper.properties", "distributionUrl=x\n")
+        with mock.patch.object(lifecycle_module, "_run_baseline_capture", return_value=30):
+            installed = install(self.repo, KIT)
+        self.assertEqual("PASS", installed["status"])
+        self.assertEqual("NOT_CAPTURED", installed["test_baseline"]["status"])
+        self.assertIn("baseline_capture.py --run-tests", installed["test_baseline"]["next_step"])
+
+    def test_install_skips_baseline_without_real_gradle_wrapper(self) -> None:
+        self._answers()
+        installed = install(self.repo, KIT)
+        self.assertEqual("SKIPPED", installed["test_baseline"]["status"])
+        self.assertFalse((self.repo / ".agents/state/baseline.json").exists())
+
     def test_graph_cache_warm_up_failure_is_observable_and_non_fatal(self) -> None:
         original = "# User-owned project instructions\n"
         write(self.repo / "AGENTS.md", original)

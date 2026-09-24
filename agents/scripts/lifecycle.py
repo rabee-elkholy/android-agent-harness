@@ -47,6 +47,11 @@ PRESERVE_GLOBS = (
     ".agents/project-context/project-notes.md",
     ".agents/project-context/architecture-policy.json",
     ".agents/project-context/project-facts.json",
+    # Rendered from project-facts.json; doctor requires them after every update.
+    ".agents/project-context/architecture.md",
+    ".agents/project-context/ui.md",
+    ".agents/project-context/persistence.md",
+    ".agents/project-context/conventions.md",
     ".agents/project-context/views/*",
     ".agents/project-context/legacy-overrides/*",
     ".agents/mcp/zoho_sprints/workflow_defaults.json",
@@ -649,6 +654,33 @@ def _warm_project_graph(repo: Path) -> tuple[bool, str | None]:
         return False, sanitized
 
 
+BASELINE_CAPTURE_COMMAND = "python .agents/scripts/baseline_capture.py --run-tests"
+
+
+def _run_baseline_capture(repo: Path) -> int:
+    import subprocess
+    script = repo / ".agents" / "scripts" / "baseline_capture.py"
+    return subprocess.run([sys.executable, "-u", str(script), "--run-tests"], cwd=str(repo), check=False).returncode
+
+
+def _capture_test_baseline(repo: Path) -> dict:
+    """Record pre-existing unit-test failures once, on the clean install tree.
+
+    Without it, every old failing test reads as a NEW_REGRESSION in the first task.
+    Failure here never fails the install; the developer gets the exact command.
+    """
+    if not (repo / "gradle" / "wrapper" / "gradle-wrapper.properties").is_file():
+        return {"status": "SKIPPED", "reason": "no Gradle wrapper in this checkout"}
+    if (repo / ".agents" / "state" / "baseline.json").is_file():
+        return {"status": "EXISTS"}
+    code = _run_baseline_capture(repo)
+    if code == 0:
+        return {"status": "CAPTURED"}
+    next_step = f"On a clean working tree, run: {BASELINE_CAPTURE_COMMAND}"
+    print(f"[WARN] Unit-test failure baseline was not captured (exit {code}). {next_step}")
+    return {"status": "NOT_CAPTURED", "exit_code": code, "next_step": next_step}
+
+
 def _uninstall_journal_path(repo: Path) -> Path:
     return repo / ".harness-setup" / "uninstall-journal.json"
 
@@ -865,6 +897,8 @@ def install(repo: Path, kit: Path) -> dict:
             _restore_git_config(repo, key, value)
         _managed_exclude(repo, remove=True)
         raise
+    with step_progress("6. Capturing pre-existing unit-test failure baseline"):
+        test_baseline = _capture_test_baseline(repo)
     result = {
         "status": "PASS",
         "action": "install",
@@ -873,6 +907,7 @@ def install(repo: Path, kit: Path) -> dict:
         "backup": str(backup),
         "app_snapshot_verified": True,
         "graph_cache_warmed": graph_cache_warmed,
+        "test_baseline": test_baseline,
     }
     if not graph_cache_warmed and graph_cache_warning:
         result["graph_cache_warning"] = graph_cache_warning
