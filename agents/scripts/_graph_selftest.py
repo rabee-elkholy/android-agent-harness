@@ -559,6 +559,101 @@ import argparse
             assert_eq(code, 0, "CLI --find on partial query exits with code 0")
             assert_eq("Campaigns" in out, True, "CLI output contains matched symbol")
             assert_eq("[*] Partial Matches" in out or "[*] Exact Matches" in out, True, "CLI formats partitioned matches")
+
+            # -----------------------------------------------------------------
+            # Test 12: Focused Queries Render Bounded Subgraphs (DEFECT-GRAPH-01)
+            # -----------------------------------------------------------------
+            print("\n[*] Test 12: Focused Queries Render Bounded Subgraphs")
+            focus_test_dir = Path(tempfile.mkdtemp(prefix="graph_focus_test_"))
+            try:
+                (focus_test_dir / "settings.gradle").write_text("include ':app', ':feature:campaigns'\n", encoding="utf-8")
+                (focus_test_dir / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+
+                # App module files
+                app_src = focus_test_dir / "app" / "src" / "main" / "kotlin" / "com" / "shop"
+                app_src.mkdir(parents=True, exist_ok=True)
+                (app_src / "BaseActivity.kt").write_text("package com.shop\nopen class BaseActivity\n", encoding="utf-8")
+                (app_src / "OrderDetailsActivity.kt").write_text("package com.shop\nimport com.shop.BaseActivity\nclass OrderDetailsActivity : BaseActivity()\n", encoding="utf-8")
+                (app_src / "OrderViewModel.kt").write_text("package com.shop\nclass OrderViewModel\n", encoding="utf-8")
+
+                # 20 other screens inheriting from BaseActivity to test hub defense and bounds
+                for i in range(20):
+                    (app_src / f"OtherScreen{i:02d}.kt").write_text(f"package com.shop\nimport com.shop.BaseActivity\nclass OtherScreen{i:02d} : BaseActivity()\n", encoding="utf-8")
+
+                # Feature module files
+                feat_src = focus_test_dir / "feature" / "campaigns" / "src" / "main" / "kotlin" / "com" / "campaigns"
+                feat_src.mkdir(parents=True, exist_ok=True)
+                (feat_src / "CampaignsScreen.kt").write_text("package com.campaigns\nimport androidx.compose.runtime.Composable\n@Composable fun CampaignsScreen() {}\n", encoding="utf-8")
+                (feat_src / "CampaignsViewModel.kt").write_text("package com.campaigns\nclass CampaignsViewModel\n", encoding="utf-8")
+
+                focus_engine = GraphEngine(focus_test_dir)
+                focus_engine.sync(force_full=True)
+
+                # GRAPH-FOCUS-001: --find ExactSymbol --json bounded by depth/limit; focus retained; bounded receipt
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    code = project_graph.main(["--repo", str(focus_test_dir), "--find", "CampaignsScreen", "--json"])
+                assert_eq(code, 0, "GRAPH-FOCUS-001: CLI --find with --json exits with 0")
+                find_data = json.loads(f.getvalue())
+                node_names = [n["name"] for n in find_data["nodes"]]
+                assert_eq("CampaignsScreen" in node_names, True, "GRAPH-FOCUS-001: Focus node retained in JSON nodes")
+                assert_eq("OrderDetailsActivity" not in node_names, True, "GRAPH-FOCUS-001: Unrelated nodes excluded from focused graph")
+                assert_eq(len(find_data["nodes"]) < len(focus_engine.graph.nodes), True, "GRAPH-FOCUS-001: Graph is bounded subgraph")
+                receipt_paths = find_data.get("discovery", {}).get("resolved_paths", [])
+                assert_eq(any("OrderDetailsActivity" in p for p in receipt_paths), False, "GRAPH-FOCUS-001: Discovery receipt paths bounded")
+
+                # GRAPH-FOCUS-002: --screen ... --json bounded
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    code = project_graph.main(["--repo", str(focus_test_dir), "--screen", "CampaignsScreen", "--json"])
+                assert_eq(code, 0, "GRAPH-FOCUS-002: CLI --screen with --json exits with 0")
+                screen_data = json.loads(f.getvalue())
+                s_node_names = [n["name"] for n in screen_data["nodes"]]
+                assert_eq("CampaignsScreen" in s_node_names, True, "GRAPH-FOCUS-002: Screen focus node retained")
+                assert_eq("OrderDetailsActivity" not in s_node_names, True, "GRAPH-FOCUS-002: Unrelated nodes excluded")
+
+                # GRAPH-FOCUS-003: --module ... --json bounded
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    code = project_graph.main(["--repo", str(focus_test_dir), "--module", ":feature:campaigns", "--json"])
+                assert_eq(code, 0, "GRAPH-FOCUS-003: CLI --module with --json exits with 0")
+                mod_data = json.loads(f.getvalue())
+                assert_eq(len(mod_data["nodes"]) > 0, True, "GRAPH-FOCUS-003: Module graph rendered")
+
+                # GRAPH-FOCUS-004: compact focused behavior unchanged
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    code = project_graph.main(["--repo", str(focus_test_dir), "--find", "CampaignsScreen", "--format", "compact"])
+                assert_eq(code, 0, "GRAPH-FOCUS-004: CLI compact format exits with 0")
+                assert_eq("CampaignsScreen" in f.getvalue(), True, "GRAPH-FOCUS-004: Compact output contains focus symbol")
+
+                # GRAPH-FOCUS-005: existing --feature behavior unchanged
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    code = project_graph.main(["--repo", str(focus_test_dir), "--feature", "campaigns", "--json"])
+                assert_eq(code, 0, "GRAPH-FOCUS-005: CLI --feature exits with 0")
+                feat_data = json.loads(f.getvalue())
+                f_node_names = [n["name"] for n in feat_data["nodes"]]
+                assert_eq("CampaignsScreen" in f_node_names, True, "GRAPH-FOCUS-005: Feature node in feature graph")
+
+                # GRAPH-FOCUS-006: hub/base fan-out cannot explode output
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    code = project_graph.main(["--repo", str(focus_test_dir), "--find", "OrderDetailsActivity", "--depth", "5", "--json"])
+                assert_eq(code, 0, "GRAPH-FOCUS-006: CLI deep traversal exits with 0")
+                deep_data = json.loads(f.getvalue())
+                d_node_names = [n["name"] for n in deep_data["nodes"]]
+                assert_eq("CampaignsScreen" not in d_node_names, True, "GRAPH-FOCUS-006: Hub defense prevents fan-out explosion")
+
+                # GRAPH-FOCUS-007: explicit unlimited behavior only when deliberately requested
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    code = project_graph.main(["--repo", str(focus_test_dir), "--find", "CampaignsScreen", "--limit", "0", "--json"])
+                assert_eq(code, 0, "GRAPH-FOCUS-007: CLI --limit 0 exits with 0")
+                unlimited_data = json.loads(f.getvalue())
+                assert_eq(len(unlimited_data["nodes"]) >= len(find_data["nodes"]), True, "GRAPH-FOCUS-007: Unlimited retains full depth slice")
+            finally:
+                shutil.rmtree(focus_test_dir, ignore_errors=True)
         finally:
             project_graph.REPO = saved_repo
 

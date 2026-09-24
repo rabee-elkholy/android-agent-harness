@@ -257,6 +257,51 @@ def main(argv: list[str] | None = None) -> int:
             live_print(f"  - {sc.name} ({sc.type}) {mod_tag}{deps_str}")
         return 0
 
+    # Bounded subgraph for focused queries (--find, --screen, --module)
+    if focus_node_id and not args.feature:
+        sub_nodes, sub_edges = engine.graph.extract_subgraph(
+            [focus_node_id],
+            max_depth=args.depth,
+            direction="outgoing",
+        )
+        original_count = len(sub_nodes)
+        if args.limit > 0 and original_count > args.limit:
+            distances = {focus_node_id: 0}
+            queue = [focus_node_id]
+            adj: dict[str, list[str]] = {}
+            for e in sub_edges:
+                adj.setdefault(e.source, []).append(e.target)
+
+            while queue:
+                curr = queue.pop(0)
+                d = distances[curr]
+                for nxt in adj.get(curr, []):
+                    if nxt not in distances:
+                        distances[nxt] = d + 1
+                        queue.append(nxt)
+
+            ranked = sorted(
+                sub_nodes.values(),
+                key=lambda node: (
+                    0 if node.id == focus_node_id else 1,
+                    distances.get(node.id, 999),
+                    0 if node.type in {EntityType.SCREEN.value, EntityType.VIEW_MODEL.value, EntityType.USE_CASE.value} else 1,
+                    str(node.file_path or ""),
+                    node.id,
+                ),
+            )[:args.limit]
+            keep = {node.id for node in ranked}
+            sub_nodes = {node.id: node for node in ranked}
+            sub_edges = [edge for edge in sub_edges if edge.source in keep and edge.target in keep]
+
+        from _graph_core import DependencyGraph
+        sub_g = DependencyGraph()
+        for sn in sub_nodes.values():
+            sub_g.add_node(sn)
+        for se in sub_edges:
+            sub_g.add_edge(se.source, se.target, kind=se.kind)
+        graph_to_render = sub_g
+
     # Filter by graph view
     if args.modules and not focus_node_id and not args.feature and not args.find:
         # Filter to only module nodes
@@ -324,7 +369,10 @@ def main(argv: list[str] | None = None) -> int:
     # Format output
     output_text = ""
     if args.format == "compact":
-        output_text = graph_to_render.to_compact(focus_id=focus_node_id, max_depth=args.depth)
+        output_text = graph_to_render.to_compact(
+            focus_id=focus_node_id if graph_to_render is engine.graph else None,
+            max_depth=args.depth,
+        )
     elif args.format == "mermaid":
         output_text = graph_to_render.to_mermaid(title="Android Project Code Graph")
     elif args.format == "dot":
