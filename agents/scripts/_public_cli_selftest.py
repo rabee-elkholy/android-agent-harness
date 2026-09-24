@@ -1614,5 +1614,53 @@ class TestSpeedTests(unittest.TestCase):
         self.assertIn('wait_for_workflow("ci.yml"', pypi_text)
 
 
+class UnknownCommandHintSelftest(unittest.TestCase):
+    def test_lifecycle_subcommand_without_task_prefix_gets_exact_hint(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("installed_harness_entry", KIT / "agents" / "harness.py")
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = entry.main(["checkpoint-phase", "--task-id", "t1", "--phase-id", "p1"])
+        self.assertEqual(2, code)
+        self.assertIn("python .agents/harness.py task checkpoint-phase", err.getvalue())
+
+
+class TaskFlagAliasSelftest(unittest.TestCase):
+    """Router commands mix --task and --task-id; every review CLI must accept both."""
+
+    def _parses(self, module_name: str, argv: list[str]) -> None:
+        import importlib
+        module = importlib.import_module(module_name)
+        seen = {}
+
+        def capture(self_parser, args=None, namespace=None):
+            ns = original(self_parser, args, namespace)
+            seen["ns"] = ns
+            raise SystemExit(0)
+
+        original = argparse.ArgumentParser.parse_args
+        argparse.ArgumentParser.parse_args = capture
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                module.main(argv)
+            self.assertEqual(0, ctx.exception.code, (module_name, argv))
+        finally:
+            argparse.ArgumentParser.parse_args = original
+        ns = seen["ns"]
+        self.assertEqual("t1", getattr(ns, "task", None) or getattr(ns, "task_id", None), (module_name, argv))
+
+    def test_review_clis_accept_task_and_task_id(self) -> None:
+        for flag in ("--task", "--task-id"):
+            for sub in ("status", "finalize", "dispatch-batch"):
+                self._parses("review_orchestrator", [sub, flag, "t1"])
+            self._parses("review_orchestrator", ["complete", flag, "t1", "--reviewer", "r", "--execution-id", "e"])
+            self._parses("review_execution", [flag, "t1"])
+            self._parses("phase_review", ["finalize", flag, "t1", "--phase-id", "p1"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

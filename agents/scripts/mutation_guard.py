@@ -373,7 +373,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["assemble"], ["device"], ["review"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
-    if status in ("VERIFYING", "BLOCKED") and action == "resume":
+    # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one.
+    if status in ("VERIFYING", "BLOCKED", "READY_FOR_DELIVERY") and action == "resume":
         return True, f"resume authorized for {status.lower()} plan {plan.get('plan_id')}"
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])

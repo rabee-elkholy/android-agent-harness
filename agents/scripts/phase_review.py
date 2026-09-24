@@ -1324,20 +1324,20 @@ def main(argv: list[str] | None = None) -> int:
 
     pkg_cmd = sub.add_parser("package")
     pkg_cmd.add_argument("--repo", default=".")
-    pkg_cmd.add_argument("--task-id", required=True)
+    pkg_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
     pkg_cmd.add_argument("--phase-id", required=True)
     pkg_cmd.add_argument("--host", help="Host that will execute this review run")
 
     dispatch_cmd = sub.add_parser("dispatch")
     dispatch_cmd.add_argument("--repo", default=".")
-    dispatch_cmd.add_argument("--task-id", required=True)
+    dispatch_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
     dispatch_cmd.add_argument("--phase-id", required=True)
     dispatch_cmd.add_argument("--reviewer", action="append", required=True, help="One actually launched reviewer; repeat for the complete roster")
     dispatch_cmd.add_argument("--host", required=True)
 
     complete_cmd = sub.add_parser("complete")
     complete_cmd.add_argument("--repo", default=".")
-    complete_cmd.add_argument("--task-id", required=True)
+    complete_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
     complete_cmd.add_argument("--phase-id", required=True)
     complete_cmd.add_argument("--reviewer", required=True)
     complete_cmd.add_argument("--execution-id", required=True)
@@ -1346,7 +1346,7 @@ def main(argv: list[str] | None = None) -> int:
 
     finalize_cmd = sub.add_parser("finalize")
     finalize_cmd.add_argument("--repo", default=".")
-    finalize_cmd.add_argument("--task-id", required=True)
+    finalize_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
     finalize_cmd.add_argument("--phase-id", required=True)
 
     args = parser.parse_args(argv)

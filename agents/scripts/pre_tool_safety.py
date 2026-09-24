@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -69,13 +70,6 @@ EPHEMERAL_GENERATED_RE = re.compile(
 # These stay denied even during approved implementation: they cross the local
 # development boundary or make recovery materially harder.
 DANGEROUS = (
-    ("developer_authority", re.compile(
-        r"(?:workflow\.py\b.*\bcancel\b|"
-        r"workflow\.py\b.*\b(?:approve|approve-sensitive)\b(?!.*\s--source\s+conversation\b)|"
-        r"(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bcancel\b|"
-        r"(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\b(?:approve|approve-sensitive)\b(?!.*\s--source\s+conversation\b))",
-        re.I,
-    )),
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)\b", re.I)),
     ("shell_indirection", re.compile(r"\b(?:base64\s+(?:-d|--decode)|frombase64string|invoke-expression|iex|eval)\b", re.I)),
     ("adb_destructive", re.compile(r"\badb(?:\.exe)?\b.*\b(?:root|remount|backup|restore|disable-verity|enable-verity|uninstall|clear)\b", re.I | re.S)),
@@ -89,6 +83,55 @@ DANGEROUS = (
     ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
     ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
 )
+WORKFLOW_ENTRYPOINTS = {"workflow.py", "workflow"}
+TASK_ENTRYPOINTS = {"harness.py", "harness", "harness_cli.py", "harness_cli", "android-harness"}
+WORKFLOW_VALUE_FLAGS = {"--repo", "--task-id"}
+
+
+def _developer_authority_violation(command: str) -> bool:
+    """Cancel, and approval from any source other than the conversation, belong to the developer.
+
+    Decided from the actual lifecycle subcommand and its --source value, never from
+    free text such as an outcome ("Fix cancel button") or an approval quote.
+    """
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    for index, token in enumerate(tokens):
+        name = token.strip(";&|").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if name in WORKFLOW_ENTRYPOINTS:
+            rest = tokens[index + 1:]
+        elif name in TASK_ENTRYPOINTS and index + 1 < len(tokens) and tokens[index + 1].lower() == "task":
+            rest = tokens[index + 2:]
+        else:
+            continue
+        subcommand, skip_value = "", False
+        for part in rest:
+            if skip_value:
+                skip_value = False
+                continue
+            if part.startswith("-"):
+                skip_value = part.lower() in WORKFLOW_VALUE_FLAGS
+                continue
+            subcommand = part.strip(";&|").lower()
+            break
+        if "-h" in rest or "--help" in rest:
+            continue  # reading usage changes nothing
+        if subcommand == "cancel":
+            return True
+        if subcommand in ("approve", "approve-sensitive"):
+            source = ""
+            for pos, part in enumerate(rest):
+                if part.startswith("--source="):
+                    source = part.split("=", 1)[1]
+                elif part == "--source" and pos + 1 < len(rest):
+                    source = rest[pos + 1]
+            if source.strip(";&|").lower() != "conversation":
+                return True
+    return False
+
+
 RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", re.I)
 ALLOWED_GRADLE_WRAPPER = re.compile(r"(?:run_gradle_task|run_tests_gate)\.py\b", re.I)
 IMMUTABLE_ADAPTER_FILES = frozenset({
@@ -278,6 +321,9 @@ def _handle_command(command: str) -> None:
         active_tid = str(p.get("task_id") or "")
     except Exception:
         pass
+    if _developer_authority_violation(command):
+        emit("deny", "Denied by local safety boundary: developer_authority.", tool="run_command", command=command, reason_code="DEVELOPER_AUTHORITY", task_id=active_tid)
+        return
     for code, pattern in DANGEROUS:
         if pattern.search(command):
             emit("deny", f"Denied by local safety boundary: {code}.", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)

@@ -682,6 +682,20 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         )
         return _with_audit_reason(json.loads(proc.stdout), self.env, SCRIPTS / "pre_tool_safety.py")
 
+    def test_V2_BOUNDARY_MANUAL_DISPATCH_001_trusted_host_refuses_cli_dispatch(self):
+        """On a hook-recorded host, a manual dispatch receipt would strand reviewers that never launched."""
+        from review_orchestrator import get_review_execution_status, main as orchestrator_main
+        for argv in (
+            ["dispatch-batch", "--repo", str(self.repo), "--task", "task-v2", "--host", "antigravity"],
+            ["dispatch", "--repo", str(self.repo), "--task", "task-v2", "--reviewer", "bug-reviewer-agent", "--host", "antigravity"],
+        ):
+            self.assertEqual(1, orchestrator_main(argv), argv)
+        status = get_review_execution_status(self.repo, "task-v2")
+        self.assertEqual("NOT_DISPATCHED", status["reviewers"]["bug-reviewer-agent"]["state"])
+        # The real launch path stays open.
+        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": self.brief_f.read_text(encoding="utf-8")}])
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+
     def test_V2_BOUNDARY_PROFILE_001_profile_exception_denies_dispatch(self):
         self.current_f.write_text(json.dumps({
             "task_id": "task-v2",

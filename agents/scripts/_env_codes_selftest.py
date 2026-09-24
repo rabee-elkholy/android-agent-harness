@@ -141,6 +141,39 @@ def test_gradle_code() -> None:
         expect_class(classify_gradle_failure(1, output), CLASS_CODE, f"CODE gradle: {output[:60]}")
 
 
+def test_gradle_test_output_is_not_environment() -> None:
+    # A failing test about network handling prints network words; Gradle itself reports only failing tests.
+    failing_network_test = (
+        "> Task :app:testDebugUnitTest\n"
+        "CampaignErrorUtilsTest > maps connection timed out() FAILED\n"
+        "    java.lang.AssertionError: expected ConnectException: Connection refused to be network\n"
+        "        at CampaignErrorUtilsTest.kt:42\n"
+        "3 tests completed, 1 failed\n"
+        "> Task :app:testDebugUnitTest FAILED\n"
+        "\n"
+        "FAILURE: Build failed with an exception.\n"
+        "\n"
+        "* What went wrong:\n"
+        "Execution failed for task ':app:testDebugUnitTest'.\n"
+        "> There were failing tests. See the report at: file:///app/build/reports/tests/index.html\n"
+        "\n"
+        "* Try:\n"
+        "> Run with --scan to get full insights.\n"
+        "\n"
+        "BUILD FAILED in 17s\n"
+        "Configuration cache entry reused.\n"
+    )
+    expect_class(classify_gradle_failure(1, failing_network_test), CLASS_CODE, "gradle failing network-themed test is CODE")
+    real_network = (
+        "> Task :app:compileDebugKotlin\n"
+        "* What went wrong:\n"
+        "Could not resolve all files for configuration ':app:debugCompileClasspath'.\n"
+        "> Could not GET 'https://dl.google.com/a.pom'. Received status code 503 from server\n"
+        "* Try:\n"
+    )
+    expect_class(classify_gradle_failure(1, real_network), CLASS_ENV, "gradle network failure in What went wrong is ENV")
+
+
 def test_gradle_posix_signal_codes() -> None:
     if os.name == "nt":
         print("[SKIP] posix signal exit codes (windows)")
@@ -210,6 +243,7 @@ def main() -> int:
     test_gradle_environment()
     test_gradle_ambiguous()
     test_gradle_code()
+    test_gradle_test_output_is_not_environment()
     test_gradle_posix_signal_codes()
     test_exit_for_mapping()
     test_device_gone_detector()

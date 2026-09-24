@@ -841,35 +841,43 @@ def get_review_execution_status(repo: Path, task_id: str) -> dict[str, Any]:
     }
 
 
+def _run_uses_native_dispatch(repo: Path, task_id: str) -> bool:
+    from review_sources import has_trusted_review_source
+    current_file = task_dir(repo, task_id) / "current-run.json"
+    if not current_file.is_file():
+        return False
+    return has_trusted_review_source(str(read_json(current_file).get("review_host") or ""))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Harness review execution orchestrator")
     subparsers = parser.add_subparsers(dest="subcommand")
 
     complete_p = subparsers.add_parser("complete", help="Record trusted completion of reviewer")
     complete_p.add_argument("--repo", default=".")
-    complete_p.add_argument("--task", required=True, help="Task ID")
+    complete_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
     complete_p.add_argument("--reviewer", required=True, help="Reviewer role")
     complete_p.add_argument("--execution-id", required=True, help="Trusted execution transcript ID")
     complete_p.add_argument("--host", default=None, help="Host environment")
 
     finalize_p = subparsers.add_parser("finalize", help="Aggregate review evidence")
     finalize_p.add_argument("--repo", default=".")
-    finalize_p.add_argument("--task", required=True, help="Task ID")
+    finalize_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
 
     dispatch_p = subparsers.add_parser("dispatch", help="Record dispatch receipt")
     dispatch_p.add_argument("--repo", default=".")
-    dispatch_p.add_argument("--task", required=True, help="Task ID")
+    dispatch_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
     dispatch_p.add_argument("--reviewer", required=True, help="Reviewer role")
     dispatch_p.add_argument("--host", default="antigravity", help="Host environment")
 
     dispatch_batch_p = subparsers.add_parser("dispatch-batch", help="Record dispatch receipts for all dispatchable reviewers")
     dispatch_batch_p.add_argument("--repo", default=".")
-    dispatch_batch_p.add_argument("--task", required=True, help="Task ID")
+    dispatch_batch_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
     dispatch_batch_p.add_argument("--host", default="antigravity", help="Host environment")
 
     status_p = subparsers.add_parser("status", help="Review execution status")
     status_p.add_argument("--repo", default=".")
-    status_p.add_argument("--task", required=True, help="Task ID")
+    status_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
 
     args = parser.parse_args(argv)
     if not args.subcommand:
@@ -892,6 +900,11 @@ def main(argv: list[str] | None = None) -> int:
             res = finalize_review_execution(repo, args.task)
             print(f"REVIEW_FINALIZED: {len(res.get('reports', []))} reports, {len(res.get('blocking_findings', []))} blocking findings")
             return 0
+        elif args.subcommand in ("dispatch", "dispatch-batch", "dispatch_batch") and _run_uses_native_dispatch(repo, args.task):
+            raise ValidationError(
+                "trusted host dispatch must be recorded by its native pre-tool hook: launch the routed "
+                "reviewers with invoke_subagent instead of recording dispatch manually"
+            )
         elif args.subcommand == "dispatch":
             receipt = record_dispatch(repo, args.task, args.reviewer, host=args.host)
             print(f"REVIEW_DISPATCHED: {args.reviewer} receipt={receipt.get('receipt_sha256')[:12]}")

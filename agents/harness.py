@@ -9,6 +9,11 @@ from pathlib import Path
 AGENTS_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = AGENTS_ROOT.parent
 SCRIPTS = AGENTS_ROOT / "scripts"
+TASK_SUBCOMMANDS = frozenset({
+    "draft", "revise", "checkpoint-phase", "begin-next-phase", "present-plan", "approve", "approve-sensitive",
+    "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
+    "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
+})
 
 
 def _run(script: str, args: list[str]) -> int:
@@ -99,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run("zoho_sync.py", args)
 
     print(f"[ERROR] Unknown installed harness command: {command}", file=sys.stderr)
+    if command in TASK_SUBCOMMANDS:
+        print(f"Did you mean: python .agents/harness.py task {command} {' '.join(args)}".rstrip(), file=sys.stderr)
     return 2
 
 

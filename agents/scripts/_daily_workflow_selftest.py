@@ -171,6 +171,18 @@ class DailyWorkflowSelftest(unittest.TestCase):
     # Section 1.4: Command Contract & Parser Tests
     # -------------------------------------------------------------------------
 
+    def test_command_contract_json_flag_accepted_before_or_after_subcommand(self) -> None:
+        """Agents naturally append --json; it must work in either position."""
+        from workflow import build_parser
+        parser = build_parser()
+        for argv in (
+            ["--json", "status", "--task-id", "t", "--next"],
+            ["status", "--task-id", "t", "--next", "--json"],
+            ["approve", "--task-id", "t", "--source", "conversation", "--proof-reference", "ok", "--enforcement-tier", "RULE_ENFORCED", "--json"],
+        ):
+            self.assertTrue(parser.parse_args(argv).json, argv)
+        self.assertFalse(parser.parse_args(["status", "--task-id", "t"]).json)
+
     def test_command_contract_draft_matches_workflow_parser(self) -> None:
         """Verify the canonical draft command flags are completely valid according to workflow parser."""
         contract_file = KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md"

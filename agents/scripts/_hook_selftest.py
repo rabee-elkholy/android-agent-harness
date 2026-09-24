@@ -128,6 +128,43 @@ class HookTests(unittest.TestCase):
         audit = [json.loads(line) for line in (self.state / "audit_log.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(all(record.get("reason_code") for record in audit))
 
+    def test_developer_authority_is_decided_by_subcommand_not_free_text(self):
+        """Task text mentioning cancel/approve is ordinary; only the real subcommand and --source matter."""
+        allowed = [
+            'python .agents/harness.py task draft --task-id t9 --outcome "Fix cancel button crash" --kind BUG',
+            'python .agents/harness.py task draft --task-id t9 --outcome "Approve button does nothing" --kind BUG',
+            'python .agents/scripts/workflow.py approve --repo . --task-id t --source conversation '
+            '--proof-reference "approve plan for task t" --enforcement-tier RULE_ENFORCED',
+            'python .agents/harness.py task approve --task-id t --source=conversation --proof-reference "ok, approve it"',
+            "python .agents/scripts/workflow.py cancel --help",
+            "python .agents/harness.py task approve -h",
+        ]
+        denied = [
+            "python .agents/scripts/workflow.py cancel --repo . --task-id t",
+            "python .agents/harness.py task cancel --task-id t",
+            "python .agents/harness.py task --json cancel --task-id t",
+            'python .agents/scripts/workflow.py approve --task-id t --source developer_terminal --proof-reference "x --source conversation"',
+            "python .agents/harness.py task approve --task-id t --proof-reference ok",
+            "python .agents/harness.py task approve-sensitive --task-id t --source host_native --proof-reference ok",
+            "git status; python .agents/scripts/workflow.py cancel --task-id t",
+        ]
+        for command in allowed:
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertNotEqual("DEVELOPER_AUTHORITY", res.get("reason_code"), command)
+        for command in denied:
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertEqual("deny", res["decision"], command)
+            self.assertEqual("DEVELOPER_AUTHORITY", res.get("reason_code"), command)
+
+    def test_router_resume_for_stale_ready_delivery_is_allowed(self):
+        """The router routes a stale READY task to `task resume`; the hook must not block its own advice."""
+        self.activate(status="READY_FOR_DELIVERY")
+        res = self.call("run_command", {"CommandLine": "python .agents/harness.py task resume --task-id task-one"})
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+        # READY still refuses unrelated mutation.
+        res = self.call("run_command", {"CommandLine": "python .agents/harness.py test"})
+        self.assertEqual("deny", res["decision"])
+
     def test_file_write_requires_plan(self):
         self.assertEqual("deny", self.call("write_to_file", {"TargetFile": "app/A.kt"})["decision"])
         self.activate()

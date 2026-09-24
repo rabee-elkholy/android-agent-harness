@@ -191,16 +191,27 @@ def classify_adb_failure(exit_code: int, output: str) -> FailureVerdict:
     return FailureVerdict(CLASS_CODE, f"adb command failed (exit {exit_code})")
 
 
+def _gradle_failure_report(raw_log: str) -> str:
+    """Gradle's own "What went wrong" sections, or the whole log when it wrote none.
+
+    Test and application output can mention network errors (a test about timeouts);
+    only Gradle's report says whether the build itself hit the environment.
+    """
+    sections = re.findall(r"(?ms)^\* What went wrong:\s*\n(.*?)(?=^\* |\Z)", raw_log)
+    return "\n".join(sections) if sections else raw_log
+
+
 def classify_gradle_failure(exit_code: int, raw_log: str) -> FailureVerdict:
     text = raw_log or ""
-    if _GRADLE_NETWORK_FETCH_RE.search(text) or _first_match(_GRADLE_ENV_RE, text):
-        return FailureVerdict(CLASS_ENV, _summarize(text))
+    report = _gradle_failure_report(text)
+    if _GRADLE_NETWORK_FETCH_RE.search(report) or _first_match(_GRADLE_ENV_RE, report):
+        return FailureVerdict(CLASS_ENV, _summarize(report))
     if os.name != "nt" and exit_code in _GRADLE_POSIX_ENV_EXITS:
         return FailureVerdict(
             CLASS_ENV, f"gradle process was killed by signal (exit {exit_code})"
         )
-    if _first_match(_GRADLE_AMBIGUOUS_RE, text):
-        return FailureVerdict(CLASS_AMBIGUOUS, _summarize(text))
+    if _first_match(_GRADLE_AMBIGUOUS_RE, report):
+        return FailureVerdict(CLASS_AMBIGUOUS, _summarize(report))
     return FailureVerdict(CLASS_CODE, f"gradle build failed (exit {exit_code})")
 
 

@@ -4348,6 +4348,9 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--task-id", required=True, help="Task ID to restore as active task")
     command.set_defaults(handler=recover_active)
     parser.add_argument("--json", action="store_true")
+    for subparser in sub.choices.values():
+        # Accept --json after the subcommand too; SUPPRESS keeps the top-level value.
+        subparser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     return parser
 
 
