@@ -1667,6 +1667,16 @@ def verify_task(args: argparse.Namespace) -> dict:
 
 def complete(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
+    plan = _load_plan(repo, args.task_id)
+    if plan.get("status") == "READY_FOR_DELIVERY":
+        ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
+        live_manifest = build_manifest(repo)
+        live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
+        if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
+            raise ValidationError(
+                f"delivery cannot be completed: repository modified after verification (live snapshot {live_snapshot[:12]} != ready {ready_snapshot[:12]})"
+            )
+        return plan
     result = verify_task(args)
     if result.get("status") != "APPROVED":
         raise ValidationError("delivery cannot be completed: " + "; ".join(result.get("blocked_by") or [str(result.get("status"))]))
@@ -1748,7 +1758,42 @@ def resume(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     assert_single_live_task(repo, allowed_task_id=args.task_id)
     plan = _load_plan(repo, args.task_id)
-    if plan.get("status") not in ("VERIFYING", "BLOCKED"):
+    status = plan.get("status")
+
+    if status == "READY_FOR_DELIVERY":
+        ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
+        ready_run_id = str(plan.get("ready_run_id") or "")
+        if not ready_snapshot or not ready_run_id:
+            tdir = task_dir(repo, args.task_id)
+            crun_path = tdir / "current-run.json"
+            if crun_path.is_file():
+                try:
+                    crun = read_json(crun_path)
+                    if not ready_snapshot:
+                        ready_snapshot = str(crun.get("delivery_snapshot_sha256") or "")
+                    if not ready_run_id:
+                        ready_run_id = str(crun.get("run_id") or "")
+                except Exception:
+                    pass
+        live_manifest = build_manifest(repo)
+        live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
+        if not ready_snapshot or not live_snapshot or ready_snapshot == live_snapshot:
+            raise ValidationError(
+                f"task '{args.task_id}' is in status 'READY_FOR_DELIVERY' with matching snapshot; resume is only permitted when delivery snapshot is stale"
+            )
+        if not plan.get("approval") or plan.get("execution_nonce") != plan["approval"].get("single_use_nonce"):
+            raise ValidationError("the approved execution identity is no longer valid")
+        plan["status"] = "IMPLEMENTING"
+        plan["resumed_at"] = utc_now()
+        plan.pop("ready_at", None)
+        plan.pop("ready_delivery_snapshot_sha256", None)
+        plan.pop("ready_change_set_sha256", None)
+        plan.pop("ready_run_id", None)
+        save_plan(_plan_path(repo, args.task_id), plan)
+        atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
+        return plan
+
+    if status not in ("VERIFYING", "BLOCKED"):
         raise ValidationError("only a verifying or blocked task can resume implementation")
     if not plan.get("approval") or plan.get("execution_nonce") != plan["approval"].get("single_use_nonce"):
         raise ValidationError("the approved execution identity is no longer valid")
@@ -3653,15 +3698,15 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
-        # 8. Final verify
+        # 8. Complete task
         return {
-            "code": "FINAL_VERIFY",
+            "code": "COMPLETE_TASK",
             "kind": "HARNESS_COMMAND",
-            "command": f"python .agents/harness.py task verify {identity}",
+            "command": f"python .agents/scripts/workflow.py complete --repo . --task-id {task_id}",
             "blocking": True,
-            "reason": "Run read-only final verification check to confirm all evidence is in place.",
+            "reason": "All required gates, reviews, and verifications have passed; seal task to READY_FOR_DELIVERY.",
             "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-            "expected": {"success_exit_codes": [0], "success_statuses": ["APPROVED"]},
+            "expected": {"success_exit_codes": [0], "success_statuses": ["READY_FOR_DELIVERY"]},
         }
 
     if state == "READY_FOR_DELIVERY":
@@ -3926,6 +3971,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "DEVICE_INSTALL": "device",
         "MOBILE_VALIDATION_DECISION": "device",
         "FINAL_VERIFY": "verify",
+        "COMPLETE_TASK": "complete",
         "DELIVER": "deliver",
         "RESUME_IMPLEMENTATION": "resume",
         "CHECKPOINT_PHASE": "checkpoint-phase",

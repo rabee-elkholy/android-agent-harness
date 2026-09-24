@@ -2566,7 +2566,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         act = resolve_next_action(self.repo, "route-cmd-009", plan)
-        self.assertEqual("FINAL_VERIFY", act["code"])
+        self.assertEqual("COMPLETE_TASK", act["code"])
 
     def test_ROUTE_CMD_010_no_device_skips_device(self) -> None:
         """ROUTE-CMD-010: No device required -> device scripts are skipped."""
@@ -2582,7 +2582,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         act = resolve_next_action(self.repo, "route-cmd-010", plan)
         self.assertNotIn("run_device.py", act.get("command", ""))
-        self.assertEqual("FINAL_VERIFY", act["code"])
+        self.assertEqual("COMPLETE_TASK", act["code"])
 
     def test_ROUTE_CMD_011_bug_requires_executable_red(self) -> None:
         """ROUTE-CMD-011: BUG requiring executable RED -> capture-red appears before implementation."""
@@ -3974,7 +3974,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         act_res = resolve_next_action(self.repo, "task-router-008", plan)
         self.assertEqual(["IMPLEMENTING"], act_res["expected"]["success_statuses"])
 
-        # FINAL_VERIFY declared expected status must be APPROVED
+        # COMPLETE_TASK declared expected status must be READY_FOR_DELIVERY
         plan["status"] = "VERIFYING"
         current = read_json(tdir / "current-run.json")
         policy = read_json(Path(current["policy"]))
@@ -3996,8 +3996,8 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
             evidence={"status": "PASS"},
         )
         act_ver = resolve_next_action(self.repo, "task-router-008", plan)
-        self.assertEqual("FINAL_VERIFY", act_ver["code"])
-        self.assertEqual(["APPROVED"], act_ver["expected"]["success_statuses"])
+        self.assertEqual("COMPLETE_TASK", act_ver["code"])
+        self.assertEqual(["READY_FOR_DELIVERY"], act_ver["expected"]["success_statuses"])
 
     def test_ROUTER_009_commands_json_matches_actual_parser(self) -> None:
         """ROUTER-009: commands --json outputs machine-readable catalog matching actual parser."""
@@ -6467,6 +6467,267 @@ class GitDeliveryTests(ReviewOrchestrationTests):
 
         action = resolve_next_action(self.repo, task_id, delivered_plan)
         self.assertEqual("TASK_DELIVERED", action.get("code"))
+
+
+class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
+    """Regression suite for DEFECT-ROUTER-01 and DEFECT-RESUME-01."""
+
+    def _setup_verifying_task_ready_for_complete(self, task_id: str) -> tuple[dict, Path]:
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 1 }\n")
+        draft(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            outcome="Router completion test task",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="COMPOSE_UI",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None,
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approval for router test",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        tdir = task_dir(self.repo, task_id)
+        current = read_json(tdir / "current-run.json")
+        current["review_protocol_version"] = 1
+        atomic_write_json(tdir / "current-run.json", current)
+        policy = read_json(Path(current["policy"]))
+        manifest = read_json(Path(current["manifest"]))
+        run_id = current["run_id"]
+        harness_version = (KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
+
+        store = EvidenceStore(state_root(self.repo))
+        evidence_common = dict(
+            snapshot=manifest["delivery_snapshot_sha256"],
+            run_id=run_id,
+            harness_version=harness_version,
+            change_set=manifest["change_set_sha256"],
+            status="PASS",
+        )
+        for g in policy.get("gates", []):
+            prod = "preflight_check" if g in ("preflight", "localization", "room") else "run_tests_gate"
+            if g == "assemble":
+                prod = "run_gradle_task"
+            store.write(**evidence_common, name=g, producer=prod, evidence={"status": "PASS"})
+        if policy.get("assemble_required") and "assemble" not in policy.get("gates", []):
+            store.write(**evidence_common, name="assemble", producer="run_gradle_task", evidence={})
+        if policy.get("reviewers"):
+            store.write(
+                **evidence_common,
+                name="reviews",
+                producer="review_orchestrator",
+                evidence={
+                    "reviewers": policy["reviewers"],
+                    "reports": [
+                        {
+                            "reviewer": r,
+                            "verdict": "PASS",
+                            "independent_execution_verified": True,
+                            "execution_id": f"conv-{r}",
+                            "findings": [],
+                        }
+                        for r in policy["reviewers"]
+                    ],
+                },
+            )
+        if policy.get("device_required"):
+            store.write(
+                **evidence_common,
+                name="device_install",
+                producer="run_device",
+                evidence={"status": "PASS", "application_id": "com.example", "serial_hash": "123456789012"},
+            )
+            store.write(
+                **evidence_common,
+                name="device_signoff",
+                producer="device_signoff",
+                evidence={"status": "PASS", "verdict": "PASS"},
+            )
+        plan = read_json(tdir / "plan.json")
+        return plan, tdir
+
+    def _setup_ready_task(self, task_id: str) -> tuple[dict, Path]:
+        from workflow import state_root, task_dir
+        tdir = task_dir(self.repo, task_id)
+        tdir.mkdir(parents=True, exist_ok=True)
+        target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt"
+        write_file(target, "package com.example\nclass MainActivity { fun auth() = true }\n")
+        manifest = build_manifest(self.repo)
+        snapshot = manifest["delivery_snapshot_sha256"]
+        change_set = manifest["change_set_sha256"]
+        nonce = "test-nonce-123"
+        plan = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "task_kind": "FEATURE",
+            "requested_outcome": "Biometric login flow",
+            "status": "READY_FOR_DELIVERY",
+            "ready_at": utc_now(),
+            "ready_delivery_snapshot_sha256": snapshot,
+            "ready_change_set_sha256": change_set,
+            "ready_run_id": f"run-{task_id}",
+            "expected_surfaces": ["AUTH"],
+            "expected_modules": [":app"],
+            "expected_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
+            "approval": {"source": "conversation", "single_use_nonce": nonce, "approved_at": utc_now()},
+            "execution_nonce": nonce,
+        }
+        p_path = tdir / "plan.json"
+        atomic_write_json(p_path, plan)
+        active = {"task_id": task_id, "plan_path": str(p_path), "updated_at": utc_now()}
+        atomic_write_json(state_root(self.repo) / "active-task.json", active)
+        return plan, tdir
+
+    def test_ROUTER_COMPLETE_001_reaches_ready_for_delivery_without_loop(self) -> None:
+        task_id = "router-comp-001"
+        plan, tdir = self._setup_verifying_task_ready_for_complete(task_id)
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("COMPLETE_TASK", act.get("code"))
+        self.assertEqual("HARNESS_COMMAND", act.get("kind"))
+        self.assertIn("workflow.py complete", act.get("command", ""))
+
+        # Execute completion
+        res = complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("READY_FOR_DELIVERY", res.get("status"))
+
+        # Verify next router action is NOT FINAL_VERIFY or COMPLETE_TASK
+        next_act = resolve_next_action(self.repo, task_id, res)
+        self.assertNotEqual("FINAL_VERIFY", next_act.get("code"))
+        self.assertNotEqual("COMPLETE_TASK", next_act.get("code"))
+
+    def test_ROUTER_COMPLETE_002_missing_evidence_fails_closed(self) -> None:
+        task_id = "router-comp-002"
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 1 }\n")
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Test", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="COMPOSE_UI", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        tdir = task_dir(self.repo, task_id)
+        plan = read_json(tdir / "plan.json")
+
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("RUN_PREFLIGHT", act.get("code"))
+
+        with self.assertRaises(ValidationError):
+            complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+
+    def test_ROUTER_COMPLETE_003_explicit_verify_remains_read_only(self) -> None:
+        task_id = "router-comp-003"
+        plan, tdir = self._setup_verifying_task_ready_for_complete(task_id)
+        res = workflow.verify_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("APPROVED", res.get("status"))
+
+        # Verify plan status is STILL VERIFYING, not mutated
+        plan_after = read_json(tdir / "plan.json")
+        self.assertEqual("VERIFYING", plan_after.get("status"))
+
+    def test_ROUTER_COMPLETE_004_repeated_completion_idempotent(self) -> None:
+        task_id = "router-comp-004"
+        plan, tdir = self._setup_verifying_task_ready_for_complete(task_id)
+        res1 = complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("READY_FOR_DELIVERY", res1.get("status"))
+        ready_at = res1.get("ready_at")
+
+        # Second complete call must not corrupt state
+        res2 = complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("READY_FOR_DELIVERY", res2.get("status"))
+        self.assertEqual(ready_at, res2.get("ready_at"))
+
+    def test_RESUME_READY_001_stale_ready_resume_succeeds(self) -> None:
+        from workflow import resume
+        task_id = "resume-ready-001"
+        plan, tdir = self._setup_ready_task(task_id)
+
+        # Stale delivery snapshot: commit hook or code formatting modifies file
+        target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt"
+        write_file(target, "package com.example\n// formatted\nclass MainActivity { fun auth() = true }\n")
+
+        # Next action detects staleness and directs resume
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DELIVERY_STALE_AFTER_COMMIT", act.get("code"))
+
+        # Exact recommended resume command
+        resumed_plan = resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("IMPLEMENTING", resumed_plan.get("status"))
+        self.assertTrue(resumed_plan.get("resumed_at"))
+        self.assertNotIn("ready_at", resumed_plan)
+        self.assertNotIn("ready_delivery_snapshot_sha256", resumed_plan)
+        self.assertNotIn("ready_change_set_sha256", resumed_plan)
+        self.assertNotIn("ready_run_id", resumed_plan)
+        self.assertEqual("test-nonce-123", resumed_plan.get("execution_nonce"))
+
+    def test_RESUME_READY_002_unchanged_ready_resume_rejected(self) -> None:
+        from workflow import resume
+        task_id = "resume-ready-002"
+        plan, tdir = self._setup_ready_task(task_id)
+
+        # Snapshot is unchanged -> resume must fail closed
+        with self.assertRaises(ValidationError) as ctx:
+            resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertIn("stale", str(ctx.exception).lower())
+
+        plan_after = read_json(tdir / "plan.json")
+        self.assertEqual("READY_FOR_DELIVERY", plan_after.get("status"))
+
+    def test_RESUME_READY_003_verifying_resume_unchanged(self) -> None:
+        from workflow import resume
+        task_id = "resume-ready-003"
+        plan, tdir = self._setup_verifying_task_ready_for_complete(task_id)
+        resumed = resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("IMPLEMENTING", resumed.get("status"))
+
+    def test_RESUME_READY_004_blocked_resume_unchanged(self) -> None:
+        from workflow import resume
+        task_id = "resume-ready-004"
+        plan, tdir = self._setup_verifying_task_ready_for_complete(task_id)
+        plan["status"] = "BLOCKED"
+        atomic_write_json(tdir / "plan.json", plan)
+        resumed = resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("IMPLEMENTING", resumed.get("status"))
+
+    def test_RESUME_READY_005_stale_ready_resume_scope_expansion_requires_approval(self) -> None:
+        from workflow import resume
+        task_id = "resume-ready-005"
+        plan, tdir = self._setup_ready_task(task_id)
+
+        # Stale delivery snapshot
+        target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt"
+        write_file(target, "package com.example\n// formatted\nclass MainActivity { fun auth() = true }\n")
+
+        resumed_plan = resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("IMPLEMENTING", resumed_plan.get("status"))
+
+        # Expand scope beyond approved expected_files
+        unapproved = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Unapproved.kt"
+        write_file(unapproved, "package com.example\nclass Unapproved\n")
+
+        # When preparing verification, scope expansion must fail closed
+        with self.assertRaises(ValidationError) as ctx:
+            prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertTrue(
+            "unapproved" in str(ctx.exception).lower() or
+            "scope" in str(ctx.exception).lower() or
+            "unexpected" in str(ctx.exception).lower() or
+            "drift" in str(ctx.exception).lower() or
+            "expected" in str(ctx.exception).lower()
+        )
 
 
 if __name__ == "__main__":
