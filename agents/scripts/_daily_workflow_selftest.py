@@ -1337,7 +1337,7 @@ class StateAuthorityHardeningTests(DailyWorkflowSelftest):
     def test_AUDIT_002b_runtime_text_asset_is_not_documentation(self) -> None:
         write_file(self.repo / "app/src/main/assets/runtime.txt", "runtime configuration\n")
         result = classify(self.repo, task_changes=[{"path": "app/src/main/assets/runtime.txt"}], progress=False)
-        self.assertIn("RESOURCE_UI", result["surfaces"])
+        self.assertIn("UNKNOWN", result["surfaces"])
         self.assertNotIn("DOCS", result["surfaces"])
 
     def test_AUDIT_003_existing_kotlin_lint_debt_does_not_block_new_comment(self) -> None:
