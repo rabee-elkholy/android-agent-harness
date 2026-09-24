@@ -216,7 +216,7 @@ def main(argv=None) -> int:
         ]
         try:
             from mutation_guard import active_plan
-            from _vnext_common import canonical_sha256, read_json, utc_now, write_json
+            from _vnext_common import atomic_write_json, canonical_sha256, read_json, utc_now
             from delivery_manifest import build_manifest, build_task_manifest, is_delivery_relevant, load_task_baseline
 
             plan = active_plan(REPO)
@@ -287,8 +287,8 @@ def main(argv=None) -> int:
                 "failed_tests": failed_records,
             }
             red_payload["red_sha256"] = canonical_sha256({k: v for k, v in red_payload.items() if k != "red_sha256"})
-            write_json(task_d / "red-evidence.json", red_payload)
-            write_json(task_d / "debug-evidence.json", {"schema_version": 1, "task_id": task_id, "entries": repro_entries})
+            atomic_write_json(task_d / "red-evidence.json", red_payload)
+            atomic_write_json(task_d / "debug-evidence.json", {"schema_version": 1, "task_id": task_id, "entries": repro_entries})
 
             if current_run:
                 from evidence_store import EvidenceStore

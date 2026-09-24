@@ -336,6 +336,101 @@ class RedGreenTemporalTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_RED_001_executable_red_capture_success(self) -> None:
+        task_id = "task-red-001"
+        draft(Namespace(
+            repo=str(self.tmp), task_id=task_id, outcome="Fix calculation bug",
+            kind="BUG", planning_depth="STANDARD", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", expected_files="app/src/main/kotlin/com/example/Calc.kt",
+            test_strategy="UNIT_ONLY", device_strategy="NONE", risks="", rollback="none", external_write=[],
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family="",
+            phases=None,
+        ))
+        approve(Namespace(repo=str(self.tmp), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(Namespace(repo=str(self.tmp), task_id=task_id))
+
+        test_file = self.tmp / "app" / "src" / "test" / "kotlin" / "com" / "example" / "CalcTest.kt"
+        _write_text(test_file, "class CalcTest { @Test fun testAdd() { assert(false) } }\n")
+
+        report_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<testsuite name="com.example.CalcTest" tests="1" skipped="0" failures="1" errors="0" time="0.05">\n'
+            '  <testcase name="testAdd" classname="com.example.CalcTest" time="0.05">\n'
+            '    <failure message="expected:&lt;5&gt; but was:&lt;4&gt;" type="AssertionError">AssertionError</failure>\n'
+            '  </testcase>\n'
+            '</testsuite>\n'
+        )
+        report_path = self.tmp / "app" / "build" / "test-results" / "testDebugUnitTest" / "TEST-com.example.CalcTest.xml"
+        _write_text(report_path, report_xml)
+
+        from run_tests_gate import main as tests_gate_main
+        with mock.patch("run_tests_gate.REPO", self.tmp), \
+             mock.patch("_repo_files.REPO", self.tmp), \
+             mock.patch("run_gradle_task.run_gradle", return_value=1), \
+             mock.patch("sys.argv", ["run_tests_gate.py", "--capture-red"]):
+            code = tests_gate_main()
+            self.assertEqual(0, code)
+
+        t_dir = task_dir(self.tmp, task_id)
+        red_file = t_dir / "red-evidence.json"
+        self.assertTrue(red_file.is_file())
+        red_data = read_json(red_file)
+        self.assertEqual(3, red_data.get("schema_version"))
+        self.assertEqual(task_id, red_data.get("task_id"))
+        self.assertEqual("FAILING_TEST", red_data.get("reproduction_kind"))
+        failed_tests = red_data.get("failed_tests", [])
+        self.assertEqual(1, len(failed_tests))
+        self.assertEqual("com.example.CalcTest#testAdd", failed_tests[0].get("test_id"))
+        self.assertTrue(failed_tests[0].get("failure_fingerprint"))
+
+    def test_RED_002b_capture_red_no_failing_tests_rejected(self) -> None:
+        task_id = "task-red-002b"
+        draft(Namespace(
+            repo=str(self.tmp), task_id=task_id, outcome="Fix calculation bug",
+            kind="BUG", planning_depth="STANDARD", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", expected_files="app/src/main/kotlin/com/example/Calc.kt",
+            test_strategy="UNIT_ONLY", device_strategy="NONE", risks="", rollback="none", external_write=[],
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family="",
+            phases=None,
+        ))
+        approve(Namespace(repo=str(self.tmp), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(Namespace(repo=str(self.tmp), task_id=task_id))
+
+        from run_tests_gate import main as tests_gate_main
+        with mock.patch("run_tests_gate.REPO", self.tmp), \
+             mock.patch("_repo_files.REPO", self.tmp), \
+             mock.patch("run_gradle_task.run_gradle", return_value=0), \
+             mock.patch("sys.argv", ["run_tests_gate.py", "--capture-red"]):
+            code = tests_gate_main()
+            self.assertEqual(1, code)
+
+        t_dir = task_dir(self.tmp, task_id)
+        self.assertFalse((t_dir / "red-evidence.json").is_file())
+
+    def test_RED_003b_build_failure_without_failing_tests_rejected(self) -> None:
+        task_id = "task-red-003b"
+        draft(Namespace(
+            repo=str(self.tmp), task_id=task_id, outcome="Fix compile bug",
+            kind="BUG", planning_depth="STANDARD", expected_surfaces="BUSINESS_LOGIC",
+            expected_modules="app", expected_files="app/src/main/kotlin/com/example/Calc.kt",
+            test_strategy="UNIT_ONLY", device_strategy="NONE", risks="", rollback="none", external_write=[],
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family="",
+            phases=None,
+        ))
+        approve(Namespace(repo=str(self.tmp), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(Namespace(repo=str(self.tmp), task_id=task_id))
+
+        from run_tests_gate import main as tests_gate_main
+        with mock.patch("run_tests_gate.REPO", self.tmp), \
+             mock.patch("_repo_files.REPO", self.tmp), \
+             mock.patch("run_gradle_task.run_gradle", return_value=1), \
+             mock.patch("sys.argv", ["run_tests_gate.py", "--capture-red"]):
+            code = tests_gate_main()
+            self.assertEqual(1, code)
+
+        t_dir = task_dir(self.tmp, task_id)
+        self.assertFalse((t_dir / "red-evidence.json").is_file())
+
     def test_RED_002_pre_red_code_fix_rejected(self) -> None:
         task_id = "task-red-002"
         draft(Namespace(
