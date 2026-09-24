@@ -6870,6 +6870,91 @@ class ArchitectureNeutralScopeTests(unittest.TestCase):
         self.assertTrue("migration" in str(ctx.exception).lower())
 
 
+class AssetClassificationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="asset_cls_")
+        self.repo = Path(self.temp.name).resolve()
+        run_git(self.repo, "init", "-q")
+        run_git(self.repo, "config", "user.name", "Asset Test")
+        run_git(self.repo, "config", "user.email", "asset@example.invalid")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_ASSET_001_assets_config_json_not_resource_ui(self) -> None:
+        from change_classifier import classify
+        import review_policy
+        p = self.repo / "app" / "src" / "main" / "assets" / "config.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"feature_flag": true}', encoding="utf-8")
+        res = classify(self.repo)
+        self.assertNotIn("RESOURCE_UI", res["surfaces"])
+        self.assertIn("UNKNOWN", res["surfaces"])
+        pol = review_policy.decide(res, self.repo)
+        self.assertNotEqual("T0_TRIVIAL", pol["risk_tier"])
+
+    def test_ASSET_002_assets_rules_json_not_resource_ui(self) -> None:
+        from change_classifier import classify
+        import review_policy
+        p = self.repo / "app" / "src" / "main" / "assets" / "rules.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"rules": [1, 2, 3]}', encoding="utf-8")
+        res = classify(self.repo)
+        self.assertNotIn("RESOURCE_UI", res["surfaces"])
+        self.assertIn("UNKNOWN", res["surfaces"])
+        pol = review_policy.decide(res, self.repo)
+        self.assertNotEqual("T0_TRIVIAL", pol["risk_tier"])
+
+    def test_ASSET_003_assets_instructions_txt_not_docs_and_not_resource_ui(self) -> None:
+        from change_classifier import classify
+        p = self.repo / "app" / "src" / "main" / "assets" / "instructions.txt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("Runtime bot instructions", encoding="utf-8")
+        res = classify(self.repo)
+        self.assertNotIn("DOCS", res["surfaces"])
+        self.assertNotIn("RESOURCE_UI", res["surfaces"])
+        self.assertIn("UNKNOWN", res["surfaces"])
+
+    def test_ASSET_004_assets_image_png_is_resource_ui(self) -> None:
+        from change_classifier import classify
+        p = self.repo / "app" / "src" / "main" / "assets" / "image.png"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\x89PNG\r\n\x1a\n")
+        res = classify(self.repo)
+        self.assertIn("RESOURCE_UI", res["surfaces"])
+        self.assertNotIn("UNKNOWN", res["surfaces"])
+
+    def test_ASSET_005_docs_notes_md_is_docs(self) -> None:
+        from change_classifier import classify
+        p = self.repo / "docs" / "notes.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# Project notes", encoding="utf-8")
+        res = classify(self.repo)
+        self.assertIn("DOCS", res["surfaces"])
+        self.assertNotIn("UNKNOWN", res["surfaces"])
+
+    def test_ASSET_006_sensitive_runtime_asset_escalates(self) -> None:
+        from change_classifier import classify
+        p = self.repo / "app" / "src" / "main" / "assets" / "secret.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"oauth_token": "secret123"}', encoding="utf-8")
+        res = classify(self.repo)
+        self.assertIn("AUTH", res["surfaces"])
+        self.assertEqual("CRITICAL", res["severity"])
+
+    def test_ASSET_007_unknown_runtime_asset_failsafe_policy_never_t0(self) -> None:
+        from change_classifier import classify
+        import review_policy
+        p = self.repo / "app" / "src" / "main" / "assets" / "data.bin"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\x00\x01\x02\x03\x04")
+        res = classify(self.repo)
+        self.assertIn("UNKNOWN", res["surfaces"])
+        pol = review_policy.decide(res, self.repo)
+        self.assertNotEqual("T0_TRIVIAL", pol["risk_tier"])
+        self.assertEqual("USER_DECISION_REQUIRED", pol["status"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

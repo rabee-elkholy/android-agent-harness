@@ -21,6 +21,20 @@ SEVERITY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 CRITICAL_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
 HIGH_SURFACES = {"ROOM_SCHEMA", "MANIFEST_PERMISSION", "BUILD_CONFIG", "PUBLIC_API", "NATIVE_CODE", "HARNESS_CONFIG"}
 DEVICE_SURFACES = {"COMPOSE_UI", "XML_UI", "NAVIGATION", "DEVICE_API"}
+VISUAL_ASSET_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".svg",
+    ".bmp",
+    ".ico",
+    ".ttf",
+    ".otf",
+    ".woff",
+    ".woff2",
+}
 
 
 def is_documentation_path(relative: str) -> bool:
@@ -642,7 +656,8 @@ def classify(
         if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
         elif "/src/" in f"/{lower}" and "/assets/" in f"/{lower}/":
-            _add(found, "RESOURCE_UI", rel, "ANDROID_RUNTIME_ASSET")
+            if suffix in VISUAL_ASSET_EXTENSIONS:
+                _add(found, "RESOURCE_UI", rel, "ANDROID_RUNTIME_ASSET")
         elif is_documentation_path(rel):
             _add(found, "DOCS", rel, "DOCUMENTATION_PATH")
         if "/res/values" in f"/{lower}" and suffix == ".xml":
