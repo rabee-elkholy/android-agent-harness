@@ -578,7 +578,7 @@ def is_architecture_neutral_scope(
         return False
     if target_scope or target_family:
         return False
-    if not surfaces or not (surfaces <= NEUTRAL_ARCHITECTURE_SURFACES):
+    if surfaces and not (surfaces <= NEUTRAL_ARCHITECTURE_SURFACES):
         return False
     return all(is_architecture_neutral_path(p) for p in scope_files)
 
@@ -689,7 +689,9 @@ def _build_and_save_plan(
                 inferred_surfaces: set[str] = set()
                 for p in norm_expected_files:
                     p_lower = p.lower()
-                    if p_lower.endswith((".kt", ".java")):
+                    if is_documentation_path(p_lower):
+                        inferred_surfaces.add("DOCS")
+                    elif p_lower.endswith((".kt", ".java")):
                         if "/test/" in p_lower or p_lower.endswith(("test.kt", "test.java")):
                             inferred_surfaces.add("TEST_ONLY")
                         elif any(w in p_lower for w in ("screen", "activity", "fragment", "composable")):
