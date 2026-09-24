@@ -1844,6 +1844,8 @@ def resume(args: argparse.Namespace) -> dict:
             )
         if not plan.get("approval") or plan.get("execution_nonce") != plan["approval"].get("single_use_nonce"):
             raise ValidationError("the approved execution identity is no longer valid")
+        from task_git_lineage import accept_requested_delivery_commit
+        accept_requested_delivery_commit(repo, args.task_id, plan)
         plan["status"] = "IMPLEMENTING"
         plan["resumed_at"] = utc_now()
         plan.pop("ready_at", None)

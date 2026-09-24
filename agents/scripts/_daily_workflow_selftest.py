@@ -89,6 +89,9 @@ from workflow import (
 KIT = Path(__file__).resolve().parents[2]
 
 
+CHANGED_ACTIVITY = "package com.example\n\nclass MainActivity { val x = 5 }\n"
+
+
 def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
     """Hook stdout carries only decision/reason; the reason code is in the audit log."""
     state = env.get("HARNESS_HOOK_STATE")
@@ -6587,7 +6590,9 @@ class GitDeliveryTests(ReviewOrchestrationTests):
 class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
     """Regression suite for DEFECT-ROUTER-01 and DEFECT-RESUME-01."""
 
-    def _setup_verifying_task_ready_for_complete(self, task_id: str) -> tuple[dict, Path]:
+    def _setup_verifying_task_ready_for_complete(
+        self, task_id: str, change_after_begin: str | None = None, expected_surfaces: str = "COMPOSE_UI",
+    ) -> tuple[dict, Path]:
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 1 }\n")
         draft(argparse.Namespace(
             repo=str(self.repo),
@@ -6595,7 +6600,7 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
             outcome="Router completion test task",
             kind="FEATURE",
             planning_depth="BOUNDED",
-            expected_surfaces="COMPOSE_UI",
+            expected_surfaces=expected_surfaces,
             expected_modules=":app",
             architecture_intent="EXISTING_CHANGE",
             architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
@@ -6612,6 +6617,8 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
             enforcement_tier="RULE_ENFORCED",
         ))
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        if change_after_begin is not None:
+            write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", change_after_begin)
         prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         tdir = task_dir(self.repo, task_id)
         current = read_json(tdir / "current-run.json")
@@ -6827,6 +6834,51 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         self.assertNotIn("ready_change_set_sha256", resumed_plan)
         self.assertNotIn("ready_run_id", resumed_plan)
         self.assertEqual("test-nonce-123", resumed_plan.get("execution_nonce"))
+
+    def test_RESUME_READY_006_requested_delivery_commit_survives_stale_resume(self) -> None:
+        """AG3-01: the commit the router asked for must not become a lineage violation after resume."""
+        from workflow import resume
+        task_id = "resume-ready-006"
+        # The task changes a committed file, so delivery really needs a developer commit.
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 0 }\n")
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-qm", "baseline before task")
+        plan, tdir = self._setup_verifying_task_ready_for_complete(task_id, change_after_begin=CHANGED_ACTIVITY, expected_surfaces="BUSINESS_LOGIC")
+        complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        target = "app/src/main/kotlin/com/example/MainActivity.kt"
+        act = resolve_next_action(self.repo, task_id, read_json(tdir / "plan.json"))
+        self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", act["code"])
+
+        # The developer commits exactly the verified task files, then tweaks the file.
+        run_git(self.repo, "add", "--", target)
+        run_git(self.repo, "commit", "-qm", "feat: delivered change")
+        write_file(self.repo / target, "package com.example\n\nclass MainActivity { val x = 6 }\n")
+        self.assertEqual("DELIVERY_STALE_AFTER_COMMIT", resolve_next_action(self.repo, task_id, read_json(tdir / "plan.json"))["code"])
+
+        resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        # Re-verification must start: the requested commit is an accepted checkpoint, not a foreign commit.
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("VERIFYING", read_json(tdir / "plan.json")["status"])
+
+    def test_RESUME_READY_007_foreign_commit_still_blocks_after_stale_resume(self) -> None:
+        """Only the requested delivery commit is accepted; a commit with unrelated files stays a lineage violation."""
+        from workflow import resume
+        task_id = "resume-ready-007"
+        # The task changes a committed file, so delivery really needs a developer commit.
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 0 }\n")
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-qm", "baseline before task")
+        plan, tdir = self._setup_verifying_task_ready_for_complete(task_id, change_after_begin=CHANGED_ACTIVITY, expected_surfaces="BUSINESS_LOGIC")
+        complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        target = "app/src/main/kotlin/com/example/MainActivity.kt"
+        write_file(self.repo / "app/src/main/kotlin/com/example/Unrelated.kt", "package com.example\nclass Unrelated\n")
+        run_git(self.repo, "add", "--", target, "app/src/main/kotlin/com/example/Unrelated.kt")
+        run_git(self.repo, "commit", "-qm", "feat: delivered change plus something else")
+        write_file(self.repo / target, "package com.example\n\nclass MainActivity { val x = 6 }\n")
+        resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        with self.assertRaises(ValidationError) as ctx:
+            prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertIn("lineage", str(ctx.exception).lower())
 
     def test_RESUME_READY_002_unchanged_ready_resume_rejected(self) -> None:
         from workflow import resume

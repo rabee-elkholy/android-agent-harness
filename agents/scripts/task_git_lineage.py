@@ -197,6 +197,73 @@ def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[
     return True, "valid accepted checkpoint descendant"
 
 
+def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, Any]) -> str | None:
+    """Accept the developer commit that DEVELOPER_GIT_COMMIT_REQUIRED asked for.
+
+    When a READY task goes stale and resumes, HEAD may hold exactly one new commit
+    containing only the files verified in the frozen run. That commit is the
+    requested delivery commit, not a foreign lineage change, so it is recorded as an
+    accepted checkpoint (same receipt schema as a WIP handoff). Anything else - more
+    commits, merges, or files outside the verified change set - is left unaccepted.
+    """
+    tdir = task_dir(repo, task_id)
+    base_head = plan.get("task_base_head") or (plan.get("repository") or {}).get("head", "")
+    current_head = git_text(repo, "rev-parse", "HEAD")
+    if not base_head or current_head == base_head:
+        return None
+    valid_heads = resolve_valid_checkpoint_heads(repo, task_id, base_head)
+    if current_head in valid_heads:
+        return None
+    accepted = str(plan.get("accepted_checkpoint_head") or "")
+    parent_head = accepted if accepted in valid_heads else base_head
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=False)
+
+    if _git("merge-base", "--is-ancestor", parent_head, current_head).returncode != 0:
+        return None
+    merges = _git("rev-list", "--merges", f"{parent_head}..{current_head}")
+    count = _git("rev-list", "--count", f"{parent_head}..{current_head}")
+    if merges.returncode != 0 or merges.stdout.strip() or count.returncode != 0 or count.stdout.strip() != "1":
+        return None
+
+    current_run = tdir / "current-run.json"
+    if not current_run.is_file():
+        return None
+    run_manifest = Path(str(read_json(current_run).get("manifest") or ""))
+    if not run_manifest.is_file():
+        return None
+    frozen = read_json(run_manifest)
+    changes = frozen.get("task_changes") if "task_changes" in frozen else frozen.get("changes") or []
+    verified_paths = {str(c.get("path") or "").replace("\\", "/") for c in changes if isinstance(c, dict) and c.get("path")}
+    committed = _git("diff", "--name-only", parent_head, current_head)
+    committed_paths = {line.strip().replace("\\", "/") for line in committed.stdout.splitlines() if line.strip()}
+    if committed.returncode != 0 or not committed_paths or not committed_paths <= verified_paths:
+        return None
+
+    receipt_data = {
+        "schema_version": 2,
+        "kind": "REQUESTED_DELIVERY_COMMIT",
+        "task_id": task_id,
+        "plan_sha256": plan.get("plan_sha256"),
+        "task_base_head": base_head,
+        "parent_head": parent_head,
+        "checkpoint_head": current_head,
+        "checkpoint_paths": sorted(committed_paths),
+        "created_at": utc_now(),
+    }
+    receipt_data["receipt_sha256"] = compute_receipt_sha(receipt_data)
+    cdir = checkpoints_dir(tdir)
+    cdir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(cdir / f"{current_head}.json", receipt_data)
+    plan["accepted_checkpoint_head"] = current_head
+    heads = list(plan.get("accepted_checkpoint_heads") or [])
+    if current_head not in heads:
+        heads.append(current_head)
+    plan["accepted_checkpoint_heads"] = heads
+    return current_head
+
+
 def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
     tdir = task_dir(repo, task_id)
     plan_f = tdir / "plan.json"

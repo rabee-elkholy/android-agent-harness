@@ -951,13 +951,24 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertTrue(all(entry["state"] == REVIEW_DISPATCHED for entry in ledger["reviewers"].values()))
 
     def test_AUDIT_005b_trusted_dispatch_rejects_manual_receipt(self) -> None:
-        task_id, reviewers, _, _ = self._setup_dispatch_state()
-        with self.assertRaises(ValidationError):
-            phase_review.main([
+        # The refusal is a clean CLI failure with guidance, not a traceback (seen live on Antigravity).
+        import contextlib
+        import io
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = phase_review.main([
                 "dispatch", "--repo", str(self.repo), "--task-id", task_id,
                 "--phase-id", "p1", "--host", "antigravity",
                 *(argument for reviewer in reviewers for argument in ("--reviewer", reviewer)),
             ])
+        self.assertEqual(1, code)
+        self.assertIn("[FAIL]", err.getvalue())
+        self.assertIn("invoke_subagent", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+        ok, _, ledger = load_phase_ledger(task_dir(self.repo, task_id), "p1", expected_run_id=meta["phase_review_run_id"])
+        self.assertTrue(ok)
+        self.assertFalse(any(entry["state"] == REVIEW_DISPATCHED for entry in ledger["reviewers"].values()))
 
     def test_AUDIT_001b_public_checkpoint_rejects_unchanged_dirty_expected_file(self) -> None:
         asset = self.repo / "app/src/main/assets/preexisting.txt"

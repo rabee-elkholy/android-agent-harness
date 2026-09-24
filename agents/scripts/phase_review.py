@@ -1319,6 +1319,14 @@ def format_phase_provenance_section(repo: Path, task_id: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except ValidationError as exc:
+        print(f"[FAIL] {exc}", file=sys.stderr)
+        return 1
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -1362,7 +1370,10 @@ def main(argv: list[str] | None = None) -> int:
             raise ValidationError(f"no active phase review run found for phase '{args.phase_id}'")
         run_host = str(read_json(run_file).get("review_host") or "")
         if has_trusted_review_source(run_host):
-            raise ValidationError("trusted host dispatch must be recorded by its native pre-tool hook")
+            raise ValidationError(
+                "trusted host dispatch must be recorded by its native pre-tool hook: launch the routed "
+                "phase reviewers with invoke_subagent instead of recording dispatch manually"
+            )
         ledger = record_phase_dispatch_batch(repo, args.task_id, args.phase_id, args.reviewer, host=args.host)
         print(f"PHASE_REVIEW_DISPATCH_RECORDED={ledger['run_id']}")
         print("INDEPENDENT_EXECUTION_VERIFIED=false")
