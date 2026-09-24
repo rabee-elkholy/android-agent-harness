@@ -470,5 +470,139 @@ class ProjectIntelligenceTests(unittest.TestCase):
             self.assertIn("compose", app_profiles[0]["ui_toolkits"])
 
 
+class InstructionConflictResolutionTests(unittest.TestCase):
+    """INSTRUCT-CONFLICT-001..006 covering deterministic polarity conflicts."""
+
+    def test_INSTRUCT_CONFLICT_001_unrelated_positive_negative_no_conflict(self) -> None:
+        from task_context import _detect_instruction_conflict
+        instructions = [
+            {
+                "id": "inst-synthetic",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "Never use synthetic view accessors.",
+            },
+            {
+                "id": "inst-compose",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "New screens must use Jetpack Compose.",
+            },
+        ]
+        conflict = _detect_instruction_conflict(instructions)
+        self.assertIsNone(conflict)
+
+    def test_INSTRUCT_CONFLICT_002_shared_subject_positive_negative_conflicts(self) -> None:
+        from task_context import _detect_instruction_conflict
+        instructions = [
+            {
+                "id": "inst-no-retrofit",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "Never use Retrofit.",
+            },
+            {
+                "id": "inst-use-retrofit",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "Networking must use Retrofit.",
+            },
+        ]
+        conflict = _detect_instruction_conflict(instructions)
+        self.assertIsNotNone(conflict)
+        self.assertIn("Conflicting", conflict)
+
+    def test_INSTRUCT_CONFLICT_003_mvi_vs_mvvm_architecture_conflict(self) -> None:
+        from task_context import _detect_instruction_conflict
+        instructions = [
+            {
+                "id": "inst-mvi",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "Architecture must use MVI.",
+            },
+            {
+                "id": "inst-mvvm",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "Architecture must use MVVM.",
+            },
+        ]
+        conflict = _detect_instruction_conflict(instructions)
+        self.assertIsNotNone(conflict)
+        self.assertIn("architecture", conflict.lower())
+
+    def test_INSTRUCT_CONFLICT_004_explicit_conflict_with_authoritative(self) -> None:
+        from task_context import _detect_instruction_conflict
+        instructions = [
+            {
+                "id": "inst-a",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "RECOMMENDATION",
+                "text": "Use Koin for dependency injection.",
+                "conflict_with": "inst-b",
+            },
+            {
+                "id": "inst-b",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "RECOMMENDATION",
+                "text": "Use Dagger Hilt for dependency injection.",
+            },
+        ]
+        conflict = _detect_instruction_conflict(instructions)
+        self.assertIsNotNone(conflict)
+        self.assertIn("Explicitly conflicting", conflict)
+
+    def test_INSTRUCT_CONFLICT_005_instructions_in_different_scopes_no_false_conflict(self) -> None:
+        from task_context import _detect_instruction_conflict
+        instructions = [
+            {
+                "id": "inst-login",
+                "status": "ACTIVE",
+                "scope": {"kind": "MODULE", "value": ":feature:login"},
+                "strength": "REQUIREMENT",
+                "text": "Never use Retrofit.",
+            },
+            {
+                "id": "inst-home",
+                "status": "ACTIVE",
+                "scope": {"kind": "MODULE", "value": ":feature:home"},
+                "strength": "REQUIREMENT",
+                "text": "Networking must use Retrofit.",
+            },
+        ]
+        conflict = _detect_instruction_conflict(instructions)
+        self.assertIsNone(conflict)
+
+    def test_INSTRUCT_CONFLICT_006_superseded_instruction_does_not_conflict(self) -> None:
+        from task_context import _detect_instruction_conflict
+        instructions = [
+            {
+                "id": "inst-old",
+                "status": "SUPERSEDED",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "Never use Retrofit.",
+            },
+            {
+                "id": "inst-new",
+                "status": "ACTIVE",
+                "scope": {"kind": "GLOBAL", "value": "*"},
+                "strength": "REQUIREMENT",
+                "text": "Networking must use Retrofit.",
+            },
+        ]
+        conflict = _detect_instruction_conflict(instructions)
+        self.assertIsNone(conflict)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

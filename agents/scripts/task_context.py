@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -272,16 +273,45 @@ def _instruction_matches_node(
     return False
 
 
+INSTRUCTION_STOPWORDS = {
+    "never", "do", "not", "dont", "must", "use", "using", "uses", "always",
+    "require", "required", "mandatory", "avoid", "no", "new", "existing",
+    "screen", "screens", "code", "should", "the", "a", "an", "in", "for",
+    "to", "of", "and", "or", "with", "all", "is", "are", "be"
+}
+
+
+def _instruction_subject_tokens(text: str) -> set[str]:
+    cleaned = re.sub(r"[^a-zA-Z0-9_\s]", " ", text.lower())
+    tokens = {t.strip() for t in cleaned.split() if t.strip()}
+    return tokens - INSTRUCTION_STOPWORDS
+
+
 def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | None:
-    for i in range(len(instructions)):
-        for j in range(i + 1, len(instructions)):
-            i1 = instructions[i]
-            i2 = instructions[j]
+    active_instructions = [
+        inst for inst in instructions
+        if str(inst.get("status", "ACTIVE") or "ACTIVE").upper() == "ACTIVE"
+    ]
+    for i in range(len(active_instructions)):
+        for j in range(i + 1, len(active_instructions)):
+            i1 = active_instructions[i]
+            i2 = active_instructions[j]
+
+            # 1. Explicit conflict_with (authoritative across any strength/scope)
+            if i1.get("conflict_with") == i2.get("id") or i2.get("conflict_with") == i1.get("id"):
+                return f"Explicitly conflicting instructions '{i1.get('id')}' and '{i2.get('id')}'."
+
             s1 = i1.get("scope") or {}
             s2 = i2.get("scope") or {}
             if s1.get("kind") == s2.get("kind") and s1.get("value") == s2.get("value"):
                 t1 = i1.get("text", "").lower()
                 t2 = i2.get("text", "").lower()
+
+                # 2. Architecture structured conflict (e.g. MVI vs MVVM)
+                if ("mvi" in t1 and "mvvm" in t2) or ("mvvm" in t1 and "mvi" in t2):
+                    return f"Conflicting developer architecture instructions '{i1.get('id')}' and '{i2.get('id')}' in scope {s1.get('kind')}:{s1.get('value')}."
+
+                # 3. Positive vs negative polarity conflict ONLY if they share a meaningful technical subject
                 negatives = ("never", "do not", "must not", "don't", "avoid", "no ")
                 positives = ("always", "must use", "require", "mandatory", "use ")
                 has_neg_1 = any(n in t1 for n in negatives)
@@ -289,12 +319,12 @@ def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | No
                 has_neg_2 = any(n in t2 for n in negatives)
                 has_pos_2 = any(p in t2 for p in positives)
                 if (has_neg_1 and has_pos_2) or (has_pos_1 and has_neg_2):
-                    return f"Conflicting developer instructions '{i1.get('id')}' and '{i2.get('id')}' in same scope {s1.get('kind')}:{s1.get('value')}."
-                if i1.get("strength") == "REQUIREMENT" and i2.get("strength") == "REQUIREMENT" and t1 != t2:
-                    if ("mvi" in t1 and "mvvm" in t2) or ("mvvm" in t1 and "mvi" in t2):
-                        return f"Conflicting developer architecture instructions '{i1.get('id')}' and '{i2.get('id')}' in scope {s1.get('kind')}:{s1.get('value')}."
-                    if i1.get("conflict_with") == i2.get("id") or i2.get("conflict_with") == i1.get("id"):
-                        return f"Explicitly conflicting instructions '{i1.get('id')}' and '{i2.get('id')}'."
+                    subj1 = _instruction_subject_tokens(t1)
+                    subj2 = _instruction_subject_tokens(t2)
+                    shared = subj1 & subj2
+                    if shared:
+                        return f"Conflicting developer instructions '{i1.get('id')}' and '{i2.get('id')}' in same scope {s1.get('kind')}:{s1.get('value')} regarding {', '.join(sorted(shared))}."
+
     return None
 
 
