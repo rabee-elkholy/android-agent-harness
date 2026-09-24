@@ -458,6 +458,8 @@ def check_material_drift(
         unplanned_surfaces.remove("COROUTINES")
     if expected_surfaces & CODE_SURFACES:
         unplanned_surfaces -= COMPANION_SURFACES
+    elif expected_surfaces & {"LOCALIZATION", "RESOURCE_UI", "XML_UI"}:
+        unplanned_surfaces -= {"LOCALIZATION", "RESOURCE_UI", "XML_UI"}
 
     outcome = str(plan.get("requested_outcome") or "").lower()
     for surface, keywords in OUTCOME_SURFACE_KEYWORDS.items():

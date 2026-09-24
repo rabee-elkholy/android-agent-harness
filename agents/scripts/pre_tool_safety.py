@@ -1556,8 +1556,8 @@ def main() -> None:
             if all_temp:
                 emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
                 return
-            allowed, reason = file_mutation_allowed(REPO)
-            emit("allow" if allowed else "deny", reason, tool=name, reason_code="FILE_MUTATION_ALLOWED" if allowed else "FILE_MUTATION_GUARD")
+            allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
+            emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)
             return
         if name == "run_command":
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")

@@ -606,13 +606,14 @@ def classify(
         known = {item.rel_posix for item in all_changes}
         for relative in candidate_paths:
             candidate = (root / relative).resolve()
-            if not candidate.is_file() or not candidate.is_relative_to(root):
+            if not candidate.is_relative_to(root):
                 continue
+            exists = candidate.is_file()
             rel = candidate.relative_to(root).as_posix()
             if rel not in known and is_delivery_relevant(rel):
                 # Context discovery asks what a clean target could affect.
                 # Reuse the central classifier with its current file content.
-                all_changes.append(ChangedFile(candidate, rel, "CANDIDATE", exists=True, is_untracked=True))
+                all_changes.append(ChangedFile(candidate, rel, "CANDIDATE", exists=exists, is_untracked=True))
                 known.add(rel)
 
     if task_changes is None and task_id:

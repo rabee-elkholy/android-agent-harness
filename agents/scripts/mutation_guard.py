@@ -247,13 +247,78 @@ def active_plan(repo: Path | str) -> dict:
     raise ValidationError(f"cannot read JSON artifact {active_file}: No active task found")
 
 
-def file_mutation_allowed(repo: Path) -> tuple[bool, str]:
+def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple[bool, str, str]:
+    root = repo.resolve()
     try:
-        plan = active_plan(repo)
+        plan = active_plan(root)
         require_mutation(plan)
     except ValidationError as exc:
-        return False, str(exc)
-    return True, f"mutation authorized by approved plan {plan.get('plan_id')}"
+        return False, str(exc), "FILE_MUTATION_GUARD"
+
+    if not targets:
+        return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
+
+    external_writes = set(plan.get("external_writes") or [])
+    expected_files = set(plan.get("expected_files") or [])
+    expected_surfaces = set(plan.get("expected_surfaces") or [])
+
+    if not expected_files and not expected_surfaces:
+        return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
+
+    from plan_authority import check_material_drift, changed_modules
+    from change_classifier import classify
+
+    for target in targets:
+        target_str = str(target or "").strip()
+        if not target_str:
+            continue
+        try:
+            target_path = Path(target_str)
+            if not target_path.is_absolute():
+                target_path = (root / target_path).resolve()
+            else:
+                target_path = target_path.resolve()
+            if not target_path.is_relative_to(root):
+                return False, f"target {target_str} is outside repository root", "PROTECTED_PATH"
+            rel_posix = target_path.relative_to(root).as_posix()
+        except Exception as exc:
+            return False, f"invalid target path {target_str}: {exc}", "PROTECTED_PATH"
+
+        if rel_posix in external_writes:
+            continue
+
+        try:
+            candidate_res = classify(
+                root,
+                task_changes=[{"path": rel_posix}],
+                candidate_paths=[rel_posix],
+                progress=False,
+            )
+            surfaces = candidate_res.get("surfaces") or []
+        except Exception:
+            surfaces = ["UNKNOWN"]
+
+        try:
+            modules = changed_modules(root, {"task_changes": [{"path": rel_posix}]})
+            if modules == [":"] and (rel_posix.startswith("app/") or rel_posix == "app") and ":app" in expected_modules:
+                modules = [":app"]
+        except Exception:
+            modules = [":app"]
+
+        drift = check_material_drift(
+            plan,
+            surfaces,
+            modules,
+            actual_files=[rel_posix],
+        )
+        if drift:
+            return (
+                False,
+                f"Write target '{rel_posix}' causes material scope drift: {', '.join(drift)}. Plan reconciliation and revised approval required.",
+                "SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL",
+            )
+
+    return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
 
 
 def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:

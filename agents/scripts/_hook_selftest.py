@@ -46,7 +46,16 @@ class HookTests(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         return json.loads(proc.stdout)
 
-    def activate(self, status: str = "IMPLEMENTING", *, external_writes: list[str] | None = None) -> None:
+    def activate(
+        self,
+        status: str = "IMPLEMENTING",
+        *,
+        external_writes: list[str] | None = None,
+        expected_files: list[str] | None = None,
+        expected_surfaces: list[str] | None = None,
+        expected_modules: list[str] | None = None,
+        test_strategy: str | None = None,
+    ) -> None:
         task = self.state / "tasks/task-one"
         task.mkdir(parents=True, exist_ok=True)
         plan = {
@@ -54,6 +63,14 @@ class HookTests(unittest.TestCase):
             "approval": {"single_use_nonce": "nonce"},
             "external_writes": external_writes or [],
         }
+        if expected_files is not None:
+            plan["expected_files"] = expected_files
+        if expected_surfaces is not None:
+            plan["expected_surfaces"] = expected_surfaces
+        if expected_modules is not None:
+            plan["expected_modules"] = expected_modules
+        if test_strategy is not None:
+            plan["test_strategy"] = test_strategy
         if status == "READY_FOR_DELIVERY":
             manifest = build_manifest(self.repo)
             plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
@@ -101,6 +118,87 @@ class HookTests(unittest.TestCase):
         # Checked-in source files (even if containing 'generated') are allowed
         res3 = self.call("write_to_file", {"TargetFile": "app/src/main/generated/User.kt"})
         self.assertEqual("allow", res3["decision"])
+
+    def test_MUTATION_SCOPE_001_approved_strings_xml_allowed(self):
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml"],
+            expected_surfaces=["LOCALIZATION"],
+            expected_modules=[":app"],
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/main/res/values/strings.xml"})
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("FILE_MUTATION_ALLOWED", res.get("reason_code"))
+
+    def test_MUTATION_SCOPE_002_unrelated_mainactivity_denied(self):
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml"],
+            expected_surfaces=["LOCALIZATION"],
+            expected_modules=[":app"],
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/main/kotlin/com/example/MainActivity.kt"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
+
+    def test_MUTATION_SCOPE_003_test_companion_allowed_when_test_strategy_permits(self):
+        self.activate(
+            expected_files=["app/src/main/kotlin/com/example/Feature.kt"],
+            expected_surfaces=["BUSINESS_LOGIC"],
+            expected_modules=[":app"],
+            test_strategy="ADD_UNIT_TESTS",
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/test/kotlin/com/example/FeatureTest.kt"})
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("FILE_MUTATION_ALLOWED", res.get("reason_code"))
+
+    def test_MUTATION_SCOPE_004_protected_path_denial_unchanged(self):
+        self.activate(
+            expected_files=["app/src/main/kotlin/com/example/Feature.kt"],
+            expected_surfaces=["BUSINESS_LOGIC"],
+            expected_modules=[":app"],
+        )
+        res = self.call("write_to_file", {"TargetFile": ".agents/state/config.json"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("PROTECTED_PATH", res.get("reason_code"))
+
+    def test_MUTATION_SCOPE_005_pre_approval_write_denied(self):
+        self.activate(
+            status="AWAITING_DEVELOPER_APPROVAL",
+            expected_files=["app/src/main/kotlin/com/example/Feature.kt"],
+            expected_surfaces=["BUSINESS_LOGIC"],
+            expected_modules=[":app"],
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/main/kotlin/com/example/Feature.kt"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("FILE_MUTATION_GUARD", res.get("reason_code"))
+
+    def test_MUTATION_SCOPE_006_new_module_or_sensitive_surface_denied(self):
+        self.activate(
+            expected_files=["app/src/main/kotlin/com/example/Feature.kt"],
+            expected_surfaces=["BUSINESS_LOGIC"],
+            expected_modules=[":app"],
+        )
+        res_mod = self.call("write_to_file", {"TargetFile": "feature/src/main/kotlin/com/example/Other.kt"})
+        self.assertEqual("deny", res_mod["decision"])
+        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res_mod.get("reason_code"))
+
+    def test_MUTATION_SCOPE_007_revised_approval_allows_expanded_target(self):
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml"],
+            expected_surfaces=["LOCALIZATION"],
+            expected_modules=[":app"],
+        )
+        res_before = self.call("write_to_file", {"TargetFile": "app/src/main/kotlin/com/example/MainActivity.kt"})
+        self.assertEqual("deny", res_before["decision"])
+        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res_before.get("reason_code"))
+
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml", "app/src/main/kotlin/com/example/MainActivity.kt"],
+            expected_surfaces=["LOCALIZATION", "BUSINESS_LOGIC"],
+            expected_modules=[":app"],
+        )
+        res_after = self.call("write_to_file", {"TargetFile": "app/src/main/kotlin/com/example/MainActivity.kt"})
+        self.assertEqual("allow", res_after["decision"])
+        self.assertEqual("FILE_MUTATION_ALLOWED", res_after.get("reason_code"))
 
     def test_verification_reviewer_roster_is_exact(self):
         self.activate("VERIFYING")
