@@ -32,6 +32,34 @@ ALLOWED_PRODUCERS = {
     "mobile_validation_skip": {"developer_approval"},
 }
 
+RED_LOGIC_SURFACES = {"BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE"}
+RED_PRESENTATIONAL_SURFACES = {"DOCS", "LOCALIZATION", "RESOURCE_UI"}
+ALTERNATE_REPRODUCTION_KINDS = ("manual_repro", "device_repro", "log_repro")
+
+
+def bug_requires_executable_red(plan: dict, surfaces, *, alternate_reproduction: bool) -> bool:
+    """Single rule for whether a BUG task must carry a failing-test RED reproduction."""
+    if str(plan.get("task_kind") or plan.get("kind") or "").upper() != "BUG":
+        return False
+    surface_set = set(surfaces or [])
+    # A presentational-only defect (typo, colour, doc) has no failing unit test to capture.
+    if surface_set and surface_set <= RED_PRESENTATIONAL_SURFACES:
+        return False
+    strategy = plan.get("test_strategy")
+    declared_no_tests = isinstance(strategy, str) and strategy.strip().lower() in ("none", "")
+    return not (declared_no_tests and (alternate_reproduction or not surface_set & RED_LOGIC_SURFACES))
+
+
+def alternate_reproduction_recorded(task_directory: Path) -> bool:
+    path = task_directory / "debug-evidence.json"
+    if not path.is_file():
+        return False
+    try:
+        entries = read_json(path).get("entries") or []
+    except Exception:
+        return False
+    return any(str((e or {}).get("kind") or "").lower() in ALTERNATE_REPRODUCTION_KINDS for e in entries if isinstance(e, dict))
+
 
 def _configured_project_kind() -> str:
     try:
@@ -505,7 +533,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 c = read_json(debug_ev_path)
                 for e in c.get("entries", []):
                     kind = str(e.get("kind") or "").lower()
-                    if kind in ("manual_repro", "device_repro", "log_repro"):
+                    if kind in ALTERNATE_REPRODUCTION_KINDS:
                         alternate_reproduction = True
                         repro_classes.add(kind.upper())
                     elif kind in ("failing_test", "test_failure"):
@@ -577,7 +605,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 reasons.append(b_err)
         elif has_executable_red:
             checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present and resolved for BUG task"})
-        elif plan.get("test_strategy") in ("none", "") and (alternate_reproduction or not any(s in ("BUSINESS_LOGIC", "ROOM_SCHEMA", "PERSISTENCE") for s in (policy.get("surfaces") or []))):
+        elif not bug_requires_executable_red(plan, policy.get("surfaces") or [], alternate_reproduction=alternate_reproduction):
             checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable test-bound RED reproduction exempted (non-code surface or alternate reproduction declared)"})
         else:
             err_msg = "missing executable RED test failure evidence: applicable BUG task requires bound RED reproduction/failing-test evidence before fix"

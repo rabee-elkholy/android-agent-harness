@@ -32,7 +32,7 @@ from _vnext_common import (  # noqa: E402
     validate_repo_path_containment,
 )
 from _variants import resolve_assemble_task  # noqa: E402
-from change_classifier import classify, is_documentation_path  # noqa: E402
+from change_classifier import PRESENTATIONAL_ASSET_EXTENSIONS, classify, is_documentation_path  # noqa: E402
 from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline  # noqa: E402
 from final_verifier import verify  # noqa: E402
 from plan_authority import (  # noqa: E402
@@ -558,9 +558,14 @@ def is_architecture_neutral_path(path: str) -> bool:
         return False
     if "/res/navigation" in norm or norm.startswith("res/navigation"):
         return False
-    if "/res/" in norm or norm.startswith("res/"):
-        return True
-    if ("/assets/" in norm or norm.startswith("assets/")) and norm.endswith((".png", ".webp", ".jpg", ".jpeg", ".svg", ".gif")):
+    if "/res/xml/" in f"/{norm}":
+        # Behavioural platform config (network security, file providers, backup rules).
+        return False
+    framed = f"/{norm}"
+    if "/res/raw/" in framed or "/assets/" in framed:
+        # Runtime data locations: only visual media is presentational.
+        return Path(norm).suffix in PRESENTATIONAL_ASSET_EXTENSIONS
+    if "/res/" in framed:
         return True
     return False
 
@@ -1058,6 +1063,16 @@ def _build_and_save_plan(
         disc_receipt = load_latest_discovery_receipt(repo)
     except Exception:
         disc_receipt = None
+
+    explicit_targets = set(architecture_scope_files)
+    explicit_scope = str(getattr(args, "architecture_target_scope", "") or "").replace("\\", "/").strip().strip("/")
+    if disc_receipt and (explicit_targets or explicit_scope):
+        # An explicit target outranks whatever was queried last; only a receipt
+        # about that target may become this task's discovery provenance.
+        receipt_paths = {str(p).replace("\\", "/").strip("/") for p in disc_receipt.get("resolved_paths") or []}
+        receipt_paths.add(str((disc_receipt.get("query") or {}).get("value") or "").replace("\\", "/").strip("/"))
+        if not (receipt_paths & explicit_targets) and not (explicit_scope and explicit_scope in receipt_paths):
+            disc_receipt = None
 
     if disc_receipt:
         fresh, fresh_msg = check_discovery_freshness(repo, disc_receipt)
@@ -2306,11 +2321,22 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
     if not needs_tests:
         return True, "NOT_REQUIRED"
     test_file = phase_dir / "unit_tests.json"
+    from phase_review import compute_phase_delta_sha256
+    evidence_identity = canonical_sha256({
+        "phase_delta_sha256": compute_phase_delta_sha256(phase_dir.name, list(phase_changes or [])),
+        "modules": sorted(str(m) for m in modules),
+    })
     if test_file.is_file():
         data = read_json(test_file)
-        if str(data.get("status") or "").upper() == "PASS":
+        recorded_identity = data.get("evidence_identity_sha256")
+        # Evidence this checkpoint recorded itself is reusable only as a PASS for the
+        # identical phase delta; a recorded failure or stale content is re-evaluated.
+        if recorded_identity is None:
+            if str(data.get("status") or "").upper() == "PASS":
+                return True, "PASS"
+            return False, str(data.get("detail") or "unit test failure in phase evidence")
+        if recorded_identity == evidence_identity and str(data.get("status") or "").upper() == "PASS":
             return True, "PASS"
-        return False, str(data.get("detail") or "unit test failure in phase evidence")
 
     gradle_wrapper = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
     run_gradle_fn = None
@@ -2342,10 +2368,7 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
         is_mock = hasattr(run_gradle_fn, "assert_called") or hasattr(run_gradle_fn, "side_effect") or hasattr(run_gradle_fn, "return_value")
         reports_before = None if is_mock else report_signatures(repo, task)
         outcome: dict = {}
-        try:
-            res = run_gradle_fn([task], cwd=repo, outcome=outcome)
-        except TypeError:
-            res = run_gradle_fn([task], cwd=repo)
+        res = run_gradle_fn([task], cwd=repo, outcome=outcome)
 
         ok, detail, data = evaluate_unit_test_execution(
             repo=repo,
@@ -2356,9 +2379,10 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
         )
         if not ok:
             atomic_write_json(test_file, {
+                **data,
                 "status": "FAIL",
                 "detail": detail,
-                **data,
+                "evidence_identity_sha256": evidence_identity,
             })
             return False, f"unit tests failed for module '{m}': {detail}"
 
@@ -2368,6 +2392,7 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
 
     aggregated_evidence["baseline_ignored"] = total_ignored
     aggregated_evidence["total_failed"] = total_failed
+    aggregated_evidence["evidence_identity_sha256"] = evidence_identity
     atomic_write_json(test_file, aggregated_evidence)
     return True, "PASS"
 
@@ -2806,9 +2831,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     "inputs": {"repo": ".", "task_id": task_id},
                     "expected": {"success_exit_codes": [0]},
                 }
-        is_bug = str(plan.get("task_kind") or "").upper() == "BUG"
+        from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
         red_evidence_file = tdir / "red-evidence.json"
-        if is_bug and not red_evidence_file.is_file():
+        if not red_evidence_file.is_file() and bug_requires_executable_red(
+            plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(tdir),
+        ):
             return {
                 "code": "CAPTURE_RED_EVIDENCE",
                 "kind": "HARNESS_COMMAND",
@@ -3225,7 +3252,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
                 "expected": {"success_exit_codes": [0]},
             }
-        return {
+        action = {
             "code": "IMPLEMENT_APPROVED_SCOPE",
             "kind": "MODEL_ACTION",
             "command": "",
@@ -3234,6 +3261,17 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             "inputs": {"repo": ".", "task_id": task_id},
             "expected": {},
         }
+        try:
+            task_manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"))
+            has_task_changes = bool(task_manifest.get("task_changes") if "task_changes" in task_manifest else task_manifest.get("changes"))
+        except Exception:
+            has_task_changes = False
+        if has_task_changes:
+            # Only the model knows when the approved change is finished; hand it the exit.
+            done_command = f"python .agents/harness.py task prepare-verification {identity} --host {run_host}"
+            action["reason"] = f"Continue the approved change. When it is complete, run: {done_command}"
+            action["on_complete"] = {"code": "PREPARE_VERIFICATION", "kind": "HARNESS_COMMAND", "command": done_command}
+        return action
 
     if state == "VERIFYING":
         tdir = task_dir(repo, task_id)
@@ -3300,9 +3338,32 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             except Exception:
                 return False
 
+        def failed_gate_action(name: str) -> dict | None:
+            # A deterministic FAIL on this frozen change set will fail again if re-run;
+            # the fix happens in IMPLEMENTING under the same approval. ENV is retried.
+            try:
+                rec = store.read(snapshot, run_id, name)
+            except Exception:
+                return None
+            if rec.get("status") != "FAIL" or rec.get("change_set_sha256") != change_set:
+                return None
+            detail = str((rec.get("evidence") or {}).get("detail") or "see gate output")
+            return {
+                "code": "RESUME_IMPLEMENTATION",
+                "kind": "HARNESS_COMMAND",
+                "command": f"python .agents/harness.py task resume --task-id {task_id}",
+                "blocking": True,
+                "reason": f"The {name} gate failed on the frozen change set: {detail}. Resume implementation, fix it within the approved scope, then prepare verification again.",
+                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "failed_gate": name},
+                "expected": {"success_statuses": ["IMPLEMENTING"]},
+            }
+
         # 1. Preflight
         if "preflight" in policy_gates or not policy_gates:
             if not has_pass_evidence("preflight"):
+                failed = failed_gate_action("preflight")
+                if failed:
+                    return failed
                 return {
                     "code": "RUN_PREFLIGHT",
                     "kind": "HARNESS_COMMAND",
@@ -3321,6 +3382,9 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         ]
         for g_name, g_cmd, g_code in specialized:
             if g_name in policy_gates and not has_pass_evidence(g_name):
+                failed = failed_gate_action(g_name)
+                if failed:
+                    return failed
                 return {
                     "code": g_code,
                     "kind": "HARNESS_COMMAND",
@@ -3334,6 +3398,9 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         # 3. Unit tests
         if "unit_tests" in policy_gates:
             if not has_pass_evidence("unit_tests"):
+                failed = failed_gate_action("unit_tests")
+                if failed:
+                    return failed
                 return {
                     "code": "RUN_UNIT_TESTS",
                     "kind": "HARNESS_COMMAND",
@@ -3688,6 +3755,9 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         assemble_required = ("assemble" in policy_gates) or bool(policy.get("assemble_required"))
         if assemble_required:
             if not has_pass_evidence("assemble"):
+                failed = failed_gate_action("assemble")
+                if failed:
+                    return failed
                 flavor = policy.get("flavor") or None
                 assemble_task = resolve_assemble_task(repo, flavor=flavor)
                 return {

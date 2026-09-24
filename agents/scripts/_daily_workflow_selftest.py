@@ -2617,6 +2617,99 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertEqual("HARNESS_COMMAND", act["kind"])
         self.assertIn("--capture-red", act["command"])
 
+    def _bug_task_next_action(self, task_id: str, *, surfaces: str, files: str, test_strategy: str | None) -> dict:
+        ns = dict(
+            repo=str(self.repo), task_id=task_id, outcome="Bug fix task", kind="BUG",
+            planning_depth="BOUNDED", expected_surfaces=surfaces, expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope=files,
+            architecture_target_family=None, expected_files=files, phases=None, force=True,
+        )
+        if test_strategy is not None:
+            ns["test_strategy"] = test_strategy
+        draft(argparse.Namespace(**ns))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation",
+            proof_reference="approved bug fix", enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        return resolve_next_action(self.repo, task_id, plan)
+
+    def test_ROUTE_CMD_011b_presentational_bug_does_not_demand_failing_unit_test(self) -> None:
+        """A strings-only BUG cannot produce a failing unit test; the router must not loop on capture-red."""
+        write_file(self.repo / "app/src/main/res/values/strings.xml", '<resources><string name="a">Tpyo</string></resources>\n')
+        for task_id, strategy in (("route-cmd-011b-default", None), ("route-cmd-011b-none", "NONE")):
+            act = self._bug_task_next_action(
+                task_id, surfaces="LOCALIZATION", files="app/src/main/res/values/strings.xml", test_strategy=strategy,
+            )
+            self.assertNotEqual("CAPTURE_RED_EVIDENCE", act["code"], task_id)
+            from workflow import cancel
+            cancel(argparse.Namespace(repo=str(self.repo), task_id=task_id, reason="next case"))
+
+    def test_ROUTE_CMD_011c_router_and_verifier_share_red_exemption(self) -> None:
+        """The CLI stores test strategy upper-case; both authorities must honour a declared NONE."""
+        from final_verifier import bug_requires_executable_red
+        plan = {"task_kind": "BUG", "test_strategy": "NONE"}
+        self.assertFalse(bug_requires_executable_red(plan, ["COMPOSE_UI"], alternate_reproduction=False))
+        self.assertTrue(bug_requires_executable_red(plan, ["BUSINESS_LOGIC"], alternate_reproduction=False))
+        self.assertFalse(bug_requires_executable_red(plan, ["BUSINESS_LOGIC"], alternate_reproduction=True))
+        self.assertTrue(bug_requires_executable_red({"task_kind": "BUG", "test_strategy": "Policy-selected relevant tests"}, ["COMPOSE_UI"], alternate_reproduction=False))
+        self.assertFalse(bug_requires_executable_red({"task_kind": "BUG"}, ["LOCALIZATION", "RESOURCE_UI"], alternate_reproduction=False))
+        self.assertFalse(bug_requires_executable_red({"task_kind": "FEATURE"}, ["BUSINESS_LOGIC"], alternate_reproduction=False))
+
+        # Router: a declared NONE strategy on logic still needs RED until an alternate reproduction is recorded.
+        act = self._bug_task_next_action(
+            "route-cmd-011c", surfaces="BUSINESS_LOGIC", files="app/src/main/kotlin/com/example/MainActivity.kt", test_strategy="NONE",
+        )
+        self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
+        atomic_write_json(task_dir(self.repo, "route-cmd-011c") / "debug-evidence.json", {
+            "schema_version": 1, "task_id": "route-cmd-011c",
+            "entries": [{"kind": "manual_repro", "detail": "crash reproduced by tapping save twice"}],
+        })
+        plan = read_json(task_dir(self.repo, "route-cmd-011c") / "plan.json")
+        self.assertNotEqual("CAPTURE_RED_EVIDENCE", resolve_next_action(self.repo, "route-cmd-011c", plan)["code"])
+
+    def test_ROUTE_CMD_011e_approved_unknown_runtime_asset_reaches_verification(self) -> None:
+        """A task that names an unclassifiable runtime asset must be able to finish once approved."""
+        rel = "app/src/main/assets/config.json"
+        write_file(self.repo / rel, '{"flag": false}\n')
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id="route-cmd-011e", outcome="Enable remote flag default", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family=None,
+            expected_files=rel, phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id="route-cmd-011e", source="conversation",
+            proof_reference="approved config change", enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id="route-cmd-011e"))
+        write_file(self.repo / rel, '{"flag": true}\n')
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="route-cmd-011e"))
+        current = read_json(task_dir(self.repo, "route-cmd-011e") / "current-run.json")
+        policy = read_json(Path(current["policy"]))
+        self.assertEqual("APPROVED_PLAN_FILES", policy.get("unknown_resolution"))
+        self.assertNotEqual("T0_TRIVIAL", policy["risk_tier"])
+        self.assertTrue(policy["reviewers"])
+
+    def test_ROUTE_CMD_011d_implementing_with_changes_exposes_completion_command(self) -> None:
+        """A non-phased task must expose how to leave IMPLEMENTING once the model finishes the change."""
+        write_file(self.repo / "app/src/main/res/values/strings.xml", '<resources><string name="a">A</string></resources>\n')
+        act = self._bug_task_next_action(
+            "route-cmd-011d", surfaces="LOCALIZATION", files="app/src/main/res/values/strings.xml", test_strategy="NONE",
+        )
+        self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act["code"])
+        self.assertNotIn("on_complete", act)
+
+        write_file(self.repo / "app/src/main/res/values/strings.xml", '<resources><string name="a">B</string></resources>\n')
+        plan = read_json(task_dir(self.repo, "route-cmd-011d") / "plan.json")
+        act = resolve_next_action(self.repo, "route-cmd-011d", plan)
+        self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act["code"])
+        done = act.get("on_complete") or {}
+        self.assertEqual("PREPARE_VERIFICATION", done.get("code"))
+        self.assertIn("task prepare-verification --repo . --task-id route-cmd-011d", done.get("command", ""))
+        self.assertIn(done["command"], act["reason"])
+
     def test_ROUTE_CMD_012_material_ambiguity_returns_developer_action(self) -> None:
         """ROUTE-CMD-012: Material ambiguity -> DEVELOPER_ACTION, not guessed script call."""
         task_id = "route-cmd-012"
@@ -6589,6 +6682,46 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         atomic_write_json(state_root(self.repo) / "active-task.json", active)
         return plan, tdir
 
+    def test_ROUTER_GATE_FAIL_001_failed_gate_routes_to_fix_not_rerun(self) -> None:
+        """A deterministic gate FAIL on the frozen change set must not be re-run forever."""
+        from workflow import resume
+        task_id = "router-gate-fail-001"
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 1 }\n")
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Gate failure routing", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="COMPOSE_UI", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        tdir = task_dir(self.repo, task_id)
+        current = read_json(tdir / "current-run.json")
+        manifest = read_json(Path(current["manifest"]))
+        store = EvidenceStore(state_root(self.repo))
+        common = dict(
+            snapshot=manifest["delivery_snapshot_sha256"], run_id=current["run_id"],
+            harness_version=(KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip(),
+            change_set=manifest["change_set_sha256"], name="preflight", producer="preflight_check",
+        )
+        plan = read_json(tdir / "plan.json")
+        self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, plan)["code"])
+
+        # A transient environment failure is simply retried.
+        store.write(status="ENV", evidence={"detail": "gradle daemon crashed"}, **common)
+        self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, plan)["code"])
+
+        # A real failure sends the model back to fix it under the same approval.
+        store.write(status="FAIL", evidence={"detail": "hardcoded string in MainActivity.kt"}, **common)
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("RESUME_IMPLEMENTATION", act["code"])
+        self.assertIn("task resume", act["command"])
+        self.assertIn("hardcoded string in MainActivity.kt", act["reason"])
+        resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("IMPLEMENTING", read_json(tdir / "plan.json")["status"])
+
     def test_ROUTER_COMPLETE_001_reaches_ready_for_delivery_without_loop(self) -> None:
         task_id = "router-comp-001"
         plan, tdir = self._setup_verifying_task_ready_for_complete(task_id)
@@ -6837,7 +6970,19 @@ class ArchitectureNeutralScopeTests(unittest.TestCase):
             architecture_target_family="",
             force=True,
         )
-        # In hybrid project with ambiguous targets and no explicit policy, architecture resolution fails
+        # Kotlin keeps the task out of the architecture-neutral exemption: a contract is
+        # resolved and bound. VM1.kt is an existing file outside every detected family, so
+        # the contract preserves its local code (a UI-family decision is not required).
+        plan = draft(args)
+        contract = plan.get("architecture_contract") or {}
+        self.assertEqual("PRESERVE", contract.get("mode"))
+        self.assertEqual("app/src/main/kotlin/scope1/VM1.kt", contract.get("target_scope"))
+
+        # A new Kotlin file in the same hybrid project still needs the developer's family decision.
+        from workflow import cancel
+        cancel(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        args.task_id = "task-neutral-003-new"
+        args.expected_files = "app/src/main/res/values/strings.xml,app/src/main/kotlin/scope1/NewVm.kt"
         with self.assertRaises(ValidationError) as ctx:
             draft(args)
         self.assertTrue("architecture contract resolution failed" in str(ctx.exception).lower() or "decision_required" in str(ctx.exception).lower())
@@ -6868,6 +7013,54 @@ class ArchitectureNeutralScopeTests(unittest.TestCase):
         with self.assertRaises(ValidationError) as ctx:
             draft(args)
         self.assertTrue("migration" in str(ctx.exception).lower())
+
+
+    def _strings_draft_args(self, task_id: str) -> argparse.Namespace:
+        return argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Update localization string", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="LOCALIZATION", expected_modules=":app",
+            expected_files="app/src/main/res/values/strings.xml", test_strategy="NONE", device_strategy="NONE",
+            risks="", rollback="git checkout", external_write=[], architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="", architecture_target_family="", force=True,
+        )
+
+    def test_PROVENANCE_001_unrelated_discovery_does_not_bind_explicit_target_task(self) -> None:
+        """DEFECT-PROVENANCE-01: an earlier unrelated query must not become the explicit task's provenance."""
+        from task_context import resolve_task_context
+        from workflow import draft
+        prior = resolve_task_context(self.repo, file="app/src/main/kotlin/scope1/VM1.kt")
+        self.assertEqual("RESOLVED", prior["status"])
+        # The unrelated target disappears; its receipt is now stale.
+        (self.repo / "app/src/main/kotlin/scope1/VM1.kt").unlink()
+
+        plan = draft(self._strings_draft_args("task-prov-001"))
+        self.assertEqual(["app/src/main/res/values/strings.xml"], plan.get("expected_files"))
+        provenance = plan.get("discovery_provenance") or {}
+        self.assertNotIn("VM1", json.dumps(provenance))
+        self.assertIsNone(plan.get("task_context_id"))
+
+    def test_PROVENANCE_002_matching_discovery_still_binds_explicit_target_task(self) -> None:
+        from task_context import resolve_task_context
+        from workflow import draft
+        ctx = resolve_task_context(self.repo, file="app/src/main/res/values/strings.xml")
+        self.assertEqual("RESOLVED", ctx["status"])
+        plan = draft(self._strings_draft_args("task-prov-002"))
+        provenance = plan.get("discovery_provenance") or {}
+        self.assertEqual("app/src/main/res/values/strings.xml", provenance.get("primary_target"))
+
+    def test_ARCH_NEUTRAL_005_runtime_data_cannot_claim_exemption_by_label(self) -> None:
+        # Declaring RESOURCE_UI must not exempt arbitrary runtime data from architecture binding.
+        from workflow import is_architecture_neutral_scope
+        for data_file in ("app/src/main/res/raw/config.json", "app/src/main/assets/rules.json", "app/src/main/res/xml/network_security_config.xml"):
+            self.assertFalse(
+                is_architecture_neutral_scope([data_file], {"RESOURCE_UI"}, "EXISTING_CHANGE"),
+                data_file,
+            )
+        for visual in ("app/src/main/res/raw/splash.webp", "app/src/main/res/drawable/ic_logo.png", "app/src/main/res/values/strings.xml"):
+            self.assertTrue(
+                is_architecture_neutral_scope([visual], {"RESOURCE_UI", "LOCALIZATION"}, "EXISTING_CHANGE"),
+                visual,
+            )
 
 
 class AssetClassificationTests(unittest.TestCase):
@@ -6953,6 +7146,104 @@ class AssetClassificationTests(unittest.TestCase):
         pol = review_policy.decide(res, self.repo)
         self.assertNotEqual("T0_TRIVIAL", pol["risk_tier"])
         self.assertEqual("USER_DECISION_REQUIRED", pol["status"])
+
+    def test_ASSET_008_res_raw_config_data_is_not_resource_ui(self) -> None:
+        # res/raw is the other Android runtime-data location; data files there are not visual UI.
+        from change_classifier import classify
+        import review_policy
+        p = self.repo / "app" / "src" / "main" / "res" / "raw" / "config.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"feature_flag": true}', encoding="utf-8")
+        res = classify(self.repo)
+        self.assertNotIn("RESOURCE_UI", res["surfaces"])
+        self.assertIn("UNKNOWN", res["surfaces"])
+        self.assertNotEqual("T0_TRIVIAL", review_policy.decide(res, self.repo)["risk_tier"])
+
+    def _classify_one(self, rel: str, content: bytes = b"x") -> list[str]:
+        from change_classifier import classify
+        p = self.repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+        return classify(self.repo, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False)["surfaces"]
+
+    def test_ASSET_010_presentational_media_is_resource_ui(self) -> None:
+        # Video/audio in res/raw or assets, and store icons under src/, are presentational, not UNKNOWN.
+        for rel in ("app/src/main/res/raw/intro_loop.mp4", "app/src/main/assets/sounds/done.ogg", "app/src/main/ic_launcher-playstore.png"):
+            surfaces = self._classify_one(rel)
+            self.assertIn("RESOURCE_UI", surfaces, rel)
+            self.assertNotIn("UNKNOWN", surfaces, rel)
+
+    def test_ASSET_011_room_exported_schema_is_room_schema(self) -> None:
+        surfaces = self._classify_one("app/schemas/com.example.data.AppDatabase/13.json", b'{"formatVersion": 1}')
+        self.assertIn("ROOM_SCHEMA", surfaces)
+        self.assertNotIn("UNKNOWN", surfaces)
+        # An unrelated JSON file in a schemas-like folder stays fail-safe.
+        self.assertIn("UNKNOWN", self._classify_one("app/src/main/assets/schemas/form.json", b"{}"))
+
+    def test_ASSET_012_dependency_binaries_are_build_config(self) -> None:
+        for rel in ("gradle/wrapper/gradle-wrapper.jar", "app/libs/LocationData-release.aar", "app/libs/vendor.jar"):
+            surfaces = self._classify_one(rel)
+            self.assertIn("BUILD_CONFIG", surfaces, rel)
+            self.assertNotIn("UNKNOWN", surfaces, rel)
+
+    def test_ASSET_013_unknown_file_in_approved_plan_is_resolved_with_review_floor(self) -> None:
+        """Approving a plan that names the UNKNOWN file is the developer's decision; risk never drops below T2."""
+        from change_classifier import classify
+        import review_policy
+        rel = "app/src/main/assets/config.json"
+        p = self.repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"feature_flag": true}', encoding="utf-8")
+        res = classify(self.repo)
+        approved = {"approval": {"single_use_nonce": "n"}, "expected_files": [rel]}
+        pol = review_policy.decide(res, self.repo, plan=approved)
+        self.assertNotEqual("USER_DECISION_REQUIRED", pol["status"])
+        self.assertIn("UNKNOWN", pol["surfaces"])
+        self.assertEqual("T2_FEATURE", pol["risk_tier"])
+        self.assertEqual(["regression-impact-reviewer-agent"], pol["reviewers"])
+        self.assertIn("assemble", pol["gates"])
+        self.assertEqual("APPROVED_PLAN_FILES", pol.get("unknown_resolution"))
+
+    def test_ASSET_014_unknown_file_outside_approval_still_requires_decision(self) -> None:
+        from change_classifier import classify
+        import review_policy
+        rel = "app/src/main/assets/config.json"
+        p = self.repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"feature_flag": true}', encoding="utf-8")
+        res = classify(self.repo)
+        for plan in (
+            {"expected_files": [rel]},  # drafted but not approved
+            {"approval": {"single_use_nonce": "n"}, "expected_files": ["app/src/main/res/values/strings.xml"]},
+            None,
+        ):
+            pol = review_policy.decide(res, self.repo, plan=plan)
+            self.assertEqual("USER_DECISION_REQUIRED", pol["status"], plan)
+            self.assertNotIn("unknown_resolution", pol)
+
+    def test_ASSET_015_approved_unknown_never_weakens_sensitive_routing(self) -> None:
+        from change_classifier import classify
+        import review_policy
+        rel = "app/src/main/assets/secret.json"
+        p = self.repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"oauth_token": "secret123"}', encoding="utf-8")
+        res = classify(self.repo)
+        pol = review_policy.decide(res, self.repo, plan={"approval": {"single_use_nonce": "n"}, "expected_files": [rel]})
+        self.assertEqual("T5_CRITICAL", pol["risk_tier"])
+        self.assertEqual(sorted(review_policy.FIVE_REVIEWERS), pol["reviewers"])
+
+    def test_ASSET_009_res_raw_image_and_regular_resources_remain_resource_ui(self) -> None:
+        from change_classifier import classify
+        raw_img = self.repo / "app" / "src" / "main" / "res" / "raw" / "splash.webp"
+        raw_img.parent.mkdir(parents=True, exist_ok=True)
+        raw_img.write_bytes(b"RIFF\x00\x00\x00\x00WEBP")
+        drawable = self.repo / "app" / "src" / "main" / "res" / "drawable" / "bg.xml"
+        drawable.parent.mkdir(parents=True, exist_ok=True)
+        drawable.write_text("<shape/>", encoding="utf-8")
+        res = classify(self.repo)
+        self.assertIn("RESOURCE_UI", res["surfaces"])
+        self.assertNotIn("UNKNOWN", res["surfaces"])
 
 
 if __name__ == "__main__":

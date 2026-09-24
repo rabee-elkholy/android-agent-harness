@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -1574,7 +1575,7 @@ class PhaseBaselineDebtToleranceTests(unittest.TestCase):
         self._write_test_report("com.example.PreExistingTest", "testOld", "expected true but was false")
 
         from unittest import mock
-        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+        with mock.patch("run_gradle_task.run_gradle", side_effect=_gradle_tests_only_failed(1)):
             ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
             self.assertTrue(ok)
             self.assertEqual("PASS", detail)
@@ -1594,7 +1595,7 @@ class PhaseBaselineDebtToleranceTests(unittest.TestCase):
         self._write_test_report("com.example.NewTest", "testNew", "unexpected null")
 
         from unittest import mock
-        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+        with mock.patch("run_gradle_task.run_gradle", side_effect=_gradle_tests_only_failed(1)):
             ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
             self.assertFalse(ok)
             self.assertIn("NEW_REGRESSION", detail)
@@ -1619,7 +1620,7 @@ class PhaseBaselineDebtToleranceTests(unittest.TestCase):
         self._write_test_report("com.example.PreExistingTest", "testOld", "index out of bounds", "IndexOutOfBoundsException")
 
         from unittest import mock
-        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+        with mock.patch("run_gradle_task.run_gradle", side_effect=_gradle_tests_only_failed(1)):
             ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
             self.assertFalse(ok)
             self.assertIn("NEW_REGRESSION", detail)
@@ -1659,6 +1660,127 @@ class PhaseBaselineDebtToleranceTests(unittest.TestCase):
             self.assertTrue(ok)
             self.assertEqual("NOT_REQUIRED", detail)
             mock_gradle.assert_not_called()
+
+    def test_PHASE_BASELINE_007_failed_phase_tests_rerun_after_fix(self) -> None:
+        """A recorded phase test failure must not permanently block a retried checkpoint."""
+        from workflow import check_phase_tests
+        task_id = "phase-base-007"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+        self._write_baseline([])
+        self._write_test_report("com.example.NewTest", "testNew", "unexpected null")
+        changes_v1 = [{"path": "app/src/main/kotlin/com/example/Logic.kt", "content_identity": "sha256:v1"}]
+        changes_v2 = [{"path": "app/src/main/kotlin/com/example/Logic.kt", "content_identity": "sha256:v2"}]
+
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", side_effect=_gradle_tests_only_failed(1)):
+            ok, _detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True, phase_changes=changes_v1)
+            self.assertFalse(ok)
+
+        # Developer fixes the test; the retried checkpoint must execute Gradle again.
+        shutil.rmtree(self.tmp / "app" / "build" / "test-results", ignore_errors=True)
+        with mock.patch("run_gradle_task.run_gradle", return_value=0) as gradle, \
+                mock.patch("run_tests_gate.collect_test_summary", return_value={"executed": 3}):
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True, phase_changes=changes_v2)
+            self.assertTrue(ok, detail)
+            gradle.assert_called()
+
+        # Even for identical content, a recorded FAIL is re-evaluated rather than replayed.
+        with mock.patch("run_gradle_task.run_gradle", return_value=0) as gradle, \
+                mock.patch("run_tests_gate.collect_test_summary", return_value={"executed": 3}):
+            atomic_write_json(p1_dir / "unit_tests.json", {**read_json(p1_dir / "unit_tests.json"), "status": "FAIL"})
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True, phase_changes=changes_v2)
+            self.assertTrue(ok, detail)
+            gradle.assert_called()
+
+    def test_PHASE_BASELINE_008_stale_phase_pass_is_not_reused(self) -> None:
+        """Phase PASS evidence is bound to the phase delta; changed content re-runs tests."""
+        from workflow import check_phase_tests
+        task_id = "phase-base-008"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+        self._write_baseline([])
+        changes_v1 = [{"path": "app/src/main/kotlin/com/example/Logic.kt", "content_identity": "sha256:v1"}]
+        changes_v2 = [{"path": "app/src/main/kotlin/com/example/Logic.kt", "content_identity": "sha256:v2"}]
+
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", return_value=0), \
+                mock.patch("run_tests_gate.collect_test_summary", return_value={"executed": 3}):
+            ok, _detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True, phase_changes=changes_v1)
+            self.assertTrue(ok)
+
+        with mock.patch("run_gradle_task.run_gradle", return_value=0) as gradle, \
+                mock.patch("run_tests_gate.collect_test_summary", return_value={"executed": 3}):
+            ok, _detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True, phase_changes=changes_v1)
+            self.assertTrue(ok)
+            gradle.assert_not_called()
+
+        self._write_test_report("com.example.NewTest", "testNew", "unexpected null")
+        with mock.patch("run_gradle_task.run_gradle", side_effect=_gradle_tests_only_failed(1)) as gradle:
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True, phase_changes=changes_v2)
+            self.assertFalse(ok)
+            self.assertIn("NEW_REGRESSION", detail)
+            gradle.assert_called()
+
+    def test_PHASE_BASELINE_009_unattributed_gradle_failure_fails_closed(self) -> None:
+        """Baseline-only reports cannot hide a Gradle failure that is not exclusively test failures."""
+        from workflow import check_phase_tests
+        from baseline_capture import fingerprint, test_key
+        task_id = "phase-base-009"
+        plan, tdir, p1_dir = self._setup_phased_task(task_id)
+        t_key = test_key("com.example.PreExistingTest", "testOld")
+        self._write_baseline([{
+            "test_name": t_key,
+            "fingerprint": fingerprint(t_key, "AssertionError", "expected true but was false"),
+            "error_type": "AssertionError",
+            "message": "expected true but was false",
+        }])
+        self._write_test_report("com.example.PreExistingTest", "testOld", "expected true but was false")
+
+        from unittest import mock
+        # Gradle reports the failure was not test-only (e.g. a compile error in another task).
+        with mock.patch("run_gradle_task.run_gradle", side_effect=_gradle_tests_only_failed(1, test_failure_only=False)):
+            ok, _detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
+            self.assertFalse(ok)
+        # An outcome without attribution must not be treated as test-only.
+        (p1_dir / "unit_tests.json").unlink()
+        with mock.patch("run_gradle_task.run_gradle", return_value=1):
+            ok, _detail = check_phase_tests(self.tmp, p1_dir, [":app"], needs_tests=True)
+            self.assertFalse(ok)
+
+
+class MissingBaselineGuidanceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="test_missing_baseline_")).resolve()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_new_regression_without_any_baseline_names_the_capture_command(self) -> None:
+        """Old failures read as NEW_REGRESSION until a baseline exists; the failure must say how to fix that."""
+        from run_tests_gate import evaluate_unit_test_execution
+        report_dir = self.tmp / "app" / "build" / "test-results" / "testDebugUnitTest"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "TEST-com.example.StreakTest.xml").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="com.example.StreakTest" tests="1" failures="1" errors="0">'
+            '<testcase name="legacy" classname="com.example.StreakTest"><failure message="old" type="AssertionError">x</failure></testcase></testsuite>\n',
+            encoding="utf-8",
+        )
+        with mock.patch("run_tests_gate.load_baseline", return_value=None):
+            ok, detail, data = evaluate_unit_test_execution(
+                self.tmp, ":app:testDebugUnitTest", 1, reports_before=None, outcome={"test_failure_only": True},
+            )
+        self.assertFalse(ok)
+        self.assertIn("NEW_REGRESSION", detail)
+        self.assertIn("baseline_capture.py --run-tests", detail)
+
+
+def _gradle_tests_only_failed(code: int, test_failure_only: bool = True):
+    """Mimic run_gradle's outcome attribution for a finished Gradle test run."""
+    def _run(task_args, *, outcome=None, cwd=None):
+        if outcome is not None:
+            outcome.clear()
+            outcome["test_failure_only"] = test_failure_only
+        return code
+    return _run
 
 
 if __name__ == "__main__":
