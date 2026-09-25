@@ -1014,6 +1014,23 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
         result = classify(self.repo)
         self.assertNotIn("CRYPTO", result["surfaces"])
 
+    def test_builtin_property_type_does_not_resolve_to_an_extension_file(self) -> None:
+        """Round 5: a String property resolved to extensions/String.kt (MessageDigest) and became CRYPTO."""
+        from change_classifier import classify
+        ext = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "extensions" / "String.kt"
+        ext.parent.mkdir(parents=True, exist_ok=True)
+        ext.write_text(
+            "package com.example.extensions\n\nimport java.security.MessageDigest\n\n"
+            "fun String.sha1(): String = MessageDigest.getInstance(\"SHA-1\").digest(toByteArray()).toString()\n",
+            encoding="utf-8",
+        )
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-q", "-m", "extensions")
+        target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Bookmark.kt"
+        target.write_text("package com.example\n\ndata class Bookmark(\n    var colorTag: String? = null,\n)\n", encoding="utf-8")
+        result = classify(self.repo)
+        self.assertNotIn("CRYPTO", result["surfaces"])
+
 
 class PhaseDRepairSelftest(unittest.TestCase):
     def setUp(self) -> None:

@@ -57,7 +57,7 @@ from evidence_store import EvidenceStore
 from final_verifier import verify_task
 import lifecycle
 from mutation_guard import active_plan
-from plan_authority import plan_payload, save_plan
+from plan_authority import module_id, plan_payload, save_plan
 import record_review
 from record_review import _parse_reviewer_findings, is_blocking_finding
 import review_package
@@ -247,6 +247,145 @@ class DailyWorkflowSelftest(unittest.TestCase):
         from workflow import main as workflow_main
         ret = workflow_main(cli_args)
         self.assertEqual(0, ret)
+
+    def _draft_ns(self, task_id: str, **overrides: Any) -> argparse.Namespace:
+        values = dict(
+            repo=str(self.repo), task_id=task_id, outcome="Show a finished message", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/Login.kt", phases=None, force=True,
+        )
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_plan_summary_is_the_registered_plan(self) -> None:
+        # Round 5 (O6): the plan shown in chat had two phases while plan.json had none. draft prints
+        # a canonical summary of the registered plan for the agent to present verbatim.
+        from workflow import plan_summary
+        plan = draft(self._draft_ns("plan-summary", phases=[
+            {"id": "data", "title": "Data layer"}, {"id": "ui", "title": "Settings screen"},
+        ]))
+        text = plan_summary(plan)
+        self.assertTrue(text.startswith("PLAN_SUMMARY_BEGIN\nTask: plan-summary (FEATURE)"))
+        self.assertIn("Phases: 2\n  1. data: Data layer\n  2. ui: Settings screen", text)
+        self.assertIn("Files: app/src/main/kotlin/com/example/Login.kt", text)
+        self.assertIn("Surfaces: BUSINESS_LOGIC", text)
+        self.assertIn(f"Plan hash: {plan['plan_sha256'][:12]}", text)
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="plan-summary"))
+        single = draft(self._draft_ns("plan-summary-single"))
+        self.assertIn("Phases: none (single phase)", plan_summary(single))
+
+    def test_C_D4_partial_revise_keeps_omitted_plan_fields(self) -> None:
+        # Certification C-D4: `revise` given only --expected-surfaces dropped the plan's files and
+        # modules, which switched off the write-scope guard. Omitted fields keep the old values.
+        draft(self._draft_ns("partial-revise", kind="BUG", test_strategy="LoginTest covers the fix"))
+        from workflow import main as workflow_main
+        with mock.patch("sys.stdout"):
+            ret = workflow_main([
+                "revise", "--repo", str(self.repo), "--task-id", "partial-revise",
+                "--expected-surfaces", "BUSINESS_LOGIC,LOCALIZATION",
+            ])
+        self.assertEqual(0, ret)
+        plan = read_json(task_dir(self.repo, "partial-revise") / "plan.json")
+        self.assertEqual(["app/src/main/kotlin/com/example/Login.kt"], plan["expected_files"])
+        self.assertEqual([":app"], plan["expected_modules"])
+        self.assertEqual(["BUSINESS_LOGIC", "LOCALIZATION"], plan["expected_surfaces"])
+        self.assertEqual("BUG", plan["task_kind"])
+        self.assertEqual("LoginTest covers the fix", plan["test_strategy"])
+        self.assertEqual("Show a finished message", plan["requested_outcome"])
+        self.assertEqual(2, plan["revision_number"])
+
+    def test_C_D5_draft_requires_expected_files_unless_trivial(self) -> None:
+        # Certification C-D5: 4 of 4 first drafts registered no files, modules or surfaces, and the
+        # harness accepted a plan with no write scope for a task with known targets.
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        unscoped = dict(expected_files=None, expected_surfaces=None, expected_modules=None)
+        # New installs record plan_scope=files_required; older installs keep accepting unscoped drafts.
+        from wizard.discovery import auto_from_facts
+        self.assertEqual("files_required", auto_from_facts({}).get("plan_scope"))
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", draft(self._draft_ns("legacy-install", **unscoped))["status"])
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="legacy-install"))
+        scope = mock.patch.object(_product, "PLAN_SCOPE", "files_required", create=True)
+        scope.start()
+        self.addCleanup(scope.stop)
+        for kind in ("FEATURE", "BUG", "REFACTOR"):
+            with self.subTest(kind=kind), self.assertRaises(ValidationError) as ctx:
+                draft(self._draft_ns(f"unscoped-{kind.lower()}", kind=kind, **unscoped))
+            self.assertIn("PLAN_SCOPE_REQUIRED", str(ctx.exception))
+            self.assertIn("--expected-files", str(ctx.exception))
+        self.assertFalse(task_dir(self.repo, "unscoped-feature").joinpath("plan.json").is_file())
+        # The error names the files discovery already found.
+        save_discovery_receipt(self.repo, create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT", query_kind="symbol", query_value="MainActivity",
+            graph_fingerprint="fp", resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/MainActivity.kt"], resolved_symbols=[],
+        ))
+        with self.assertRaises(ValidationError) as ctx:
+            draft(self._draft_ns("unscoped-with-discovery", **unscoped))
+        self.assertIn("Candidates from discovery: app/src/main/kotlin/com/example/MainActivity.kt", str(ctx.exception))
+        # T0 (strings/resources/docs only) stays exempt.
+        trivial = draft(self._draft_ns("strings-only", expected_files=None, expected_surfaces="LOCALIZATION", expected_modules=None))
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", trivial["status"])
+
+    def test_draft_rejects_file_paths_as_surfaces(self) -> None:
+        # DEFECT-SURFACES-01 (round 5): file paths were stored upper-cased as surfaces, the real
+        # surfaces were never declared, and every task needed a second approval for drift.
+        with self.assertRaises(ValidationError) as ctx:
+            draft(self._draft_ns("surfaces-paths", expected_surfaces="BUSINESS_LOGIC,app/src/main/kotlin/com/example/Login.kt"))
+        self.assertIn("--expected-files", str(ctx.exception))
+
+    def test_draft_declares_the_modules_of_its_expected_files(self) -> None:
+        # Round 5: a plan naming strings.xml in another module still declared one module, so the
+        # approved plan drifted on that module and needed a second approval.
+        write_file(self.repo / "core/build.gradle.kts", 'plugins { id("com.android.library") }\nandroid { namespace = "com.example.core" }\n')
+        write_file(self.repo / "core/src/main/res/values/strings.xml", "<resources/>\n")
+        draft(self._draft_ns(
+            "modules-union",
+            expected_files="app/src/main/kotlin/com/example/Login.kt,core/src/main/res/values/strings.xml",
+        ))
+        plan = read_json(task_dir(self.repo, "modules-union") / "plan.json")
+        self.assertEqual([":app", ":core"], plan["expected_modules"])
+        self.assertEqual(["BUSINESS_LOGIC"], plan["expected_surfaces"])
+
+    def test_cancel_clears_the_latest_discovery_receipt(self) -> None:
+        # Round 5 hardening: a finished task's discovery anchor must not carry into the next task.
+        from discovery_receipt import create_discovery_receipt, load_latest_discovery_receipt, save_discovery_receipt
+        draft(self._draft_ns("clears-discovery"))
+        save_discovery_receipt(self.repo, create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT", query_kind="file", query_value="app/src/main/kotlin/com/example/Login.kt",
+            graph_fingerprint="fp", resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/Login.kt"], resolved_symbols=[],
+        ))
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="clears-discovery"))
+        self.assertIsNone(load_latest_discovery_receipt(self.repo))
+
+    def test_editing_a_tracked_file_does_not_inherit_its_existing_sensitive_content(self) -> None:
+        # Round 5: editing ProfileViewModel (which already mentions sign-in and subscriptions) was
+        # refused before the edit as AUTH/BILLING drift, making the task sensitive and undeliverable.
+        from mutation_guard import file_mutation_allowed
+        vm = "app/src/main/kotlin/com/example/ProfileViewModel.kt"
+        write_file(self.repo / vm, "package com.example\n\nclass ProfileViewModel(val signInState: SignInState, val subscriptionTier: SubscriptionTier) {\n    val loginRequired = true\n    fun purchase() = Unit\n}\n")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "vm"], cwd=self.repo, check=True)
+        draft(self._draft_ns("tracked-sensitive", expected_files=vm, expected_surfaces="BUSINESS_LOGIC"))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id="tracked-sensitive", source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id="tracked-sensitive"))
+        allowed, reason, _code = file_mutation_allowed(self.repo, targets=[vm])
+        self.assertTrue(allowed, reason)
+        # A new file is still judged on everything its path says.
+        allowed_new, _reason, _code = file_mutation_allowed(self.repo, targets=["app/src/main/AndroidManifest.xml"])
+        self.assertFalse(allowed_new)
+
+    def test_remediation_command_keeps_the_root_module(self) -> None:
+        # DEFECT-DRIFT-LOOP-01 (round 5): the root module ":" was printed as an empty entry, the
+        # revise command dropped it, and prepare-verification reported the same drift forever.
+        plan = {"task_kind": "FEATURE", "requested_outcome": "x", "expected_modules": [":app"], "expected_surfaces": []}
+        manifest = {"task_changes": [{"path": "build.gradle.kts"}, {"path": "app/src/main/A.kt"}]}
+        cmd = build_remediation_command(self.repo, "t", plan, {"surfaces": []}, manifest)
+        modules = shlex.split(cmd.replace("\\\n", " "))
+        value = modules[modules.index("--expected-modules") + 1]
+        self.assertEqual([":", ":app"], sorted(module_id(item) for item in value.split(",") if item.strip()))
 
     def test_architecture_drift_documented_cli_is_real(self) -> None:
         """Verify architecture_drift.py CLI is real, returns 0 for compliant plan, and never mutates state."""
@@ -2609,6 +2748,58 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertNotIn("run_device.py", act.get("command", ""))
         self.assertEqual("COMPLETE_TASK", act["code"])
 
+    def test_ROUTE_CMD_010B_verifying_bug_without_red_is_not_routed_to_complete(self) -> None:
+        # DEFECT-RED-DEADEND-01 (round 5): a BUG task that skipped CAPTURE_RED reached VERIFYING;
+        # the router said COMPLETE_TASK while the final verifier refused for missing RED.
+        plan, tdir, policy, manifest = self._setup_verifying_task("route-cmd-010b")
+        current = read_json(tdir / "current-run.json")
+        policy.update({"gates": ["preflight"], "reviewers": [], "assemble_required": False,
+                       "device_required": False, "surfaces": ["BUSINESS_LOGIC"]})
+        atomic_write_json(Path(current["policy"]), policy)
+        self._record_evidence(manifest, current["run_id"], "preflight", "PASS")
+        plan = dict(plan, task_kind="BUG", test_strategy="Policy-selected relevant tests")
+        act = resolve_next_action(self.repo, "route-cmd-010b", plan)
+        self.assertEqual("RED_EVIDENCE_MISSING", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertIn("revise", act["reason"])
+
+    def _v1_reviewed_task(self, task_id: str, severity: str, surfaces: list[str], review_evidence: dict) -> tuple[dict, dict]:
+        plan, tdir, policy, manifest = self._setup_verifying_task(task_id)
+        current = read_json(tdir / "current-run.json")
+        current["review_protocol_version"] = 1
+        current["review_host"] = "claude"
+        atomic_write_json(tdir / "current-run.json", current)
+        policy.update({"gates": ["preflight"], "reviewers": ["bug-reviewer-agent"], "assemble_required": False,
+                       "device_required": False, "severity": severity, "surfaces": surfaces})
+        atomic_write_json(Path(current["policy"]), policy)
+        self._record_evidence(manifest, current["run_id"], "preflight", "PASS")
+        write_file(active_review_package_path(self.repo, current), "# Review Package\n")
+        self._record_evidence(manifest, current["run_id"], "reviews", "PASS", review_evidence)
+        return plan, current
+
+    def test_ROUTE_CMD_010C_v1_high_severity_routes_to_developer_review_override(self) -> None:
+        # Round 5 (D13): a HIGH change on a host without trusted transcripts reached COMPLETE_TASK and
+        # failed at the verifier after every review had been paid for.
+        unverified = {"reviewers": ["bug-reviewer-agent"], "reports": [{"reviewer": "bug-reviewer-agent", "independent_execution_verified": False}]}
+        plan, _ = self._v1_reviewed_task("route-v1-high", "HIGH", ["ROOM_SCHEMA"], unverified)
+        act = resolve_next_action(self.repo, "route-v1-high", plan)
+        self.assertEqual("REVIEW_OVERRIDE_REQUIRED", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertIn("--override-reviews --source developer_terminal", act["command"])
+
+    def test_ROUTE_CMD_010D_v1_sensitive_change_has_no_override_route(self) -> None:
+        unverified = {"reviewers": ["bug-reviewer-agent"], "reports": [{"reviewer": "bug-reviewer-agent", "independent_execution_verified": False}]}
+        plan, _ = self._v1_reviewed_task("route-v1-sensitive", "CRITICAL", ["AUTH"], unverified)
+        act = resolve_next_action(self.repo, "route-v1-sensitive", plan)
+        self.assertEqual("SENSITIVE_REVIEW_PROOF_UNAVAILABLE", act["code"])
+        self.assertEqual("", act["command"])
+
+    def test_ROUTE_CMD_010E_v1_developer_override_proceeds(self) -> None:
+        overridden = {"developer_override": True, "source": "developer_terminal", "proof_reference_sha256": "x"}
+        plan, _ = self._v1_reviewed_task("route-v1-overridden", "HIGH", ["ROOM_SCHEMA"], overridden)
+        act = resolve_next_action(self.repo, "route-v1-overridden", plan)
+        self.assertNotIn(act["code"], ("REVIEW_OVERRIDE_REQUIRED", "SENSITIVE_REVIEW_PROOF_UNAVAILABLE"))
+
     def test_ROUTE_CMD_011_bug_requires_executable_red(self) -> None:
         """ROUTE-CMD-011: BUG requiring executable RED -> capture-red appears before implementation."""
         task_id = "route-cmd-011"
@@ -4904,6 +5095,92 @@ class ReviewOrchestrationTests(unittest.TestCase):
         report = _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")
         self.assertEqual("PASS", report["verdict"])
 
+    def test_REVIEW_ORCH_017B_v1_run_reads_the_v2_block_installed_reviewers_emit(self) -> None:
+        # DEFECT-REVIEW-FORMAT-01 (round 5): Claude Code runs are protocol V1, but the installed
+        # reviewer agents must end with a HARNESS_REVIEW_RESULT_V2 block and nothing after it,
+        # so no Claude review could ever be recorded.
+        from record_review import _parse_response_text
+        task_id = "test-orch-017b"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current["review_protocol_version"] = 1
+        atomic_write_json(tdir / "current-run.json", current)
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        text = "Reviewed the diff.\n```json\n" + json.dumps(block) + "\n```"
+        self.assertEqual("PASS", _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")["verdict"])
+        wrong = dict(block, review_package_sha256="0" * 64)
+        with self.assertRaises(ValidationError):
+            _parse_response_text(self.repo, task_id, "bug-reviewer-agent", "```json\n" + json.dumps(wrong) + "\n```", "dummy-sha")
+
+    @staticmethod
+    def _claude_transcript(path: Path, final_text: str) -> Path:
+        """A Claude Code subagent transcript: JSONL, the final reply split over content blocks."""
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "Review the package."}},
+            {"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [
+                {"type": "text", "text": "Reading the diff."}, {"type": "tool_use", "name": "Read", "input": {}}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]}},
+            {"type": "assistant", "message": {"id": "m2", "role": "assistant", "content": [{"type": "text", "text": final_text[:20]}]}},
+            {"type": "assistant", "message": {"id": "m2", "role": "assistant", "content": [{"type": "text", "text": final_text[20:]}]}},
+        ]
+        write_file(path, "".join(json.dumps(line) + "\n" for line in lines))
+        return path
+
+    def _setup_claude_v1_task(self, task_id: str) -> tuple[dict, str, str, Path]:
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current["review_protocol_version"] = 1
+        current["review_host"] = "claude"
+        atomic_write_json(tdir / "current-run.json", current)
+        policy = read_json(Path(current["policy"]))
+        policy["severity"] = "LOW"
+        atomic_write_json(Path(current["policy"]), policy)
+        return current, run_id, pkg_sha, tdir
+
+    def test_C_D3_record_review_ingests_claude_subagent_transcript_unchanged(self) -> None:
+        # Certification C-D3: Claude Code could not record a reviewer response unchanged; the
+        # hook denied backticks, pipes and `<` in --response-text, and --from-subagent did not
+        # read Claude's JSONL transcripts. The transcript path is now the ingestion method.
+        task_id = "claude-transcript"
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        text = "Checked `run()` | callers < 3.\n```json\n" + json.dumps(block) + "\n```"
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/session-1/subagents/agent-a1.jsonl", text)
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            # A transcript the agent could write itself (inside the repository) is refused.
+            inside = self._claude_transcript(self.repo / "reviews/agent-a1.output", text)
+            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={inside}"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+        evidence = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")
+        self.assertEqual("PASS", evidence["status"])
+        report = evidence["evidence"]["reports"][0]
+        self.assertEqual("claude_subagent_transcript", report["provenance"])
+        self.assertFalse(report["independent_execution_verified"])
+        self.assertEqual(str(transcript.resolve()), report["transcript_path"])
+        self.assertEqual(sha256_file(transcript), report["transcript_sha256"])
+        rules = (KIT / "agents/tool-adapters/CLAUDE.md.template").read_text(encoding="utf-8")
+        self.assertIn("record_review.py --task <id> --from-subagent <role>=<transcript-path>", rules)
+        self.assertIn("--response-file <transcript-path>", rules)
+
+    def test_C_D3_background_task_output_is_accepted_and_fabrication_still_rejected(self) -> None:
+        task_id = "claude-task-output"
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
+        fabricated = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                      "review_package_sha256": "0" * 64, "verdict": "PASS", "findings": []}
+        session = Path(tempfile.mkdtemp(prefix="claude-", dir=tempfile.gettempdir()))
+        self.addCleanup(shutil.rmtree, session, True)
+        output = self._claude_transcript(session / "-app/session-1/tasks/a1.output", "```json\n" + json.dumps(fabricated) + "\n```")
+        err = __import__("io").StringIO()
+        with mock.patch("sys.stderr", err):
+            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
+        self.assertIn("review_package_sha256", err.getvalue())
+        genuine = dict(fabricated, review_package_sha256=pkg_sha)
+        self._claude_transcript(output, "```json\n" + json.dumps(genuine) + "\n```")
+        with mock.patch("builtins.print"):
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
+
     def test_REVIEW_ORCH_018_v2_does_not_accept_footer_only_PASS(self) -> None:
         from record_review import _parse_response_text
         task_id = "test-orch-018"
@@ -5802,6 +6079,55 @@ class VerifyingScopeTests(unittest.TestCase):
         )
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+
+    def _invoke_in_conversation(self, conversation: str, tool_name: str, tool_args: dict) -> dict:
+        self.env["HARNESS_HOOK_STATE"] = str(self.state / "hook-state.json")
+        payload = json.dumps({"conversationId": conversation, "toolName": tool_name, "toolArgs": tool_args})
+        proc = subprocess.run([sys.executable, str(self.safety_script)], input=payload, capture_output=True, text=True, env=self.env, check=False)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return _with_audit_reason(json.loads(proc.stdout.strip()), self.env, self.safety_script)
+
+    def _billing_receipt(self) -> None:
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        billing = self.repo / "feature/billing/src/main/kotlin/com/example/Billing.kt"
+        billing.parent.mkdir(parents=True, exist_ok=True)
+        billing.write_text("package com.example\nclass Billing\n", encoding="utf-8")
+        save_discovery_receipt(self.repo, create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT", query_kind="module", query_value=":feature:billing",
+            graph_fingerprint="fp-billing", resolved_modules=[":feature:billing"],
+            resolved_paths=["feature/billing/src/main/kotlin/com/example/Billing.kt"], resolved_symbols=["Billing"],
+            allowed_search_roots=["feature/billing"],
+        ))
+
+    def test_DISCOVERY_LIFECYCLE_001_receipt_from_earlier_conversation_grants_no_scope(self) -> None:
+        # External review of v1.1.0: latest-discovery.json was global, so a new conversation inherited
+        # the previous conversation's search scope.
+        search = {"SearchPath": "feature/billing", "Query": "charge"}
+        self._invoke_in_conversation("conv-old", "view_file", {"AbsolutePath": str(self.repo / "README.md")})
+        time.sleep(0.05)
+        self._billing_receipt()
+        self.assertEqual("allow", self._invoke_in_conversation("conv-old", "grep_search", search)["decision"])
+        time.sleep(0.05)
+        denied = self._invoke_in_conversation("conv-new", "grep_search", search)
+        self.assertEqual("deny", denied["decision"], denied)
+
+    def test_DISCOVERY_LIFECYCLE_002_out_of_scope_code_read_is_allowed_and_audited(self) -> None:
+        self._invoke_in_conversation("conv-read", "view_file", {"AbsolutePath": str(self.repo / "README.md")})
+        time.sleep(0.05)
+        self._billing_receipt()
+        other = self.repo / "feature/profile/src/main/kotlin/com/example/Profile.kt"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text("package com.example\nclass Profile\n", encoding="utf-8")
+        inside = self._invoke_in_conversation("conv-read", "view_file", {"AbsolutePath": str(self.repo / "feature/billing/src/main/kotlin/com/example/Billing.kt")})
+        self.assertEqual("allow", inside["decision"])
+        audit = self.state / "audit_log.jsonl"
+        self.assertNotIn("READ_OUTSIDE_SCOPE", audit.read_text(encoding="utf-8"))
+        outside = self._invoke_in_conversation("conv-read", "view_file", {"AbsolutePath": str(other)})
+        self.assertEqual("allow", outside["decision"])
+        self.assertEqual("Tool is outside the harness mutation boundary.", outside["reason"])
+        flagged = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines() if "READ_OUTSIDE_SCOPE" in line]
+        self.assertEqual(1, len(flagged))
+        self.assertIn("feature/profile/src/main/kotlin/com/example/Profile.kt", flagged[0]["reason"])
 
     def test_VERIFY_SCOPE_005_graph_expansion_adds_exact_bounded_root(self) -> None:
         scope = {

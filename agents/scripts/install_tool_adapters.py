@@ -733,6 +733,8 @@ def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
 
 
 CC_HOOK_COMMAND = "{py} .agents/scripts/cc_pre_tool_safety.py"
+# Shell commands and file edits; keep in sync with FILE_EDIT_TOOLS in cc_pre_tool_safety.py.
+CC_HOOK_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit"
 
 COPILOT_HOOKS_FILE = ".github/hooks/android-harness-pre-tool-use.json"
 
@@ -773,20 +775,27 @@ def ensure_cc_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
             continue
         for hook in group.get("hooks") or []:
             if isinstance(hook, dict) and "cc_pre_tool_safety.py" in str(hook.get("command", "")):
+                if group.get("_harnessManaged") and group.get("matcher") != CC_HOOK_MATCHER:
+                    # Installs before round 5 registered Bash only, so file edits were never checked.
+                    if dry_run:
+                        return [f"dry-run widen PreToolUse bridge matcher in {rel}"]
+                    group["matcher"] = CC_HOOK_MATCHER
+                    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                    return [f"widened PreToolUse bridge matcher in {rel}"]
                 return [f"skip {rel}: harness PreToolUse bridge already registered"]
 
     new_group = {
-        "matcher": "Bash",
+        "matcher": CC_HOOK_MATCHER,
         "_harnessManaged": True,
         "hooks": [{"type": "command", "command": command, "timeout": 15}],
     }
     if dry_run:
-        logs = [f"dry-run merge PreToolUse(Bash) into {rel}"]
+        logs = [f"dry-run merge PreToolUse({CC_HOOK_MATCHER}) into {rel}"]
         return logs
     groups.append(new_group)
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return [f"merged PreToolUse(Bash) bridge into {rel}"]
+    return [f"merged PreToolUse({CC_HOOK_MATCHER}) bridge into {rel}"]
 
 
 def ensure_copilot_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:

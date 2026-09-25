@@ -1,6 +1,8 @@
 """Critical safety regressions using temporary repositories and simulated tools."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -61,6 +63,19 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertFalse(run_gradle_task.test_failure_only(task, "BUILD FAILED"))
         self.assertFalse(run_gradle_task.test_failure_only(task, log + "\n* What went wrong:\nFailed to notify build listener.\n> Release output verification failed\n* Try:\n"))
         self.assertFalse(run_gradle_task.test_failure_only(task, "FAILURE: Build completed with 2 failures.\n" + log))
+
+    def test_gradle_9_test_failure_without_try_section_is_attributed(self):
+        # Round 5: Gradle 9.7 prints no '* Try:' after a test failure, so the section ran to the end
+        # of the log and --capture-red could never record RED evidence.
+        task = ":modules:services:utils:testDebugUnitTest"
+        log = (
+            f"> Task {task} FAILED\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\n"
+            f"Execution failed for task '{task}'.\n"
+            "> There were failing tests. See the report at: file:///repo/build/reports/tests/index.html\n\n"
+            "BUILD FAILED in 5s\n62 actionable tasks: 1 executed, 61 up-to-date\nConfiguration cache entry reused.\n"
+        )
+        self.assertTrue(run_gradle_task.test_failure_only(task, log))
+        self.assertFalse(run_gradle_task.test_failure_only(":app:testDebugUnitTest", log))
 
     def test_caller_answers_survive_failure_and_update_rollback(self):
         from argparse import Namespace
@@ -219,6 +234,79 @@ class CriticalSafetyTests(unittest.TestCase):
                     with mock.patch.object(run_tests_gate, "REPO", repo), mock.patch.object(run_tests_gate, "load_baseline", return_value=baseline), mock.patch.object(run_tests_gate, "write_gate_result"), mock.patch.object(run_tests_gate, "current_head_sha", return_value=""), mock.patch.object(run_gradle_task, "run_gradle", side_effect=gradle):
                         code = run_tests_gate.main([":app:testDebugUnitTest"])
                     self.assertEqual(0 if fresh_failure and only_test_failure else 1, code)
+
+    def test_changed_modules_scope_targets_every_changed_module(self):
+        # Round 5 (D8): a change in two modules fell back to :app tests and the changed test never ran.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            changed = [repo / "modules/a/src/main/A.kt", repo / "modules/b/src/test/BTest.kt"]
+            import _product
+            import _repo_files
+            with mock.patch.object(_repo_files, "changed_paths", return_value=changed), mock.patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"):
+                with mock.patch.object(_product, "UNIT_TEST_SCOPE", "legacy", create=True):
+                    self.assertEqual([":app:testDebugUnitTest"], run_tests_gate.resolve_target_tasks(repo, None))
+                with mock.patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True):
+                    self.assertEqual([":modules:a:testDebugUnitTest", ":modules:b:testDebugUnitTest"], run_tests_gate.resolve_target_tasks(repo, None))
+                    self.assertEqual([":x:test"], run_tests_gate.resolve_target_tasks(repo, ":x:test"))
+                with mock.patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True), mock.patch.object(_repo_files, "changed_paths", return_value=[*changed, repo / "app/src/main/M.kt"]):
+                    self.assertEqual([":app:testDebugUnitTest", ":modules:a:testDebugUnitTest", ":modules:b:testDebugUnitTest"], run_tests_gate.resolve_target_tasks(repo, None))
+
+    def test_multi_module_run_executes_each_module_and_blocks_new_failure(self):
+        passing = '<testsuite tests="1" failures="0"><testcase classname="A" name="a"/></testsuite>'
+        failing = '<testsuite tests="1" failures="1"><testcase classname="B" name="b"><failure message="new"/></testcase></testsuite>'
+        tasks = [":modules:a:testDebugUnitTest", ":modules:b:testDebugUnitTest"]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            ran: list[str] = []
+
+            def gradle(args, **kwargs):
+                ran.extend(args)
+                module = args[0].split(":")[2]
+                folder = repo / "modules" / module / "build/test-results/testDebugUnitTest"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "r.xml").write_text(passing if module == "a" else failing)
+                if module == "b":
+                    kwargs["outcome"].update(test_failure_only=True)
+                    return 1
+                return 0
+            written: dict = {}
+            with mock.patch.object(run_tests_gate, "REPO", repo), mock.patch.object(run_tests_gate, "resolve_target_tasks", return_value=tasks), \
+                    mock.patch.object(run_tests_gate, "load_baseline", return_value={"unit_tests": []}), \
+                    mock.patch.object(run_tests_gate, "write_gate_result", side_effect=lambda name, data: written.update(data)), \
+                    mock.patch.object(run_tests_gate, "current_head_sha", return_value=""), mock.patch.object(run_gradle_task, "run_gradle", side_effect=gradle):
+                code = run_tests_gate.main([])
+            self.assertEqual(tasks, ran)
+            self.assertNotEqual(0, code)
+            self.assertEqual(["B#b"], written.get("new_regressions"))
+            self.assertEqual(2, written.get("executed"))
+
+    def test_device_step_when_verification_is_disabled_says_so(self):
+        # Round 5 (O3): with device verification disabled, install-start failed as an environment
+        # problem and told the agent to halt instead of saying there is no device step.
+        import _product
+        out = io.StringIO()
+        with mock.patch.object(_product, "DEVICE_VERIFICATION_MODE", "disabled", create=True), \
+                mock.patch.object(sys, "argv", ["run_device.py", "install-start"]), \
+                mock.patch.object(run_device, "require_serial", side_effect=AssertionError("no device lookup expected")), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(0, run_device.main())
+        self.assertIn("Device verification is disabled", out.getvalue())
+        self.assertIn("task status --next", out.getvalue())
+
+    def test_install_explains_app_owned_agents_directory(self):
+        # Round 5 (D2): an app keeping .agents/skills got "already contains a harness", which was wrong
+        # and gave no migration step.
+        fixture = fixtures.LifecycleTests()
+        fixture.setUp()
+        try:
+            fixture._answers()
+            (fixture.repo / ".agents/skills/app-skill").mkdir(parents=True)
+            with self.assertRaisesRegex(ValidationError, r"did not install \(entries: skills/\).*git mv \.agents/skills"):
+                lifecycle.install(fixture.repo, fixtures.KIT)
+            self.assertFalse((fixture.repo / ".agents/scripts").exists())
+            self.assertTrue((fixture.repo / ".agents/skills/app-skill").is_dir())
+        finally:
+            fixture.tearDown()
 
     def test_update_preserves_history_and_rejects_active_task(self):
         fixture = fixtures.LifecycleTests()

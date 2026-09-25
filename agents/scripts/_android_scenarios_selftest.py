@@ -1123,6 +1123,87 @@ class AndroidScenariosSelftest(unittest.TestCase):
         self.assertEqual(1, code, "Diff-scoped check must catch placeholder mismatch on multiline opening tag.")
 
 
+class ToolchainIdentityTests(unittest.TestCase):
+    def test_java_identity_ignores_picked_up_option_lines(self) -> None:
+        # Round 5: JAVA_TOOL_OPTIONS carried a proxy port; when it changed, the "java version"
+        # identity changed and a finished verification went stale without any code change.
+        import delivery_manifest
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[:1] == ["java"]:
+                stderr = (
+                    "Picked up JAVA_TOOL_OPTIONS: -Dhttps.proxyPort=40865\n"
+                    "Picked up _JAVA_OPTIONS: -Xmx2g\n"
+                    'openjdk version "21.0.10" 2026-01-20\n'
+                )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr=stderr)
+            return subprocess.CompletedProcess(cmd, 0, stdout="git version 2.43.0\n", stderr="")
+
+        # The identity is cached per process; an earlier test may have cached the runner's real JDK.
+        delivery_manifest._toolchain_versions.cache_clear()
+        self.addCleanup(delivery_manifest._toolchain_versions.cache_clear)
+        with mock.patch.object(delivery_manifest.subprocess, "run", side_effect=fake_run):
+            versions = delivery_manifest._toolchain_versions()
+        self.assertEqual('openjdk version "21.0.10" 2026-01-20', versions["java"])
+
+
+class ExportedComponentGuardTests(unittest.TestCase):
+    # Round 5 (O5): a newly exported receiver without a permission passed security review on precedent;
+    # no deterministic rule existed.
+    MANIFEST = (
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">'
+        "<application>{body}</application></manifest>"
+    )
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp.name)
+        self.rel = "app/src/main/AndroidManifest.xml"
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        self.write('<receiver android:name=".Old" android:exported="true"/>')
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=self.repo, check=True)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def write(self, body: str) -> None:
+        path = self.repo / self.rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.MANIFEST.format(body=body), encoding="utf-8")
+
+    def test_new_exported_receiver_without_permission_fails(self) -> None:
+        from exported_component_guard import check
+        self.write('<receiver android:name=".Old" android:exported="true"/><receiver android:name=".New" android:exported="true"/>')
+        ok, detail = check(self.repo, [self.rel])
+        self.assertFalse(ok)
+        self.assertIn('<receiver android:name=".New">', detail)
+        self.assertNotIn(".Old", detail)
+
+    def test_permission_not_exported_or_recorded_decision_passes(self) -> None:
+        from exported_component_guard import check
+        for body in (
+            '<receiver android:name=".New" android:exported="true" android:permission="com.example.PRIVATE"/>',
+            '<service android:name=".New" android:exported="false"/>',
+            '<provider android:name=".New" android:exported="true" android:readPermission="com.example.READ"/>',
+            '<receiver android:name=".New" android:exported="true" tools:ignore="ExportedReceiver"/>',
+        ):
+            with self.subTest(body=body):
+                self.write('<receiver android:name=".Old" android:exported="true"/>' + body)
+                self.assertTrue(check(self.repo, [self.rel])[0])
+
+    def test_existing_component_newly_opened_fails(self) -> None:
+        from exported_component_guard import check
+        subprocess.run(["git", "rm", "-q", "--cached", self.rel], cwd=self.repo, check=True)
+        self.write('<service android:name=".Sync" android:exported="false"/>')
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "sync"], cwd=self.repo, check=True)
+        self.write('<service android:name=".Sync" android:exported="true"/>')
+        ok, detail = check(self.repo, [self.rel])
+        self.assertFalse(ok)
+        self.assertIn('<service android:name=".Sync">', detail)
+
+
 class MobileValidationTests(unittest.TestCase):
     """MOBILE-001 through MOBILE-012 test suite for Phase 6 optional mobile validation."""
 

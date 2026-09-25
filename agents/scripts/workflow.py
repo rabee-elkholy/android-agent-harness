@@ -55,6 +55,13 @@ from _verification_recipes import get_verification_recipes  # noqa: E402
 
 
 SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
+# Every surface the change classifier can report; --expected-surfaces must name these (or aliases).
+KNOWN_SURFACES = {
+    "ANALYTICS", "AUTH", "BILLING", "BUILD_CONFIG", "BUSINESS_LOGIC", "COMPOSE_UI", "COROUTINES", "CRYPTO",
+    "DEVICE_API", "DOCS", "HARNESS_CONFIG", "LOCALIZATION", "MANIFEST_PERMISSION", "NATIVE_CODE", "NAVIGATION",
+    "NETWORK", "PERSISTENCE", "PUBLIC_API", "RESOURCE_UI", "ROOM_SCHEMA", "SECURITY", "SENSITIVE_DATA",
+    "TEST_ONLY", "UNKNOWN", "XML_UI",
+}
 
 
 def normalize_expected_files(repo: Path, raw_files: str | list[str] | None) -> list[str]:
@@ -132,7 +139,8 @@ def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict
     surfaces_str = ",".join(surfaces)
 
     modules = sorted(set(plan.get("expected_modules") or []) | set(changed_modules(repo, manifest)))
-    modules_str = ",".join(m.lstrip(":") for m in modules)
+    # Keep the leading colon: stripping it turned the root module ":" into an empty entry.
+    modules_str = ",".join(module_id(m) for m in modules)
 
     actual_paths = sorted({
         (entry.get("path") if isinstance(entry, dict) else str(entry))
@@ -588,6 +596,43 @@ def is_architecture_neutral_scope(
     return all(is_architecture_neutral_path(p) for p in scope_files)
 
 
+def _plan_scope_policy() -> str:
+    try:
+        import _product
+        return str(getattr(_product, "PLAN_SCOPE", "legacy") or "legacy").strip().lower()
+    except Exception:
+        return "legacy"
+
+
+def _require_plan_files(repo: Path, scope_files: list[str], policy: dict, task_kind: str) -> None:
+    """A non-trivial plan must name the files it will edit; without them the write guard has no scope.
+
+    Certification C-D5: first drafts registered no files, modules or surfaces for tasks whose
+    targets were already known. T0 (resources, strings, docs) and micro plans stay exempt, and
+    installs whose answers predate PLAN_SCOPE keep accepting unscoped drafts.
+    """
+    if _plan_scope_policy() != "files_required":
+        return
+    if scope_files or policy.get("micro_eligible") or policy.get("risk_tier") == "T0_TRIVIAL":
+        return
+    candidates: list[str] = []
+    try:
+        from discovery_receipt import load_latest_discovery_receipt
+        receipt = load_latest_discovery_receipt(repo) or {}
+        candidates = [str(item).replace("\\", "/") for item in receipt.get("resolved_paths") or [] if (repo / str(item)).is_file()]
+    except Exception:
+        candidates = []
+    found = (
+        f" Candidates from discovery: {', '.join(sorted(dict.fromkeys(candidates))[:20])}."
+        if candidates
+        else " Find them first with `harness.py task-context --file <path>` / `--symbol <name>` or `harness.py graph --feature <name>`."
+    )
+    raise ValidationError(
+        f"PLAN_SCOPE_REQUIRED: a {task_kind} plan must name at least one --expected-files entry so edits are checked "
+        f"against the approved scope.{found} Re-run draft with --expected-files <comma-separated paths>."
+    )
+
+
 def _build_and_save_plan(
     repo: Path,
     args: argparse.Namespace,
@@ -684,6 +729,12 @@ def _build_and_save_plan(
     norm_expected_files = normalize_expected_files(repo, raw_expected_files)
     raw_expected = [item.strip() for item in (getattr(args, "expected_surfaces", None) or "").split(",") if item.strip()]
     expected = normalize_expected_surfaces(raw_expected)
+    unknown_surfaces = sorted(set(expected) - KNOWN_SURFACES)
+    if unknown_surfaces:
+        raise ValidationError(
+            f"unknown --expected-surfaces value(s): {', '.join(unknown_surfaces)}. "
+            f"Valid surfaces: {', '.join(sorted(KNOWN_SURFACES))}. File paths belong in --expected-files."
+        )
     if not expected:
         if cached_ctx and cached_ctx.get("candidate_surfaces"):
             expected = list(cached_ctx["candidate_surfaces"])
@@ -808,6 +859,8 @@ def _build_and_save_plan(
     architecture_scope_files = list(norm_expected_files)
     for phase in parsed_phases or []:
         architecture_scope_files.extend(phase.get("expected_files") or [])
+    if not is_revision:
+        _require_plan_files(repo, architecture_scope_files, preliminary_policy, resolved_kind)
 
     target_surfaces = set(expected) if expected else set(raw_expected)
     if not target_surfaces and norm_expected_files:
@@ -909,12 +962,7 @@ def _build_and_save_plan(
     if arch_brief:
         (directory / "task-architecture-brief.md").write_text(arch_brief, encoding="utf-8")
 
-    raw_exp_mods = getattr(args, "expected_modules", None)
-    if raw_exp_mods:
-        resolved_expected_modules = [module_id(item) for item in str(raw_exp_mods).split(",") if item.strip()]
-    elif cached_ctx and cached_ctx.get("module"):
-        resolved_expected_modules = [module_id(cached_ctx["module"])]
-    elif norm_expected_files:
+    def _modules_of_expected_files() -> set[str]:
         from plan_authority import discover_android_modules
         known_mods = sorted(
             ((module_id(item), module_id(item).lstrip(":").replace(":", "/")) for item in discover_android_modules(repo)),
@@ -925,7 +973,17 @@ def _build_and_save_plan(
             rel = f.replace("\\", "/").strip("/")
             matched = next((candidate for candidate, prefix in known_mods if prefix and (rel == prefix or rel.startswith(prefix + "/"))), None)
             found_mods.add(matched or ":")
-        resolved_expected_modules = sorted(found_mods)
+        return found_mods
+
+    raw_exp_mods = getattr(args, "expected_modules", None)
+    if raw_exp_mods:
+        declared_mods = {module_id(item) for item in str(raw_exp_mods).split(",") if item.strip()}
+        # Planned files in another module are part of the plan; naming them avoids a later drift approval.
+        resolved_expected_modules = sorted(declared_mods | (_modules_of_expected_files() if norm_expected_files else set()))
+    elif cached_ctx and cached_ctx.get("module"):
+        resolved_expected_modules = [module_id(cached_ctx["module"])]
+    elif norm_expected_files:
+        resolved_expected_modules = sorted(_modules_of_expected_files())
     else:
         resolved_expected_modules = []
 
@@ -1182,6 +1240,51 @@ def _build_and_save_plan(
     return plan
 
 
+def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argparse.Namespace:
+    """Arguments for a revision: every plan field the caller did not give keeps its old value.
+
+    A revision given only --expected-surfaces used to drop the plan's files and modules, which
+    switched off the write-scope guard (certification C-D4).
+    """
+    merged = argparse.Namespace(**vars(args))
+
+    def given(name: str) -> bool:
+        value = getattr(args, name, None)
+        return bool(value.strip()) if isinstance(value, str) else bool(value)
+
+    def joined(values: Any) -> str:
+        return ",".join(str(item) for item in values or [] if str(item).strip())
+
+    if str(getattr(args, "kind", None) or "AUTO").upper() == "AUTO" and old_plan.get("task_kind"):
+        merged.kind = old_plan["task_kind"]
+    if not given("planning_depth") and old_plan.get("planning_depth"):
+        merged.planning_depth = old_plan["planning_depth"]
+    if not given("expected_files") and old_plan.get("expected_files"):
+        merged.expected_files = joined(old_plan["expected_files"])
+    if not given("expected_modules") and old_plan.get("expected_modules"):
+        merged.expected_modules = joined(old_plan["expected_modules"])
+    if not given("expected_surfaces") and old_plan.get("expected_surfaces"):
+        surfaces = set(old_plan["expected_surfaces"])
+        if given("expected_files"):
+            # New files keep the surfaces a draft would infer for them.
+            new_files = normalize_expected_files(repo, args.expected_files)
+            surfaces |= set(classify(repo, task_changes=[{"path": item} for item in new_files]).get("surfaces") or [])
+        merged.expected_surfaces = joined(sorted(surfaces))
+    for name in ("test_strategy", "device_strategy", "rollback"):
+        if not given(name) and old_plan.get(name):
+            setattr(merged, name, old_plan[name])
+    if not given("risks") and old_plan.get("risks"):
+        merged.risks = joined(old_plan["risks"])
+    if not given("external_write") and old_plan.get("external_writes"):
+        merged.external_write = list(old_plan["external_writes"])
+    if not (given("phases") or given("phases_file")) and old_plan.get("phases"):
+        merged.phases = list(old_plan["phases"])
+    if getattr(args, "scoped_phase_review", None) is None and getattr(args, "scoped_phase_review_enabled", None) is None \
+            and old_plan.get("scoped_phase_review_enabled") is not None:
+        merged.scoped_phase_review_enabled = old_plan["scoped_phase_review_enabled"]
+    return merged
+
+
 def revise(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
@@ -1235,7 +1338,7 @@ def revise(args: argparse.Namespace) -> dict:
 
     return _build_and_save_plan(
         repo,
-        args,
+        _revision_args(repo, args, old_plan),
         task_id,
         is_revision=True,
         old_plan=old_plan,
@@ -1767,6 +1870,8 @@ def cancel(args: argparse.Namespace) -> dict:
                 active_path.unlink(missing_ok=True)
         except Exception:
             pass
+    from discovery_receipt import clear_latest_discovery_receipt
+    clear_latest_discovery_receipt(repo)
     return plan
 
 
@@ -1926,6 +2031,8 @@ def finalize_ready_delivery(
                 active_path.unlink(missing_ok=True)
         except Exception:
             active_path.unlink(missing_ok=True)
+    from discovery_receipt import clear_latest_discovery_receipt
+    clear_latest_discovery_receipt(repo)
     return plan, True
 
 
@@ -3756,6 +3863,50 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
+        # 4b. Hosts without trusted transcripts (review protocol V1) cannot prove independent review
+        # execution, which the final verifier requires for HIGH/CRITICAL and sensitive changes.
+        # Say so before assemble instead of failing at completion.
+        if required_reviewers and int(current_run.get("review_protocol_version") or 1) < 2 and has_pass_evidence("reviews"):
+            try:
+                review_ev = store.read(snapshot, run_id, "reviews").get("evidence") or {}
+            except Exception:
+                review_ev = {}
+            severity = str(policy.get("severity") or "").upper()
+            sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+            unverified = any(not r.get("independent_execution_verified") for r in review_ev.get("reports") or [])
+            if not review_ev.get("developer_override") and unverified and (sensitive or severity in ("HIGH", "CRITICAL")):
+                if sensitive:
+                    return {
+                        "code": "SENSITIVE_REVIEW_PROOF_UNAVAILABLE",
+                        "kind": "DEVELOPER_ACTION",
+                        "command": "",
+                        "blocking": True,
+                        "reason": (
+                            f"This change touches sensitive surfaces ({', '.join(sensitive)}). Delivery needs reviewer "
+                            "execution proof that this host cannot produce, and a developer override is not allowed for "
+                            "sensitive changes. Ask the developer: run the review on a host with trusted transcripts "
+                            "(Antigravity), or cancel and split the sensitive part out of this task."
+                        ),
+                        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                        "expected": {},
+                    }
+                return {
+                    "code": "REVIEW_OVERRIDE_REQUIRED",
+                    "kind": "DEVELOPER_ACTION",
+                    "command": (
+                        f'python .agents/scripts/record_review.py --task {task_id} --override-reviews '
+                        '--source developer_terminal --proof-reference "<why the recorded reviews are accepted>"'
+                    ),
+                    "blocking": True,
+                    "reason": (
+                        f"This {severity} change was reviewed on a host that cannot prove independent reviewer execution. "
+                        "The developer must accept the recorded reviews by running the command in their own terminal; "
+                        "the agent must not run it."
+                    ),
+                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                    "expected": {"success_exit_codes": [0]},
+                }
+
         # 5. Assemble
         assemble_required = ("assemble" in policy_gates) or bool(policy.get("assemble_required"))
         if assemble_required:
@@ -3855,7 +4006,27 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
-        # 8. Complete task
+        # 8. A BUG task that skipped CAPTURE_RED cannot complete; the final verifier applies this rule.
+        from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
+        red_dir = task_dir(repo, task_id)
+        if not (red_dir / "red-evidence.json").is_file() and bug_requires_executable_red(
+            plan, policy.get("surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(red_dir),
+        ):
+            return {
+                "code": "RED_EVIDENCE_MISSING",
+                "kind": "DEVELOPER_ACTION",
+                "command": "",
+                "blocking": True,
+                "reason": (
+                    "This BUG task has no failing-test RED reproduction captured before the fix, so it cannot complete. "
+                    "Ask the developer: if the task is not a bug, correct the task kind through workflow.py revise; "
+                    "otherwise cancel and restart the task, capturing RED before changing production code."
+                ),
+                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                "expected": {},
+            }
+
+        # 9. Complete task
         return {
             "code": "COMPLETE_TASK",
             "kind": "HARNESS_COMMAND",
@@ -4222,8 +4393,8 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
     command.add_argument(
         "--planning-depth",
         choices=("BOUNDED", "ARCHITECTURAL", "bounded", "architectural"),
-        default="BOUNDED",
-        help="Planning depth scope: BOUNDED (default) or ARCHITECTURAL",
+        default=None if is_revision else "BOUNDED",
+        help="Planning depth scope: BOUNDED (default) or ARCHITECTURAL; revise keeps the plan's depth when omitted",
     )
     command.add_argument("--expected-surfaces")
     command.add_argument("--expected-modules")
@@ -4362,6 +4533,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def plan_summary(plan: dict) -> str:
+    """Canonical text of the registered plan; the agent presents it verbatim for approval."""
+    def listed(values: Any) -> str:
+        items = [str(v) for v in (values or []) if str(v)]
+        return ", ".join(items) if items else "none"
+
+    phases = plan.get("phases") or []
+    lines = [
+        "PLAN_SUMMARY_BEGIN",
+        f"Task: {plan.get('task_id')} ({plan.get('task_kind') or 'AUTO'})",
+        f"Outcome: {plan.get('requested_outcome') or ''}",
+        f"Phases: {len(phases) if phases else 'none (single phase)'}",
+    ]
+    for index, phase in enumerate(phases, 1):
+        if isinstance(phase, dict):
+            lines.append(f"  {index}. {phase.get('id')}: {phase.get('title') or phase.get('description') or ''}")
+    lines += [
+        f"Files: {listed(plan.get('expected_files'))}",
+        f"Modules: {listed(plan.get('expected_modules'))}",
+        f"Surfaces: {listed(plan.get('expected_surfaces'))}",
+        f"Tests: {plan.get('test_strategy') or 'none'}",
+        f"Plan hash: {str(plan.get('plan_sha256') or '')[:12]}",
+        "PLAN_SUMMARY_END",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
     parser = build_parser()
@@ -4397,6 +4595,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
+        if args.action in ("draft", "revise"):
+            print(plan_summary(result))
         print(f"TASK_STATUS={result.get('status', 'READY')}")
         for item in result.get("next_actions") or []:
             print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")

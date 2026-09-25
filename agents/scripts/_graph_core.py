@@ -1310,6 +1310,10 @@ class GraphEngine:
                 "graph": self.graph.to_dict(),
             }
             self.cache_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            # A few bytes the pre-tool hook can read without loading the whole cache.
+            self.cache_file.with_name(self.cache_file.name + ".fingerprint").write_text(
+                self.graph_fingerprint + "\n", encoding="utf-8",
+            )
         except Exception:
             pass
 

@@ -163,6 +163,33 @@ class HookTests(unittest.TestCase):
         self.assertEqual("DRAFT_FORCE", res.get("reason_code"))
         self.assertIn("workflow.py revise", res["reason"])
 
+    def test_C_D2_backslash_continuations_are_one_command(self):
+        """Certification C-D2: a command wrapped with backslash-newline was split into several
+        "commands" and denied as if the plan state forbade it; the one-line form was allowed."""
+        draft = (
+            "python .agents/scripts/workflow.py draft --repo . --task-id t1 \\\n"
+            "  --kind FEATURE \\\n"
+            '  --outcome "Show a toast"'
+        )
+        res = self.call("run_command", {"CommandLine": draft})
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+        self.assertEqual(res["decision"], self.call("run_command", {"CommandLine": draft.replace(" \\\n ", "")})["decision"])
+        # Joined lines still meet the whole-command checks.
+        res = self.call("run_command", {"CommandLine": draft + " \\\n  --force"})
+        self.assertEqual("DRAFT_FORCE", res.get("reason_code"))
+        self.activate(status="AWAITING_DEVELOPER_APPROVAL")
+        revise = (
+            "python .agents/scripts/workflow.py revise --repo . --task-id task-one \\\n"
+            "  --expected-files app/src/main/res/values/strings.xml \\\n"
+            "  --expected-surfaces LOCALIZATION"
+        )
+        res = self.call("run_command", {"CommandLine": revise})
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+        # Real newlines still separate commands, and a denied segment is named in the reason.
+        res = self.call("run_command", {"CommandLine": "git status\ntouch app/owned.txt"})
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("'touch app/owned.txt'", res["reason"])
+
     def test_router_resume_for_stale_ready_delivery_is_allowed(self):
         """The router routes a stale READY task to `task resume`; the hook must not block its own advice."""
         self.activate(status="READY_FOR_DELIVERY")
@@ -296,6 +323,30 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", res_mod["decision"])
         self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res_mod.get("reason_code"))
 
+    def test_MUTATION_SCOPE_006b_drift_names_missing_surfaces_of_all_planned_files(self):
+        # Round 5 (O4): each planned file's first edit revealed one more surface, so one small change
+        # needed up to three approvals. The first denial now names them all.
+        screen = self.repo / "app/src/main/kotlin/com/example/Screen.kt"
+        screen.write_text("package com.example\n\nimport androidx.compose.runtime.Composable\n\n@Composable\nfun Screen() {}\n", encoding="utf-8")
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml", "app/src/main/res/layout/activity_main.xml", "app/src/main/kotlin/com/example/Screen.kt"],
+            expected_surfaces=["LOCALIZATION"],
+            expected_modules=[":app"],
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/main/res/layout/activity_main.xml"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
+        self.assertIn("Surfaces missing across the planned files: COMPOSE_UI, XML_UI.", res["reason"])
+        self.assertIn("--expected-surfaces COMPOSE_UI,LOCALIZATION,XML_UI", res["reason"])
+        # Certification C-D4: the hint is a complete one-line revise that keeps files and modules.
+        self.assertIn(
+            "Revise the plan in one command: python .agents/scripts/workflow.py revise --repo . --task-id '<task-id>'"
+            " --expected-files app/src/main/kotlin/com/example/Screen.kt,app/src/main/res/layout/activity_main.xml,app/src/main/res/values/strings.xml"
+            " --expected-modules :app --expected-surfaces COMPOSE_UI,LOCALIZATION,XML_UI",
+            res["reason"],
+        )
+        self.assertNotIn("\n", res["reason"])
+
     def test_MUTATION_SCOPE_007_revised_approval_allows_expanded_target(self):
         self.activate(
             expected_files=["app/src/main/res/values/strings.xml"],
@@ -384,6 +435,15 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "rg safe | tee app/status.txt"})["decision"])
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "rg $(touch app/owned)"})["decision"])
 
+    def test_C1_file_test_is_read_only_without_a_task(self):
+        # Certification C1: a read-only `test -f` outside a task was denied.
+        for command in ("test -f app/build.gradle.kts", "[ -f app/build.gradle.kts ]", "test -d app && ls app"):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.call("run_command", {"CommandLine": command})["decision"])
+        for command in ("test -f app/x > owned", "[ -f app/x ] || touch owned", "test -f $(touch owned)"):
+            with self.subTest(command=command):
+                self.assertEqual("deny", self.call("run_command", {"CommandLine": command})["decision"])
+
     def test_task_context_is_bounded_read_only_discovery(self):
         targeted = "python .agents/scripts/task_context.py --repo . --file app/src/main/kotlin/com/example/MainActivity.kt --json"
         result = self.call("run_command", {"CommandLine": targeted})
@@ -407,7 +467,14 @@ class HookTests(unittest.TestCase):
     def test_targeted_task_context_satisfies_discovery_anchor(self):
         targeted = "python .agents/scripts/task_context.py --repo . --symbol MainActivity --json"
         self.assertEqual("allow", self.call("run_command", {"CommandLine": targeted})["decision"])
-        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app", "Query": "MainActivity"})["decision"])
+        from discovery_receipt import load_latest_discovery_receipt
+        receipt = load_latest_discovery_receipt(self.repo)
+        anchor_dir = str(Path(receipt["resolved_paths"][0]).parent.as_posix())
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": anchor_dir, "Query": "MainActivity"})["decision"])
+        # A targeted anchor no longer opens the whole module (round 5 hardening).
+        whole_module = self.call("grep_search", {"SearchPath": "app", "Query": "MainActivity"})
+        self.assertEqual("deny", whole_module["decision"])
+        self.assertIn("DISCOVERY_SCOPE_EXPANSION_REQUIRED", whole_module["reason"])
 
     def test_failed_task_context_does_not_satisfy_discovery_anchor(self):
         invalid = "python .agents/scripts/task_context.py --repo . --file app/src/main/Missing.kt --json"

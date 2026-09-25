@@ -27,7 +27,15 @@ def compute_receipt_id(mode: str, query_kind: str, query_value: str, graph_fp: s
     return f"disc-{h}"
 
 
-def compute_allowed_search_roots(resolved_paths: list[str], resolved_modules: list[str] | None = None) -> list[str]:
+def compute_allowed_search_roots(
+    resolved_paths: list[str],
+    resolved_modules: list[str] | None = None,
+    *,
+    include_module_roots: bool = True,
+) -> list[str]:
+    """Search roots granted by a discovery. Whole-module roots are granted only when the
+    discovery itself was about that module; a file, symbol or architecture anchor stays
+    within the directories the graph returned."""
     roots: set[str] = set()
     for p_str in resolved_paths:
         norm = str(p_str).replace("\\", "/").strip().lstrip("/")
@@ -46,7 +54,7 @@ def compute_allowed_search_roots(resolved_paths: list[str], resolved_modules: li
                 if any(part in {"feature", "features", "ui", "domain", "data", "presentation"} for part in parts):
                     roots.add(grandparent)
 
-    if resolved_modules:
+    if resolved_modules and include_module_roots:
         for mod in resolved_modules:
             m_norm = mod.strip().lstrip(":").replace(":", "/")
             if m_norm:
@@ -71,7 +79,9 @@ def create_discovery_receipt(
     norm_symbols = sorted({str(s).strip() for s in resolved_symbols if str(s).strip()})
 
     if allowed_search_roots is None:
-        search_roots = compute_allowed_search_roots(norm_paths, norm_modules)
+        search_roots = compute_allowed_search_roots(
+            norm_paths, norm_modules, include_module_roots=str(query_kind).lower() == "module",
+        )
     else:
         search_roots = sorted({str(r).replace("\\", "/").strip().lstrip("/") for r in allowed_search_roots if str(r).strip()})
 
@@ -128,6 +138,11 @@ def load_discovery_receipt(repo: Path, receipt_id: str) -> dict[str, Any] | None
     return None
 
 
+# Set by the tool hook to the start of the calling conversation: a receipt written before it came
+# from an earlier conversation and grants no scope in this one. None keeps the age check only.
+RECEIPT_NOT_BEFORE: float | None = None
+
+
 def load_latest_discovery_receipt(repo: Path, max_age_seconds: float = 3600.0) -> dict[str, Any] | None:
     disc_dir = repo / DISCOVERY_CACHE_SUBDIR
     latest_file = disc_dir / "latest-discovery.json"
@@ -140,6 +155,8 @@ def load_latest_discovery_receipt(repo: Path, max_age_seconds: float = 3600.0) -
     try:
         st = latest_file.stat()
         if max_age_seconds > 0 and (time.time() - st.st_mtime) > max_age_seconds:
+            return None
+        if RECEIPT_NOT_BEFORE is not None and st.st_mtime < RECEIPT_NOT_BEFORE:
             return None
         data = json.loads(latest_file.read_text(encoding="utf-8"))
         if isinstance(data, dict):
@@ -209,7 +226,35 @@ def check_discovery_freshness(repo: Path, receipt: dict[str, Any]) -> tuple[bool
         if len(missing_paths) == len(resolved_paths[:3]):
             return False, f"PRIMARY_TARGET_MISSING: all primary paths {missing_paths} are missing"
 
+    # 3. The graph the receipt was computed from must still be the current graph.
+    receipt_fp = str(receipt.get("graph_fingerprint") or "").strip()
+    current_fp = current_graph_fingerprint(repo)
+    if receipt_fp and current_fp and receipt_fp != current_fp:
+        return False, f"GRAPH_CHANGED: receipt graph {receipt_fp[:12]} is not the current graph {current_fp[:12]}; query the graph again"
+
     return True, "FRESH"
+
+
+def current_graph_fingerprint(repo: Path) -> str:
+    """Fingerprint of the last saved project graph, from its sidecar ('' when unknown)."""
+    for cache in (repo / ".agents" / "cache" / "project_graph.json", repo / "agents" / "cache" / "project_graph.json"):
+        sidecar = cache.with_name(cache.name + ".fingerprint")
+        try:
+            if sidecar.is_file():
+                return sidecar.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+    return ""
+
+
+def clear_latest_discovery_receipt(repo: Path) -> None:
+    """Forget the latest discovery so a finished task's anchor does not carry into the next task."""
+    disc_dir = repo / DISCOVERY_CACHE_SUBDIR
+    for path in [disc_dir / "latest-discovery.json", *disc_dir.glob("disc-*.json")]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 cache_discovery_receipt = save_discovery_receipt

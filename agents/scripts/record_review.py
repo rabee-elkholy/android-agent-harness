@@ -14,6 +14,7 @@ from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_f
 from _vnext_common import active_review_package_path as _vnext_active_package_path  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
 from workflow import SENSITIVE_SURFACES, assert_active_run_fresh, state_root, task_dir  # noqa: E402
+from review_sources import is_claude_transcript, read_claude_subagent_transcript  # noqa: E402
 
 
 def active_review_package_path(repo: Path, current_run: dict, root: Path | None = None) -> Path:
@@ -395,7 +396,10 @@ def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, res
     package_sha = sha256_file(package)
     protocol_version = int(current.get("review_protocol_version") or 1)
 
-    if protocol_version >= 2:
+    # Installed reviewer agents end with a HARNESS_REVIEW_RESULT_V2 block on every host. A V1 run
+    # (hosts without trusted transcripts) reads that block when no legacy footer is present; the
+    # V2 parser binds the full package hash, task, run and reviewer, and trust stays V1.
+    if protocol_version >= 2 or (not FOOTER_PATTERN.search(text) and '"schema_version"' in text):
         from review_orchestrator import parse_structured_result
         parsed = parse_structured_result(
             text=text,
@@ -504,6 +508,7 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
             "provenance": str(report.get("provenance") or "unspecified"),
             "independent_execution_verified": bool(report.get("independent_execution_verified", False)),
             "execution_proof": report.get("execution_proof"),
+            **{key: report[key] for key in ("transcript_path", "transcript_sha256") if report.get(key)},
         })
 
     missing = required - seen
@@ -618,7 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", action="append", default=[])
     parser.add_argument("--response", action="append", default=[], metavar="REVIEWER=PATH", help="Ingest an unchanged reviewer response with its evidence footer")
     parser.add_argument("--response-text", action="append", default=[], metavar="REVIEWER=TEXT", help="Ingest an unchanged reviewer response text with its evidence footer")
-    parser.add_argument("--from-subagent", action="append", default=[], metavar="REVIEWER=CONV_ID_OR_PATH", help="Auto-harvest subagent transcript and record review")
+    parser.add_argument("--from-subagent", action="append", default=[], metavar="REVIEWER=CONV_ID_OR_PATH", help="Auto-harvest subagent transcript and record review; on Claude Code pass the subagent transcript path (JSONL)")
     parser.add_argument("--subagent-id", default="", help="Subagent conversation ID or execution reference proving independent reviewer run")
     parser.add_argument("--verdict", action="append", default=[], metavar="[REVIEWER=]VERDICT", help="Record a reviewer verdict directly (e.g. bug-reviewer-agent=PASS, or PASS with --reviewer)")
     parser.add_argument("--reviewer", help="Reviewer name when recording a single verdict with --verdict")
@@ -811,6 +816,24 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValidationError("--from-subagent must be REVIEWER=CONVERSATION_ID")
             reviewer = reviewer.strip()
             conv_id = conv_id.strip()
+            given = Path(conv_id).expanduser()
+            if is_claude_transcript(given):
+                # Claude Code: ingest the reviewer's last reply unchanged; no quoting, no copy.
+                extracted_text, identity = read_claude_subagent_transcript(given)
+                rep = response_text_to_report(repo, args.task, reviewer, extracted_text)
+                severity = str(policy.get("severity") or "").upper()
+                sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+                if severity in ("HIGH", "CRITICAL") or sensitive:
+                    raise ValidationError(
+                        f"independent execution verification failed for {reviewer}: a Claude transcript is not trusted "
+                        "execution proof for HIGH/CRITICAL or sensitive changes"
+                    )
+                rep.update(identity)
+                rep["provenance"] = "claude_subagent_transcript"
+                rep["independent_execution_verified"] = False
+                rep["execution_proof"] = None
+                (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+                continue
             transcript_file = _find_subagent_transcript(conv_id)
             if not transcript_file or not transcript_file.is_file():
                 p_cand = Path(conv_id)

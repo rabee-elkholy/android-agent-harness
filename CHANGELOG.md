@@ -4,6 +4,57 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [Unreleased]
+
+Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a large multi-module app using version-catalog plugin aliases. Results: [docs/benchmark/results-2026-09-25-round5.md](docs/benchmark/results-2026-09-25-round5.md).
+
+### Certification run fixes (C-D2 to C-D6, C1)
+
+Defects found by the Claude Code certification run ([docs/benchmark/certification-progress.md](docs/benchmark/certification-progress.md)).
+
+- C-D2: a command wrapped with backslash-newline is one command; it was denied with a misleading plan-state reason. Real newlines still separate commands, and a denied compound command names the denied segment.
+- C-D3: `record_review.py --from-subagent <role>=<path>` and `phase-review complete --response-file <path>` read a Claude Code subagent transcript (JSONL) and ingest the last reply unchanged. Only Claude's transcript locations are accepted (`~/.claude/projects/**`, `<tmp>/claude-*/**/tasks/*.output`); the path and its sha256 are recorded and independent execution stays unverified. On the Claude hook, text inside single quotes is no longer treated as a pipe, redirection or substitution (Antigravity keeps the strict check). The Claude rules name the transcript path as the ingestion method.
+- C-D4: `revise` keeps every plan field it is not given (files, modules, surfaces, kind, strategies, phases); a revision with only `--expected-surfaces` dropped the files and modules and disabled the write-scope guard. The drift denial prints one complete `revise` command with files, modules and surfaces.
+- C-D5: new installs (`PLAN_SCOPE = "files_required"`) refuse a non-trivial draft without `--expected-files` with `PLAN_SCOPE_REQUIRED`, listing the files discovery found. T0/micro plans are exempt; existing installs are unchanged.
+- C-D6: `phase-review complete --response-file` with something that is not a file is a usage error instead of a traceback.
+- C1: `test -f` and `[ -f ... ]` are read-only commands outside a task.
+
+### Claude Code
+
+- The Claude Code bridge prepares verification with `--host claude`; the hook no longer demands `--host antigravity` from every host, and Claude can no longer claim the Antigravity host.
+- Review protocol V1 runs read the `HARNESS_REVIEW_RESULT_V2` block that installed reviewers emit, so Claude reviews can be recorded.
+- Claude Code file edits (Edit, Write, MultiEdit, NotebookEdit) go through the plan-scoped write checks; `update` widens installs that registered the hook for Bash only.
+- On hosts without trusted transcripts (review protocol V1), the router stops before assemble for HIGH or CRITICAL changes with `REVIEW_OVERRIDE_REQUIRED` (a developer-terminal command) and for sensitive surfaces with `SENSITIVE_REVIEW_PROOF_UNAVAILABLE`, instead of failing at completion. `docs/tool-support.md` lists these limits.
+- Claude rules: show the `PLAN_SUMMARY` block verbatim for approval, run Gradle-backed commands in the foreground with the maximum timeout, and never run the review override.
+
+### Discovery and planning
+
+- Module discovery resolves `alias(libs.plugins.…)` through `gradle/*.versions.toml`; projects that apply Android plugins by alias were seen as having no modules.
+- The drift remediation command keeps the root module `:`, which ended a revise loop.
+- Editing an existing file in a scope shared by several architecture families keeps its local conventions instead of failing as ambiguous.
+- `draft` and `revise` reject unknown `--expected-surfaces` values and declare the modules of the planned files.
+- The router no longer routes a BUG task without RED evidence to `COMPLETE_TASK`.
+- A targeted discovery no longer grants whole-module search roots; receipts go stale when the graph changes, and ending a task clears the latest receipt.
+- `:feature:home` alone is not a cross-module scope, and resource XML is matched by its directory segment.
+- The setup wizard ignores test source-set manifests and disabled aliases when recommending the launcher.
+- `draft` and `revise` print a `PLAN_SUMMARY` block (phases, files, modules, surfaces, tests, plan hash) built from the registered plan.
+- A write-time drift denial names every surface the planned files still lack, with the `--expected-surfaces` value for a single revision.
+- A discovery receipt written before the current conversation started grants no search scope in it (hosts that send a conversation id).
+- `view_file` reads of code outside the task or discovery scope stay allowed and are recorded as `READ_OUTSIDE_SCOPE` in the audit log.
+- Install explains an app-owned `.agents` directory (for example `.agents/skills`): it lists the entries and the move needed, instead of reporting an existing harness. The install prompt no longer fixes the host to Antigravity.
+
+### Gates and evidence
+
+- `check_strings` accepts a `<string>` and a `<plurals>` with the same name.
+- The classifier no longer resolves built-in property types such as `String` to same-named extension files, which classified ordinary entity changes as CRYPTO.
+- The java toolchain identity ignores `Picked up JAVA_TOOL_OPTIONS` notices, which made verifications stale when a proxy port changed.
+- Gradle 9 test failures, which print no `* Try:` section, are attributed to the test task, so `--capture-red` records RED evidence again.
+- Before an edit, a tracked file's sensitive surfaces come from its diff rather than its existing text, so editing a ViewModel that already mentions sign-in no longer makes the task sensitive.
+- New installs run the unit tests of every changed module (`UNIT_TEST_SCOPE = "changed_modules"`), one Gradle run per module; a change across two modules no longer falls back to `:app` tests that skip the changed test. Existing installs keep single-task targeting.
+- A missing translation names its options: add it, `translatable="false"` or `tools:ignore="MissingTranslation"` for text that is not translated, or `l10n-todo="true"` when a translation service fills it.
+- With device verification disabled, `run_device.py install-start` says there is no device step and points to `task status --next`, instead of failing as an environment problem.
+- Preflight fails when a task newly exports a receiver, service or provider without a permission, unless the element records the decision with the matching Lint id in `tools:ignore`.
+
 ## [1.1.0] - 2026-09-25
 
 First release line declared stable for daily use on Google Antigravity. It closes every defect found across four end-to-end rounds in which Antigravity worked on a production Android app with a human developer in the loop.

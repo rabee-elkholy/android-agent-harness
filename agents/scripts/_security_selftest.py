@@ -97,6 +97,82 @@ class SecurityTests(unittest.TestCase):
         result = json.loads(proc.stdout)["hookSpecificOutput"]
         self.assertEqual("deny", result["permissionDecision"])
 
+    def claude_bridge(self, command: str) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True, text=True, env=self.env, check=False, timeout=15,
+        )
+        return json.loads(proc.stdout)["hookSpecificOutput"]
+
+    def claude_tool(self, tool_name: str, tool_input: dict) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": tool_name, "tool_input": tool_input}),
+            capture_output=True, text=True, env=self.env, check=False, timeout=15,
+        )
+        return json.loads(proc.stdout)["hookSpecificOutput"]
+
+    def test_claude_bridge_guards_file_edits(self):
+        # DEFECT-CLAUDE-EDIT-01 (round 5): only Bash reached the engine, so Edit/Write were never
+        # checked against the approved plan on Claude Code.
+        self._reset_active_task()
+        target = str(self.repo / "app/src/main/kotlin/A.kt")
+        for tool, tool_input in (
+            ("Edit", {"file_path": target, "old_string": "a", "new_string": "b"}),
+            ("Write", {"file_path": target, "content": "class A"}),
+            ("MultiEdit", {"file_path": target, "edits": []}),
+            ("NotebookEdit", {"notebook_path": str(self.repo / "n.ipynb"), "new_source": "x"}),
+        ):
+            with self.subTest(tool=tool):
+                self.assertEqual("deny", self.claude_tool(tool, tool_input)["permissionDecision"])
+        self.assertEqual("allow", self.claude_tool("Read", {"file_path": target})["permissionDecision"])
+
+    def test_claude_settings_hook_covers_edit_tools_and_widens_old_installs(self):
+        from install_tool_adapters import ensure_cc_hooks
+        ensure_cc_hooks(self.repo, "python", dry_run=False)
+        settings = self.repo / ".claude/settings.json"
+        group = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]
+        for tool in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+            self.assertIn(tool, group["matcher"].split("|"))
+        group["matcher"] = "Bash"
+        settings.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}), encoding="utf-8")
+        ensure_cc_hooks(self.repo, "python", dry_run=False)
+        widened = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        self.assertEqual(1, len(widened))
+        self.assertIn("Edit", widened[0]["matcher"].split("|"))
+
+    def test_claude_bridge_requires_its_own_review_host(self):
+        # DEFECT-HOST-01 (round 5): a Claude Code install could never prepare verification,
+        # because the engine demanded --host antigravity from every host.
+        prepare = "python .agents/harness.py task prepare-verification --repo . --task-id t"
+        denied = self.claude_bridge(f"{prepare} --host antigravity")
+        self.assertEqual("deny", denied["permissionDecision"])
+        self.assertIn("--host claude", denied["permissionDecisionReason"])
+        self.assertEqual("deny", self.claude_bridge(prepare)["permissionDecision"])
+        self.assertNotIn("REVIEW_HOST_REQUIRED", self.claude_bridge(f"{prepare} --host claude")["permissionDecisionReason"])
+        # Antigravity, which calls the engine without a host marker, is unchanged.
+        engine = self.engine(f"{prepare} --host claude")
+        self.assertEqual("deny", engine["decision"])
+        self.assertIn("--host antigravity", engine["reason"])
+
+    def test_C_D3_claude_single_quoted_text_is_not_a_shell_operator(self):
+        # Certification C-D3: a reviewer reply in single quotes was denied for its backticks, `|`
+        # and `<`, although bash treats them as literal text there.
+        record = f"python {SCRIPTS / 'record_review.py'} --task t --response-text"
+        quoted = f"{record} 'bug-reviewer-agent=Checked `run()` | callers < 3 > 2 & $HOME'"
+        self.assertEqual("allow", self.claude_bridge(quoted)["permissionDecision"])
+        for command in (
+            f'{record} "bug-reviewer-agent=$(touch owned)"',
+            f'{record} "bug-reviewer-agent=`touch owned`"',
+            f"{record} 'bug-reviewer-agent=x' | tee owned",
+            f"{record} 'bug-reviewer-agent=x' > owned",
+            f"{record} bug-reviewer-agent=x`touch owned`",
+            f"{record} 'unterminated",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"])
+        # Antigravity (engine called without a host marker) keeps the strict character check.
+        self.assertEqual("deny", self.engine(quoted)["decision"])
+
     def test_copilot_bridge_denies_and_malformed_fails_closed(self):
         proc = subprocess.run(
             [sys.executable, str(COPILOT)], input=json.dumps({"toolName": "bash", "toolArgs": {"command": "adb root"}}),
@@ -315,6 +391,25 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("normal_str", res)
         self.assertNotIn("wip_str", res, "tools:ignore='MissingTranslation' should be excluded from missing parity check")
         self.assertNotIn("todo_str", res, "l10n-todo='true' should be excluded from missing parity check")
+
+    def test_string_and_plurals_may_share_a_name(self):
+        # DEFECT-STRINGS-DUP-01 (round 5): R.string.x and R.plurals.x are separate resource types.
+        sys.path.insert(0, str(SCRIPTS))
+        from check_strings import _parse_resources
+        strings_xml = self.repo / "app/src/main/res/values/strings.xml"
+        strings_xml.parent.mkdir(parents=True, exist_ok=True)
+        strings_xml.write_text(
+            "<resources>\n"
+            "    <plurals name=\"episode_count\"><item quantity=\"one\">%d episode</item><item quantity=\"other\">%d episodes</item></plurals>\n"
+            "    <string name=\"episode_count\">Episode Count</string>\n"
+            "    <string name=\"twice\">A</string>\n"
+            "    <string name=\"twice\">B</string>\n"
+            "</resources>\n",
+            encoding="utf-8",
+        )
+        _res, dups = _parse_resources(strings_xml)
+        self.assertEqual(1, len(dups), dups)
+        self.assertIn('Duplicate <string name="twice">', dups[0])
 
 
     def test_git_hooks_and_gradlew_file_mutations_denied(self):

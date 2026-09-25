@@ -277,12 +277,13 @@ def resolve_architecture_contract(
             match_type = "UNIQUE_LOCAL"
         elif (
             mode == "PRESERVE"
-            and m_type == "NONE"
+            and m_type in ("NONE", "AMBIGUOUS")
             and target_scope.strip()
             and (repo / target_scope.replace("\\", "/").strip("/")).is_file()
         ):
-            # An existing file outside every family (domain, data, core code) keeps
-            # its own local conventions; no family is being chosen or extended.
+            # An existing file outside every family (domain, data, core code), or in a scope
+            # several families share, keeps its own local conventions; no family is being
+            # chosen or extended.
             source_family = None
             target_family = None
         elif len(families) > 1:

@@ -79,6 +79,10 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
         "SELECTED_AI_TOOLS": list(tools) if isinstance(tools, list) else [part.strip() for part in str(tools).split(",") if part.strip()],
         "PRIMARY_AI_HOST": primary_host_from_tools(tools),
         "MODEL_CALL_BUDGET": int(answers.get("model_call_budget") or 20),
+        # Installs whose answers predate this key keep single-task unit-test targeting.
+        "UNIT_TEST_SCOPE": answers.get("unit_test_scope") or "legacy",
+        # Installs whose answers predate this key accept a draft without --expected-files.
+        "PLAN_SCOPE": answers.get("plan_scope") or "legacy",
     }
     lines = ['"""Generated project identity and vNext policy configuration."""', "from __future__ import annotations", ""]
     lines.extend(f"{key} = {value!r}" for key, value in values.items())

@@ -28,6 +28,20 @@ SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 # redirection and $(...) are rejected before this by SHELL_LAUNDERING.
 POWERSHELL_READ_CMDLETS = {"get-childitem", "gci", "dir", "get-content", "gc", "select-string", "sls", "test-path", "get-location"}
 
+# Content-derived surfaces that a pre-edit check must not take from a tracked file's existing text.
+PRE_EXISTING_CONTENT_SURFACES = {"AUTH", "BILLING", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
+
+
+def _is_tracked(root: Path, rel_posix: str) -> bool:
+    import subprocess
+    try:
+        return subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", rel_posix],
+            cwd=str(root), capture_output=True, check=False, timeout=10,
+        ).returncode == 0
+    except Exception:
+        return False
+
 
 def _tokens(command: str) -> list[str]:
     # Windows paths must retain backslashes. Reject ambiguous shell syntax;
@@ -90,7 +104,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[2:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb"}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "["}:
         return executable, tokens[1:]
     if executable in POWERSHELL_READ_CMDLETS:
         return "powershell-read", tokens[1:]
@@ -127,6 +141,9 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return bool(args) and args[0].lower() in {"dependencies", "tasks", "projects", "properties", "help", "--help", "-h"}
     if name == "powershell-read":
         return True
+    if name in {"test", "["}:
+        # File tests (`test -f x`, `[ -d x ]`) only read; operators around them are checked as segments.
+        return name == "test" or args[-1:] == ["]"]
     if name in {"rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat"}:
         return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
     if name == "compileall":
@@ -313,6 +330,11 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             surfaces = candidate_res.get("surfaces") or []
         except Exception:
             surfaces = ["UNKNOWN"]
+        if _is_tracked(root, rel_posix):
+            # Before an edit the classifier sees the whole file, so an existing file that already
+            # mentions sign-in or purchases would make any edit sensitive. Sensitive surfaces of a
+            # tracked file are judged on its actual diff at prepare-verification and by the verifier.
+            surfaces = [s for s in surfaces if s not in PRE_EXISTING_CONTENT_SURFACES]
 
         try:
             modules = changed_modules(root, {"task_changes": [{"path": rel_posix}]})
@@ -328,17 +350,77 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             actual_files=[rel_posix],
         )
         if drift:
+            hint = _all_missing_surfaces_hint(root, plan, rel_posix, drift, classify, check_material_drift)
             return (
                 False,
-                f"Write target '{rel_posix}' causes material scope drift: {', '.join(drift)}. Plan reconciliation and revised approval required.",
+                f"Write target '{rel_posix}' causes material scope drift: {', '.join(drift)}. Plan reconciliation and revised approval required.{hint}",
                 "SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL",
             )
 
     return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
 
 
+def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[str], classify, check_material_drift) -> str:
+    """Name every surface the planned files still lack, so one revision covers them all.
+
+    Without this, each planned file's first edit revealed one more surface and one small change
+    needed up to three approvals.
+    """
+    missing = {item.split(":", 1)[1] for item in drift if item.startswith("surface:")}
+    for rel in plan.get("expected_files") or []:
+        rel = str(rel).replace("\\", "/").strip("/")
+        if not rel or rel == target or rel in set(plan.get("external_writes") or []) or not (root / rel).is_file():
+            continue
+        try:
+            surfaces = classify(root, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False).get("surfaces") or []
+        except Exception:
+            continue
+        if _is_tracked(root, rel):
+            surfaces = [s for s in surfaces if s not in PRE_EXISTING_CONTENT_SURFACES]
+        missing |= {item.split(":", 1)[1] for item in check_material_drift(plan, surfaces) if item.startswith("surface:")}
+    files = set(plan.get("expected_files") or []) | {item.split(":", 1)[1] for item in drift if item.startswith("file:")}
+    modules = set(plan.get("expected_modules") or []) | {
+        ":" + item[len("module:"):].lstrip(":") for item in drift if item.startswith("module:")
+    }
+    surfaces = set(plan.get("expected_surfaces") or []) | missing
+    # A partial revise keeps omitted fields, but the full command shows the developer the whole scope.
+    import shlex
+    command = f"python .agents/scripts/workflow.py revise --repo . --task-id {shlex.quote(str(plan.get('task_id') or '<task-id>'))}"
+    for flag, values in (("--expected-files", files), ("--expected-modules", modules), ("--expected-surfaces", surfaces)):
+        if values:
+            command += f" {flag} {shlex.quote(','.join(sorted(values)))}"
+    missing_text = f" Surfaces missing across the planned files: {', '.join(sorted(missing))}." if missing else ""
+    return f"{missing_text} Revise the plan in one command: {command}"
+
+
+def join_continuations(command: str) -> str:
+    """Replace backslash-newline outside quotes with a space, as a POSIX shell does.
+
+    Agents wrap long harness commands over several lines; each line is not a separate command.
+    """
+    out, quote, i = [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "\\" and command.startswith(("\\\n", "\\\r\n"), i):
+            out.append(" ")
+            i += 3 if command[i + 1] == "\r" else 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _split_segments(command: str) -> list[str] | None:
-    """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote."""
+    """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote.
+
+    Backslash-newline outside quotes is a line continuation, not a separator.
+    """
+    command = join_continuations(command)
     segments, current, quote, i = [], [], "", 0
     while i < len(command):
         ch = command[i]
@@ -365,20 +447,67 @@ def _split_segments(command: str) -> list[str] | None:
     return [item.strip() for item in segments if item.strip()]
 
 
+def _without_single_quoted_text(command: str) -> str | None:
+    """The command with single-quoted text removed, as a POSIX shell reads it.
+
+    Inside single quotes nothing is special, so a reviewer reply there cannot pipe, redirect or
+    substitute. Double-quoted text is kept because `$` and backticks still expand in it, and a
+    backslash outside single quotes keeps the next character. None for an unterminated quote.
+    """
+    out, quote, i = [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            if ch == '"':
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+            if ch == "'":
+                out.append(" ")
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return None if quote else "".join(out)
+
+
+def _posix_shell_host() -> bool:
+    # Claude Code runs Bash on every platform; its bridge marks the host. Antigravity calls the
+    # engine without a marker and may run PowerShell or cmd, so it keeps the character check.
+    return os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude"
+
+
 def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if isinstance(repo, str) and (isinstance(command, Path) or (" " in repo and not " " in str(command))):
         repo, command = command, repo
     normalized = str(command or "").strip()
     if not normalized:
         return True, "empty command"
-    if SHELL_LAUNDERING.search(normalized):
+    operator_text = _without_single_quoted_text(normalized) if _posix_shell_host() else normalized
+    if operator_text is None:
+        return False, "unterminated quote in command"
+    if SHELL_LAUNDERING.search(operator_text):
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
     segments = _split_segments(normalized)
     if segments is None:
         return False, "unterminated quote in command"
     if len(segments) > 1:
-        decisions = [command_allowed(repo, item) for item in segments]
-        return next((decision for decision in decisions if not decision[0]), (True, "every command segment is authorized"))
+        for item in segments:
+            allowed, reason = command_allowed(repo, item)
+            if not allowed:
+                return False, f"command segment '{item}' is denied: {reason}"
+        return True, "every command segment is authorized"
+    if segments:
+        normalized = segments[0]
     if _workflow_action(normalized, repo) in BOOTSTRAP_ACTIONS:
         return True, "task-authority workflow command"
     if _is_read_only(normalized, repo):

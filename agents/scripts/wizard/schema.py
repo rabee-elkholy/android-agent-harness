@@ -85,6 +85,8 @@ ALLOWED_NORMALIZED_KEYS = {
     "gemini_config",
     "assemble_now",
     "model_call_budget",
+    "unit_test_scope",
+    "plan_scope",
     "zoho_mcp",
     "chat_language",
     "zoho_language",

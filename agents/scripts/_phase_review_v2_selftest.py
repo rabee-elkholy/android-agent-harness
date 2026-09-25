@@ -927,6 +927,56 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         result_file = phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json"
         self.assertEqual("reviewer_response_text_unverified", read_json(result_file)["provenance"])
 
+    def test_C_D3_response_file_accepts_claude_subagent_transcript(self) -> None:
+        # Certification C-D3: a Claude reviewer reply could not be handed over unchanged. The
+        # subagent transcript path is read directly; its path and sha256 are recorded, unverified.
+        import hashlib
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        reviewer = reviewers[0]
+        block = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": meta["phase_review_run_id"],
+            "reviewer": reviewer, "review_package_sha256": meta["package_sha256"],
+            "verdict": "PASS", "findings": [],
+        })
+        claude_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = claude_home / "projects/-app/s1/subagents/agent-r1.jsonl"
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "Review phase p1."}},
+            {"type": "assistant", "message": {"id": "m9", "role": "assistant", "content": [
+                {"type": "text", "text": "Checked `x` | y < z.\n```json\n" + block + "\n```"}]}},
+        ]
+        write_file(transcript, "".join(json.dumps(line) + "\n" for line in lines))
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            exit_code = phase_review.main([
+                "complete", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
+                "--reviewer", reviewer, "--execution-id", "agent-r1", "--response-file", str(transcript),
+            ])
+        self.assertEqual(0, exit_code)
+        result = read_json(phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json")
+        self.assertEqual("PASS", result["result"]["verdict"])
+        self.assertFalse(result["independent_execution_verified"])
+        self.assertEqual(str(transcript.resolve()), result["response_source"]["transcript_path"])
+        self.assertEqual(hashlib.sha256(transcript.read_bytes()).hexdigest(), result["response_source"]["transcript_sha256"])
+
+    def test_C_D6_response_file_that_is_not_a_file_is_a_usage_error(self) -> None:
+        import contextlib
+        import io
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
+        task_id, reviewers, _, _ = self._setup_dispatch_state()
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = phase_review.main([
+                "complete", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
+                "--reviewer", reviewers[0], "--execution-id", "r1", "--response-file", "PASS no findings",
+            ])
+        self.assertEqual(1, code)
+        self.assertIn("--response-file must be the path of a file", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
     def test_AUDIT_005_nontrusted_dispatch_has_public_cli(self) -> None:
         write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'codex'\n")
         task_id, reviewers, _, meta = self._setup_dispatch_state()

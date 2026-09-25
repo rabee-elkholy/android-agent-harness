@@ -166,10 +166,46 @@ def discover_modules(repo: Path, paths: list[Path] | None = None) -> list[str]:
     return modules
 
 
+def _catalog_plugin_ids(repo: Path) -> dict[str, str]:
+    """Map version-catalog plugin aliases (android-library -> android.library) to plugin ids."""
+    ids: dict[str, str] = {}
+    for toml in sorted((repo / "gradle").glob("*.versions.toml")):
+        section = ""
+        for line in read_text(toml).splitlines():
+            stripped = line.strip()
+            header = re.match(r"^\[([^\]]+)\]", stripped)
+            if header:
+                section = header.group(1).strip()
+                continue
+            if section != "plugins":
+                continue
+            entry = re.match(r'^([\w.-]+)\s*=\s*(.+)$', stripped)
+            if not entry:
+                continue
+            value = entry.group(2)
+            plugin_id = re.search(r'\bid\s*=\s*["\']([^"\']+)["\']', value) or re.match(r'["\']([^"\':]+)', value)
+            if plugin_id:
+                ids[re.sub(r"[-_.]", ".", entry.group(1)).lower()] = plugin_id.group(1)
+    return ids
+
+
+def _resolve_catalog_aliases(text: str, catalog_ids: dict[str, str]) -> str:
+    """Rewrite alias(libs.plugins.x.y) as id("<plugin id>") so id-based checks see it."""
+    if not catalog_ids or "alias" not in text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        plugin_id = catalog_ids.get(re.sub(r"[-_.]", ".", match.group(1)).lower())
+        return f'id("{plugin_id}")' if plugin_id else match.group(0)
+
+    return re.sub(r"alias\(\s*\w+\.plugins\.([\w.]+)\s*\)", replace, text)
+
+
 def discover_android_modules(repo: Path, paths: list[Path] | None = None) -> list[str]:
     modules: list[str] = []
+    catalog_ids = _catalog_plugin_ids(repo)
     for path in (paths if paths is not None else gradle_files(repo)):
-        text = read_text(path)
+        text = _resolve_catalog_aliases(read_text(path), catalog_ids)
         if not re.search(r"com\.android\.(?:application|library|dynamic-feature)|androidTarget\s*\(", text):
             continue
         if re.search(r"com\.android\.(?:application|library|dynamic-feature).*apply\s+false", text):
@@ -231,6 +267,22 @@ def discover_android_source_root(repo: Path, module: str) -> list[str]:
     return list((module_dir / "src" / "main").relative_to(repo).parts)
 
 
+# Gradle test source sets only (testDebug, androidTestFree, androidUnitTest, commonTest...),
+# so a product flavor whose name ends in "Test" keeps its launcher.
+_TEST_SOURCE_SET = re.compile(
+    r"^(?:(?:test|androidTest|testFixtures)(?:[A-Z]\w*)?|\w*(?:UnitTest|InstrumentedTest)|(?:common|jvm|android|ios|js|native)Test)$"
+)
+
+
+def _is_test_manifest(relative_parts: tuple[str, ...]) -> bool:
+    """True for manifests of test source sets such as src/androidTest or src/debugUnitTest."""
+    try:
+        source_set = relative_parts[relative_parts.index("src") + 1]
+    except (ValueError, IndexError):
+        return False
+    return bool(_TEST_SOURCE_SET.match(source_set))
+
+
 def discover_launchers(
     repo: Path,
     *,
@@ -245,8 +297,10 @@ def discover_launchers(
     for path in (manifests if manifests is not None else repo.glob("**/AndroidManifest.xml")):
         if skip_path(path, repo):
             continue
-        text = read_text(path)
         relative_parts = path.relative_to(repo).parts
+        if _is_test_manifest(relative_parts):
+            continue
+        text = read_text(path)
         try:
             source_index = relative_parts.index("src")
             module = ":" + ":".join(relative_parts[:source_index]) if source_index else ":"
@@ -264,6 +318,9 @@ def discover_launchers(
             tree = ET.parse(path)
             root = tree.getroot()
             for elem in list(root.findall(".//activity")) + list(root.findall(".//activity-alias")):
+                enabled = elem.attrib.get("{http://schemas.android.com/apk/res/android}enabled") or elem.attrib.get("android:enabled")
+                if (enabled or "").strip().lower() == "false":
+                    continue
                 has_main = False
                 has_launcher = False
                 for ifilter in elem.findall("intent-filter"):
@@ -302,6 +359,8 @@ def discover_launchers(
             act_blocks = re.findall(r"<(?:activity|activity-alias)\b[\s\S]*?</(?:activity|activity-alias)>", text)
             for block in act_blocks:
                 if "android.intent.action.MAIN" not in block or "android.intent.category.LAUNCHER" not in block:
+                    continue
+                if re.search(r'android:enabled\s*=\s*"false"', block):
                     continue
                 m = re.search(r'android:name="([^"]+)"', block)
                 if not m:
@@ -728,6 +787,8 @@ def auto_from_facts(facts: dict) -> dict:
         "gemini_config": "merge-allowlist" if facts.get("gemini") else "skip",
         "assemble_now": "tests-only",
         "model_call_budget": 10,
+        "unit_test_scope": "changed_modules",
+        "plan_scope": "files_required",
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
         "chat_language": "mirror",
         "zoho_language": "en_titles_ar_comments",

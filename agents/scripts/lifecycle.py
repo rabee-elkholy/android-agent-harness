@@ -863,12 +863,34 @@ def recover_interrupted_update(repo: Path) -> dict | None:
     return None
 
 
+def _looks_like_harness(agents: Path) -> bool:
+    return any((agents / rel).exists() for rel in ("scripts/workflow.py", "state", "harness.py", "hooks.json"))
+
+
+def _unmanaged_agents_message(agents: Path) -> str:
+    """Refusal for an app that keeps its own files in .agents (for example .agents/skills)."""
+    try:
+        entries = sorted(item.name + ("/" if item.is_dir() else "") for item in agents.iterdir())
+    except OSError:
+        entries = []
+    shown = ", ".join(entries[:10]) + (f" (+{len(entries) - 10} more)" if len(entries) > 10 else "")
+    return (
+        "target has a .agents directory that this harness did not install"
+        + (f" (entries: {shown})" if shown else "")
+        + ". The harness owns .agents entirely and will not merge into it. Nothing was changed. "
+        "Move these entries out first (for example: git mv .agents/skills <new-location>), update anything "
+        "that references them, commit, then rerun the install."
+    )
+
+
 def install(repo: Path, kit: Path) -> dict:
     repo = _validate_repo(repo)
     _assert_kit_outside_repo(repo, kit)
     recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
     kit, version = _validate_kit(kit)
+    if (repo / ".agents").exists() and not (repo / OWNERSHIP_RELATIVE).exists() and not _looks_like_harness(repo / ".agents"):
+        raise ValidationError(_unmanaged_agents_message(repo / ".agents"))
     if (repo / ".agents").exists() or (repo / OWNERSHIP_RELATIVE).exists():
         raise ValidationError("target already contains a harness; uninstall it before the clean vNext install")
     answers = _load_answers(repo)

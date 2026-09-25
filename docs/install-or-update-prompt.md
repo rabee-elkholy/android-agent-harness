@@ -11,7 +11,7 @@ This onboarding performs CLEAN INSTALL only.
 Require:
 - root Gradle Wrapper
 - no active Harness task
-- no existing managed `.agents`
+- no `.agents` (if the app has its own, STOP: move it first)
 - no incompatible `.harness-setup`
 
 If an existing Harness installation is detected:
@@ -44,7 +44,7 @@ Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
 ## Phase 3: Authoritative interview
 Run: `python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>`
 The setup wizard payload is the sole interview authority. Ask **only** the questions returned; respect `recommended` (1 per question). Context preview: `python <kit-dir>/harness_cli.py context preview --repo <app-root>`.
-- For AI host: select **Google Antigravity** (`antigravity`).
+- For AI host: the developer's host; default **Google Antigravity** (`antigravity`).
 - No model selection or escalation questions are asked; reviewer model is inherited by omission.
 - For Reviewer Call Safety Cap: select recommended default of `20`.
 If a question contains `conditional_text_input`, and the selected option equals `when_option`, ask exactly that nested prompt and save the value under `answer_key`. Do not invent any other follow-up questions.
