@@ -1,6 +1,6 @@
 # Android Agent Harness chat installer
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness.git`
-> **Kit version**: `v1.0.62`
+> **Kit version**: `v1.1.0`
 
 ---
 Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
@@ -25,7 +25,7 @@ Active task check: If `.agents/state/active-task.json` exists with an active tas
 Path and Location Rules:
 `<cache-root>` is `%USERPROFILE%\.android-harness` or `~/.android-harness`.
 `<version>` is the Kit version shown in the header above.
-`<kit-dir>` is `<cache-root>\kit` or `<cache-root>/kit` at detached `v1.0.62`.
+`<kit-dir>` is `<cache-root>\kit` or `<cache-root>/kit` at detached `v1.1.0`.
 `<staging-dir>` is `<cache-root>\kit-stage-<version>-<nonce>` or `<cache-root>/kit-stage-<version>-<nonce>`.
 `<kit-dir>` and `<staging-dir>` MUST NOT be inside `<app-root>`. Both must be strictly external to the app repository.
 Never run a clone command without an explicit destination.
@@ -35,7 +35,7 @@ Never clone to `<app-root>/android-agent-harness`, `<app-root>/kit`, or `<app-ro
 Read-only path check before clone: Resolve `<app-root>`, `<kit-dir>`, and `<staging-dir>`.
 STOP if `<kit-dir>` or `<staging-dir>` is equal to or contained by `<app-root>`.
 Command with explicit external destination:
-`git clone --depth 1 --branch v1.0.62 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
+`git clone --depth 1 --branch v1.1.0 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
 Verify: `git -C <staging-dir> describe --tags --exact-match`
 Verify version: `python <staging-dir>/harness_cli.py version --kit <staging-dir>`
 Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
