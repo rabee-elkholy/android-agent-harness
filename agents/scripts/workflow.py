@@ -4449,6 +4449,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def plan_summary(plan: dict) -> str:
+    """Canonical text of the registered plan; the agent presents it verbatim for approval."""
+    def listed(values: Any) -> str:
+        items = [str(v) for v in (values or []) if str(v)]
+        return ", ".join(items) if items else "none"
+
+    phases = plan.get("phases") or []
+    lines = [
+        "PLAN_SUMMARY_BEGIN",
+        f"Task: {plan.get('task_id')} ({plan.get('task_kind') or 'AUTO'})",
+        f"Outcome: {plan.get('requested_outcome') or ''}",
+        f"Phases: {len(phases) if phases else 'none (single phase)'}",
+    ]
+    for index, phase in enumerate(phases, 1):
+        if isinstance(phase, dict):
+            lines.append(f"  {index}. {phase.get('id')}: {phase.get('title') or phase.get('description') or ''}")
+    lines += [
+        f"Files: {listed(plan.get('expected_files'))}",
+        f"Modules: {listed(plan.get('expected_modules'))}",
+        f"Surfaces: {listed(plan.get('expected_surfaces'))}",
+        f"Tests: {plan.get('test_strategy') or 'none'}",
+        f"Plan hash: {str(plan.get('plan_sha256') or '')[:12]}",
+        "PLAN_SUMMARY_END",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
     parser = build_parser()
@@ -4484,6 +4511,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
+        if args.action in ("draft", "revise"):
+            print(plan_summary(result))
         print(f"TASK_STATUS={result.get('status', 'READY')}")
         for item in result.get("next_actions") or []:
             print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")

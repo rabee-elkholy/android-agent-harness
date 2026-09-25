@@ -13,6 +13,8 @@ Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a la
 - The Claude Code bridge prepares verification with `--host claude`; the hook no longer demands `--host antigravity` from every host, and Claude can no longer claim the Antigravity host.
 - Review protocol V1 runs read the `HARNESS_REVIEW_RESULT_V2` block that installed reviewers emit, so Claude reviews can be recorded.
 - Claude Code file edits (Edit, Write, MultiEdit, NotebookEdit) go through the plan-scoped write checks; `update` widens installs that registered the hook for Bash only.
+- On hosts without trusted transcripts (review protocol V1), the router stops before assemble for HIGH or CRITICAL changes with `REVIEW_OVERRIDE_REQUIRED` (a developer-terminal command) and for sensitive surfaces with `SENSITIVE_REVIEW_PROOF_UNAVAILABLE`, instead of failing at completion. `docs/tool-support.md` lists these limits.
+- Claude rules: show the `PLAN_SUMMARY` block verbatim for approval, run Gradle-backed commands in the foreground with the maximum timeout, and never run the review override.
 
 ### Discovery and planning
 
@@ -24,6 +26,11 @@ Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a la
 - A targeted discovery no longer grants whole-module search roots; receipts go stale when the graph changes, and ending a task clears the latest receipt.
 - `:feature:home` alone is not a cross-module scope, and resource XML is matched by its directory segment.
 - The setup wizard ignores test source-set manifests and disabled aliases when recommending the launcher.
+- `draft` and `revise` print a `PLAN_SUMMARY` block (phases, files, modules, surfaces, tests, plan hash) built from the registered plan.
+- A write-time drift denial names every surface the planned files still lack, with the `--expected-surfaces` value for a single revision.
+- A discovery receipt written before the current conversation started grants no search scope in it (hosts that send a conversation id).
+- `view_file` reads of code outside the task or discovery scope stay allowed and are recorded as `READ_OUTSIDE_SCOPE` in the audit log.
+- Install explains an app-owned `.agents` directory (for example `.agents/skills`): it lists the entries and the move needed, instead of reporting an existing harness. The install prompt no longer fixes the host to Antigravity.
 
 ### Gates and evidence
 
@@ -32,6 +39,10 @@ Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a la
 - The java toolchain identity ignores `Picked up JAVA_TOOL_OPTIONS` notices, which made verifications stale when a proxy port changed.
 - Gradle 9 test failures, which print no `* Try:` section, are attributed to the test task, so `--capture-red` records RED evidence again.
 - Before an edit, a tracked file's sensitive surfaces come from its diff rather than its existing text, so editing a ViewModel that already mentions sign-in no longer makes the task sensitive.
+- New installs run the unit tests of every changed module (`UNIT_TEST_SCOPE = "changed_modules"`), one Gradle run per module; a change across two modules no longer falls back to `:app` tests that skip the changed test. Existing installs keep single-task targeting.
+- A missing translation names its options: add it, `translatable="false"` or `tools:ignore="MissingTranslation"` for text that is not translated, or `l10n-todo="true"` when a translation service fills it.
+- With device verification disabled, `run_device.py install-start` says there is no device step and points to `task status --next`, instead of failing as an environment problem.
+- Preflight fails when a task newly exports a receiver, service or provider without a permission, unless the element records the decision with the matching Lint id in `tools:ignore`.
 
 ## [1.1.0] - 2026-09-25
 

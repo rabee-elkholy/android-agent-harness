@@ -138,6 +138,11 @@ def load_discovery_receipt(repo: Path, receipt_id: str) -> dict[str, Any] | None
     return None
 
 
+# Set by the tool hook to the start of the calling conversation: a receipt written before it came
+# from an earlier conversation and grants no scope in this one. None keeps the age check only.
+RECEIPT_NOT_BEFORE: float | None = None
+
+
 def load_latest_discovery_receipt(repo: Path, max_age_seconds: float = 3600.0) -> dict[str, Any] | None:
     disc_dir = repo / DISCOVERY_CACHE_SUBDIR
     latest_file = disc_dir / "latest-discovery.json"
@@ -150,6 +155,8 @@ def load_latest_discovery_receipt(repo: Path, max_age_seconds: float = 3600.0) -
     try:
         st = latest_file.stat()
         if max_age_seconds > 0 and (time.time() - st.st_mtime) > max_age_seconds:
+            return None
+        if RECEIPT_NOT_BEFORE is not None and st.st_mtime < RECEIPT_NOT_BEFORE:
             return None
         data = json.loads(latest_file.read_text(encoding="utf-8"))
         if isinstance(data, dict):

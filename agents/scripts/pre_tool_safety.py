@@ -1576,6 +1576,66 @@ def _handle_search(name: str, args: dict) -> None:
     )
 
 
+CONVERSATION_LIMIT = 50
+CODE_READ_SUFFIXES = (".kt", ".kts", ".java", ".xml", ".gradle")
+
+
+def _conversation_started_at(payload: dict) -> float | None:
+    """First time this hook saw the calling conversation; None when the host sends no identity."""
+    conversation = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
+    if not conversation or conversation == "claude-session":
+        return None
+    try:
+        import time
+        path = _audit_path().with_name("hook-conversations.json")
+        try:
+            seen = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(seen, dict):
+                seen = {}
+        except (OSError, ValueError):
+            seen = {}
+        if conversation in seen:
+            return float(seen[conversation])
+        seen[conversation] = time.time()
+        newest = sorted(seen.items(), key=lambda item: float(item[1]))[-CONVERSATION_LIMIT:]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix=".conversations-", suffix=".tmp", dir=str(path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(newest), handle)
+        os.replace(temp_name, path)
+        return float(seen[conversation])
+    except Exception:
+        return None
+
+
+def _flag_out_of_scope_read(name: str, args: dict) -> None:
+    """Audit a code read outside the task or discovery scope. Reads are never blocked."""
+    try:
+        target = str(args.get("AbsolutePath") or args.get("absolutePath") or _target(args) or "").replace("\\", "/")
+        if not target.lower().endswith(CODE_READ_SUFFIXES):
+            return
+        path = Path(target)
+        rel = path.resolve().relative_to(REPO.resolve()).as_posix() if path.is_absolute() else target.lstrip("./")
+        if rel.startswith(".agents/"):
+            return
+        try:
+            plan = active_plan(REPO)
+        except Exception:
+            plan = {}
+        if plan.get("status") in ("IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
+            in_scope = _is_path_in_active_scope(REPO, rel, plan)
+        else:
+            from discovery_receipt import check_discovery_freshness, is_path_in_discovery_scope, load_latest_discovery_receipt
+            receipt = load_latest_discovery_receipt(REPO)
+            if not receipt or not check_discovery_freshness(REPO, receipt)[0]:
+                return
+            in_scope = is_path_in_discovery_scope(REPO, rel, receipt)
+        if not in_scope:
+            _audit("allow", f"READ_OUTSIDE_SCOPE: {rel}", name, "", reason_code="READ_OUTSIDE_SCOPE", task_id=str(plan.get("task_id") or ""))
+    except Exception:
+        return
+
+
 def main() -> None:
     try:
         raw = sys.stdin.read()
@@ -1588,6 +1648,10 @@ def main() -> None:
         if any(key in payload for key in ("terminationReason", "termination_reason")) or payload.get("event") == "Stop" or payload.get("hook") == "Stop":
             _handle_stop()
             return
+        started = _conversation_started_at(payload)
+        if started is not None:
+            import discovery_receipt
+            discovery_receipt.RECEIPT_NOT_BEFORE = started
         name, args = _tool_name_and_args(payload)
         if name in WRITE_TOOLS:
             targets = _extract_all_targets(args)
@@ -1649,6 +1713,8 @@ def main() -> None:
 
         # Known read-only tools
         if name in ("view_file", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
+            if name == "view_file":
+                _flag_out_of_scope_read(name, args)
             emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
             return
 

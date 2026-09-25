@@ -54,14 +54,14 @@ Total agent spend: $43.50. Delivered: T1, T2, T4, T7.
 | D6 | critical | Module discovery matched literal plugin ids only; with `alias(libs.plugins.android.library)` it found 0 of 47 modules | fixed |
 | D4 | high | `<string>` and `<plurals>` sharing a name were reported as duplicates; preflight failed on the untouched baseline (90 errors) | fixed |
 | D5 | high | Drift remediation printed the root module as an empty entry; revise dropped it and the same drift repeated forever | fixed |
-| D8 | high | A change touching two modules fell back to `:app` tests; the gate passed while the changed test never ran | open (needs per-module baselines) |
+| D8 | high | A change touching two modules fell back to `:app` tests; the gate passed while the changed test never ran | fixed for new installs (`UNIT_TEST_SCOPE = "changed_modules"`: one test run per changed module); existing installs keep single-task targeting |
 | D10 | high | A BUG task without RED reached COMPLETE_TASK in the router while the verifier refused | fixed (router) |
 | D11 | high | Editing an existing file in a scope shared by six architecture families was refused, with no working remediation | fixed |
 | D12 | high | A `String` property resolved to `extensions/String.kt` (MessageDigest) and classified the change CRYPTO / T5 | fixed |
-| D13 | high | On hosts without trusted transcripts, HIGH changes complete only through a developer-terminal review override and sensitive changes cannot be delivered; not documented or routed | open (design/docs) |
+| D13 | high | On hosts without trusted transcripts, HIGH changes complete only through a developer-terminal review override and sensitive changes cannot be delivered; not documented or routed | fixed (router stops before assemble with `REVIEW_OVERRIDE_REQUIRED` or `SENSITIVE_REVIEW_PROOF_UNAVAILABLE`; limits documented in `docs/tool-support.md`) |
 | D14 | high | The java toolchain identity included `Picked up JAVA_TOOL_OPTIONS` with a proxy port; a reconnect made a finished verification stale | fixed |
 | D1 | medium | The wizard recommended an `androidTest` activity as launcher and listed disabled aliases | fixed |
-| D2 | high | Install refuses any existing `.agents` directory; the harness owns `.agents` wholesale, so repos using `.agents/skills` cannot install | open (design) |
+| D2 | high | Install refuses any existing `.agents` directory; the harness owns `.agents` wholesale, so repos using `.agents/skills` cannot install | mitigated: ownership unchanged by design; install lists the app's entries and the move needed, and the install prompt says so |
 | D7 | low | `--expected-surfaces` accepted file paths; plans then drifted and needed a second approval | fixed (validation, modules of planned files declared) |
 | D15 | critical | The Claude Code hook was registered for Bash only and the bridge allowed every other tool: Edit/Write/MultiEdit/NotebookEdit were never checked against the plan, while doctor reported mutation interception HARD_ENFORCED | fixed (bridge maps edits to write checks; update widens old installs) |
 | D16 | critical | Gradle 9 prints no `* Try:` after a failing test, so the attribution parser rejected every test failure and `--capture-red` could never record RED | fixed |
@@ -77,13 +77,18 @@ Other observations: the install prompt hardcodes Antigravity (F1); the Claude sa
 | `latest-discovery.json` outlived its graph and task | Fixed: freshness compares a graph-fingerprint sidecar; deliver and cancel clear the latest receipt |
 | Reminder wording looser than enforcement | Fixed |
 | Router heuristics (`:feature:home` as multi-module, substring resource checks) | Fixed |
-| `view_file` unrestricted | Not changed: read-only; recommend allowing user-supplied and discovered paths and flagging repeated out-of-scope reads |
+| `view_file` unrestricted | Reads stay allowed; code reads outside the task or discovery scope are recorded as `READ_OUTSIDE_SCOPE` in the audit log |
+| Receipt not bound to a conversation | Fixed for hosts that send a conversation id: a receipt written before the conversation started grants no scope |
 
 ## Antigravity stability
 
 Every fix keeps Antigravity's behaviour unless the change is a correctness fix that also applies to it (D4, D5, D6, D11, D12, D14, D16, D17, discovery scope). Hook stdout, Review Protocol V2 and the Antigravity adapters were not changed. Each fix landed only after the complete selftest passed, including the Antigravity suites. Two attempted changes were reverted because they changed established behaviour: a `prepare-verification` RED guard (121 existing tests) and widening declared surfaces from file paths (3 router tests).
 
-## Recommendations
+## Follow-up after the round
+
+Closed after the round, each with a regression test and the complete selftest: D8, D13, D2 (message), O4 (one revision names every missing surface), O5 (preflight rule for newly exported components), O6 (`PLAN_SUMMARY` printed by `draft`), O2 (parity message), O3 (device step when verification is disabled), F1 (install prompt host), F9 (Claude rules: foreground, maximum timeout), receipt lifecycle and `view_file` auditing. A certification run of T1 to T10 on a clean checkout follows with one frozen harness commit.
+
+## Recommendations (as written at the end of the round)
 
 1. Per-module unit-test baselines, then target every changed module in the test gate (D8).
 2. Document and route the V1-host limits for HIGH and sensitive changes (D13).

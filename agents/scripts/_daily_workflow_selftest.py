@@ -258,6 +258,23 @@ class DailyWorkflowSelftest(unittest.TestCase):
         values.update(overrides)
         return argparse.Namespace(**values)
 
+    def test_plan_summary_is_the_registered_plan(self) -> None:
+        # Round 5 (O6): the plan shown in chat had two phases while plan.json had none. draft prints
+        # a canonical summary of the registered plan for the agent to present verbatim.
+        from workflow import plan_summary
+        plan = draft(self._draft_ns("plan-summary", phases=[
+            {"id": "data", "title": "Data layer"}, {"id": "ui", "title": "Settings screen"},
+        ]))
+        text = plan_summary(plan)
+        self.assertTrue(text.startswith("PLAN_SUMMARY_BEGIN\nTask: plan-summary (FEATURE)"))
+        self.assertIn("Phases: 2\n  1. data: Data layer\n  2. ui: Settings screen", text)
+        self.assertIn("Files: app/src/main/kotlin/com/example/Login.kt", text)
+        self.assertIn("Surfaces: BUSINESS_LOGIC", text)
+        self.assertIn(f"Plan hash: {plan['plan_sha256'][:12]}", text)
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="plan-summary"))
+        single = draft(self._draft_ns("plan-summary-single"))
+        self.assertIn("Phases: none (single phase)", plan_summary(single))
+
     def test_draft_rejects_file_paths_as_surfaces(self) -> None:
         # DEFECT-SURFACES-01 (round 5): file paths were stored upper-cased as surfaces, the real
         # surfaces were never declared, and every task needed a second approval for drift.
@@ -5941,6 +5958,55 @@ class VerifyingScopeTests(unittest.TestCase):
         )
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+
+    def _invoke_in_conversation(self, conversation: str, tool_name: str, tool_args: dict) -> dict:
+        self.env["HARNESS_HOOK_STATE"] = str(self.state / "hook-state.json")
+        payload = json.dumps({"conversationId": conversation, "toolName": tool_name, "toolArgs": tool_args})
+        proc = subprocess.run([sys.executable, str(self.safety_script)], input=payload, capture_output=True, text=True, env=self.env, check=False)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return _with_audit_reason(json.loads(proc.stdout.strip()), self.env, self.safety_script)
+
+    def _billing_receipt(self) -> None:
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        billing = self.repo / "feature/billing/src/main/kotlin/com/example/Billing.kt"
+        billing.parent.mkdir(parents=True, exist_ok=True)
+        billing.write_text("package com.example\nclass Billing\n", encoding="utf-8")
+        save_discovery_receipt(self.repo, create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT", query_kind="module", query_value=":feature:billing",
+            graph_fingerprint="fp-billing", resolved_modules=[":feature:billing"],
+            resolved_paths=["feature/billing/src/main/kotlin/com/example/Billing.kt"], resolved_symbols=["Billing"],
+            allowed_search_roots=["feature/billing"],
+        ))
+
+    def test_DISCOVERY_LIFECYCLE_001_receipt_from_earlier_conversation_grants_no_scope(self) -> None:
+        # External review of v1.1.0: latest-discovery.json was global, so a new conversation inherited
+        # the previous conversation's search scope.
+        search = {"SearchPath": "feature/billing", "Query": "charge"}
+        self._invoke_in_conversation("conv-old", "view_file", {"AbsolutePath": str(self.repo / "README.md")})
+        time.sleep(0.05)
+        self._billing_receipt()
+        self.assertEqual("allow", self._invoke_in_conversation("conv-old", "grep_search", search)["decision"])
+        time.sleep(0.05)
+        denied = self._invoke_in_conversation("conv-new", "grep_search", search)
+        self.assertEqual("deny", denied["decision"], denied)
+
+    def test_DISCOVERY_LIFECYCLE_002_out_of_scope_code_read_is_allowed_and_audited(self) -> None:
+        self._invoke_in_conversation("conv-read", "view_file", {"AbsolutePath": str(self.repo / "README.md")})
+        time.sleep(0.05)
+        self._billing_receipt()
+        other = self.repo / "feature/profile/src/main/kotlin/com/example/Profile.kt"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text("package com.example\nclass Profile\n", encoding="utf-8")
+        inside = self._invoke_in_conversation("conv-read", "view_file", {"AbsolutePath": str(self.repo / "feature/billing/src/main/kotlin/com/example/Billing.kt")})
+        self.assertEqual("allow", inside["decision"])
+        audit = self.state / "audit_log.jsonl"
+        self.assertNotIn("READ_OUTSIDE_SCOPE", audit.read_text(encoding="utf-8"))
+        outside = self._invoke_in_conversation("conv-read", "view_file", {"AbsolutePath": str(other)})
+        self.assertEqual("allow", outside["decision"])
+        self.assertEqual("Tool is outside the harness mutation boundary.", outside["reason"])
+        flagged = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines() if "READ_OUTSIDE_SCOPE" in line]
+        self.assertEqual(1, len(flagged))
+        self.assertIn("feature/profile/src/main/kotlin/com/example/Profile.kt", flagged[0]["reason"])
 
     def test_VERIFY_SCOPE_005_graph_expansion_adds_exact_bounded_root(self) -> None:
         scope = {
