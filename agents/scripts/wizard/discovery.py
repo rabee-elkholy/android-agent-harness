@@ -231,6 +231,18 @@ def discover_android_source_root(repo: Path, module: str) -> list[str]:
     return list((module_dir / "src" / "main").relative_to(repo).parts)
 
 
+_TEST_SOURCE_SET = re.compile(r"^(?:test|androidTest|testFixtures|.*(?:Test|UnitTest|InstrumentedTest))$")
+
+
+def _is_test_manifest(relative_parts: tuple[str, ...]) -> bool:
+    """True for manifests of test source sets such as src/androidTest or src/debugUnitTest."""
+    try:
+        source_set = relative_parts[relative_parts.index("src") + 1]
+    except (ValueError, IndexError):
+        return False
+    return bool(_TEST_SOURCE_SET.match(source_set))
+
+
 def discover_launchers(
     repo: Path,
     *,
@@ -245,8 +257,10 @@ def discover_launchers(
     for path in (manifests if manifests is not None else repo.glob("**/AndroidManifest.xml")):
         if skip_path(path, repo):
             continue
-        text = read_text(path)
         relative_parts = path.relative_to(repo).parts
+        if _is_test_manifest(relative_parts):
+            continue
+        text = read_text(path)
         try:
             source_index = relative_parts.index("src")
             module = ":" + ":".join(relative_parts[:source_index]) if source_index else ":"
@@ -264,6 +278,9 @@ def discover_launchers(
             tree = ET.parse(path)
             root = tree.getroot()
             for elem in list(root.findall(".//activity")) + list(root.findall(".//activity-alias")):
+                enabled = elem.attrib.get("{http://schemas.android.com/apk/res/android}enabled") or elem.attrib.get("android:enabled")
+                if (enabled or "").strip().lower() == "false":
+                    continue
                 has_main = False
                 has_launcher = False
                 for ifilter in elem.findall("intent-filter"):
@@ -302,6 +319,8 @@ def discover_launchers(
             act_blocks = re.findall(r"<(?:activity|activity-alias)\b[\s\S]*?</(?:activity|activity-alias)>", text)
             for block in act_blocks:
                 if "android.intent.action.MAIN" not in block or "android.intent.category.LAUNCHER" not in block:
+                    continue
+                if re.search(r'android:enabled\s*=\s*"false"', block):
                     continue
                 m = re.search(r'android:name="([^"]+)"', block)
                 if not m:

@@ -593,6 +593,23 @@ class DiscoveryTests(RepoCase):
             set(discover_launchers(self.repo)),
         )
 
+    def test_launchers_ignore_test_source_sets_and_disabled_aliases(self) -> None:
+        # DEFECT-LAUNCHER-01: an androidTest TestActivity was recommended as the app launcher.
+        write(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\nandroid { namespace = "com.one"; defaultConfig { applicationId = "com.one" } }\n')
+        launcher = '<intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>'
+        write(
+            self.repo / "app/src/main/AndroidManifest.xml",
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+            f'<activity android:name=".ui.MainActivity"/>'
+            f'<activity-alias android:name=".ui.MainActivityDefault" android:targetActivity=".ui.MainActivity" android:enabled="true">{launcher}</activity-alias>'
+            f'<activity-alias android:name=".ui.MainActivity_1" android:targetActivity=".ui.MainActivity" android:enabled="false">{launcher}</activity-alias>'
+            '</application></manifest>',
+        )
+        test_manifest = f'<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><activity android:name=".TestActivity">{launcher}</activity></application></manifest>'
+        write(self.repo / "app/src/androidTest/AndroidManifest.xml", test_manifest)
+        write(self.repo / "app/src/test/AndroidManifest.xml", test_manifest)
+        self.assertEqual(["com.one/.ui.MainActivityDefault"], discover_launchers(self.repo))
+
     def test_kmp_and_root_module_source_roots_are_exact(self) -> None:
         write(self.repo / "composeApp/src/androidMain/kotlin/App.kt", "class App\n")
         self.assertEqual(["composeApp", "src", "androidMain"], discover_android_source_root(self.repo, ":composeApp"))
