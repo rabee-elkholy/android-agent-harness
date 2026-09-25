@@ -444,13 +444,55 @@ def _split_segments(command: str) -> list[str] | None:
     return [item.strip() for item in segments if item.strip()]
 
 
+def _without_single_quoted_text(command: str) -> str | None:
+    """The command with single-quoted text removed, as a POSIX shell reads it.
+
+    Inside single quotes nothing is special, so a reviewer reply there cannot pipe, redirect or
+    substitute. Double-quoted text is kept because `$` and backticks still expand in it, and a
+    backslash outside single quotes keeps the next character. None for an unterminated quote.
+    """
+    out, quote, i = [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            if ch == '"':
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+            if ch == "'":
+                out.append(" ")
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return None if quote else "".join(out)
+
+
+def _posix_shell_host() -> bool:
+    # Claude Code runs Bash on every platform; its bridge marks the host. Antigravity calls the
+    # engine without a marker and may run PowerShell or cmd, so it keeps the character check.
+    return os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude"
+
+
 def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if isinstance(repo, str) and (isinstance(command, Path) or (" " in repo and not " " in str(command))):
         repo, command = command, repo
     normalized = str(command or "").strip()
     if not normalized:
         return True, "empty command"
-    if SHELL_LAUNDERING.search(normalized):
+    operator_text = _without_single_quoted_text(normalized) if _posix_shell_host() else normalized
+    if operator_text is None:
+        return False, "unterminated quote in command"
+    if SHELL_LAUNDERING.search(operator_text):
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
     segments = _split_segments(normalized)
     if segments is None:

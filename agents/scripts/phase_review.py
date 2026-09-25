@@ -43,7 +43,13 @@ from review_orchestrator import (
     REVIEW_PROTOCOL_RETRY_REQUIRED,
 )
 from review_policy import canonical_risk_tier, decide
-from review_sources import has_trusted_review_source, resolve_review_host, resolve_trusted_review_source
+from review_sources import (
+    has_trusted_review_source,
+    is_claude_transcript,
+    read_claude_subagent_transcript,
+    resolve_review_host,
+    resolve_trusted_review_source,
+)
 from workflow import _load_plan, state_root, task_dir
 
 # Phase substates
@@ -928,11 +934,12 @@ def complete_phase_review(
     verdict: str | None = None,
     findings: list[Any] | None = None,
     package_sha256: str | None = None,
+    response_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with StateLock(phase_review_dir(task_dir(repo, task_id), phase_id)):
         return _complete_phase_review_locked(
             repo, task_id, phase_id, reviewer, execution_id, host,
-            raw_response, verdict, findings, package_sha256,
+            raw_response, verdict, findings, package_sha256, response_source,
         )
 
 
@@ -947,6 +954,7 @@ def _complete_phase_review_locked(
     verdict: str | None = None,
     findings: list[Any] | None = None,
     package_sha256: str | None = None,
+    response_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tdir = task_dir(repo, task_id)
     prun_f = phase_run_file(tdir, phase_id)
@@ -1138,6 +1146,8 @@ def _complete_phase_review_locked(
         "result": parsed,
         "result_sha256": result_sha,
     }
+    if response_source:
+        res_payload["response_source"] = dict(response_source)
     res_file.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(res_file, res_payload)
 
@@ -1350,7 +1360,7 @@ def _main(argv: list[str] | None = None) -> int:
     complete_cmd.add_argument("--reviewer", required=True)
     complete_cmd.add_argument("--execution-id", required=True)
     complete_cmd.add_argument("--host")
-    complete_cmd.add_argument("--response-file", help="Unchanged reviewer response text for hosts without a trusted transcript source")
+    complete_cmd.add_argument("--response-file", help="Unchanged reviewer response for hosts without a trusted transcript source; on Claude Code the subagent transcript path (JSONL)")
 
     finalize_cmd = sub.add_parser("finalize")
     finalize_cmd.add_argument("--repo", default=".")
@@ -1385,7 +1395,14 @@ def _main(argv: list[str] | None = None) -> int:
                 raise ValidationError(f"no active phase review run found for phase '{args.phase_id}'")
             if has_trusted_review_source(str(read_json(run_file).get("review_host") or "")):
                 raise ValidationError("trusted host phase reviews require transcript ingestion; --response-file is unavailable")
-        raw_response = Path(args.response_file).read_text(encoding="utf-8") if args.response_file else None
+        raw_response, response_source = None, None
+        if args.response_file:
+            response_path = Path(args.response_file).expanduser()
+            if is_claude_transcript(response_path):
+                # Claude Code: the reviewer's last reply, read unchanged from its subagent transcript.
+                raw_response, response_source = read_claude_subagent_transcript(response_path)
+            else:
+                raw_response = response_path.read_text(encoding="utf-8")
         res = complete_phase_review(
             repo,
             args.task_id,
@@ -1394,6 +1411,7 @@ def _main(argv: list[str] | None = None) -> int:
             args.execution_id,
             host=args.host,
             raw_response=raw_response,
+            response_source=response_source,
         )
         print(json.dumps(res, indent=2))
         return 0

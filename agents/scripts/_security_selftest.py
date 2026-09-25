@@ -154,6 +154,25 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual("deny", engine["decision"])
         self.assertIn("--host antigravity", engine["reason"])
 
+    def test_C_D3_claude_single_quoted_text_is_not_a_shell_operator(self):
+        # Certification C-D3: a reviewer reply in single quotes was denied for its backticks, `|`
+        # and `<`, although bash treats them as literal text there.
+        record = f"python {SCRIPTS / 'record_review.py'} --task t --response-text"
+        quoted = f"{record} 'bug-reviewer-agent=Checked `run()` | callers < 3 > 2 & $HOME'"
+        self.assertEqual("allow", self.claude_bridge(quoted)["permissionDecision"])
+        for command in (
+            f'{record} "bug-reviewer-agent=$(touch owned)"',
+            f'{record} "bug-reviewer-agent=`touch owned`"',
+            f"{record} 'bug-reviewer-agent=x' | tee owned",
+            f"{record} 'bug-reviewer-agent=x' > owned",
+            f"{record} bug-reviewer-agent=x`touch owned`",
+            f"{record} 'unterminated",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"])
+        # Antigravity (engine called without a host marker) keeps the strict character check.
+        self.assertEqual("deny", self.engine(quoted)["decision"])
+
     def test_copilot_bridge_denies_and_malformed_fails_closed(self):
         proc = subprocess.run(
             [sys.executable, str(COPILOT)], input=json.dumps({"toolName": "bash", "toolArgs": {"command": "adb root"}}),
