@@ -28,7 +28,11 @@ def _is_exact_non_architectural_file(path: str) -> bool:
     if suffix == ".xml":
         # values/strings.xml, colors.xml, etc. are non-architectural
         # layout files like activity_main.xml or navigation graphs can be architectural
-        if any(seg in norm for seg in ("values", "drawable", "mipmap", "font", "raw")):
+        # Match the resource directory segment (values-ar, drawable-hdpi, raw), not substrings of
+        # file names such as layout/rawdata_view.xml.
+        parts = norm.split("/")
+        res_dir = parts[-2] if len(parts) >= 2 else ""
+        if res_dir.split("-")[0] in {"values", "drawable", "mipmap", "font", "raw"}:
             return True
     return False
 
@@ -58,7 +62,8 @@ def classify_discovery_mode(
         modules = [m.strip() for m in expected_modules.split(",") if m.strip()]
 
     # 1. D3 Check: Architectural / Cross-Module / Migration Scope
-    is_multi_module = len(modules) > 1 or (len(modules) == 1 and ":" in modules[0] and modules[0] != ":app")
+    # Every module id contains ':', so only a count of distinct modules marks a cross-module scope.
+    is_multi_module = len({":" + m.strip(":").replace("/", ":") for m in modules}) > 1
     is_arch_intent = arch_intent in ("MIGRATION", "REFACTOR_STRUCTURAL", "CROSS_MODULE")
     has_arch_keywords = bool(re.search(
         r"\b(?:multi-module|migration|restructur|hilt\s+restructur|di\s+restructur|shared\s+contract|public\s+contract|cross-module|room\s+migration|clean\s+architecture\s+migration)\b",

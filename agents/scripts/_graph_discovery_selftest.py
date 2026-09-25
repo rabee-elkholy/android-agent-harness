@@ -330,6 +330,22 @@ class GraphDiscoverySelftest(unittest.TestCase):
         clear_latest_discovery_receipt(self.repo)
         self.assertIsNone(load_latest_discovery_receipt(self.repo))
 
+    def test_graph_001b_one_named_module_is_not_multi_module(self) -> None:
+        """GRAPH-001B: A single module id such as :feature:home is not a cross-module scope."""
+        single = route_discovery(self.repo, outcome="Tweak the home header", expected_modules=":feature:home")
+        self.assertNotEqual(DISCOVERY_D3_ARCHITECTURAL_GRAPH, single.mode)
+        multi = route_discovery(self.repo, outcome="Tweak the home header", expected_modules=":feature:home,:core:ui")
+        self.assertEqual(DISCOVERY_D3_ARCHITECTURAL_GRAPH, multi.mode)
+
+    def test_graph_001c_resource_directories_match_whole_path_segments(self) -> None:
+        """GRAPH-001C: A layout named rawdata_view.xml is not a raw/values resource."""
+        from discovery_router import _is_exact_non_architectural_file
+        self.assertFalse(_is_exact_non_architectural_file("app/src/main/res/layout/rawdata_view.xml"))
+        self.assertFalse(_is_exact_non_architectural_file("app/src/main/res/navigation/font_settings_nav.xml"))
+        self.assertTrue(_is_exact_non_architectural_file("app/src/main/res/values-ar/strings.xml"))
+        self.assertTrue(_is_exact_non_architectural_file("app/src/main/res/drawable-hdpi/icon.xml"))
+        self.assertTrue(_is_exact_non_architectural_file("app/src/main/res/raw/config.xml"))
+
     def test_graph_009_bounded_context_insufficient(self) -> None:
         """GRAPH-009: When bounded context has truncated dependents, graph_expansion_required is reported."""
         import task_context
