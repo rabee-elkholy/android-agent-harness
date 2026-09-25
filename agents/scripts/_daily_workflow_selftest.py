@@ -2619,6 +2619,21 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertNotIn("run_device.py", act.get("command", ""))
         self.assertEqual("COMPLETE_TASK", act["code"])
 
+    def test_ROUTE_CMD_010B_verifying_bug_without_red_is_not_routed_to_complete(self) -> None:
+        # DEFECT-RED-DEADEND-01 (round 5): a BUG task that skipped CAPTURE_RED reached VERIFYING;
+        # the router said COMPLETE_TASK while the final verifier refused for missing RED.
+        plan, tdir, policy, manifest = self._setup_verifying_task("route-cmd-010b")
+        current = read_json(tdir / "current-run.json")
+        policy.update({"gates": ["preflight"], "reviewers": [], "assemble_required": False,
+                       "device_required": False, "surfaces": ["BUSINESS_LOGIC"]})
+        atomic_write_json(Path(current["policy"]), policy)
+        self._record_evidence(manifest, current["run_id"], "preflight", "PASS")
+        plan = dict(plan, task_kind="BUG", test_strategy="Policy-selected relevant tests")
+        act = resolve_next_action(self.repo, "route-cmd-010b", plan)
+        self.assertEqual("RED_EVIDENCE_MISSING", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertIn("revise", act["reason"])
+
     def test_ROUTE_CMD_011_bug_requires_executable_red(self) -> None:
         """ROUTE-CMD-011: BUG requiring executable RED -> capture-red appears before implementation."""
         task_id = "route-cmd-011"

@@ -3856,7 +3856,27 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
-        # 8. Complete task
+        # 8. A BUG task that skipped CAPTURE_RED cannot complete; the final verifier applies this rule.
+        from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
+        red_dir = task_dir(repo, task_id)
+        if not (red_dir / "red-evidence.json").is_file() and bug_requires_executable_red(
+            plan, policy.get("surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(red_dir),
+        ):
+            return {
+                "code": "RED_EVIDENCE_MISSING",
+                "kind": "DEVELOPER_ACTION",
+                "command": "",
+                "blocking": True,
+                "reason": (
+                    "This BUG task has no failing-test RED reproduction captured before the fix, so it cannot complete. "
+                    "Ask the developer: if the task is not a bug, correct the task kind through workflow.py revise; "
+                    "otherwise cancel and restart the task, capturing RED before changing production code."
+                ),
+                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                "expected": {},
+            }
+
+        # 9. Complete task
         return {
             "code": "COMPLETE_TASK",
             "kind": "HARNESS_COMMAND",
