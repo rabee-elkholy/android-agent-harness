@@ -166,10 +166,46 @@ def discover_modules(repo: Path, paths: list[Path] | None = None) -> list[str]:
     return modules
 
 
+def _catalog_plugin_ids(repo: Path) -> dict[str, str]:
+    """Map version-catalog plugin aliases (android-library -> android.library) to plugin ids."""
+    ids: dict[str, str] = {}
+    for toml in sorted((repo / "gradle").glob("*.versions.toml")):
+        section = ""
+        for line in read_text(toml).splitlines():
+            stripped = line.strip()
+            header = re.match(r"^\[([^\]]+)\]", stripped)
+            if header:
+                section = header.group(1).strip()
+                continue
+            if section != "plugins":
+                continue
+            entry = re.match(r'^([\w.-]+)\s*=\s*(.+)$', stripped)
+            if not entry:
+                continue
+            value = entry.group(2)
+            plugin_id = re.search(r'\bid\s*=\s*["\']([^"\']+)["\']', value) or re.match(r'["\']([^"\':]+)', value)
+            if plugin_id:
+                ids[re.sub(r"[-_.]", ".", entry.group(1)).lower()] = plugin_id.group(1)
+    return ids
+
+
+def _resolve_catalog_aliases(text: str, catalog_ids: dict[str, str]) -> str:
+    """Rewrite alias(libs.plugins.x.y) as id("<plugin id>") so id-based checks see it."""
+    if not catalog_ids or "alias" not in text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        plugin_id = catalog_ids.get(re.sub(r"[-_.]", ".", match.group(1)).lower())
+        return f'id("{plugin_id}")' if plugin_id else match.group(0)
+
+    return re.sub(r"alias\(\s*\w+\.plugins\.([\w.]+)\s*\)", replace, text)
+
+
 def discover_android_modules(repo: Path, paths: list[Path] | None = None) -> list[str]:
     modules: list[str] = []
+    catalog_ids = _catalog_plugin_ids(repo)
     for path in (paths if paths is not None else gradle_files(repo)):
-        text = read_text(path)
+        text = _resolve_catalog_aliases(read_text(path), catalog_ids)
         if not re.search(r"com\.android\.(?:application|library|dynamic-feature)|androidTarget\s*\(", text):
             continue
         if re.search(r"com\.android\.(?:application|library|dynamic-feature).*apply\s+false", text):

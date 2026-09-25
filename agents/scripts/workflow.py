@@ -132,7 +132,8 @@ def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict
     surfaces_str = ",".join(surfaces)
 
     modules = sorted(set(plan.get("expected_modules") or []) | set(changed_modules(repo, manifest)))
-    modules_str = ",".join(m.lstrip(":") for m in modules)
+    # Keep the leading colon: stripping it turned the root module ":" into an empty entry.
+    modules_str = ",".join(module_id(m) for m in modules)
 
     actual_paths = sorted({
         (entry.get("path") if isinstance(entry, dict) else str(entry))

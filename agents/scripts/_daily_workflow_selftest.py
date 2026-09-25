@@ -57,7 +57,7 @@ from evidence_store import EvidenceStore
 from final_verifier import verify_task
 import lifecycle
 from mutation_guard import active_plan
-from plan_authority import plan_payload, save_plan
+from plan_authority import module_id, plan_payload, save_plan
 import record_review
 from record_review import _parse_reviewer_findings, is_blocking_finding
 import review_package
@@ -247,6 +247,16 @@ class DailyWorkflowSelftest(unittest.TestCase):
         from workflow import main as workflow_main
         ret = workflow_main(cli_args)
         self.assertEqual(0, ret)
+
+    def test_remediation_command_keeps_the_root_module(self) -> None:
+        # DEFECT-DRIFT-LOOP-01 (round 5): the root module ":" was printed as an empty entry, the
+        # revise command dropped it, and prepare-verification reported the same drift forever.
+        plan = {"task_kind": "FEATURE", "requested_outcome": "x", "expected_modules": [":app"], "expected_surfaces": []}
+        manifest = {"task_changes": [{"path": "build.gradle.kts"}, {"path": "app/src/main/A.kt"}]}
+        cmd = build_remediation_command(self.repo, "t", plan, {"surfaces": []}, manifest)
+        modules = shlex.split(cmd.replace("\\\n", " "))
+        value = modules[modules.index("--expected-modules") + 1]
+        self.assertEqual([":", ":app"], sorted(module_id(item) for item in value.split(",") if item.strip()))
 
     def test_architecture_drift_documented_cli_is_real(self) -> None:
         """Verify architecture_drift.py CLI is real, returns 0 for compliant plan, and never mutates state."""

@@ -45,7 +45,7 @@ from record_review import ingest  # noqa: E402
 from skill_router import route  # noqa: E402
 from mutation_guard import command_allowed  # noqa: E402
 from _repo_files import first_adb_serial  # noqa: E402
-from wizard.discovery import discover, discover_android_source_root, discover_di_framework, discover_launchers, discover_module_application_ids  # noqa: E402
+from wizard.discovery import discover, discover_android_modules, discover_android_source_root, discover_di_framework, discover_launchers, discover_module_application_ids  # noqa: E402
 from wizard.questions import normalize, questions_payload  # noqa: E402
 from room_guard import check_room_working_tree  # noqa: E402
 from workflow import _next_actions, begin_task, complete, deliver_task, draft, prepare_verification, record_approval, record_sensitive_approval, state_root, task_dir  # noqa: E402
@@ -613,6 +613,22 @@ class DiscoveryTests(RepoCase):
         # A product flavor named like a test keeps its launcher.
         write(self.repo / "app/src/abTest/AndroidManifest.xml", test_manifest.replace(".TestActivity", ".AbActivity"))
         self.assertIn("com.one/.AbActivity", discover_launchers(self.repo))
+
+    def test_android_modules_applied_through_version_catalog_aliases(self) -> None:
+        # DEFECT-MODULES-CATALOG-01 (round 5): Pocket Casts applies every Android plugin with
+        # alias(libs.plugins.android.library); discovery found 0 of 47 modules.
+        write(
+            self.repo / "gradle/libs.versions.toml",
+            '[versions]\nagp = "9.0.0"\n\n[plugins]\n'
+            'android-application = { id = "com.android.application", version.ref = "agp" }\n'
+            'android_library = { id = "com.android.library", version.ref = "agp" }\n'
+            'kotlin-jvm = "org.jetbrains.kotlin.jvm:2.0.0"\n',
+        )
+        write(self.repo / "build.gradle.kts", "plugins {\n    alias(libs.plugins.android.application) apply false\n    alias(libs.plugins.android.library) apply false\n}\n")
+        write(self.repo / "app/build.gradle.kts", "plugins {\n    alias(libs.plugins.android.application)\n}\n")
+        write(self.repo / "modules/services/localization/build.gradle.kts", "plugins {\n    alias(libs.plugins.android.library)\n}\n")
+        write(self.repo / "modules/services/jvmonly/build.gradle.kts", "plugins {\n    alias(libs.plugins.kotlin.jvm)\n}\n")
+        self.assertEqual([":app", ":modules:services:localization"], sorted(discover_android_modules(self.repo)))
 
     def test_kmp_and_root_module_source_roots_are_exact(self) -> None:
         write(self.repo / "composeApp/src/androidMain/kotlin/App.kt", "class App\n")
