@@ -1398,6 +1398,11 @@ def _main(argv: list[str] | None = None) -> int:
         raw_response, response_source = None, None
         if args.response_file:
             response_path = Path(args.response_file).expanduser()
+            if not response_path.is_file():
+                raise ValidationError(
+                    f"--response-file must be the path of a file holding the unchanged reviewer reply "
+                    f"(on Claude Code, the reviewer's subagent transcript); '{args.response_file}' is not a file"
+                )
             if is_claude_transcript(response_path):
                 # Claude Code: the reviewer's last reply, read unchanged from its subagent transcript.
                 raw_response, response_source = read_claude_subagent_transcript(response_path)

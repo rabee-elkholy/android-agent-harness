@@ -961,6 +961,22 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual(str(transcript.resolve()), result["response_source"]["transcript_path"])
         self.assertEqual(hashlib.sha256(transcript.read_bytes()).hexdigest(), result["response_source"]["transcript_sha256"])
 
+    def test_C_D6_response_file_that_is_not_a_file_is_a_usage_error(self) -> None:
+        import contextlib
+        import io
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
+        task_id, reviewers, _, _ = self._setup_dispatch_state()
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = phase_review.main([
+                "complete", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
+                "--reviewer", reviewers[0], "--execution-id", "r1", "--response-file", "PASS no findings",
+            ])
+        self.assertEqual(1, code)
+        self.assertIn("--response-file must be the path of a file", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
     def test_AUDIT_005_nontrusted_dispatch_has_public_cli(self) -> None:
         write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'codex'\n")
         task_id, reviewers, _, meta = self._setup_dispatch_state()
