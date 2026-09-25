@@ -435,6 +435,15 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "rg safe | tee app/status.txt"})["decision"])
         self.assertEqual("deny", self.call("run_command", {"CommandLine": "rg $(touch app/owned)"})["decision"])
 
+    def test_C1_file_test_is_read_only_without_a_task(self):
+        # Certification C1: a read-only `test -f` outside a task was denied.
+        for command in ("test -f app/build.gradle.kts", "[ -f app/build.gradle.kts ]", "test -d app && ls app"):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.call("run_command", {"CommandLine": command})["decision"])
+        for command in ("test -f app/x > owned", "[ -f app/x ] || touch owned", "test -f $(touch owned)"):
+            with self.subTest(command=command):
+                self.assertEqual("deny", self.call("run_command", {"CommandLine": command})["decision"])
+
     def test_task_context_is_bounded_read_only_discovery(self):
         targeted = "python .agents/scripts/task_context.py --repo . --file app/src/main/kotlin/com/example/MainActivity.kt --json"
         result = self.call("run_command", {"CommandLine": targeted})

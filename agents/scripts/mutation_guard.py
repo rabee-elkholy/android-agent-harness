@@ -104,7 +104,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[2:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb"}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "["}:
         return executable, tokens[1:]
     if executable in POWERSHELL_READ_CMDLETS:
         return "powershell-read", tokens[1:]
@@ -141,6 +141,9 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return bool(args) and args[0].lower() in {"dependencies", "tasks", "projects", "properties", "help", "--help", "-h"}
     if name == "powershell-read":
         return True
+    if name in {"test", "["}:
+        # File tests (`test -f x`, `[ -d x ]`) only read; operators around them are checked as segments.
+        return name == "test" or args[-1:] == ["]"]
     if name in {"rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat"}:
         return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
     if name == "compileall":
