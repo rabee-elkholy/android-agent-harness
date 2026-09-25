@@ -385,6 +385,23 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         res = resolve_architecture_contract(self.repo, architecture_intent="EXISTING_CHANGE", target_scope="")
         self.assertEqual(STATUS_DECISION_REQUIRED, res["status"])
 
+    def test_existing_file_in_a_scope_shared_by_families_preserves_local_conventions(self) -> None:
+        # DEFECT-ARCH-AMBIGUOUS-01 (round 5): six Pocket Casts families claim modules/features/profile,
+        # so editing the existing ProfileHeader.kt was refused as ambiguous with no working remediation.
+        self._write("app/src/main/kotlin/feature/Header.kt", "@Composable fun Header() {}")
+        families = [
+            {"id": "af-one", "label": "compose", "scopes": ["app/src/main/kotlin/feature"], "exemplars": ["app/src/main/kotlin/feature"]},
+            {"id": "af-two", "label": "xml", "scopes": ["app/src/main/kotlin/feature"], "exemplars": ["app/src/main/kotlin/feature"]},
+        ]
+        facts_file = self.repo / ".agents/project-context/project-facts.json"
+        facts_file.parent.mkdir(parents=True, exist_ok=True)
+        facts_file.write_text(json.dumps({"facts": {"architecture": {"families": families}}}), encoding="utf-8")
+
+        existing = resolve_architecture_contract(self.repo, architecture_intent="EXISTING_CHANGE", target_scope="app/src/main/kotlin/feature/Header.kt")
+        self.assertEqual(STATUS_RESOLVED, existing["status"], existing.get("message"))
+        missing = resolve_architecture_contract(self.repo, architecture_intent="EXISTING_CHANGE", target_scope="app/src/main/kotlin/feature/New.kt")
+        self.assertEqual(STATUS_DECISION_REQUIRED, missing["status"])
+
     def test_ambiguous_preserve_never_uses_preferred_new_code_family(self) -> None:
         self._write("app/src/main/kotlin/legacy/LegacyFragment.kt", "class LegacyFragment : Fragment()")
         self._write("app/src/main/kotlin/modern/ModernScreen.kt", "@Composable fun ModernScreen() {}")
