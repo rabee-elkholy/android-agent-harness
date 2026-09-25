@@ -343,7 +343,9 @@ def _propagate_sensitive_dependencies(
         if re.search(rf"\b{re.escape(property_name)}\b", diff_text):
             deps.add(property_type)
     for dep in sorted(deps):
-        if _is_universal_hub("", dep):
+        # A built-in type (String, Context...) must not resolve to a same-named extension file
+        # such as extensions/String.kt; property types above bypass the extractor's filter.
+        if dep in FRAMEWORK_EXCLUDED_TYPES or _is_universal_hub("", dep):
             continue
         resolved = _resolve_type_surface(root, dep, type_index)
         if resolved:
