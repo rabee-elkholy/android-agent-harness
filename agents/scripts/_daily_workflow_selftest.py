@@ -275,6 +275,26 @@ class DailyWorkflowSelftest(unittest.TestCase):
         single = draft(self._draft_ns("plan-summary-single"))
         self.assertIn("Phases: none (single phase)", plan_summary(single))
 
+    def test_C_D4_partial_revise_keeps_omitted_plan_fields(self) -> None:
+        # Certification C-D4: `revise` given only --expected-surfaces dropped the plan's files and
+        # modules, which switched off the write-scope guard. Omitted fields keep the old values.
+        draft(self._draft_ns("partial-revise", kind="BUG", test_strategy="LoginTest covers the fix"))
+        from workflow import main as workflow_main
+        with mock.patch("sys.stdout"):
+            ret = workflow_main([
+                "revise", "--repo", str(self.repo), "--task-id", "partial-revise",
+                "--expected-surfaces", "BUSINESS_LOGIC,LOCALIZATION",
+            ])
+        self.assertEqual(0, ret)
+        plan = read_json(task_dir(self.repo, "partial-revise") / "plan.json")
+        self.assertEqual(["app/src/main/kotlin/com/example/Login.kt"], plan["expected_files"])
+        self.assertEqual([":app"], plan["expected_modules"])
+        self.assertEqual(["BUSINESS_LOGIC", "LOCALIZATION"], plan["expected_surfaces"])
+        self.assertEqual("BUG", plan["task_kind"])
+        self.assertEqual("LoginTest covers the fix", plan["test_strategy"])
+        self.assertEqual("Show a finished message", plan["requested_outcome"])
+        self.assertEqual(2, plan["revision_number"])
+
     def test_draft_rejects_file_paths_as_surfaces(self) -> None:
         # DEFECT-SURFACES-01 (round 5): file paths were stored upper-cased as surfaces, the real
         # surfaces were never declared, and every task needed a second approval for drift.

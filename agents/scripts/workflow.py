@@ -1201,6 +1201,51 @@ def _build_and_save_plan(
     return plan
 
 
+def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argparse.Namespace:
+    """Arguments for a revision: every plan field the caller did not give keeps its old value.
+
+    A revision given only --expected-surfaces used to drop the plan's files and modules, which
+    switched off the write-scope guard (certification C-D4).
+    """
+    merged = argparse.Namespace(**vars(args))
+
+    def given(name: str) -> bool:
+        value = getattr(args, name, None)
+        return bool(value.strip()) if isinstance(value, str) else bool(value)
+
+    def joined(values: Any) -> str:
+        return ",".join(str(item) for item in values or [] if str(item).strip())
+
+    if str(getattr(args, "kind", None) or "AUTO").upper() == "AUTO" and old_plan.get("task_kind"):
+        merged.kind = old_plan["task_kind"]
+    if not given("planning_depth") and old_plan.get("planning_depth"):
+        merged.planning_depth = old_plan["planning_depth"]
+    if not given("expected_files") and old_plan.get("expected_files"):
+        merged.expected_files = joined(old_plan["expected_files"])
+    if not given("expected_modules") and old_plan.get("expected_modules"):
+        merged.expected_modules = joined(old_plan["expected_modules"])
+    if not given("expected_surfaces") and old_plan.get("expected_surfaces"):
+        surfaces = set(old_plan["expected_surfaces"])
+        if given("expected_files"):
+            # New files keep the surfaces a draft would infer for them.
+            new_files = normalize_expected_files(repo, args.expected_files)
+            surfaces |= set(classify(repo, task_changes=[{"path": item} for item in new_files]).get("surfaces") or [])
+        merged.expected_surfaces = joined(sorted(surfaces))
+    for name in ("test_strategy", "device_strategy", "rollback"):
+        if not given(name) and old_plan.get(name):
+            setattr(merged, name, old_plan[name])
+    if not given("risks") and old_plan.get("risks"):
+        merged.risks = joined(old_plan["risks"])
+    if not given("external_write") and old_plan.get("external_writes"):
+        merged.external_write = list(old_plan["external_writes"])
+    if not (given("phases") or given("phases_file")) and old_plan.get("phases"):
+        merged.phases = list(old_plan["phases"])
+    if getattr(args, "scoped_phase_review", None) is None and getattr(args, "scoped_phase_review_enabled", None) is None \
+            and old_plan.get("scoped_phase_review_enabled") is not None:
+        merged.scoped_phase_review_enabled = old_plan["scoped_phase_review_enabled"]
+    return merged
+
+
 def revise(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
@@ -1254,7 +1299,7 @@ def revise(args: argparse.Namespace) -> dict:
 
     return _build_and_save_plan(
         repo,
-        args,
+        _revision_args(repo, args, old_plan),
         task_id,
         is_revision=True,
         old_plan=old_plan,
@@ -4309,8 +4354,8 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
     command.add_argument(
         "--planning-depth",
         choices=("BOUNDED", "ARCHITECTURAL", "bounded", "architectural"),
-        default="BOUNDED",
-        help="Planning depth scope: BOUNDED (default) or ARCHITECTURAL",
+        default=None if is_revision else "BOUNDED",
+        help="Planning depth scope: BOUNDED (default) or ARCHITECTURAL; revise keeps the plan's depth when omitted",
     )
     command.add_argument("--expected-surfaces")
     command.add_argument("--expected-modules")

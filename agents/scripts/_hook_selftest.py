@@ -338,6 +338,14 @@ class HookTests(unittest.TestCase):
         self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
         self.assertIn("Surfaces missing across the planned files: COMPOSE_UI, XML_UI.", res["reason"])
         self.assertIn("--expected-surfaces COMPOSE_UI,LOCALIZATION,XML_UI", res["reason"])
+        # Certification C-D4: the hint is a complete one-line revise that keeps files and modules.
+        self.assertIn(
+            "Revise the plan in one command: python .agents/scripts/workflow.py revise --repo . --task-id '<task-id>'"
+            " --expected-files app/src/main/kotlin/com/example/Screen.kt,app/src/main/res/layout/activity_main.xml,app/src/main/res/values/strings.xml"
+            " --expected-modules :app --expected-surfaces COMPOSE_UI,LOCALIZATION,XML_UI",
+            res["reason"],
+        )
+        self.assertNotIn("\n", res["reason"])
 
     def test_MUTATION_SCOPE_007_revised_approval_allows_expanded_target(self):
         self.activate(

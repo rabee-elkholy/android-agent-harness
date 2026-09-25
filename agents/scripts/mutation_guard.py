@@ -375,13 +375,19 @@ def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[
         if _is_tracked(root, rel):
             surfaces = [s for s in surfaces if s not in PRE_EXISTING_CONTENT_SURFACES]
         missing |= {item.split(":", 1)[1] for item in check_material_drift(plan, surfaces) if item.startswith("surface:")}
-    if not missing:
-        return ""
-    declared = sorted(set(plan.get("expected_surfaces") or []) | missing)
-    return (
-        f" Surfaces missing across the planned files: {', '.join(sorted(missing))}."
-        f" Request them in one revision: --expected-surfaces {','.join(declared)}"
-    )
+    files = set(plan.get("expected_files") or []) | {item.split(":", 1)[1] for item in drift if item.startswith("file:")}
+    modules = set(plan.get("expected_modules") or []) | {
+        ":" + item[len("module:"):].lstrip(":") for item in drift if item.startswith("module:")
+    }
+    surfaces = set(plan.get("expected_surfaces") or []) | missing
+    # A partial revise keeps omitted fields, but the full command shows the developer the whole scope.
+    import shlex
+    command = f"python .agents/scripts/workflow.py revise --repo . --task-id {shlex.quote(str(plan.get('task_id') or '<task-id>'))}"
+    for flag, values in (("--expected-files", files), ("--expected-modules", modules), ("--expected-surfaces", surfaces)):
+        if values:
+            command += f" {flag} {shlex.quote(','.join(sorted(values)))}"
+    missing_text = f" Surfaces missing across the planned files: {', '.join(sorted(missing))}." if missing else ""
+    return f"{missing_text} Revise the plan in one command: {command}"
 
 
 def join_continuations(command: str) -> str:
