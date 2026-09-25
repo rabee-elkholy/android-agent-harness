@@ -596,6 +596,43 @@ def is_architecture_neutral_scope(
     return all(is_architecture_neutral_path(p) for p in scope_files)
 
 
+def _plan_scope_policy() -> str:
+    try:
+        import _product
+        return str(getattr(_product, "PLAN_SCOPE", "legacy") or "legacy").strip().lower()
+    except Exception:
+        return "legacy"
+
+
+def _require_plan_files(repo: Path, scope_files: list[str], policy: dict, task_kind: str) -> None:
+    """A non-trivial plan must name the files it will edit; without them the write guard has no scope.
+
+    Certification C-D5: first drafts registered no files, modules or surfaces for tasks whose
+    targets were already known. T0 (resources, strings, docs) and micro plans stay exempt, and
+    installs whose answers predate PLAN_SCOPE keep accepting unscoped drafts.
+    """
+    if _plan_scope_policy() != "files_required":
+        return
+    if scope_files or policy.get("micro_eligible") or policy.get("risk_tier") == "T0_TRIVIAL":
+        return
+    candidates: list[str] = []
+    try:
+        from discovery_receipt import load_latest_discovery_receipt
+        receipt = load_latest_discovery_receipt(repo) or {}
+        candidates = [str(item).replace("\\", "/") for item in receipt.get("resolved_paths") or [] if (repo / str(item)).is_file()]
+    except Exception:
+        candidates = []
+    found = (
+        f" Candidates from discovery: {', '.join(sorted(dict.fromkeys(candidates))[:20])}."
+        if candidates
+        else " Find them first with `harness.py task-context --file <path>` / `--symbol <name>` or `harness.py graph --feature <name>`."
+    )
+    raise ValidationError(
+        f"PLAN_SCOPE_REQUIRED: a {task_kind} plan must name at least one --expected-files entry so edits are checked "
+        f"against the approved scope.{found} Re-run draft with --expected-files <comma-separated paths>."
+    )
+
+
 def _build_and_save_plan(
     repo: Path,
     args: argparse.Namespace,
@@ -822,6 +859,8 @@ def _build_and_save_plan(
     architecture_scope_files = list(norm_expected_files)
     for phase in parsed_phases or []:
         architecture_scope_files.extend(phase.get("expected_files") or [])
+    if not is_revision:
+        _require_plan_files(repo, architecture_scope_files, preliminary_policy, resolved_kind)
 
     target_surfaces = set(expected) if expected else set(raw_expected)
     if not target_surfaces and norm_expected_files:

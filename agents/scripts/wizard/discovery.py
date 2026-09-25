@@ -788,6 +788,7 @@ def auto_from_facts(facts: dict) -> dict:
         "assemble_now": "tests-only",
         "model_call_budget": 10,
         "unit_test_scope": "changed_modules",
+        "plan_scope": "files_required",
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
         "chat_language": "mirror",
         "zoho_language": "en_titles_ar_comments",

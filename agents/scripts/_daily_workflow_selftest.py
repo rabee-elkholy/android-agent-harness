@@ -295,6 +295,38 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertEqual("Show a finished message", plan["requested_outcome"])
         self.assertEqual(2, plan["revision_number"])
 
+    def test_C_D5_draft_requires_expected_files_unless_trivial(self) -> None:
+        # Certification C-D5: 4 of 4 first drafts registered no files, modules or surfaces, and the
+        # harness accepted a plan with no write scope for a task with known targets.
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        unscoped = dict(expected_files=None, expected_surfaces=None, expected_modules=None)
+        # New installs record plan_scope=files_required; older installs keep accepting unscoped drafts.
+        from wizard.discovery import auto_from_facts
+        self.assertEqual("files_required", auto_from_facts({}).get("plan_scope"))
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", draft(self._draft_ns("legacy-install", **unscoped))["status"])
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="legacy-install"))
+        scope = mock.patch.object(_product, "PLAN_SCOPE", "files_required", create=True)
+        scope.start()
+        self.addCleanup(scope.stop)
+        for kind in ("FEATURE", "BUG", "REFACTOR"):
+            with self.subTest(kind=kind), self.assertRaises(ValidationError) as ctx:
+                draft(self._draft_ns(f"unscoped-{kind.lower()}", kind=kind, **unscoped))
+            self.assertIn("PLAN_SCOPE_REQUIRED", str(ctx.exception))
+            self.assertIn("--expected-files", str(ctx.exception))
+        self.assertFalse(task_dir(self.repo, "unscoped-feature").joinpath("plan.json").is_file())
+        # The error names the files discovery already found.
+        save_discovery_receipt(self.repo, create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT", query_kind="symbol", query_value="MainActivity",
+            graph_fingerprint="fp", resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/MainActivity.kt"], resolved_symbols=[],
+        ))
+        with self.assertRaises(ValidationError) as ctx:
+            draft(self._draft_ns("unscoped-with-discovery", **unscoped))
+        self.assertIn("Candidates from discovery: app/src/main/kotlin/com/example/MainActivity.kt", str(ctx.exception))
+        # T0 (strings/resources/docs only) stays exempt.
+        trivial = draft(self._draft_ns("strings-only", expected_files=None, expected_surfaces="LOCALIZATION", expected_modules=None))
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", trivial["status"])
+
     def test_draft_rejects_file_paths_as_surfaces(self) -> None:
         # DEFECT-SURFACES-01 (round 5): file paths were stored upper-cased as surfaces, the real
         # surfaces were never declared, and every task needed a second approval for drift.

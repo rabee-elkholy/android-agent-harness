@@ -86,6 +86,7 @@ ALLOWED_NORMALIZED_KEYS = {
     "assemble_now",
     "model_call_budget",
     "unit_test_scope",
+    "plan_scope",
     "zoho_mcp",
     "chat_language",
     "zoho_language",
