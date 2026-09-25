@@ -79,6 +79,14 @@ On **Google Antigravity**:
 
 On **Claude Code, Codex, and other hosts without a trusted transcript adapter**, the final run freezes Review Protocol V1. Pass the active host to `task status --next --host <host>` and `prepare-verification --host <host>`. Record the unchanged final reviewer response with `record_review.py --response <role>=<path>` or `--response-text <role>=<text>`; the evidence identifies independent execution as unverified. For scoped phase reviews, build the package with `phase-review package --host <host>`, launch the exact roster with the generated briefs, then run `phase-review dispatch --host <host> --reviewer <role>` once for each launched reviewer in the same command. Ingest unchanged responses with `phase-review complete --host <host> --response-file <path>`. These hosts retain deterministic policy, immutable packages, gates, and the final verifier, but the receipt is host-reported rather than trusted execution proof. Antigravity's `--from-subagent` transcript path is not a portable ingestion command.
 
+Limits on these hosts, because the final verifier requires proven independent review execution for some changes:
+
+| Change | What completes it on a V1 host |
+|---|---|
+| LOW or MEDIUM severity, no sensitive surface | Recorded reviews are enough |
+| HIGH or CRITICAL severity, no sensitive surface | After the reviews pass, the router returns `REVIEW_OVERRIDE_REQUIRED`: the developer runs `record_review.py --override-reviews --source developer_terminal --proof-reference "<reason>"` in their own terminal. The agent cannot run it; the hook denies it |
+| AUTH, BILLING, SECURITY, SENSITIVE_DATA or CRYPTO surface | Not deliverable. The router returns `SENSITIVE_REVIEW_PROOF_UNAVAILABLE`: run the review on Antigravity, or cancel and split the sensitive part into its own task |
+
 ## Changing setup answers
 
 Edit or regenerate `.harness-setup/answers.json`, then run a compatible update.

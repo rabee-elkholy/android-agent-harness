@@ -2694,6 +2694,43 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertEqual("DEVELOPER_ACTION", act["kind"])
         self.assertIn("revise", act["reason"])
 
+    def _v1_reviewed_task(self, task_id: str, severity: str, surfaces: list[str], review_evidence: dict) -> tuple[dict, dict]:
+        plan, tdir, policy, manifest = self._setup_verifying_task(task_id)
+        current = read_json(tdir / "current-run.json")
+        current["review_protocol_version"] = 1
+        current["review_host"] = "claude"
+        atomic_write_json(tdir / "current-run.json", current)
+        policy.update({"gates": ["preflight"], "reviewers": ["bug-reviewer-agent"], "assemble_required": False,
+                       "device_required": False, "severity": severity, "surfaces": surfaces})
+        atomic_write_json(Path(current["policy"]), policy)
+        self._record_evidence(manifest, current["run_id"], "preflight", "PASS")
+        write_file(active_review_package_path(self.repo, current), "# Review Package\n")
+        self._record_evidence(manifest, current["run_id"], "reviews", "PASS", review_evidence)
+        return plan, current
+
+    def test_ROUTE_CMD_010C_v1_high_severity_routes_to_developer_review_override(self) -> None:
+        # Round 5 (D13): a HIGH change on a host without trusted transcripts reached COMPLETE_TASK and
+        # failed at the verifier after every review had been paid for.
+        unverified = {"reviewers": ["bug-reviewer-agent"], "reports": [{"reviewer": "bug-reviewer-agent", "independent_execution_verified": False}]}
+        plan, _ = self._v1_reviewed_task("route-v1-high", "HIGH", ["ROOM_SCHEMA"], unverified)
+        act = resolve_next_action(self.repo, "route-v1-high", plan)
+        self.assertEqual("REVIEW_OVERRIDE_REQUIRED", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertIn("--override-reviews --source developer_terminal", act["command"])
+
+    def test_ROUTE_CMD_010D_v1_sensitive_change_has_no_override_route(self) -> None:
+        unverified = {"reviewers": ["bug-reviewer-agent"], "reports": [{"reviewer": "bug-reviewer-agent", "independent_execution_verified": False}]}
+        plan, _ = self._v1_reviewed_task("route-v1-sensitive", "CRITICAL", ["AUTH"], unverified)
+        act = resolve_next_action(self.repo, "route-v1-sensitive", plan)
+        self.assertEqual("SENSITIVE_REVIEW_PROOF_UNAVAILABLE", act["code"])
+        self.assertEqual("", act["command"])
+
+    def test_ROUTE_CMD_010E_v1_developer_override_proceeds(self) -> None:
+        overridden = {"developer_override": True, "source": "developer_terminal", "proof_reference_sha256": "x"}
+        plan, _ = self._v1_reviewed_task("route-v1-overridden", "HIGH", ["ROOM_SCHEMA"], overridden)
+        act = resolve_next_action(self.repo, "route-v1-overridden", plan)
+        self.assertNotIn(act["code"], ("REVIEW_OVERRIDE_REQUIRED", "SENSITIVE_REVIEW_PROOF_UNAVAILABLE"))
+
     def test_ROUTE_CMD_011_bug_requires_executable_red(self) -> None:
         """ROUTE-CMD-011: BUG requiring executable RED -> capture-red appears before implementation."""
         task_id = "route-cmd-011"

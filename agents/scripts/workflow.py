@@ -3779,6 +3779,50 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
+        # 4b. Hosts without trusted transcripts (review protocol V1) cannot prove independent review
+        # execution, which the final verifier requires for HIGH/CRITICAL and sensitive changes.
+        # Say so before assemble instead of failing at completion.
+        if required_reviewers and int(current_run.get("review_protocol_version") or 1) < 2 and has_pass_evidence("reviews"):
+            try:
+                review_ev = store.read(snapshot, run_id, "reviews").get("evidence") or {}
+            except Exception:
+                review_ev = {}
+            severity = str(policy.get("severity") or "").upper()
+            sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+            unverified = any(not r.get("independent_execution_verified") for r in review_ev.get("reports") or [])
+            if not review_ev.get("developer_override") and unverified and (sensitive or severity in ("HIGH", "CRITICAL")):
+                if sensitive:
+                    return {
+                        "code": "SENSITIVE_REVIEW_PROOF_UNAVAILABLE",
+                        "kind": "DEVELOPER_ACTION",
+                        "command": "",
+                        "blocking": True,
+                        "reason": (
+                            f"This change touches sensitive surfaces ({', '.join(sensitive)}). Delivery needs reviewer "
+                            "execution proof that this host cannot produce, and a developer override is not allowed for "
+                            "sensitive changes. Ask the developer: run the review on a host with trusted transcripts "
+                            "(Antigravity), or cancel and split the sensitive part out of this task."
+                        ),
+                        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                        "expected": {},
+                    }
+                return {
+                    "code": "REVIEW_OVERRIDE_REQUIRED",
+                    "kind": "DEVELOPER_ACTION",
+                    "command": (
+                        f'python .agents/scripts/record_review.py --task {task_id} --override-reviews '
+                        '--source developer_terminal --proof-reference "<why the recorded reviews are accepted>"'
+                    ),
+                    "blocking": True,
+                    "reason": (
+                        f"This {severity} change was reviewed on a host that cannot prove independent reviewer execution. "
+                        "The developer must accept the recorded reviews by running the command in their own terminal; "
+                        "the agent must not run it."
+                    ),
+                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                    "expected": {"success_exit_codes": [0]},
+                }
+
         # 5. Assemble
         assemble_required = ("assemble" in policy_gates) or bool(policy.get("assemble_required"))
         if assemble_required:
