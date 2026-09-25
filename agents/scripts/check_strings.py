@@ -570,6 +570,10 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
 
                 for key in sorted(missing_in_loc):
                     print(f"   - {key}")
+                print(
+                    "   Add the translation. A string that must not be translated takes translatable=\"false\" or "
+                    "tools:ignore=\"MissingTranslation\"; one an external translation service will fill takes l10n-todo=\"true\"."
+                )
                 errors += len(missing_in_loc)
             else:
                 scope_note = f"{len(keys_to_check)} modified key(s)" if not args.all else "all keys"

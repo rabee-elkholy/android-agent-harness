@@ -256,6 +256,14 @@ def _handle_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _device_verification_disabled() -> bool:
+    try:
+        import _product
+        return str(getattr(_product, "DEVICE_VERIFICATION_MODE", "") or "").strip().lower() == "disabled"
+    except Exception:
+        return False
+
+
 def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
     if getattr(args, "force", False) or args.action in ("uninstall", "signoff", "skip-validation", "status"):
         return None
@@ -629,6 +637,14 @@ def main() -> int:
     parser.add_argument("--source", choices=["developer_terminal", "host_native", "conversation"], default=None, help="Authority source for signoff")
     parser.add_argument("--approval-token", default=None, help="Trusted approval token from developer prompt")
     args = parser.parse_args()
+
+    if args.action in ("install", "start", "install-start") and not args.force and _device_verification_disabled():
+        live_print(
+            "[SKIP] Device verification is disabled for this project (DEVICE_VERIFICATION_MODE = \"disabled\"). "
+            "Nothing was installed or launched; do not describe the app as running. "
+            "Get the next step from: python .agents/harness.py task status --next"
+        )
+        return 0
 
     prereq_err = _check_device_prerequisites(args)
     if prereq_err is not None:

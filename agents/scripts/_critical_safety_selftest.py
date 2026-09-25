@@ -1,6 +1,8 @@
 """Critical safety regressions using temporary repositories and simulated tools."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -277,6 +279,34 @@ class CriticalSafetyTests(unittest.TestCase):
             self.assertNotEqual(0, code)
             self.assertEqual(["B#b"], written.get("new_regressions"))
             self.assertEqual(2, written.get("executed"))
+
+    def test_device_step_when_verification_is_disabled_says_so(self):
+        # Round 5 (O3): with device verification disabled, install-start failed as an environment
+        # problem and told the agent to halt instead of saying there is no device step.
+        import _product
+        out = io.StringIO()
+        with mock.patch.object(_product, "DEVICE_VERIFICATION_MODE", "disabled", create=True), \
+                mock.patch.object(sys, "argv", ["run_device.py", "install-start"]), \
+                mock.patch.object(run_device, "require_serial", side_effect=AssertionError("no device lookup expected")), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(0, run_device.main())
+        self.assertIn("Device verification is disabled", out.getvalue())
+        self.assertIn("task status --next", out.getvalue())
+
+    def test_install_explains_app_owned_agents_directory(self):
+        # Round 5 (D2): an app keeping .agents/skills got "already contains a harness", which was wrong
+        # and gave no migration step.
+        fixture = fixtures.LifecycleTests()
+        fixture.setUp()
+        try:
+            fixture._answers()
+            (fixture.repo / ".agents/skills/app-skill").mkdir(parents=True)
+            with self.assertRaisesRegex(ValidationError, r"did not install \(entries: skills/\).*git mv \.agents/skills"):
+                lifecycle.install(fixture.repo, fixtures.KIT)
+            self.assertFalse((fixture.repo / ".agents/scripts").exists())
+            self.assertTrue((fixture.repo / ".agents/skills/app-skill").is_dir())
+        finally:
+            fixture.tearDown()
 
     def test_update_preserves_history_and_rejects_active_task(self):
         fixture = fixtures.LifecycleTests()
