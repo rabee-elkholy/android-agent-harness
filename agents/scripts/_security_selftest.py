@@ -337,6 +337,25 @@ class SecurityTests(unittest.TestCase):
         self.assertNotIn("wip_str", res, "tools:ignore='MissingTranslation' should be excluded from missing parity check")
         self.assertNotIn("todo_str", res, "l10n-todo='true' should be excluded from missing parity check")
 
+    def test_string_and_plurals_may_share_a_name(self):
+        # DEFECT-STRINGS-DUP-01 (round 5): R.string.x and R.plurals.x are separate resource types.
+        sys.path.insert(0, str(SCRIPTS))
+        from check_strings import _parse_resources
+        strings_xml = self.repo / "app/src/main/res/values/strings.xml"
+        strings_xml.parent.mkdir(parents=True, exist_ok=True)
+        strings_xml.write_text(
+            "<resources>\n"
+            "    <plurals name=\"episode_count\"><item quantity=\"one\">%d episode</item><item quantity=\"other\">%d episodes</item></plurals>\n"
+            "    <string name=\"episode_count\">Episode Count</string>\n"
+            "    <string name=\"twice\">A</string>\n"
+            "    <string name=\"twice\">B</string>\n"
+            "</resources>\n",
+            encoding="utf-8",
+        )
+        _res, dups = _parse_resources(strings_xml)
+        self.assertEqual(1, len(dups), dups)
+        self.assertIn('Duplicate <string name="twice">', dups[0])
+
 
     def test_git_hooks_and_gradlew_file_mutations_denied(self):
         # Attempting write to .git/hooks/pre-commit

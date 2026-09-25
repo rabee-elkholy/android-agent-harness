@@ -120,7 +120,8 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
         return {}, []
     res: dict[str, dict] = {}
     duplicates: list[str] = []
-    seen_names: set[str] = set()
+    # Android keeps separate namespaces per resource type (R.string.x vs R.plurals.x).
+    seen_names: set[tuple[str, str]] = set()
 
     try:
         root = ET.parse(xml_file).getroot()
@@ -133,13 +134,13 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
             name = elem.get("name")
             if not name:
                 continue
-            if name in seen_names:
+            if (tag, name) in seen_names:
                 try:
                     rel_p = xml_file.relative_to(REPO).as_posix()
                 except ValueError:
                     rel_p = str(xml_file)
                 duplicates.append(f"Duplicate <{tag} name=\"{name}\"> in {rel_p}")
-            seen_names.add(name)
+            seen_names.add((tag, name))
 
             if elem.get("translatable") == "false":
                 continue
