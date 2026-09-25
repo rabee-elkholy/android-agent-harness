@@ -290,6 +290,24 @@ class DailyWorkflowSelftest(unittest.TestCase):
         cancel(argparse.Namespace(repo=str(self.repo), task_id="clears-discovery"))
         self.assertIsNone(load_latest_discovery_receipt(self.repo))
 
+    def test_editing_a_tracked_file_does_not_inherit_its_existing_sensitive_content(self) -> None:
+        # Round 5: editing ProfileViewModel (which already mentions sign-in and subscriptions) was
+        # refused before the edit as AUTH/BILLING drift, making the task sensitive and undeliverable.
+        from mutation_guard import file_mutation_allowed
+        vm = "app/src/main/kotlin/com/example/ProfileViewModel.kt"
+        write_file(self.repo / vm, "package com.example\n\nclass ProfileViewModel(val signInState: SignInState, val subscriptionTier: SubscriptionTier) {\n    val loginRequired = true\n    fun purchase() = Unit\n}\n")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "vm"], cwd=self.repo, check=True)
+        draft(self._draft_ns("tracked-sensitive", expected_files=vm, expected_surfaces="BUSINESS_LOGIC"))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id="tracked-sensitive", source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id="tracked-sensitive"))
+        allowed, reason, _code = file_mutation_allowed(self.repo, targets=[vm])
+        self.assertTrue(allowed, reason)
+        # A new file is still judged on everything its path says.
+        allowed_new, _reason, _code = file_mutation_allowed(self.repo, targets=["app/src/main/AndroidManifest.xml"])
+        self.assertFalse(allowed_new)
+
     def test_remediation_command_keeps_the_root_module(self) -> None:
         # DEFECT-DRIFT-LOOP-01 (round 5): the root module ":" was printed as an empty entry, the
         # revise command dropped it, and prepare-verification reported the same drift forever.

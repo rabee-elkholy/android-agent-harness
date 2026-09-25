@@ -28,6 +28,20 @@ SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 # redirection and $(...) are rejected before this by SHELL_LAUNDERING.
 POWERSHELL_READ_CMDLETS = {"get-childitem", "gci", "dir", "get-content", "gc", "select-string", "sls", "test-path", "get-location"}
 
+# Content-derived surfaces that a pre-edit check must not take from a tracked file's existing text.
+PRE_EXISTING_CONTENT_SURFACES = {"AUTH", "BILLING", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
+
+
+def _is_tracked(root: Path, rel_posix: str) -> bool:
+    import subprocess
+    try:
+        return subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", rel_posix],
+            cwd=str(root), capture_output=True, check=False, timeout=10,
+        ).returncode == 0
+    except Exception:
+        return False
+
 
 def _tokens(command: str) -> list[str]:
     # Windows paths must retain backslashes. Reject ambiguous shell syntax;
@@ -313,6 +327,11 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             surfaces = candidate_res.get("surfaces") or []
         except Exception:
             surfaces = ["UNKNOWN"]
+        if _is_tracked(root, rel_posix):
+            # Before an edit the classifier sees the whole file, so an existing file that already
+            # mentions sign-in or purchases would make any edit sensitive. Sensitive surfaces of a
+            # tracked file are judged on its actual diff at prepare-verification and by the verifier.
+            surfaces = [s for s in surfaces if s not in PRE_EXISTING_CONTENT_SURFACES]
 
         try:
             modules = changed_modules(root, {"task_changes": [{"path": rel_posix}]})
