@@ -4,6 +4,40 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.0] - 2026-09-25
+
+First release line declared stable for daily use on Google Antigravity. It closes every defect found across four end-to-end rounds in which Antigravity worked on a production Android app with a human developer in the loop.
+
+### Workflow and router
+
+- `task resume --reopen` sends a verified READY task back to implementation when the developer asks for changes before committing. Before this, the only way out was cancelling the task. The commit request now names this path.
+- A developer commit made at READY in response to the router's commit request is accepted as a lineage checkpoint on resume, instead of being flagged as a foreign change.
+- Closed router dead ends: failed gates now return actionable next steps, IMPLEMENTING has an explicit completion path, and `--json` works on every subcommand.
+- Phase test evidence is bound to its evidence identity, and explicit test targets take precedence over discovery receipts.
+
+### Test-driven evidence
+
+- Bug tasks need a fresh, task-scoped RED capture. Existing failures and environment errors are never accepted as the reproduction.
+- A real test baseline is captured at install, with a clear message when it is missing, so existing failures are reported as debt rather than blocking.
+- Gradle failures are classified from the "What went wrong" report, so tests whose names mention the network are no longer misread as environment failures.
+
+### Safety and policy
+
+- Antigravity hook output contains only `decision` and `reason`, as its protojson schema requires.
+- Developer authority is parsed from the actual subcommand: agents cannot cancel tasks or approve without a conversation source, and prose such as "Cancel button" no longer triggers a false denial.
+- Read-only `git grep`, `git blame`, `harness.py graph` and PowerShell reads (`Get-ChildItem`, `Get-Content`, `Select-String`, `Test-Path`) are allowed outside a task. Pager hooks, `--out`, pipes, redirection and subexpressions stay blocked.
+- Code-surface patterns no longer run on `res/values*` resources. Before this, adding a string to a large `strings.xml` was denied as AUTH, BILLING or DEVICE_API drift because existing copy mentioned "login" or "subscribe", which pushed agents to hardcode text in code instead.
+- The SENSITIVE_DATA surface now matches real location data (location APIs, location permissions, latitude and longitude) instead of the bare word "location". A display field such as `locationText` no longer escalates every ViewModel that uses the model to CRITICAL.
+- Command segments are split on `;`, `&&`, `||` and newlines only outside quotes. A developer reason such as `--proof-reference "not reachable; tests cover it"` no longer breaks a routed command in two, and an unterminated quote is denied.
+- A denied `draft --force` now points to `workflow.py revise` for correcting a plan that is awaiting approval.
+- Tighter change classification: Room exported schemas, binary libraries and media assets now land on the correct surfaces, and XML layouts no longer get the presentational relaxation. Architecture resolution also preserves the existing pattern for existing files.
+- A resolved UNKNOWN classification now requires an approved plan and an eligible reviewer.
+
+### Reviews
+
+- Where the host has a trusted native dispatch, CLI reviewer dispatch is refused so that reviews go through `invoke_subagent`.
+- Validation errors in phase review print a `[FAIL]` line instead of a traceback. Review CLIs accept `--task` and `--task-id`.
+
 ## [1.0.62] - 2026-09-23
 
 ### Phase transition integrity

@@ -1838,9 +1838,12 @@ def resume(args: argparse.Namespace) -> dict:
                     pass
         live_manifest = build_manifest(repo)
         live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
-        if not ready_snapshot or not live_snapshot or ready_snapshot == live_snapshot:
+        unchanged = not ready_snapshot or not live_snapshot or ready_snapshot == live_snapshot
+        # --reopen: the developer reviewed the verified diff and requested changes before committing.
+        if unchanged and not getattr(args, "reopen", False):
             raise ValidationError(
-                f"task '{args.task_id}' is in status 'READY_FOR_DELIVERY' with matching snapshot; resume is only permitted when delivery snapshot is stale"
+                f"task '{args.task_id}' is in status 'READY_FOR_DELIVERY' with matching snapshot; resume is only permitted when delivery snapshot is stale. "
+                f"If the developer requested changes before committing, reopen with: python .agents/harness.py task resume --task-id {args.task_id} --reopen"
             )
         if not plan.get("approval") or plan.get("execution_nonce") != plan["approval"].get("single_use_nonce"):
             raise ValidationError("the approved execution identity is no longer valid")
@@ -3944,7 +3947,8 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 "blocking": True,
                 "reason": (
                     f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}. "
-                    "Human Git Authority requires the developer to review and commit changes before final delivery."
+                    "Human Git Authority requires the developer to review and commit changes before final delivery. "
+                    f"If the developer requests changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
                 ),
                 "suggested_commit": suggested_commit,
                 "inputs": {
@@ -4330,7 +4334,9 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--source", choices=("developer_terminal", "host_native", "conversation"), default=None, help="Authority source for delivery override")
     command.set_defaults(handler=deliver_task)
     sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
-    sub.add_parser("resume", parents=[common]).set_defaults(handler=resume)
+    resume_cmd = sub.add_parser("resume", parents=[common])
+    resume_cmd.add_argument("--reopen", action="store_true", help="Reopen a verified READY task because the developer requested changes before committing")
+    resume_cmd.set_defaults(handler=resume)
     sub.add_parser("handoff", parents=[common]).set_defaults(handler=cmd_task_handoff)
     sub.add_parser("reconcile-handoff", parents=[common]).set_defaults(handler=cmd_task_reconcile_handoff)
     reconcile_cmd = sub.add_parser("reconcile-delivery", parents=[common])

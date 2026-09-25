@@ -138,10 +138,33 @@ class CriticalSafetyTests(unittest.TestCase):
                 "sed -i s/a/b/ app.kt", "sed 'w output.txt' app.kt",
                 "git diff --output=out.txt", "git log --output out.txt",
                 "git symbolic-ref HEAD refs/heads/other", "rg --pre mutate.py needle",
+                "git grep -O mutate.sh needle", "git grep -nOmutate.sh needle",
+                "git grep --open-files-in-pager=mutate.sh needle",
+                "Set-Content app.kt x", "Get-Content app.kt | Set-Content b.kt", "Get-ChildItem $(Remove-Item app.kt)",
+                "python .agents/harness.py graph --find X --out graph.json",
             ):
                 self.assertFalse(mutation_guard.command_allowed(repo, command)[0], command)
-            for command in ("git status && git diff --stat", "rg -n needle app.kt", "python .agents/scripts/workflow.py --help"):
+            for command in (
+                "git status && git diff --stat", "rg -n needle app.kt", "python .agents/scripts/workflow.py --help",
+                'git grep -n "calculateDaysRemaining"', "git blame -L 1,20 app.kt",
+                "Get-ChildItem -Path app\\src\\main", "Get-Content app\\build.gradle", "Select-String -Path app.kt -Pattern needle",
+                "python .agents/harness.py graph --find MVIViewModel --json",
+            ):
                 self.assertTrue(mutation_guard.command_allowed(repo, command)[0], command)
+
+    def test_quoted_separator_does_not_split_a_command(self):
+        # Round 4: a developer reason containing ';' split a routed device command in two.
+        with mock.patch.object(mutation_guard, "active_plan", return_value={"status": "VERIFYING"}):
+            quoted = ('python .agents/harness.py device skip-validation --task-id t --source conversation '
+                      '--proof-reference "not reachable from navigation; build and tests cover it"')
+            self.assertTrue(mutation_guard.command_allowed(Path('.'), quoted)[0])
+            self.assertTrue(mutation_guard.command_allowed(Path('.'), quoted.replace('"', "'"))[0])
+            for command in (
+                'python .agents/harness.py device skip-validation --proof-reference "x"; python mutate.py',
+                'python .agents/harness.py device skip-validation --proof-reference "x" && python mutate.py',
+                'python .agents/harness.py device skip-validation --proof-reference "unterminated; python mutate.py',
+            ):
+                self.assertFalse(mutation_guard.command_allowed(Path('.'), command)[0], command)
 
     def test_verification_and_resume_exemptions_are_segment_scoped(self):
         with mock.patch.object(mutation_guard, "active_plan", return_value={"status": "VERIFYING"}):

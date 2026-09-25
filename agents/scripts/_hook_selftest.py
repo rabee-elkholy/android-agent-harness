@@ -156,6 +156,13 @@ class HookTests(unittest.TestCase):
             self.assertEqual("deny", res["decision"], command)
             self.assertEqual("DEVELOPER_AUTHORITY", res.get("reason_code"), command)
 
+    def test_draft_force_denial_points_to_revise(self):
+        """Round 4: an agent fixing a pending plan tried draft --force; the denial must name the real path."""
+        res = self.call("run_command", {"CommandLine": 'python .agents/scripts/workflow.py draft --repo . --task-id t --outcome "x" --force'})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("DRAFT_FORCE", res.get("reason_code"))
+        self.assertIn("workflow.py revise", res["reason"])
+
     def test_router_resume_for_stale_ready_delivery_is_allowed(self):
         """The router routes a stale READY task to `task resume`; the hook must not block its own advice."""
         self.activate(status="READY_FOR_DELIVERY")

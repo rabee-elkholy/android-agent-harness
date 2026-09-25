@@ -24,6 +24,11 @@ BOOTSTRAP_ACTIONS = {
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 
+# Read-only PowerShell cmdlets (Antigravity on Windows runs PowerShell). Pipes,
+# redirection and $(...) are rejected before this by SHELL_LAUNDERING.
+POWERSHELL_READ_CMDLETS = {"get-childitem", "gci", "dir", "get-content", "gc", "select-string", "sls", "test-path", "get-location"}
+
+
 def _tokens(command: str) -> list[str]:
     # Windows paths must retain backslashes. Reject ambiguous shell syntax;
     # these exemptions are intentionally narrower than a general shell parser.
@@ -87,6 +92,8 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         return "", []
     if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb"}:
         return executable, tokens[1:]
+    if executable in POWERSHELL_READ_CMDLETS:
+        return "powershell-read", tokens[1:]
     if executable in {"gradlew", "gradlew.bat", "gradle"}:
         return executable, tokens[1:]
     return "", []
@@ -97,9 +104,12 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name == "git":
         if args[:1] == ["-C"] and len(args) >= 3:
             args = args[2:]
-        if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe"}:
+        if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe", "grep", "blame"}:
             return False
         if any(arg.startswith(("--output", "--ext-diff", "--textconv")) for arg in args[1:]):
+            return False
+        # git grep -O/--open-files-in-pager runs an arbitrary program.
+        if args[0] == "grep" and any(arg.startswith("--open") or (arg[:2] != "--" and arg.startswith("-") and "O" in arg) for arg in args[1:]):
             return False
         if args[0] == "symbolic-ref":
             return len(args) == 2 and not args[1].startswith("-")
@@ -115,6 +125,8 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return False
     if name in {"gradlew", "gradlew.bat", "gradle"}:
         return bool(args) and args[0].lower() in {"dependencies", "tasks", "projects", "properties", "help", "--help", "-h"}
+    if name == "powershell-read":
+        return True
     if name in {"rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat"}:
         return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
     if name == "compileall":
@@ -134,6 +146,9 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             return targets == 1 and not any(arg.startswith("--out") for arg in args)
         if args[:2] in (["context", "preview"], ["context", "status"]):
             return True
+        # `graph` forwards to project_graph.py and gets the same read-only rule.
+        if args[:1] == ["graph"]:
+            return not any(arg.startswith("--out") for arg in args)
     # Only known harness parsers implement help without running arbitrary code.
     return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "android-harness"} and bool(args) and args[-1] in {"--help", "-h"}
 
@@ -322,6 +337,34 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
 
 
+def _split_segments(command: str) -> list[str] | None:
+    """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote."""
+    segments, current, quote, i = [], [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+            current.append(ch)
+        elif ch in "\"'":
+            quote = ch
+            current.append(ch)
+        elif command.startswith(("&&", "||"), i):
+            segments.append("".join(current))
+            current = []
+            i += 1
+        elif ch in ";\n":
+            segments.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+        i += 1
+    if quote:
+        return None
+    segments.append("".join(current))
+    return [item.strip() for item in segments if item.strip()]
+
+
 def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if isinstance(repo, str) and (isinstance(command, Path) or (" " in repo and not " " in str(command))):
         repo, command = command, repo
@@ -330,7 +373,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, "empty command"
     if SHELL_LAUNDERING.search(normalized):
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
-    segments = [item.strip() for item in re.split(r"(?:&&|\|\||;|\r?\n)", normalized) if item.strip()]
+    segments = _split_segments(normalized)
+    if segments is None:
+        return False, "unterminated quote in command"
     if len(segments) > 1:
         decisions = [command_allowed(repo, item) for item in segments]
         return next((decision for decision in decisions if not decision[0]), (True, "every command segment is authorized"))
@@ -373,7 +418,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["assemble"], ["device"], ["review"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
-    # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one.
+    # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.
     if status in ("VERIFYING", "BLOCKED", "READY_FOR_DELIVERY") and action == "resume":
         return True, f"resume authorized for {status.lower()} plan {plan.get('plan_id')}"
     if status == "BLOCKED":

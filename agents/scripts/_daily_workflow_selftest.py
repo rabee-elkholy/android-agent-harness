@@ -6889,9 +6889,28 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         with self.assertRaises(ValidationError) as ctx:
             resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         self.assertIn("stale", str(ctx.exception).lower())
+        self.assertIn("--reopen", str(ctx.exception))
 
         plan_after = read_json(tdir / "plan.json")
         self.assertEqual("READY_FOR_DELIVERY", plan_after.get("status"))
+
+    def test_RESUME_READY_008_developer_requested_change_reopens_unchanged_ready(self) -> None:
+        # Round 4: the developer reviews the verified diff and asks for a change before
+        # committing. Only an explicit --reopen returns the task to IMPLEMENTING.
+        from workflow import resume, resolve_next_action
+        task_id = "resume-ready-008"
+        plan, tdir = self._setup_ready_task(task_id)
+        action = resolve_next_action(self.repo, task_id)
+        self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", action["code"])
+        self.assertIn(f"task resume --task-id {task_id} --reopen", action["reason"])
+
+        resume(argparse.Namespace(repo=str(self.repo), task_id=task_id, reopen=True))
+
+        plan_after = read_json(tdir / "plan.json")
+        self.assertEqual("IMPLEMENTING", plan_after.get("status"))
+        self.assertNotIn("ready_delivery_snapshot_sha256", plan_after)
+        self.assertNotIn("ready_run_id", plan_after)
+        self.assertEqual(plan["execution_nonce"], plan_after["execution_nonce"])
 
     def test_RESUME_READY_003_verifying_resume_unchanged(self) -> None:
         from workflow import resume

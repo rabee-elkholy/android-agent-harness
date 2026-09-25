@@ -57,7 +57,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("BILLING", re.compile(r"(?i)billingclient|purchase|subscription|productdetails|com\.android\.billingclient"), "BILLING_PATTERN"),
     ("AUTH", re.compile(r"(?i)oauth|authentication|authorization|login|sign.?in|jwt|androidx\.biometric|com\.google\.android\.gms\.auth"), "AUTH_PATTERN"),
     ("CRYPTO", re.compile(r"(?i)cipher|keystore|secretkey|encrypt|decrypt|messageDigest|javax\.crypto|java\.security\.(?:KeyStore|MessageDigest)"), "CRYPTO_PATTERN"),
-    ("SENSITIVE_DATA", re.compile(r"(?i)access.?token|refresh.?token|password|biometric|health.?data|location|androidx\.security\.crypto"), "SENSITIVE_PATTERN"),
+    ("SENSITIVE_DATA", re.compile(r"(?i)access.?token|refresh.?token|password|biometric|health.?data|androidx\.security\.crypto|android\.location|fusedlocation|locationservices|locationrequest|lastknownlocation|lastlocation|access_(?:fine|coarse|background)_location|\blatitude\b|\blongitude\b"), "SENSITIVE_PATTERN"),
     ("COROUTINES", re.compile(r"\b(suspend|CoroutineScope|Dispatchers\.|Flow<|StateFlow|SharedFlow|launch\s*\{|async\s*\{)"), "COROUTINE_PATTERN"),
     ("ROOM_SCHEMA", re.compile(r"@(Database|Entity|Embedded|Relation)|AutoMigration|Migration\s*\("), "ROOM_PATTERN"),
     ("PERSISTENCE", re.compile(r"(?i)datastore|sqldelight|sqlite(database|openhelper)?|realm(configuration)?"), "PERSISTENCE_PATTERN"),
@@ -762,9 +762,12 @@ def classify(
             _add(found, "BUILD_CONFIG", rel, "PROGUARD_RULES")
         if Path(lower).name in ("baseline-prof.txt", "startup-prof.txt"):
             _add(found, "BUILD_CONFIG", rel, "BASELINE_PROFILE")
+        # res/values*.xml holds user-facing copy and constants; words like "login" or
+        # "subscribe" there are text, not billing/auth/device code.
+        values_resource = "/res/values" in f"/{lower}" and suffix == ".xml"
         for surface, pattern, reason in PATTERNS:
 
-            if not test_path:
+            if not test_path and not values_resource:
                 if pattern.search(diff_text):
                     _add(found, surface, rel, reason)
                 elif context_text and pattern.search(context_text):

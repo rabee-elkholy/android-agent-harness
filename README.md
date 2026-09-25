@@ -27,6 +27,24 @@ Prompt rules help guide behavior. Android Agent Harness moves selected guarantee
 
 ---
 
+## What it actually stops
+
+Every row below is a failure mode we have watched AI agents hit on a real Android codebase, and the concrete mechanism that now stops it.
+
+| Without the harness | With the harness |
+|---|---|
+| The agent reports "tests pass" from a run that predates its last edit. | Test, review, assemble and device evidence is bound to a frozen delivery snapshot. Any later edit makes it stale, and delivery fails closed. |
+| A bug is "fixed" without ever being reproduced. | Bug tasks require a captured RED: a new test that fails before the fix, recorded as evidence. Tests that were already failing are never accepted as the reproduction. |
+| Tests that were already broken block the task or get blamed on the change. | A test baseline is captured at install. Only new failures block; known debt is reported separately. |
+| The agent edits files the developer never agreed to. | The plan pins expected files and surfaces. On Antigravity, native hooks deny out-of-scope writes before they happen; on every host, drift is re-checked at verification. |
+| The agent approves its own plan, cancels its own task, or commits. | Approval must cite the developer's words in chat. Cancel, commit, merge, rebase and push stay with the developer. |
+| A risky change gets the same light review as a string fix. | A 6-tier risk model routes reviewers and gates from the final diff: none for trivial changes, specialists for Room, security or device surfaces. |
+| A large change is reviewed only once, at the end. | Multi-phase tasks checkpoint each phase; substantial or risky phases get a scoped delta review before the next begins. |
+| The developer asks for a change after verification and the workflow wedges. | `task resume --reopen` sends a verified task back to implementation under the same approval, and it is re-verified. |
+| A new chat forgets the team's conventions. | Project notes and scoped developer instructions live in the repo and are pinned into every matching plan. |
+
+---
+
 ## What the harness adds
 
 The harness adds six engineering capabilities around your AI coding assistant:
@@ -421,9 +439,15 @@ All pull requests and commits run the complete matrix on GitHub Actions.
 
 ---
 
+## Field-tested
+
+Version 1.1.0 is the first release line declared stable. Before it shipped, the harness drove Google Antigravity through four end-to-end rounds on a disposable copy of a production Android app (Kotlin and Java, XML and Compose, MVVM and MVI, Hilt, Room, Arabic and English resources), with a human in the developer role approving plans, reviewing diffs and making every commit.
+
+Those rounds covered ordinary daily work: date-logic bugs reproduced with failing tests, copy fixes across locales, ViewModel validation, a two-phase feature with scoped phase review, a new screen following the project's preferred architecture, developer-requested changes after verification, and harness updates between tasks. Every defect found in a round was fixed with a failing regression test first, and all of them are covered by the deterministic selftest suite that runs on every commit.
+
 ## Maturity / roadmap
 
-Production-oriented and heavily self-tested. Real-world Android burn-in continues across heterogeneous production codebases.
+Stable for daily use on Google Antigravity, where enforcement is hook-backed. Other hosts are supported with rule-level enforcement plus the same downstream verification. Real-world burn-in continues across more Android codebases.
 
 **Roadmap:**
 - Real-repo burn-in across diverse Android topologies

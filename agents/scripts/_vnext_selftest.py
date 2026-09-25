@@ -607,6 +607,33 @@ class PolicyTests(RepoCase):
         self.assertIn("BILLING", result["surfaces"])
         self.assertEqual("CRITICAL", result["severity"])
 
+    def test_location_display_text_is_not_sensitive_but_location_data_is(self) -> None:
+        # Round 4: a campaign model with `locationText: String` made every ViewModel using it CRITICAL.
+        write(self.repo / "app/src/main/kotlin/A.kt", 'data class Campaign(val locationText: String = "", val title: String = "")\n')
+        self.assertNotIn("SENSITIVE_DATA", classify(self.repo)["surfaces"])
+        for code in (
+            "val client = LocationServices.getFusedLocationProviderClient(context)\n",
+            "val perm = android.Manifest.permission.ACCESS_FINE_LOCATION\n",
+            "data class Fix(val latitude: Double, val longitude: Double)\n",
+        ):
+            write(self.repo / "app/src/main/kotlin/A.kt", code)
+            self.assertIn("SENSITIVE_DATA", classify(self.repo)["surfaces"], code)
+
+    def test_string_resources_do_not_raise_code_surfaces(self) -> None:
+        # Round 4: adding strings to a large strings.xml was denied as AUTH/BILLING/DEVICE_API drift
+        # because its existing copy mentions login, subscriptions and bluetooth.
+        strings = self.repo / "app/src/main/res/values/strings.xml"
+        write(strings, '<resources>\n<string name="login">Sign in</string>\n<string name="sub">Subscribe</string>\n'
+                       '<string name="bt">Enable bluetooth location</string>\n<string name="pw">Forgot password</string>\n</resources>\n')
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "strings fixture")
+        rel = "app/src/main/res/values/strings.xml"
+        candidate = classify(self.repo, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False)
+        self.assertEqual({"LOCALIZATION", "RESOURCE_UI"}, set(candidate["surfaces"]))
+        write(strings, strings.read_text(encoding="utf-8").replace("</resources>", '<string name="tip">Log in to track purchases</string>\n</resources>'))
+        edited = classify(self.repo, task_changes=[{"path": rel}], progress=False)
+        self.assertEqual({"LOCALIZATION", "RESOURCE_UI"}, set(edited["surfaces"]))
+
     def test_removed_security_code_remains_critical(self) -> None:
         write(self.repo / "app/src/main/kotlin/A.kt", "internal val verifier: HostnameVerifier? = null\n")
         run_git(self.repo, "add", ".")

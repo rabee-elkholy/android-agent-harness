@@ -69,6 +69,10 @@ EPHEMERAL_GENERATED_RE = re.compile(
 
 # These stay denied even during approved implementation: they cross the local
 # development boundary or make recovery materially harder.
+DENY_HINTS = {
+    "draft_force": "To correct a plan that awaits approval, run `python .agents/scripts/workflow.py revise --repo . --task-id <id>` "
+                   "with the corrected arguments. To replace a different live task, ask the developer to cancel it.",
+}
 DANGEROUS = (
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)\b", re.I)),
     ("shell_indirection", re.compile(r"\b(?:base64\s+(?:-d|--decode)|frombase64string|invoke-expression|iex|eval)\b", re.I)),
@@ -326,7 +330,8 @@ def _handle_command(command: str) -> None:
         return
     for code, pattern in DANGEROUS:
         if pattern.search(command):
-            emit("deny", f"Denied by local safety boundary: {code}.", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)
+            hint = f" {DENY_HINTS[code]}" if code in DENY_HINTS else ""
+            emit("deny", f"Denied by local safety boundary: {code}.{hint}", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)
             return
     if RAW_GRADLE.search(command) and not ALLOWED_GRADLE_WRAPPER.search(command):
         emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)

@@ -105,6 +105,8 @@ python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>
 
 # 6. Resume implementation (if verification findings require code fixes)
 python .agents/scripts/workflow.py resume --repo . --task-id <id>
+# READY_FOR_DELIVERY and the developer requested changes before committing:
+python .agents/scripts/workflow.py resume --repo . --task-id <id> --reopen
 
 # 7. Read-only verification check
 python .agents/scripts/workflow.py verify --repo . --task-id <id>
@@ -365,7 +367,7 @@ When an exception occurs:
 | **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
 | **Review Complete**| `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` | Record trusted reviewer completion |
 | **Review Finalize**| `python .agents/harness.py review finalize --task <id>` | Aggregate review evidence once all reviewers complete |
-| **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation |
+| **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation; add `--reopen` at READY_FOR_DELIVERY when the developer requests changes |
 | **Assemble** | `python .agents/harness.py assemble` | Build application debug artifact (derived assemble task) |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
 | **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
