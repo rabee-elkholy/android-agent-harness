@@ -79,6 +79,17 @@ Same rule as rounds 1-4: every harness defect gets a failing regression test
 first, then the fix, then `python harness_cli.py selftest` passes. Fixes land
 on the round branch, never on `main` directly.
 
+Antigravity stability comes first. Antigravity is the primary production host
+and round 5 must not regress it:
+
+- no change to hook stdout, Review Protocol V2, `GEMINI.md`, `agents/hooks.json`
+  or the Antigravity reviewer agents; a defect that needs one is recorded and
+  left to the maintainer;
+- every fix to shared code keeps the complete selftest green, including the
+  Antigravity hook and protocol tests, before it is pushed;
+- design-level defects (for example ownership of `.agents`) are reported as
+  recommendations, not changed in this round.
+
 ## Out of scope
 
 - Physical device and ADB gates. They need a local run.

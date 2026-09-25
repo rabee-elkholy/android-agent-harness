@@ -608,7 +608,11 @@ class DiscoveryTests(RepoCase):
         test_manifest = f'<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><activity android:name=".TestActivity">{launcher}</activity></application></manifest>'
         write(self.repo / "app/src/androidTest/AndroidManifest.xml", test_manifest)
         write(self.repo / "app/src/test/AndroidManifest.xml", test_manifest)
+        write(self.repo / "app/src/androidTestDebug/AndroidManifest.xml", test_manifest)
         self.assertEqual(["com.one/.ui.MainActivityDefault"], discover_launchers(self.repo))
+        # A product flavor named like a test keeps its launcher.
+        write(self.repo / "app/src/abTest/AndroidManifest.xml", test_manifest.replace(".TestActivity", ".AbActivity"))
+        self.assertIn("com.one/.AbActivity", discover_launchers(self.repo))
 
     def test_kmp_and_root_module_source_roots_are_exact(self) -> None:
         write(self.repo / "composeApp/src/androidMain/kotlin/App.kt", "class App\n")

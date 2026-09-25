@@ -231,7 +231,11 @@ def discover_android_source_root(repo: Path, module: str) -> list[str]:
     return list((module_dir / "src" / "main").relative_to(repo).parts)
 
 
-_TEST_SOURCE_SET = re.compile(r"^(?:test|androidTest|testFixtures|.*(?:Test|UnitTest|InstrumentedTest))$")
+# Gradle test source sets only (testDebug, androidTestFree, androidUnitTest, commonTest...),
+# so a product flavor whose name ends in "Test" keeps its launcher.
+_TEST_SOURCE_SET = re.compile(
+    r"^(?:(?:test|androidTest|testFixtures)(?:[A-Z]\w*)?|\w*(?:UnitTest|InstrumentedTest)|(?:common|jvm|android|ios|js|native)Test)$"
+)
 
 
 def _is_test_manifest(relative_parts: tuple[str, ...]) -> bool:
