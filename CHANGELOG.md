@@ -4,7 +4,7 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
-## [Unreleased]
+## [1.1.1] - 2026-09-25
 
 Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a large multi-module app using version-catalog plugin aliases. Results: [docs/benchmark/results-2026-09-25-round5.md](docs/benchmark/results-2026-09-25-round5.md).
 
