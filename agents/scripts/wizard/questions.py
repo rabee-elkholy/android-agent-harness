@@ -978,6 +978,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "git_gate": "no",
         "device_verification": raw.get("i22") or auto.get("device_verification", "manual_only"),
         "model_call_budget": model_call_budget,
+        "unit_test_scope": "changed_modules",
         "asked": asked,
     }
 

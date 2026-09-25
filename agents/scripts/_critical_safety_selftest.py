@@ -233,6 +233,51 @@ class CriticalSafetyTests(unittest.TestCase):
                         code = run_tests_gate.main([":app:testDebugUnitTest"])
                     self.assertEqual(0 if fresh_failure and only_test_failure else 1, code)
 
+    def test_changed_modules_scope_targets_every_changed_module(self):
+        # Round 5 (D8): a change in two modules fell back to :app tests and the changed test never ran.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            changed = [repo / "modules/a/src/main/A.kt", repo / "modules/b/src/test/BTest.kt"]
+            import _product
+            import _repo_files
+            with mock.patch.object(_repo_files, "changed_paths", return_value=changed), mock.patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"):
+                with mock.patch.object(_product, "UNIT_TEST_SCOPE", "legacy", create=True):
+                    self.assertEqual([":app:testDebugUnitTest"], run_tests_gate.resolve_target_tasks(repo, None))
+                with mock.patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True):
+                    self.assertEqual([":modules:a:testDebugUnitTest", ":modules:b:testDebugUnitTest"], run_tests_gate.resolve_target_tasks(repo, None))
+                    self.assertEqual([":x:test"], run_tests_gate.resolve_target_tasks(repo, ":x:test"))
+                with mock.patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True), mock.patch.object(_repo_files, "changed_paths", return_value=[*changed, repo / "app/src/main/M.kt"]):
+                    self.assertEqual([":app:testDebugUnitTest", ":modules:a:testDebugUnitTest", ":modules:b:testDebugUnitTest"], run_tests_gate.resolve_target_tasks(repo, None))
+
+    def test_multi_module_run_executes_each_module_and_blocks_new_failure(self):
+        passing = '<testsuite tests="1" failures="0"><testcase classname="A" name="a"/></testsuite>'
+        failing = '<testsuite tests="1" failures="1"><testcase classname="B" name="b"><failure message="new"/></testcase></testsuite>'
+        tasks = [":modules:a:testDebugUnitTest", ":modules:b:testDebugUnitTest"]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            ran: list[str] = []
+
+            def gradle(args, **kwargs):
+                ran.extend(args)
+                module = args[0].split(":")[2]
+                folder = repo / "modules" / module / "build/test-results/testDebugUnitTest"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "r.xml").write_text(passing if module == "a" else failing)
+                if module == "b":
+                    kwargs["outcome"].update(test_failure_only=True)
+                    return 1
+                return 0
+            written: dict = {}
+            with mock.patch.object(run_tests_gate, "REPO", repo), mock.patch.object(run_tests_gate, "resolve_target_tasks", return_value=tasks), \
+                    mock.patch.object(run_tests_gate, "load_baseline", return_value={"unit_tests": []}), \
+                    mock.patch.object(run_tests_gate, "write_gate_result", side_effect=lambda name, data: written.update(data)), \
+                    mock.patch.object(run_tests_gate, "current_head_sha", return_value=""), mock.patch.object(run_gradle_task, "run_gradle", side_effect=gradle):
+                code = run_tests_gate.main([])
+            self.assertEqual(tasks, ran)
+            self.assertNotEqual(0, code)
+            self.assertEqual(["B#b"], written.get("new_regressions"))
+            self.assertEqual(2, written.get("executed"))
+
     def test_update_preserves_history_and_rejects_active_task(self):
         fixture = fixtures.LifecycleTests()
         fixture.setUp()

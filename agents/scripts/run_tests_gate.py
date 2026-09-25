@@ -31,7 +31,9 @@ from _live_process import enable_line_buffered_stdio, live_print, step_progress 
 from _repo_files import REPO  # noqa: E402
 
 
-def report_paths(repo: Path, task: str) -> list[Path]:
+def report_paths(repo: Path, task: str | list[str]) -> list[Path]:
+    if isinstance(task, (list, tuple)):
+        return sorted({path for item in task for path in report_paths(repo, item)})
     parts = [item for item in task.strip().split(":") if item]
     if len(parts) >= 1:
         module = repo.joinpath(*parts[:-1])
@@ -40,7 +42,7 @@ def report_paths(repo: Path, task: str) -> list[Path]:
     return sorted(path for path in repo.glob("**/build/test-results/**/*.xml") if path.is_file() and "androidtest" not in path.as_posix().lower())
 
 
-def collect_test_summary(repo: Path, task: str) -> dict[str, int]:
+def collect_test_summary(repo: Path, task: str | list[str]) -> dict[str, int]:
     totals = {"executed": 0, "skipped": 0, "failed": 0, "reports": 0}
     for report in report_paths(repo, task):
         try:
@@ -60,7 +62,7 @@ def collect_test_summary(repo: Path, task: str) -> dict[str, int]:
     return totals
 
 
-def collect_executed_tests(repo: Path, task: str) -> list[str]:
+def collect_executed_tests(repo: Path, task: str | list[str]) -> list[str]:
     names: set[str] = set()
     for report in report_paths(repo, task):
         try:
@@ -81,7 +83,7 @@ def collect_executed_tests(repo: Path, task: str) -> list[str]:
     return sorted(names)
 
 
-def collect_task_failures(repo: Path, task: str) -> list[dict]:
+def collect_task_failures(repo: Path, task: str | list[str]) -> list[dict]:
     entries: dict[str, dict] = {}
     for report in report_paths(repo, task):
         for item in parse_report(report):
@@ -89,7 +91,7 @@ def collect_task_failures(repo: Path, task: str) -> list[dict]:
     return sorted(entries.values(), key=lambda item: item["test_name"])
 
 
-def report_signatures(repo: Path, task: str) -> dict[str, tuple[int, int]]:
+def report_signatures(repo: Path, task: str | list[str]) -> dict[str, tuple[int, int]]:
     result: dict[str, tuple[int, int]] = {}
     for path in report_paths(repo, task):
         try:
@@ -164,6 +166,51 @@ def resolve_target_task(repo: Path, requested_task: str | None) -> str:
     except Exception:
         pass
     return default_task
+
+
+def _unit_test_scope() -> str:
+    try:
+        import _product
+        return str(getattr(_product, "UNIT_TEST_SCOPE", "legacy") or "legacy").strip().lower()
+    except Exception:
+        return "legacy"
+
+
+def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
+    """Unit-test tasks for this run.
+
+    Installs with UNIT_TEST_SCOPE = "changed_modules" test every changed module; a change that spans
+    several modules no longer falls back to the default task, which may not run the changed tests.
+    Other installs keep the single-task behaviour of resolve_target_task.
+    """
+    single = resolve_target_task(repo, requested_task)
+    if requested_task or _unit_test_scope() != "changed_modules":
+        return [single]
+    from baseline_capture import _unit_test_task
+    default_task = _unit_test_task()
+    if single != default_task:
+        return [single]
+    try:
+        from _repo_files import changed_paths
+        changed = changed_paths(repo=repo)
+        root_build_names = {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "libs.versions.toml"}
+        if any(p.name in root_build_names or p.parent == repo for p in changed if p.suffix in {".gradle", ".kts", ".toml", ".properties"}):
+            return [default_task]
+        default_module = default_task.rsplit(":", 1)[0] or ":app"
+        task_suffix = default_task.split(":")[-1] if ":" in default_task else "testDebugUnitTest"
+        tasks: list[str] = []
+        for p in changed:
+            rel = p.relative_to(repo).as_posix()
+            if "/src/" not in rel:
+                continue
+            mod_path = rel.split("/src/")[0]
+            mod_name = ":" + mod_path.replace("/", ":") if mod_path and mod_path != "." else ":app"
+            task = default_task if mod_name in (default_module, ":app") else f"{mod_name}:{task_suffix}"
+            if task not in tasks:
+                tasks.append(task)
+        return sorted(tasks) or [default_task]
+    except Exception:
+        return [default_task]
 
 
 def _failures_with_freshness(
@@ -290,12 +337,31 @@ def main(argv=None) -> int:
 
     from run_gradle_task import run_gradle
 
-    task = resolve_target_task(REPO, args.task)
-    live_print(f"[*] Unit-test gate: {task}")
+    tasks = resolve_target_tasks(REPO, args.task)
+    task: str | list[str] = tasks[0] if len(tasks) == 1 else tasks
+    task_label = " ".join(tasks)
+    live_print(f"[*] Unit-test gate: {task_label}")
     reports_before = report_signatures(REPO, task)
     outcome: dict = {}
-    with step_progress(f"Running unit tests: {task}"):
-        code = run_gradle([task], outcome=outcome)
+    code = 0
+    if len(tasks) == 1:
+        with step_progress(f"Running unit tests: {task_label}"):
+            code = run_gradle(tasks, outcome=outcome)
+    else:
+        # One Gradle run per module keeps failure attribution per task and runs every module's tests.
+        attributable = True
+        for item in tasks:
+            item_outcome: dict = {}
+            with step_progress(f"Running unit tests: {item}"):
+                item_code = run_gradle([item], outcome=item_outcome)
+            if item_code == EXIT_ENV:
+                code = item_code
+                break
+            if item_code != 0:
+                code = code or item_code
+                attributable = attributable and bool(item_outcome.get("test_failure_only"))
+        if code != 0 and code != EXIT_ENV:
+            outcome["test_failure_only"] = attributable
     if code == EXIT_ENV:
         write_gate_result("unit_tests", {
             "schema_version": 2,
@@ -416,7 +482,7 @@ def main(argv=None) -> int:
                 "pre_fix_task_change_set_sha256": pre_fix_task_change_set,
                 "baseline_sha256": baseline_sha,
                 "reproduction_kind": "FAILING_TEST",
-                "gradle_task": task,
+                "gradle_task": task_label,
                 "failed_tests": failed_records,
             }
             red_payload["red_sha256"] = canonical_sha256({k: v for k, v in red_payload.items() if k != "red_sha256"})
