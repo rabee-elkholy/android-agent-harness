@@ -167,8 +167,20 @@ def main(argv: list[str] | None = None) -> int:
                 arch_msg = "no architecture contract bound (exempted)"
         sublog(f"[{'OK' if arch_ok else 'FAIL'}] [ARCHITECTURE] {arch_msg}")
 
+    with step_progress("6. Exported components"):
+        manifest_paths = [p for p in (task_change_paths if task_change_paths is not None else modified) if p.endswith("AndroidManifest.xml")]
+        if not manifest_paths:
+            exported_ok, exported_msg = True, "no manifest change"
+        else:
+            try:
+                from exported_component_guard import check as check_exported
+                exported_ok, exported_msg = check_exported(repo_target, manifest_paths)
+            except Exception as exc:
+                exported_ok, exported_msg = True, f"exported-component check skipped: {exc}"
+        sublog(f"[{'OK' if exported_ok else 'FAIL'}] {exported_msg}")
+
     live_print("\n==================================================")
-    overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok and arch_ok
+    overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok and arch_ok and exported_ok
     common = {
         "schema_version": 2,
         "producer": "preflight_check",
@@ -183,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
             "fast_kt_lint": lint_code,
             "risk_approval": risk_ok,
             "architecture_drift": arch_ok,
+            "exported_components": exported_ok,
         },
         "detail": "" if overall_pass else "preflight steps failed; see step exit codes",
     }

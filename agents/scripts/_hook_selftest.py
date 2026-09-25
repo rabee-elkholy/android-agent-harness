@@ -296,6 +296,22 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", res_mod["decision"])
         self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res_mod.get("reason_code"))
 
+    def test_MUTATION_SCOPE_006b_drift_names_missing_surfaces_of_all_planned_files(self):
+        # Round 5 (O4): each planned file's first edit revealed one more surface, so one small change
+        # needed up to three approvals. The first denial now names them all.
+        screen = self.repo / "app/src/main/kotlin/com/example/Screen.kt"
+        screen.write_text("package com.example\n\nimport androidx.compose.runtime.Composable\n\n@Composable\nfun Screen() {}\n", encoding="utf-8")
+        self.activate(
+            expected_files=["app/src/main/res/values/strings.xml", "app/src/main/res/layout/activity_main.xml", "app/src/main/kotlin/com/example/Screen.kt"],
+            expected_surfaces=["LOCALIZATION"],
+            expected_modules=[":app"],
+        )
+        res = self.call("write_to_file", {"TargetFile": "app/src/main/res/layout/activity_main.xml"})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
+        self.assertIn("Surfaces missing across the planned files: COMPOSE_UI, XML_UI.", res["reason"])
+        self.assertIn("--expected-surfaces COMPOSE_UI,LOCALIZATION,XML_UI", res["reason"])
+
     def test_MUTATION_SCOPE_007_revised_approval_allows_expanded_target(self):
         self.activate(
             expected_files=["app/src/main/res/values/strings.xml"],

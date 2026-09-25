@@ -347,13 +347,41 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             actual_files=[rel_posix],
         )
         if drift:
+            hint = _all_missing_surfaces_hint(root, plan, rel_posix, drift, classify, check_material_drift)
             return (
                 False,
-                f"Write target '{rel_posix}' causes material scope drift: {', '.join(drift)}. Plan reconciliation and revised approval required.",
+                f"Write target '{rel_posix}' causes material scope drift: {', '.join(drift)}. Plan reconciliation and revised approval required.{hint}",
                 "SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL",
             )
 
     return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
+
+
+def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[str], classify, check_material_drift) -> str:
+    """Name every surface the planned files still lack, so one revision covers them all.
+
+    Without this, each planned file's first edit revealed one more surface and one small change
+    needed up to three approvals.
+    """
+    missing = {item.split(":", 1)[1] for item in drift if item.startswith("surface:")}
+    for rel in plan.get("expected_files") or []:
+        rel = str(rel).replace("\\", "/").strip("/")
+        if not rel or rel == target or rel in set(plan.get("external_writes") or []) or not (root / rel).is_file():
+            continue
+        try:
+            surfaces = classify(root, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False).get("surfaces") or []
+        except Exception:
+            continue
+        if _is_tracked(root, rel):
+            surfaces = [s for s in surfaces if s not in PRE_EXISTING_CONTENT_SURFACES]
+        missing |= {item.split(":", 1)[1] for item in check_material_drift(plan, surfaces) if item.startswith("surface:")}
+    if not missing:
+        return ""
+    declared = sorted(set(plan.get("expected_surfaces") or []) | missing)
+    return (
+        f" Surfaces missing across the planned files: {', '.join(sorted(missing))}."
+        f" Request them in one revision: --expected-surfaces {','.join(declared)}"
+    )
 
 
 def _split_segments(command: str) -> list[str] | None:
