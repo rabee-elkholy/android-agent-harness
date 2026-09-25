@@ -55,6 +55,13 @@ from _verification_recipes import get_verification_recipes  # noqa: E402
 
 
 SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
+# Every surface the change classifier can report; --expected-surfaces must name these (or aliases).
+KNOWN_SURFACES = {
+    "ANALYTICS", "AUTH", "BILLING", "BUILD_CONFIG", "BUSINESS_LOGIC", "COMPOSE_UI", "COROUTINES", "CRYPTO",
+    "DEVICE_API", "DOCS", "HARNESS_CONFIG", "LOCALIZATION", "MANIFEST_PERMISSION", "NATIVE_CODE", "NAVIGATION",
+    "NETWORK", "PERSISTENCE", "PUBLIC_API", "RESOURCE_UI", "ROOM_SCHEMA", "SECURITY", "SENSITIVE_DATA",
+    "TEST_ONLY", "UNKNOWN", "XML_UI",
+}
 
 
 def normalize_expected_files(repo: Path, raw_files: str | list[str] | None) -> list[str]:
@@ -685,6 +692,12 @@ def _build_and_save_plan(
     norm_expected_files = normalize_expected_files(repo, raw_expected_files)
     raw_expected = [item.strip() for item in (getattr(args, "expected_surfaces", None) or "").split(",") if item.strip()]
     expected = normalize_expected_surfaces(raw_expected)
+    unknown_surfaces = sorted(set(expected) - KNOWN_SURFACES)
+    if unknown_surfaces:
+        raise ValidationError(
+            f"unknown --expected-surfaces value(s): {', '.join(unknown_surfaces)}. "
+            f"Valid surfaces: {', '.join(sorted(KNOWN_SURFACES))}. File paths belong in --expected-files."
+        )
     if not expected:
         if cached_ctx and cached_ctx.get("candidate_surfaces"):
             expected = list(cached_ctx["candidate_surfaces"])
@@ -910,12 +923,7 @@ def _build_and_save_plan(
     if arch_brief:
         (directory / "task-architecture-brief.md").write_text(arch_brief, encoding="utf-8")
 
-    raw_exp_mods = getattr(args, "expected_modules", None)
-    if raw_exp_mods:
-        resolved_expected_modules = [module_id(item) for item in str(raw_exp_mods).split(",") if item.strip()]
-    elif cached_ctx and cached_ctx.get("module"):
-        resolved_expected_modules = [module_id(cached_ctx["module"])]
-    elif norm_expected_files:
+    def _modules_of_expected_files() -> set[str]:
         from plan_authority import discover_android_modules
         known_mods = sorted(
             ((module_id(item), module_id(item).lstrip(":").replace(":", "/")) for item in discover_android_modules(repo)),
@@ -926,7 +934,17 @@ def _build_and_save_plan(
             rel = f.replace("\\", "/").strip("/")
             matched = next((candidate for candidate, prefix in known_mods if prefix and (rel == prefix or rel.startswith(prefix + "/"))), None)
             found_mods.add(matched or ":")
-        resolved_expected_modules = sorted(found_mods)
+        return found_mods
+
+    raw_exp_mods = getattr(args, "expected_modules", None)
+    if raw_exp_mods:
+        declared_mods = {module_id(item) for item in str(raw_exp_mods).split(",") if item.strip()}
+        # Planned files in another module are part of the plan; naming them avoids a later drift approval.
+        resolved_expected_modules = sorted(declared_mods | (_modules_of_expected_files() if norm_expected_files else set()))
+    elif cached_ctx and cached_ctx.get("module"):
+        resolved_expected_modules = [module_id(cached_ctx["module"])]
+    elif norm_expected_files:
+        resolved_expected_modules = sorted(_modules_of_expected_files())
     else:
         resolved_expected_modules = []
 

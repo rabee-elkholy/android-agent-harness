@@ -248,6 +248,36 @@ class DailyWorkflowSelftest(unittest.TestCase):
         ret = workflow_main(cli_args)
         self.assertEqual(0, ret)
 
+    def _draft_ns(self, task_id: str, **overrides: Any) -> argparse.Namespace:
+        values = dict(
+            repo=str(self.repo), task_id=task_id, outcome="Show a finished message", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family=None,
+            expected_files="app/src/main/kotlin/com/example/Login.kt", phases=None, force=True,
+        )
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_draft_rejects_file_paths_as_surfaces(self) -> None:
+        # DEFECT-SURFACES-01 (round 5): file paths were stored upper-cased as surfaces, the real
+        # surfaces were never declared, and every task needed a second approval for drift.
+        with self.assertRaises(ValidationError) as ctx:
+            draft(self._draft_ns("surfaces-paths", expected_surfaces="BUSINESS_LOGIC,app/src/main/kotlin/com/example/Login.kt"))
+        self.assertIn("--expected-files", str(ctx.exception))
+
+    def test_draft_declares_the_modules_of_its_expected_files(self) -> None:
+        # Round 5: a plan naming strings.xml in another module still declared one module, so the
+        # approved plan drifted on that module and needed a second approval.
+        write_file(self.repo / "core/build.gradle.kts", 'plugins { id("com.android.library") }\nandroid { namespace = "com.example.core" }\n')
+        write_file(self.repo / "core/src/main/res/values/strings.xml", "<resources/>\n")
+        draft(self._draft_ns(
+            "modules-union",
+            expected_files="app/src/main/kotlin/com/example/Login.kt,core/src/main/res/values/strings.xml",
+        ))
+        plan = read_json(task_dir(self.repo, "modules-union") / "plan.json")
+        self.assertEqual([":app", ":core"], plan["expected_modules"])
+        self.assertEqual(["BUSINESS_LOGIC"], plan["expected_surfaces"])
+
     def test_remediation_command_keeps_the_root_module(self) -> None:
         # DEFECT-DRIFT-LOOP-01 (round 5): the root module ":" was printed as an empty entry, the
         # revise command dropped it, and prepare-verification reported the same drift forever.
