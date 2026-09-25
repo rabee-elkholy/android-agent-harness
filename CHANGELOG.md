@@ -12,6 +12,7 @@ Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a la
 
 - The Claude Code bridge prepares verification with `--host claude`; the hook no longer demands `--host antigravity` from every host, and Claude can no longer claim the Antigravity host.
 - Review protocol V1 runs read the `HARNESS_REVIEW_RESULT_V2` block that installed reviewers emit, so Claude reviews can be recorded.
+- Claude Code file edits (Edit, Write, MultiEdit, NotebookEdit) go through the plan-scoped write checks; `update` widens installs that registered the hook for Bash only.
 
 ### Discovery and planning
 
@@ -29,6 +30,8 @@ Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a la
 - `check_strings` accepts a `<string>` and a `<plurals>` with the same name.
 - The classifier no longer resolves built-in property types such as `String` to same-named extension files, which classified ordinary entity changes as CRYPTO.
 - The java toolchain identity ignores `Picked up JAVA_TOOL_OPTIONS` notices, which made verifications stale when a proxy port changed.
+- Gradle 9 test failures, which print no `* Try:` section, are attributed to the test task, so `--capture-red` records RED evidence again.
+- Before an edit, a tracked file's sensitive surfaces come from its diff rather than its existing text, so editing a ViewModel that already mentions sign-in no longer makes the task sensitive.
 
 ## [1.1.0] - 2026-09-25
 

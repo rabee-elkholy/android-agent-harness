@@ -1,6 +1,6 @@
 # Round 5 test plan: Claude Code on Pocket Casts (cloud)
 
-Status: executed 2026-09-25 (T1-T3); results in [results-2026-09-25-round5.md](results-2026-09-25-round5.md).
+Status: executed 2026-09-25 (install, T1-T8; T9-T10 not run); results in [results-2026-09-25-round5.md](results-2026-09-25-round5.md).
 
 ## Goal
 
