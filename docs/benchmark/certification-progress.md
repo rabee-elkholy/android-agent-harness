@@ -51,40 +51,27 @@ D1, D2 (message), D8 config, D10 (router), O2 hint, O4 hint, O6 plan summary (it
 1. Finish T4 (RED capture, gates, reviews, delivery).
 2. Run T5 (feature-to-feature import), T6 (exported receiver, O5 gate), T7 (commit and push), T8 (two phases), T9 (change after READY, then commit), T10 (out-of-scope edit and `draft --force`).
 3. Write the certification report with per-task verdicts, costs and the defect list.
-4. After the run, fix C-D2, C-D3, C-D4, C-D5, C-D6 (each with a regression test and the complete selftest), keeping Antigravity unchanged.
+4. Done: C-D2 to C-D6 and C1 are fixed (see above); D10b, C2 and C6 remain open.
 5. Later: release (version bump, PR to `main`, CI, tag) once the fixes are validated.
 
 ## Unresolved problems and recommended fixes
 
-Fix these after the run, each with a failing regression test first and the complete selftest before push. Keep Antigravity's hook stdout, Review Protocol V2, `GEMINI.md`, `agents/hooks.json` and reviewer agents unchanged.
+Fixed after the run on branch `claude/summary-uv8zs5`, one commit per defect, each with a failing regression test first. Hook stdout, Review Protocol V2, `GEMINI.md`, `agents/hooks.json` and the Antigravity reviewer agents are unchanged.
 
-### C-D2 (high): multi-line commands denied with a misleading reason
-- Where: `agents/scripts/mutation_guard.py` `_split_segments` splits on `\n` outside quotes, so `\`+newline continuations become separate "commands"; the first unknown segment triggers "not allowed while plan status is ..." or "No active task found".
-- Fix: in `_split_segments`, treat backslash-newline outside quotes as whitespace (join the lines) before splitting; keep real newlines as separators. Add a test: `workflow.py draft ... \\\n --outcome "x"` is allowed exactly like the one-line form, and `revise` at AWAITING with continuations is allowed.
-- Also: when a segment is denied, name the segment in the reason ("segment '--kind FEATURE' is not a command") so agents do not misdiagnose state.
+| Id | Fix | Commit |
+|---|---|---|
+| C-D2 | Backslash-newline outside quotes joins lines into one command (the hook joins before its pattern checks); real newlines stay separators; a denied segment is named in the reason | 49b2042 |
+| C-D4 | `revise` keeps every omitted plan field (files, modules, surfaces, kind, depth, strategies, risks, rollback, external writes, phases); the drift hint prints one complete `revise` command | 6f1273a |
+| C-D3 | `record_review.py --from-subagent <role>=<path>` and `phase-review complete --response-file <path>` read Claude subagent transcripts (JSONL), take the last assistant reply unchanged, accept only Claude's locations (`<claude home>/projects/**`, `<tmp>/claude-*/**/tasks/*.output`), and record path and sha256; execution stays unverified (V1); a wrong `review_package_sha256` is still rejected. On the Claude hook only, single-quoted text is not an operator. Claude rules updated | 20b28fc |
+| C-D6 | `--response-file` that is not a file is a usage error | 7a6950a |
+| C-D5 | New installs (`PLAN_SCOPE = "files_required"`) require `--expected-files` for non-T0/non-micro drafts, with discovery candidates in the error. Gated like D8 because enforcing it for existing installs broke 54 tests that draft without files | 4d1c646 |
+| C1 | `test -f` / `[ -f ... ]` are read-only | f4a4942 |
 
-### C-D3 (high): Claude cannot record an unchanged reviewer response
-- Where: `pre_tool_safety.py` read-only boundary denies backticks, `|`, `<` anywhere in the command, even inside single quotes; agents may not write files outside the plan; `record_review.py --from-subagent` and `phase_review.py complete --response-file` do not read Claude subagent transcripts.
-- Best fix (host-scoped, Antigravity untouched): let `record_review.py --from-subagent <role>=<path>` and `phase-review complete --response-file` accept a Claude subagent transcript (`.../tasks/<agent-id>.output`, JSONL): parse it, take the last assistant text, and ingest it unchanged. The agent then only passes a path, so no quoting problem. Restrict accepted paths to the Claude project transcript directory (`~/.claude/projects/...` or the `tasks/*.output` files of the current session), record the path and its sha256 in the evidence, and still mark independent execution as unverified (V1).
-- Secondary: in the command guard, do not treat characters inside single-quoted arguments as shell operators (tokenize with `shlex` and only check unquoted tokens). Add tests for both.
-- Update the Claude rules template to name the transcript path as the ingestion method.
-
-### C-D4 (high): partial `revise` drops files and modules
-- Where: `workflow.py` `revise` -> `_build_and_save_plan` rebuilds the plan only from given args.
-- Fix: in `revise`, default every omitted field (`expected_files`, `expected_modules`, `expected_surfaces`, `test_strategy`, phases, architecture args) to the old plan's value; merge surfaces given by the O4 hint with the old ones. Test: revise with only `--expected-surfaces X` keeps files and modules. Also make the O4 hint print the full revise command (files, modules, surfaces).
-
-### C-D5 (medium): unscoped plans accepted
-- Where: `workflow.py` draft validation.
-- Fix: for FEATURE/BUG/REFACTOR tasks that are not T0/micro, require at least one `--expected-files` entry (or fail with a message showing the discovered candidate files from the task context/receipt). Alternatively auto-fill `expected_files` from the discovery receipt's resolved paths and show them in `PLAN_SUMMARY`. Keep T0 and context-note actions exempt. Check the Antigravity daily tests that draft without files and adapt them only if the rule is gated to new plans.
-
-### C-D6 (low): raw traceback in `phase-review complete`
-- Fix: check `Path(response_file).is_file()` and fail with a usage error naming the expected input.
-
-### Open observations
-- D10b: CAPTURE_RED is advisory; in T4 the agent edited production code before RED and never asked the router after approval. Fix option: the write guard denies non-test source edits in a BUG task until RED evidence exists (tests stay writable), gated to BUG tasks with executable RED required.
-- C1: `test -f` outside a task is denied; add `test`/`[ -f ]` to the read-only allowlist.
+### Still open
+- D10b: CAPTURE_RED is still advisory at write time. Denying non-test edits before RED changes the write guard on every host, Antigravity included, so it was not done as an optional small fix; it needs its own decision.
 - C2: install prompt Phase 4/5 text describes Antigravity outputs; mention that other hosts get their own adapter files (keep the prompt under 4096 bytes).
 - C6: agents re-type `PLAN_SUMMARY`; the Claude rule exists, consider having `approve` print the plan hash the developer approved.
+- C-D5 applies to new installs only; existing installs keep `PLAN_SCOPE = "legacy"` unless their setup answers set `plan_scope` to `files_required`.
 
 ## How to resume the certification run
 

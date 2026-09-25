@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a large multi-module app using version-catalog plugin aliases. Results: [docs/benchmark/results-2026-09-25-round5.md](docs/benchmark/results-2026-09-25-round5.md).
 
+### Certification run fixes (C-D2 to C-D6, C1)
+
+Defects found by the Claude Code certification run ([docs/benchmark/certification-progress.md](docs/benchmark/certification-progress.md)).
+
+- C-D2: a command wrapped with backslash-newline is one command; it was denied with a misleading plan-state reason. Real newlines still separate commands, and a denied compound command names the denied segment.
+- C-D3: `record_review.py --from-subagent <role>=<path>` and `phase-review complete --response-file <path>` read a Claude Code subagent transcript (JSONL) and ingest the last reply unchanged. Only Claude's transcript locations are accepted (`~/.claude/projects/**`, `<tmp>/claude-*/**/tasks/*.output`); the path and its sha256 are recorded and independent execution stays unverified. On the Claude hook, text inside single quotes is no longer treated as a pipe, redirection or substitution (Antigravity keeps the strict check). The Claude rules name the transcript path as the ingestion method.
+- C-D4: `revise` keeps every plan field it is not given (files, modules, surfaces, kind, strategies, phases); a revision with only `--expected-surfaces` dropped the files and modules and disabled the write-scope guard. The drift denial prints one complete `revise` command with files, modules and surfaces.
+- C-D5: new installs (`PLAN_SCOPE = "files_required"`) refuse a non-trivial draft without `--expected-files` with `PLAN_SCOPE_REQUIRED`, listing the files discovery found. T0/micro plans are exempt; existing installs are unchanged.
+- C-D6: `phase-review complete --response-file` with something that is not a file is a usage error instead of a traceback.
+- C1: `test -f` and `[ -f ... ]` are read-only commands outside a task.
+
 ### Claude Code
 
 - The Claude Code bridge prepares verification with `--host claude`; the hook no longer demands `--host antigravity` from every host, and Claude can no longer claim the Antigravity host.
