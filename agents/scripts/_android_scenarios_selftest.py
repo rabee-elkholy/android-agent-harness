@@ -1123,6 +1123,27 @@ class AndroidScenariosSelftest(unittest.TestCase):
         self.assertEqual(1, code, "Diff-scoped check must catch placeholder mismatch on multiline opening tag.")
 
 
+class ToolchainIdentityTests(unittest.TestCase):
+    def test_java_identity_ignores_picked_up_option_lines(self) -> None:
+        # Round 5: JAVA_TOOL_OPTIONS carried a proxy port; when it changed, the "java version"
+        # identity changed and a finished verification went stale without any code change.
+        import delivery_manifest
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[:1] == ["java"]:
+                stderr = (
+                    "Picked up JAVA_TOOL_OPTIONS: -Dhttps.proxyPort=40865\n"
+                    "Picked up _JAVA_OPTIONS: -Xmx2g\n"
+                    'openjdk version "21.0.10" 2026-01-20\n'
+                )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr=stderr)
+            return subprocess.CompletedProcess(cmd, 0, stdout="git version 2.43.0\n", stderr="")
+
+        with mock.patch.object(delivery_manifest.subprocess, "run", side_effect=fake_run):
+            versions = delivery_manifest._toolchain_versions()
+        self.assertEqual('openjdk version "21.0.10" 2026-01-20', versions["java"])
+
+
 class MobileValidationTests(unittest.TestCase):
     """MOBILE-001 through MOBILE-012 test suite for Phase 6 optional mobile validation."""
 

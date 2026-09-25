@@ -289,7 +289,13 @@ def _external_inputs(repo: Path) -> list[dict[str, str | int | bool]]:
 def _toolchain_versions() -> dict[str, str]:
     try:
         java_proc = subprocess.run(["java", "-version"], capture_output=True, text=True, check=False)
-        java_version = (java_proc.stderr or java_proc.stdout or "unavailable").splitlines()[0][:200]
+        # JVM option notices ("Picked up JAVA_TOOL_OPTIONS: ...") carry environment noise such as
+        # proxy ports; the version line is the toolchain identity.
+        java_lines = [
+            line for line in (java_proc.stderr or java_proc.stdout or "").splitlines()
+            if line.strip() and not line.startswith("Picked up ")
+        ]
+        java_version = (java_lines[0] if java_lines else "unavailable")[:200]
     except OSError:
         java_version = "unavailable"
     try:
