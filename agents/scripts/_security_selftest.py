@@ -104,6 +104,42 @@ class SecurityTests(unittest.TestCase):
         )
         return json.loads(proc.stdout)["hookSpecificOutput"]
 
+    def claude_tool(self, tool_name: str, tool_input: dict) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": tool_name, "tool_input": tool_input}),
+            capture_output=True, text=True, env=self.env, check=False, timeout=15,
+        )
+        return json.loads(proc.stdout)["hookSpecificOutput"]
+
+    def test_claude_bridge_guards_file_edits(self):
+        # DEFECT-CLAUDE-EDIT-01 (round 5): only Bash reached the engine, so Edit/Write were never
+        # checked against the approved plan on Claude Code.
+        self._reset_active_task()
+        target = str(self.repo / "app/src/main/kotlin/A.kt")
+        for tool, tool_input in (
+            ("Edit", {"file_path": target, "old_string": "a", "new_string": "b"}),
+            ("Write", {"file_path": target, "content": "class A"}),
+            ("MultiEdit", {"file_path": target, "edits": []}),
+            ("NotebookEdit", {"notebook_path": str(self.repo / "n.ipynb"), "new_source": "x"}),
+        ):
+            with self.subTest(tool=tool):
+                self.assertEqual("deny", self.claude_tool(tool, tool_input)["permissionDecision"])
+        self.assertEqual("allow", self.claude_tool("Read", {"file_path": target})["permissionDecision"])
+
+    def test_claude_settings_hook_covers_edit_tools_and_widens_old_installs(self):
+        from install_tool_adapters import ensure_cc_hooks
+        ensure_cc_hooks(self.repo, "python", dry_run=False)
+        settings = self.repo / ".claude/settings.json"
+        group = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]
+        for tool in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+            self.assertIn(tool, group["matcher"].split("|"))
+        group["matcher"] = "Bash"
+        settings.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}), encoding="utf-8")
+        ensure_cc_hooks(self.repo, "python", dry_run=False)
+        widened = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        self.assertEqual(1, len(widened))
+        self.assertIn("Edit", widened[0]["matcher"].split("|"))
+
     def test_claude_bridge_requires_its_own_review_host(self):
         # DEFECT-HOST-01 (round 5): a Claude Code install could never prepare verification,
         # because the engine demanded --host antigravity from every host.

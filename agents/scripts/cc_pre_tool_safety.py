@@ -2,11 +2,12 @@
 
 Translates the Claude Code hook protocol (JSON on stdin: tool_name/tool_input)
 into the kit's pre_tool_safety payload, and maps the verdict back to Claude
-Code's permissionDecision JSON. Deterministic git/adb/emulator denials now run
-in Claude Code sessions exactly as they do in Antigravity.
+Code's permissionDecision JSON. Shell commands go through the command checks and
+file edits (Edit, Write, MultiEdit, NotebookEdit) through the plan-scoped write
+checks, as they do in Antigravity.
 
 Install (written automatically by install_tool_adapters.py --cc-hooks):
-  .claude/settings.json -> hooks.PreToolUse -> matcher "Bash"
+  .claude/settings.json -> hooks.PreToolUse -> matcher "Bash|Edit|Write|MultiEdit|NotebookEdit"
 
 Exit code is always 0; the JSON decision carries the verdict.
 """
@@ -20,6 +21,8 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 ENGINE = SCRIPTS / "pre_tool_safety.py"
+# Claude Code tools that change files; keep in sync with CC_HOOK_MATCHER in install_tool_adapters.py.
+FILE_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
 def emit(decision: str, reason: str) -> None:
@@ -52,20 +55,29 @@ def main() -> int:
         emit("deny", "android-harness bridge received unreadable hook input. Retry the tool.")
         return 0
 
-    if tool_name.lower() != "bash" or not command.strip():
-        emit("allow", "Not a shell command; nothing for the harness gate to inspect.")
-        return 0
-
     session_id = str(
         payload_in.get("session_id")
         or payload_in.get("sessionId")
         or os.environ.get("CLAUDE_SESSION_ID")
         or "claude-session"
     )
-    inner = {
-        "conversationId": session_id,
-        "toolCall": {"name": "run_command", "args": {"CommandLine": command}},
-    }
+    edit_target = ""
+    if tool_name in FILE_EDIT_TOOLS and isinstance(tool_input, dict):
+        edit_target = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    if edit_target:
+        # File edits are plan-scoped mutations; the engine checks them like any host write tool.
+        inner = {
+            "conversationId": session_id,
+            "toolCall": {"name": "write_to_file", "args": {"TargetFile": edit_target}},
+        }
+    elif tool_name.lower() == "bash" and command.strip():
+        inner = {
+            "conversationId": session_id,
+            "toolCall": {"name": "run_command", "args": {"CommandLine": command}},
+        }
+    else:
+        emit("allow", "Not a shell command or file edit; nothing for the harness gate to inspect.")
+        return 0
     try:
         proc = subprocess.run(
             [sys.executable, str(ENGINE)],
