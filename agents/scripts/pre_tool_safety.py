@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
-from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed  # noqa: E402
+from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed, join_continuations  # noqa: E402
 from _vnext_common import active_review_package_path, read_json, sha256_file, validate_id  # noqa: E402
 
 
@@ -319,6 +319,8 @@ def _handle_stop() -> None:
 
 
 def _handle_command(command: str) -> None:
+    # A backslash-newline continuation is one command; join it so pattern checks see the whole line.
+    command = join_continuations(command)
     active_tid = ""
     try:
         p = active_plan(REPO)

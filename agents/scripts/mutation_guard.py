@@ -384,8 +384,34 @@ def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[
     )
 
 
+def join_continuations(command: str) -> str:
+    """Replace backslash-newline outside quotes with a space, as a POSIX shell does.
+
+    Agents wrap long harness commands over several lines; each line is not a separate command.
+    """
+    out, quote, i = [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "\\" and command.startswith(("\\\n", "\\\r\n"), i):
+            out.append(" ")
+            i += 3 if command[i + 1] == "\r" else 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _split_segments(command: str) -> list[str] | None:
-    """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote."""
+    """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote.
+
+    Backslash-newline outside quotes is a line continuation, not a separator.
+    """
+    command = join_continuations(command)
     segments, current, quote, i = [], [], "", 0
     while i < len(command):
         ch = command[i]
@@ -424,8 +450,13 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if segments is None:
         return False, "unterminated quote in command"
     if len(segments) > 1:
-        decisions = [command_allowed(repo, item) for item in segments]
-        return next((decision for decision in decisions if not decision[0]), (True, "every command segment is authorized"))
+        for item in segments:
+            allowed, reason = command_allowed(repo, item)
+            if not allowed:
+                return False, f"command segment '{item}' is denied: {reason}"
+        return True, "every command segment is authorized"
+    if segments:
+        normalized = segments[0]
     if _workflow_action(normalized, repo) in BOOTSTRAP_ACTIONS:
         return True, "task-authority workflow command"
     if _is_read_only(normalized, repo):

@@ -163,6 +163,33 @@ class HookTests(unittest.TestCase):
         self.assertEqual("DRAFT_FORCE", res.get("reason_code"))
         self.assertIn("workflow.py revise", res["reason"])
 
+    def test_C_D2_backslash_continuations_are_one_command(self):
+        """Certification C-D2: a command wrapped with backslash-newline was split into several
+        "commands" and denied as if the plan state forbade it; the one-line form was allowed."""
+        draft = (
+            "python .agents/scripts/workflow.py draft --repo . --task-id t1 \\\n"
+            "  --kind FEATURE \\\n"
+            '  --outcome "Show a toast"'
+        )
+        res = self.call("run_command", {"CommandLine": draft})
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+        self.assertEqual(res["decision"], self.call("run_command", {"CommandLine": draft.replace(" \\\n ", "")})["decision"])
+        # Joined lines still meet the whole-command checks.
+        res = self.call("run_command", {"CommandLine": draft + " \\\n  --force"})
+        self.assertEqual("DRAFT_FORCE", res.get("reason_code"))
+        self.activate(status="AWAITING_DEVELOPER_APPROVAL")
+        revise = (
+            "python .agents/scripts/workflow.py revise --repo . --task-id task-one \\\n"
+            "  --expected-files app/src/main/res/values/strings.xml \\\n"
+            "  --expected-surfaces LOCALIZATION"
+        )
+        res = self.call("run_command", {"CommandLine": revise})
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+        # Real newlines still separate commands, and a denied segment is named in the reason.
+        res = self.call("run_command", {"CommandLine": "git status\ntouch app/owned.txt"})
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("'touch app/owned.txt'", res["reason"])
+
     def test_router_resume_for_stale_ready_delivery_is_allowed(self):
         """The router routes a stale READY task to `task resume`; the hook must not block its own advice."""
         self.activate(status="READY_FOR_DELIVERY")
