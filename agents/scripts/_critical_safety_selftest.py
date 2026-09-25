@@ -62,6 +62,19 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertFalse(run_gradle_task.test_failure_only(task, log + "\n* What went wrong:\nFailed to notify build listener.\n> Release output verification failed\n* Try:\n"))
         self.assertFalse(run_gradle_task.test_failure_only(task, "FAILURE: Build completed with 2 failures.\n" + log))
 
+    def test_gradle_9_test_failure_without_try_section_is_attributed(self):
+        # Round 5: Gradle 9.7 prints no '* Try:' after a test failure, so the section ran to the end
+        # of the log and --capture-red could never record RED evidence.
+        task = ":modules:services:utils:testDebugUnitTest"
+        log = (
+            f"> Task {task} FAILED\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\n"
+            f"Execution failed for task '{task}'.\n"
+            "> There were failing tests. See the report at: file:///repo/build/reports/tests/index.html\n\n"
+            "BUILD FAILED in 5s\n62 actionable tasks: 1 executed, 61 up-to-date\nConfiguration cache entry reused.\n"
+        )
+        self.assertTrue(run_gradle_task.test_failure_only(task, log))
+        self.assertFalse(run_gradle_task.test_failure_only(":app:testDebugUnitTest", log))
+
     def test_caller_answers_survive_failure_and_update_rollback(self):
         from argparse import Namespace
         cli = fixtures.harness_cli

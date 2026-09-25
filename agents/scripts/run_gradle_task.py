@@ -155,7 +155,9 @@ def test_failure_only(task: str, raw_log: str) -> bool:
     """Attribute a nonzero exit to one test task, never to another build failure."""
     failures = re.findall(r"Execution failed for task ['\"]([^'\"]+)['\"]", raw_log)
     failed_tasks = re.findall(r"(?m)^> Task (\S+) FAILED\s*$", raw_log)
-    sections = re.findall(r"(?ms)^\* What went wrong:\s*\n(.*?)(?=^\* |\Z)", raw_log)
+    # A section ends at the next '* ' heading, a blank line or the build result: Gradle 9 prints no
+    # '* Try:' after a test failure, so the section would otherwise run to the end of the log.
+    sections = re.findall(r"(?ms)^\* What went wrong:[ \t]*\n(.*?)(?=^\* |^[ \t]*$|^BUILD (?:FAILED|SUCCESSFUL)|\Z)", raw_log)
     if len(sections) != 1 or re.search(r"Build completed with (?:[2-9]|\d{2,}) failures", raw_log):
         return False
     details = [line.strip() for line in sections[0].splitlines() if line.strip()]
