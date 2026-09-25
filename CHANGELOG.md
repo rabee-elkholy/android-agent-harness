@@ -4,6 +4,32 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [Unreleased]
+
+Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a large multi-module app using version-catalog plugin aliases. Results: [docs/benchmark/results-2026-09-25-round5.md](docs/benchmark/results-2026-09-25-round5.md).
+
+### Claude Code
+
+- The Claude Code bridge prepares verification with `--host claude`; the hook no longer demands `--host antigravity` from every host, and Claude can no longer claim the Antigravity host.
+- Review protocol V1 runs read the `HARNESS_REVIEW_RESULT_V2` block that installed reviewers emit, so Claude reviews can be recorded.
+
+### Discovery and planning
+
+- Module discovery resolves `alias(libs.plugins.…)` through `gradle/*.versions.toml`; projects that apply Android plugins by alias were seen as having no modules.
+- The drift remediation command keeps the root module `:`, which ended a revise loop.
+- Editing an existing file in a scope shared by several architecture families keeps its local conventions instead of failing as ambiguous.
+- `draft` and `revise` reject unknown `--expected-surfaces` values and declare the modules of the planned files.
+- The router no longer routes a BUG task without RED evidence to `COMPLETE_TASK`.
+- A targeted discovery no longer grants whole-module search roots; receipts go stale when the graph changes, and ending a task clears the latest receipt.
+- `:feature:home` alone is not a cross-module scope, and resource XML is matched by its directory segment.
+- The setup wizard ignores test source-set manifests and disabled aliases when recommending the launcher.
+
+### Gates and evidence
+
+- `check_strings` accepts a `<string>` and a `<plurals>` with the same name.
+- The classifier no longer resolves built-in property types such as `String` to same-named extension files, which classified ordinary entity changes as CRYPTO.
+- The java toolchain identity ignores `Picked up JAVA_TOOL_OPTIONS` notices, which made verifications stale when a proxy port changed.
+
 ## [1.1.0] - 2026-09-25
 
 First release line declared stable for daily use on Google Antigravity. It closes every defect found across four end-to-end rounds in which Antigravity worked on a production Android app with a human developer in the loop.
