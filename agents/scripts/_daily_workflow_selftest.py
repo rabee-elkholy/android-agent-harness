@@ -4914,6 +4914,23 @@ class ReviewOrchestrationTests(unittest.TestCase):
         report = _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")
         self.assertEqual("PASS", report["verdict"])
 
+    def test_REVIEW_ORCH_017B_v1_run_reads_the_v2_block_installed_reviewers_emit(self) -> None:
+        # DEFECT-REVIEW-FORMAT-01 (round 5): Claude Code runs are protocol V1, but the installed
+        # reviewer agents must end with a HARNESS_REVIEW_RESULT_V2 block and nothing after it,
+        # so no Claude review could ever be recorded.
+        from record_review import _parse_response_text
+        task_id = "test-orch-017b"
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current["review_protocol_version"] = 1
+        atomic_write_json(tdir / "current-run.json", current)
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        text = "Reviewed the diff.\n```json\n" + json.dumps(block) + "\n```"
+        self.assertEqual("PASS", _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")["verdict"])
+        wrong = dict(block, review_package_sha256="0" * 64)
+        with self.assertRaises(ValidationError):
+            _parse_response_text(self.repo, task_id, "bug-reviewer-agent", "```json\n" + json.dumps(wrong) + "\n```", "dummy-sha")
+
     def test_REVIEW_ORCH_018_v2_does_not_accept_footer_only_PASS(self) -> None:
         from record_review import _parse_response_text
         task_id = "test-orch-018"

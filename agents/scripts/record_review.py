@@ -395,7 +395,10 @@ def _parse_response_text(repo: Path, task_id: str, reviewer: str, text: str, res
     package_sha = sha256_file(package)
     protocol_version = int(current.get("review_protocol_version") or 1)
 
-    if protocol_version >= 2:
+    # Installed reviewer agents end with a HARNESS_REVIEW_RESULT_V2 block on every host. A V1 run
+    # (hosts without trusted transcripts) reads that block when no legacy footer is present; the
+    # V2 parser binds the full package hash, task, run and reviewer, and trust stays V1.
+    if protocol_version >= 2 or (not FOOTER_PATTERN.search(text) and '"schema_version"' in text):
         from review_orchestrator import parse_structured_result
         parsed = parse_structured_result(
             text=text,
