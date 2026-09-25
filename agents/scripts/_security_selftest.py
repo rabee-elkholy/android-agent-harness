@@ -97,6 +97,27 @@ class SecurityTests(unittest.TestCase):
         result = json.loads(proc.stdout)["hookSpecificOutput"]
         self.assertEqual("deny", result["permissionDecision"])
 
+    def claude_bridge(self, command: str) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True, text=True, env=self.env, check=False, timeout=15,
+        )
+        return json.loads(proc.stdout)["hookSpecificOutput"]
+
+    def test_claude_bridge_requires_its_own_review_host(self):
+        # DEFECT-HOST-01 (round 5): a Claude Code install could never prepare verification,
+        # because the engine demanded --host antigravity from every host.
+        prepare = "python .agents/harness.py task prepare-verification --repo . --task-id t"
+        denied = self.claude_bridge(f"{prepare} --host antigravity")
+        self.assertEqual("deny", denied["permissionDecision"])
+        self.assertIn("--host claude", denied["permissionDecisionReason"])
+        self.assertEqual("deny", self.claude_bridge(prepare)["permissionDecision"])
+        self.assertNotIn("REVIEW_HOST_REQUIRED", self.claude_bridge(f"{prepare} --host claude")["permissionDecisionReason"])
+        # Antigravity, which calls the engine without a host marker, is unchanged.
+        engine = self.engine(f"{prepare} --host claude")
+        self.assertEqual("deny", engine["decision"])
+        self.assertIn("--host antigravity", engine["reason"])
+
     def test_copilot_bridge_denies_and_malformed_fails_closed(self):
         proc = subprocess.run(
             [sys.executable, str(COPILOT)], input=json.dumps({"toolName": "bash", "toolArgs": {"command": "adb root"}}),

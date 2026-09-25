@@ -336,13 +336,19 @@ def _handle_command(command: str) -> None:
     if RAW_GRADLE.search(command) and not ALLOWED_GRADLE_WRAPPER.search(command):
         emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)
         return
+    # Bridges for other hosts set HARNESS_HOOK_HOST; Antigravity calls the engine directly.
+    hook_host = os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() or "antigravity"
+    if hook_host == "antigravity":
+        required_host_message = "Antigravity verification must be prepared with --host antigravity\nso trusted Review Protocol V2 can be used."
+    else:
+        required_host_message = f"Verification in this host must be prepared with --host {hook_host};\nit must not claim another host's review protocol."
     if (
         re.search(r"(?:workflow(?:\.py)?\s+prepare-verification|harness(?:\.py)?\s+task\s+prepare-verification)\b", command, re.I)
-        and not re.search(r"--host\s+antigravity\b", command, re.I)
+        and not re.search(rf"--host\s+{re.escape(hook_host)}(?![\w-])", command, re.I)
     ):
         emit(
             "deny",
-            "REVIEW_HOST_REQUIRED:\nAntigravity verification must be prepared with --host antigravity\nso trusted Review Protocol V2 can be used.",
+            f"REVIEW_HOST_REQUIRED:\n{required_host_message}",
             tool="run_command",
             command=command,
             reason_code="REVIEW_HOST_REQUIRED",

@@ -70,6 +70,7 @@ def main() -> int:
         proc = subprocess.run(
             [sys.executable, str(ENGINE)],
             input=json.dumps(inner),
+            env={**os.environ, "HARNESS_HOOK_HOST": "claude"},
             capture_output=True,
             text=True,
             encoding="utf-8",
