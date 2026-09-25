@@ -278,6 +278,18 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertEqual([":app", ":core"], plan["expected_modules"])
         self.assertEqual(["BUSINESS_LOGIC"], plan["expected_surfaces"])
 
+    def test_cancel_clears_the_latest_discovery_receipt(self) -> None:
+        # Round 5 hardening: a finished task's discovery anchor must not carry into the next task.
+        from discovery_receipt import create_discovery_receipt, load_latest_discovery_receipt, save_discovery_receipt
+        draft(self._draft_ns("clears-discovery"))
+        save_discovery_receipt(self.repo, create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT", query_kind="file", query_value="app/src/main/kotlin/com/example/Login.kt",
+            graph_fingerprint="fp", resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/Login.kt"], resolved_symbols=[],
+        ))
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="clears-discovery"))
+        self.assertIsNone(load_latest_discovery_receipt(self.repo))
+
     def test_remediation_command_keeps_the_root_module(self) -> None:
         # DEFECT-DRIFT-LOOP-01 (round 5): the root module ":" was printed as an empty entry, the
         # revise command dropped it, and prepare-verification reported the same drift forever.

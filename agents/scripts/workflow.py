@@ -1786,6 +1786,8 @@ def cancel(args: argparse.Namespace) -> dict:
                 active_path.unlink(missing_ok=True)
         except Exception:
             pass
+    from discovery_receipt import clear_latest_discovery_receipt
+    clear_latest_discovery_receipt(repo)
     return plan
 
 
@@ -1945,6 +1947,8 @@ def finalize_ready_delivery(
                 active_path.unlink(missing_ok=True)
         except Exception:
             active_path.unlink(missing_ok=True)
+    from discovery_receipt import clear_latest_discovery_receipt
+    clear_latest_discovery_receipt(repo)
     return plan, True
 
 

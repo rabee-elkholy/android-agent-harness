@@ -407,7 +407,14 @@ class HookTests(unittest.TestCase):
     def test_targeted_task_context_satisfies_discovery_anchor(self):
         targeted = "python .agents/scripts/task_context.py --repo . --symbol MainActivity --json"
         self.assertEqual("allow", self.call("run_command", {"CommandLine": targeted})["decision"])
-        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app", "Query": "MainActivity"})["decision"])
+        from discovery_receipt import load_latest_discovery_receipt
+        receipt = load_latest_discovery_receipt(self.repo)
+        anchor_dir = str(Path(receipt["resolved_paths"][0]).parent.as_posix())
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": anchor_dir, "Query": "MainActivity"})["decision"])
+        # A targeted anchor no longer opens the whole module (round 5 hardening).
+        whole_module = self.call("grep_search", {"SearchPath": "app", "Query": "MainActivity"})
+        self.assertEqual("deny", whole_module["decision"])
+        self.assertIn("DISCOVERY_SCOPE_EXPANSION_REQUIRED", whole_module["reason"])
 
     def test_failed_task_context_does_not_satisfy_discovery_anchor(self):
         invalid = "python .agents/scripts/task_context.py --repo . --file app/src/main/Missing.kt --json"

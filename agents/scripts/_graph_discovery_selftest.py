@@ -256,6 +256,80 @@ class GraphDiscoverySelftest(unittest.TestCase):
         self.assertIn("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res.get("reason", ""))
         self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
 
+    def test_graph_008b_computed_roots_do_not_open_the_whole_module(self) -> None:
+        """GRAPH-008B: The production path (roots computed by the receipt) keeps a targeted anchor narrow."""
+        receipt = create_discovery_receipt(
+            mode=DISCOVERY_D1_TARGETED_GRAPH,
+            query_kind="symbol",
+            query_value="ProfileViewModel",
+            graph_fingerprint="fp_prof_02",
+            resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"],
+            resolved_symbols=["ProfileViewModel"],
+        )
+        self.assertNotIn("app", receipt["allowed_search_roots"])
+        save_discovery_receipt(self.repo, receipt)
+
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/payments", "Query": "charge"},
+        )
+        self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+        res = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "app/src/main/kotlin/com/example/profile", "Query": "load"},
+        )
+        self.assertEqual("allow", res["decision"])
+
+    def test_graph_008c_only_a_module_query_grants_its_module_root(self) -> None:
+        """GRAPH-008C: Module roots come from a module query, never from architecture or file anchors."""
+        paths = ["app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"]
+        module_receipt = create_discovery_receipt(
+            mode=DISCOVERY_D2_FEATURE_GRAPH, query_kind="module", query_value=":app", graph_fingerprint="fp",
+            resolved_modules=[":app"], resolved_paths=paths, resolved_symbols=[],
+        )
+        self.assertIn("app", module_receipt["allowed_search_roots"])
+        arch_receipt = create_discovery_receipt(
+            mode="ARCHITECTURAL_GRAPH", query_kind="modules", query_value="modules", graph_fingerprint="fp",
+            resolved_modules=[":app", ":core"], resolved_paths=paths, resolved_symbols=[],
+        )
+        self.assertNotIn("app", arch_receipt["allowed_search_roots"])
+        self.assertNotIn("core", arch_receipt["allowed_search_roots"])
+
+    def test_graph_008d_receipt_is_stale_once_the_graph_changes(self) -> None:
+        """GRAPH-008D: A receipt from an older graph is stale; freshness is read from a small sidecar."""
+        from _graph_core import GraphEngine
+        engine = GraphEngine(self.repo)
+        engine.file_hashes = {"app/src/main/kotlin/com/example/profile/ProfileViewModel.kt": "h1"}
+        engine.save_cache()
+        sidecar = engine.cache_file.with_name(engine.cache_file.name + ".fingerprint")
+        self.assertEqual(engine.graph_fingerprint, sidecar.read_text(encoding="utf-8").strip())
+
+        receipt = create_discovery_receipt(
+            mode=DISCOVERY_D1_TARGETED_GRAPH, query_kind="symbol", query_value="ProfileViewModel",
+            graph_fingerprint=engine.graph_fingerprint, resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"], resolved_symbols=[],
+        )
+        self.assertTrue(check_discovery_freshness(self.repo, receipt)[0])
+        engine.file_hashes["app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"] = "h2"
+        engine.save_cache()
+        fresh, reason = check_discovery_freshness(self.repo, receipt)
+        self.assertFalse(fresh)
+        self.assertIn("GRAPH_CHANGED", reason)
+
+    def test_graph_008e_ending_a_task_clears_the_latest_receipt(self) -> None:
+        """GRAPH-008E: A receipt from a finished task does not anchor the next task's search."""
+        from discovery_receipt import clear_latest_discovery_receipt
+        receipt = create_discovery_receipt(
+            mode=DISCOVERY_D1_TARGETED_GRAPH, query_kind="symbol", query_value="ProfileViewModel",
+            graph_fingerprint="fp", resolved_modules=[":app"],
+            resolved_paths=["app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"], resolved_symbols=[],
+        )
+        save_discovery_receipt(self.repo, receipt)
+        self.assertIsNotNone(load_latest_discovery_receipt(self.repo))
+        clear_latest_discovery_receipt(self.repo)
+        self.assertIsNone(load_latest_discovery_receipt(self.repo))
+
     def test_graph_009_bounded_context_insufficient(self) -> None:
         """GRAPH-009: When bounded context has truncated dependents, graph_expansion_required is reported."""
         import task_context
