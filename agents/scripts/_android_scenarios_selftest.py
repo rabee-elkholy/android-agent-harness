@@ -1139,6 +1139,9 @@ class ToolchainIdentityTests(unittest.TestCase):
                 return subprocess.CompletedProcess(cmd, 0, stdout="", stderr=stderr)
             return subprocess.CompletedProcess(cmd, 0, stdout="git version 2.43.0\n", stderr="")
 
+        # The identity is cached per process; an earlier test may have cached the runner's real JDK.
+        delivery_manifest._toolchain_versions.cache_clear()
+        self.addCleanup(delivery_manifest._toolchain_versions.cache_clear)
         with mock.patch.object(delivery_manifest.subprocess, "run", side_effect=fake_run):
             versions = delivery_manifest._toolchain_versions()
         self.assertEqual('openjdk version "21.0.10" 2026-01-20', versions["java"])

@@ -31,7 +31,7 @@
     "agents/rules/harness-rules.md": "9ab8156445b47dd49f954cfed48a40b81949157f2c9ba91f0829d862a16a87fc",
     "agents/scripts/_adb_core.py": "47bcedef8d2c1f5825404b1527d75948692433c6753e2fde073f7e4ba53b52e0",
     "agents/scripts/_adb_core_selftest.py": "f2f6b03168253032b4fdfa6289ac67d80824723fc84903f17d2d1cee62569ba2",
-    "agents/scripts/_android_scenarios_selftest.py": "8234190e4343d4237ed6269f590d6121141b2d204ce692daebbef4fc87a028f3",
+    "agents/scripts/_android_scenarios_selftest.py": "e89bf96d952b0b60c36579f653d6e5a6114ebf352d4955e445e6036924efa49a",
     "agents/scripts/_antigravity_stability_selftest.py": "358f324a881a468d358e9bc477f4d9366163849571459f72e846867a9109ad65",
     "agents/scripts/_architecture_selftest.py": "e5d7008c74a32f1175628bd686b98126dcc8626f761d54fd9fd554fb263f7938",
     "agents/scripts/_baseline_selftest.py": "a5a9df883b5bbfe9c44540ac3e959e228932cf7f2f02c9c7bed39befb99e8f3a",
