@@ -4,7 +4,7 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
-## [Unreleased]
+## [1.1.2] - 2026-09-26
 
 Hardening before the next certification run. Antigravity behaviour changes only where listed under "Every host".
 
