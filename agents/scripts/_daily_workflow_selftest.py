@@ -6655,6 +6655,21 @@ class DocumentationConsistencyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = KIT
 
+    def test_benchmark_status_is_the_single_consistent_status_source(self) -> None:
+        bench = self.root / "docs/benchmark"
+        status_doc = (bench / "benchmark-status.md").read_text(encoding="utf-8")
+        rows = [line.split("|") for line in status_doc.splitlines() if re.match(r"\| (Install|T\d+) \|", line)]
+        statuses = {row[1].strip(): row[-2].strip() for row in rows}
+        self.assertEqual(["Install"] + [f"T{i}" for i in range(1, 11)], list(statuses))
+        self.assertTrue(set(statuses.values()) <= {"PASSED", "PENDING", "INCOMPLETE"}, statuses)
+        scope = status_doc.split("## Next Certification Scope", 1)[1].strip().rstrip(".")
+        self.assertEqual([k for k, v in statuses.items() if v != "PASSED"], [item.strip() for item in scope.split(",")])
+        evidence = status_doc.split("## Evidence for passed scenarios", 1)[1].split("## Next Certification Scope", 1)[0]
+        cited = re.findall(r"- \*\*(Install|T\d+)\*\*", evidence)
+        self.assertEqual(sorted(k for k, v in statuses.items() if v == "PASSED"), sorted(cited))
+        for retired in ("certification-plan.md", "certification-progress.md", "round5-findings-log.md", "round5-plan.md"):
+            self.assertFalse((bench / retired).exists(), retired)
+
     def test_E2_E3_ci_claims_match_the_workflow(self) -> None:
         # The matrix claimed the complete suite on every Python and OS; CI runs it on Linux/3.12 only
         # and `selftest --quick` elsewhere. The performance job was named a "regression budget" while

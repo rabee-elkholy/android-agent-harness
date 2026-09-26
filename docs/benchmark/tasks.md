@@ -1,5 +1,7 @@
 # Benchmark Task List
 
+A/B comparison kit (agent alone vs agent + harness). Certification status lives in [benchmark-status.md](benchmark-status.md).
+
 Standardized tasks for measuring "agent alone" vs "agent + harness". Each task
 is small enough to run in one session and is designed so at least one harness
 gate has a determinate outcome.

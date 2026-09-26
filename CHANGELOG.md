@@ -6,11 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.1.1] - 2026-09-25
 
-Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a large multi-module app using version-catalog plugin aliases. Results: [docs/benchmark/results-2026-09-25-round5.md](docs/benchmark/results-2026-09-25-round5.md).
+Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a large multi-module app using version-catalog plugin aliases. Results: [docs/benchmark/results-2026-09-25-round5.md](https://github.com/rabee-elkholy/android-agent-harness/blob/v1.1.1/docs/benchmark/results-2026-09-25-round5.md).
 
 ### Certification run fixes (C-D2 to C-D6, C1)
 
-Defects found by the Claude Code certification run ([docs/benchmark/certification-progress.md](docs/benchmark/certification-progress.md)).
+Defects found by the Claude Code certification run ([docs/benchmark/certification-progress.md](https://github.com/rabee-elkholy/android-agent-harness/blob/v1.1.1/docs/benchmark/certification-progress.md)).
 
 - C-D2: a command wrapped with backslash-newline is one command; it was denied with a misleading plan-state reason. Real newlines still separate commands, and a denied compound command names the denied segment.
 - C-D3: `record_review.py --from-subagent <role>=<path>` and `phase-review complete --response-file <path>` read a Claude Code subagent transcript (JSONL) and ingest the last reply unchanged. Only Claude's transcript locations are accepted (`~/.claude/projects/**`, `<tmp>/claude-*/**/tasks/*.output`); the path and its sha256 are recorded and independent execution stays unverified. On the Claude hook, text inside single quotes is no longer treated as a pipe, redirection or substitution (Antigravity keeps the strict check). The Claude rules name the transcript path as the ingestion method.
