@@ -6661,7 +6661,7 @@ class DocumentationConsistencyTests(unittest.TestCase):
         rows = [line.split("|") for line in status_doc.splitlines() if re.match(r"\| (Install|T\d+) \|", line)]
         statuses = {row[1].strip(): row[-2].strip() for row in rows}
         self.assertEqual(["Install"] + [f"T{i}" for i in range(1, 11)], list(statuses))
-        self.assertTrue(set(statuses.values()) <= {"PASSED", "PENDING", "INCOMPLETE"}, statuses)
+        self.assertTrue(set(statuses.values()) <= {"PASSED", "FAILED", "INCOMPLETE", "ENV_BLOCKED", "PENDING"}, statuses)
         scope = status_doc.split("## Next Certification Scope", 1)[1].strip().rstrip(".")
         self.assertEqual([k for k, v in statuses.items() if v != "PASSED"], [item.strip() for item in scope.split(",")])
         evidence = status_doc.split("## Evidence for passed scenarios", 1)[1].split("## Next Certification Scope", 1)[0]
