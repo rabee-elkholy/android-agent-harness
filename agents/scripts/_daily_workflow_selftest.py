@@ -5221,6 +5221,20 @@ class ReviewOrchestrationTests(unittest.TestCase):
         with mock.patch("builtins.print"):
             self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
 
+    def test_C6_claude_transcript_skips_trailing_api_error_messages(self) -> None:
+        # Claude Code records a failed API call as an assistant line with isApiErrorMessage; taking it
+        # as the reviewer's last reply would lose the real review.
+        from review_sources import read_claude_subagent_transcript
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-e1.jsonl", "The real review reply.")
+        with transcript.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "assistant", "isApiErrorMessage": True, "message": {
+                "id": "m3", "role": "assistant", "content": [{"type": "text", "text": "API Error: 529 overloaded"}]}}) + "\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}):
+            text, _ = read_claude_subagent_transcript(transcript)
+        self.assertEqual("The real review reply.", text)
+
     def test_C3_v1_router_does_not_redispatch_recorded_reviewers(self) -> None:
         # Claude has no dispatch hook, so no V1 receipt is ever written; the router asked to dispatch
         # every reviewer again even after some replies were recorded.

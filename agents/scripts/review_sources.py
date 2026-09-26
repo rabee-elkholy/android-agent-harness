@@ -151,7 +151,11 @@ def read_claude_subagent_transcript(path: Path) -> tuple[str, dict]:
             if isinstance(block, dict) and block.get("type") == "text"
         )
 
-    assistant = [entry for entry in entries if entry.get("type") == "assistant" and isinstance(entry.get("message"), dict)]
+    # A failed API call is recorded as an assistant line with isApiErrorMessage; it is not a reply.
+    assistant = [
+        entry for entry in entries
+        if entry.get("type") == "assistant" and isinstance(entry.get("message"), dict) and not entry.get("isApiErrorMessage")
+    ]
     last = next((entry for entry in reversed(assistant) if text_of(entry).strip()), None)
     if last is None:
         raise ValidationError(f"Claude subagent transcript {path} has no assistant text")
