@@ -271,6 +271,19 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(category, "Git Working Tree", "WARN", f"Failed querying git status: {exc}")
 
+    def _released_scripts(self) -> list[str]:
+        """Scripts the release ships, from its checksum inventory (the single list of shipped files)."""
+        inventory = self.agents_dir / "release_checksums.json"
+        try:
+            files = json.loads(inventory.read_text(encoding="utf-8")).get("files") or {}
+        except (OSError, ValueError, AttributeError):
+            return []
+        prefix = "agents/scripts/"
+        return sorted(
+            name[len(prefix):] for name in files
+            if isinstance(name, str) and name.startswith(prefix) and name.endswith(".py")
+        )
+
     def check_file_structure(self) -> None:
         category = "2. File Structure & Version"
         if not self.agents_dir.is_dir():
@@ -293,9 +306,10 @@ class HarnessDoctor:
             self.log(category, "Canonical Rules", "FAIL", "harness-rules.md missing.")
 
         scripts_dir = self.agents_dir / "scripts"
-        missing_scripts = [s for s in CORE_SCRIPTS if not (scripts_dir / s).is_file()]
+        expected_scripts = self._released_scripts() or list(CORE_SCRIPTS)
+        missing_scripts = [s for s in expected_scripts if not (scripts_dir / s).is_file()]
         if not missing_scripts:
-            self.log(category, "Core Scripts", "PASS", f"All {len(CORE_SCRIPTS)} core harness scripts verified.")
+            self.log(category, "Core Scripts", "PASS", f"All {len(expected_scripts)} core harness scripts verified.")
         else:
             self.log(category, "Core Scripts", "FAIL", f"Missing scripts: {', '.join(missing_scripts)}")
 
