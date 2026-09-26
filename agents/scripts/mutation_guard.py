@@ -418,9 +418,12 @@ def join_continuations(command: str) -> str:
 def _split_segments(command: str) -> list[str] | None:
     """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote.
 
-    Backslash-newline outside quotes is a line continuation, not a separator.
+    On the Claude bridge (Bash), backslash-newline outside quotes is a line continuation. Other
+    hosts may run PowerShell or cmd, where a trailing backslash ends a Windows path, so every
+    newline stays a command boundary there.
     """
-    command = join_continuations(command)
+    if _posix_shell_host():
+        command = join_continuations(command)
     segments, current, quote, i = [], [], "", 0
     while i < len(command):
         ch = command[i]

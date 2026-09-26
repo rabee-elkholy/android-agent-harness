@@ -319,8 +319,10 @@ def _handle_stop() -> None:
 
 
 def _handle_command(command: str) -> None:
-    # A backslash-newline continuation is one command; join it so pattern checks see the whole line.
-    command = join_continuations(command)
+    # Bash (the Claude bridge) joins backslash-newline into one command, so pattern checks must see
+    # the joined line. PowerShell and cmd have no such continuation: other hosts keep every line.
+    if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude":
+        command = join_continuations(command)
     active_tid = ""
     try:
         p = active_plan(REPO)

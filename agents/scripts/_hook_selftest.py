@@ -165,7 +165,9 @@ class HookTests(unittest.TestCase):
 
     def test_C_D2_backslash_continuations_are_one_command(self):
         """Certification C-D2: a command wrapped with backslash-newline was split into several
-        "commands" and denied as if the plan state forbade it; the one-line form was allowed."""
+        "commands" and denied as if the plan state forbade it; the one-line form was allowed.
+        Only the Claude bridge (Bash) treats backslash-newline as a continuation."""
+        self.env["HARNESS_HOOK_HOST"] = "claude"
         draft = (
             "python .agents/scripts/workflow.py draft --repo . --task-id t1 \\\n"
             "  --kind FEATURE \\\n"
@@ -189,6 +191,24 @@ class HookTests(unittest.TestCase):
         res = self.call("run_command", {"CommandLine": "git status\ntouch app/owned.txt"})
         self.assertEqual("deny", res["decision"])
         self.assertIn("'touch app/owned.txt'", res["reason"])
+
+    def test_A1_antigravity_newline_is_always_a_command_boundary(self):
+        """PowerShell has no backslash continuation, and Windows paths end with a backslash. A
+        trailing backslash must not join the next line into a read-only command on Antigravity."""
+        self.env.pop("HARNESS_HOOK_HOST", None)
+        smuggled = "Get-ChildItem C:\\temp\\\nRemove-Item -Recurse app"
+        res = self.call("run_command", {"CommandLine": smuggled})
+        self.assertEqual("deny", res["decision"], res.get("reason"))
+        self.assertIn("'Remove-Item -Recurse app'", res["reason"])
+        self.activate()
+        res = self.call("run_command", {"CommandLine": "git status \\\nRemove-Item -Recurse app"})
+        self.assertEqual("deny", res["decision"], res.get("reason"))
+        # Every line is still checked on its own, exactly as before C-D2.
+        wrapped = "python .agents/scripts/workflow.py draft --repo . --task-id t1 \\\n  --kind FEATURE"
+        res = self.call("run_command", {"CommandLine": wrapped})
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("'--kind FEATURE'", res["reason"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "git status\ngit diff --stat"})["decision"])
 
     def test_router_resume_for_stale_ready_delivery_is_allowed(self):
         """The router routes a stale READY task to `task resume`; the hook must not block its own advice."""
