@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
-from _repo_files import REPO, changed_paths  # noqa: E402
+from _repo_files import REPO, changed_paths, repo_glob  # noqa: E402
 
 enable_line_buffered_stdio()
 
@@ -33,7 +33,7 @@ RES_DIRS: list[Path] = []
 primary_res = REPO.joinpath(*ANDROID_SRC) / "res"
 if primary_res.is_dir():
     RES_DIRS.append(primary_res)
-for candidate in list(REPO.glob("**/src/*/res")) + list(REPO.glob("**/composeResources")):
+for candidate in list(repo_glob(REPO, "**/src/*/res")) + list(repo_glob(REPO, "**/composeResources")):
     if candidate.is_dir() and candidate not in RES_DIRS and "/build/" not in candidate.as_posix():
         RES_DIRS.append(candidate)
 

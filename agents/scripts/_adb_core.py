@@ -32,6 +32,7 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _env_codes import device_gone_reason  # noqa: E402
+from _repo_files import repo_glob  # noqa: E402
 from _product import APPLICATION_ID, LAUNCHER  # noqa: E402
 
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
@@ -269,7 +270,7 @@ def _clean_string_value(raw: str) -> str:
 def index_string_resources(repo: Path) -> dict[str, dict[str, str]]:
     """Index string resources from res/values*/strings.xml mapped by locale."""
     res_map: dict[str, dict[str, str]] = {"default": {}}
-    for res_dir in repo.rglob("res/values*"):
+    for res_dir in repo_glob(repo, "**/res/values*"):
         if not res_dir.is_dir():
             continue
         folder_name = res_dir.name.lower()
@@ -611,7 +612,7 @@ def discover_diff_targets(repo: Path) -> dict:
 
     if results["target_activity"]:
         act_simple = results["target_activity"]
-        for mf in repo.rglob("AndroidManifest.xml"):
+        for mf in repo_glob(repo, "**/AndroidManifest.xml"):
             try:
                 txt = mf.read_text(encoding="utf-8", errors="ignore")
                 for line in txt.splitlines():

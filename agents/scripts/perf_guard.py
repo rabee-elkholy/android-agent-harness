@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 APP_DIR = REPO.joinpath(*ANDROID_SRC)
 
 
-from _repo_files import changed_paths  # noqa: E402
+from _repo_files import changed_paths, repo_glob  # noqa: E402
 
 
 def get_git_modified_files() -> list[Path]:
@@ -133,7 +133,7 @@ def main():
         target_files = [
             p
             for root in roots
-            for p in root.glob("**/*.kt")
+            for p in repo_glob(root, "**/*.kt")
         ]
         print(f"Scanning {len(target_files)} Kotlin file(s) across {len(roots)} module source root(s)...")
     else:

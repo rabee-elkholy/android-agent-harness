@@ -11,6 +11,15 @@ from pathlib import Path
 from .i18n import DEFAULT_PM_PROVIDER, SCHEMA, SKIP_DIRS, t
 
 
+def _repo_glob(repo: Path, pattern: str):
+    """Recursive glob that never walks `.git` (see _repo_files.repo_glob)."""
+    scripts = str(Path(__file__).resolve().parents[1])
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from _repo_files import repo_glob
+    return repo_glob(repo, pattern)
+
+
 def setup_dir(repo: Path) -> Path:
     return repo / ".harness-setup"
 
@@ -233,7 +242,7 @@ def discover_application_ids(
                 ids.append(m.group(1))
     # Fallback: inspect AndroidManifest.xml package attribute
     if not ids:
-        for path in (manifests if manifests is not None else repo.glob("**/AndroidManifest.xml")):
+        for path in (manifests if manifests is not None else _repo_glob(repo, "**/AndroidManifest.xml")):
             if skip_path(path, repo):
                 continue
             text = read_text(path)
@@ -294,7 +303,7 @@ def discover_launchers(
     ids = application_ids if application_ids is not None else discover_application_ids(repo, paths, manifests)
     module_ids = module_application_ids if module_application_ids is not None else discover_module_application_ids(repo, paths)
     found: list[str] = []
-    for path in (manifests if manifests is not None else repo.glob("**/AndroidManifest.xml")):
+    for path in (manifests if manifests is not None else _repo_glob(repo, "**/AndroidManifest.xml")):
         if skip_path(path, repo):
             continue
         relative_parts = path.relative_to(repo).parts
@@ -393,7 +402,7 @@ def discover_apk_hint(repo: Path, modules: list[str] | None = None) -> str:
 
 def discover_locales(repo: Path, locale_dirs: list[Path] | None = None) -> list[str]:
     names: set[str] = set()
-    for path in (locale_dirs if locale_dirs is not None else repo.glob("**/res/values*")):
+    for path in (locale_dirs if locale_dirs is not None else _repo_glob(repo, "**/res/values*")):
         if skip_path(path, repo) or not path.is_dir():
             continue
         names.add(path.name)
@@ -480,7 +489,7 @@ def discover_stack(
     chunks: list[str] = []
     for path in (paths if paths is not None else gradle_files(repo)):
         chunks.append(read_text(path))
-    for toml in (catalogs if catalogs is not None else repo.glob("**/libs.versions.toml")):
+    for toml in (catalogs if catalogs is not None else _repo_glob(repo, "**/libs.versions.toml")):
         if not skip_path(toml, repo):
             chunks.append(read_text(toml))
     n = 0
@@ -638,7 +647,7 @@ def discover_architectural_bases(repo: Path, sources: list[Path] | None = None) 
         "activities": [],
         "fragments": [],
     }
-    candidates = sources if sources is not None else repo.glob("**/*.kt")
+    candidates = sources if sources is not None else _repo_glob(repo, "**/*.kt")
     for p in candidates:
         if p.suffix.lower() != ".kt":
             continue

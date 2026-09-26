@@ -17,6 +17,27 @@ REPO = Path(_env_repo).resolve() if _env_repo else SCRIPTS_DIR.parent.parent
 _CODE_SUFFIXES = {".kt", ".java", ".kts", ".cpp", ".c", ".h", ".hpp", ".aidl", ".pro"}
 
 
+def repo_glob(root: Path, pattern: str):
+    """Path.glob for a recursive "**/..." pattern that never walks `.git`.
+
+    Git packs objects in the background, so a directory under `.git` can vanish while it is
+    walked, and Path.glob raises FileNotFoundError on Python 3.10. The result and its order are
+    those of root.glob(pattern) without the `.git` subtree.
+    """
+    root = Path(root)
+    if not pattern.startswith("**/"):
+        yield from root.glob(pattern)
+        return
+    yield from root.glob(pattern[3:])
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        return
+    for child in children:
+        if child.name != ".git" and child.is_dir():
+            yield from child.glob(pattern)
+
+
 def _unquote_git_path(raw: str) -> str:
     """Decode C-style quoted and octal-escaped Git porcelain path."""
     raw = raw.strip()

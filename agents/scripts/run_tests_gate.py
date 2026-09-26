@@ -28,7 +28,7 @@ from baseline_capture import (  # noqa: E402
 from _env_codes import EXIT_ENV  # noqa: E402
 from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print, step_progress  # noqa: E402
-from _repo_files import REPO  # noqa: E402
+from _repo_files import REPO, repo_glob  # noqa: E402
 
 
 def report_paths(repo: Path, task: str | list[str]) -> list[Path]:
@@ -39,7 +39,7 @@ def report_paths(repo: Path, task: str | list[str]) -> list[Path]:
         module = repo.joinpath(*parts[:-1])
         exact = module / "build" / "test-results" / parts[-1]
         return sorted(path for path in exact.rglob("*.xml") if path.is_file())
-    return sorted(path for path in repo.glob("**/build/test-results/**/*.xml") if path.is_file() and "androidtest" not in path.as_posix().lower())
+    return sorted(path for path in repo_glob(repo, "**/build/test-results/**/*.xml") if path.is_file() and "androidtest" not in path.as_posix().lower())
 
 
 def collect_test_summary(repo: Path, task: str | list[str]) -> dict[str, int]:

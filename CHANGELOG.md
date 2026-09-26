@@ -18,7 +18,7 @@ Hardening before the next certification run. Antigravity behaviour changes only 
 - The router's Zoho lifecycle commands (`zoho_sync.py start`, `prepare-report`, `delivery`, `status`) are allowed for the linked task, in the state the router issues them and only with the approved `zoho_sprints` external-write scope; they were denied, which dead-ended every Zoho-linked task.
 - The Antigravity draft row names `--expected-files`, which new installs require.
 - Doctor checks every script in the release checksum inventory instead of a hand-kept list.
-- Doctor's repository scans skip `.git` and tolerate directories that vanish mid-walk; on Python 3.10 background Git object packing made the credential scan raise FileNotFoundError and fail `repair`.
+- Recursive repository scans (Doctor, project context, setup wizard, string, Room, lint, performance and test-report scans) no longer walk `.git`; on Python 3.10 background Git object packing removed a directory mid-walk, Path.glob raised FileNotFoundError and `repair` failed.
 - `revise` (since v1.1.1) keeps every omitted field, including phases and task kind: to drop phases or change the kind, pass them explicitly.
 
 ### Claude Code

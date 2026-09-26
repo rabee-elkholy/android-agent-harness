@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from _repo_files import REPO, changed_paths
+from _repo_files import REPO, changed_paths, repo_glob
 
 VERSION_RE = re.compile(r"version\s*=\s*(\d+)")
 MIGRATION_RE = re.compile(r"Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")
@@ -241,7 +241,7 @@ def find_candidate_migration_files(db_path: Path, changed_src: list[Path], repo:
             if not (set(p.parts) & skip_parts) and p not in seen and p.is_file():
                 candidates.append(p)
                 seen.add(p)
-    for p in list(scan_root.glob("**/*.kt")) + list(scan_root.glob("**/*.java")):
+    for p in list(repo_glob(scan_root, "**/*.kt")) + list(repo_glob(scan_root, "**/*.java")):
         if not (set(p.parts) & skip_parts) and p not in seen and p.is_file():
             try:
                 head = p.read_text(encoding="utf-8", errors="replace")[:4000]

@@ -280,6 +280,32 @@ class CriticalSafetyTests(unittest.TestCase):
             self.assertEqual(["B#b"], written.get("new_regressions"))
             self.assertEqual(2, written.get("executed"))
 
+    def test_repo_glob_matches_path_glob_without_entering_git(self):
+        # Recursive Path.glob over the repository walked `.git`, where background object packing can
+        # remove directories mid-walk (FileNotFoundError on Python 3.10). repo_glob returns what
+        # Path.glob returns for the working tree, in the same order, and never lists `.git`.
+        from _repo_files import repo_glob
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            for rel in ("AndroidManifest.xml", "app/src/main/AndroidManifest.xml", "lib/src/debug/AndroidManifest.xml",
+                        ".git/modules/x/AndroidManifest.xml", "app/src/main/res/values/strings.xml",
+                        "app/build/test-results/testDebugUnitTest/TEST-a.xml"):
+                (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+                (repo / rel).write_text("x", encoding="utf-8")
+            for pattern in ("**/AndroidManifest.xml", "**/src/*/res", "**/build/test-results/**/TEST-*.xml", "**/res/values*"):
+                with self.subTest(pattern=pattern):
+                    expected = [p for p in repo.glob(pattern) if ".git" not in p.relative_to(repo).parts]
+                    self.assertEqual(expected, list(repo_glob(repo, pattern)))
+            real_scandir = os.scandir
+
+            def no_git(path="."):
+                if ".git" in Path(str(path)).parts:
+                    raise FileNotFoundError(2, "vanished", str(path))
+                return real_scandir(path)
+
+            with mock.patch("os.scandir", side_effect=no_git):
+                self.assertEqual(3, len(list(repo_glob(repo, "**/AndroidManifest.xml"))))
+
     def test_doctor_repository_scan_survives_git_objects_vanishing(self):
         # CI (Python 3.10): git packed objects in the background while Doctor's credential scan globbed
         # the whole repository, `.git` included; Path.glob raised FileNotFoundError and repair failed.

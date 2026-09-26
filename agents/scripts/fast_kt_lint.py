@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _product import PACKAGE_PREFIX  # noqa: E402
-from _repo_files import REPO, changed_paths  # noqa: E402
+from _repo_files import REPO, changed_paths, repo_glob  # noqa: E402
 
 try:
     from _product import DI_FRAMEWORK, SUPPORTED_LOCALES, UI_FRAMEWORK
@@ -519,7 +519,7 @@ def main() -> int:
         target_files = [
             p
             for root in roots
-            for p in root.rglob("*.kt")
+            for p in repo_glob(root, "**/*.kt")
             if not any(x in p.parts for x in skip)
         ]
         modified_lines_map = {p: None for p in target_files}

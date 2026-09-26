@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _gate_results import current_head_sha  # noqa: E402
 from _env_codes import EXIT_ENV  # noqa: E402
 from _live_process import enable_line_buffered_stdio, live_print  # noqa: E402
-from _repo_files import REPO, has_non_doc_code_changes  # noqa: E402
+from _repo_files import REPO, has_non_doc_code_changes, repo_glob  # noqa: E402
 
 BASELINE_SCHEMA = 1
 
@@ -59,7 +59,7 @@ def _project_name() -> str:
 def find_test_reports(repo: Path) -> list[Path]:
     reports: list[Path] = []
     try:
-        for path in repo.glob("**/build/test-results/**/TEST-*.xml"):
+        for path in repo_glob(repo, "**/build/test-results/**/TEST-*.xml"):
             if "androidtest" in path.as_posix().lower():
                 continue
             if path.is_file():

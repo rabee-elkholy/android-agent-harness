@@ -17,6 +17,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from _repo_files import repo_glob
+
 SCHEMA_VERSION = 2
 EXTRACTOR_VERSION = "2.1.0"
 ADVISORY_SCHEMA_VERSION = 1
@@ -584,7 +586,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
             modules.extend(parse_settings_modules(_safe_read(s_path)))
 
     build_texts: dict[str, str] = {}
-    for build_file in repo.glob("**/build.gradle*"):
+    for build_file in repo_glob(repo, "**/build.gradle*"):
         if not _skip_path(build_file, repo):
             rel = _rel_path(build_file, repo)
             build_texts[rel] = _safe_read(build_file)
@@ -632,7 +634,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     nav_elements: list[dict] = []
 
     all_kt_files: list[tuple[str, Path, str]] = []
-    for p in repo.rglob("*.kt"):
+    for p in repo_glob(repo, "**/*.kt"):
         if _skip_path(p, repo) or ".agents" in p.parts:
             continue
         rel = _rel_path(p, repo)
@@ -641,7 +643,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     all_kt_files.sort(key=lambda item: item[0])
 
     manifest_files: list[Path] = []
-    for m in repo.glob("**/AndroidManifest.xml"):
+    for m in repo_glob(repo, "**/AndroidManifest.xml"):
         if not _skip_path(m, repo):
             rel = _rel_path(m, repo)
             if classify_source_path(rel) == "MANIFEST":
@@ -851,7 +853,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
             nav_elements.append({"type": "voyager", "path": rel})
 
     # XML Navigation graphs
-    for nav_xml in repo.glob("**/res/navigation/*.xml"):
+    for nav_xml in repo_glob(repo, "**/res/navigation/*.xml"):
         if not _skip_path(nav_xml, repo):
             rel_xml = _rel_path(nav_xml, repo)
             if classify_source_path(rel_xml) == "MAIN_SOURCE":
@@ -861,7 +863,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     has_compose = "androidx.compose" in corpus_gradle or bool(compose_themes) or any(s.get("ui_toolkit") == "compose" for s in discovered_screens)
     has_xml_views = any(s.get("ui_toolkit") == "xml" for s in discovered_screens) or any(
         not _skip_path(xml_p, repo) and classify_source_path(_rel_path(xml_p, repo)) == "MAIN_SOURCE"
-        for xml_p in repo.glob("**/res/layout/*.xml")
+        for xml_p in repo_glob(repo, "**/res/layout/*.xml")
     )
     if has_compose and has_xml_views:
         ui_framework = "hybrid"
