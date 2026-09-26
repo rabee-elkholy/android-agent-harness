@@ -6655,6 +6655,19 @@ class DocumentationConsistencyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = KIT
 
+    def test_E2_E3_ci_claims_match_the_workflow(self) -> None:
+        # The matrix claimed the complete suite on every Python and OS; CI runs it on Linux/3.12 only
+        # and `selftest --quick` elsewhere. The performance job was named a "regression budget" while
+        # its timings are informational.
+        ci = (self.root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        matrix = (self.root / "docs/compatibility-matrix.md").read_text(encoding="utf-8")
+        self.assertIn("python harness_cli.py selftest --quick", ci)
+        self.assertNotIn("complete suite runs on Linux for every supported Python version", matrix)
+        self.assertNotIn("complete suite runs on the canonical runtime for every OS", matrix)
+        self.assertIn("`selftest --quick`", matrix)
+        self.assertNotIn("regression budget", ci)
+        self.assertIn("name: Scalability invariants (timings informational)", ci)
+
     def test_C1_C2_claude_rules_agree_on_review_ingestion_and_plan_scope(self) -> None:
         # Claude read three contradicting instructions for recording reviews (CLAUDE.md: transcript;
         # harness-rules.md: --response <file>; tool-support.md: --from-subagent "not portable"), and its

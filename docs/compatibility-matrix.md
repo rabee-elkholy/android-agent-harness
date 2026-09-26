@@ -17,8 +17,8 @@
 
 | Runtime | Declared support | Validation |
 |---|---|---|
-| Python 3.10–3.14 | Supported | The complete suite runs on Linux for every supported Python version |
-| Linux, macOS, Windows | Supported | The complete suite runs on the canonical runtime for every OS; wheel lifecycle tests run separately on all three |
+| Python 3.10–3.14 | Supported | The complete suite runs on Linux with Python 3.12; Python 3.10, 3.11, 3.13 and 3.14 run the `selftest --quick` subset on Linux |
+| Linux, macOS, Windows | Supported | The complete suite runs on Linux; macOS and Windows run the `selftest --quick` subset with Python 3.12; wheel lifecycle tests run on all three |
 | Python 3.15+ | Not yet declared | Refuse release claims until added to CI |
 
 CI configuration is evidence only after it has actually run. A local doctor

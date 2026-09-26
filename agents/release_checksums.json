@@ -36,7 +36,7 @@
     "agents/scripts/_architecture_selftest.py": "e5d7008c74a32f1175628bd686b98126dcc8626f761d54fd9fd554fb263f7938",
     "agents/scripts/_baseline_selftest.py": "a5a9df883b5bbfe9c44540ac3e959e228932cf7f2f02c9c7bed39befb99e8f3a",
     "agents/scripts/_critical_safety_selftest.py": "e87854f7dea01b8034522429ccbaf5b2ec1919544522957369bbc6904f93ae61",
-    "agents/scripts/_daily_workflow_selftest.py": "20eb82d03fde45f6175859f5065808feb533307fa5f1535658105dca4642f627",
+    "agents/scripts/_daily_workflow_selftest.py": "1ad4766c334692a99361e72788576921560b5561e8ba56a179e538210ff6a504",
     "agents/scripts/_enforcement.py": "70a882d2a04228708f869726ddb3b9a11557d83aca72541e1de17011d020ef71",
     "agents/scripts/_env_codes.py": "fd47d241fa3f6a9d8c25889c75ea7238275103e42121e317f7f361320093a1d5",
     "agents/scripts/_env_codes_selftest.py": "e6a10eff6049664036374e350c8af88ac244920bd0b7655cc20b51d6702d3994",
