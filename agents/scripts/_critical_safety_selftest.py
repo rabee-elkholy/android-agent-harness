@@ -280,6 +280,33 @@ class CriticalSafetyTests(unittest.TestCase):
             self.assertEqual(["B#b"], written.get("new_regressions"))
             self.assertEqual(2, written.get("executed"))
 
+    def test_doctor_repository_scan_survives_git_objects_vanishing(self):
+        # CI (Python 3.10): git packed objects in the background while Doctor's credential scan globbed
+        # the whole repository, `.git` included; Path.glob raised FileNotFoundError and repair failed.
+        from doctor.engine import HarnessDoctor
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".git/objects/97").mkdir(parents=True)
+            (repo / ".git/objects/97/zoho_config.json").write_text("{}", encoding="utf-8")
+            (repo / "app/src/vanishing").mkdir(parents=True)
+            (repo / "app/zoho_config.json").write_text("{}", encoding="utf-8")
+            real_scandir = os.scandir
+
+            def flaky_scandir(path="."):
+                if str(path).endswith("vanishing"):
+                    raise FileNotFoundError(2, "No such file or directory", str(path))
+                return real_scandir(path)
+
+            doctor = HarnessDoctor(repo, run_selftest=False)
+            with mock.patch("os.scandir", side_effect=flaky_scandir):
+                found = sorted(p.relative_to(repo).as_posix() for p in doctor._repo_files(("zoho_config.json",)))
+                doctor.check_zoho_mcp()
+            self.assertEqual(["app/zoho_config.json"], found)
+            isolation = next(r for r in doctor.results if r.name == "Credential Isolation")
+            self.assertEqual("FAIL", isolation.status)
+            self.assertIn("app/zoho_config.json", isolation.message)
+            self.assertNotIn(".git", isolation.message)
+
     def test_E1_doctor_checks_every_script_of_the_release_inventory(self):
         # Doctor checked a hand-kept list of 58 scripts and reported "All core scripts verified" while
         # phase_review.py, exported_component_guard.py and others could be missing. The release

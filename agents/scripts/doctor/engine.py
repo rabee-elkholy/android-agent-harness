@@ -608,11 +608,25 @@ class HarnessDoctor:
         else:
             self.log(category, "Placeholder Inspection", "FAIL", f"Found {len(leaks)} file(s) with un-replaced placeholders.", leaks)
 
+    def _repo_files(self, patterns: tuple[str, ...], skip_dirs: set[str] | frozenset[str] = frozenset({".git"})):
+        """Files under the repository whose name matches a pattern, never inside skipped directories.
+
+        Git packs objects in the background, so a directory under `.git` can vanish mid-walk;
+        `Path.glob` then raises FileNotFoundError on Python 3.10. os.walk skips unreadable or
+        vanished directories instead.
+        """
+        from fnmatch import fnmatchcase
+        for current, dirs, files in os.walk(self.repo, onerror=lambda _error: None):
+            dirs[:] = [name for name in dirs if name not in skip_dirs]
+            for name in files:
+                if any(fnmatchcase(name, pattern) for pattern in patterns):
+                    yield Path(current) / name
+
     def _detect_project_domains(self) -> set[str]:
         detected = set()
         skip_parts = {".git", ".gradle", "build", ".harness-backup", "node_modules", "__pycache__"}
         text_corpus = ""
-        for p in self.repo.glob("**/*.gradle*"):
+        for p in self._repo_files(("*.gradle*",), skip_parts):
             if any(x in p.parts for x in skip_parts):
                 continue
             try:
@@ -627,7 +641,7 @@ class HarnessDoctor:
             except Exception:
                 pass
 
-        for p in self.repo.glob("**/AndroidManifest.xml"):
+        for p in self._repo_files(("AndroidManifest.xml",), skip_parts):
             if any(x in p.parts for x in skip_parts):
                 continue
             try:
@@ -637,7 +651,7 @@ class HarnessDoctor:
 
         scanned_kt = 0
         max_kt_files = 500
-        for p in self.repo.rglob("*.kt"):
+        for p in self._repo_files(("*.kt",), skip_parts):
             if scanned_kt >= max_kt_files:
                 break
             if any(x in p.parts for x in skip_parts):
@@ -1057,20 +1071,19 @@ class HarnessDoctor:
 
         repo_tokens: list[Path] = []
         seen_token_paths: set[str] = set()
-        secret_globs = [
-            "**/zoho_config.json",
-            "**/*zoho*token*.json",
-            "**/zoho_sprints.json",
-            "**/github_projects.json",
-            "**/jira.json",
-            "**/linear.json",
-        ]
-        for pattern in secret_globs:
-            for path in self.repo.glob(pattern):
-                marker = str(path).lower()
-                if marker not in seen_token_paths:
-                    seen_token_paths.add(marker)
-                    repo_tokens.append(path)
+        secret_names = (
+            "zoho_config.json",
+            "*zoho*token*.json",
+            "zoho_sprints.json",
+            "github_projects.json",
+            "jira.json",
+            "linear.json",
+        )
+        for path in self._repo_files(secret_names):
+            marker = str(path).lower()
+            if marker not in seen_token_paths:
+                seen_token_paths.add(marker)
+                repo_tokens.append(path)
         if not repo_tokens:
             self.log(
                 category,
