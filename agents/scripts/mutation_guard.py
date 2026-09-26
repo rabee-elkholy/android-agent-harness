@@ -96,7 +96,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             return "compileall", tokens[3:]
         path = tokens[1].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
-        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "repair"}
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "repair", "zoho_sync"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name in {"harness_cli.py", "harness.py"}:
@@ -615,6 +615,41 @@ def _posix_shell_host() -> bool:
     return os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude"
 
 
+# Router-issued Zoho lifecycle commands and the plan states they belong to (None: read-only, any state).
+ZOHO_LIFECYCLE_STATES = {
+    "start": {"APPROVED", "IMPLEMENTING"},
+    "start-sync": {"APPROVED", "IMPLEMENTING"},
+    "prepare-report": {"READY_FOR_DELIVERY", "DELIVERED"},
+    "delivery": {"DELIVERED"},
+    "delivery-sync": {"DELIVERED"},
+    "status": None,
+}
+
+
+def _zoho_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str] | None:
+    """Allow only the audited zoho_sync lifecycle commands for a Zoho-linked task in scope."""
+    name, args = _entry(command, repo)
+    if name != "zoho_sync":
+        return None
+    action = args[0] if args else ""
+    if action not in ZOHO_LIFECYCLE_STATES:
+        return False, f"zoho_sync '{action}' is not an audited lifecycle command"
+    task_id = args[args.index("--task-id") + 1] if "--task-id" in args and args.index("--task-id") + 1 < len(args) else ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", task_id):
+        return False, "zoho_sync lifecycle commands must name the linked task with --task-id"
+    try:
+        plan = read_json(_state_root(Path(repo)) / "tasks" / task_id / "plan.json")
+    except Exception:
+        return False, f"zoho_sync: no plan found for task '{task_id}'"
+    if not plan.get("zoho_link") or "zoho_sprints" not in (plan.get("external_writes") or []):
+        return False, f"zoho_sync: task '{task_id}' has no approved Zoho link and zoho_sprints external-write scope"
+    states = ZOHO_LIFECYCLE_STATES[action]
+    status = str(plan.get("status") or "")
+    if states is not None and status not in states:
+        return False, f"zoho_sync {action} is not part of the {status or 'missing'} state"
+    return True, f"audited Zoho lifecycle command for linked task {task_id}"
+
+
 def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if isinstance(repo, str) and (isinstance(command, Path) or (" " in repo and not " " in str(command))):
         repo, command = command, repo
@@ -641,6 +676,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, "every command segment is authorized"
     if segments:
         normalized = segments[0]
+    zoho = _zoho_lifecycle_decision(repo, normalized)
+    if zoho is not None:
+        return zoho
     if _workflow_action(normalized, repo) in BOOTSTRAP_ACTIONS:
         return True, "task-authority workflow command"
     if _is_read_only(normalized, repo):
