@@ -327,6 +327,32 @@ class DailyWorkflowSelftest(unittest.TestCase):
         trivial = draft(self._draft_ns("strings-only", expected_files=None, expected_surfaces="LOCALIZATION", expected_modules=None))
         self.assertEqual("AWAITING_DEVELOPER_APPROVAL", trivial["status"])
 
+    def test_B3_approval_binds_the_plan_hash_the_developer_saw(self) -> None:
+        # C6: the agent re-typed PLAN_SUMMARY and the developer approved that text while approval bound
+        # plan.json. approve takes the summary's hash and refuses a plan that is not the one shown.
+        import contextlib, io
+        from workflow import main as workflow_main
+        plan = draft(self._draft_ns("bound-approval"))
+        shown = plan["plan_sha256"][:12]
+        base = ["approve", "--repo", str(self.repo), "--task-id", "bound-approval", "--source", "conversation",
+                "--proof-reference", "ok", "--enforcement-tier", "RULE_ENFORCED"]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(1, workflow_main(base + ["--plan-hash", "0" * 12]))
+        self.assertIn("PLAN_HASH_MISMATCH", err.getvalue())
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", read_json(task_dir(self.repo, "bound-approval") / "plan.json")["status"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(0, workflow_main(base + ["--plan-hash", shown]))
+        self.assertIn(f"APPROVED_PLAN_HASH={shown}", out.getvalue())
+        approved = read_json(task_dir(self.repo, "bound-approval") / "plan.json")
+        self.assertEqual("IMPLEMENTING", approved["status"])
+        self.assertEqual(shown, approved["approval"]["presented_plan_hash"])
+        # The router's approve command carries the registered plan's hash.
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="bound-approval"))
+        pending = draft(self._draft_ns("router-approval"))
+        self.assertIn(f"--plan-hash {pending['plan_sha256'][:12]}", resolve_next_action(self.repo, "router-approval", pending)["command"])
+
     def test_draft_rejects_file_paths_as_surfaces(self) -> None:
         # DEFECT-SURFACES-01 (round 5): file paths were stored upper-cased as surfaces, the real
         # surfaces were never declared, and every task needed a second approval for drift.

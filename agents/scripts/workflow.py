@@ -1383,6 +1383,11 @@ def present_plan(args: argparse.Namespace) -> dict:
     return receipt
 
 
+def _plan_hash_arg(plan: dict) -> str:
+    shown = str(plan.get("plan_sha256") or "")[:12]
+    return f" --plan-hash {shown}" if shown else ""
+
+
 def record_approval(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     assert_single_live_task(repo, allowed_task_id=args.task_id)
@@ -1390,8 +1395,19 @@ def record_approval(args: argparse.Namespace) -> dict:
     plan = _load_plan(repo, args.task_id)
     tier = args.enforcement_tier
     directory = task_dir(repo, args.task_id)
+    presented = str(getattr(args, "plan_hash", None) or "").strip().lower()
     with StateLock(directory / ".lock"):
+        if presented:
+            # The developer approved the PLAN_SUMMARY that showed this hash; bind approval to that plan.
+            registered = str(plan.get("plan_sha256") or "").lower()
+            if len(presented) < 12 or not registered.startswith(presented):
+                raise ValidationError(
+                    f"PLAN_HASH_MISMATCH: the approved summary shows plan hash '{presented}', but the registered plan "
+                    f"is '{registered[:12]}'. Show the current PLAN_SUMMARY block verbatim and ask for approval again."
+                )
         plan = approve_and_begin(repo, plan, source=args.source, proof_reference=args.proof_reference, enforcement_tier=tier)
+        if presented and isinstance(plan.get("approval"), dict):
+            plan["approval"]["presented_plan_hash"] = presented
         save_plan(plan_file, plan)
         atomic_write_json(state_root(repo) / "active-task.json", {
             "task_id": args.task_id,
@@ -2910,7 +2926,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         return {
             "code": "APPROVE_PLAN",
             "kind": "DEVELOPER_ACTION",
-            "command": f'python .agents/harness.py task approve {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED',
+            "command": f'python .agents/harness.py task approve {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED{_plan_hash_arg(plan)}',
             "blocking": True,
             "reason": "The reviewed plan needs explicit approval before implementation.",
             "inputs": {"repo": ".", "task_id": task_id},
@@ -4259,7 +4275,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
             "action": "approve",
             "code": "APPROVE_PLAN",
             "kind": "DEVELOPER_ACTION",
-            "command": f'{base} approve {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED',
+            "command": f'{base} approve {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED{_plan_hash_arg(plan)}',
             "reason": "The reviewed plan needs explicit approval before implementation.",
         }]
     if state == "APPROVED":
@@ -4475,6 +4491,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
     command.add_argument("--proof-reference", required=True)
     command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
+    command.add_argument("--plan-hash", default=None, help="Plan hash shown in the approved PLAN_SUMMARY (at least 12 hex characters)")
     command.set_defaults(handler=record_approval)
     command = sub.add_parser("approve-sensitive", parents=[common])
     command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
@@ -4597,6 +4614,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if args.action in ("draft", "revise"):
             print(plan_summary(result))
+        if args.action == "approve":
+            print(f"APPROVED_PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
         print(f"TASK_STATUS={result.get('status', 'READY')}")
         for item in result.get("next_actions") or []:
             print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")
