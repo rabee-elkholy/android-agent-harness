@@ -5166,8 +5166,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
         write_file(path, "".join(json.dumps(line) + "\n" for line in lines))
         return path
 
-    def _setup_claude_v1_task(self, task_id: str) -> tuple[dict, str, str, Path]:
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+    def _setup_claude_v1_task(self, task_id: str, reviewers: list[str] | None = None) -> tuple[dict, str, str, Path]:
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, reviewers or ["bug-reviewer-agent"])
         current["review_protocol_version"] = 1
         current["review_host"] = "claude"
         atomic_write_json(tdir / "current-run.json", current)
@@ -5220,6 +5220,30 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self._claude_transcript(output, "```json\n" + json.dumps(genuine) + "\n```")
         with mock.patch("builtins.print"):
             self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
+
+    def test_C3_v1_router_does_not_redispatch_recorded_reviewers(self) -> None:
+        # Claude has no dispatch hook, so no V1 receipt is ever written; the router asked to dispatch
+        # every reviewer again even after some replies were recorded.
+        task_id = "claude-v1-router"
+        roster = ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id, roster)
+        plan = read_json(tdir / "plan.json")
+        first = resolve_next_action(self.repo, task_id, plan, host="claude")
+        self.assertEqual("DISPATCH_REVIEWERS", first["code"])
+        self.assertEqual(roster, first["reviewers"])
+        self.assertIn("record_review.py --task", first["reason"])
+        self.assertIn("--from-subagent", first["reason"])
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-b1.jsonl", "```json\n" + json.dumps(block) + "\n```")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+        after = resolve_next_action(self.repo, task_id, read_json(tdir / "plan.json"), host="claude")
+        self.assertNotIn("bug-reviewer-agent", after.get("reviewers") or [])
+        self.assertEqual(["regression-impact-reviewer-agent"], after.get("pending_reviewers") or after.get("reviewers"))
+        self.assertIn("--from-subagent", after["reason"])
 
     def test_REVIEW_ORCH_018_v2_does_not_accept_footer_only_PASS(self) -> None:
         from record_review import _parse_response_text

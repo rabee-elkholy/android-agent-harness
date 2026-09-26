@@ -3825,13 +3825,23 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                             completed_reviewers.add(f.stem)
 
                 req_set = set(required_reviewers)
+                # A recorded reply proves the reviewer was launched; hosts without a dispatch hook
+                # (Claude Code) never write a V1 receipt, so do not ask to launch it again.
+                dispatched_reviewers |= completed_reviewers
+                v1_host = str(current_run.get("review_host") or "").strip().lower()
+                record_hint = ""
+                if not has_trusted_review_source(v1_host):
+                    record_hint = (
+                        f" Record each finished reviewer's reply with `python .agents/scripts/record_review.py --task {task_id} "
+                        "--from-subagent <role>=<transcript-path>`."
+                    )
                 if not req_set.issubset(dispatched_reviewers):
                     return {
                         "code": "DISPATCH_REVIEWERS",
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(req_set - dispatched_reviewers))}.",
+                        "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(req_set - dispatched_reviewers))}.{record_hint}",
                         "reviewers": sorted(req_set - dispatched_reviewers),
                         "package_path": str(pkg_path),
                         "briefs": briefs,
@@ -3855,7 +3865,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(pending)}.",
+                        "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(pending)}.{record_hint}",
                         "reviewers": required_reviewers,
                         "pending_reviewers": pending,
                         "inputs": {
