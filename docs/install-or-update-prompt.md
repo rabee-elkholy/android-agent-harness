@@ -14,10 +14,7 @@ Require:
 - no `.agents` (if the app has its own, STOP: move it first)
 - no incompatible `.harness-setup`
 
-If an existing Harness installation is detected:
-STOP.
-
-Tell the developer to remove/uninstall the old Harness first, then rerun the clean installer. Do not auto-delete project files.
+If a Harness is already installed, STOP: tell the developer to uninstall it first, then rerun the clean installer. Do not auto-delete project files.
 
 Active task check: If `.agents/state/active-task.json` exists with an active task, STOP immediately. Tell developer:
 "An active task `<id>` is currently recorded. Please finish or cancel it before updating: `python .agents/scripts/workflow.py cancel --repo . --task-id <id>`". Do NOT search the repository or try to resume the active task.
@@ -53,10 +50,10 @@ If a question contains `conditional_text_input`, and the selected option equals 
 **STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.**
 create `<temp-answers>.json` outside `<app-root>`, then run:
 `python <kit-dir>/harness_cli.py init --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json`
-The installer takes a pre-install application backup, installs `.agents/hooks.json`, writes Antigravity reviewer agent definitions to `.agents/agents/<reviewer>/agent.md`, and generates `GEMINI.md`.
+It backs up the app, installs `.agents/` and each selected host's files: Antigravity `.agents/hooks.json`, `.agents/agents/<reviewer>/agent.md`, `GEMINI.md`; Claude Code `CLAUDE.md`, `.claude/agents/`, `.claude/settings.json` hook.
 
 ## Phase 5: Verification
 Run: `python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json`
-Doctor validates `.agents/hooks.json`, all 7 custom reviewer agents in `.agents/agents/`, Review Protocol V2, and runtime root paths.
+Doctor validates the harness and each selected host's adapter (Antigravity: hooks, 7 reviewers in `.agents/agents/`, Review Protocol V2).
 Optionally verify kit version: `python <kit-dir>/harness_cli.py version --kit <kit-dir>`
 On success show 0 changed app files and say: “Android Agent Harness is successfully configured. Open a NEW chat at the project root.”

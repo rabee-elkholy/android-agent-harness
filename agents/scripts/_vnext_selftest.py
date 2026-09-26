@@ -197,6 +197,17 @@ class ChatInstallationDocsTests(unittest.TestCase):
         ):
             self.assertIn(marker, self.prompt)
 
+    def test_E4_install_prompt_outputs_are_host_specific(self) -> None:
+        # Phases 4 and 5 described only Antigravity outputs, so a Claude Code install looked incomplete.
+        phase4 = self.prompt[self.prompt.index("Phase 4:"):self.prompt.index("Phase 5:")]
+        phase5 = self.prompt[self.prompt.index("Phase 5:"):]
+        self.assertIn("Claude Code", phase4)
+        self.assertIn("CLAUDE.md", phase4)
+        self.assertIn(".claude/agents/", phase4)
+        self.assertIn(".agents/agents/", phase4)
+        self.assertIn("selected host", phase5)
+        self.assertLessEqual(len(self.prompt.encode("utf-8")), 4096)
+
     def test_single_shot_proceed_and_followup_execution_rules(self) -> None:
         harness_rules = (KIT / "agents" / "rules" / "harness-rules.md").read_text(encoding="utf-8")
         gemini_tpl = (KIT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")

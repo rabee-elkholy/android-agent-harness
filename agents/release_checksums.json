@@ -63,7 +63,7 @@
     "agents/scripts/_variants.py": "98b4b01007975cf95186b7975c5b399174ef237525175ab8f5914e764fed3866",
     "agents/scripts/_verification_recipes.py": "5bf892d82818020c4f7fff063a3983d383b2b4ee50fc459b29a44eb53f2f1209",
     "agents/scripts/_vnext_common.py": "cd5450fd0ef658facf134e11d2d9fc37606120ad4e45babe7db50be4501c31c8",
-    "agents/scripts/_vnext_selftest.py": "8e1afad62b0abb86e591f4c8973a4909b5203603f4074340a20104e96c07263b",
+    "agents/scripts/_vnext_selftest.py": "5d343d2efd79285106254cda58ec22a39845e5adc853ef36efd7946ac70ce853",
     "agents/scripts/_worktree_handoff_selftest.py": "1508ec0c8df4335f8351407378b2e8a917e6a0034d01abc8bb8c7e4a6827c452",
     "agents/scripts/_zoho_selftest.py": "37fe9627fadaf39e20a7695b52993309a18670cf039ca39cf0075dffdaca6f65",
     "agents/scripts/antigravity_runtime.py": "550c879cf3f6af8c94eb1de48b424799fabf4047e3b935d04249c53ee0815b7d",
