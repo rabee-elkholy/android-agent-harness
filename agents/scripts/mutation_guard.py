@@ -96,7 +96,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             return "compileall", tokens[3:]
         path = tokens[1].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
-        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "repair"}
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "repair", "zoho_sync"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name in {"harness_cli.py", "harness.py"}:
@@ -290,6 +290,10 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     if not targets:
         return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
 
+    red_denial = _red_evidence_denial(root, plan, targets)
+    if red_denial:
+        return False, red_denial, "RED_EVIDENCE_REQUIRED"
+
     external_writes = set(plan.get("external_writes") or [])
     expected_files = set(plan.get("expected_files") or [])
     expected_surfaces = set(plan.get("expected_surfaces") or [])
@@ -360,6 +364,51 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
 
 
+TEST_PATH_MARKERS = ("/test/", "/androidtest/", "/testfixtures/", "/sharedtest/")
+
+
+def _is_production_code(rel_posix: str) -> bool:
+    lower = f"/{rel_posix.lower()}"
+    if not lower.endswith((".kt", ".java")):
+        return False
+    return not (any(marker in lower for marker in TEST_PATH_MARKERS) or lower.endswith(("test.kt", "tests.kt", "test.java")))
+
+
+def _red_evidence_denial(root: Path, plan: dict, targets: list[str]) -> str:
+    """A BUG task that needs executable RED may not change production code before RED exists.
+
+    Tests, fixtures and resources stay writable so the failing test can be written first. The rule is
+    the final verifier's own (bug_requires_executable_red), so the router, the write guard and the
+    verifier agree.
+    """
+    if str(plan.get("task_kind") or plan.get("kind") or "").upper() != "BUG":
+        return ""
+    task_id = str(plan.get("task_id") or "")
+    if not task_id:
+        return ""
+    task_directory = _state_root(root) / "tasks" / task_id
+    if (task_directory / "red-evidence.json").is_file():
+        return ""
+    from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
+    if not bug_requires_executable_red(
+        plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(task_directory),
+    ):
+        return ""
+    for target in targets:
+        path = Path(str(target or "").strip())
+        try:
+            rel = (path if path.is_absolute() else root / path).resolve().relative_to(root).as_posix()
+        except (ValueError, OSError):
+            continue
+        if _is_production_code(rel):
+            return (
+                f"RED_EVIDENCE_REQUIRED: this BUG task must capture a failing test before changing production code "
+                f"('{rel}'). Write the failing test first (test files stay writable), then run "
+                "`python .agents/harness.py test --capture-red`."
+            )
+    return ""
+
+
 def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[str], classify, check_material_drift) -> str:
     """Name every surface the planned files still lack, so one revision covers them all.
 
@@ -418,9 +467,12 @@ def join_continuations(command: str) -> str:
 def _split_segments(command: str) -> list[str] | None:
     """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote.
 
-    Backslash-newline outside quotes is a line continuation, not a separator.
+    On the Claude bridge (Bash), backslash-newline outside quotes is a line continuation. Other
+    hosts may run PowerShell or cmd, where a trailing backslash ends a Windows path, so every
+    newline stays a command boundary there.
     """
-    command = join_continuations(command)
+    if _posix_shell_host():
+        command = join_continuations(command)
     segments, current, quote, i = [], [], "", 0
     while i < len(command):
         ch = command[i]
@@ -480,10 +532,122 @@ def _without_single_quoted_text(command: str) -> str | None:
     return None if quote else "".join(out)
 
 
+def _quote_mask(command: str) -> str | None:
+    """Same-length copy of the command with quoted text blanked, so operators are found only outside quotes."""
+    out, quote, i = [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(command):
+                out.append("__")
+                i += 2
+                continue
+            out.append(ch if ch == quote else "_")
+            if ch == quote:
+                quote = ""
+        elif ch == "\\" and i + 1 < len(command):
+            out.append("__")
+            i += 2
+            continue
+        else:
+            if ch in "\"'":
+                quote = ch
+            out.append(ch)
+        i += 1
+    return None if quote else "".join(out)
+
+
+READ_ONLY_FILTERS = {"head", "tail", "grep", "rg"}
+
+
+def _is_read_only_filter(stage: str) -> bool:
+    import shlex
+    visible = _without_single_quoted_text(stage)
+    if visible is None or SHELL_LAUNDERING.search(visible) or re.search(r"[;&\n]", visible):
+        return False
+    try:
+        tokens = shlex.split(stage, posix=True)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] not in READ_ONLY_FILTERS:
+        return False
+    return not any(token.startswith(("--pre", "--hostname-bin")) for token in tokens[1:])
+
+
+def _claude_shell_core(repo: Path | str, command: str) -> str | None:
+    """Strip the bounded Bash conveniences Claude writes around a harness command.
+
+    Accepted only on the Claude bridge: a leading `cd <repository root> &&`, `2>&1`, and trailing
+    pipes into read-only filters (head, tail, grep, rg). Returns the core command to check, or None
+    when anything else is present, so the ordinary checks deny it.
+    """
+    mask = _quote_mask(command)
+    if mask is None:
+        return None
+    # Trailing pipes into read-only filters.
+    cuts = [m.start() for m in re.finditer(r"(?<!\|)\|(?!\|)", mask)]
+    core = command
+    if cuts:
+        stages = [command[start + 1:end] for start, end in zip(cuts, cuts[1:] + [len(command)])]
+        if not all(_is_read_only_filter(stage.strip()) for stage in stages):
+            return None
+        core, mask = command[:cuts[0]], mask[:cuts[0]]
+    # Stderr merged into stdout changes no file.
+    for match in reversed(list(re.finditer(r"(?:(?<=\s)|^)2>&1(?=\s|$)", mask))):
+        core, mask = core[:match.start()] + core[match.end():], mask[:match.start()] + mask[match.end():]
+    # `cd` to the repository root only.
+    lead = re.match(r"\s*cd\s+(\S+)\s*&&", mask)
+    if lead:
+        target = core[lead.start(1):lead.end(1)].strip("'\"")
+        try:
+            same = Path(os.path.expanduser(target)).resolve() == Path(repo).resolve()
+        except OSError:
+            same = False
+        if not same:
+            return None
+        core = core[lead.end():]
+    return core.strip()
+
+
 def _posix_shell_host() -> bool:
     # Claude Code runs Bash on every platform; its bridge marks the host. Antigravity calls the
     # engine without a marker and may run PowerShell or cmd, so it keeps the character check.
     return os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude"
+
+
+# Router-issued Zoho lifecycle commands and the plan states they belong to (None: read-only, any state).
+ZOHO_LIFECYCLE_STATES = {
+    "start": {"APPROVED", "IMPLEMENTING"},
+    "start-sync": {"APPROVED", "IMPLEMENTING"},
+    "prepare-report": {"READY_FOR_DELIVERY", "DELIVERED"},
+    "delivery": {"DELIVERED"},
+    "delivery-sync": {"DELIVERED"},
+    "status": None,
+}
+
+
+def _zoho_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str] | None:
+    """Allow only the audited zoho_sync lifecycle commands for a Zoho-linked task in scope."""
+    name, args = _entry(command, repo)
+    if name != "zoho_sync":
+        return None
+    action = args[0] if args else ""
+    if action not in ZOHO_LIFECYCLE_STATES:
+        return False, f"zoho_sync '{action}' is not an audited lifecycle command"
+    task_id = args[args.index("--task-id") + 1] if "--task-id" in args and args.index("--task-id") + 1 < len(args) else ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", task_id):
+        return False, "zoho_sync lifecycle commands must name the linked task with --task-id"
+    try:
+        plan = read_json(_state_root(Path(repo)) / "tasks" / task_id / "plan.json")
+    except Exception:
+        return False, f"zoho_sync: no plan found for task '{task_id}'"
+    if not plan.get("zoho_link") or "zoho_sprints" not in (plan.get("external_writes") or []):
+        return False, f"zoho_sync: task '{task_id}' has no approved Zoho link and zoho_sprints external-write scope"
+    states = ZOHO_LIFECYCLE_STATES[action]
+    status = str(plan.get("status") or "")
+    if states is not None and status not in states:
+        return False, f"zoho_sync {action} is not part of the {status or 'missing'} state"
+    return True, f"audited Zoho lifecycle command for linked task {task_id}"
 
 
 def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
@@ -492,6 +656,10 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     normalized = str(command or "").strip()
     if not normalized:
         return True, "empty command"
+    if _posix_shell_host():
+        core = _claude_shell_core(repo, normalized)
+        if core and core != normalized:
+            return command_allowed(repo, core)
     operator_text = _without_single_quoted_text(normalized) if _posix_shell_host() else normalized
     if operator_text is None:
         return False, "unterminated quote in command"
@@ -508,6 +676,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, "every command segment is authorized"
     if segments:
         normalized = segments[0]
+    zoho = _zoho_lifecycle_decision(repo, normalized)
+    if zoho is not None:
+        return zoho
     if _workflow_action(normalized, repo) in BOOTSTRAP_ACTIONS:
         return True, "task-authority workflow command"
     if _is_read_only(normalized, repo):

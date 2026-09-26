@@ -77,7 +77,7 @@ Follow the simplified 4-phase lifecycle driven by `python .agents/harness.py tas
 | :--- | :--- | :--- | :--- |
 | **PLAN** | 1. Discovery | `python .agents/harness.py task-context --file <path> --json` | Bounded AST slice for target file/symbol |
 | **PLAN** | 1b. Graph | `python .agents/harness.py graph --feature <name> --json` | AST/symbol feature graph analysis |
-| **PLAN** | 2. Draft | `python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR>` | Create task plan |
+| **PLAN** | 2. Draft | `python .agents/scripts/workflow.py draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR> --expected-files <paths>` | Create task plan; `--expected-files` is required except for T0 resource/string/doc-only plans |
 | **PLAN** | 3. Approve | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Record approval & atomically transition to IMPLEMENTING |
 | **BUILD** | 4. (Compat) Begin | `python .agents/scripts/workflow.py begin --repo . --task-id <id>` | Idempotent begin compatibility command |
 | **BUILD** | 4b. Zoho Start Sync | `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item (when plan has approved zoho_link) |

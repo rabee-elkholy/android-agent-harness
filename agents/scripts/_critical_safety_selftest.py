@@ -280,6 +280,38 @@ class CriticalSafetyTests(unittest.TestCase):
             self.assertEqual(["B#b"], written.get("new_regressions"))
             self.assertEqual(2, written.get("executed"))
 
+    def test_E1_doctor_checks_every_script_of_the_release_inventory(self):
+        # Doctor checked a hand-kept list of 58 scripts and reported "All core scripts verified" while
+        # phase_review.py, exported_component_guard.py and others could be missing. The release
+        # checksum inventory is the single list of shipped scripts.
+        from doctor.engine import HarnessDoctor
+        from doctor.models import CORE_SCRIPTS
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            agents = repo / ".agents"
+            (agents / "rules").mkdir(parents=True)
+            (agents / "rules" / "harness-rules.md").write_text("rules\n", encoding="utf-8")
+            (agents / "VERSION").write_text("1.1.1\n", encoding="utf-8")
+            (agents / "scripts" / "doctor").mkdir(parents=True)
+            for name in CORE_SCRIPTS:
+                (agents / "scripts" / name).write_text("", encoding="utf-8")
+            (agents / "scripts" / "doctor" / "engine.py").write_text("", encoding="utf-8")
+            inventory = {name: "0" * 64 for name in (
+                *(f"agents/scripts/{n}" for n in CORE_SCRIPTS), "agents/scripts/doctor/engine.py", "agents/scripts/phase_review.py",
+            )}
+            (agents / "release_checksums.json").write_text(json.dumps({"schema_version": 1, "algorithm": "sha256", "files": inventory}), encoding="utf-8")
+            doctor = HarnessDoctor(repo, run_selftest=False)
+            doctor.check_file_structure()
+            result = next(r for r in doctor.results if r.name == "Core Scripts")
+            self.assertEqual("FAIL", result.status, result.message)
+            self.assertIn("phase_review.py", result.message)
+            (agents / "scripts" / "phase_review.py").write_text("", encoding="utf-8")
+            doctor = HarnessDoctor(repo, run_selftest=False)
+            doctor.check_file_structure()
+            result = next(r for r in doctor.results if r.name == "Core Scripts")
+            self.assertEqual("PASS", result.status, result.message)
+            self.assertIn(f"All {len(inventory)} ", result.message)
+
     def test_device_step_when_verification_is_disabled_says_so(self):
         # Round 5 (O3): with device verification disabled, install-start failed as an environment
         # problem and told the agent to halt instead of saying there is no device step.

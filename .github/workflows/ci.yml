@@ -87,7 +87,7 @@ jobs:
           python harness_cli.py doctor --json
 
   performance:
-    name: Performance regression budget
+    name: Scalability invariants (timings informational)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

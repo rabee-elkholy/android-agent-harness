@@ -327,6 +327,32 @@ class DailyWorkflowSelftest(unittest.TestCase):
         trivial = draft(self._draft_ns("strings-only", expected_files=None, expected_surfaces="LOCALIZATION", expected_modules=None))
         self.assertEqual("AWAITING_DEVELOPER_APPROVAL", trivial["status"])
 
+    def test_B3_approval_binds_the_plan_hash_the_developer_saw(self) -> None:
+        # C6: the agent re-typed PLAN_SUMMARY and the developer approved that text while approval bound
+        # plan.json. approve takes the summary's hash and refuses a plan that is not the one shown.
+        import contextlib, io
+        from workflow import main as workflow_main
+        plan = draft(self._draft_ns("bound-approval"))
+        shown = plan["plan_sha256"][:12]
+        base = ["approve", "--repo", str(self.repo), "--task-id", "bound-approval", "--source", "conversation",
+                "--proof-reference", "ok", "--enforcement-tier", "RULE_ENFORCED"]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(1, workflow_main(base + ["--plan-hash", "0" * 12]))
+        self.assertIn("PLAN_HASH_MISMATCH", err.getvalue())
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", read_json(task_dir(self.repo, "bound-approval") / "plan.json")["status"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(0, workflow_main(base + ["--plan-hash", shown]))
+        self.assertIn(f"APPROVED_PLAN_HASH={shown}", out.getvalue())
+        approved = read_json(task_dir(self.repo, "bound-approval") / "plan.json")
+        self.assertEqual("IMPLEMENTING", approved["status"])
+        self.assertEqual(shown, approved["approval"]["presented_plan_hash"])
+        # The router's approve command carries the registered plan's hash.
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="bound-approval"))
+        pending = draft(self._draft_ns("router-approval"))
+        self.assertIn(f"--plan-hash {pending['plan_sha256'][:12]}", resolve_next_action(self.repo, "router-approval", pending)["command"])
+
     def test_draft_rejects_file_paths_as_surfaces(self) -> None:
         # DEFECT-SURFACES-01 (round 5): file paths were stored upper-cased as surfaces, the real
         # surfaces were never declared, and every task needed a second approval for drift.
@@ -408,6 +434,20 @@ class DailyWorkflowSelftest(unittest.TestCase):
         draft(args)
         code = architecture_drift.main(["--repo", str(self.repo), "--task-id", task_id])
         self.assertEqual(0, code)
+
+    def test_B1_exported_component_check_crash_fails_preflight(self) -> None:
+        # A crash in the exported-component guard reported "skipped" and let preflight PASS; a proof
+        # gate must fail closed. The same manifest change passes when the guard runs normally.
+        import contextlib, io
+        import preflight_check
+        write_file(self.repo / "app/src/main/AndroidManifest.xml", '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application/></manifest>\n')
+        argv = ["--repo", str(self.repo), "--diagnostic"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, preflight_check.main(argv))
+        out = io.StringIO()
+        with mock.patch("exported_component_guard.check", side_effect=RuntimeError("parser exploded")), contextlib.redirect_stdout(out):
+            self.assertEqual(1, preflight_check.main(argv))
+        self.assertIn("[FAIL] EXPORTED_COMPONENT_CHECK_ERROR: parser exploded", out.getvalue())
 
     def test_public_command_catalog_has_no_unknown_flags(self) -> None:
         """Verify command catalog references only valid flags for each CLI tool."""
@@ -5126,8 +5166,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
         write_file(path, "".join(json.dumps(line) + "\n" for line in lines))
         return path
 
-    def _setup_claude_v1_task(self, task_id: str) -> tuple[dict, str, str, Path]:
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+    def _setup_claude_v1_task(self, task_id: str, reviewers: list[str] | None = None) -> tuple[dict, str, str, Path]:
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, reviewers or ["bug-reviewer-agent"])
         current["review_protocol_version"] = 1
         current["review_host"] = "claude"
         atomic_write_json(tdir / "current-run.json", current)
@@ -5180,6 +5220,62 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self._claude_transcript(output, "```json\n" + json.dumps(genuine) + "\n```")
         with mock.patch("builtins.print"):
             self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
+
+    def test_C4_from_subagent_accepts_a_claude_agent_id(self) -> None:
+        # A foreground Claude subagent returns its reply and agent id, not a transcript path; the agent
+        # had no reliable way to name the file. The id is resolved inside Claude's projects directory.
+        task_id = "claude-agent-id"
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/session-9/subagents/agent-a7f3c21.jsonl",
+                                             "```json\n" + json.dumps(block) + "\n```")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-reviewer-agent=../../etc/passwd"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-reviewer-agent=a7f3c21"]))
+        report = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")["evidence"]["reports"][0]
+        self.assertEqual(str(transcript.resolve()), report["transcript_path"])
+        self.assertEqual("claude_subagent_transcript", report["provenance"])
+
+    def test_C6_claude_transcript_skips_trailing_api_error_messages(self) -> None:
+        # Claude Code records a failed API call as an assistant line with isApiErrorMessage; taking it
+        # as the reviewer's last reply would lose the real review.
+        from review_sources import read_claude_subagent_transcript
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-e1.jsonl", "The real review reply.")
+        with transcript.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "assistant", "isApiErrorMessage": True, "message": {
+                "id": "m3", "role": "assistant", "content": [{"type": "text", "text": "API Error: 529 overloaded"}]}}) + "\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}):
+            text, _ = read_claude_subagent_transcript(transcript)
+        self.assertEqual("The real review reply.", text)
+
+    def test_C3_v1_router_does_not_redispatch_recorded_reviewers(self) -> None:
+        # Claude has no dispatch hook, so no V1 receipt is ever written; the router asked to dispatch
+        # every reviewer again even after some replies were recorded.
+        task_id = "claude-v1-router"
+        roster = ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id, roster)
+        plan = read_json(tdir / "plan.json")
+        first = resolve_next_action(self.repo, task_id, plan, host="claude")
+        self.assertEqual("DISPATCH_REVIEWERS", first["code"])
+        self.assertEqual(roster, first["reviewers"])
+        self.assertIn("record_review.py --task", first["reason"])
+        self.assertIn("--from-subagent", first["reason"])
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-b1.jsonl", "```json\n" + json.dumps(block) + "\n```")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+        after = resolve_next_action(self.repo, task_id, read_json(tdir / "plan.json"), host="claude")
+        self.assertNotIn("bug-reviewer-agent", after.get("reviewers") or [])
+        self.assertEqual(["regression-impact-reviewer-agent"], after.get("pending_reviewers") or after.get("reviewers"))
+        self.assertIn("--from-subagent", after["reason"])
 
     def test_REVIEW_ORCH_018_v2_does_not_accept_footer_only_PASS(self) -> None:
         from record_review import _parse_response_text
@@ -6558,6 +6654,52 @@ class DocumentationConsistencyTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.root = KIT
+
+    def test_benchmark_status_is_the_single_consistent_status_source(self) -> None:
+        bench = self.root / "docs/benchmark"
+        status_doc = (bench / "benchmark-status.md").read_text(encoding="utf-8")
+        rows = [line.split("|") for line in status_doc.splitlines() if re.match(r"\| (Install|T\d+) \|", line)]
+        statuses = {row[1].strip(): row[-2].strip() for row in rows}
+        self.assertEqual(["Install"] + [f"T{i}" for i in range(1, 11)], list(statuses))
+        self.assertTrue(set(statuses.values()) <= {"PASSED", "PENDING", "INCOMPLETE"}, statuses)
+        scope = status_doc.split("## Next Certification Scope", 1)[1].strip().rstrip(".")
+        self.assertEqual([k for k, v in statuses.items() if v != "PASSED"], [item.strip() for item in scope.split(",")])
+        evidence = status_doc.split("## Evidence for passed scenarios", 1)[1].split("## Next Certification Scope", 1)[0]
+        cited = re.findall(r"- \*\*(Install|T\d+)\*\*", evidence)
+        self.assertEqual(sorted(k for k, v in statuses.items() if v == "PASSED"), sorted(cited))
+        for retired in ("certification-plan.md", "certification-progress.md", "round5-findings-log.md", "round5-plan.md"):
+            self.assertFalse((bench / retired).exists(), retired)
+
+    def test_E2_E3_ci_claims_match_the_workflow(self) -> None:
+        # The matrix claimed the complete suite on every Python and OS; CI runs it on Linux/3.12 only
+        # and `selftest --quick` elsewhere. The performance job was named a "regression budget" while
+        # its timings are informational.
+        ci = (self.root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        matrix = (self.root / "docs/compatibility-matrix.md").read_text(encoding="utf-8")
+        self.assertIn("python harness_cli.py selftest --quick", ci)
+        self.assertNotIn("complete suite runs on Linux for every supported Python version", matrix)
+        self.assertNotIn("complete suite runs on the canonical runtime for every OS", matrix)
+        self.assertIn("`selftest --quick`", matrix)
+        self.assertNotIn("regression budget", ci)
+        self.assertIn("name: Scalability invariants (timings informational)", ci)
+
+    def test_C1_C2_claude_rules_agree_on_review_ingestion_and_plan_scope(self) -> None:
+        # Claude read three contradicting instructions for recording reviews (CLAUDE.md: transcript;
+        # harness-rules.md: --response <file>; tool-support.md: --from-subagent "not portable"), and its
+        # draft row omitted --expected-files, which new installs require.
+        claude = (self.root / "agents/tool-adapters/CLAUDE.md.template").read_text(encoding="utf-8")
+        rules = (self.root / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
+        support = (self.root / "docs/tool-support.md").read_text(encoding="utf-8")
+        self.assertIn("--from-subagent <role>=<transcript-path>", claude)
+        record_row = next(line for line in rules.splitlines() if line.startswith("| Record review |"))
+        self.assertIn("Antigravity V2: `review complete --task <id> --reviewer <role> --execution-id <id>`", record_row)
+        self.assertNotIn("--response <role>=<file>", record_row)
+        self.assertNotIn("not a portable ingestion command", support)
+        self.assertIn("On Claude Code", support)
+        self.assertIn("--from-subagent <role>=<transcript-path>", support)
+        draft_row = next(line for line in claude.splitlines() if "**Draft Plan**" in line)
+        self.assertIn("--expected-files", draft_row)
+        self.assertIn("Required: `--task-id`, `--outcome`, `--expected-files <comma-separated paths from discovery>`", draft_row)
 
     def test_readme_contains_antigravity_first_review_v2(self) -> None:
         content = (self.root / "README.md").read_text(encoding="utf-8")

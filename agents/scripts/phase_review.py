@@ -44,6 +44,7 @@ from review_orchestrator import (
 )
 from review_policy import canonical_risk_tier, decide
 from review_sources import (
+    find_claude_subagent_transcript,
     has_trusted_review_source,
     is_claude_transcript,
     read_claude_subagent_transcript,
@@ -1396,6 +1397,14 @@ def _main(argv: list[str] | None = None) -> int:
             if has_trusted_review_source(str(read_json(run_file).get("review_host") or "")):
                 raise ValidationError("trusted host phase reviews require transcript ingestion; --response-file is unavailable")
         raw_response, response_source = None, None
+        if not args.response_file:
+            run_file = phase_run_file(task_dir(repo, args.task_id), args.phase_id)
+            run_host = str(read_json(run_file).get("review_host") or "") if run_file.is_file() else ""
+            if run_file.is_file() and not has_trusted_review_source(run_host):
+                # Claude Code: the execution id is the subagent's agent id; read its transcript.
+                found = find_claude_subagent_transcript(args.execution_id)
+                if found:
+                    raw_response, response_source = read_claude_subagent_transcript(found)
         if args.response_file:
             response_path = Path(args.response_file).expanduser()
             if not response_path.is_file():

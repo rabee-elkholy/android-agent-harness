@@ -14,7 +14,7 @@ from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_f
 from _vnext_common import active_review_package_path as _vnext_active_package_path  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
 from workflow import SENSITIVE_SURFACES, assert_active_run_fresh, state_root, task_dir  # noqa: E402
-from review_sources import is_claude_transcript, read_claude_subagent_transcript  # noqa: E402
+from review_sources import find_claude_subagent_transcript, is_claude_transcript, read_claude_subagent_transcript  # noqa: E402
 
 
 def active_review_package_path(repo: Path, current_run: dict, root: Path | None = None) -> Path:
@@ -817,6 +817,9 @@ def main(argv: list[str] | None = None) -> int:
             reviewer = reviewer.strip()
             conv_id = conv_id.strip()
             given = Path(conv_id).expanduser()
+            if not is_claude_transcript(given) and not _find_subagent_transcript(conv_id):
+                # Claude Code reports an agent id for foreground subagents; Antigravity ids resolve first.
+                given = find_claude_subagent_transcript(conv_id) or given
             if is_claude_transcript(given):
                 # Claude Code: ingest the reviewer's last reply unchanged; no quoting, no copy.
                 extracted_text, identity = read_claude_subagent_transcript(given)

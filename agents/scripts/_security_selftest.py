@@ -173,6 +173,40 @@ class SecurityTests(unittest.TestCase):
         # Antigravity (engine called without a host marker) keeps the strict character check.
         self.assertEqual("deny", self.engine(quoted)["decision"])
 
+    def test_C5_claude_bounded_shell_ergonomics(self):
+        # Claude habitually writes `cd <repo> && ...`, `2>&1` and `| tail -20`; each denial cost a retry.
+        # Only the exact repository root, stderr merge and read-only filters are accepted.
+        repo = str(self.repo)
+        record = f"python {SCRIPTS / 'record_review.py'} --task t --status"
+        allowed = (
+            "git status 2>&1 | tail -5",
+            f"cd {repo} && git log --oneline -3 | head -2",
+            f"cd {repo} && {record} 2>&1 | grep -i staged",
+            "git diff --stat | rg -n 'app/'",
+            "git log --oneline | grep 'fix | refactor'",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.claude_bridge(command)["permissionDecision"], command)
+        denied = (
+            "cd /tmp && git status",
+            f"cd {repo}/app && git status",
+            "git status | xargs rm -rf app",
+            "git status | tail -5 > out.txt",
+            "git status | sh",
+            "git status 2>out.txt",
+            "git status 2>&1 >out.txt",
+            "git status | grep x $(touch owned)",
+            "git status | rg --pre cat x",
+            f"cd {repo} && touch owned",
+        )
+        for command in denied:
+            with self.subTest(command=command):
+                self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"], command)
+        # Antigravity keeps its character check.
+        self.assertEqual("deny", self.engine("git status 2>&1 | tail -5")["decision"])
+        self.assertEqual("deny", self.engine(f"cd {repo} && git status")["decision"])
+
     def test_copilot_bridge_denies_and_malformed_fails_closed(self):
         proc = subprocess.run(
             [sys.executable, str(COPILOT)], input=json.dumps({"toolName": "bash", "toolArgs": {"command": "adb root"}}),

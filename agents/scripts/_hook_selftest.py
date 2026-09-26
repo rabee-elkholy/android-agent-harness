@@ -69,6 +69,7 @@ class HookTests(unittest.TestCase):
         expected_surfaces: list[str] | None = None,
         expected_modules: list[str] | None = None,
         test_strategy: str | None = None,
+        task_kind: str | None = None,
     ) -> None:
         task = self.state / "tasks/task-one"
         task.mkdir(parents=True, exist_ok=True)
@@ -85,6 +86,9 @@ class HookTests(unittest.TestCase):
             plan["expected_modules"] = expected_modules
         if test_strategy is not None:
             plan["test_strategy"] = test_strategy
+        if task_kind is not None:
+            plan["task_kind"] = task_kind
+            plan["task_id"] = "task-one"
         if status == "READY_FOR_DELIVERY":
             manifest = build_manifest(self.repo)
             plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
@@ -165,7 +169,9 @@ class HookTests(unittest.TestCase):
 
     def test_C_D2_backslash_continuations_are_one_command(self):
         """Certification C-D2: a command wrapped with backslash-newline was split into several
-        "commands" and denied as if the plan state forbade it; the one-line form was allowed."""
+        "commands" and denied as if the plan state forbade it; the one-line form was allowed.
+        Only the Claude bridge (Bash) treats backslash-newline as a continuation."""
+        self.env["HARNESS_HOOK_HOST"] = "claude"
         draft = (
             "python .agents/scripts/workflow.py draft --repo . --task-id t1 \\\n"
             "  --kind FEATURE \\\n"
@@ -189,6 +195,61 @@ class HookTests(unittest.TestCase):
         res = self.call("run_command", {"CommandLine": "git status\ntouch app/owned.txt"})
         self.assertEqual("deny", res["decision"])
         self.assertIn("'touch app/owned.txt'", res["reason"])
+
+    def test_A1_antigravity_newline_is_always_a_command_boundary(self):
+        """PowerShell has no backslash continuation, and Windows paths end with a backslash. A
+        trailing backslash must not join the next line into a read-only command on Antigravity."""
+        self.env.pop("HARNESS_HOOK_HOST", None)
+        smuggled = "Get-ChildItem C:\\temp\\\nRemove-Item -Recurse app"
+        res = self.call("run_command", {"CommandLine": smuggled})
+        self.assertEqual("deny", res["decision"], res.get("reason"))
+        self.assertIn("'Remove-Item -Recurse app'", res["reason"])
+        self.activate()
+        res = self.call("run_command", {"CommandLine": "git status \\\nRemove-Item -Recurse app"})
+        self.assertEqual("deny", res["decision"], res.get("reason"))
+        # Every line is still checked on its own, exactly as before C-D2.
+        wrapped = "python .agents/scripts/workflow.py draft --repo . --task-id t1 \\\n  --kind FEATURE"
+        res = self.call("run_command", {"CommandLine": wrapped})
+        self.assertEqual("deny", res["decision"])
+        self.assertIn("'--kind FEATURE'", res["reason"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "git status\ngit diff --stat"})["decision"])
+
+    def _link_zoho(self, *, approved: bool = True) -> None:
+        plan_file = self.state / "tasks/task-one/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["task_id"] = "task-one"
+        plan["zoho_link"] = {"item_id": "42", "sprint_id": "7", "item_type": "Bug"}
+        plan["external_writes"] = ["zoho_sprints"] if approved else []
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+
+    def test_D1_router_zoho_lifecycle_commands_are_allowed_only_in_scope(self):
+        # The router made `zoho_sync.py start` / `delivery` blocking steps and the hook denied both:
+        # every Zoho-linked task dead-ended. Only the exact lifecycle commands for the linked task,
+        # in the matching state and with the approved external-write scope, are allowed.
+        start = "python .agents/scripts/zoho_sync.py start --repo . --task-id task-one"
+        delivery = "python .agents/scripts/zoho_sync.py delivery --repo . --task-id task-one"
+        report = ('python .agents/scripts/zoho_sync.py prepare-report --repo . --task-id task-one --objective "Crash fixed" '
+                  '--changes "Null check" --impact-json "[\\"Player\\"]" --tests-json "[\\"Unit\\"]"')
+        status = "python .agents/scripts/zoho_sync.py status --repo . --task-id task-one"
+        self.activate()
+        self._link_zoho()
+        for host in ("antigravity", "claude"):
+            self.env["HARNESS_HOOK_HOST"] = host
+            with self.subTest(host=host):
+                self.assertEqual("allow", self.call("run_command", {"CommandLine": start})["decision"])
+                self.assertEqual("allow", self.call("run_command", {"CommandLine": status})["decision"])
+                self.assertEqual("deny", self.call("run_command", {"CommandLine": delivery})["decision"])
+                self.assertEqual("deny", self.call("run_command", {"CommandLine": start.replace("task-one", "other-task")})["decision"])
+                self.assertEqual("deny", self.call("run_command", {"CommandLine": start + " && touch owned"})["decision"])
+        self.env.pop("HARNESS_HOOK_HOST", None)
+        self._link_zoho(approved=False)
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": start})["decision"])
+        self.activate(status="DELIVERED")
+        self._link_zoho()
+        for command in (report, delivery):
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.call("run_command", {"CommandLine": command})["decision"])
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": start})["decision"])
 
     def test_router_resume_for_stale_ready_delivery_is_allowed(self):
         """The router routes a stale READY task to `task resume`; the hook must not block its own advice."""
@@ -346,6 +407,36 @@ class HookTests(unittest.TestCase):
             res["reason"],
         )
         self.assertNotIn("\n", res["reason"])
+
+    def test_B2_bug_task_needs_red_before_production_code(self):
+        # D10b: CAPTURE_RED was advisory at write time; production code was fixed before RED and the
+        # task only failed at completion. Tests and fixtures stay writable before RED.
+        source = "app/src/main/kotlin/com/example/Calc.kt"
+        self.activate(
+            expected_files=[source], expected_surfaces=["BUSINESS_LOGIC"], expected_modules=[":app"],
+            test_strategy="Add a failing unit test", task_kind="BUG",
+        )
+        res = self.call("write_to_file", {"TargetFile": source})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("RED_EVIDENCE_REQUIRED", res.get("reason_code"))
+        self.assertIn("harness.py test --capture-red", res["reason"])
+        for writable in ("app/src/test/kotlin/com/example/CalcTest.kt", "app/src/test/resources/calc-fixture.json"):
+            with self.subTest(target=writable):
+                self.assertEqual("allow", self.call("write_to_file", {"TargetFile": writable})["decision"])
+        (self.state / "tasks/task-one/red-evidence.json").write_text("{}", encoding="utf-8")
+        self.assertEqual("allow", self.call("write_to_file", {"TargetFile": source})["decision"])
+
+    def test_B2_red_boundary_skips_features_and_declared_alternate_reproduction(self):
+        source = "app/src/main/kotlin/com/example/Calc.kt"
+        self.activate(expected_files=[source], expected_surfaces=["BUSINESS_LOGIC"], expected_modules=[":app"],
+                      test_strategy="Add unit tests", task_kind="FEATURE")
+        self.assertEqual("allow", self.call("write_to_file", {"TargetFile": source})["decision"])
+        # A BUG with no executable test and a recorded manual reproduction follows the final verifier's rule.
+        self.activate(expected_files=[source], expected_surfaces=["BUSINESS_LOGIC"], expected_modules=[":app"],
+                      test_strategy="none", task_kind="BUG")
+        (self.state / "tasks/task-one/debug-evidence.json").write_text(
+            json.dumps({"entries": [{"kind": "manual_repro", "reference": "steps"}]}), encoding="utf-8")
+        self.assertEqual("allow", self.call("write_to_file", {"TargetFile": source})["decision"])
 
     def test_MUTATION_SCOPE_007_revised_approval_allows_expanded_target(self):
         self.activate(
