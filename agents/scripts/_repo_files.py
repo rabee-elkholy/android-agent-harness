@@ -21,8 +21,8 @@ def repo_glob(root: Path, pattern: str):
     """Path.glob for a recursive "**/..." pattern that never walks `.git`.
 
     Git packs objects in the background, so a directory under `.git` can vanish while it is
-    walked, and Path.glob raises FileNotFoundError on Python 3.10. The result and its order are
-    those of root.glob(pattern) without the `.git` subtree.
+    walked, and Path.glob raises FileNotFoundError on Python 3.10. The result is that of
+    root.glob(pattern) without the `.git` subtree.
     """
     root = Path(root)
     if not pattern.startswith("**/"):

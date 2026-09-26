@@ -283,7 +283,7 @@ class CriticalSafetyTests(unittest.TestCase):
     def test_repo_glob_matches_path_glob_without_entering_git(self):
         # Recursive Path.glob over the repository walked `.git`, where background object packing can
         # remove directories mid-walk (FileNotFoundError on Python 3.10). repo_glob returns what
-        # Path.glob returns for the working tree, in the same order, and never lists `.git`.
+        # Path.glob returns for the working tree and never lists `.git`.
         from _repo_files import repo_glob
         with tempfile.TemporaryDirectory() as td:
             repo = Path(td)
@@ -295,7 +295,8 @@ class CriticalSafetyTests(unittest.TestCase):
             for pattern in ("**/AndroidManifest.xml", "**/src/*/res", "**/build/test-results/**/TEST-*.xml", "**/res/values*"):
                 with self.subTest(pattern=pattern):
                     expected = [p for p in repo.glob(pattern) if ".git" not in p.relative_to(repo).parts]
-                    self.assertEqual(expected, list(repo_glob(repo, pattern)))
+                    # Path.glob's order differs between Python versions; the set of results is the contract.
+                    self.assertEqual(sorted(expected), sorted(repo_glob(repo, pattern)))
             real_scandir = os.scandir
 
             def no_git(path="."):
