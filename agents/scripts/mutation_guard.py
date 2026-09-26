@@ -290,6 +290,10 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     if not targets:
         return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
 
+    red_denial = _red_evidence_denial(root, plan, targets)
+    if red_denial:
+        return False, red_denial, "RED_EVIDENCE_REQUIRED"
+
     external_writes = set(plan.get("external_writes") or [])
     expected_files = set(plan.get("expected_files") or [])
     expected_surfaces = set(plan.get("expected_surfaces") or [])
@@ -358,6 +362,51 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             )
 
     return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
+
+
+TEST_PATH_MARKERS = ("/test/", "/androidtest/", "/testfixtures/", "/sharedtest/")
+
+
+def _is_production_code(rel_posix: str) -> bool:
+    lower = f"/{rel_posix.lower()}"
+    if not lower.endswith((".kt", ".java")):
+        return False
+    return not (any(marker in lower for marker in TEST_PATH_MARKERS) or lower.endswith(("test.kt", "tests.kt", "test.java")))
+
+
+def _red_evidence_denial(root: Path, plan: dict, targets: list[str]) -> str:
+    """A BUG task that needs executable RED may not change production code before RED exists.
+
+    Tests, fixtures and resources stay writable so the failing test can be written first. The rule is
+    the final verifier's own (bug_requires_executable_red), so the router, the write guard and the
+    verifier agree.
+    """
+    if str(plan.get("task_kind") or plan.get("kind") or "").upper() != "BUG":
+        return ""
+    task_id = str(plan.get("task_id") or "")
+    if not task_id:
+        return ""
+    task_directory = _state_root(root) / "tasks" / task_id
+    if (task_directory / "red-evidence.json").is_file():
+        return ""
+    from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
+    if not bug_requires_executable_red(
+        plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(task_directory),
+    ):
+        return ""
+    for target in targets:
+        path = Path(str(target or "").strip())
+        try:
+            rel = (path if path.is_absolute() else root / path).resolve().relative_to(root).as_posix()
+        except (ValueError, OSError):
+            continue
+        if _is_production_code(rel):
+            return (
+                f"RED_EVIDENCE_REQUIRED: this BUG task must capture a failing test before changing production code "
+                f"('{rel}'). Write the failing test first (test files stay writable), then run "
+                "`python .agents/harness.py test --capture-red`."
+            )
+    return ""
 
 
 def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[str], classify, check_material_drift) -> str:

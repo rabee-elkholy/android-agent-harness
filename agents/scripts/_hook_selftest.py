@@ -69,6 +69,7 @@ class HookTests(unittest.TestCase):
         expected_surfaces: list[str] | None = None,
         expected_modules: list[str] | None = None,
         test_strategy: str | None = None,
+        task_kind: str | None = None,
     ) -> None:
         task = self.state / "tasks/task-one"
         task.mkdir(parents=True, exist_ok=True)
@@ -85,6 +86,9 @@ class HookTests(unittest.TestCase):
             plan["expected_modules"] = expected_modules
         if test_strategy is not None:
             plan["test_strategy"] = test_strategy
+        if task_kind is not None:
+            plan["task_kind"] = task_kind
+            plan["task_id"] = "task-one"
         if status == "READY_FOR_DELIVERY":
             manifest = build_manifest(self.repo)
             plan["ready_delivery_snapshot_sha256"] = manifest["delivery_snapshot_sha256"]
@@ -366,6 +370,36 @@ class HookTests(unittest.TestCase):
             res["reason"],
         )
         self.assertNotIn("\n", res["reason"])
+
+    def test_B2_bug_task_needs_red_before_production_code(self):
+        # D10b: CAPTURE_RED was advisory at write time; production code was fixed before RED and the
+        # task only failed at completion. Tests and fixtures stay writable before RED.
+        source = "app/src/main/kotlin/com/example/Calc.kt"
+        self.activate(
+            expected_files=[source], expected_surfaces=["BUSINESS_LOGIC"], expected_modules=[":app"],
+            test_strategy="Add a failing unit test", task_kind="BUG",
+        )
+        res = self.call("write_to_file", {"TargetFile": source})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("RED_EVIDENCE_REQUIRED", res.get("reason_code"))
+        self.assertIn("harness.py test --capture-red", res["reason"])
+        for writable in ("app/src/test/kotlin/com/example/CalcTest.kt", "app/src/test/resources/calc-fixture.json"):
+            with self.subTest(target=writable):
+                self.assertEqual("allow", self.call("write_to_file", {"TargetFile": writable})["decision"])
+        (self.state / "tasks/task-one/red-evidence.json").write_text("{}", encoding="utf-8")
+        self.assertEqual("allow", self.call("write_to_file", {"TargetFile": source})["decision"])
+
+    def test_B2_red_boundary_skips_features_and_declared_alternate_reproduction(self):
+        source = "app/src/main/kotlin/com/example/Calc.kt"
+        self.activate(expected_files=[source], expected_surfaces=["BUSINESS_LOGIC"], expected_modules=[":app"],
+                      test_strategy="Add unit tests", task_kind="FEATURE")
+        self.assertEqual("allow", self.call("write_to_file", {"TargetFile": source})["decision"])
+        # A BUG with no executable test and a recorded manual reproduction follows the final verifier's rule.
+        self.activate(expected_files=[source], expected_surfaces=["BUSINESS_LOGIC"], expected_modules=[":app"],
+                      test_strategy="none", task_kind="BUG")
+        (self.state / "tasks/task-one/debug-evidence.json").write_text(
+            json.dumps({"entries": [{"kind": "manual_repro", "reference": "steps"}]}), encoding="utf-8")
+        self.assertEqual("allow", self.call("write_to_file", {"TargetFile": source})["decision"])
 
     def test_MUTATION_SCOPE_007_revised_approval_allows_expanded_target(self):
         self.activate(
