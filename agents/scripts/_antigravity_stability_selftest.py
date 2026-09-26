@@ -605,6 +605,67 @@ class TestCanonicalDraftRow(unittest.TestCase):
                 self.assertIn("--expected-files <paths>", row)
 
 
+class TestAntigravityPlanHashApproval(unittest.TestCase):
+    """B3: the documented Antigravity approval binds the plan hash shown in PLAN_SUMMARY."""
+
+    DOCS = (REPO_ROOT / "GEMINI.md", REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template")
+
+    def _approve_commands(self, path: Path) -> list[str]:
+        return re.findall(r"`[^`]*workflow\.py approve [^`]*`", path.read_text(encoding="utf-8"))
+
+    def test_every_documented_approve_carries_the_summary_hash(self):
+        for path in self.DOCS:
+            commands = self._approve_commands(path)
+            with self.subTest(path=path.name):
+                self.assertGreaterEqual(len(commands), 2)
+                for command in commands:
+                    self.assertIn("--plan-hash <hash from PLAN_SUMMARY>", command)
+
+    def test_documented_approval_accepts_the_shown_plan_and_rejects_a_mismatch(self):
+        import argparse
+        import contextlib
+        import io
+        import workflow
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            for args in (["init", "-q"], ["config", "user.name", "T"], ["config", "user.email", "t@example.invalid"]):
+                subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+            files = {
+                "gradlew": "#!/bin/sh\n", "settings.gradle.kts": 'include(":app")\n',
+                "app/build.gradle.kts": 'plugins { id("com.android.application") }\n',
+                "app/src/main/kotlin/com/example/MainActivity.kt": "package com.example\n\nclass MainActivity\n",
+            }
+            for rel, text in files.items():
+                (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+                (repo / rel).write_text(text, encoding="utf-8")
+            (repo / ".agents" / "state").mkdir(parents=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True, capture_output=True)
+            plan = workflow.draft(argparse.Namespace(
+                repo=str(repo), task_id="ag-approve", outcome="Show a finished message", kind="FEATURE",
+                planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE", architecture_target_scope="", architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt", phases=None, force=True,
+            ))
+            shown = re.search(r"Plan hash: ([0-9a-f]{12})", workflow.plan_summary(plan)).group(1)
+            documented = self._approve_commands(self.DOCS[0])[-1].strip("`")
+            argv = documented.split("workflow.py ", 1)[1].replace('"<phrase>"', "ok").replace("<id>", "ag-approve").split()
+            argv[argv.index("--repo") + 1] = str(repo)
+            hash_at = argv.index("<hash") 
+            del argv[hash_at:hash_at + 3]
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(1, workflow.main(argv[:hash_at] + ["0" * 12] + argv[hash_at:]))
+            self.assertIn("PLAN_HASH_MISMATCH", err.getvalue())
+            plan_file = repo / ".agents" / "state" / "tasks" / "ag-approve" / "plan.json"
+            self.assertEqual("AWAITING_DEVELOPER_APPROVAL", json.loads(plan_file.read_text(encoding="utf-8"))["status"])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, workflow.main(argv[:hash_at] + [shown] + argv[hash_at:]))
+            approved = json.loads(plan_file.read_text(encoding="utf-8"))
+            self.assertEqual("IMPLEMENTING", approved["status"])
+            self.assertEqual(shown, approved["approval"]["presented_plan_hash"])
+
+
 class TestReviewProtocolV2FailClosed(unittest.TestCase):
     """P0 Section 4: Close remaining Review V2 fail-open boundaries."""
 
