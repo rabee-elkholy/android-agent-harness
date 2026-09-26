@@ -532,6 +532,83 @@ def _without_single_quoted_text(command: str) -> str | None:
     return None if quote else "".join(out)
 
 
+def _quote_mask(command: str) -> str | None:
+    """Same-length copy of the command with quoted text blanked, so operators are found only outside quotes."""
+    out, quote, i = [], "", 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(command):
+                out.append("__")
+                i += 2
+                continue
+            out.append(ch if ch == quote else "_")
+            if ch == quote:
+                quote = ""
+        elif ch == "\\" and i + 1 < len(command):
+            out.append("__")
+            i += 2
+            continue
+        else:
+            if ch in "\"'":
+                quote = ch
+            out.append(ch)
+        i += 1
+    return None if quote else "".join(out)
+
+
+READ_ONLY_FILTERS = {"head", "tail", "grep", "rg"}
+
+
+def _is_read_only_filter(stage: str) -> bool:
+    import shlex
+    visible = _without_single_quoted_text(stage)
+    if visible is None or SHELL_LAUNDERING.search(visible) or re.search(r"[;&\n]", visible):
+        return False
+    try:
+        tokens = shlex.split(stage, posix=True)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] not in READ_ONLY_FILTERS:
+        return False
+    return not any(token.startswith(("--pre", "--hostname-bin")) for token in tokens[1:])
+
+
+def _claude_shell_core(repo: Path | str, command: str) -> str | None:
+    """Strip the bounded Bash conveniences Claude writes around a harness command.
+
+    Accepted only on the Claude bridge: a leading `cd <repository root> &&`, `2>&1`, and trailing
+    pipes into read-only filters (head, tail, grep, rg). Returns the core command to check, or None
+    when anything else is present, so the ordinary checks deny it.
+    """
+    mask = _quote_mask(command)
+    if mask is None:
+        return None
+    # Trailing pipes into read-only filters.
+    cuts = [m.start() for m in re.finditer(r"(?<!\|)\|(?!\|)", mask)]
+    core = command
+    if cuts:
+        stages = [command[start + 1:end] for start, end in zip(cuts, cuts[1:] + [len(command)])]
+        if not all(_is_read_only_filter(stage.strip()) for stage in stages):
+            return None
+        core, mask = command[:cuts[0]], mask[:cuts[0]]
+    # Stderr merged into stdout changes no file.
+    for match in reversed(list(re.finditer(r"(?:(?<=\s)|^)2>&1(?=\s|$)", mask))):
+        core, mask = core[:match.start()] + core[match.end():], mask[:match.start()] + mask[match.end():]
+    # `cd` to the repository root only.
+    lead = re.match(r"\s*cd\s+(\S+)\s*&&", mask)
+    if lead:
+        target = core[lead.start(1):lead.end(1)].strip("'\"")
+        try:
+            same = Path(os.path.expanduser(target)).resolve() == Path(repo).resolve()
+        except OSError:
+            same = False
+        if not same:
+            return None
+        core = core[lead.end():]
+    return core.strip()
+
+
 def _posix_shell_host() -> bool:
     # Claude Code runs Bash on every platform; its bridge marks the host. Antigravity calls the
     # engine without a marker and may run PowerShell or cmd, so it keeps the character check.
@@ -544,6 +621,10 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     normalized = str(command or "").strip()
     if not normalized:
         return True, "empty command"
+    if _posix_shell_host():
+        core = _claude_shell_core(repo, normalized)
+        if core and core != normalized:
+            return command_allowed(repo, core)
     operator_text = _without_single_quoted_text(normalized) if _posix_shell_host() else normalized
     if operator_text is None:
         return False, "unterminated quote in command"
