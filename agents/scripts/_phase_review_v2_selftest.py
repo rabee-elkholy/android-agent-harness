@@ -961,6 +961,30 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual(str(transcript.resolve()), result["response_source"]["transcript_path"])
         self.assertEqual(hashlib.sha256(transcript.read_bytes()).hexdigest(), result["response_source"]["transcript_sha256"])
 
+    def test_C4_phase_complete_finds_the_claude_transcript_by_execution_id(self) -> None:
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
+        task_id, reviewers, _, meta = self._setup_dispatch_state()
+        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
+        reviewer = reviewers[0]
+        block = json.dumps({
+            "schema_version": 2, "task_id": task_id, "run_id": meta["phase_review_run_id"],
+            "reviewer": reviewer, "review_package_sha256": meta["package_sha256"], "verdict": "PASS", "findings": [],
+        })
+        claude_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = claude_home / "projects/-app/s1/subagents/agent-5be09d1.jsonl"
+        write_file(transcript, json.dumps({"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [
+            {"type": "text", "text": "```json\n" + block + "\n```"}]}}) + "\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            code = phase_review.main([
+                "complete", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
+                "--reviewer", reviewer, "--execution-id", "5be09d1",
+            ])
+        self.assertEqual(0, code)
+        result = read_json(phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json")
+        self.assertEqual(str(transcript.resolve()), result["response_source"]["transcript_path"])
+        self.assertFalse(result["independent_execution_verified"])
+
     def test_C_D6_response_file_that_is_not_a_file_is_a_usage_error(self) -> None:
         import contextlib
         import io

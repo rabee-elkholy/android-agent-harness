@@ -5221,6 +5221,24 @@ class ReviewOrchestrationTests(unittest.TestCase):
         with mock.patch("builtins.print"):
             self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
 
+    def test_C4_from_subagent_accepts_a_claude_agent_id(self) -> None:
+        # A foreground Claude subagent returns its reply and agent id, not a transcript path; the agent
+        # had no reliable way to name the file. The id is resolved inside Claude's projects directory.
+        task_id = "claude-agent-id"
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/session-9/subagents/agent-a7f3c21.jsonl",
+                                             "```json\n" + json.dumps(block) + "\n```")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-reviewer-agent=../../etc/passwd"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-reviewer-agent=a7f3c21"]))
+        report = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")["evidence"]["reports"][0]
+        self.assertEqual(str(transcript.resolve()), report["transcript_path"])
+        self.assertEqual("claude_subagent_transcript", report["provenance"])
+
     def test_C6_claude_transcript_skips_trailing_api_error_messages(self) -> None:
         # Claude Code records a failed API call as an assistant line with isApiErrorMessage; taking it
         # as the reviewer's last reply would lose the real review.

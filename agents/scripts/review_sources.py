@@ -115,6 +115,18 @@ def _claude_transcript_entries(raw: str) -> list[dict] | None:
     return entries if is_claude else None
 
 
+def find_claude_subagent_transcript(agent_id: str) -> Path | None:
+    """The transcript of a Claude Code subagent, found by its agent id in Claude's projects directory."""
+    value = str(agent_id or "").strip()
+    if value.startswith("agent-"):
+        value = value[len("agent-"):]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", value):
+        return None
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    matches = [path for path in (home / "projects").glob(f"*/*/subagents/agent-{value}.jsonl") if path.is_file()]
+    return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
+
+
 def is_claude_transcript(path: Path) -> bool:
     try:
         return path.is_file() and _claude_transcript_entries(path.read_text(encoding="utf-8", errors="replace")) is not None
