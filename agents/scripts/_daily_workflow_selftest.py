@@ -409,6 +409,20 @@ class DailyWorkflowSelftest(unittest.TestCase):
         code = architecture_drift.main(["--repo", str(self.repo), "--task-id", task_id])
         self.assertEqual(0, code)
 
+    def test_B1_exported_component_check_crash_fails_preflight(self) -> None:
+        # A crash in the exported-component guard reported "skipped" and let preflight PASS; a proof
+        # gate must fail closed. The same manifest change passes when the guard runs normally.
+        import contextlib, io
+        import preflight_check
+        write_file(self.repo / "app/src/main/AndroidManifest.xml", '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application/></manifest>\n')
+        argv = ["--repo", str(self.repo), "--diagnostic"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, preflight_check.main(argv))
+        out = io.StringIO()
+        with mock.patch("exported_component_guard.check", side_effect=RuntimeError("parser exploded")), contextlib.redirect_stdout(out):
+            self.assertEqual(1, preflight_check.main(argv))
+        self.assertIn("[FAIL] EXPORTED_COMPONENT_CHECK_ERROR: parser exploded", out.getvalue())
+
     def test_public_command_catalog_has_no_unknown_flags(self) -> None:
         """Verify command catalog references only valid flags for each CLI tool."""
         import preflight_check

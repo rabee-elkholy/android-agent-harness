@@ -176,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
                 from exported_component_guard import check as check_exported
                 exported_ok, exported_msg = check_exported(repo_target, manifest_paths)
             except Exception as exc:
-                exported_ok, exported_msg = True, f"exported-component check skipped: {exc}"
+                # A proof gate that cannot run fails closed.
+                exported_ok, exported_msg = False, f"EXPORTED_COMPONENT_CHECK_ERROR: {exc}"
         sublog(f"[{'OK' if exported_ok else 'FAIL'}] {exported_msg}")
 
     live_print("\n==================================================")
