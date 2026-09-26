@@ -594,6 +594,17 @@ class TestDefaultsAndTerminology(unittest.TestCase):
         self.assertIn("Reviewer Call Safety Cap", questions_py)
 
 
+class TestCanonicalDraftRow(unittest.TestCase):
+    def test_D2_antigravity_draft_row_names_expected_files(self):
+        # New installs refuse a non-trivial draft without --expected-files (PLAN_SCOPE_REQUIRED); the
+        # canonical Antigravity draft row did not mention the flag, so the first draft failed.
+        for path in (REPO_ROOT / "GEMINI.md", REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template"):
+            row = next(line for line in path.read_text(encoding="utf-8").splitlines()
+                       if "workflow.py draft --repo . --task-id <id>" in line)
+            with self.subTest(path=path.name):
+                self.assertIn("--expected-files <paths>", row)
+
+
 class TestReviewProtocolV2FailClosed(unittest.TestCase):
     """P0 Section 4: Close remaining Review V2 fail-open boundaries."""
 
