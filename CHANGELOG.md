@@ -4,6 +4,34 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [Unreleased]
+
+Hardening before the next certification run. Antigravity behaviour changes only where listed under "Every host".
+
+### Security
+- Backslash-newline is a line continuation only on the Claude hook (Bash). v1.1.1 joined it on every host, so on Antigravity/PowerShell a line ending in a Windows path could carry the next line past the guard as part of a read-only command; every newline is again a command boundary there.
+
+### Every host (Antigravity included)
+- A crash in the exported-component check fails preflight (`EXPORTED_COMPONENT_CHECK_ERROR`) instead of passing it.
+- A BUG task that needs executable RED cannot change production `.kt`/`.java` code until `red-evidence.json` exists (`RED_EVIDENCE_REQUIRED`); tests, fixtures and resources stay writable, and a declared no-test strategy with a recorded alternate reproduction is unaffected.
+- `approve --plan-hash <hash>` binds approval to the plan hash shown in `PLAN_SUMMARY` and refuses a different plan (`PLAN_HASH_MISMATCH`); approve prints `APPROVED_PLAN_HASH`, and the router's approve command carries the hash. Approving without the flag works as before.
+- The router's Zoho lifecycle commands (`zoho_sync.py start`, `prepare-report`, `delivery`, `status`) are allowed for the linked task, in the state the router issues them and only with the approved `zoho_sprints` external-write scope; they were denied, which dead-ended every Zoho-linked task.
+- The Antigravity draft row names `--expected-files`, which new installs require.
+- Doctor checks every script in the release checksum inventory instead of a hand-kept list.
+- `revise` (since v1.1.1) keeps every omitted field, including phases and task kind: to drop phases or change the kind, pass them explicitly.
+
+### Claude Code
+- The rules agree on review ingestion (`record_review.py --from-subagent <role>=<transcript-path or agent id>`), and the draft row requires `--expected-files`.
+- `--from-subagent <role>=<agentId>` and `phase-review complete --execution-id <agentId>` find the subagent transcript in Claude's projects directory.
+- V1 runs count a recorded reply as dispatched, so the router no longer asks to launch recorded reviewers again, and its messages name the record command.
+- Trailing API-error lines in a transcript are not taken as the reviewer's reply.
+- The Claude hook accepts `cd <repository root> &&`, `2>&1` and pipes into `head`, `tail`, `grep` or `rg`; anything else is checked as before.
+
+### Documentation and CI
+- The compatibility matrix states which runtimes run the complete suite and which run `selftest --quick`; the performance job is named "Scalability invariants (timings informational)".
+- The install prompt lists each selected host's files.
+- `docs/benchmark/benchmark-status.md` is the single benchmark status file; earlier round and certification reports remain in the Git history.
+
 ## [1.1.1] - 2026-09-25
 
 Fixes from round 5, in which Claude Code drove the harness on Pocket Casts, a large multi-module app using version-catalog plugin aliases. Results: [docs/benchmark/results-2026-09-25-round5.md](https://github.com/rabee-elkholy/android-agent-harness/blob/v1.1.1/docs/benchmark/results-2026-09-25-round5.md).
