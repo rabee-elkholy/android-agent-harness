@@ -35,7 +35,7 @@
     "agents/scripts/_antigravity_stability_selftest.py": "071ac023def1ef89ec44551d1fc8eeff20e0fcd33cfeac14ae224decd07811cd",
     "agents/scripts/_architecture_selftest.py": "e5d7008c74a32f1175628bd686b98126dcc8626f761d54fd9fd554fb263f7938",
     "agents/scripts/_baseline_selftest.py": "a5a9df883b5bbfe9c44540ac3e959e228932cf7f2f02c9c7bed39befb99e8f3a",
-    "agents/scripts/_critical_safety_selftest.py": "701e7f3e7322d41d1867065ad6f375e45e30f0a766e0256cb1d1fe898876ff31",
+    "agents/scripts/_critical_safety_selftest.py": "ea42b729178b135fe548ea0228f57dfd9698bab4fef366c9c966232d3ce09c1d",
     "agents/scripts/_daily_workflow_selftest.py": "18dd8b2e556fd859a6c47e721183dd44721c13eee43095c71098f77bac298cfd",
     "agents/scripts/_enforcement.py": "70a882d2a04228708f869726ddb3b9a11557d83aca72541e1de17011d020ef71",
     "agents/scripts/_env_codes.py": "fd47d241fa3f6a9d8c25889c75ea7238275103e42121e317f7f361320093a1d5",

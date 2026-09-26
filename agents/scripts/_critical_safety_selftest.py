@@ -304,7 +304,7 @@ class CriticalSafetyTests(unittest.TestCase):
             self.assertEqual(["app/zoho_config.json"], found)
             isolation = next(r for r in doctor.results if r.name == "Credential Isolation")
             self.assertEqual("FAIL", isolation.status)
-            self.assertIn("app/zoho_config.json", isolation.message)
+            self.assertIn(str(repo / "app" / "zoho_config.json"), isolation.message)
             self.assertNotIn(".git", isolation.message)
 
     def test_E1_doctor_checks_every_script_of_the_release_inventory(self):
