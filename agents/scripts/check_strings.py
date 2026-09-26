@@ -172,6 +172,24 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
     return res, duplicates
 
 
+def _resource_names(xml_text: str) -> set[str]:
+    """Every string/plurals/string-array name in the XML, exempt or not."""
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return set()
+    return {elem.get("name") for tag in ("string", "plurals", "string-array") for elem in root.findall(tag) if elem.get("name")}
+
+
+def _head_resource_names(repo: Path, rel: str) -> set[str] | None:
+    """Resource names in the committed version of a file; None when it has none (new or not in Git)."""
+    proc = subprocess.run(
+        ["git", "show", f"HEAD:{rel}"], cwd=str(repo), capture_output=True,
+        text=True, encoding="utf-8", errors="replace", check=False,
+    )
+    return _resource_names(proc.stdout) if proc.returncode == 0 else None
+
+
 def discover_locale_pairs(res_dirs: list[Path] | None = None, repo: Path | None = None) -> list[tuple[Path, Path, str]]:
     """Find all (base_values_xml, localized_values_xml, locale_tag) pairs for strings, plurals, and arrays."""
     r = repo or REPO
@@ -561,8 +579,18 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
             else:
                 keys_to_check = touched_keys
 
+            # A base key exempt from translation (translatable="false", MissingTranslation, l10n-todo)
+            # is not "missing in base" because a locale still translates it (N5).
+            base_exempt = _resource_names(base_file.read_text(encoding="utf-8", errors="replace")) - base_keys if base_file.is_file() else set()
             missing_in_loc = [k for k in keys_to_check if k in base_keys and k not in loc_keys]
-            missing_in_base = [k for k in keys_to_check if k in loc_keys and k not in base_keys]
+            missing_in_base = [k for k in keys_to_check if k in loc_keys and k not in base_keys and k not in base_exempt]
+            if not args.all and missing_in_loc:
+                # Editing a key never creates a gap in a locale that already lacked it at HEAD;
+                # that is pre-existing debt, not this change's (N6). New keys stay strict.
+                head_base = _head_resource_names(r, base_rel)
+                head_loc = _head_resource_names(r, loc_rel)
+                if head_base is not None and head_loc is not None:
+                    missing_in_loc = [k for k in missing_in_loc if not (k in head_base and k not in head_loc)]
 
             if missing_in_loc:
                 not_found_note = " (file does not exist)" if not loc_file.is_file() else ""

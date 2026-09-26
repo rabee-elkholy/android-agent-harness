@@ -824,13 +824,9 @@ def main(argv: list[str] | None = None) -> int:
                 # Claude Code: ingest the reviewer's last reply unchanged; no quoting, no copy.
                 extracted_text, identity = read_claude_subagent_transcript(given)
                 rep = response_text_to_report(repo, args.task, reviewer, extracted_text)
-                severity = str(policy.get("severity") or "").upper()
-                sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
-                if severity in ("HIGH", "CRITICAL") or sensitive:
-                    raise ValidationError(
-                        f"independent execution verification failed for {reviewer}: a Claude transcript is not trusted "
-                        "execution proof for HIGH/CRITICAL or sensitive changes"
-                    )
+                # Recorded unverified even for HIGH/CRITICAL or sensitive changes: the router then
+                # stops at REVIEW_OVERRIDE_REQUIRED or SENSITIVE_REVIEW_PROOF_UNAVAILABLE, and the
+                # final verifier refuses unverified proof. Refusing here left no exit (N8).
                 rep.update(identity)
                 rep["provenance"] = "claude_subagent_transcript"
                 rep["independent_execution_verified"] = False

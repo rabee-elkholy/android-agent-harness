@@ -1555,6 +1555,50 @@ class PhaseBaselineDebtToleranceTests(unittest.TestCase):
         )
         (report_dir / f"TEST-{classname}.xml").write_text(report_xml, encoding="utf-8")
 
+    def _write_passing_report(self, module_dir: str) -> None:
+        report_dir = self.tmp / module_dir / "build" / "test-results" / "testDebugUnitTest"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "TEST-com.example.LogicTest.xml").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<testsuite name="com.example.LogicTest" tests="1" skipped="0" failures="0" errors="0" time="0.01">\n'
+            '  <testcase name="works" classname="com.example.LogicTest" time="0.01"/>\n'
+            '</testsuite>\n',
+            encoding="utf-8",
+        )
+
+    def test_N3_resource_only_module_without_test_sources_is_not_a_zero_test_failure(self) -> None:
+        # Certification N3 (T8): a phase adding a string to the app's resource-only string module
+        # failed its checkpoint because that module ran zero tests; it has no test sources at all.
+        from workflow import check_phase_tests
+        _, _, p1_dir = self._setup_phased_task("phase-n3")
+        strings = self.tmp / "localization" / "src" / "main" / "res" / "values" / "strings.xml"
+        strings.parent.mkdir(parents=True, exist_ok=True)
+        strings.write_text("<resources><string name=\"streak\">Streak</string></resources>\n", encoding="utf-8")
+        (self.tmp / "localization" / "build.gradle.kts").write_text("plugins { id(\"com.android.library\") }\n", encoding="utf-8")
+        self._write_passing_report("app")
+        changes = [
+            {"path": "app/src/main/kotlin/com/example/Logic.kt", "status": "M"},
+            {"path": "localization/src/main/res/values/strings.xml", "status": "M"},
+        ]
+        from unittest import mock
+        with mock.patch("run_gradle_task.run_gradle", return_value=0):
+            ok, detail = check_phase_tests(self.tmp, p1_dir, [":app", ":localization"], needs_tests=True, phase_changes=changes)
+        self.assertTrue(ok, detail)
+        evidence = read_json(p1_dir / "unit_tests.json")
+        self.assertEqual("SKIPPED_NO_TEST_SOURCES", evidence["modules"][":localization"]["status"])
+        # A code change in a module without tests still needs test evidence.
+        logic = self.tmp / "localization" / "src" / "main" / "kotlin" / "Streak.kt"
+        logic.parent.mkdir(parents=True, exist_ok=True)
+        logic.write_text("class Streak\n", encoding="utf-8")
+        (p1_dir / "unit_tests.json").unlink()
+        with mock.patch("run_gradle_task.run_gradle", return_value=0):
+            ok, detail = check_phase_tests(
+                self.tmp, p1_dir, [":app", ":localization"], needs_tests=True,
+                phase_changes=[*changes, {"path": "localization/src/main/kotlin/Streak.kt", "status": "A"}],
+            )
+        self.assertFalse(ok)
+        self.assertIn("zero tests were executed", detail)
+
     def test_PHASE_BASELINE_001_preexisting_baseline_failure_tolerated(self) -> None:
         from workflow import check_phase_tests
         from baseline_capture import fingerprint, test_key

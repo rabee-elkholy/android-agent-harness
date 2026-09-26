@@ -503,8 +503,9 @@ def _without_single_quoted_text(command: str) -> str | None:
     """The command with single-quoted text removed, as a POSIX shell reads it.
 
     Inside single quotes nothing is special, so a reviewer reply there cannot pipe, redirect or
-    substitute. Double-quoted text is kept because `$` and backticks still expand in it, and a
-    backslash outside single quotes keeps the next character. None for an unterminated quote.
+    substitute. Inside double quotes only `$` and backticks still expand, so only they are kept;
+    `|`, `>`, `<`, `&` and `^` there are text (N10). A backslash outside quotes keeps the next
+    character. None for an unterminated quote.
     """
     out, quote, i = [], "", 0
     while i < len(command):
@@ -513,6 +514,12 @@ def _without_single_quoted_text(command: str) -> str | None:
             if ch == "'":
                 quote = ""
             i += 1
+            continue
+        if quote == '"' and ch not in '"$`\\':
+            i += 1
+            continue
+        if quote == '"' and ch == "\\":
+            i += 2  # an escaped character inside double quotes is literal
             continue
         if ch == "\\":
             out.append(command[i:i + 2])

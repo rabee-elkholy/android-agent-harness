@@ -4,6 +4,25 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [Unreleased]
+
+Fixes for the v1.1.2 mid-tier certification findings (docs/benchmark/certification-report-v1.1.2.md).
+
+### Security
+- N7: `tools:ignore="ExportedReceiver"` (and the service/provider ids) no longer waives `EXPORTED_COMPONENT_WITHOUT_PERMISSION`; the agent could add it on its own. Public exposure is accepted only by the developer in their own terminal (`exported_component_guard.py --accept <android:name> --source developer_terminal --proof-reference "<reason>"`), which the hook denies to agents.
+
+### Every host (Antigravity included)
+- N1: a phase checkpoint must be for the active phase. A later phase whose files an earlier checkpoint already covered (phases added by a revision after the work was done) completes with an empty checkpoint instead of dead-ending; a later phase with unfinished files is still refused.
+- N2: a draft with `--phases` and no `--expected-files` takes the phases' files as the plan scope, not the task context's single target file.
+- N3: at a phase checkpoint, a module with no unit-test sources whose phase changes are all resources is skipped instead of failing for zero executed tests; a code change there still needs tests.
+- N4: revising a plan keeps earlier phases that were reviewed and finalized; their review proof is checked against the plan they were reviewed under.
+- N5: a base string marked `tools:ignore="MissingTranslation"` or `l10n-todo="true"` no longer turns its existing translations into "missing in base" errors.
+- N6: editing an existing string does not fail parity for locales that already lacked the key; newly added keys are still checked in every locale.
+
+### Claude Code
+- N8: `record_review.py --from-subagent` records a Claude transcript for a HIGH/CRITICAL or sensitive change as unverified instead of refusing it, so the router reaches `REVIEW_OVERRIDE_REQUIRED` or `SENSITIVE_REVIEW_PROOF_UNAVAILABLE`; the final verifier still refuses unverified proof without the developer override.
+- N10: inside double quotes only `$` and backticks are shell operators; `|`, `>`, `<`, `&` and `^` there are text.
+
 ## [1.1.2] - 2026-09-26
 
 Hardening before the next certification run. Antigravity behaviour changes only where listed under "Every host".

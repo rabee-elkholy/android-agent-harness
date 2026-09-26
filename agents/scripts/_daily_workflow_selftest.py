@@ -5204,6 +5204,26 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertIn("record_review.py --task <id> --from-subagent <role>=<transcript-path>", rules)
         self.assertIn("--response-file <transcript-path>", rules)
 
+    def test_N8_high_claude_transcript_is_recorded_unverified_so_the_router_can_stop(self) -> None:
+        # Certification N8 (T6): for a HIGH change, --from-subagent refused a Claude transcript, so no
+        # review was ever recorded and the router kept returning DISPATCH_REVIEWERS with the same failing
+        # command. Recorded as unverified, the router reaches REVIEW_OVERRIDE_REQUIRED (developer terminal)
+        # or SENSITIVE_REVIEW_PROOF_UNAVAILABLE, and the final verifier still refuses unverified proof.
+        task_id = "claude-high"
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
+        policy = read_json(Path(current["policy"]))
+        policy["severity"] = "HIGH"
+        atomic_write_json(Path(current["policy"]), policy)
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-h1.jsonl", "```json\n" + json.dumps(block) + "\n```")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+        report = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")["evidence"]["reports"][0]
+        self.assertFalse(report["independent_execution_verified"])
+
     def test_C_D3_background_task_output_is_accepted_and_fabrication_still_rejected(self) -> None:
         task_id = "claude-task-output"
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)

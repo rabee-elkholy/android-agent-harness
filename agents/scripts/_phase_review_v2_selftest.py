@@ -1104,6 +1104,97 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual("CHECKPOINT_PHASE", next_action["code"])
         self.assertIn('--phase-id "p2"', next_action["command"])
 
+    def test_N4_revision_keeps_reviewed_phase_complete(self) -> None:
+        # Certification N4: revising the plan during p2 dropped a reviewed, finalized p1 because
+        # its review proof was checked against the revised plan, and the router went back to p1.
+        task_id, reviewers, meta = self._completed_dispatch_for_finalization()
+        self.assertEqual("PASS", finalize_phase_review(self.repo, task_id, "p1")["verdict"])
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
+        revised = subprocess.run(
+            [*public_cli, "task", "revise", "--repo", str(self.repo), "--task-id", task_id,
+             "--expected-files", "app/src/main/java/com/example/Auth.kt,app/src/main/java/com/example/UI.kt,"
+             "app/src/main/res/values/strings.xml"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, revised.returncode, revised.stderr)
+        phase_state = read_json(task_dir(self.repo, task_id) / "phase-state.json")
+        self.assertEqual(["p1"], phase_state["completed_phases"])
+        self.assertEqual("p2", phase_state["current_phase_id"])
+        self.assertEqual(1, read_json(task_dir(self.repo, task_id) / "plan.json")["active_phase_index"])
+
+    def test_N2_phase_files_become_the_plan_scope(self) -> None:
+        # Certification N2 (T8): a draft with --phases and no --expected-files took the task
+        # context's single target file as the whole plan scope, so the write guard denied the
+        # other phase files until two extra revisions were approved.
+        phases = [
+            {"id": "p1", "name": "Data", "expected_files": ["app/src/main/java/com/example/Stats.kt", "app/src/main/java/com/example/Settings.kt"]},
+            {"id": "p2", "name": "UI", "expected_files": ["app/src/main/java/com/example/Profile.kt"]},
+        ]
+        context = {"context_id": "ctx-1", "target_file": "app/src/main/java/com/example/Stats.kt"}
+        with mock.patch.object(workflow, "_resolve_task_context_for_draft", return_value=context):
+            task_id = draft(argparse.Namespace(
+                repo=str(self.repo), task_id="phase-scope", prompt="Streak", outcome="Streak",
+                kind="FEATURE", phases=phases, task_context_id="ctx-1",
+            ))["task_id"]
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual(
+            sorted(f for phase in phases for f in phase["expected_files"]),
+            sorted(plan["expected_files"]),
+        )
+
+    def test_N1_checkpoint_rejects_a_phase_that_is_not_active(self) -> None:
+        # Certification N1: a checkpoint for p2 was accepted while p1 was active, which later
+        # left p2 with a stale review and no way forward.
+        task_id = self._create_phased_task([
+            {"id": "p1", "name": "Docs", "expected_files": []},
+            {"id": "p2", "name": "More docs", "expected_files": []},
+        ])
+        write_file(self.repo / "docs/usage.md", "# Usage\n")
+        with self.assertRaisesRegex(ValidationError, "active phase is 'p1'"):
+            checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+        self.assertFalse((task_dir(self.repo, task_id) / "phases" / "p2" / "checkpoint.json").exists())
+
+    def test_N1_empty_later_phase_with_unfinished_files_is_refused(self) -> None:
+        task_id = draft(argparse.Namespace(
+            repo=str(self.repo), task_id="phase-covered", prompt="Phased docs", outcome="Write docs",
+            kind="FEATURE", expected_files="docs/usage.md,docs/next.md",
+            phases=[{"id": "p1", "name": "Docs"}, {"id": "p2", "name": "More docs"}],
+        ))["task_id"]
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation",
+            proof_reference="approve", enforcement_tier="RULE_ENFORCED",
+        ))
+        write_file(self.repo / "docs/usage.md", "# Usage\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        # p2 has not been done yet (docs/next.md is not in p1's checkpoint): still refused.
+        with self.assertRaisesRegex(ValidationError, "no file changes detected"):
+            checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+
+    def test_N1_later_phase_already_covered_by_earlier_checkpoint_can_complete(self) -> None:
+        # Certification N1 (T3): phases imposed by a revision after the work was done put every
+        # file in p1's checkpoint; p2 then had no delta and could never be checkpointed.
+        task_id = draft(argparse.Namespace(
+            repo=str(self.repo), task_id="phase-covered", prompt="Phased docs", outcome="Write docs",
+            kind="FEATURE", expected_files="docs/usage.md,docs/next.md",
+            phases=[{"id": "p1", "name": "Docs"}, {"id": "p2", "name": "More docs"}],
+        ))["task_id"]
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation",
+            proof_reference="approve", enforcement_tier="RULE_ENFORCED",
+        ))
+        write_file(self.repo / "docs/usage.md", "# Usage\n")
+        write_file(self.repo / "docs/next.md", "# Next\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        result = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+        self.assertEqual("CHECKPOINT_PASS", result["status"])
+        self.assertEqual("NOT_REQUIRED", result["review"]["status"])
+        self.assertEqual([], result["checkpoint"]["manifest_delta"])
+        self.assertEqual(["p1", "p2"], read_json(task_dir(self.repo, task_id) / "phase-state.json")["completed_phases"])
+        # An empty first phase is still refused (test_AUDIT_001b).
+
     def test_AUDIT_011_docs_only_phase_checkpoints_without_gradle(self) -> None:
         task_id = self._create_phased_task([
             {"id": "p1", "name": "Documentation", "expected_files": ["docs/usage.md"]},

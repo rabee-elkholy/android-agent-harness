@@ -87,6 +87,8 @@ Limits on these hosts, because the final verifier requires proven independent re
 | HIGH or CRITICAL severity, no sensitive surface | After the reviews pass, the router returns `REVIEW_OVERRIDE_REQUIRED`: the developer runs `record_review.py --override-reviews --source developer_terminal --proof-reference "<reason>"` in their own terminal. The agent cannot run it; the hook denies it |
 | AUTH, BILLING, SECURITY, SENSITIVE_DATA or CRYPTO surface | Not deliverable. The router returns `SENSITIVE_REVIEW_PROOF_UNAVAILABLE`: run the review on Antigravity, or cancel and split the sensitive part into its own task |
 
+On every host, a component the task newly exports without a permission fails preflight with `EXPORTED_COMPONENT_WITHOUT_PERMISSION`. If public access is intended, the developer accepts it in their own terminal with `exported_component_guard.py --accept <android:name> --source developer_terminal --proof-reference "<reason>"`; the hook denies that command to the agent, and `tools:ignore` on the element does not waive the check.
+
 ## Changing setup answers
 
 Edit or regenerate `.harness-setup/answers.json`, then run a compatible update.

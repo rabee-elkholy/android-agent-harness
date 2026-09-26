@@ -723,6 +723,9 @@ def _build_and_save_plan(
         cached_ctx = _resolve_task_context_for_draft(repo, task_context_id)
 
     raw_expected_files = getattr(args, "expected_files", None)
+    if not raw_expected_files and parsed_phases:
+        # The phases name the files; the task context's single target file is not the scope (N2).
+        raw_expected_files = [f for phase in parsed_phases for f in (phase.get("expected_files") or [])]
     if not raw_expected_files and cached_ctx and cached_ctx.get("target_file"):
         raw_expected_files = cached_ctx["target_file"]
 
@@ -1037,10 +1040,8 @@ def _build_and_save_plan(
         elif task_context_id:
             plan["task_context_id"] = task_context_id
         plan["developer_instructions"] = _applicable_developer_instructions_for_task(repo, cached_ctx, inferred_target_scope, arch_intent)
-        save_plan(directory / "plan.json", plan)
-        atomic_write_json(directory / "preliminary-classification.json", classification)
-        atomic_write_json(directory / "preliminary-policy.json", preliminary_policy)
-        atomic_write_json(state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(directory / "plan.json"), "updated_at": utc_now()})
+        # Completed phases are checked against the plan they were reviewed under, before the
+        # revision replaces it; checked afterwards, every review proof reads as stale (N4).
         if parsed_phases:
             phase_state_file = directory / "phase-state.json"
             old_state = read_json(phase_state_file) if phase_state_file.is_file() else {}
@@ -1069,6 +1070,12 @@ def _build_and_save_plan(
                     break
                 preserved.append(phase_id)
 
+        save_plan(directory / "plan.json", plan)
+        atomic_write_json(directory / "preliminary-classification.json", classification)
+        atomic_write_json(directory / "preliminary-policy.json", preliminary_policy)
+        atomic_write_json(state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(directory / "plan.json"), "updated_at": utc_now()})
+        if parsed_phases:
+            phase_state_file = directory / "phase-state.json"
             next_index = min(len(preserved), len(parsed_phases) - 1)
             next_id = parsed_phases[next_index]["id"]
             # A pre-existing phase baseline is required to distinguish prior
@@ -2488,6 +2495,24 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
     total_failed = 0
 
     for m in modules:
+        # A module with no unit-test sources whose phase changes are all resources cannot produce
+        # test evidence; demanding it dead-ends any phase touching a resource-only module (N3).
+        # A code change in such a module still runs and needs tests.
+        module_dir = m.strip(":").replace(":", "/")
+        module_src = repo / module_dir / "src"
+        module_paths = [
+            str(c.get("path") if isinstance(c, dict) else c or "").replace("\\", "/")
+            for c in (phase_changes or [])
+        ]
+        module_paths = [p for p in module_paths if p.startswith(module_dir + "/src/")]
+        if (
+            module_dir
+            and module_paths
+            and all("/res/" in p for p in module_paths)
+            and not any(d.is_dir() and d.name.lower().startswith("test") for d in (module_src.iterdir() if module_src.is_dir() else []))
+        ):
+            aggregated_evidence["modules"][m] = {"status": "SKIPPED_NO_TEST_SOURCES", "executed": 0}
+            continue
         try:
             task = resolve_module_gradle_task(repo, m, task_type="test", phase_changes=phase_changes)
         except ValidationError as exc:
@@ -2547,6 +2572,13 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     target_phase = next((p for p in phases if p.get("id") == phase_id), None)
     if not target_phase:
         raise ValidationError(f"phase '{phase_id}' not found in plan phases")
+    active_phase_id = phase_state.get("current_phase_id")
+    if active_phase_id and phase_id != active_phase_id:
+        raise ValidationError(
+            f"phase checkpoint is for '{phase_id}' but the active phase is '{active_phase_id}'; "
+            "checkpoint the active phase first"
+        )
+    phase_index = next(i for i, p in enumerate(phases) if p.get("id") == phase_id)
 
     from phase_review import (
         get_phase_substate,
@@ -2568,7 +2600,22 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     base_data = read_json(baseline_file) if baseline_file.is_file() else load_task_baseline(repo, args.task_id)
     manifest = build_task_manifest(repo, base_data, expected_files=target_phase.get("expected_files") or plan.get("expected_files"))
     phase_changes = manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes") or []
-    if not phase_changes:
+    # A later phase can be empty when an earlier phase's checkpoint already covered its files
+    # (phases added by a revision after the work was done). It records an empty checkpoint; the
+    # final verification still gates the whole task delta.
+    empty_later_phase = False
+    if not phase_changes and phase_index > 0:
+        covered: set[str] = set()
+        for done_id in phase_state.get("completed_phases") or []:
+            done_file = directory / "phases" / done_id / "checkpoint.json"
+            if done_file.is_file():
+                covered.update(
+                    str(c.get("path") or "").replace("\\", "/").strip("/")
+                    for c in read_json(done_file).get("manifest_delta") or [] if isinstance(c, dict)
+                )
+        owned = normalize_expected_files(repo, target_phase.get("expected_files") or plan.get("expected_files") or [])
+        empty_later_phase = bool(owned) and set(owned) <= covered
+    if not phase_changes and not empty_later_phase:
         raise ValidationError(f"phase checkpoint failed: no file changes detected for phase '{phase_id}'")
 
     phase_expected_files = target_phase.get("expected_files")

@@ -207,6 +207,32 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual("deny", self.engine("git status 2>&1 | tail -5")["decision"])
         self.assertEqual("deny", self.engine(f"cd {repo} && git status")["decision"])
 
+    def test_N10_claude_double_quoted_operators_are_text(self):
+        # Certification N10 (T3, T5): `|`, `>` and `^` inside double quotes were read as shell operators,
+        # so `grep -E "13[5-9]|140"` and a draft outcome saying "search->discover" were denied. In bash
+        # only `$` and backticks expand inside double quotes; those stay denied.
+        record = f"python {SCRIPTS / 'record_review.py'} --task t --status"
+        allowed = (
+            'git log --oneline | grep -E "fix|refactor"',
+            'git log --oneline | grep -n "^Merge" | head -5',
+            f'{record} "search->discover < 3 & more"',
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.claude_bridge(command)["permissionDecision"], command)
+        denied = (
+            f'{record} "x$(touch owned)"',
+            f'{record} "x`touch owned`"',
+            f'{record} "a|b" > owned',
+            'git log | grep "a" | sh',
+            f'{record} "unterminated',
+        )
+        for command in denied:
+            with self.subTest(command=command):
+                self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"], command)
+        # Antigravity keeps its character check.
+        self.assertEqual("deny", self.engine('git log --oneline | grep -E "fix|refactor"')["decision"])
+
     def test_copilot_bridge_denies_and_malformed_fails_closed(self):
         proc = subprocess.run(
             [sys.executable, str(COPILOT)], input=json.dumps({"toolName": "bash", "toolArgs": {"command": "adb root"}}),

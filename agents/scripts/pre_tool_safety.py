@@ -83,6 +83,7 @@ DANGEROUS = (
     ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
     ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
     ("review_override_provenance", re.compile(r"record_review\.py\b.*--override-reviews\b.*--source\s+developer_terminal\b", re.I)),
+    ("exported_component_acceptance", re.compile(r"exported_component_guard\.py\b.*--accept\b", re.I)),
     ("review_complete_text_bypass", re.compile(r"(?:review_orchestrator(?:\.py)?|harness(?:\.py)?\s+review)\b.*\bcomplete\b.*--text\b", re.I)),
     ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
     ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),

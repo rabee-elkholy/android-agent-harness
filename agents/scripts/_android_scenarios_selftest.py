@@ -1122,6 +1122,39 @@ class AndroidScenariosSelftest(unittest.TestCase):
         code = check_strings.main([], repo=self.repo)
         self.assertEqual(1, code, "Diff-scoped check must catch placeholder mismatch on multiline opening tag.")
 
+    def _commit_locales(self) -> tuple[Path, str]:
+        # "title" is translated in values-ar but was never translated in values-fr (pre-existing debt).
+        base = self.repo / "app/src/main/res/values/strings.xml"
+        xml = '<resources>\n    <string name="title">Nothing queued up</string>\n    <string name="other">Other</string>\n</resources>\n'
+        _write_file(base, xml)
+        _write_file(self.repo / "app/src/main/res/values-ar/strings.xml", xml.replace("Nothing queued up", "لا شيء"))
+        _write_file(self.repo / "app/src/main/res/values-fr/strings.xml", '<resources>\n    <string name="other">Autre</string>\n</resources>\n')
+        _run_git(self.repo, "add", ".")
+        _run_git(self.repo, "commit", "-qm", "baseline locales")
+        return base, xml
+
+    def test_N6_editing_a_key_does_not_fail_on_locales_that_already_lacked_it(self) -> None:
+        # Certification N6 (T10): changing the English text of an existing key failed parity
+        # because three locales never had the key; the edit did not create that gap.
+        import check_strings
+        base, xml = self._commit_locales()
+        _write_file(base, xml.replace("Nothing queued up", "Your queue is empty"))
+        self.assertEqual(0, check_strings.main([], repo=self.repo))
+        # A newly added key is still checked in every locale.
+        _write_file(base, xml.replace("</resources>", '    <string name="added">Added</string>\n</resources>'))
+        self.assertEqual(1, check_strings.main([], repo=self.repo))
+
+    def test_N5_exempt_base_key_does_not_turn_existing_translations_into_errors(self) -> None:
+        # Certification N5 (T10): marking an existing base string tools:ignore="MissingTranslation"
+        # or l10n-todo="true" dropped it from the base, so every locale that had it failed as
+        # "missing in base" (3 issues became 16).
+        import check_strings
+        base, xml = self._commit_locales()
+        marked = xml.replace("<resources>", '<resources xmlns:tools="http://schemas.android.com/tools">')
+        for attribute in ('tools:ignore="MissingTranslation"', 'l10n-todo="true"'):
+            _write_file(base, marked.replace('name="title">Nothing queued up', f'name="title" {attribute}>Your queue is empty'))
+            self.assertEqual(0, check_strings.main([], repo=self.repo), attribute)
+
 
 class ToolchainIdentityTests(unittest.TestCase):
     def test_java_identity_ignores_picked_up_option_lines(self) -> None:
@@ -1180,17 +1213,47 @@ class ExportedComponentGuardTests(unittest.TestCase):
         self.assertIn('<receiver android:name=".New">', detail)
         self.assertNotIn(".Old", detail)
 
-    def test_permission_not_exported_or_recorded_decision_passes(self) -> None:
+    def test_permission_or_not_exported_passes(self) -> None:
         from exported_component_guard import check
         for body in (
             '<receiver android:name=".New" android:exported="true" android:permission="com.example.PRIVATE"/>',
             '<service android:name=".New" android:exported="false"/>',
             '<provider android:name=".New" android:exported="true" android:readPermission="com.example.READ"/>',
-            '<receiver android:name=".New" android:exported="true" tools:ignore="ExportedReceiver"/>',
         ):
             with self.subTest(body=body):
                 self.write('<receiver android:name=".Old" android:exported="true"/>' + body)
-                self.assertTrue(check(self.repo, [self.rel])[0])
+                self.assertTrue(check(self.repo, [self.rel], accepted=set())[0])
+
+    def test_N7_tools_ignore_is_not_a_waiver_only_the_developer_accepts_public_exposure(self) -> None:
+        # Certification N7 (T6): the gate named tools:ignore="ExportedReceiver" as a fix and the agent
+        # added it on its own; a security boundary the agent can clear by editing the diff is no boundary.
+        from exported_component_guard import accepted_names, check, record_acceptance
+        self.write('<receiver android:name=".Old" android:exported="true"/>'
+                   '<receiver android:name=".New" android:exported="true" tools:ignore="ExportedReceiver"/>')
+        ok, detail = check(self.repo, [self.rel], accepted=set())
+        self.assertFalse(ok)
+        self.assertIn('<receiver android:name=".New">', detail)
+        self.assertIn("--source developer_terminal", detail)
+        self.assertNotIn("record that decision on the element", detail)
+        task_directory = self.repo / "task"
+        with self.assertRaises(Exception):
+            record_acceptance(task_directory, [".New"], source="conversation", proof_reference="agent says ok")
+        record_acceptance(task_directory, [".New"], source="developer_terminal", proof_reference="public refresh trigger")
+        self.assertEqual({".New"}, accepted_names(task_directory))
+        self.assertTrue(check(self.repo, [self.rel], accepted=accepted_names(task_directory))[0])
+
+    def test_N7_agent_cannot_run_the_developer_acceptance(self) -> None:
+        payload = {"toolName": "run_command", "toolArgs": {"CommandLine": (
+            'python .agents/scripts/exported_component_guard.py --accept .New '
+            '--source developer_terminal --proof-reference "public"')}}
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "pre_tool_safety.py")], input=json.dumps(payload),
+            capture_output=True, text=True, check=False,
+            env={**os.environ, "HARNESS_REPO": str(self.repo), "HARNESS_HOOK_STATE": str(self.repo / "hook-state")},
+        )
+        verdict = json.loads(proc.stdout)
+        self.assertEqual("deny", verdict["decision"], proc.stdout + proc.stderr)
+        self.assertIn("exported_component_acceptance", verdict["reason"])
 
     def test_existing_component_newly_opened_fails(self) -> None:
         from exported_component_guard import check
