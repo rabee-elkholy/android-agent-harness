@@ -14,7 +14,7 @@ Hardening before the next certification run. Antigravity behaviour changes only 
 ### Every host (Antigravity included)
 - A crash in the exported-component check fails preflight (`EXPORTED_COMPONENT_CHECK_ERROR`) instead of passing it.
 - A BUG task that needs executable RED cannot change production `.kt`/`.java` code until `red-evidence.json` exists (`RED_EVIDENCE_REQUIRED`); tests, fixtures and resources stay writable, and a declared no-test strategy with a recorded alternate reproduction is unaffected.
-- `approve --plan-hash <hash>` binds approval to the plan hash shown in `PLAN_SUMMARY` and refuses a different plan (`PLAN_HASH_MISMATCH`); approve prints `APPROVED_PLAN_HASH`, and the router's approve command carries the hash. Approving without the flag works as before.
+- `approve --plan-hash <hash>` binds approval to the plan hash shown in `PLAN_SUMMARY` and refuses a different plan (`PLAN_HASH_MISMATCH`); approve prints `APPROVED_PLAN_HASH`, the router's approve command carries the hash, and the Antigravity and Claude rules pass the `PLAN_SUMMARY` hash. Approving without the flag works as before.
 - The router's Zoho lifecycle commands (`zoho_sync.py start`, `prepare-report`, `delivery`, `status`) are allowed for the linked task, in the state the router issues them and only with the approved `zoho_sprints` external-write scope; they were denied, which dead-ended every Zoho-linked task.
 - The Antigravity draft row names `--expected-files`, which new installs require.
 - Doctor checks every script in the release checksum inventory instead of a hand-kept list.
@@ -31,7 +31,7 @@ Hardening before the next certification run. Antigravity behaviour changes only 
 ### Documentation and CI
 - The compatibility matrix states which runtimes run the complete suite and which run `selftest --quick`; the performance job is named "Scalability invariants (timings informational)".
 - The install prompt lists each selected host's files.
-- `docs/benchmark/benchmark-status.md` is the single benchmark status file; earlier round and certification reports remain in the Git history.
+- `docs/benchmark/benchmark-status.md` is the single, cumulative benchmark status file; earlier round and certification reports remain in the Git history.
 
 ## [1.1.1] - 2026-09-25
 
