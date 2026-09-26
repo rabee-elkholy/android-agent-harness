@@ -6599,6 +6599,24 @@ class DocumentationConsistencyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = KIT
 
+    def test_C1_C2_claude_rules_agree_on_review_ingestion_and_plan_scope(self) -> None:
+        # Claude read three contradicting instructions for recording reviews (CLAUDE.md: transcript;
+        # harness-rules.md: --response <file>; tool-support.md: --from-subagent "not portable"), and its
+        # draft row omitted --expected-files, which new installs require.
+        claude = (self.root / "agents/tool-adapters/CLAUDE.md.template").read_text(encoding="utf-8")
+        rules = (self.root / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
+        support = (self.root / "docs/tool-support.md").read_text(encoding="utf-8")
+        self.assertIn("--from-subagent <role>=<transcript-path>", claude)
+        record_row = next(line for line in rules.splitlines() if line.startswith("| Record review |"))
+        self.assertIn("Antigravity V2: `review complete --task <id> --reviewer <role> --execution-id <id>`", record_row)
+        self.assertNotIn("--response <role>=<file>", record_row)
+        self.assertNotIn("not a portable ingestion command", support)
+        self.assertIn("On Claude Code", support)
+        self.assertIn("--from-subagent <role>=<transcript-path>", support)
+        draft_row = next(line for line in claude.splitlines() if "**Draft Plan**" in line)
+        self.assertIn("--expected-files", draft_row)
+        self.assertIn("Required: `--task-id`, `--outcome`, `--expected-files <comma-separated paths from discovery>`", draft_row)
+
     def test_readme_contains_antigravity_first_review_v2(self) -> None:
         content = (self.root / "README.md").read_text(encoding="utf-8")
         self.assertIn("Antigravity-First Architecture & Review Protocol V2", content)

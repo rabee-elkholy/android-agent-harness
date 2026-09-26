@@ -105,7 +105,7 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 | Preflight | `python .agents/harness.py preflight` |
 | Unit tests | `python .agents/harness.py test` |
 | Review package | `python .agents/scripts/review_package.py` |
-| Record review | Antigravity V2: `review complete --task <id> --reviewer <role> --execution-id <id>`; others V1: `record_review.py --response <role>=<file>` |
+| Record review | Antigravity V2: `review complete --task <id> --reviewer <role> --execution-id <id>`; V1 hosts: `record_review.py` as their host rules say |
 | Resume | `python .agents/harness.py task resume --task-id <id>` |
 | Assemble | `python .agents/harness.py assemble` |
 | Device | `python .agents/harness.py device install-start` |
