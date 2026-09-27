@@ -799,6 +799,37 @@ class SecurityTests(unittest.TestCase):
         current_p = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
         self.assertFalse(current_p.exists())
 
+    def test_N12_skill_drift_stops_at_prepare_verification_not_at_complete(self):
+        # Certification round 2 (T8): the change added COMPOSE_UI, a companion surface that is not
+        # material drift, so prepare-verification, every gate and review ran and the router said
+        # COMPLETE_TASK; only the final verifier then refused the unplanned compose-inspector skill.
+        from workflow import prepare_verification
+        from _vnext_common import ValidationError, git_text
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init", "-q"], cwd=self.repo, check=True)
+        plan_file = self.repo / "agents/state/tasks/t/plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan.update({
+            "status": "IMPLEMENTING", "surfaces": ["BUSINESS_LOGIC"], "expected_surfaces": ["BUSINESS_LOGIC"],
+            "modules": [":", ":app"], "expected_modules": [":", ":app"],
+            "skills": [{"id": "android-harness", "sha256": "x"}],
+            "repository": {"head": git_text(self.repo, "rev-parse", "HEAD"), "branch": git_text(self.repo, "rev-parse", "--abbrev-ref", "HEAD")},
+        })
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+        screen = self.repo / "app/src/main/Stats.kt"
+        screen.parent.mkdir(parents=True, exist_ok=True)
+        screen.write_text("import androidx.compose.runtime.Composable\n@Composable fun Stats() { Text(\"x\") }\n", encoding="utf-8")
+
+        class DummyArgs:
+            task_id = "t"
+            force = False
+
+        with self.assertRaises(ValidationError) as ctx:
+            prepare_verification(self.repo, DummyArgs())
+        self.assertIn("PLAN_APPROVAL_REQUIRED", str(ctx.exception))
+        self.assertIn("compose-inspector", str(ctx.exception))
+        self.assertIn("COMPOSE_UI", str(ctx.exception))
+        self.assertFalse((self.repo / "agents/state/tasks/t/current-run.json").exists())
+
     def test_REVIEW_FRESH_001(self):
         """REVIEW-FRESH-001: repo changes after package freeze -> package generation/ingestion STALE"""
         from workflow import assert_active_run_fresh

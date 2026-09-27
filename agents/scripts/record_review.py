@@ -676,10 +676,14 @@ def main(argv: list[str] | None = None) -> int:
                 "overridden_reviewers": sorted(required),
                 "timestamp": utc_now(),
             }
-            path = EvidenceStore(state_root(repo)).write(
+            store = EvidenceStore(state_root(repo))
+            # Recorded reviews stay as they are (append-only); an override given after them is its
+            # own artifact, which the router and the final verifier read with them (N11).
+            reviews_recorded = (store.run_dir(manifest["delivery_snapshot_sha256"], str(current["run_id"])) / "reviews.json").is_file()
+            path = store.write(
                 snapshot=manifest["delivery_snapshot_sha256"],
                 run_id=str(current["run_id"]),
-                name="reviews",
+                name="review_override" if reviews_recorded else "reviews",
                 producer="developer_approval",
                 harness_version=harness_version,
                 change_set=manifest["change_set_sha256"],

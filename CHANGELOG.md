@@ -23,6 +23,13 @@ Fixes for the v1.1.2 mid-tier certification findings (docs/benchmark/certificati
 - N8: `record_review.py --from-subagent` records a Claude transcript for a HIGH/CRITICAL or sensitive change as unverified instead of refusing it, so the router reaches `REVIEW_OVERRIDE_REQUIRED` or `SENSITIVE_REVIEW_PROOF_UNAVAILABLE`; the final verifier still refuses unverified proof without the developer override.
 - N10: inside double quotes only `$` and backticks are shell operators; `|`, `>`, `<`, `&` and `^` there are text.
 
+### Targeted re-run findings (docs/benchmark/certification-report-2609344.md)
+- N2 residual: when the plan names its files (`--expected-files` or phase files), modules and surfaces come from those files, not from the task context; a tracked file's existing sign-in or purchase text does not make the plan sensitive (the write guard's rule).
+- N12: an unplanned mandatory skill (for example `compose-inspector` when a change adds Compose UI) now stops `prepare-verification` with `PLAN_APPROVAL_REQUIRED` and a revise command, before any gate or review runs; the final verifier's check is unchanged.
+- N13: a finalized phase stays complete through a revision while its reviewed files are unchanged; an edit to one of them still invalidates it.
+- N14: when a revision invalidates a phase, the later phases' baselines from that pass move to `phases/<id>/baseline-history/`, so `begin-next-phase` derives a fresh one.
+- N11: a developer review override given after the reviews were recorded is written as its own append-only `review_override` artifact; the router and the final verifier read it with the reviews and apply the same rules (never for sensitive surfaces, developer terminal for HIGH/CRITICAL, proof reference, complete non-blocking reviews).
+
 ## [1.1.2] - 2026-09-26
 
 Hardening before the next certification run. Antigravity behaviour changes only where listed under "Every host".

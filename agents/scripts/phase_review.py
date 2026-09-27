@@ -304,7 +304,14 @@ def phase_review_freshness(
     task_id: str,
     phase_id: str,
     run_meta: dict[str, Any] | None = None,
+    reviewed_paths_only: bool = False,
 ) -> tuple[bool, str]:
+    """Whether a phase review still matches the tree.
+
+    reviewed_paths_only: for a phase that is already complete, judge only the files its checkpoint
+    reviewed. Later phases legitimately change other files; an edit to a reviewed file still makes
+    the review stale (N13).
+    """
     tdir = task_dir(repo, task_id)
     if run_meta is None:
         prun_f = phase_run_file(tdir, phase_id)
@@ -334,6 +341,9 @@ def phase_review_freshness(
     try:
         plan = _load_plan(repo, task_id)
         phase_changes = live_phase_changes(repo, task_id, phase_id, plan)
+        if reviewed_paths_only:
+            reviewed = {str(c.get("path") or "") for c in ckpt.get("manifest_delta") or [] if isinstance(c, dict)}
+            phase_changes = [c for c in phase_changes if str(c.get("path") or "") in reviewed]
         current_states = phase_path_states(repo, phase_changes)
     except Exception as exc:
         return False, f"could not derive live phase delta: {exc}"
@@ -383,7 +393,7 @@ def validate_completed_phase_review_proof(
     for reviewer in roster:
         validate_id(reviewer, "reviewer")
     try:
-        fresh, reason = phase_review_freshness(repo, task_id, phase_id, run)
+        fresh, reason = phase_review_freshness(repo, task_id, phase_id, run, reviewed_paths_only=True)
     except Exception as exc:
         raise ValidationError(f"phase review proof freshness cannot be verified: {exc}") from exc
     if not fresh:

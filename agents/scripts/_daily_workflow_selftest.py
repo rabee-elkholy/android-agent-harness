@@ -5224,6 +5224,48 @@ class ReviewOrchestrationTests(unittest.TestCase):
         report = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")["evidence"]["reports"][0]
         self.assertFalse(report["independent_execution_verified"])
 
+    def test_N11_developer_review_override_is_recorded_after_recorded_reviews(self) -> None:
+        # Certification round 2 (T3): REVIEW_OVERRIDE_REQUIRED comes only after the reviews are
+        # recorded, and --override-reviews wrote the same append-only `reviews` artifact, so the
+        # developer's override always failed with "append-only artifact already exists".
+        task_id = "claude-high-override"
+        current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
+        policy = read_json(Path(current["policy"]))
+        policy["severity"] = "HIGH"
+        atomic_write_json(Path(current["policy"]), policy)
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+                 "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
+        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
+        self.addCleanup(shutil.rmtree, claude_home, True)
+        transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-o1.jsonl", "```json\n" + json.dumps(block) + "\n```")
+        store = EvidenceStore(state_root(self.repo))
+        snapshot = current["delivery_snapshot_sha256"]
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+        reviews_before = store.read(snapshot, run_id, "reviews")
+        self.assertEqual("REVIEW_OVERRIDE_REQUIRED", resolve_next_action(self.repo, task_id)["code"])
+        with mock.patch("builtins.print"):
+            self.assertEqual(0, record_review.main([
+                "--repo", str(self.repo), "--task", task_id, "--override-reviews",
+                "--source", "developer_terminal", "--proof-reference", "developer read both reviews",
+            ]))
+        # Append-only: the recorded reviews are untouched; the override is its own artifact.
+        self.assertEqual(reviews_before, store.read(snapshot, run_id, "reviews"))
+        self.assertTrue(store.read(snapshot, run_id, "review_override")["evidence"]["developer_override"])
+        self.assertNotEqual("REVIEW_OVERRIDE_REQUIRED", resolve_next_action(self.repo, task_id)["code"])
+        # The final verifier applies the same override rules to the separate artifact.
+        from final_verifier import review_override_errors
+        override = store.read(snapshot, run_id, "review_override")["evidence"]
+        self.assertEqual([], review_override_errors(policy, override))
+        self.assertTrue(review_override_errors(dict(policy, surfaces=["AUTH"]), override))
+        self.assertTrue(review_override_errors(policy, dict(override, source="conversation")))
+        # A second override is refused: the evidence stays append-only.
+        with mock.patch("builtins.print"), mock.patch("sys.stderr"):
+            self.assertEqual(1, record_review.main([
+                "--repo", str(self.repo), "--task", task_id, "--override-reviews",
+                "--source", "developer_terminal", "--proof-reference", "again",
+            ]))
+
     def test_C_D3_background_task_output_is_accepted_and_fabrication_still_rejected(self) -> None:
         task_id = "claude-task-output"
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)

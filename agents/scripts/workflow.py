@@ -64,6 +64,35 @@ KNOWN_SURFACES = {
 }
 
 
+def _surfaces_from_paths(files: list[str]) -> list[str]:
+    """Surfaces a file path suggests, for files the classifier cannot read (new files)."""
+    inferred_surfaces: set[str] = set()
+    for p in files:
+        p_lower = p.lower()
+        if is_documentation_path(p_lower):
+            inferred_surfaces.add("DOCS")
+        elif p_lower.endswith((".kt", ".java")):
+            if "/test/" in p_lower or p_lower.endswith(("test.kt", "test.java")):
+                inferred_surfaces.add("TEST_ONLY")
+            elif any(w in p_lower for w in ("screen", "activity", "fragment", "composable")):
+                inferred_surfaces.update(["BUSINESS_LOGIC", "COMPOSE_UI"])
+            else:
+                inferred_surfaces.add("BUSINESS_LOGIC")
+        elif "/res/values" in p_lower and p_lower.endswith(".xml"):
+            inferred_surfaces.add("LOCALIZATION" if "strings" in p_lower else "RESOURCE_UI")
+        elif "/res/layout" in p_lower and p_lower.endswith(".xml"):
+            inferred_surfaces.add("XML_UI")
+        elif "/res/navigation" in p_lower and p_lower.endswith(".xml"):
+            inferred_surfaces.add("NAVIGATION")
+        elif "/res/" in p_lower:
+            inferred_surfaces.add("RESOURCE_UI")
+        elif p_lower.endswith((".gradle", ".gradle.kts")):
+            inferred_surfaces.add("BUILD_CONFIG")
+        elif p_lower.endswith("androidmanifest.xml"):
+            inferred_surfaces.add("MANIFEST_PERMISSION")
+    return sorted(inferred_surfaces)
+
+
 def normalize_expected_files(repo: Path, raw_files: str | list[str] | None) -> list[str]:
     if not raw_files:
         return []
@@ -723,6 +752,7 @@ def _build_and_save_plan(
         cached_ctx = _resolve_task_context_for_draft(repo, task_context_id)
 
     raw_expected_files = getattr(args, "expected_files", None)
+    files_named_by_plan = bool(raw_expected_files) or any((phase.get("expected_files") or []) for phase in (parsed_phases or []))
     if not raw_expected_files and parsed_phases:
         # The phases name the files; the task context's single target file is not the scope (N2).
         raw_expected_files = [f for phase in parsed_phases for f in (phase.get("expected_files") or [])]
@@ -739,37 +769,28 @@ def _build_and_save_plan(
             f"Valid surfaces: {', '.join(sorted(KNOWN_SURFACES))}. File paths belong in --expected-files."
         )
     if not expected:
-        if cached_ctx and cached_ctx.get("candidate_surfaces"):
+        if cached_ctx and cached_ctx.get("candidate_surfaces") and not files_named_by_plan:
             expected = list(cached_ctx["candidate_surfaces"])
+        elif norm_expected_files and files_named_by_plan:
+            # The planned files, not the context file, set the surfaces (N2 residual). Each file is read
+            # the way the write guard reads it: a tracked file's existing sign-in or purchase text does
+            # not make the plan sensitive; its diff is judged at verification.
+            from mutation_guard import PRE_EXISTING_CONTENT_SURFACES, _is_tracked
+            planned_surfaces: set[str] = set()
+            unread: list[str] = []
+            for p in norm_expected_files:
+                found = set(classify(repo, task_changes=[{"path": p}], candidate_paths=[p], progress=False).get("surfaces") or [])
+                if _is_tracked(repo, p):
+                    found -= PRE_EXISTING_CONTENT_SURFACES
+                planned_surfaces |= found
+                if not found:
+                    unread.append(p)
+            expected = sorted(planned_surfaces | set(_surfaces_from_paths(unread)))
         elif norm_expected_files:
             file_class = classify(repo, task_changes=[{"path": p} for p in norm_expected_files])
             expected = list(file_class.get("surfaces") or [])
             if not expected:
-                inferred_surfaces: set[str] = set()
-                for p in norm_expected_files:
-                    p_lower = p.lower()
-                    if is_documentation_path(p_lower):
-                        inferred_surfaces.add("DOCS")
-                    elif p_lower.endswith((".kt", ".java")):
-                        if "/test/" in p_lower or p_lower.endswith(("test.kt", "test.java")):
-                            inferred_surfaces.add("TEST_ONLY")
-                        elif any(w in p_lower for w in ("screen", "activity", "fragment", "composable")):
-                            inferred_surfaces.update(["BUSINESS_LOGIC", "COMPOSE_UI"])
-                        else:
-                            inferred_surfaces.add("BUSINESS_LOGIC")
-                    elif "/res/values" in p_lower and p_lower.endswith(".xml"):
-                        inferred_surfaces.add("LOCALIZATION" if "strings" in p_lower else "RESOURCE_UI")
-                    elif "/res/layout" in p_lower and p_lower.endswith(".xml"):
-                        inferred_surfaces.add("XML_UI")
-                    elif "/res/navigation" in p_lower and p_lower.endswith(".xml"):
-                        inferred_surfaces.add("NAVIGATION")
-                    elif "/res/" in p_lower:
-                        inferred_surfaces.add("RESOURCE_UI")
-                    elif p_lower.endswith((".gradle", ".gradle.kts")):
-                        inferred_surfaces.add("BUILD_CONFIG")
-                    elif p_lower.endswith("androidmanifest.xml"):
-                        inferred_surfaces.add("MANIFEST_PERMISSION")
-                expected = sorted(inferred_surfaces)
+                expected = _surfaces_from_paths(norm_expected_files)
         elif not classification.get("changed_files"):
             expected = list(DEFAULT_APP_SURFACES)
         else:
@@ -983,7 +1004,7 @@ def _build_and_save_plan(
         declared_mods = {module_id(item) for item in str(raw_exp_mods).split(",") if item.strip()}
         # Planned files in another module are part of the plan; naming them avoids a later drift approval.
         resolved_expected_modules = sorted(declared_mods | (_modules_of_expected_files() if norm_expected_files else set()))
-    elif cached_ctx and cached_ctx.get("module"):
+    elif cached_ctx and cached_ctx.get("module") and not files_named_by_plan:
         resolved_expected_modules = [module_id(cached_ctx["module"])]
     elif norm_expected_files:
         resolved_expected_modules = sorted(_modules_of_expected_files())
@@ -1084,6 +1105,15 @@ def _build_and_save_plan(
                 preserved = []
                 next_index = 0
                 next_id = parsed_phases[0]["id"]
+            # A later phase's baseline is the snapshot at which the phase before it completed. Once that
+            # phase is no longer complete, the baseline belongs to an invalidated pass: keep it as
+            # history and let begin-next-phase derive a fresh one (N14).
+            for index, later in enumerate(parsed_phases):
+                stale_baseline = directory / "phases" / later["id"] / "baseline.json"
+                if index > len(preserved) and stale_baseline.is_file():
+                    history = stale_baseline.parent / "baseline-history"
+                    history.mkdir(parents=True, exist_ok=True)
+                    stale_baseline.replace(history / f"{utc_now().replace(':', '')}-{canonical_sha256(read_json(stale_baseline))[:12]}.json")
             plan["active_phase_index"] = next_index
             atomic_write_json(phase_state_file, {
                 "current_phase_id": next_id,
@@ -1644,6 +1674,11 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         if (c.get("path") if isinstance(c, dict) else str(c))
     ]
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths)
+    # The final verifier refuses a mandatory skill the approved plan did not name; a companion
+    # surface such as COMPOSE_UI is not material drift but can add one. Stop here, before any gate
+    # or review runs, instead of at complete (N12).
+    from final_verifier import unplanned_mandatory_skills
+    drift = [*drift, *(f"skill:{skill}" for skill in unplanned_mandatory_skills(plan, policy))]
     if drift:
         plan["material_drift"] = drift
         save_plan(_plan_path(repo, args.task_id), plan)
@@ -3947,7 +3982,8 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             severity = str(policy.get("severity") or "").upper()
             sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
             unverified = any(not r.get("independent_execution_verified") for r in review_ev.get("reports") or [])
-            if not review_ev.get("developer_override") and unverified and (sensitive or severity in ("HIGH", "CRITICAL")):
+            overridden = review_ev.get("developer_override") or (store.run_dir(snapshot, run_id) / "review_override.json").is_file()
+            if not overridden and unverified and (sensitive or severity in ("HIGH", "CRITICAL")):
                 if sensitive:
                     return {
                         "code": "SENSITIVE_REVIEW_PROOF_UNAVAILABLE",

@@ -27,6 +27,7 @@ ALLOWED_PRODUCERS = {
     "device_launch": {"run_device"},
     "device_signoff": {"developer_approval", "ask_question", "run_device"},
     "reviews": {"review_orchestrator", "developer_approval", "developer_override"},
+    "review_override": {"developer_approval"},
     "sensitive_approval": {"developer_approval"},
     "red_evidence": {"run_tests_gate", "workflow", "developer_approval"},
     "mobile_validation_skip": {"developer_approval"},
@@ -295,6 +296,38 @@ def device_chain_errors(assemble: dict | None, install: dict | None, launch: dic
     return reasons
 
 
+def review_override_errors(policy: dict, evidence: dict) -> list[str]:
+    """Why a developer review override cannot stand for this change (empty when it can)."""
+    severity = str(policy.get("severity") or "").upper()
+    sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+    source = str(evidence.get("source") or "")
+    if not evidence.get("developer_override"):
+        return ["developer review override record is invalid"]
+    if sensitive:
+        return [f"developer review override is strictly forbidden for sensitive changes ({', '.join(sensitive)})"]
+    if source != "developer_terminal" and severity in ("HIGH", "CRITICAL"):
+        return [f"developer review override via {source or 'non-terminal'} is forbidden for {severity} severity changes; requires developer_terminal"]
+    if not str(evidence.get("proof_reference_sha256") or "").strip():
+        return ["developer review override is missing proof reference"]
+    return []
+
+
+def unplanned_mandatory_skills(plan: dict, policy: dict) -> list[str]:
+    """Skills the verification policy makes mandatory that the approved plan did not name."""
+    planned_skills = {(item.get("id"), item.get("sha256")) for item in plan.get("skills") or []}
+    planned_ids = {item.get("id") for item in plan.get("skills") or []}
+    selected_skills = {(item.get("id"), item.get("sha256")) for item in (policy.get("skills") or {}).get("skills") or []}
+    benign_skills = {"android-harness", "test-driven-development", "kotlin-coroutines-expert"}
+    missing_skills = set()
+    for skill_id, sha in selected_skills:
+        if (skill_id, sha) in planned_skills:
+            continue
+        if skill_id not in planned_ids and skill_id in benign_skills:
+            continue
+        missing_skills.add(skill_id)
+    return sorted(missing_skills)
+
+
 def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Path, state_root: Path, run_id: str) -> dict:
     checks: list[dict] = []
     reasons: list[str] = []
@@ -363,19 +396,8 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     if policy_error:
         return _blocked(block_status, [policy_error], checks)
     agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
-    planned_skills = {(item.get("id"), item.get("sha256")) for item in plan.get("skills") or []}
-    planned_ids = {item.get("id") for item in plan.get("skills") or []}
-    selected_skills = {(item.get("id"), item.get("sha256")) for item in (policy.get("skills") or {}).get("skills") or []}
-    benign_skills = {"android-harness", "test-driven-development", "kotlin-coroutines-expert"}
-    missing_skills = set()
-    for skill_id, sha in selected_skills:
-        if (skill_id, sha) in planned_skills:
-            continue
-        if skill_id not in planned_ids and skill_id in benign_skills:
-            continue
-        missing_skills.add(skill_id)
-    if missing_skills:
-        missing_ids = sorted(missing_skills)
+    missing_ids = unplanned_mandatory_skills(plan, policy)
+    if missing_ids:
         return _blocked("PLAN_APPROVAL_REQUIRED", [f"mandatory skill selection drifted from the approved plan: {', '.join(missing_ids)}"], checks)
     for skill in (policy.get("skills") or {}).get("skills") or []:
         path = agents_root / str(skill.get("path") or "")
@@ -621,26 +643,29 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             reasons.append(error)
         elif review_record:
             evidence = review_record.get("evidence") or {}
-            if evidence.get("developer_override"):
-                severity = str(policy.get("severity") or "").upper()
-                sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
-                source = str(evidence.get("source") or "")
-                if sensitive:
-                    err_msg = f"developer review override is strictly forbidden for sensitive changes ({', '.join(sensitive)})"
-                    reasons.append(err_msg)
+            override_evidence = evidence if evidence.get("developer_override") else None
+            if override_evidence is None and (store.run_dir(snapshot, run_id) / "review_override.json").is_file():
+                # Recorded after the reviews as its own append-only artifact (N11). It accepts
+                # unverified reviewer execution, never missing, truncated or blocking reviews.
+                override_record, override_error = _validate_artifact(store, snapshot, change_set, run_id, "review_override", harness_version)
+                if override_error:
+                    reasons.append(override_error)
                     checks[-1]["status"] = "FAIL"
-                    checks[-1]["detail"] = err_msg
-                elif source != "developer_terminal" and severity in ("HIGH", "CRITICAL"):
-                    err_msg = f"developer review override via {source or 'non-terminal'} is forbidden for {severity} severity changes; requires developer_terminal"
-                    reasons.append(err_msg)
+                    checks[-1]["detail"] = override_error
+                override_evidence = (override_record or {}).get("evidence") or {"developer_override": False}
+                if not reviewers <= set(evidence.get("reviewers") or []):
+                    reasons.append("required reviewer coverage is incomplete")
+                if evidence.get("is_truncated"):
+                    reasons.append("truncated review cannot approve delivery")
+                if evidence.get("blocking_findings"):
+                    reasons.append("review contains unresolved blocking findings")
+            if override_evidence is not None:
+                override_errors = review_override_errors(policy, override_evidence)
+                if override_errors:
+                    reasons.append(override_errors[0])
                     checks[-1]["status"] = "FAIL"
-                    checks[-1]["detail"] = err_msg
-                elif not str(evidence.get("proof_reference_sha256") or "").strip():
-                    err_msg = "developer review override is missing proof reference"
-                    reasons.append(err_msg)
-                    checks[-1]["status"] = "FAIL"
-                    checks[-1]["detail"] = err_msg
-                else:
+                    checks[-1]["detail"] = override_errors[0]
+                elif checks[-1]["status"] == "PASS":
                     checks[-1]["detail"] = "bound developer override PASS"
 
             else:

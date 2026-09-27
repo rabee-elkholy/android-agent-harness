@@ -1123,6 +1123,120 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual("p2", phase_state["current_phase_id"])
         self.assertEqual(1, read_json(task_dir(self.repo, task_id) / "plan.json")["active_phase_index"])
 
+    def _revise_files(self, task_id: str, files: str) -> None:
+        public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
+        revised = subprocess.run(
+            [*public_cli, "task", "revise", "--repo", str(self.repo), "--task-id", task_id, "--expected-files", files],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, revised.returncode, revised.stderr)
+
+    def test_N13_finalized_phase_survives_a_revision_while_the_next_phase_has_edits(self) -> None:
+        # Certification round 2 (T8): p1 was reviewed and finalized, p2 had edits, and a revision reset
+        # progress to p1 because the proof check re-derived p1's delta from the whole tree (p2's files
+        # included) and read "phase delta SHA-256 changed".
+        task_id, _, _ = self._completed_dispatch_for_finalization()
+        self.assertEqual("PASS", finalize_phase_review(self.repo, task_id, "p1")["verdict"])
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/java/com/example/UI.kt", "package com.example\nclass UI\n")
+        self._revise_files(task_id, "app/src/main/java/com/example/Auth.kt,app/src/main/java/com/example/UI.kt,app/src/main/res/values/strings.xml")
+        phase_state = read_json(task_dir(self.repo, task_id) / "phase-state.json")
+        self.assertEqual(["p1"], phase_state["completed_phases"])
+        self.assertEqual("p2", phase_state["current_phase_id"])
+
+    def test_N13_revision_after_a_finalized_phase_file_changed_invalidates_that_phase(self) -> None:
+        # A later edit to a file p1 reviewed makes p1's review stale; the revision must not keep it.
+        task_id, _, _ = self._completed_dispatch_for_finalization()
+        self.assertEqual("PASS", finalize_phase_review(self.repo, task_id, "p1")["verdict"])
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/java/com/example/Auth.kt", "package com.example\nclass Auth { fun changedAfterReview() {} }\n")
+        self._revise_files(task_id, "app/src/main/java/com/example/Auth.kt,app/src/main/java/com/example/UI.kt,app/src/main/res/values/strings.xml")
+        phase_state = read_json(task_dir(self.repo, task_id) / "phase-state.json")
+        self.assertEqual([], phase_state["completed_phases"])
+        self.assertEqual("p1", phase_state["current_phase_id"])
+
+    def test_N14_invalidated_phase_can_advance_again_and_the_stale_next_baseline_is_kept_as_history(self) -> None:
+        # Certification round 2 (T8): after a revision invalidated p1, the p2 baseline from the first
+        # pass stayed, so begin-next-phase failed with "next phase baseline differs from the current
+        # delivery snapshot" once p1 was checkpointed again.
+        task_id = self._create_phased_task([
+            {"id": "p1", "name": "Docs", "expected_files": ["docs/usage.md"]},
+            {"id": "p2", "name": "More docs", "expected_files": ["docs/next.md"]},
+        ])
+        write_file(self.repo / "docs/usage.md", "# Usage\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        stale = read_json(task_dir(self.repo, task_id) / "phases" / "p2" / "baseline.json")
+        write_file(self.repo / "docs/usage.md", "# Usage\nChanged after p1 completed.\n")
+        self._revise_files(task_id, "docs/usage.md,docs/next.md,docs/extra.md")
+        self.assertEqual("p1", read_json(task_dir(self.repo, task_id) / "phase-state.json")["current_phase_id"])
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual("p2", read_json(task_dir(self.repo, task_id) / "phase-state.json")["current_phase_id"])
+        retired = list((task_dir(self.repo, task_id) / "phases" / "p2").glob("baseline-history/*.json"))
+        self.assertEqual([stale], [read_json(p) for p in retired])
+
+    def test_N2_residual_modules_and_surfaces_come_from_the_planned_files(self) -> None:
+        # Certification round 2 (T8): with --phases the files came from the phases, but Modules came
+        # from the task context (one module) and Surfaces from the context file's whole text
+        # (AUTH, BILLING from PlaybackManager), while COMPOSE_UI of the planned UI file was missing.
+        write_file(self.repo / "settings.gradle.kts", "rootProject.name = 'sample'\ninclude(':app')\ninclude(':core')\n")
+        write_file(self.repo / "core/build.gradle.kts", "plugins { id(\"com.android.library\") }\n")
+        write_file(self.repo / "app/build.gradle.kts", "plugins { id(\"com.android.application\") }\n")
+        write_file(self.repo / "core/src/main/java/com/example/Playback.kt",
+                   "package com.example\nclass Playback { fun login(token: String) {}; fun purchase(sku: String) {} }\n")
+        write_file(self.repo / "app/src/main/java/com/example/ProfileStats.kt",
+                   "package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun ProfileStats() {}\n")
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-qm", "two modules")
+        phases = [
+            {"id": "p1", "name": "Data", "expected_files": ["core/src/main/java/com/example/Playback.kt"]},
+            {"id": "p2", "name": "UI", "expected_files": ["app/src/main/java/com/example/ProfileStats.kt"]},
+        ]
+        context = {"context_id": "ctx-1", "target_file": "core/src/main/java/com/example/Playback.kt",
+                   "module": ":core", "candidate_surfaces": ["AUTH", "BILLING", "BUSINESS_LOGIC"]}
+        with mock.patch.object(workflow, "_resolve_task_context_for_draft", return_value=context):
+            task_id = draft(argparse.Namespace(
+                repo=str(self.repo), task_id="phase-scope-mods", prompt="Streak", outcome="Streak",
+                kind="FEATURE", phases=phases, task_context_id="ctx-1",
+            ))["task_id"]
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual([":app", ":core"], sorted(plan["expected_modules"]))
+        self.assertIn("COMPOSE_UI", plan["expected_surfaces"])
+        self.assertFalse({"AUTH", "BILLING"} & set(plan["expected_surfaces"]), plan["expected_surfaces"])
+
+    def test_N12_revised_surface_plans_the_skill_and_verification_proceeds(self) -> None:
+        # Certification round 2 (T8): the remedy for an unplanned mandatory skill is a revision that
+        # names the surface; after approval the plan carries the skill and the drift is gone.
+        task_id = draft(argparse.Namespace(
+            repo=str(self.repo), task_id="skill-drift", prompt="Stats", outcome="Show stats",
+            kind="FEATURE", expected_files="app/src/main/java/com/example/App.kt",
+            expected_surfaces="BUSINESS_LOGIC",
+        ))["task_id"]
+        approve = argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                     proof_reference="ok", enforcement_tier="RULE_ENFORCED")
+        record_approval(approve)
+        write_file(self.repo / "app/src/main/java/com/example/App.kt",
+                   "package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun App() { Text(\"x\") }\n")
+        with self.assertRaisesRegex(ValidationError, "skill:compose-inspector"):
+            workflow.prepare_verification(self.repo, argparse.Namespace(task_id=task_id, force=False, host="claude"))
+        public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
+        revised = subprocess.run(
+            [*public_cli, "task", "revise", "--repo", str(self.repo), "--task-id", task_id,
+             "--expected-surfaces", "BUSINESS_LOGIC,COMPOSE_UI"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, revised.returncode, revised.stderr)
+        record_approval(approve)
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertIn("compose-inspector", {item.get("id") for item in plan.get("skills") or []})
+        try:
+            workflow.prepare_verification(self.repo, argparse.Namespace(task_id=task_id, force=False, host="claude"))
+        except ValidationError as exc:
+            self.assertNotIn("skill:", str(exc))
+
     def test_N2_phase_files_become_the_plan_scope(self) -> None:
         # Certification N2 (T8): a draft with --phases and no --expected-files took the task
         # context's single target file as the whole plan scope, so the write guard denied the
