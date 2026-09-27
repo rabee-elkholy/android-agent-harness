@@ -990,6 +990,38 @@ class AndroidScenariosSelftest(unittest.TestCase):
         passed, msg = check_room_working_tree(repo=self.repo)
         self.assertFalse(passed, "Cross-db migrations must not satisfy AppDatabase bump.")
 
+    def test_O36_device_install_binds_later_round_policy_to_the_run_change_set(self) -> None:
+        # Certification O36: install-start validated the run policy without the run's change set, so a
+        # round-2 policy (bound to that change set) never matched and every round-2 install was refused.
+        import argparse
+        import run_device
+        import final_verifier
+        from unittest import mock
+        from _vnext_common import atomic_write_json
+
+        state = self.repo / ".agents/state"
+        d = state / "tasks/TASK-O36"
+        d.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(state / "active-task.json", {"task_id": "TASK-O36", "plan_path": str(d / "plan.json")})
+        atomic_write_json(d / "plan.json", {"task_id": "TASK-O36", "status": "VERIFYING", "verification_run_id": "run-2"})
+        atomic_write_json(d / "policy.json", {"gates": ["preflight"], "review_round": 2})
+        atomic_write_json(d / "manifest.json", {"task_changes": [], "change_set_sha256": "cs-round-2"})
+        atomic_write_json(d / "current-run.json", {
+            "task_id": "TASK-O36", "run_id": "run-2", "delivery_snapshot_sha256": "snap2",
+            "change_set_sha256": "cs-round-2", "policy": str(d / "policy.json"), "manifest": str(d / "manifest.json"),
+        })
+        seen = {}
+
+        def spy(repo, plan, policy, state_root, policy_path, current_change_set=None, task_changes=None):
+            seen["change_set"] = current_change_set
+            return None, "stop here", "BLOCKED"
+
+        import delivery_manifest
+        with mock.patch.object(run_device, "REPO", self.repo),                 mock.patch.object(delivery_manifest, "build_manifest", lambda repo: {"delivery_snapshot_sha256": "snap2"}),                 mock.patch.object(final_verifier, "validate_policy_artifact", spy):
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+        self.assertEqual(EXIT_ENV, code)
+        self.assertEqual("cs-round-2", seen.get("change_set"))
+
     # --- Scenario R05: Device Prerequisite Safety ---
     def test_scenario_r05_device_prerequisites_safety(self) -> None:
         import argparse

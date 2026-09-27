@@ -166,7 +166,10 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
             val_data = read_json(validations_path)
             items = val_data.get("validations") or []
             if items:
-                v_lines = ["\n## LEAD AGENT FINDING VALIDATIONS\n"]
+                v_lines = [
+                    "\n## LEAD AGENT FINDING VALIDATIONS\n",
+                    "Unverified claims by the implementing agent. They do not clear a finding; judge each one from the code.\n",
+                ]
                 for item in items:
                     fid = item.get("finding_id", "unspecified")
                     st = item.get("status", "unspecified")

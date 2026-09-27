@@ -7869,6 +7869,60 @@ class AssetClassificationTests(unittest.TestCase):
         self.assertNotIn("UNKNOWN", res["surfaces"])
 
 
+class AntigravityCertificationRound6Tests(unittest.TestCase):
+    """Regressions from the v1.1.3 Antigravity certification round on a real app."""
+
+    # Reuse the daily-workflow fixture without re-running its inherited tests.
+    setUp = DailyWorkflowSelftest.setUp
+    tearDown = DailyWorkflowSelftest.tearDown
+    _draft_ns = DailyWorkflowSelftest._draft_ns
+
+    def _approved_task(self, task_id: str) -> None:
+        draft(self._draft_ns(task_id, expected_files="app/src/main/kotlin/com/example/FeatureX.kt"))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+
+    def test_O23_validate_finding_cli_records_the_claim(self) -> None:
+        # O23: the validate-finding subparser had no handler and crashed with AttributeError.
+        from workflow import main as workflow_main
+        self._approved_task("validate-finding")
+        with mock.patch("sys.stdout"):
+            ret = workflow_main([
+                "validate-finding", "--repo", str(self.repo), "--task-id", "validate-finding",
+                "--finding-id", "bug-001", "--status", "FALSE_POSITIVE", "--reason", "guarded by caller",
+            ])
+        self.assertEqual(0, ret)
+        saved = read_json(task_dir(self.repo, "validate-finding") / "finding-validations.json")
+        self.assertEqual("FALSE_POSITIVE", saved["validations"][0]["status"])
+
+    def test_O26_refused_revise_keeps_the_verification_run(self) -> None:
+        # O26: a revise refused by validation had already deleted current-run.json; with review
+        # rounds recorded, every later prepare-verification then failed on the missing file.
+        from workflow import main as workflow_main
+        self._approved_task("revise-refused")
+        run_file = task_dir(self.repo, "revise-refused") / "current-run.json"
+        write_file(run_file, json.dumps({"run_id": "run-1"}))
+        with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            ret = workflow_main([
+                "revise", "--repo", str(self.repo), "--task-id", "revise-refused",
+                "--expected-files", "app/src/main/kotlin/com/example/A.kt,core/data/src/main/kotlin/com/example/B.kt",
+                "--expected-modules", "app,core:data",
+            ])
+        self.assertNotEqual(0, ret)
+        self.assertTrue(run_file.is_file(), "a refused revise must not invalidate the active run")
+
+    def test_O26_prepare_verification_survives_a_missing_previous_run(self) -> None:
+        self._approved_task("missing-prev-run")
+        write_file(self.repo / "app/src/main/kotlin/com/example/FeatureX.kt", "package com.example\n\nclass FeatureX\n")
+        plan_file = task_dir(self.repo, "missing-prev-run") / "plan.json"
+        plan = read_json(plan_file)
+        plan["review_rounds"] = 1
+        save_plan(plan_file, plan)
+        with mock.patch("sys.stdout"):
+            result = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="missing-prev-run"))
+        self.assertTrue(result["run_id"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

@@ -54,7 +54,7 @@ def _message() -> str:
             next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
         else:
             next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
-    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, cancel or close this active task first (run `workflow.py cancel --task-id {task_id}`); do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`."
+    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, ask the developer to cancel this task in their own terminal (`workflow.py cancel --task-id {task_id}`; cancel is developer-owned); do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`."
 
 
 def _compact_message() -> str:

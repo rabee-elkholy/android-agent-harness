@@ -170,8 +170,10 @@ class SecurityTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"])
-        # Antigravity (engine called without a host marker) keeps the strict character check.
-        self.assertEqual("deny", self.engine(quoted)["decision"])
+        # Single-quoted text is literal in PowerShell too, so since O7 Antigravity reads it the same way;
+        # the operators outside the quotes above stay denied there.
+        self.assertEqual("allow", self.engine(quoted)["decision"])
+        self.assertEqual("deny", self.engine(f"{record} 'bug-reviewer-agent=x' | tee owned")["decision"])
 
     def test_C5_claude_bounded_shell_ergonomics(self):
         # Claude habitually writes `cd <repo> && ...`, `2>&1` and `| tail -20`; each denial cost a retry.
@@ -232,6 +234,32 @@ class SecurityTests(unittest.TestCase):
                 self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"], command)
         # Antigravity keeps its character check.
         self.assertEqual("deny", self.engine('git log --oneline | grep -E "fix|refactor"')["decision"])
+
+    def test_O7_antigravity_quoted_operators_are_text_in_every_shell(self):
+        # Certification O7 (Antigravity round): `Select-String -Pattern "a|b"`, a `<receiver` search and a
+        # revise outcome saying "db < 19" were denied as pipes/redirections. Quoted text is literal in
+        # PowerShell and POSIX shells alike; where they disagree about a backslash the stricter reading wins.
+        record = f"python {SCRIPTS / 'record_review.py'} --task t --status"
+        allowed = (
+            'Select-String -Path "README.md" -Pattern "parity|translat"',
+            'Select-String -Path "AndroidManifest.xml" -Pattern "<receiver"',
+            f'{record} "db < 19 unsupported | no downgrade"',
+            "Select-String -Pattern 'a|b' -Path README.md",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assertEqual("allow", self.engine(command)["decision"], command)
+        denied = (
+            'Get-Content "a.txt" | Remove-Item',
+            f'{record} "x$(Remove-Item owned)"',
+            f'{record} "x`touch owned`"',
+            f'{record} "a|b" > owned',
+            'echo \\" | Remove-Item -Recurse x "',
+            'Select-String -Pattern "a\\" | Remove-Item x "',
+        )
+        for command in denied:
+            with self.subTest(command=command):
+                self.assertEqual("deny", self.engine(command)["decision"], command)
 
     def test_copilot_bridge_denies_and_malformed_fails_closed(self):
         proc = subprocess.run(

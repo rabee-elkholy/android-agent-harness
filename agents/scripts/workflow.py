@@ -1368,20 +1368,29 @@ def revise(args: argparse.Namespace) -> dict:
     history_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_json(history_dir / f"{old_plan_sha}.json", old_plan)
 
-    # 3. Invalidate active verification run
+    # 3. Invalidate the active verification run only once the revised plan is saved. A revision
+    #    refused by validation (for example PHASE_PLAN_REQUIRED) keeps the old plan, so it must
+    #    keep the run that plan's review rounds refer to.
     current_run_file = directory / "current-run.json"
+    parked_run_file = directory / "current-run.revising.json"
     if current_run_file.is_file():
-        current_run_file.unlink(missing_ok=True)
-
-    return _build_and_save_plan(
-        repo,
-        _revision_args(repo, args, old_plan),
-        task_id,
-        is_revision=True,
-        old_plan=old_plan,
-        old_baseline=old_baseline,
-        old_plan_sha=old_plan_sha,
-    )
+        os.replace(current_run_file, parked_run_file)
+    try:
+        result = _build_and_save_plan(
+            repo,
+            _revision_args(repo, args, old_plan),
+            task_id,
+            is_revision=True,
+            old_plan=old_plan,
+            old_baseline=old_baseline,
+            old_plan_sha=old_plan_sha,
+        )
+    except BaseException:
+        if parked_run_file.is_file() and not current_run_file.exists():
+            os.replace(parked_run_file, current_run_file)
+        raise
+    parked_run_file.unlink(missing_ok=True)
+    return result
 
 
 def recover_active(args: argparse.Namespace) -> dict:
@@ -1629,8 +1638,14 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         classification = classify(repo, task_id=args.task_id, task_changes=manifest.get("task_changes"))
         sublog(f"Surfaces: {', '.join(classification.get('surfaces') or []) or 'none'}")
     completed_rounds = int(plan.get("review_rounds") or 0)
+    previous_run_file = task_dir(repo, args.task_id) / "current-run.json"
+    if completed_rounds and not previous_run_file.is_file():
+        # The earlier round's run was invalidated (older harness revise, manual cleanup); there is
+        # nothing to carry forward, so route this round like a first round instead of failing on
+        # every retry (certification O26).
+        completed_rounds = 0
     if completed_rounds:
-        previous_current = read_json(task_dir(repo, args.task_id) / "current-run.json")
+        previous_current = read_json(previous_run_file)
         previous_policy = read_json(Path(previous_current["policy"]))
         previous_reviews = EvidenceStore(state_root(repo)).read(
             str(previous_current["delivery_snapshot_sha256"]),
@@ -4603,6 +4618,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--status", choices=("CONFIRMED", "FALSE_POSITIVE", "NEEDS_CONTEXT", "NOT_REPRODUCIBLE"), required=True, help="Validation verdict of the technical claim")
     command.add_argument("--reason", default="", help="Concise technical explanation (mandatory for FALSE_POSITIVE)")
     command.add_argument("--evidence-reference", default="", help="File:line or package reference")
+    command.set_defaults(handler=record_finding_validation)
     pv_cmd = sub.add_parser("prepare-verification", parents=[common])
     pv_cmd.add_argument("--force", action="store_true", help="Force regenerate verification run snapshot")
     pv_cmd.add_argument("--host", default=None, help="Host environment for reviewer execution")

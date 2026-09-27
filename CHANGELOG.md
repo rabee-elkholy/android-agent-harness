@@ -4,6 +4,26 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.4] - 2026-09-27
+
+Fixes for the Antigravity certification round on a real bilingual app (Gemini 3.8 Flash, harness v1.1.3). Three findings dead-ended a task; each now has a regression test that fails on v1.1.3.
+
+### Every host (Antigravity included)
+- O36: a device install after a second review round (a reviewer finding fixed, or a device FAIL) was always refused with "policy artifact does not match deterministic policy evaluation": `run_device.py` validated the round-2 policy without the run's change set. It now passes it, as the final verifier does.
+- O26: a `revise` refused by validation (for example `PHASE_PLAN_REQUIRED`) had already deleted `current-run.json`, so every later `prepare-verification` failed on the missing file. The run is now invalidated only after the revised plan is saved, and a missing earlier run routes the next round like a first round.
+- O21/O17: the Room gate failed any schema change on an app that already ships `fallbackToDestructiveMigration()`, while reviewers flagged removing it as a crash for old installs, so the task could not be delivered. A fallback the app already had is now a warning (the explicit migration is still required); a newly added one still fails. `fallbackToDestructiveMigrationOnDowngrade()` no longer counts as destructive.
+- O23: `workflow.py validate-finding` crashed (`AttributeError: 'Namespace' object has no attribute 'handler'`). Its records reach reviewers labelled as unverified claims by the implementing agent; they never clear a finding.
+- The router reminder no longer tells the agent to run `workflow.py cancel`, which is developer-owned and denied to agents.
+
+### Antigravity
+- O7: quoted `|`, `<`, `>`, `&` and `^` were read as shell operators, so `Select-String -Pattern "a|b"`, a `<receiver` search, and a revise text saying "db < 19" were denied. A command now passes when neither its PowerShell nor its POSIX reading exposes an operator outside quotes; `$` and backticks inside double quotes stay denied.
+- Rules: developer decisions (plan approval, device decision and sign-off, the commit stop, gates that need the developer) are asked with `ask_question` and carry everything needed to decide: the `PLAN_SUMMARY` block verbatim, numbered walkthrough steps with expected results, or the files, a suggested commit message and the options committed / request changes / cancel. After the developer commits, the agent runs `deliver` itself. Reviewer verdicts are reported after `review finalize`. A gate that refuses what the developer asked for goes back to the developer instead of a silent change of approach. Deferred translations use `l10n-todo="true"`. Durable notes and instructions are recorded only when the developer asks for a durable rule. A harness failure is reported, not debugged by reading `.agents/scripts`.
+
+### Known limitations (planned next)
+- The router still returns `DISPATCH_REVIEWERS` without brief paths, so the agent reads every `brief-<role>.md` and copies it into `invoke_subagent` (O20, O35).
+- Resource files anywhere under `/res/` are writable when the plan has a resource surface (O13).
+- Duplicate heartbeat lines in long gate logs (O3); a new Gradle daemon per harness run (O15).
+
 ## [1.1.3] - 2026-09-27
 
 Fixes for the v1.1.2 mid-tier certification findings (docs/benchmark/certification-report-v1.1.2.md).

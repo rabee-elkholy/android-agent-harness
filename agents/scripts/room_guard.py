@@ -21,7 +21,9 @@ MIGRATION_RE = re.compile(r"Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")
 AUTO_MIGRATION_RE = re.compile(r"AutoMigration\s*\(\s*(?:from\s*=\s*)?(\d+)\s*,\s*(?:to\s*=\s*)?(\d+)")
 ENTITY_REF_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)(?:::class|\.class)")
 EMBEDDED_TYPE_RE = re.compile(r"@Embedded(?:\([^)]*\))?\s+(?:val|var)\s+\w+\s*:\s*([A-Z][A-Za-z0-9_]*)")
-DESTRUCTIVE_RE = re.compile(r"fallbackToDestructiveMigration(?:OnDowngrade)?\s*\(")
+# Only the unconditional upgrade fallback loses data when a migration is missing; OnDowngrade and
+# From(<versions>) are scoped choices the app makes deliberately.
+DESTRUCTIVE_RE = re.compile(r"fallbackToDestructiveMigration\s*\(")
 NOT_NULL_NO_DEFAULT_RE = re.compile(
     r"ALTER\s+TABLE\s+([A-Za-z0-9_`\"']+)\s+ADD\s+(?:COLUMN\s+)?([A-Za-z0-9_`\"']+)\s+[^;\"'\n\r]*\bNOT\s+NULL\b(?![^;\"'\n\r]*\bDEFAULT\b)",
     re.I,
@@ -393,6 +395,7 @@ def check_room_working_tree(
         return True, "No Room @Database or mapped @Entity changes in the working tree."
 
     failures: list[str] = []
+    warnings: list[str] = []
     no_baseline = False
     for path, new_decl, old_decl, why in affected:
         old_ver = old_decl.version if old_decl else None
@@ -543,10 +546,19 @@ def check_room_working_tree(
 
 
         if entity_hit and new_decl.destructive:
-            failures.append(
-                f"{new_decl.rel}: fallbackToDestructiveMigration() is forbidden on a schema change "
-                "(zero data loss). Remove it and ship an explicit Migration."
-            )
+            if old_decl is not None and old_decl.destructive:
+                # The app already shipped this fallback. The explicit migration checked above is still
+                # required; removing the fallback changes behaviour for installs that have no migration
+                # path, which is the developer's product decision, not this task's.
+                warnings.append(
+                    f"{new_decl.rel}: pre-existing fallbackToDestructiveMigration() kept; the explicit "
+                    "migration is still required. Removing the fallback is a separate developer decision."
+                )
+            else:
+                failures.append(
+                    f"{new_decl.rel}: fallbackToDestructiveMigration() is forbidden on a schema change "
+                    "(zero data loss). Remove it and ship an explicit Migration."
+                )
 
     if failures:
         return False, " ".join(failures)
@@ -556,7 +568,8 @@ def check_room_working_tree(
         if no_baseline
         else ""
     )
-    return True, f"Room migration gate passed for: {names}.{baseline_note}"
+    warning_note = "".join(f" [WARN] {item}" for item in warnings)
+    return True, f"Room migration gate passed for: {names}.{baseline_note}{warning_note}"
 
 
 def main() -> int:

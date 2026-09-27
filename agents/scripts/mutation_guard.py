@@ -539,6 +539,49 @@ def _without_single_quoted_text(command: str) -> str | None:
     return None if quote else "".join(out)
 
 
+def _without_powershell_quoted_text(command: str) -> str | None:
+    """The command with quoted text removed, as PowerShell reads it (a backslash is never special).
+
+    Inside single quotes everything is text; inside double quotes `$` and backticks still expand,
+    so they are kept. None for an unterminated quote.
+    """
+    out, quote = [], ""
+    for ch in command:
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+            continue
+        if quote == '"':
+            if ch == '"':
+                quote = ""
+                out.append(ch)
+            elif ch in "$`":
+                out.append(ch)
+            continue
+        if ch == "'":
+            quote = "'"
+            out.append(" ")
+            continue
+        if ch == '"':
+            quote = '"'
+        out.append(ch)
+    return None if quote else "".join(out)
+
+
+def _operator_text_any_shell(command: str) -> str | None:
+    """Unquoted text under both PowerShell and POSIX readings, for hosts without a shell marker.
+
+    Antigravity may run PowerShell, cmd or a POSIX shell. Quoted `|`, `<`, `>`, `&` and `^` are text
+    in all of them (O7), but the shells disagree about backslashes before quotes, so the command
+    passes only when neither reading exposes an operator. None when either reading is unterminated.
+    """
+    posix = _without_single_quoted_text(command)
+    powershell = _without_powershell_quoted_text(command)
+    if posix is None or powershell is None:
+        return None
+    return posix + " " + powershell
+
+
 def _quote_mask(command: str) -> str | None:
     """Same-length copy of the command with quoted text blanked, so operators are found only outside quotes."""
     out, quote, i = [], "", 0
@@ -667,7 +710,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         core = _claude_shell_core(repo, normalized)
         if core and core != normalized:
             return command_allowed(repo, core)
-    operator_text = _without_single_quoted_text(normalized) if _posix_shell_host() else normalized
+    operator_text = (
+        _without_single_quoted_text(normalized) if _posix_shell_host() else _operator_text_any_shell(normalized)
+    )
     if operator_text is None:
         return False, "unterminated quote in command"
     if SHELL_LAUNDERING.search(operator_text):

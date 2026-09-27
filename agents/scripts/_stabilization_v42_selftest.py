@@ -1454,6 +1454,46 @@ class PreflightScopeV42Tests(unittest.TestCase):
         self.assertFalse(db_ok)
         self.assertIn("fallbackToDestructiveMigration", db_msg)
 
+    def test_PREFLIGHT42_003b_preexisting_or_downgrade_fallback_does_not_block_explicit_migration(self) -> None:
+        """Certification O17/O21: a fallback the app already shipped, or OnDowngrade, never dead-ends a schema change."""
+        from room_guard import check_room_working_tree
+        db_file = self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example" / "AppDatabase.kt"
+        builder = "Room.databaseBuilder(ctx, AppDatabase::class.java, \"db\")"
+        db_file.write_text(
+            "package com.example\n"
+            "@Database(entities = [User::class], version = 1)\n"
+            "abstract class AppDatabase : RoomDatabase() {\n"
+            f"    fun build(ctx: Context) = {builder}.fallbackToDestructiveMigration().fallbackToDestructiveMigrationOnDowngrade().build()\n"
+            "}\n"
+            "data class User(val id: Int)\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=self.tmp, check=True)
+        subprocess.run(["git", "commit", "-m", "db v1 with fallbacks", "-q"], cwd=self.tmp, check=True)
+
+        migrated = (
+            "package com.example\n"
+            "@Database(entities = [User::class], version = 2)\n"
+            "abstract class AppDatabase : RoomDatabase() {\n"
+            f"    fun build(ctx: Context) = {builder}.addMigrations(MIGRATION_1_2){{fallback}}.build()\n"
+            "    val MIGRATION_1_2 = object : Migration(1, 2) { override fun migrate(db: SupportSQLiteDatabase) { db.execSQL(\"ALTER TABLE User ADD COLUMN note TEXT\") } }\n"
+            "}\n"
+            "data class User(val id: Int, val note: String? = null)\n"
+        )
+        db_file.write_text(migrated.replace("{fallback}", ".fallbackToDestructiveMigration().fallbackToDestructiveMigrationOnDowngrade()"), encoding="utf-8")
+        ok, msg = check_room_working_tree(paths=None, repo=self.tmp)
+        self.assertTrue(ok, msg)
+        self.assertIn("[WARN]", msg)
+        self.assertIn("pre-existing fallbackToDestructiveMigration()", msg)
+
+        db_file.write_text(migrated.replace("{fallback}", ".fallbackToDestructiveMigrationOnDowngrade()"), encoding="utf-8")
+        ok, msg = check_room_working_tree(paths=None, repo=self.tmp)
+        self.assertTrue(ok, msg)
+
+        db_file.write_text(migrated.replace("{fallback}", ""), encoding="utf-8")
+        ok, msg = check_room_working_tree(paths=None, repo=self.tmp)
+        self.assertTrue(ok, msg)
+
     def test_PREFLIGHT42_004_unrelated_dirty_business_logic_does_not_elevate_resource_task(self) -> None:
         """PREFLIGHT42-004: Unrelated dirty BUSINESS_LOGIC + current RESOURCE_UI task -> classification reflects RESOURCE_UI."""
         # Pre-existing unrelated dirty business logic before task begins
