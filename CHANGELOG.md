@@ -4,7 +4,7 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
-## [Unreleased]
+## [1.1.3] - 2026-09-27
 
 Fixes for the v1.1.2 mid-tier certification findings (docs/benchmark/certification-report-v1.1.2.md).
 
