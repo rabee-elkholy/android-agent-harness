@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_f
 from delivery_manifest import build_manifest  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
-from plan_authority import changed_modules, check_material_drift, plan_payload, validate_plan_hash  # noqa: E402
+from plan_authority import changed_file_paths, changed_modules, check_material_drift, plan_payload, validate_plan_hash  # noqa: E402
 from artifact_set import verify_artifact_set  # noqa: E402
 from review_policy import decide, decide_later_round  # noqa: E402
 
@@ -359,10 +359,16 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         return _blocked("PLAN_APPROVAL_REQUIRED", [f"plan status is {plan.get('status')}"], checks)
 
     current = build_manifest(repo)
-    recorded_file_identity = [
-        {"path": item.get("path"), "content_identity": item.get("content_identity")}
-        for item in recorded_manifest.get("files") or []
-    ]
+    recorded_file_identity = []
+    for item in recorded_manifest.get("files") or []:
+        identity = {"path": item.get("path"), "content_identity": item.get("content_identity")}
+        # v1.1.4 manifests did not bind Git file mode. Preserve verification of
+        # those records while requiring the mode whenever the manifest carries it.
+        if "git_mode" in item:
+            identity["git_mode"] = item.get("git_mode")
+        if "worktree_git_mode" in item:
+            identity["worktree_git_mode"] = item.get("worktree_git_mode")
+        recorded_file_identity.append(identity)
     if canonical_sha256(recorded_file_identity) != recorded_manifest.get("delivery_snapshot_sha256"):
         return _blocked("BLOCKED", ["delivery manifest file identity is corrupted"], checks)
     if canonical_sha256(recorded_manifest.get("changes") or []) != recorded_manifest.get("change_set_sha256"):
@@ -387,7 +393,10 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     snapshot = str(current["delivery_snapshot_sha256"])
     change_set = str(current["change_set_sha256"])
     task_changes = recorded_manifest.get("task_changes") if "task_changes" in recorded_manifest else None
-    drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest, task_only=True))
+    drift = check_material_drift(
+        plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest, task_only=True),
+        actual_files=changed_file_paths(recorded_manifest),
+    )
     if drift:
         return _blocked("PLAN_APPROVAL_REQUIRED", ["material plan drift: " + ", ".join(drift)], checks)
     expected_policy, policy_error, block_status = validate_policy_artifact(

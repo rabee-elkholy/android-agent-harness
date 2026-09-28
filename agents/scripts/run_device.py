@@ -532,6 +532,7 @@ def _handle_signoff(args: argparse.Namespace) -> int:
             "application_id": str(install_ev.get("application_id") or APPLICATION_ID),
             "signer": os.environ.get("USERNAME") or os.environ.get("USER") or "developer",
         },
+        allow_pass_retry=True,
     )
     live_print(f"[SUCCESS] Device sign-off recorded: verdict={verdict} for task {task_id} (run {run_id[:12]})")
     return 0

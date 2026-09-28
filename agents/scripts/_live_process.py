@@ -99,26 +99,22 @@ def step_progress(name: str, step: int | None = None, total: int | None = None, 
         worker = threading.Thread(target=_step_heartbeat, name="step-hb", daemon=True)
         worker.start()
 
+    failed = False
     try:
         yield
-        stop_heartbeat.set()
-        elapsed = time.time() - t0
-        with _active_step_lock:
-            has_sublogs = _active_step_has_sublogs.pop() if _active_step_has_sublogs else False
-        if has_sublogs:
-            live_print(f"  [Done] ({elapsed:.1f}s)")
-        else:
-            live_print(f"[Done] ({elapsed:.1f}s)")
-    except Exception:
-        stop_heartbeat.set()
-        elapsed = time.time() - t0
-        with _active_step_lock:
-            has_sublogs = _active_step_has_sublogs.pop() if _active_step_has_sublogs else False
-        if has_sublogs:
-            live_print(f"  [Fail] ({elapsed:.1f}s)")
-        else:
-            live_print(f"[Fail] ({elapsed:.1f}s)")
+    except BaseException:
+        failed = True
         raise
+    finally:
+        stop_heartbeat.set()
+        if worker is not None:
+            worker.join()
+        elapsed = time.time() - t0
+        with _active_step_lock:
+            has_sublogs = _active_step_has_sublogs.pop() if _active_step_has_sublogs else False
+        prefix = "  " if has_sublogs else ""
+        status = "Fail" if failed else "Done"
+        live_print(f"{prefix}[{status}] ({elapsed:.1f}s)")
 
 
 def run_streaming(
@@ -217,7 +213,7 @@ def run_streaming(
         stop.set()
         if proc.stdout is not None:
             proc.stdout.close()
-        worker.join(timeout=1.0)
+        worker.join()
 
     code = proc.returncode if proc.returncode is not None else 1
     return code, "".join(raw_chunks), echoed

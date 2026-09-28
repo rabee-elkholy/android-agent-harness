@@ -179,6 +179,53 @@ class EvidenceStore:
         run_id = validate_id(run_id, "run id")
         return bounded_path(self.runs_root, Path(snapshot) / run_id)
 
+    def _read_record(self, path: Path, *, snapshot: str, run_id: str, name: str) -> dict:
+        record = read_json(path)
+        unsigned = dict(record)
+        stored = str(unsigned.pop("artifact_sha256", ""))
+        if not stored or stored != canonical_sha256(unsigned):
+            raise ValidationError(f"artifact integrity mismatch: {name}")
+        if (
+            record.get("artifact") != name
+            or record.get("delivery_snapshot_sha256") != snapshot
+            or record.get("run_id") != run_id
+        ):
+            raise ValidationError(f"artifact identity mismatch: {name}")
+        return record
+
+    def _read_attempt_chain(self, snapshot: str, run_id: str, name: str) -> tuple[dict, int]:
+        run_dir = self.run_dir(snapshot, run_id)
+        primary = bounded_path(run_dir, f"{name}.json")
+        first = self._read_record(primary, snapshot=snapshot, run_id=run_id, name=name)
+        first_attempt = first.get("attempt", 1)
+        if first_attempt != 1 or first.get("previous_artifact_sha256") not in (None, ""):
+            raise ValidationError(f"artifact attempt chain mismatch: {name}")
+
+        latest = first
+        attempt = 1
+        attempt_dir = bounded_path(run_dir, Path("attempts") / name)
+        try:
+            paths = sorted(path for path in attempt_dir.iterdir() if path.name.endswith(".json"))
+        except FileNotFoundError:
+            return latest, attempt
+        except OSError as exc:
+            raise ValidationError(f"artifact attempt history unavailable: {name}") from exc
+        for path in paths:
+            attempt += 1
+            if path.name != f"{attempt:08d}.json":
+                raise ValidationError(f"artifact attempt chain mismatch: {name}")
+            record = self._read_record(path, snapshot=snapshot, run_id=run_id, name=name)
+            if (
+                record.get("attempt") != attempt
+                or record.get("previous_artifact_sha256") != latest.get("artifact_sha256")
+                or record.get("change_set_sha256") != first.get("change_set_sha256")
+                or record.get("producer") != first.get("producer")
+                or record.get("harness_version") != first.get("harness_version")
+            ):
+                raise ValidationError(f"artifact attempt chain mismatch: {name}")
+            latest = record
+        return latest, attempt
+
     def write(
         self,
         *,
@@ -191,6 +238,7 @@ class EvidenceStore:
         status: str,
         evidence: dict,
         lock: bool = True,
+        allow_pass_retry: bool = False,
     ) -> Path:
         name = validate_id(name, "artifact name")
         producer = validate_id(producer, "producer")
@@ -198,30 +246,45 @@ class EvidenceStore:
         if status not in VALID_STATUSES:
             raise ValidationError(f"invalid artifact status: {status}")
         run_dir = self.run_dir(snapshot, run_id)
-        target = bounded_path(run_dir, f"{name}.json")
-        record = {
-            "schema_version": SCHEMA_VERSION,
-            "artifact": name,
-            "producer": producer,
-            "harness_version": str(harness_version),
-            "delivery_snapshot_sha256": snapshot,
-            "change_set_sha256": str(change_set),
-            "run_id": run_id,
-            "created_at": utc_now(),
-            "status": status,
-            "evidence": redact(evidence),
-        }
-        record["artifact_sha256"] = canonical_sha256(record)
+        primary = bounded_path(run_dir, f"{name}.json")
 
         def _do_write() -> Path:
-            if target.exists():
-                try:
-                    existing = read_json(target)
-                    prev_status = str(existing.get("status") or "").upper()
-                except Exception:
-                    prev_status = ""
-                if prev_status not in ("FAIL", "ENV", "BLOCKED", "STALE"):
+            previous_sha256: str | None = None
+            attempt = 1
+            target = primary
+            if primary.exists():
+                latest, previous_attempt = self._read_attempt_chain(snapshot, run_id, name)
+                previous_status = str(latest.get("status") or "").upper()
+                if previous_status not in ("FAIL", "ENV", "BLOCKED", "STALE") and not (
+                    allow_pass_retry and previous_status == "PASS"
+                ):
+                    raise ValidationError(f"append-only artifact already exists: {primary.name}")
+                if (
+                    latest.get("change_set_sha256") != str(change_set)
+                    or latest.get("producer") != producer
+                    or latest.get("harness_version") != str(harness_version)
+                ):
+                    raise ValidationError(f"artifact retry identity mismatch: {name}")
+                attempt = previous_attempt + 1
+                previous_sha256 = str(latest.get("artifact_sha256") or "")
+                target = bounded_path(run_dir, Path("attempts") / name / f"{attempt:08d}.json")
+                if target.exists():
                     raise ValidationError(f"append-only artifact already exists: {target.name}")
+            record = {
+                "schema_version": SCHEMA_VERSION,
+                "artifact": name,
+                "producer": producer,
+                "harness_version": str(harness_version),
+                "delivery_snapshot_sha256": snapshot,
+                "change_set_sha256": str(change_set),
+                "run_id": run_id,
+                "created_at": utc_now(),
+                "attempt": attempt,
+                "previous_artifact_sha256": previous_sha256,
+                "status": status,
+                "evidence": redact(evidence),
+            }
+            record["artifact_sha256"] = canonical_sha256(record)
             target.parent.mkdir(parents=True, exist_ok=True)
             fd, temp_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=str(target.parent))
             try:
@@ -245,15 +308,8 @@ class EvidenceStore:
 
     def read(self, snapshot: str, run_id: str, name: str) -> dict:
         name = validate_id(name, "artifact name")
-        record = read_json(bounded_path(self.run_dir(snapshot, run_id), f"{name}.json"))
-        stored = str(record.pop("artifact_sha256", ""))
-        actual = canonical_sha256(record)
-        record["artifact_sha256"] = stored
-        if not stored or stored != actual:
-            raise ValidationError(f"artifact integrity mismatch: {name}")
-        if record.get("delivery_snapshot_sha256") != snapshot or record.get("run_id") != run_id:
-            raise ValidationError(f"artifact identity mismatch: {name}")
-        return record
+        latest, _ = self._read_attempt_chain(snapshot, run_id, name)
+        return latest
 
     def prune(self, *, keep: int = 50, protected: set[tuple[str, str]] | None = None) -> list[Path]:
         """Remove only complete, unprotected old run directories."""

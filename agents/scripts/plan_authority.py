@@ -160,6 +160,23 @@ def changed_modules(repo: Path, manifest: dict, task_only: bool = True) -> list[
     return sorted(found)
 
 
+def changed_file_paths(manifest: dict, task_only: bool = True) -> list[str]:
+    """Written/deleted paths in the task delta, including both ends of a rename."""
+    changes = (manifest.get("task_changes") if task_only and "task_changes" in manifest else manifest.get("changes")) or []
+    paths: set[str] = set()
+    for change in changes:
+        if isinstance(change, dict):
+            raw_paths = [change.get("path")]
+            if str(change.get("status") or "").upper().startswith("R"):
+                raw_paths.append(change.get("old_path"))
+        else:
+            raw_paths = [str(change)]
+        for raw in raw_paths:
+            if raw:
+                paths.add(str(raw).replace("\\", "/").strip("/"))
+    return sorted(paths)
+
+
 def plan_payload(plan: dict) -> dict:
     payload = {
         "schema_version": plan.get("schema_version"),
@@ -473,7 +490,7 @@ def check_material_drift(
         unplanned_modules.discard(":app")
 
     unplanned_files: set[str] = set()
-    expected_files = set(plan.get("expected_files") or [])
+    expected_files = {f.replace("\\", "/").strip("/") for f in (plan.get("expected_files") or [])}
     if expected_files and actual_files is not None:
         test_strategy = str(plan.get("test_strategy") or "").lower()
         adds_tests = any(kw in test_strategy for kw in ("test", "add", "unit", "tdd", "new")) or bool(expected_surfaces & {"TEST_ONLY"})
@@ -485,9 +502,7 @@ def check_material_drift(
             is_test = "/test/" in f"/{f_lower}" or "/androidtest/" in f"/{f_lower}" or f_lower.endswith(("test.kt", "test.java", "tests.kt"))
             if is_test and adds_tests:
                 continue
-            is_res = "/res/" in f"/{f_lower}"
-            if is_res and (expected_surfaces & {"RESOURCE_UI", "XML_UI", "LOCALIZATION"}):
-                continue
+            # Surface compatibility does not expand an explicit approved file list.
             unplanned_files.add(f_norm)
 
     return sorted(

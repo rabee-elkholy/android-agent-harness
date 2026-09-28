@@ -31,6 +31,7 @@ from _vnext_common import (
     canonical_sha256,
     git_text,
     read_json,
+    redact,
     sha256_file,
     utc_now,
     validate_repo_path_containment,
@@ -274,6 +275,105 @@ class DailyWorkflowSelftest(unittest.TestCase):
         cancel(argparse.Namespace(repo=str(self.repo), task_id="plan-summary"))
         single = draft(self._draft_ns("plan-summary-single"))
         self.assertIn("Phases: none (single phase)", plan_summary(single))
+
+    def test_plan_summary_discloses_the_redacted_approval_payload(self) -> None:
+        from plan_authority import plan_payload
+        from workflow import plan_summary
+
+        plan = draft(self._draft_ns(
+            "plan-summary-authority",
+            planning_depth="BOUNDED",
+            test_strategy="Targeted unit tests",
+            device_strategy="PHYSICAL_PREFERRED",
+            risks="Database compatibility,authorization=Bearer TOPSECRET123456",
+            rollback="Restore feature flag; api_key=TOPSECRET123456",
+            external_write=["mcp:release-server:high-impact"],
+            scoped_phase_review=True,
+            phases=[{
+                "id": "logic",
+                "title": "Update logic token=TOPSECRET123456",
+                "expected_files": ["app/src/main/kotlin/com/example/Login.kt"],
+                "expected_modules": [":app"],
+                "expected_surfaces": ["BUSINESS_LOGIC"],
+                "critical_boundary": True,
+            }],
+        ))
+        text = plan_summary(plan)
+
+        self.assertIn(f"Plan ID: {plan['plan_id']}", text)
+        self.assertIn("Planning depth: BOUNDED", text)
+        self.assertIn("Device strategy: PHYSICAL_PREFERRED", text)
+        self.assertIn("Risks: Database compatibility, authorization=[REDACTED]", text)
+        self.assertIn("Rollback: Restore feature flag; api_key=[REDACTED]", text)
+        self.assertIn("External writes: mcp:release-server:high-impact", text)
+        self.assertIn(
+            "Architecture contract: " + json.dumps(redact(plan["architecture_contract"]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            text,
+        )
+        self.assertIn(
+            "Phase authority: " + json.dumps(redact(plan["phases"][0]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            text,
+        )
+        self.assertIn(
+            "Skills: " + json.dumps(redact(plan["skills"]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            text,
+        )
+        self.assertIn(
+            "Repository binding: " + json.dumps(redact(plan["repository"]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            text,
+        )
+        self.assertIn(f"Base delivery snapshot: {plan['base_delivery_snapshot_sha256']}", text)
+        self.assertIn(f"Base change set: {plan['base_change_set_sha256']}", text)
+        self.assertIn("Scoped phase review: enabled", text)
+        self.assertIn(
+            "Approval payload (redacted): "
+            + json.dumps(redact(plan_payload(plan)), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            text,
+        )
+        self.assertNotIn("TOPSECRET123456", text)
+
+    def test_revise_prints_the_new_authority_disclosure_and_hash(self) -> None:
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        draft(self._draft_ns("plan-summary-revise"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ret = workflow_main([
+                "revise", "--repo", str(self.repo), "--task-id", "plan-summary-revise",
+                "--device-strategy", "ANY",
+                "--risks", "Network outage",
+                "--rollback", "Disable the integration",
+                "--external-write", "mcp:tracker",
+            ])
+        self.assertEqual(0, ret)
+        revised = read_json(task_dir(self.repo, "plan-summary-revise") / "plan.json")
+        summary = out.getvalue()
+        self.assertIn("Device strategy: ANY", summary)
+        self.assertIn("Risks: Network outage", summary)
+        self.assertIn("Rollback: Disable the integration", summary)
+        self.assertIn("External writes: mcp:tracker", summary)
+        self.assertIn(f"Plan hash: {revised['plan_sha256'][:12]}", summary)
+
+    def test_plan_summary_redacts_compound_credentials_without_changing_approval(self) -> None:
+        from workflow import plan_summary
+        from plan_authority import plan_payload, validate_plan_hash
+        plan = draft(self._draft_ns("compound-secrets", risks="Keep access_token=FAKE_ACCESS_123 private",
+                                    rollback="Restore client_secret='FAKE_CLIENT_456'"))
+        before = json.dumps(plan, sort_keys=True)
+        text = plan_summary(plan)
+        self.assertNotIn("FAKE_ACCESS_123", text)
+        self.assertNotIn("FAKE_CLIENT_456", text)
+        self.assertIn("access_token=[REDACTED]", text)
+        self.assertIn("client_secret=[REDACTED]", text)
+        self.assertEqual(before, json.dumps(plan, sort_keys=True))
+        self.assertEqual(plan["plan_sha256"], canonical_sha256(plan_payload(plan)))
+        self.assertTrue(validate_plan_hash(plan)[0])
+        approved = record_approval(argparse.Namespace(repo=str(self.repo), task_id=plan["task_id"],
+            source="conversation", proof_reference="approved", enforcement_tier="RULE_ENFORCED",
+            plan_hash=plan["plan_sha256"]))
+        self.assertEqual("IMPLEMENTING", approved["status"])
 
     def test_C_D4_partial_revise_keeps_omitted_plan_fields(self) -> None:
         # Certification C-D4: `revise` given only --expected-surfaces dropped the plan's files and
@@ -1254,6 +1354,40 @@ class DailyWorkflowSelftest(unittest.TestCase):
 
 class StateAuthorityHardeningTests(DailyWorkflowSelftest):
     """Regression tests for Part XX P0 Authority / State Correctness hardening."""
+
+    def test_STATE_000_prepare_run_write_failure_remains_retryable(self) -> None:
+        """A failed current-run write must not strand the plan in VERIFYING."""
+        task_id = "state-000-task"
+        draft(self._draft_ns(
+            task_id,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation",
+            proof_reference="approved", enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(
+            self.repo / "app/src/main/kotlin/com/example/MainActivity.kt",
+            "package com.example\nclass MainActivity { val changed = true }\n",
+        )
+
+        real_atomic_write = workflow.atomic_write_json
+
+        def fail_current_run(path: Path, data: dict) -> None:
+            if Path(path).name == "current-run.json":
+                raise OSError("simulated current-run write failure")
+            real_atomic_write(path, data)
+
+        with mock.patch("workflow.atomic_write_json", side_effect=fail_current_run):
+            with self.assertRaisesRegex(OSError, "current-run write failure"):
+                prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertEqual("IMPLEMENTING", plan.get("status"))
+        retry = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertTrue(retry.get("run_id"))
 
     def test_STATE_001_reminder_on_ready_for_delivery_zero_mutation(self) -> None:
         """STATE-001: Pre-invocation reminder fired on READY_FOR_DELIVERY causes 0 state mutations and 0 artifact writes."""
@@ -2508,6 +2642,58 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertEqual("HARNESS_COMMAND", act["kind"])
         self.assertIn("preflight", act["command"])
         self.assertTrue(act["blocking"])
+
+    def test_NEXT_001a_missing_current_run_routes_through_retryable_resume(self) -> None:
+        """A VERIFYING task with no run artifact must not suggest an impossible prepare."""
+        task_id = "task-next-missing-run"
+        plan, tdir, _, _ = self._setup_verifying_task(task_id)
+        (tdir / "current-run.json").unlink()
+
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("RESUME_IMPLEMENTATION", action.get("code"))
+        self.assertIn("task resume", action.get("command", ""))
+
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        retried = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertTrue(retried.get("run_id"))
+
+    def test_NEXT_001b_implementing_pass_is_not_promoted_into_new_verification_run(self) -> None:
+        """A diagnostic PASS from IMPLEMENTING cannot become authority for a later run."""
+        task_id = "task-next-prerun-pass"
+        plan = draft(self._draft_ns(
+            task_id,
+            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation",
+            proof_reference="approved", enforcement_tier="RULE_ENFORCED",
+            plan_hash=plan["plan_sha256"][:12],
+        ))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(
+            self.repo / "app/src/main/kotlin/com/example/MainActivity.kt",
+            "package com.example\n\nclass MainActivity { val changed = true }\n",
+        )
+
+        diagnostic_manifest = build_manifest(self.repo)
+        atomic_write_json(state_root(self.repo) / "results" / "preflight.json", {
+            "schema_version": 2,
+            "producer": "preflight_check",
+            "status": "PASS",
+            "exit_code": 0,
+            "delivery_snapshot_sha256": diagnostic_manifest["delivery_snapshot_sha256"],
+            "change_set_sha256": diagnostic_manifest["change_set_sha256"],
+            "external_inputs_sha256": diagnostic_manifest["external_inputs_sha256"],
+        })
+
+        current = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        with self.assertRaises(ValidationError):
+            EvidenceStore(state_root(self.repo)).read(
+                current["delivery_snapshot_sha256"], current["run_id"], "preflight",
+            )
+        action = resolve_next_action(self.repo, task_id)
+        self.assertEqual("RUN_PREFLIGHT", action["code"])
 
     def test_NEXT_002_tests_required_and_missing_resolves_run_unit_tests(self) -> None:
         """NEXT-002: In VERIFYING status with preflight passed and unit tests required/missing, resolve RUN_UNIT_TESTS."""
@@ -4926,6 +5112,35 @@ class ReviewOrchestrationTests(unittest.TestCase):
 
         return current, run_id, pkg_sha, tdir
 
+    def test_prepare_retry_retains_previous_review_round_after_plan_save_failure(self) -> None:
+        task_id = "prepare-publish-failure"
+        current, run_id, _, tdir = self._setup_v2_task(task_id)
+        # This fixture tests lifecycle publication, not reviewer certification.
+        EvidenceStore(state_root(self.repo)).write(
+            snapshot=current["delivery_snapshot_sha256"], run_id=run_id, name="reviews",
+            producer="review_orchestrator", harness_version="1.1.4",
+            change_set=current["change_set_sha256"], status="FAIL",
+            evidence={"reports": [], "blocking_findings": [{"reviewer": "bug-reviewer-agent"}]},
+        )
+        plan = read_json(tdir / "plan.json")
+        plan["review_rounds"] = 1
+        plan["blocked_reviewers"] = ["bug-reviewer-agent"]
+        workflow.save_plan(tdir / "plan.json", plan)
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        with mock.patch("workflow.save_plan", side_effect=OSError("simulated final plan write failure")):
+            with self.assertRaisesRegex(OSError, "final plan write failure"):
+                prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        persisted = read_json(tdir / "plan.json")
+        self.assertEqual("IMPLEMENTING", persisted["status"])
+        self.assertEqual(run_id, persisted["verification_run_id"])
+        # Retry after an interrupted publication still uses the completed review round.
+        retry = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertNotEqual(run_id, retry["run_id"])
+        self.assertEqual("VERIFYING", read_json(tdir / "plan.json")["status"])
+        policy = read_json(Path(retry["policy"]))
+        self.assertIn("bug-reviewer-agent", policy["reviewers"])
+        self.assertEqual(run_id, policy["later_round_source"]["run_id"])
+
     def test_REVIEW_ORCH_001_dispatch_receipt_written_before_result(self) -> None:
         from review_orchestrator import record_dispatch, dispatch_receipt_file, load_ledger, REVIEW_DISPATCHED
         task_id = "test-orch-001"
@@ -5809,12 +6024,25 @@ class ReviewOrchestrationTests(unittest.TestCase):
         current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
 
-        act1 = resolve_next_action(self.repo, task_id, plan)
-        self.assertEqual("DISPATCH_REVIEWERS", act1["code"])
+        # Exercise the public entrypoint, then feed its exact current content to the hook.
+        cli = subprocess.run(
+            [sys.executable, str(KIT / "agents" / "harness.py"), "task", "status",
+             "--repo", str(self.repo), "--task-id", task_id, "--next"],
+            capture_output=True, text=True, encoding="utf-8", check=False, timeout=15,
+        )
+        self.assertEqual(0, cli.returncode, cli.stderr)
+        self.assertIn("NEXT_ACTION=DISPATCH_REVIEWERS", cli.stdout)
+        payloads = [line.split("=", 1)[1] for line in cli.stdout.splitlines()
+                    if line.startswith("NEXT_ACTION_INPUTS=")]
+        self.assertEqual(1, len(payloads))
+        dispatch = json.loads(payloads[0])
+        self.assertEqual(["bug-reviewer-agent"], dispatch["reviewers"])
+        self.assertEqual(run_id, dispatch["run_id"])
 
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
-        brief_content = brief_p.read_text(encoding="utf-8")
+        brief_content = dispatch["review_execution_profile"]["reviewers"]["bug-reviewer-agent"]["brief_content"]
+        self.assertEqual(brief_p.read_text(encoding="utf-8"), brief_content)
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
@@ -6956,6 +7184,19 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
         plan_after = read_json(tdir / "plan.json")
         self.assertEqual("VERIFYING", plan_after.get("status"))
 
+    def test_STALE_NEXT_009_task_manifest_failure_is_not_treated_as_fresh(self) -> None:
+        """Freshness must fail closed when the task-scoped change set cannot be rebuilt."""
+        task_id = "test-stale-009"
+        current, _, _, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        self.assertTrue(current.get("task_change_set_sha256"))
+
+        from workflow import resolve_next_action
+        with mock.patch("workflow.build_task_manifest", side_effect=ValidationError("task manifest unavailable")):
+            action = resolve_next_action(self.repo, task_id, read_json(tdir / "plan.json"))
+
+        self.assertEqual("VERIFICATION_STALE", action.get("code"))
+        self.assertIn("TASK_CHANGE_SET_UNAVAILABLE", action.get("reason", ""))
+
     def test_STALE_FINAL_001_final_reviewer_return_after_user_edit_cannot_be_ingested(self) -> None:
         """STALE-FINAL-001: Final reviewer return after user edit cannot be ingested as current evidence."""
         task_id = "test-stale-final-001"
@@ -7925,4 +8166,3 @@ class AntigravityCertificationRound6Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

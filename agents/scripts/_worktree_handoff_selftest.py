@@ -255,6 +255,35 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         plan = read_json(task_dir(self.repo, t_id) / "plan.json")
         self.assertEqual("VERIFYING", plan["status"])
 
+    def test_checkpoint_missing_or_corrupt_baseline_blocks_classification_and_prepare(self) -> None:
+        from change_classifier import classify
+        from delivery_manifest import load_task_baseline
+        t_id = self._create_task()
+        rel = "app/src/main/java/com/example/Feature.kt"
+        write_file(self.repo / rel, "package com.example\n@Entity data class Feature(val id: Int)\n")
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "checkpoint fixture")
+        reconcile_handoff(self.repo, t_id)
+        baseline_file = task_dir(self.repo, t_id) / "task-baseline.json"
+        original = baseline_file.read_bytes()
+        baseline = load_task_baseline(self.repo, t_id)
+        manifest = build_task_manifest(self.repo, baseline)
+        self.assertIn("ROOM_SCHEMA", classify(self.repo, task_id=t_id, task_changes=manifest["task_changes"])["surfaces"])
+        for broken in (None, b"{broken", b"[]"):
+            with self.subTest(broken=broken):
+                if broken is None:
+                    baseline_file.unlink()
+                else:
+                    baseline_file.write_bytes(broken)
+                with self.assertRaisesRegex(ValidationError, "baseline"):
+                    classify(self.repo, task_id=t_id, task_changes=manifest["task_changes"])
+                with self.assertRaisesRegex(ValidationError, "baseline"):
+                    prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=t_id, host="antigravity"))
+                self.assertEqual("IMPLEMENTING", read_json(task_dir(self.repo, t_id) / "plan.json")["status"])
+                baseline_file.write_bytes(original)
+        self.assertIn("ROOM_SCHEMA", classify(self.repo, task_id=t_id, task_changes=manifest["task_changes"])["surfaces"])
+
     def test_HANDOFF_009_unknown_head_change_remains_blocked(self) -> None:
         """HANDOFF_009: unknown HEAD change remains blocked."""
         t_id = self._create_task()
@@ -536,6 +565,7 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         act = resolve_next_action(self.repo, t_id)
         self.assertIn("code", act)
         self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act["code"])
+        self.assertEqual("PREPARE_VERIFICATION", (act.get("on_complete") or {}).get("code"))
 
     def test_HANDOFF_022_no_repeat_approval_after_safe_return(self) -> None:
         """HANDOFF_022: no repeat approval after safe return."""
@@ -899,6 +929,40 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         res_prep = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=t_id, host="antigravity"))
         self.assertIn("run_id", res_prep)
         self.assertEqual("VERIFYING", read_json(task_dir(self.repo, t_id) / "plan.json").get("status"))
+        self.assertNotEqual("VERIFICATION_STALE", resolve_next_action(self.repo, t_id)["code"])
+
+    def test_HANDOFF_025_committed_room_drift_requires_revised_approval(self) -> None:
+        """Committed checkpoint code must still be classified from the full task delta."""
+        path = "app/src/main/java/com/example/Feature.kt"
+        t_id = self._create_task(expected_files=[path], outcome="Add a feature model")
+        write_file(
+            self.repo / path,
+            "package com.example\nimport androidx.room.Entity\n@Entity data class Feature(val id: Long)\n",
+        )
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-m", "wip: room model")
+        reconcile_handoff(self.repo, t_id)
+
+        with self.assertRaisesRegex(ValidationError, "surface:ROOM_SCHEMA"):
+            prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=t_id, host="antigravity"))
+
+    def test_HANDOFF_026_committed_rename_outside_delivery_scope_remains_auditable(self) -> None:
+        """A committed rename cannot disappear merely because its destination suffix is excluded."""
+        old_path = "app/src/main/java/com/example/App.kt"
+        new_path = "app/archive/App.tmp"
+        t_id = self._create_task(expected_files=[new_path], outcome="Archive obsolete application source")
+        (self.repo / new_path).parent.mkdir(parents=True, exist_ok=True)
+        run_git(self.repo, "mv", old_path, new_path)
+        create_pending_handoff(self.repo, t_id)
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-m", "wip: archive obsolete source")
+        reconcile_handoff(self.repo, t_id)
+
+        manifest = build_task_manifest(self.repo, t_id)
+        rename = next(item for item in manifest["task_changes"] if item.get("path") == new_path)
+        self.assertEqual("R", rename["status"])
+        self.assertEqual(old_path, rename["old_path"])
 
     def test_HANDOFF_SECOND_CHECKPOINT_001(self) -> None:
         """HANDOFF_SECOND_CHECKPOINT_001: two sequential handoffs retain full final delta."""

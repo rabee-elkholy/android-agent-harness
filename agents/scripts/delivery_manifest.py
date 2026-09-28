@@ -21,8 +21,10 @@ from _vnext_common import (  # noqa: E402
     git,
     git_text,
     repository_identity,
+    read_json,
     sha256_bytes,
     utc_now,
+    validate_id,
 )
 
 
@@ -32,6 +34,9 @@ NESTED_EXCLUDED = {".gradle", ".idea", "build", "out", "node_modules", "__pycach
 SOURCE_SUFFIXES = {
     ".kt", ".java", ".kts", ".gradle", ".groovy", ".toml", ".xml", ".json",
     ".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".pro", ".rules",
+    ".proto", ".sq", ".sqm", ".sql", ".graphql", ".graphqls", ".gql",
+    ".yaml", ".yml", ".sh", ".py", ".ps1", ".bat", ".cmd", ".bzl",
+    ".bazel", ".mk", ".bp", ".cmake", ".rs", ".s", ".asm", ".lockfile",
     ".properties", ".jar", ".aar", ".so", ".bin", ".png", ".jpg", ".jpeg", ".webp",
     ".gif", ".svg", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4",
     ".md", ".rst", ".adoc",
@@ -39,7 +44,9 @@ SOURCE_SUFFIXES = {
 SOURCE_SUFFIX_TUPLE = tuple(sorted(SOURCE_SUFFIXES))
 ROOT_BUILD_FILES = {
     "gradlew", "gradlew.bat", "settings.gradle", "settings.gradle.kts",
-    "build.gradle", "build.gradle.kts", "gradle.properties",
+    "build.gradle", "build.gradle.kts", "gradle.properties", "gradle.lockfile",
+    "cmakelists.txt", "android.mk", "android.bp", "build", "build.bazel",
+    "workspace", "workspace.bazel", "module.bazel",
 }
 EXTERNAL_CANDIDATES = {
     "local.properties",
@@ -55,6 +62,8 @@ class ChangeEntry:
     path: str
     old_path: str | None
     content_identity: str
+    git_mode: str
+    worktree_git_mode: str | None = None
 
 
 def _normal_rel(raw: str) -> str:
@@ -65,9 +74,9 @@ def _normal_rel(raw: str) -> str:
 def is_delivery_relevant(relative: str) -> bool:
     rel = _normal_rel(relative)
     lowered = rel.lower()
-    first = lowered.partition("/")[0]
-    framed = f"/{lowered.strip('/')}/"
-    if first in ROOT_EXCLUDED or any(f"/{part}/" in framed for part in NESTED_EXCLUDED):
+    parts = [part for part in lowered.strip("/").split("/") if part]
+    first = parts[0] if parts else ""
+    if first in ROOT_EXCLUDED or any(part in NESTED_EXCLUDED for part in parts[:-1]):
         return False
     if lowered.startswith(("agents/state/", "agents/cache/", "audit/")):
         return False
@@ -116,8 +125,18 @@ def _path_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def _index_and_untracked(repo: Path) -> tuple[dict[str, str], set[str]]:
+def _working_tree_mode(path: Path, *, trust_executable_bit: bool = True) -> str:
+    if path.is_symlink():
+        return "120000"
+    try:
+        return "100755" if trust_executable_bit and path.stat().st_mode & 0o111 else "100644"
+    except OSError:
+        return "000000"
+
+
+def _index_and_untracked(repo: Path) -> tuple[dict[str, str], dict[str, str], set[str]]:
     index: dict[str, str] = {}
+    modes: dict[str, str] = {}
     untracked: set[str] = set()
     raw = git(repo, "ls-files", "-s", "--others", "--exclude-standard", "-z")
     for entry in raw.split(b"\0"):
@@ -130,8 +149,10 @@ def _index_and_untracked(repo: Path) -> tuple[dict[str, str], set[str]]:
         parts = meta.split()
         if len(parts) < 3 or parts[2] != b"0":
             continue
-        index[_normal_rel(raw_path.decode("utf-8", errors="surrogateescape"))] = parts[1].decode("ascii")
-    return index, untracked
+        rel = _normal_rel(raw_path.decode("utf-8", errors="surrogateescape"))
+        modes[rel] = parts[0].decode("ascii")
+        index[rel] = parts[1].decode("ascii")
+    return index, modes, untracked
 
 
 def _porcelain_changes(
@@ -139,10 +160,12 @@ def _porcelain_changes(
     algorithm: str,
     content_cache: dict[str, str],
     index_entries: dict[str, str],
+    index_modes: dict[str, str],
 ) -> list[ChangeEntry]:
     raw = git(repo, "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all")
     chunks = raw.split(b"\0")
     entries: list[ChangeEntry] = []
+    trust_executable_bit: bool | None = None
     index = 0
     while index < len(chunks):
         chunk = chunks[index]
@@ -153,17 +176,24 @@ def _porcelain_changes(
         status = ""
         rel = ""
         old_rel: str | None = None
+        head_mode = "000000"
+        index_mode = "000000"
+        worktree_mode = "000000"
+        xy = ".."
+        divergent_mode = None
         if line.startswith("1 "):
             parts = line.split(" ", 8)
             if len(parts) < 9:
                 continue
             xy, rel = parts[1], parts[8]
+            head_mode, index_mode, worktree_mode = parts[3], parts[4], parts[5]
             status = "D" if "D" in xy else "A" if "A" in xy else "T" if "T" in xy else "M"
         elif line.startswith("2 "):
             parts = line.split(" ", 9)
             if len(parts) < 10:
                 continue
             xy, rel = parts[1], parts[9]
+            head_mode, index_mode, worktree_mode = parts[3], parts[4], parts[5]
             old_rel = chunks[index].decode("utf-8", errors="surrogateescape") if index < len(chunks) else None
             index += 1
             status = "C" if "C" in xy else "R"
@@ -186,13 +216,38 @@ def _porcelain_changes(
         if status == "D" or (not path.exists() and not path.is_symlink()):
             base_oid = index_entries.get(rel, "unknown")
             identity = f"tombstone:git:{base_oid}"
+            git_mode = head_mode if head_mode != "000000" else index_modes.get(rel, "000000")
         else:
             oid = _working_tree_oid(repo, rel, path, algorithm)
-            if status == "M" and xy == ".M" and oid == index_entries.get(rel):
+            if xy[:1] != "." and index_mode != "000000":
+                git_mode = index_mode
+            elif worktree_mode != "000000":
+                git_mode = worktree_mode
+            else:
+                if trust_executable_bit is None:
+                    trust_executable_bit = git_text(repo, "config", "--bool", "--default", "true", "--get", "core.filemode") != "false"
+                git_mode = _working_tree_mode(path, trust_executable_bit=trust_executable_bit)
+            if worktree_mode != "000000" and worktree_mode != git_mode:
+                # Bind both staged intent and the actual tree used by gates.
+                # Git's reported mode honors core.filemode=false on Windows.
+                divergent_mode = worktree_mode
+            if (
+                status == "M"
+                and xy == ".M"
+                and oid == index_entries.get(rel)
+                and git_mode == index_modes.get(rel)
+            ):
                 continue
             content_cache[rel] = oid
             identity = f"git:{oid}"
-        entries.append(ChangeEntry(status=status, path=rel, old_path=old_rel, content_identity=identity))
+        entries.append(ChangeEntry(
+            status=status,
+            path=rel,
+            old_path=old_rel,
+            content_identity=identity,
+            git_mode=git_mode,
+            worktree_git_mode=divergent_mode,
+        ))
     # Git does not always report an unstaged filesystem rename as a rename. Pair
     # a deleted index blob with an added working-tree blob deterministically so
     # the canonical change set still models the operation accurately.
@@ -210,7 +265,14 @@ def _porcelain_changes(
         new_items = sorted(additions[identity], key=lambda item: item.path)
         for old, new in zip(old_items, new_items):
             consumed.update((old, new))
-            replacements.append(ChangeEntry(status="R", path=new.path, old_path=old.path, content_identity=new.content_identity))
+            replacements.append(ChangeEntry(
+                status="R",
+                path=new.path,
+                old_path=old.path,
+                content_identity=new.content_identity,
+                git_mode=new.git_mode,
+                worktree_git_mode=new.worktree_git_mode,
+            ))
     entries = [entry for entry in entries if entry not in consumed] + replacements
     return sorted(entries, key=lambda item: (item.path, item.old_path or "", item.status))
 
@@ -221,9 +283,10 @@ def _delivery_files(
     algorithm: str,
     content_cache: dict[str, str],
     index: dict[str, str],
+    index_modes: dict[str, str],
     untracked: set[str],
 ) -> list[dict[str, str]]:
-    changed_paths = {entry.path for entry in changes}
+    changed_paths = {entry.path: entry for entry in changes}
     candidates = set(index) | untracked
     result: list[dict[str, str]] = []
     for rel in sorted(candidates):
@@ -234,13 +297,22 @@ def _delivery_files(
             if not path.exists() and not path.is_symlink():
                 continue
             identity = content_cache.get(rel) or _working_tree_oid(repo, rel, path, algorithm)
+            git_mode = changed_paths[rel].git_mode if rel in changed_paths else _working_tree_mode(path)
             source = "working_tree"
         else:
             identity = index.get(rel)
+            git_mode = index_modes.get(rel, "000000")
             source = "git_index"
         if not identity:
             raise HarnessError(f"cannot identify delivery file: {rel}")
-        result.append({"path": rel, "content_identity": f"git:{identity}", "source": source})
+        result.append({
+            "path": rel,
+            "content_identity": f"git:{identity}",
+            "git_mode": git_mode,
+            "source": source,
+        })
+        if rel in changed_paths and changed_paths[rel].worktree_git_mode:
+            result[-1]["worktree_git_mode"] = changed_paths[rel].worktree_git_mode
     return result
 
 
@@ -314,11 +386,22 @@ def build_manifest(repo: Path) -> dict:
     root = repo.resolve()
     algorithm = _object_format(root)
     content_cache: dict[str, str] = {}
-    index, untracked = _index_and_untracked(root)
-    changes = _porcelain_changes(root, algorithm, content_cache, index)
-    files = _delivery_files(root, changes, algorithm, content_cache, index, untracked)
-    file_identity = [{"path": item["path"], "content_identity": item["content_identity"]} for item in files]
-    change_identity = [asdict(item) for item in changes]
+    index, index_modes, untracked = _index_and_untracked(root)
+    changes = _porcelain_changes(root, algorithm, content_cache, index, index_modes)
+    files = _delivery_files(root, changes, algorithm, content_cache, index, index_modes, untracked)
+    file_identity = [
+        {
+            "path": item["path"],
+            "content_identity": item["content_identity"],
+            "git_mode": item["git_mode"],
+            **({"worktree_git_mode": item["worktree_git_mode"]} if "worktree_git_mode" in item else {}),
+        }
+        for item in files
+    ]
+    change_identity = [
+        {key: value for key, value in asdict(item).items() if key != "worktree_git_mode" or value is not None}
+        for item in changes
+    ]
     external = _external_inputs(root)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -350,13 +433,29 @@ def load_task_baseline(repo: Path, task_id: str | None = None) -> dict | None:
                     pass
     if not tid:
         return None
+    validate_id(tid, "task id")
     for state_dir in (root / ".agents" / "state", root / "agents" / "state"):
         baseline_file = state_dir / "tasks" / tid / "task-baseline.json"
-        if baseline_file.is_file():
-            try:
-                return json.loads(baseline_file.read_text(encoding="utf-8"))
-            except Exception:
-                return None
+        try:
+            baseline = read_json(baseline_file)
+        except ValidationError as exc:
+            if not isinstance(exc.__cause__, FileNotFoundError):
+                raise ValidationError(f"task baseline unavailable: {baseline_file}") from exc
+            plan_file = baseline_file.with_name("plan.json")
+            if plan_file.exists():
+                plan = read_json(plan_file)
+                if "task_baseline" in plan:
+                    raise ValidationError(f"task baseline missing: {baseline_file}; restore the original task state") from exc
+            continue
+        if not isinstance(baseline.get("changes"), list) or baseline.get("task_id", tid) != tid:
+            raise ValidationError(f"invalid task baseline: {baseline_file}")
+        if baseline.get("baseline_sha256"):
+            identity = {key: baseline.get(key) for key in (
+                "schema_version", "task_id", "repository", "base_delivery_snapshot_sha256", "base_change_set_sha256", "changes",
+            )}
+            if canonical_sha256(identity) != baseline["baseline_sha256"]:
+                raise ValidationError(f"task baseline integrity mismatch: {baseline_file}")
+        return baseline
     return None
 
 
@@ -467,8 +566,12 @@ def build_task_diff(
                     diff_chunks.append(chunk)
         else:
             base_ref = task_base_head or "HEAD"
+            pathspec = [rel]
+            old_rel = item.get("old_path")
+            if old_rel and old_rel != rel:
+                pathspec.append(old_rel)
             proc = subprocess.run(
-                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", base_ref, "--", rel],
+                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", base_ref, "--", *pathspec],
                 cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
             if proc.stdout:
@@ -503,7 +606,7 @@ def build_task_manifest(
                         pass
 
     if task_base_head is None and isinstance(baseline, dict):
-        task_base_head = baseline.get("task_base_head")
+        task_base_head = baseline.get("task_base_head") or (baseline.get("repository") or {}).get("head")
 
     committed_task_changes: list[dict] = []
     if task_base_head:
@@ -525,22 +628,31 @@ def build_task_manifest(
                         stat = parts[0][0]
                         p = parts[-1]
                         old_p = parts[1] if len(parts) > 2 else None
-                        if is_delivery_relevant(p):
+                        if is_delivery_relevant(p) or (old_p and is_delivery_relevant(old_p)):
                             target_p = repo / p
-                            if target_p.is_file():
-                                raw_oid = git(repo, "hash-object", "--path", p, "--stdin", input_bytes=target_p.read_bytes()).decode("utf-8").strip()
+                            if target_p.is_file() or target_p.is_symlink():
+                                raw_oid = git(repo, "hash-object", "--path", p, "--stdin", input_bytes=_path_bytes(target_p)).decode("utf-8").strip()
                                 oid = f"git:{raw_oid}"
+                                tree_entry = git_text(repo, "ls-tree", current_head, "--", p).split()
+                                git_mode = tree_entry[0] if tree_entry else _working_tree_mode(target_p)
                             else:
                                 try:
-                                    base_blob = git_text(repo, "rev-parse", f"{task_base_head}:{p}").strip()
+                                    base_path = old_p or p
+                                    base_blob = git_text(repo, "rev-parse", f"{task_base_head}:{base_path}").strip()
                                     oid = f"tombstone:git:{base_blob}"
                                 except Exception:
                                     oid = "tombstone:git:unknown"
+                                try:
+                                    tree_entry = git_text(repo, "ls-tree", task_base_head, "--", old_p or p).split()
+                                    git_mode = tree_entry[0] if tree_entry else "000000"
+                                except Exception:
+                                    git_mode = "000000"
                             committed_task_changes.append({
                                 "status": stat,
                                 "path": _normal_rel(p),
                                 "old_path": _normal_rel(old_p) if old_p else None,
                                 "content_identity": oid,
+                                "git_mode": git_mode,
                             })
         except Exception:
             pass
@@ -605,7 +717,9 @@ def build_task_manifest(
             if base_entry:
                 if (cur.get("content_identity") != base_entry.get("content_identity") or
                     cur.get("status") != base_entry.get("status") or
-                    cur.get("old_path") != base_entry.get("old_path")):
+                    cur.get("old_path") != base_entry.get("old_path") or
+                    ("git_mode" in base_entry and cur.get("git_mode") != base_entry.get("git_mode")) or
+                    cur.get("worktree_git_mode") != base_entry.get("worktree_git_mode")):
                     task_changes.append(cur)
 
     # Add committed task changes not present in working tree changes
@@ -653,6 +767,7 @@ def build_task_manifest(
                 "status": "BASELINE_DIRTY_REMOVED",
                 "old_path": b_old,
                 "content_identity": "git:head_or_reverted",
+                "git_mode": base_entry.get("git_mode", "000000") if isinstance(base_entry, dict) else "000000",
             })
 
     task_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))

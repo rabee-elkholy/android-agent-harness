@@ -12,6 +12,12 @@ import re
 import subprocess
 from pathlib import Path
 
+from _vnext_common import ValidationError
+
+
+class AuthoritativeEvidenceError(ValidationError):
+    """An active verification run could not persist its delivery authority."""
+
 
 def results_dir() -> Path:
     override = os.environ.get("HARNESS_RESULTS_DIR")
@@ -43,41 +49,45 @@ def write_gate_result(
                 payload["status"] = "FAIL"
                 payload["exit_code"] = 1
                 payload["detail"] = f"evidence identity unavailable: {type(exc).__name__}: {exc}"
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / f"{name}.json"
-        tmp = target.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        os.replace(tmp, target)
-
         run_id = os.environ.get("HARNESS_RUN_ID", "").strip()
-        if not run_id:
-            # Gates discover the one active verification run, removing fragile
-            # shell-environment coupling from normal use.
-            try:
-                from _repo_files import REPO
-                from _vnext_common import read_json
+        # A shell override cannot redirect evidence away from the active run.
+        # Explicit run IDs remain supported when no verification task is active.
+        try:
+            from _repo_files import REPO
+            from _vnext_common import read_json, validate_id
 
-                state_root = directory.parent
-                active = read_json(state_root / "active-task.json")
-                task_id = str(active.get("task_id") or "")
+            state_root = directory.parent
+            active_path = state_root / "active-task.json"
+            try:
+                active = read_json(active_path)
+            except ValidationError as exc:
+                # Absence is normal for standalone diagnostics. An unreadable
+                # existing pointer must never downgrade a rerun to diagnostics.
+                if not isinstance(exc.__cause__, FileNotFoundError):
+                    raise
+                active = None
+            if active is not None:
+                task_id = validate_id(str(active.get("task_id") or ""), "task_id")
                 plan = read_json(state_root / "tasks" / task_id / "plan.json")
-                current = read_json(state_root / "tasks" / task_id / "current-run.json")
                 if plan.get("status") == "VERIFYING":
-                    run_id = str(current.get("run_id") or "")
-            except Exception:
-                run_id = ""
+                    current = read_json(state_root / "tasks" / task_id / "current-run.json")
+                    current_run_id = validate_id(str(current.get("run_id") or ""), "run_id")
+                    if run_id and run_id != current_run_id:
+                        raise ValidationError("explicit verification run identity mismatch")
+                    run_id = current_run_id
+                    if plan.get("verification_run_id") and plan["verification_run_id"] != run_id:
+                        raise ValidationError("active verification run identity mismatch")
+        except Exception as exc:
+            raise AuthoritativeEvidenceError("authoritative evidence run discovery failed") from exc
         if run_id and name != "device":
             from evidence_store import EvidenceStore
-            from _vnext_common import ValidationError
 
             snapshot = str(payload.get("delivery_snapshot_sha256") or "")
             change_set = str(payload.get("change_set_sha256") or "")
             task = str(payload.get("task") or "")
             evidence_name = "assemble" if task and "assemble" in task.lower() else name
             if task and "test" in task.lower() and evidence_name != "unit_tests":
-                return target
+                run_id = ""
             producer_defaults = {
                 "assemble": "run_gradle_task",
                 "preflight": "preflight_check",
@@ -88,24 +98,38 @@ def write_gate_result(
                 "device_launch": "run_device",
             }
             producer = str(payload.get("producer") or producer_defaults.get(evidence_name) or evidence_name).replace(".py", "").replace("-", "_")
-            harness_version = os.environ.get("HARNESS_VERSION", "").strip()
-            if not harness_version:
-                version_file = directory.parent.parent / "VERSION"
-                harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "unknown"
-            try:
-                EvidenceStore(directory.parent).write(
-                    snapshot=snapshot,
-                    run_id=run_id,
-                    name=evidence_name,
-                    producer=producer,
-                    harness_version=harness_version,
-                    change_set=change_set,
-                    status=str(payload.get("status") or "FAIL"),
-                    evidence=payload,
-                )
-            except ValidationError:
-                return None
+            if run_id:
+                try:
+                    harness_version = os.environ.get("HARNESS_VERSION", "").strip()
+                    if not harness_version:
+                        version_file = directory.parent.parent / "VERSION"
+                        harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "unknown"
+                    EvidenceStore(directory.parent).write(
+                        snapshot=snapshot,
+                        run_id=run_id,
+                        name=evidence_name,
+                        producer=producer,
+                        harness_version=harness_version,
+                        change_set=change_set,
+                        status=str(payload.get("status") or "FAIL"),
+                        evidence=payload,
+                        allow_pass_retry=True,
+                    )
+                except Exception as exc:
+                    raise AuthoritativeEvidenceError(
+                        f"authoritative evidence write failed for {evidence_name}: {exc}"
+                    ) from exc
+
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{name}.json"
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        os.replace(tmp, target)
         return target
+    except AuthoritativeEvidenceError:
+        raise
     except Exception:
         return None
 

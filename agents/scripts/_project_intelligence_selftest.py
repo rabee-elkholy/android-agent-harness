@@ -792,10 +792,10 @@ class TaskContextFallbackTests(unittest.TestCase):
 
     def test_TASKCTX_FALLBACK_010_non_delivery_files_are_not_resolved(self) -> None:
         from task_context import resolve_task_context
-        stray = self.repo / "scratch" / "config.yaml"
+        stray = self.repo / "scratch" / "session.tmp"
         stray.parent.mkdir(parents=True, exist_ok=True)
-        stray.write_text("key: value", encoding="utf-8")
-        res = resolve_task_context(self.repo, file="scratch/config.yaml")
+        stray.write_text("ephemeral", encoding="utf-8")
+        res = resolve_task_context(self.repo, file="scratch/session.tmp")
         self.assertNotEqual("RESOLVED", res["status"])
 
 

@@ -349,7 +349,8 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
 
-    with step_progress(f"Gradle: {task_label}"):
+    # run_streaming owns the quiet-output heartbeat for this step.
+    with step_progress(f"Gradle: {task_label}", heartbeat_sec=0):
         code, raw_log, echoed = run_streaming(
             gradle_cmd,
             cwd=str(run_root),

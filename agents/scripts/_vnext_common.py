@@ -17,8 +17,8 @@ SECRET_KEY = re.compile(r"(?i)(token|secret|password|passwd|authorization|api[_-
 SECRET_VALUE_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(
-        r"(?im)([\"']?\b(?:token|secret|password|passwd|api[_-]?key|authorization|private[_-]?key|"
-        r"storepassword|keypassword)\b[\"']?\s*[:=]\s*)(?:[\"'][^\r\n\"']*[\"']|[^\s,;#]+)"
+        r"(?im)([\"']?\b(?:[\w.-]*(?:token|secret|password|passwd)|api[_-]?key|authorization|private[_-]?key)"
+        r"\b[\"']?\s*[:=]\s*)(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^\s,;#]+)"
     ),
     re.compile(r"(?i)\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"(?i)(https?://[^\s/:@]+:)[^\s/@]+(@)"),

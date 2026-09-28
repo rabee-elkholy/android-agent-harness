@@ -15,9 +15,15 @@ stateDiagram-v2
 
 The approval hash includes plan identity, requested outcome, scope, tests, device strategy, risks, rollback, skills, repository identity, and base snapshot. `begin` consumes a single-use nonce. New surfaces or modules require a revised plan and fresh approval.
 
+`draft` and `revise` render `PLAN_SUMMARY` from the registered approval payload, including external writes, device strategy, risks, rollback, architecture contract, phase authority, and repository binding. Display redaction does not modify the plan or its approval hash. Secret-shaped assignments, including compound names such as `access_token` and `client_secret`, are redacted; use credential references rather than putting credentials in a plan. Redaction is not a general-purpose secret detector.
+
 ## Delivery identity
 
-The canonical manifest covers tracked, staged, unstaged, untracked, deleted, and renamed Android delivery files. It uses Git blob identities so committing identical content does not invalidate evidence. Ignored build inputs such as `local.properties` are included by redacted hash, alongside toolchain identity.
+The canonical manifest covers tracked, staged, unstaged, untracked, deleted, and renamed Android delivery files. It uses Git blob identities and file modes so committing an identical delivery tree preserves its snapshot identity. Ignored build inputs such as `local.properties` are included by redacted hash, alongside toolchain identity.
+
+Delivery inputs include Protocol Buffers, SQLDelight schemas/migrations, GraphQL, YAML configuration, build scripts, and native build definitions. Managed harness directories and build outputs remain excluded. Git modes are bound alongside content; when staged and working-tree modes differ, both are recorded. Git's `core.filemode` behavior is respected, including on Windows. Changing either recorded mode invalidates the snapshot even when content is unchanged.
+
+Task classification includes changes in accepted WIP checkpoints, relative to the original task baseline. A declared baseline that is missing, unreadable, or invalid blocks verification instead of falling back to a clean working tree. Legacy tasks that never declared a baseline retain their full-worktree compatibility path.
 
 Each immutable evidence record contains:
 
@@ -27,6 +33,10 @@ Each immutable evidence record contains:
 - producer and harness version;
 - status and sanitized details;
 - an integrity hash.
+
+Gate reruns append numbered, hash-linked attempts under the same snapshot/run; previous records are never overwritten. Readers validate the chain and use its last valid attempt, so a later `FAIL`, `ENV`, `BLOCKED`, or `STALE` cannot retain an earlier `PASS`. A broken chain or unreadable attempt directory blocks reading; readers do not skip a bad attempt or fall back to the first record. Mutable result files are diagnostic mirrors, not delivery authority. Failure to discover an active run or persist authoritative evidence is an error, not a successful diagnostic fallback. An explicit `HARNESS_RUN_ID` must match an active verification run; it cannot redirect evidence to a different run. Explicit standalone runs remain supported when no verification task is active.
+
+Verification preparation saves the lifecycle transition after the frozen run artifacts. If publication stops before the plan save, retry uses the completed run named by the persisted plan and its frozen manifest/policy to retain the previous review round. It does not reset review findings or require another approval for unchanged scope.
 
 The final verifier recomputes the current manifest and classification, validates policy and skill hashes, checks only selected gates, verifies required reviewer coverage, and validates the assemble/install/launch APK-set chain. It never writes success state.
 

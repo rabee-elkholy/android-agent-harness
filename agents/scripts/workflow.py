@@ -25,6 +25,7 @@ from _vnext_common import (  # noqa: E402
     git,
     git_text,
     read_json,
+    redact,
     repository_identity,
     sha256_file,
     utc_now,
@@ -42,10 +43,12 @@ from plan_authority import (  # noqa: E402
     begin,
     changed_modules,
     check_material_drift,
+    changed_file_paths,
     create_plan,
     deliver as deliver_plan,
     module_id,
     normalize_expected_surfaces,
+    plan_payload,
     save_plan,
 )
 from review_policy import decide, decide_later_round  # noqa: E402
@@ -171,11 +174,7 @@ def build_remediation_command(repo: Path, task_id: str, plan: dict, policy: dict
     # Keep the leading colon: stripping it turned the root module ":" into an empty entry.
     modules_str = ",".join(module_id(m) for m in modules)
 
-    actual_paths = sorted({
-        (entry.get("path") if isinstance(entry, dict) else str(entry))
-        for entry in (manifest.get("task_changes") or manifest.get("changes") or [])
-        if (entry.get("path") if isinstance(entry, dict) else str(entry))
-    })
+    actual_paths = changed_file_paths(manifest)
     all_expected_files = sorted(set(plan.get("expected_files") or []) | set(actual_paths))
     files_str = ",".join(all_expected_files)
 
@@ -1646,6 +1645,19 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         completed_rounds = 0
     if completed_rounds:
         previous_current = read_json(previous_run_file)
+        committed_run_id = str(plan.get("verification_run_id") or "")
+        if committed_run_id and previous_current.get("run_id") != committed_run_id:
+            # A prepare may have published its pointer before the final plan
+            # save failed (or the process stopped). The persisted plan still
+            # names the completed round; recover from its frozen artifacts.
+            validate_id(committed_run_id, "run_id")
+            previous_manifest = read_json(task_dir(repo, args.task_id) / f"manifest-{committed_run_id}.json")
+            previous_current = {
+                "run_id": committed_run_id,
+                "policy": str(task_dir(repo, args.task_id) / f"policy-{committed_run_id}.json"),
+                "delivery_snapshot_sha256": previous_manifest["delivery_snapshot_sha256"],
+                "change_set_sha256": previous_manifest["change_set_sha256"],
+            }
         previous_policy = read_json(Path(previous_current["policy"]))
         previous_reviews = EvidenceStore(state_root(repo)).read(
             str(previous_current["delivery_snapshot_sha256"]),
@@ -1683,11 +1695,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
     else:
         policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
-    actual_task_paths = [
-        (c.get("path") if isinstance(c, dict) else str(c))
-        for c in (manifest.get("task_changes") or manifest.get("changes") or [])
-        if (c.get("path") if isinstance(c, dict) else str(c))
-    ]
+    actual_task_paths = changed_file_paths(manifest)
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths)
     # The final verifier refuses a mandatory skill the approved plan did not name; a companion
     # surface such as COMPOSE_UI is not material drift but can add one. Stop here, before any gate
@@ -1741,7 +1749,6 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     atomic_write_json(policy_path, policy)
     plan["status"] = "VERIFYING"
     plan["verification_run_id"] = run_id
-    save_plan(_plan_path(repo, args.task_id), plan)
     atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
     recipes = get_verification_recipes(policy.get("surfaces") or [])
 
@@ -1795,49 +1802,10 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "created_at": utc_now(),
     }
     atomic_write_json(directory / "current-run.json", current)
-
-    # Bridge valid pre-existing gate results into EvidenceStore for this new run_id
-    try:
-        store = EvidenceStore(state_root(repo))
-        results_dir = state_root(repo) / "results"
-        if results_dir.is_dir():
-            harness_version_p = repo / "VERSION" if (repo / "VERSION").is_file() else Path(__file__).resolve().parents[1] / "VERSION"
-            h_ver = harness_version_p.read_text(encoding="utf-8").strip() if harness_version_p.is_file() else "1.0.0"
-            producer_defaults = {
-                "assemble": "run_gradle_task",
-                "preflight": "preflight_check",
-                "localization": "check_strings",
-                "room": "room_guard",
-                "unit_tests": "run_tests_gate",
-                "device_install": "run_device",
-                "device_launch": "run_device",
-            }
-            for res_path in sorted(results_dir.glob("*.json")):
-                try:
-                    res_data = read_json(res_path)
-                    if (
-                        res_data.get("delivery_snapshot_sha256") == manifest["delivery_snapshot_sha256"]
-                        and res_data.get("change_set_sha256") == manifest["change_set_sha256"]
-                        and str(res_data.get("status") or "").upper() == "PASS"
-                    ):
-                        gate_name = res_path.stem
-                        if gate_name == "device":
-                            continue
-                        producer = str(res_data.get("producer") or producer_defaults.get(gate_name) or gate_name).replace(".py", "").replace("-", "_")
-                        store.write(
-                            snapshot=manifest["delivery_snapshot_sha256"],
-                            run_id=run_id,
-                            name=gate_name,
-                            producer=producer,
-                            harness_version=str(res_data.get("harness_version") or h_ver),
-                            change_set=manifest["change_set_sha256"],
-                            status="PASS",
-                            evidence=res_data,
-                        )
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    # Commit the lifecycle transition last. If any frozen run artifact cannot
+    # be written, the task remains IMPLEMENTING and prepare-verification is
+    # safely retryable instead of becoming a VERIFYING task with no run.
+    save_plan(_plan_path(repo, args.task_id), plan)
 
     return current
 
@@ -2262,8 +2230,12 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
                     "live": live_task_cs,
                     "reason": f"STALE: task change set modified after verification freeze: {task_cs[:12]} != live {live_task_cs[:12]}",
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            return {
+                "fresh": False,
+                "reason_code": "TASK_CHANGE_SET_UNAVAILABLE",
+                "reason": f"TASK_CHANGE_SET_UNAVAILABLE: could not rebuild task-scoped changes: {exc}",
+            }
 
     return {
         "fresh": True,
@@ -3503,13 +3475,13 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         current_run_file = tdir / "current-run.json"
         if not current_run_file.is_file():
             return {
-                "code": "PREPARE_VERIFICATION",
+                "code": "RESUME_IMPLEMENTATION",
                 "kind": "HARNESS_COMMAND",
-                "command": f"python .agents/harness.py task prepare-verification {identity}",
+                "command": f"python .agents/harness.py task resume --task-id {task_id}",
                 "blocking": True,
-                "reason": "Freeze the finished change set and derive its gates and reviewers.",
+                "reason": "The VERIFYING task has no current run. Resume implementation, then prepare verification again.",
                 "inputs": {"repo": ".", "task_id": task_id},
-                "expected": {"success_exit_codes": [0], "success_statuses": ["VERIFYING"]},
+                "expected": {"success_exit_codes": [0], "success_statuses": ["IMPLEMENTING"]},
             }
 
         try:
@@ -3519,13 +3491,13 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             manifest = read_json(Path(current_run["manifest"]))
         except Exception:
             return {
-                "code": "PREPARE_VERIFICATION",
+                "code": "RESUME_IMPLEMENTATION",
                 "kind": "HARNESS_COMMAND",
-                "command": f"python .agents/harness.py task prepare-verification {identity}",
+                "command": f"python .agents/harness.py task resume --task-id {task_id}",
                 "blocking": True,
-                "reason": "Verification run artifacts are corrupted; re-run prepare-verification.",
+                "reason": "Verification run artifacts are corrupted. Resume implementation, then prepare verification again.",
                 "inputs": {"repo": ".", "task_id": task_id},
-                "expected": {"success_exit_codes": [0], "success_statuses": ["VERIFYING"]},
+                "expected": {"success_exit_codes": [0], "success_statuses": ["IMPLEMENTING"]},
             }
 
         freshness = verification_freshness(repo, task_id, current_run)
@@ -4661,25 +4633,57 @@ def build_parser() -> argparse.ArgumentParser:
 
 def plan_summary(plan: dict) -> str:
     """Canonical text of the registered plan; the agent presents it verbatim for approval."""
+    authority = plan_payload(plan)
+
     def listed(values: Any) -> str:
-        items = [str(v) for v in (values or []) if str(v)]
+        items = [str(redact(v)) for v in (values or []) if str(v)]
         return ", ".join(items) if items else "none"
 
-    phases = plan.get("phases") or []
+    def displayed(value: Any, *, default: str = "none") -> str:
+        if value in (None, "", [], {}):
+            return default
+        redacted = redact(value)
+        if isinstance(redacted, (dict, list)):
+            return json.dumps(redacted, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return str(redacted)
+
+    phases = authority.get("phases") or []
     lines = [
         "PLAN_SUMMARY_BEGIN",
         f"Task: {plan.get('task_id')} ({plan.get('task_kind') or 'AUTO'})",
-        f"Outcome: {plan.get('requested_outcome') or ''}",
+        f"Plan schema: {plan.get('schema_version') or 'unknown'}",
+        f"Plan ID: {plan.get('plan_id') or ''}",
+        f"Planning depth: {plan.get('planning_depth') or 'STANDARD'}",
+        f"Outcome: {displayed(plan.get('requested_outcome'), default='')}",
         f"Phases: {len(phases) if phases else 'none (single phase)'}",
     ]
     for index, phase in enumerate(phases, 1):
         if isinstance(phase, dict):
-            lines.append(f"  {index}. {phase.get('id')}: {phase.get('title') or phase.get('description') or ''}")
+            phase_title = phase.get("title") or phase.get("description") or ""
+            lines.append(f"  {index}. {phase.get('id')}: {displayed(phase_title, default='')}")
+    for phase in phases:
+        if isinstance(phase, dict):
+            lines.append(f"  Phase authority: {displayed(phase)}")
+    scoped_review = authority.get("scoped_phase_review_enabled")
+    scoped_review_text = "policy-selected" if scoped_review is None else ("enabled" if scoped_review else "disabled")
     lines += [
-        f"Files: {listed(plan.get('expected_files'))}",
-        f"Modules: {listed(plan.get('expected_modules'))}",
-        f"Surfaces: {listed(plan.get('expected_surfaces'))}",
-        f"Tests: {plan.get('test_strategy') or 'none'}",
+        f"Files: {listed(authority.get('expected_files'))}",
+        f"Modules: {listed(authority.get('expected_modules'))}",
+        f"Surfaces: {listed(authority.get('expected_surfaces'))}",
+        f"Tests: {displayed(authority.get('test_strategy'))}",
+        f"Device strategy: {displayed(authority.get('device_strategy'))}",
+        f"Risks: {listed(authority.get('risks'))}",
+        f"Rollback: {displayed(authority.get('rollback'))}",
+        f"External writes: {listed(authority.get('external_writes'))}",
+        f"Architecture contract: {displayed(authority.get('architecture_contract'))}",
+        f"Skills: {displayed(authority.get('skills'))}",
+        f"Repository binding: {displayed(authority.get('repository'))}",
+        f"Base delivery snapshot: {displayed(authority.get('base_delivery_snapshot_sha256'))}",
+        f"Base change set: {displayed(authority.get('base_change_set_sha256'))}",
+        f"Supersedes plan hash: {displayed(authority.get('supersedes_plan_sha256'))}",
+        f"Zoho link: {displayed(authority.get('zoho_link'))}",
+        f"Scoped phase review: {scoped_review_text}",
+        f"Approval payload (redacted): {displayed(authority)}",
         f"Plan hash: {str(plan.get('plan_sha256') or '')[:12]}",
         "PLAN_SUMMARY_END",
     ]
@@ -4729,6 +4733,9 @@ def main(argv: list[str] | None = None) -> int:
         for item in result.get("next_actions") or []:
             print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")
             print(f"NEXT_REASON={item.get('reason')}")
+            if item.get("code") in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"}:
+                # Preserve the router's exact payload once, including current briefs.
+                print("NEXT_ACTION_INPUTS=" + json.dumps(item.get("inputs", {}), ensure_ascii=False))
     if args.action in ("draft", "revise", "recover-active", "reconcile-delivery"):
         return 0 if result.get("status") not in ("BLOCKED", "STALE", "USER_DECISION_REQUIRED") else 1
     return 0 if result.get("status") not in ("BLOCKED", "STALE", "PLAN_APPROVAL_REQUIRED", "USER_DECISION_REQUIRED") else 1

@@ -1602,7 +1602,23 @@ class PhaseReviewV2Selftest(unittest.TestCase):
     def test_PHASE_HOOK_001_exact_batch_allowed(self) -> None:
         """PHASE_HOOK_001: exact batch allowed, receipts and ledger updated."""
         task_id, reviewers, briefs, meta = self._setup_dispatch_state()
-        subagents = [{"TypeName": r, "Role": r, "Prompt": briefs[r]} for r in reviewers]
+        cli = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parents[1] / "harness.py"), "task", "status",
+             "--repo", str(self.repo), "--task-id", task_id, "--next"],
+            capture_output=True, text=True, encoding="utf-8", check=False, timeout=15,
+        )
+        self.assertEqual(0, cli.returncode, cli.stderr)
+        self.assertIn("NEXT_ACTION=DISPATCH_PHASE_REVIEWERS", cli.stdout)
+        payloads = [line.split("=", 1)[1] for line in cli.stdout.splitlines()
+                    if line.startswith("NEXT_ACTION_INPUTS=")]
+        self.assertEqual(1, len(payloads))
+        dispatch = json.loads(payloads[0])
+        self.assertEqual(sorted(reviewers), dispatch["reviewers"])
+        self.assertEqual("p1", dispatch["phase_id"])
+        # The phase contract exposes paths; the host reads the exact current file as Prompt.
+        prompts = {r: Path(dispatch["briefs"][r]).read_text(encoding="utf-8") for r in reviewers}
+        self.assertEqual(briefs, prompts)
+        subagents = [{"TypeName": r, "Role": r, "Prompt": prompts[r]} for r in reviewers]
         code, res = self._run_pre_tool_safety({"toolName": "invoke_subagent", "toolArgs": {"Subagents": subagents}})
         self.assertEqual(0, code)
         self.assertEqual("allow", res.get("decision"))

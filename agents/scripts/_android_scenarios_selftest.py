@@ -537,6 +537,128 @@ class AndroidScenariosSelftest(unittest.TestCase):
         manifest_paths = [c["path"] for c in manifest.get("changes") or []]
         self.assertNotIn(gen_path, manifest_paths)
 
+    def test_delivery_manifest_tracks_android_generator_and_build_inputs(self) -> None:
+        tracked_inputs = {
+            "app/src/main/proto/user.proto": "message User { string id = 1; }\n",
+            "app/src/main/sqldelight/com/example/User.sq": "selectAll: SELECT * FROM User;\n",
+            "app/src/main/sqldelight/com/example/User.sqm": "CREATE TABLE User(id TEXT);\n",
+            "app/src/main/graphql/user.graphql": "query User { user { id } }\n",
+            "app/src/main/graphql/user.gql": "query UserName { user { name } }\n",
+            "app/src/main/graphql/schema.graphqls": "type User { id: ID! }\n",
+            "app/src/main/sql/seed.sql": "INSERT INTO User(id) VALUES ('1');\n",
+            "config/openapi.yaml": "openapi: 3.0.0\n",
+            "config/codegen.yml": "generatorName: kotlin\n",
+            "scripts/generate.sh": "#!/bin/sh\n",
+            "scripts/generate.py": "print('generate')\n",
+            "scripts/generate.ps1": "Write-Output generate\n",
+            "scripts/generate.bat": "@echo generate\n",
+            "scripts/generate.cmd": "@echo generate\n",
+            "build_defs/android.bzl": "def android_rules():\n    pass\n",
+            "build_defs/module.bazel": "android_library(name = 'module')\n",
+            "native/Android.mk": "LOCAL_PATH := $(call my-dir)\n",
+            "native/Android.bp": "cc_library { name: \"native\" }\n",
+            "native/src/lib.rs": "pub fn answer() -> i32 { 42 }\n",
+            "native/src/startup.asm": "section .text\n",
+            "native/CMakeLists.txt": "add_library(example SHARED example.cpp)\n",
+            "BUILD": "filegroup(name = \"android_inputs\")\n",
+            "gradle/dependency-locks/app.lockfile": "example:artifact:1.0=runtimeClasspath\n",
+        }
+        for rel, content in tracked_inputs.items():
+            _write_file(self.repo / rel, content)
+        _run_git(self.repo, "add", ".")
+        _run_git(self.repo, "commit", "-qm", "generator inputs")
+
+        clean_snapshot = build_manifest(self.repo)["delivery_snapshot_sha256"]
+        for rel, content in tracked_inputs.items():
+            _write_file(self.repo / rel, content + "# changed\n")
+
+        manifest = build_manifest(self.repo)
+        changed_paths = {c["path"] for c in manifest.get("changes") or []}
+        self.assertEqual(set(tracked_inputs), changed_paths)
+        self.assertNotEqual(clean_snapshot, manifest["delivery_snapshot_sha256"])
+
+    def test_delivery_manifest_generator_suffixes_do_not_bypass_exclusions(self) -> None:
+        excluded = (
+            ".git/hooks/generate.sh",
+            ".agents/cache/schema.proto",
+            "app/build/generated/source/schema.proto",
+            "app/out/generated/query.graphql",
+            "node_modules/tool/schema.sq",
+            "__pycache__/generate.py",
+        )
+        unrelated = (
+            "app/src/main/cache/session.tmp",
+            "notes/local.scratch",
+        )
+        for rel in (*excluded, *unrelated):
+            self.assertFalse(is_delivery_relevant(rel), rel)
+
+    def test_delivery_manifest_binds_git_executable_mode(self) -> None:
+        script = self.repo / "scripts/generate.sh"
+        _write_file(script, "#!/bin/sh\necho generate\n")
+        _run_git(self.repo, "add", "scripts/generate.sh")
+        _run_git(self.repo, "commit", "-qm", "add generator script")
+
+        before = build_manifest(self.repo)
+        _run_git(self.repo, "update-index", "--chmod=+x", "scripts/generate.sh")
+        after = build_manifest(self.repo)
+
+        self.assertNotEqual(before["delivery_snapshot_sha256"], after["delivery_snapshot_sha256"])
+        change = next(item for item in after["changes"] if item["path"] == "scripts/generate.sh")
+        delivery_file = next(item for item in after["files"] if item["path"] == "scripts/generate.sh")
+        before_file = next(item for item in before["files"] if item["path"] == "scripts/generate.sh")
+        self.assertEqual("100755", change["git_mode"])
+        self.assertEqual("100755", delivery_file["git_mode"])
+        self.assertEqual(before_file["content_identity"], delivery_file["content_identity"])
+
+        _run_git(self.repo, "update-index", "--chmod=-x", "scripts/generate.sh")
+        reverted = build_manifest(self.repo)
+        self.assertEqual(before["delivery_snapshot_sha256"], reverted["delivery_snapshot_sha256"])
+        self.assertNotIn("scripts/generate.sh", {item["path"] for item in reverted["changes"]})
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable-bit behavior; staged mode test covers Windows")
+    def test_delivery_manifest_binds_unstaged_mode_after_staged_content(self) -> None:
+        rel = "scripts/mixed.sh"
+        script = self.repo / rel
+        _write_file(script, "#!/bin/sh\necho before\n")
+        script.chmod(0o644)
+        _run_git(self.repo, "config", "core.filemode", "true")
+        _run_git(self.repo, "add", rel)
+        _run_git(self.repo, "commit", "-qm", "mode baseline")
+        _write_file(script, "#!/bin/sh\necho after\n")
+        _run_git(self.repo, "add", rel)
+        before = build_manifest(self.repo)
+        script.chmod(0o755)
+        after = build_manifest(self.repo)
+        self.assertNotEqual(before["delivery_snapshot_sha256"], after["delivery_snapshot_sha256"])
+        self.assertNotEqual(before["change_set_sha256"], after["change_set_sha256"])
+        script.chmod(0o644)
+        restored = build_manifest(self.repo)
+        self.assertEqual(before["delivery_snapshot_sha256"], restored["delivery_snapshot_sha256"])
+        # The inverse divergence (index executable, worktree non-executable) is bound too.
+        script.chmod(0o755)
+        _run_git(self.repo, "add", rel)
+        staged = build_manifest(self.repo)
+        script.chmod(0o644)
+        diverged = build_manifest(self.repo)
+        self.assertNotEqual(staged["delivery_snapshot_sha256"], diverged["delivery_snapshot_sha256"])
+
+    def test_delivery_manifest_new_script_respects_core_filemode_false(self) -> None:
+        rel = "scripts/new-generator.cmd"
+        script = self.repo / rel
+        _write_file(script, "@echo generate\n")
+        script.chmod(0o755)
+        _run_git(self.repo, "config", "core.filemode", "false")
+        before = build_manifest(self.repo)
+        _run_git(self.repo, "add", rel)
+        staged = build_manifest(self.repo)
+        self.assertEqual(before["delivery_snapshot_sha256"], staged["delivery_snapshot_sha256"])
+        self.assertEqual("100644", next(f for f in before["files"] if f["path"] == rel)["git_mode"])
+        # Explicit developer staging of a Git executable mode still changes identity.
+        _run_git(self.repo, "update-index", "--chmod=+x", rel)
+        executable = build_manifest(self.repo)
+        self.assertNotEqual(staged["delivery_snapshot_sha256"], executable["delivery_snapshot_sha256"])
+
     # --- Scenario 19: New Untracked Kotlin Source File ---
     def test_scenario_19_new_untracked_kotlin_file(self) -> None:
         new_source = "app/src/main/kotlin/com/example/FreshClass.kt"
@@ -2181,6 +2303,54 @@ class DeviceFlowTests(MobileValidationTests):
             code2 = _handle_signoff(args)
         self.assertEqual(0, code1)
         self.assertEqual(0, code2)
+
+    def test_DEVICE_FLOW_013_pass_can_be_retracted_by_fail(self) -> None:
+        """DEVICE_FLOW_013: a later developer FAIL supersedes PASS in the same immutable run."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-013")
+        from run_device import _handle_signoff
+
+        passed = argparse.Namespace(
+            action="signoff", task_id="dev-flow-013", verdict="PASS",
+            source="conversation", proof_reference="walkthrough initially passed", approval_token=None,
+        )
+        failed = argparse.Namespace(
+            action="signoff", task_id="dev-flow-013", verdict="FAIL",
+            source="conversation", proof_reference="crash found during final edge case", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            self.assertEqual(0, _handle_signoff(passed))
+            self.assertEqual(0, _handle_signoff(failed))
+
+        store = EvidenceStore(state_root(self.repo))
+        latest = store.read(manifest["delivery_snapshot_sha256"], run_id, "device_signoff")
+        self.assertEqual("FAIL", latest["status"])
+        self.assertEqual(2, latest["attempt"])
+        from workflow import resolve_next_action
+        action = resolve_next_action(self.repo, "dev-flow-013", read_json(tdir / "plan.json"))
+        self.assertEqual("RESUME_IMPLEMENTATION", action["code"])
+
+    def test_DEVICE_FLOW_014_fail_can_be_revised_to_pass(self) -> None:
+        """DEVICE_FLOW_014: fixing the observed issue may replace FAIL with an explicit PASS."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-014")
+        from run_device import _handle_signoff
+
+        failed = argparse.Namespace(
+            action="signoff", task_id="dev-flow-014", verdict="FAIL",
+            source="conversation", proof_reference="first walkthrough failed", approval_token=None,
+        )
+        passed = argparse.Namespace(
+            action="signoff", task_id="dev-flow-014", verdict="PASS",
+            source="conversation", proof_reference="rerun walkthrough passed", approval_token=None,
+        )
+        with mock.patch("run_device.REPO", self.repo):
+            self.assertEqual(0, _handle_signoff(failed))
+            self.assertEqual(0, _handle_signoff(passed))
+
+        latest = EvidenceStore(state_root(self.repo)).read(
+            manifest["delivery_snapshot_sha256"], run_id, "device_signoff",
+        )
+        self.assertEqual("PASS", latest["status"])
+        self.assertEqual(2, latest["attempt"])
 
 
 if __name__ == "__main__":

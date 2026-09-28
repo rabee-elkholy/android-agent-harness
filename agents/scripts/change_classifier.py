@@ -180,9 +180,9 @@ def _read_text(path: Path) -> str:
         return ""
 
 
-def _head_text(repo: Path, relative: str) -> str:
+def _head_text(repo: Path, relative: str, base_ref: str = "HEAD") -> str:
     proc = subprocess.run(
-        ["git", "show", f"HEAD:{relative}"], cwd=str(repo), capture_output=True,
+        ["git", "show", f"{base_ref}:{relative}"], cwd=str(repo), capture_output=True,
         text=True, encoding="utf-8", errors="replace", check=False,
     )
     return proc.stdout if proc.returncode == 0 and len(proc.stdout) <= 2 * 1024 * 1024 else ""
@@ -520,16 +520,16 @@ def _enclosing_xml_context(text: str, modified_line_numbers: list[int]) -> str:
     return "\n".join(elements)
 
 
-def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
+def _diff_content(repo: Path, changed: ChangedFile, base_ref: str = "HEAD") -> tuple[str, str]:
     """Return added/removed diff text and bounded enclosing structural context."""
     if changed.is_untracked:
         content = _read_text(changed.path) if changed.exists else ""
         return content, ""
     before_rel = changed.old_rel_posix or changed.rel_posix
     if not changed.exists or changed.status == "D":
-        return _head_text(repo, before_rel), ""
+        return _head_text(repo, before_rel, base_ref), ""
 
-    diff_cmd = ["git", "diff", "-U0", "--no-ext-diff", "--find-renames", "HEAD", "--", changed.rel_posix]
+    diff_cmd = ["git", "diff", "-U0", "--no-ext-diff", "--find-renames", base_ref, "--", changed.rel_posix]
     if changed.old_rel_posix and changed.old_rel_posix != changed.rel_posix:
         diff_cmd.append(changed.old_rel_posix)
     proc = subprocess.run(
@@ -538,7 +538,7 @@ def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
     )
     if proc.returncode != 0:
         text = _read_text(changed.path) if changed.exists else ""
-        return text + "\n" + _head_text(repo, before_rel), ""
+        return text + "\n" + _head_text(repo, before_rel, base_ref), ""
 
     lines: list[str] = []
     line_nums: list[int] = []
@@ -566,12 +566,12 @@ def _diff_content(repo: Path, changed: ChangedFile) -> tuple[str, str]:
 
 
 
-def _changed_line_count(repo: Path, changes: list) -> int:
+def _changed_line_count(repo: Path, changes: list, base_ref: str = "HEAD") -> int:
     """Return a conservative diff-size bound without trusting file mtimes."""
     total = 0
     relevant_paths = {c.rel_posix for c in changes} | {c.old_rel_posix for c in changes if c.old_rel_posix}
     proc = subprocess.run(
-        ["git", "diff", "--numstat", "HEAD", "--"], cwd=str(repo),
+        ["git", "diff", "--numstat", base_ref, "--"], cwd=str(repo),
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if proc.returncode == 0:
@@ -613,6 +613,21 @@ def classify(
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
     all_changes = changed_files(root, include_untracked=True)
+    task_base_ref = "HEAD"
+    task_baseline: dict | None = None
+    if task_id:
+        from delivery_manifest import build_task_manifest, load_task_baseline
+        task_baseline = load_task_baseline(root, task_id)
+        if task_baseline:
+            candidate_ref = str(
+                task_baseline.get("task_base_head")
+                or (task_baseline.get("repository") or {}).get("head")
+                or ""
+            )
+            if re.fullmatch(r"[0-9a-fA-F]{40,64}", candidate_ref):
+                task_base_ref = candidate_ref
+            if task_changes is None:
+                task_changes = build_task_manifest(root, task_baseline).get("task_changes")
     if candidate_paths:
         known = {item.rel_posix for item in all_changes}
         for relative in candidate_paths:
@@ -627,15 +642,6 @@ def classify(
                 all_changes.append(ChangedFile(candidate, rel, "CANDIDATE", exists=exists, is_untracked=True))
                 known.add(rel)
 
-    if task_changes is None and task_id:
-        try:
-            from delivery_manifest import load_task_baseline
-            baseline = load_task_baseline(root, task_id)
-            if baseline and "task_changes" in baseline:
-                task_changes = baseline.get("task_changes")
-        except Exception:
-            pass
-
     if task_changes is not None:
         def _extract_cls_path(c: Any) -> str:
             if isinstance(c, dict):
@@ -646,6 +652,31 @@ def classify(
 
         task_paths = {_extract_cls_path(c) for c in task_changes if _extract_cls_path(c)}
         changes = [c for c in all_changes if c.rel_posix in task_paths or (c.old_rel_posix and c.old_rel_posix in task_paths)]
+        # Accepted WIP checkpoints leave a clean worktree, so git status alone
+        # cannot supply the files that changed since the immutable task base.
+        if task_id and task_baseline:
+            represented = {
+                (item.rel_posix, item.old_rel_posix or "")
+                for item in changes
+            }
+            for entry in task_changes:
+                if not isinstance(entry, dict):
+                    continue
+                rel = str(entry.get("path") or "").replace("\\", "/")
+                old_rel = str(entry.get("old_path") or "").replace("\\", "/") or None
+                if not rel or (rel, old_rel or "") in represented:
+                    continue
+                target = root / rel
+                changes.append(ChangedFile(
+                    path=target,
+                    rel_posix=rel,
+                    status=str(entry.get("status") or "M"),
+                    old_path=(root / old_rel) if old_rel else None,
+                    old_rel_posix=old_rel,
+                    exists=target.is_file() or target.is_symlink(),
+                    is_untracked=False,
+                ))
+                represented.add((rel, old_rel or ""))
     else:
         changes = all_changes
 
@@ -661,9 +692,9 @@ def classify(
             continue
         lower = rel.lower()
         suffix = Path(lower).suffix
-        diff_text, context_text = _diff_content(root, changed)
+        diff_text, context_text = _diff_content(root, changed, task_base_ref)
         before_rel = changed.old_rel_posix or rel
-        full_text = (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel)
+        full_text = (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel, task_base_ref)
         test_path = "/test/" in f"/{lower}" or "/androidtest/" in f"/{lower}" or lower.endswith(("test.kt", "test.java"))
         if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
@@ -819,7 +850,7 @@ def classify(
         "confidence": confidence,
         "details": details,
         "changed_files": len(relevant_changes),
-        "changed_lines": _changed_line_count(root, relevant_changes),
+        "changed_lines": _changed_line_count(root, relevant_changes, task_base_ref),
         "has_delete_or_rename": any(item.status in {"D", "R"} for item in relevant_changes),
     }
     result["classification_sha256"] = canonical_sha256(result)

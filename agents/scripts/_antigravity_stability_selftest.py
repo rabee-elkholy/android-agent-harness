@@ -875,5 +875,362 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         self.assertNotIn("fallback_model", rev)
 
 
+class TestResourceWriteScope(unittest.TestCase):
+    def test_O13_resource_surface_never_expands_explicit_files(self):
+        from plan_authority import check_material_drift
+        approved = 'app/src/main/res/values/strings.xml'
+        for surface in ('RESOURCE_UI', 'XML_UI', 'LOCALIZATION'):
+            plan = dict(expected_files=[approved], expected_surfaces=[surface],
+                        expected_modules=[':app', ':core'])
+            for path in ('app/src/main/res/values/colors.xml',
+                         'app/src/debug/res/values/strings.xml',
+                         'app/src/demo/res/values-ar/strings.xml',
+                         'core/src/main/res/values/strings.xml'):
+                for candidate in (path, path.replace('/', '\\')):
+                    with self.subTest(surface=surface, path=candidate):
+                        self.assertEqual(['file:' + path], check_material_drift(
+                            plan, [surface], [':core' if path.startswith('core/') else ':app'], [candidate]))
+            self.assertEqual([], check_material_drift(plan, [surface], [':app'], [approved]))
+            plan['expected_files'] = [approved.replace('/', '\\')]
+            self.assertEqual([], check_material_drift(plan, [surface], [':app'], [approved]))
+
+    def test_O13_existing_surface_scope_and_test_companions_remain_supported(self):
+        from plan_authority import check_material_drift
+        plan = dict(expected_files=[], expected_surfaces=['LOCALIZATION'], expected_modules=[':app'])
+        self.assertEqual([], check_material_drift(plan, ['RESOURCE_UI'], [':app'],
+                                                ['app/src/demo/res/values-ar/new.xml']))
+        self.assertEqual(['module:core'], check_material_drift(plan, ['RESOURCE_UI'], [':core'],
+                                                               ['core/src/main/res/values/new.xml']))
+        plan.update(expected_files=['app/src/main/res/values/strings.xml'], test_strategy='add unit tests')
+        self.assertEqual([], check_material_drift(plan, ['TEST_ONLY'], [':app'],
+                                                ['app/src/test/kotlin/LabelTest.kt']))
+
+    def test_O13_guard_prepare_and_revised_approval_agree_on_new_resources(self):
+        import argparse
+        import workflow
+        from _daily_workflow_selftest import DailyWorkflowSelftest, write_file
+        from mutation_guard import file_mutation_allowed
+        from _vnext_common import ValidationError
+        fixture = DailyWorkflowSelftest()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        repo = fixture.repo
+        approved = 'app/src/main/res/values/strings.xml'
+        added = 'app/src/debug/res/values/new.xml'
+        other = 'core/src/main/res/values/new.xml'
+        # Declare both modules before drafting; file authority is independent of module authority.
+        write_file(repo / 'core/build.gradle.kts', 'plugins { id("com.android.library") }\n')
+        write_file(repo / 'settings.gradle.kts', 'include(":app", ":core")\n')
+        from _daily_workflow_selftest import run_git
+        run_git(repo, 'add', '.')
+        run_git(repo, 'commit', '-qm', 'declare modules')
+        plan = workflow.draft(fixture._draft_ns('resource-scope', expected_files=approved,
+            expected_surfaces='LOCALIZATION', expected_modules=':app,:core'))
+        approval = argparse.Namespace(repo=str(repo), task_id='resource-scope', source='conversation',
+                                      proof_reference='approved', enforcement_tier='RULE_ENFORCED',
+                                      plan_hash=plan['plan_sha256'][:12])
+        workflow.record_approval(approval)
+        self.assertTrue(file_mutation_allowed(repo, targets=[approved])[0])
+        for target in (added, other):
+            allowed, reason, code = file_mutation_allowed(repo, targets=[target])
+            self.assertFalse(allowed, reason)
+            self.assertEqual('SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL', code)
+            self.assertIn('file:' + target, reason)
+        write_file(repo / added, '<resources><string name="new_label">New</string></resources>\n')
+        with self.assertRaisesRegex(ValidationError, 'file:app/src/debug/res/values/new.xml'):
+            workflow.prepare_verification(repo, 'resource-scope')
+        parser = workflow.build_parser()
+        revision = workflow.revise(parser.parse_args(['revise', '--repo', str(repo), '--task-id',
+            'resource-scope', '--expected-files', ','.join([approved, added, other])]))
+        self.assertFalse(file_mutation_allowed(repo, targets=[other])[0])
+        with self.assertRaises(ValidationError):
+            workflow.record_approval(approval)  # Old hash cannot authorize new scope.
+        approval.plan_hash = revision['plan_sha256'][:12]
+        workflow.record_approval(approval)
+        for target in (added, other):
+            self.assertTrue(file_mutation_allowed(repo, targets=[target])[0])
+        write_file(repo / other, '<resources><string name="core_label">Core</string></resources>\n')
+        current = workflow.prepare_verification(repo, 'resource-scope')
+        self.assertTrue(current['run_id'])
+
+    def test_O13_changed_paths_preserve_task_delta_and_copy_semantics(self):
+        from plan_authority import changed_file_paths
+        baseline = {'path': 'outside/baseline.xml', 'status': 'M'}
+        self.assertEqual([], changed_file_paths({'task_changes': [], 'changes': [baseline]}))
+        self.assertEqual(['outside/baseline.xml'], changed_file_paths({'changes': [baseline]}))
+        manifest = {'task_changes': [
+            {'path': r'app\src\debug\res\values\new.xml',
+             'old_path': r'app\src\main\res\values\old.xml', 'status': 'R100'},
+            {'path': 'app/src/main/res/values/copy.xml', 'old_path': 'outside/read-only.xml', 'status': 'C100'},
+            {'path': 'app/src/main/res/values/deleted.xml', 'status': 'D'},
+        ], 'changes': [baseline]}
+        self.assertEqual([
+            'app/src/debug/res/values/new.xml', 'app/src/main/res/values/copy.xml',
+            'app/src/main/res/values/deleted.xml', 'app/src/main/res/values/old.xml',
+        ], changed_file_paths(manifest))
+        self.assertEqual(['outside/baseline.xml'], changed_file_paths(manifest, task_only=False))
+
+    def test_O13_prepare_checks_rename_source_and_revise_hint(self):
+        import argparse
+        import workflow
+        from _daily_workflow_selftest import DailyWorkflowSelftest
+        from _vnext_common import ValidationError
+        from mutation_guard import file_mutation_allowed
+        fixture = DailyWorkflowSelftest()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        repo = fixture.repo
+        source = 'app/src/main/res/values/strings.xml'
+        target = 'app/src/main/res/values/labels.xml'
+        plan = workflow.draft(fixture._draft_ns('rename-scope', expected_files=target,
+            expected_surfaces='LOCALIZATION'))
+        approval = argparse.Namespace(repo=str(repo), task_id='rename-scope', source='conversation',
+            proof_reference='approved', enforcement_tier='RULE_ENFORCED', plan_hash=plan['plan_sha256'][:12])
+        workflow.record_approval(approval)
+        self.assertFalse(file_mutation_allowed(repo, targets=[source, target])[0])
+        (repo / source).rename(repo / target)
+        with self.assertRaisesRegex(ValidationError, 'file:' + source) as failure:
+            workflow.prepare_verification(repo, 'rename-scope')
+        self.assertIn(source, str(failure.exception).split('--expected-files', 1)[1])
+        revised = workflow.revise(workflow.build_parser().parse_args([
+            'revise', '--repo', str(repo), '--task-id', 'rename-scope', '--expected-files', source + ',' + target]))
+        approval.plan_hash = revised['plan_sha256'][:12]
+        workflow.record_approval(approval)
+        self.assertTrue(workflow.prepare_verification(repo, 'rename-scope')['run_id'])
+
+    def test_O13_final_verifier_rechecks_files_in_previously_frozen_runs(self):
+        import argparse
+        from unittest import mock
+        import workflow
+        from final_verifier import verify_task
+        from _daily_workflow_selftest import DailyWorkflowSelftest, write_file
+        for rename in (False, True):
+            with self.subTest(rename=rename):
+                fixture = DailyWorkflowSelftest()
+                fixture.setUp()
+                self.addCleanup(fixture.tearDown)
+                repo = fixture.repo
+                source = 'app/src/main/res/values/strings.xml'
+                target = 'app/src/main/res/values/labels.xml'
+                plan = workflow.draft(fixture._draft_ns('frozen-scope',
+                    expected_files=target if rename else source, expected_surfaces='LOCALIZATION'))
+                workflow.record_approval(argparse.Namespace(repo=str(repo), task_id='frozen-scope',
+                    source='conversation', proof_reference='approved', enforcement_tier='RULE_ENFORCED',
+                    plan_hash=plan['plan_sha256'][:12]))
+                if rename:
+                    (repo / source).rename(repo / target)
+                else:
+                    write_file(repo / target, '<resources><string name="new">New</string></resources>\n')
+                # Model a frozen run from the older, permissive preparation path.
+                # The real final verifier must independently enforce approved file authority.
+                with mock.patch.object(workflow, 'check_material_drift', return_value=[]):
+                    workflow.prepare_verification(repo, 'frozen-scope')
+                result = verify_task(repo, 'frozen-scope')
+                self.assertEqual('PLAN_APPROVAL_REQUIRED', result['status'], result)
+                self.assertIn('file:' + (source if rename else target), '\n'.join(result['blocked_by']))
+
+
+class TestReviewerBriefCLI(unittest.TestCase):
+    def test_O20_text_cli_exposes_dispatch_inputs_once_and_preserves_json(self):
+        import contextlib
+        import io
+        from unittest import mock
+        import workflow
+        role = 'bug-reviewer-agent'
+        for code in ('DISPATCH_REVIEWERS', 'DISPATCH_PHASE_REVIEWERS'):
+            for protocol in (1, 2):
+                with self.subTest(code=code, protocol=protocol):
+                    inputs = {'repo': '.', 'task_id': 't', 'run_id': 'current-run',
+                              'reviewers': [role], 'briefs': {role: '/current/brief.md'},
+                              'review_execution_profile': {'reviewers': {role: {
+                                  'brief_path': '/current/brief.md',
+                                  'brief_content': '# Exact brief\nRun: current-run\nSnapshot: abc\n',
+                                  'model_policy': 'INHERIT_PARENT_BY_OMISSION'}}}}
+                    if code == 'DISPATCH_PHASE_REVIEWERS':
+                        inputs['phase_id'] = 'p1'
+                    action = dict(code=code, kind='HOST_ACTION', command='', reason='Dispatch', inputs=inputs)
+                    plan = {'task_id': 't', 'status': 'VERIFYING', 'review_protocol_version': protocol}
+                    with mock.patch.object(workflow, '_load_plan', return_value=plan), \
+                         mock.patch.object(workflow, 'resolve_next_action', return_value=action):
+                        out = io.StringIO()
+                        args = ['status', '--repo', '.', '--task-id', 't', '--next']
+                        with contextlib.redirect_stdout(out):
+                            self.assertEqual(0, workflow.main(args))
+                        lines = [line for line in out.getvalue().splitlines() if line.startswith('NEXT_ACTION_INPUTS=')]
+                        self.assertEqual(1, len(lines), out.getvalue())
+                        self.assertEqual(inputs, json.loads(lines[0].split('=', 1)[1]))
+                        out = io.StringIO()
+                        with contextlib.redirect_stdout(out):
+                            self.assertEqual(0, workflow.main(args + ['--json']))
+                        self.assertEqual(inputs, json.loads(out.getvalue())['next_action']['inputs'])
+
+    def test_O20_wait_does_not_repeat_briefs_or_request_dispatch(self):
+        import contextlib
+        import io
+        from unittest import mock
+        import workflow
+        with mock.patch.object(workflow, '_load_plan', return_value={'status': 'VERIFYING'}), \
+             mock.patch.object(workflow, 'resolve_next_action', return_value={
+                 'code': 'WAIT_FOR_REVIEWERS', 'kind': 'HOST_ACTION', 'inputs': {'task_id': 't'}}):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, workflow.main(['status', '--task-id', 't', '--next']))
+            self.assertNotIn('NEXT_ACTION_INPUTS=', out.getvalue())
+            self.assertNotIn('DISPATCH_REVIEWERS', out.getvalue())
+
+
+class TestGradleProgress(unittest.TestCase):
+    def test_O3_gradle_uses_only_stream_heartbeat_and_preserves_outcomes(self):
+        import contextlib
+        from unittest import mock
+        import run_gradle_task as runner
+        for code, raw in ((0, 'BUILD SUCCESSFUL\n'), (7, 'compiler failed\n')):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as td:
+                beats = []
+                @contextlib.contextmanager
+                def step(name, **kwargs):
+                    beats.append(kwargs.get('heartbeat_sec', 5.0))
+                    yield
+                def stream(*args, **kwargs):
+                    beats.append(kwargs['heartbeat_sec'])
+                    return code, raw, raw.splitlines()
+                with mock.patch.object(runner, 'step_progress', step), \
+                     mock.patch.object(runner, 'run_streaming', stream), \
+                     mock.patch.object(runner, 'gradle_wrapper', return_value=Path(td) / 'gradlew'), \
+                     mock.patch.object(runner, 'write_gate_result') as record, \
+                     mock.patch.object(runner, 'live_print'), \
+                     mock.patch.object(runner, 'enable_line_buffered_stdio'), \
+                     mock.patch.object(runner, 'current_head_sha', return_value='head'):
+                    self.assertEqual(code, runner.run_gradle([':app:compileDebugKotlin'], cwd=td))
+                    self.assertEqual(1, sum(beat > 0 for beat in beats))
+                    self.assertEqual(code, record.call_args.args[1]['exit_code'])
+                    self.assertEqual('PASS' if code == 0 else 'FAIL', record.call_args.args[1]['status'])
+
+    def test_O3_step_stops_and_joins_heartbeat_on_all_exits(self):
+        from unittest import mock
+        import _live_process as live
+        for error in (None, RuntimeError, KeyboardInterrupt, SystemExit):
+            with self.subTest(error=error):
+                depth = len(live._active_step_has_sublogs)
+                event = mock.Mock()
+                worker = mock.Mock()
+                with mock.patch.object(live.threading, 'Event', return_value=event), \
+                     mock.patch.object(live.threading, 'Thread', return_value=worker), \
+                     mock.patch.object(live, 'live_print') as output:
+                    try:
+                        with live.step_progress('test'):
+                            if error:
+                                raise error()
+                    except BaseException as exc:
+                        self.assertIsInstance(exc, error)
+                    event.set.assert_called()
+                    worker.join.assert_called_once()
+                    self.assertEqual(depth, len(live._active_step_has_sublogs))
+                    self.assertIn('[Fail]' if error else '[Done]', output.call_args.args[0])
+                # Keep a RED failure isolated from later tests.
+                del live._active_step_has_sublogs[depth:]
+
+    def test_O3_stream_silence_output_failure_and_interrupt_preserve_raw_log(self):
+        from unittest import mock
+        import _live_process as live
+        # Explicit clock/event ticks exercise silence without timing thresholds or sleeps.
+        for lines, code, interrupted in (([], 0, False), (['one\n', 'two\n'], 0, False),
+                                         (['failed\n'], 9, False), ([], 0, True)):
+            with self.subTest(lines=lines, code=code, interrupted=interrupted):
+                clock = [0.0]
+                events = []
+                workers = []
+                class Event:
+                    def __init__(self):
+                        self.stopped = False
+                        self.ticks = 0
+                        events.append(self)
+                    def set(self):
+                        self.stopped = True
+                    def wait(self, delay):
+                        if self.stopped or self.ticks:
+                            return True
+                        self.ticks += 1
+                        clock[0] += 1 if lines else 11
+                        return False
+                class Worker:
+                    def __init__(self, target, **kwargs):
+                        self.target = target
+                        self.joined = False
+                        workers.append(self)
+                    def start(self):
+                        pass
+                    def join(self, **kwargs):
+                        self.joined = True
+                class Output:
+                    def __iter__(self):
+                        if interrupted:
+                            raise KeyboardInterrupt()
+                        if not lines:
+                            workers[0].target()
+                        for line in lines:
+                            yield line
+                            events[0].ticks = 0
+                            workers[0].target()  # Advance one second between visible lines.
+                    def close(self):
+                        pass
+                proc = mock.Mock(stdout=Output(), returncode=code)
+                with mock.patch.object(live.threading, 'Event', Event), \
+                     mock.patch.object(live.threading, 'Thread', Worker), \
+                     mock.patch.object(live.time, 'time', side_effect=lambda: clock[0]), \
+                     mock.patch.object(live.subprocess, 'Popen', return_value=proc), \
+                     mock.patch.object(live, 'enable_line_buffered_stdio'), \
+                     mock.patch.object(live, 'live_print') as output:
+                    if interrupted:
+                        with self.assertRaises(KeyboardInterrupt):
+                            live.run_streaming(['gradle'])
+                        proc.terminate.assert_called_once()
+                    else:
+                        result = live.run_streaming(['gradle'])
+                        self.assertEqual((code, ''.join(lines), [s.rstrip('\n') for s in lines]), result)
+                        beats = [c for c in output.call_args_list if 'still running' in c.args[0]]
+                        self.assertEqual(0 if lines else 1, len(beats))
+                    self.assertTrue(events[0].stopped)
+                    self.assertTrue(workers[0].joined)
+                    count = output.call_count
+                    workers[0].target()
+                    self.assertEqual(count, output.call_count)  # No heartbeat after completion.
+        with mock.patch.object(live.subprocess, 'Popen', side_effect=OSError('launch failed')), \
+             mock.patch.object(live.threading, 'Thread') as worker, \
+             mock.patch.object(live, 'enable_line_buffered_stdio'), mock.patch.object(live, 'live_print'):
+            self.assertEqual((1, '', []), live.run_streaming(['missing-gradle']))
+            worker.assert_not_called()
+
+    def test_O3_real_child_preserves_output_and_exit_codes(self):
+        from unittest import mock
+        import _live_process as live
+        for code in (0, 7):
+            with self.subTest(code=code), mock.patch.object(live, "enable_line_buffered_stdio"), \
+                 mock.patch.object(live, "live_print"):
+                result = live.run_streaming(
+                    [sys.executable, "-c", f"print('child output', flush=True); raise SystemExit({code})"],
+                )
+                self.assertEqual((code, "child output\n", ["child output"]), result)
+
+    def test_O15_gradle_preserves_explicit_daemon_arguments_and_environment(self):
+        from unittest import mock
+        import run_gradle_task as runner
+        for flag in ([], ['--no-daemon'], ['--daemon'], ['-Dorg.gradle.daemon=false']):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as td:
+                env = {'JAVA_HOME': '/selected/jdk', 'GRADLE_USER_HOME': '/selected/gradle',
+                       'JAVA_OPTS': '-Xmx128m', 'GRADLE_OPTS': '-Dorg.gradle.daemon=false'}
+                with mock.patch.dict(os.environ, env), \
+                     mock.patch.object(runner, 'gradle_wrapper', return_value=Path(td) / 'gradlew'), \
+                     mock.patch.object(runner, 'run_streaming', return_value=(0, '', [])) as stream, \
+                     mock.patch.object(runner, 'write_gate_result'), mock.patch.object(runner, 'live_print'), \
+                     mock.patch.object(runner, 'current_head_sha', return_value='head'), \
+                     mock.patch.object(runner, 'enable_line_buffered_stdio'):
+                    self.assertEqual(0, runner.run_gradle([':app:compileDebugKotlin', *flag], cwd=td))
+                args, kwargs = stream.call_args
+                self.assertEqual(['--console=plain', ':app:compileDebugKotlin', *flag], args[0][-2-len(flag):])
+                for key, value in env.items():
+                    self.assertEqual(value, kwargs['env'][key])
+                self.assertEqual(str(Path(td).resolve()), kwargs['cwd'])
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

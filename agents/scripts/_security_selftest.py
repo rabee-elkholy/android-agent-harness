@@ -89,6 +89,30 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("storePassword=[REDACTED]", redacted)
         self.assertIn("https://build-user:[REDACTED]@example.invalid", redacted)
 
+    def test_review_text_redaction_compound_keys_preserves_nonsecret_context(self):
+        from _vnext_common import redact_text
+        for key in ("access_token", "refresh-token", "clientSecret", "DB_PASSWORD", "signing.storePassword"):
+            with self.subTest(key=key):
+                raw = f'{key}="FAKE_START\\"FAKE_END"; retries=3; token_count=5; rollback=disable'
+                result = redact_text(raw)
+                self.assertNotIn("FAKE_START", result)
+                self.assertNotIn("FAKE_END", result)
+                self.assertIn("retries=3; token_count=5; rollback=disable", result)
+                self.assertEqual(result, redact_text(result))
+
+    def test_gate_bridge_empty_or_mismatched_run_cannot_be_diagnostic(self):
+        from _gate_results import AuthoritativeEvidenceError, write_gate_result
+        from _vnext_common import atomic_write_json
+        state = self.repo / "agents/state"
+        atomic_write_json(state / "tasks/t/plan.json", {"status": "VERIFYING", "verification_run_id": "expected-run"})
+        for current in ({}, {"run_id": "wrong-run"}):
+            with self.subTest(current=current):
+                atomic_write_json(state / "tasks/t/current-run.json", current)
+                with mock.patch.dict(os.environ, {"HARNESS_RUN_ID": ""}):
+                    with self.assertRaises(AuthoritativeEvidenceError):
+                        write_gate_result("preflight", {"status": "FAIL"}, results_dir_override=state / "results")
+                self.assertFalse((state / "results/preflight.json").exists())
+
     def test_claude_bridge_denies(self):
         proc = subprocess.run(
             [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}),
@@ -306,10 +330,9 @@ class SecurityTests(unittest.TestCase):
         res = json.loads(proc.stdout)
         self.assertEqual("allow", res["decision"])
 
-    def test_evidence_store_allows_retry_on_fail_but_blocks_pass(self):
+    def test_evidence_store_appends_gate_retries_and_reads_latest(self):
         sys.path.insert(0, str(SCRIPTS))
         from evidence_store import EvidenceStore
-        from _vnext_common import ValidationError
         store = EvidenceStore(self.repo / "agents/state")
         common = {
             "snapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -318,17 +341,248 @@ class SecurityTests(unittest.TestCase):
             "producer": "run_tests_gate",
             "harness_version": "1.0.26",
             "change_set": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "allow_pass_retry": True,
         }
         # First write FAIL
         p1 = store.write(**common, status="FAIL", evidence={"detail": "fail"})
         self.assertTrue(p1.is_file())
-        # Retry with PASS should succeed because previous was FAIL
+        first_bytes = p1.read_bytes()
+        # Every retry is a new immutable attempt, regardless of status.
         p2 = store.write(**common, status="PASS", evidence={"detail": "pass"})
         self.assertTrue(p2.is_file())
+        self.assertNotEqual(p1, p2)
+        self.assertEqual(first_bytes, p1.read_bytes())
         self.assertEqual("PASS", store.read(common["snapshot"], common["run_id"], common["name"])["status"])
-        # Writing again when status is PASS must raise ValidationError
-        with self.assertRaises(ValidationError):
-            store.write(**common, status="PASS", evidence={"detail": "another pass"})
+        p3 = store.write(**common, status="PASS", evidence={"detail": "another pass"})
+        self.assertNotEqual(p2, p3)
+        self.assertEqual(3, store.read(common["snapshot"], common["run_id"], common["name"])["attempt"])
+
+    def _write_evidence_transition(self, first: str, second: str, *, run_id: str) -> tuple[dict, Path, Path]:
+        from evidence_store import EvidenceStore
+
+        store = EvidenceStore(self.repo / "agents/state")
+        common = {
+            "snapshot": "c" * 64,
+            "run_id": run_id,
+            "name": "unit_tests",
+            "producer": "run_tests_gate",
+            "harness_version": "1.1.4",
+            "change_set": "d" * 64,
+            "allow_pass_retry": True,
+        }
+        first_path = store.write(**common, status=first, evidence={"attempt": 1})
+        first_bytes = first_path.read_bytes()
+        second_path = store.write(**common, status=second, evidence={"attempt": 2})
+        self.assertEqual(first_bytes, first_path.read_bytes(), "the first attempt must remain immutable")
+        self.assertNotEqual(first_path, second_path)
+        return store.read(common["snapshot"], common["run_id"], common["name"]), first_path, second_path
+
+    def test_gate_rerun_pass_to_fail_is_authoritative(self):
+        latest, _, _ = self._write_evidence_transition("PASS", "FAIL", run_id="pass-fail")
+        self.assertEqual("FAIL", latest["status"])
+        self.assertEqual(2, latest["evidence"]["attempt"])
+
+    def test_gate_rerun_pass_to_env_is_authoritative(self):
+        latest, _, _ = self._write_evidence_transition("PASS", "ENV", run_id="pass-env")
+        self.assertEqual("ENV", latest["status"])
+
+    def test_gate_rerun_pass_to_blocked_and_stale_are_authoritative(self):
+        for status in ("BLOCKED", "STALE"):
+            with self.subTest(status=status):
+                latest, _, _ = self._write_evidence_transition("PASS", status, run_id=f"pass-{status.lower()}")
+                self.assertEqual(status, latest["status"])
+
+    def test_gate_rerun_fail_to_pass_is_authoritative(self):
+        latest, _, _ = self._write_evidence_transition("FAIL", "PASS", run_id="fail-pass")
+        self.assertEqual("PASS", latest["status"])
+
+    def test_gate_rerun_pass_to_pass_is_auditable(self):
+        latest, first_path, second_path = self._write_evidence_transition("PASS", "PASS", run_id="pass-pass")
+        self.assertEqual("PASS", latest["status"])
+        self.assertTrue(first_path.is_file())
+        self.assertTrue(second_path.is_file())
+
+    def test_gate_reruns_are_scoped_by_snapshot_and_run(self):
+        from evidence_store import EvidenceStore
+
+        store = EvidenceStore(self.repo / "agents/state")
+        common = dict(name="unit_tests", producer="run_tests_gate", harness_version="1.1.4", change_set="f" * 64)
+        store.write(snapshot="a" * 64, run_id="run-a", **common, status="PASS", evidence={"scope": "a"}, allow_pass_retry=True)
+        store.write(snapshot="b" * 64, run_id="run-b", **common, status="FAIL", evidence={"scope": "b"}, allow_pass_retry=True)
+        self.assertEqual("PASS", store.read("a" * 64, "run-a", "unit_tests")["status"])
+        self.assertEqual("FAIL", store.read("b" * 64, "run-b", "unit_tests")["status"])
+
+    def test_final_verifier_reads_the_latest_gate_attempt(self):
+        from evidence_store import EvidenceStore
+        from final_verifier import _validate_artifact
+
+        store = EvidenceStore(self.repo / "agents/state")
+        common = dict(
+            snapshot="e" * 64, run_id="verifier-rerun", name="unit_tests", producer="run_tests_gate",
+            harness_version="1.1.4", change_set="f" * 64, allow_pass_retry=True,
+        )
+        store.write(**common, status="PASS", evidence={"attempt": 1})
+        store.write(**common, status="FAIL", evidence={"attempt": 2})
+        record, error = _validate_artifact(
+            store, common["snapshot"], common["change_set"], common["run_id"], common["name"], common["harness_version"],
+        )
+        self.assertIsNone(record)
+        self.assertIn("status is FAIL", error or "")
+
+    def test_gate_result_bridge_surfaces_authoritative_write_failure(self):
+        from _gate_results import write_gate_result
+        from _vnext_common import ValidationError
+        from evidence_store import EvidenceStore
+
+        results = self.repo / "agents/state/results"
+        payload = {
+            "status": "FAIL",
+            "delivery_snapshot_sha256": "a" * 64,
+            "change_set_sha256": "b" * 64,
+        }
+        with mock.patch.dict(os.environ, {"HARNESS_RUN_ID": "bridge-run", "HARNESS_VERSION": "1.1.4"}), \
+             mock.patch.object(EvidenceStore, "write", side_effect=ValidationError("disk failure")):
+            with self.assertRaisesRegex(ValidationError, "authoritative evidence"):
+                write_gate_result("unit_tests", payload, results_dir_override=results)
+        self.assertFalse((results / "unit_tests.json").exists())
+
+    def test_gate_bridge_discovery_failure_cannot_publish_a_diagnostic_rerun(self):
+        from _gate_results import AuthoritativeEvidenceError, write_gate_result
+        from _vnext_common import atomic_write_json, read_json, ValidationError
+        from evidence_store import EvidenceStore
+
+        state = self.repo / "agents/state"
+        task = state / "tasks/t"
+        atomic_write_json(task / "plan.json", {"status": "VERIFYING"})
+        atomic_write_json(task / "current-run.json", {"run_id": "discovery-run"})
+        payload = {"delivery_snapshot_sha256": "a" * 64, "change_set_sha256": "b" * 64}
+        store = EvidenceStore(state)
+        original = store.write(snapshot="a" * 64, run_id="discovery-run", name="preflight",
+                               producer="preflight_check", harness_version="1.1.4",
+                               change_set="b" * 64, status="PASS", evidence={})
+        original_bytes = original.read_bytes()
+        for filename in ("active-task.json", "plan.json", "current-run.json"):
+            with self.subTest(filename=filename):
+                def unreadable(path):
+                    if Path(path).name == filename:
+                        raise ValidationError("simulated read failure")
+                    return read_json(path)
+                with mock.patch.dict(os.environ, {"HARNESS_RUN_ID": "", "HARNESS_VERSION": "1.1.4"}), \
+                     mock.patch("_vnext_common.read_json", side_effect=unreadable):
+                    with self.assertRaises(AuthoritativeEvidenceError):
+                        write_gate_result("preflight", {**payload, "status": "FAIL"}, results_dir_override=state / "results")
+                self.assertFalse((state / "results/preflight.json").exists())
+                self.assertEqual(original_bytes, original.read_bytes())
+
+        # A later successful retry must append FAIL and invalidate the old PASS.
+        with mock.patch.dict(os.environ, {"HARNESS_RUN_ID": "", "HARNESS_VERSION": "1.1.4"}):
+            write_gate_result("preflight", {**payload, "status": "FAIL"}, results_dir_override=state / "results")
+        from final_verifier import _validate_artifact
+        record, error = _validate_artifact(store, "a" * 64, "b" * 64, "discovery-run", "preflight", "1.1.4")
+        self.assertIsNone(record)
+        self.assertIn("status is FAIL", error)
+
+    def test_gate_bridge_diagnostics_do_not_require_a_current_run(self):
+        from _gate_results import write_gate_result
+        state = self.repo / "agents/state"
+        with mock.patch.dict(os.environ, {"HARNESS_RUN_ID": ""}):
+            self.assertIsNotNone(write_gate_result("preflight", {"status": "FAIL"}, results_dir_override=state / "results"))
+            (state / "active-task.json").unlink()
+            self.assertIsNotNone(write_gate_result("preflight", {"status": "FAIL"}, results_dir_override=state / "results"))
+
+    def test_gate_result_bridge_rerun_updates_immutable_authority_and_mutable_mirror(self):
+        from _gate_results import read_gate_result, write_gate_result
+        from evidence_store import EvidenceStore
+
+        results = self.repo / "agents/state/results"
+        common = {
+            "delivery_snapshot_sha256": "a" * 64,
+            "change_set_sha256": "b" * 64,
+            "producer": "run_tests_gate",
+        }
+        with mock.patch.dict(os.environ, {"HARNESS_RUN_ID": "bridge-rerun", "HARNESS_VERSION": "1.1.4"}):
+            self.assertIsNotNone(write_gate_result("unit_tests", {**common, "status": "PASS"}, results_dir_override=results))
+            self.assertIsNotNone(write_gate_result("unit_tests", {**common, "status": "FAIL"}, results_dir_override=results))
+
+        latest = EvidenceStore(results.parent).read("a" * 64, "bridge-rerun", "unit_tests")
+        self.assertEqual("FAIL", latest["status"])
+        self.assertEqual(2, latest["attempt"])
+        self.assertEqual("FAIL", read_gate_result("unit_tests", results_dir_override=results)["status"])
+
+    def test_gate_explicit_stale_run_cannot_redirect_active_evidence(self):
+        from _gate_results import AuthoritativeEvidenceError, write_gate_result
+        from _vnext_common import atomic_write_json
+        from evidence_store import EvidenceStore
+        state = self.repo / 'agents/state'
+        task = state / 'tasks/t'
+        atomic_write_json(task / 'plan.json', {'status': 'VERIFYING', 'verification_run_id': 'current-run'})
+        atomic_write_json(task / 'current-run.json', {'run_id': 'current-run'})
+        store = EvidenceStore(state)
+        common = dict(snapshot='a' * 64, run_id='current-run', name='preflight',
+            producer='preflight_check', harness_version='1.1.4', change_set='b' * 64)
+        original = store.write(**common, status='PASS', evidence={})
+        original_bytes = original.read_bytes()
+        payload = dict(status='FAIL', delivery_snapshot_sha256='a' * 64, change_set_sha256='b' * 64)
+        with mock.patch.dict(os.environ, {'HARNESS_RUN_ID': 'old-run', 'HARNESS_VERSION': '1.1.4'}):
+            with self.assertRaisesRegex(AuthoritativeEvidenceError, 'authoritative evidence'):
+                write_gate_result('preflight', payload, results_dir_override=state / 'results')
+        self.assertFalse((store.run_dir('a' * 64, 'old-run') / 'preflight.json').exists())
+        self.assertFalse((state / 'results/preflight.json').exists())
+        self.assertEqual(original_bytes, original.read_bytes())
+        with mock.patch.dict(os.environ, {'HARNESS_RUN_ID': 'current-run', 'HARNESS_VERSION': '1.1.4'}):
+            self.assertIsNotNone(write_gate_result('preflight', payload, results_dir_override=state / 'results'))
+        self.assertEqual('FAIL', store.read('a' * 64, 'current-run', 'preflight')['status'])
+        self.assertEqual(original_bytes, original.read_bytes())
+        # Standalone explicit-run callers remain supported when no active task exists.
+        (state / 'active-task.json').unlink()
+        with mock.patch.dict(os.environ, {'HARNESS_RUN_ID': 'standalone-run', 'HARNESS_VERSION': '1.1.4'}):
+            self.assertIsNotNone(write_gate_result('preflight', payload, results_dir_override=state / 'results'))
+        self.assertEqual('FAIL', store.read('a' * 64, 'standalone-run', 'preflight')['status'])
+
+    def test_gate_attempt_history_not_a_directory_fails_closed(self):
+        from _vnext_common import ValidationError
+        from evidence_store import EvidenceStore
+        from final_verifier import _validate_artifact
+        store = EvidenceStore(self.repo / 'agents/state')
+        common = dict(snapshot='a' * 64, run_id='bad-history', name='unit_tests',
+            producer='run_tests_gate', harness_version='1.1.4', change_set='b' * 64, allow_pass_retry=True)
+        original = store.write(**common, status='PASS', evidence={})
+        original_bytes = original.read_bytes()
+        latest = store.write(**common, status='FAIL', evidence={})
+        history = latest.parent
+        parked = history.with_name('parked-history')
+        history.rename(parked)
+        history.write_text('damaged history path', encoding='utf-8')
+        try:
+            with self.assertRaises(ValidationError):
+                store.read('a' * 64, 'bad-history', 'unit_tests')
+            record, error = _validate_artifact(store, 'a' * 64, 'b' * 64, 'bad-history', 'unit_tests', '1.1.4')
+            self.assertIsNone(record)
+            self.assertTrue(error)
+            with self.assertRaises(ValidationError):
+                store.write(**common, status='PASS', evidence={})
+        finally:
+            history.unlink()
+            parked.rename(history)
+        self.assertEqual('FAIL', store.read('a' * 64, 'bad-history', 'unit_tests')['status'])
+        self.assertEqual(original_bytes, original.read_bytes())
+
+    def test_gate_attempt_chain_tampering_fails_closed(self):
+        from _vnext_common import ValidationError
+        from evidence_store import EvidenceStore
+
+        store = EvidenceStore(self.repo / "agents/state")
+        common = dict(
+            snapshot="9" * 64, run_id="tampered-rerun", name="unit_tests", producer="run_tests_gate",
+            harness_version="1.1.4", change_set="8" * 64, allow_pass_retry=True,
+        )
+        store.write(**common, status="PASS", evidence={"attempt": 1})
+        retry_path = store.write(**common, status="FAIL", evidence={"attempt": 2})
+        retry = json.loads(retry_path.read_text(encoding="utf-8"))
+        retry["status"] = "PASS"
+        retry_path.write_text(json.dumps(retry), encoding="utf-8")
+        with self.assertRaisesRegex(ValidationError, "integrity mismatch"):
+            store.read(common["snapshot"], common["run_id"], common["name"])
 
     def test_mutation_guard_blocks_raw_gradle_and_destructive_commands_in_implementing(self):
         sys.path.insert(0, str(SCRIPTS))

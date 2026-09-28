@@ -58,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
 
     selected_gates = {"preflight", "localization", "room"}
     task_changes: list | None = None
+    task_id = ""
     if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
         try:
             if task_id_arg:
@@ -87,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             task_changes = None
 
     if task_changes is not None:
-        classification = classify(repo_target, task_changes=task_changes)
+        classification = classify(repo_target, task_id=task_id or None, task_changes=task_changes)
     else:
         classification = classify(repo_target)
     risk_tier_name = classification["severity"]
