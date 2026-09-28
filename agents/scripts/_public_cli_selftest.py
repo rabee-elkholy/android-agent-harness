@@ -1803,7 +1803,9 @@ class ReadableGradleLogSelftest(unittest.TestCase):
                     paths.append(run_gradle_task.save_raw_log(root, ":app:assembleDebug", f"log {i}\n"))
         kept = sorted((root / "state" / "logs" / "gradle").glob("*.log"))
         self.assertEqual(run_gradle_task.RAW_LOG_KEEP, len(kept))
-        self.assertEqual(paths[-1], kept[-1])
+        # Same file; the state root is resolved, so compare identity rather than spelling (Windows
+        # temp paths can come back as 8.3 short names such as RUNNER~1).
+        self.assertTrue(paths[-1].samefile(kept[-1]))
         self.assertEqual("log 22\n", kept[-1].read_text(encoding="utf-8"))
         line = run_gradle_task.result_line("PASS", ":app:assembleDebug", "1m 56s", 37, kept[-1])
         self.assertEqual(f"[RESULT] PASS :app:assembleDebug in 1m 56s | 37 warning lines not shown | full log: {kept[-1]}", line)
