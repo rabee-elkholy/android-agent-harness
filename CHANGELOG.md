@@ -4,6 +4,14 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.6] - 2026-09-28
+
+Readable gate logs.
+
+### Every host
+- Gradle gates (unit tests, assemble, baseline) no longer stream per-build warnings (`warning:`, `w:`, `[WARN]`, JVM sharing notices) or Gradle's summary chatter (`FROM-CACHE` tasks, deprecation hints, configuration-cache and problems-report lines, the actionable-task count). The full output is kept under `state/logs/gradle/` (newest 20 runs), and every Gradle gate ends with one line: `[RESULT] PASS|FAIL|ENV <task> in <duration> | <n> warning lines not shown | full log: <path>`.
+- The preflight result line names the checks that failed (`PREFLIGHT FAILED (1 of 7 checks): exported components.`) and its evidence detail lists them, instead of "see step exit codes".
+
 ## [1.1.5] - 2026-09-28
 
 Stricter proof for the remaining certification findings, plus a faster local selftest.
