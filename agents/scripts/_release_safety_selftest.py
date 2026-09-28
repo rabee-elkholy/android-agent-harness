@@ -132,6 +132,25 @@ class ReleaseSafetyTests(unittest.TestCase):
             with self.subTest(runs=runs), mock.patch.object(release, "run_cmd", return_value=subprocess.CompletedProcess([], 0, json.dumps(runs), "")):
                 self.assertEqual(allowed, release.wait_for_workflow("ci.yml", sha, timeout=0))
 
+    def test_workflow_gate_accepts_a_pull_request_run_only_for_the_exact_commit_when_allowed(self):
+        sha = "a" * 40
+        pr_pass = dict(headSha=sha, status="completed", conclusion="success", databaseId=5, event="pull_request", headBranch="fix/x")
+        push_pending = dict(headSha=sha, status="in_progress", conclusion="", databaseId=9, event="push", headBranch="main")
+        other_branch_push = dict(pr_pass, event="push", headBranch="fix/x")
+        cases = (
+            ([pr_pass, push_pending], True, True),     # identical code already passed on the PR
+            ([pr_pass, push_pending], False, False),   # tag checks keep requiring the push run
+            ([dict(pr_pass, headSha="b" * 40)], True, False),
+            ([dict(pr_pass, conclusion="failure")], True, False),
+            ([other_branch_push], True, False),        # a push to another branch is not main
+        )
+        for runs, accept_pr, allowed in cases:
+            with self.subTest(runs=runs, accept_pr=accept_pr), \
+                    mock.patch.object(release, "run_cmd", return_value=subprocess.CompletedProcess([], 0, json.dumps(runs), "")) as run:
+                self.assertEqual(allowed, release.wait_for_workflow("ci.yml", sha, timeout=0, accept_pull_request=accept_pr))
+                argv = run.call_args.args[0]
+                self.assertEqual(not accept_pr, "--event" in argv)
+
     def test_packaging_uses_owned_workspace_and_preserves_existing_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

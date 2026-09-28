@@ -72,6 +72,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Windows Defender scans every temporary repository the suites create; exclude the test temp
+      # directory on the throwaway runner. Failure to add the exclusion only costs speed.
+      - name: Exclude selftest temp from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP 'harness-selftest'
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          try { Add-MpPreference -ExclusionPath $tmp, $env:GITHUB_WORKSPACE -ErrorAction Stop } catch { Write-Warning "Defender exclusion not applied: $_" }
+          "HARNESS_SELFTEST_TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Run quick compatibility selftest
         run: python harness_cli.py selftest --quick
 

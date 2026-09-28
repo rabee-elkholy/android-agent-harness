@@ -15,6 +15,7 @@ Readable gate logs, and updating an installed harness from chat.
 
 ### Every host
 - Gradle gates (unit tests, assemble, baseline) no longer stream per-build warnings (`warning:`, `w:`, `[WARN]`, JVM sharing notices) or Gradle's summary chatter (`FROM-CACHE` tasks, deprecation hints, configuration-cache and problems-report lines, the actionable-task count). The full output is kept under `state/logs/gradle/` (newest 20 runs), and every Gradle gate ends with one line: `[RESULT] PASS|FAIL|ENV <task> in <duration> | <n> warning lines not shown | full log: <path>`.
+- Maintainer tooling: Windows CI jobs exclude the selftest temp directory from Defender scanning on the throwaway runner (`HARNESS_SELFTEST_TMP`), and `release_version.py` accepts a successful pull-request CI run for the exact release commit (it is pushed to `main` as a fast-forward, so the tested tree is identical) instead of waiting for a second identical run; tag checks still need their own run.
 - The preflight result line names the checks that failed (`PREFLIGHT FAILED (1 of 7 checks): exported components.`) and its evidence detail lists them, instead of "see step exit codes".
 
 ## [1.1.5] - 2026-09-28

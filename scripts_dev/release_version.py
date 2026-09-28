@@ -221,21 +221,38 @@ def github_release_exists(tag_name: str) -> bool:
 
 
 
-def wait_for_workflow(workflow: str, sha: str, *, branch: str = "main", timeout: float = 1800) -> bool:
-    """Require a successful completed run for the exact commit and ref."""
+def wait_for_workflow(
+    workflow: str, sha: str, *, branch: str = "main", timeout: float = 1800, accept_pull_request: bool = False,
+) -> bool:
+    """Require a successful completed run for the exact commit and ref.
+
+    With accept_pull_request, a successful pull_request run whose head is this exact commit also counts.
+    The release pushes the commit to main as a fast-forward before waiting, so the commit already contains
+    the PR's base and the PR's merge result was this same tree; re-running CI would test identical code.
+    """
     deadline = time.monotonic() + timeout
     while True:
-        result = run_cmd([
-            "gh", "run", "list", "--workflow", workflow, "--commit", sha,
-            "--branch", branch, "--event", "push", "--limit", "20",
-            "--json", "databaseId,headSha,status,conclusion",
-        ], check=False)
+        command = [
+            "gh", "run", "list", "--workflow", workflow, "--commit", sha, "--limit", "50",
+            "--json", "databaseId,headSha,status,conclusion,event,headBranch",
+        ]
+        if not accept_pull_request:
+            command[7:7] = ["--branch", branch, "--event", "push"]
+        result = run_cmd(command, check=False)
         if result.returncode != 0:
             print(f"[FAIL] Cannot verify {workflow}: {result.stderr.strip()}")
             return False
         try:
-            runs = json.loads(result.stdout)
-            runs = [run for run in runs if run.get("headSha") == sha]
+            runs = [
+                run for run in json.loads(result.stdout)
+                if run.get("headSha") == sha
+                and (
+                    (run.get("event", "push") == "push" and run.get("headBranch", branch) == branch)
+                    or (accept_pull_request and run.get("event") == "pull_request")
+                )
+            ]
+            if any(run.get("status") == "completed" and run.get("conclusion") == "success" for run in runs):
+                return True
             latest = max(runs, key=lambda run: int(run["databaseId"])) if runs else None
         except (ValueError, TypeError, KeyError, AttributeError):
             print(f"[FAIL] Invalid workflow response for {workflow}.")
@@ -539,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[OK] Release commit {sha} prepared locally; tagging requires successful CI.")
             return 0
         run_cmd(["git", "push", "origin", "HEAD:refs/heads/main"])
-        if not wait_for_workflow("ci.yml", sha):
+        if not wait_for_workflow("ci.yml", sha, accept_pull_request=True):
             return 1
         if run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip() != sha:
             print("[FAIL] HEAD changed during verification; release stopped.")

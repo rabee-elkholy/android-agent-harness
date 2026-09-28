@@ -55,7 +55,7 @@
     "agents/scripts/_project_intelligence_selftest.py": "f18d819a7f7e2acfa511b75f83c1ca4182db176e9daee65de5167d71ecdab868",
     "agents/scripts/_public_cli_selftest.py": "e75ce4d0a8f4827487cf084b288653876ce4a35b1ffa92619eb539e1efd0792d",
     "agents/scripts/_public_commands.py": "00afc3e01e45bec5e4457a2ddca146a20933c2c16a3c74f0a717073762b3a4d5",
-    "agents/scripts/_release_safety_selftest.py": "19ecfbb15416b2d853db8e8e2603ff86e631e7983550282cac6acb8395746159",
+    "agents/scripts/_release_safety_selftest.py": "0899e0cea2a15f2a7a0b8bf3fb6c8d42ec9324bef4ac3f2ab4c3ee9b37c653d7",
     "agents/scripts/_repo_files.py": "d6bf9dcf94263c5b3383768bd336680ad08c69196234d81f4fd83d3da98bff3a",
     "agents/scripts/_security_selftest.py": "4920275ada24c94c73c00a35a784b836272ce99817b434db1db707db68a3df63",
     "agents/scripts/_stabilization_v41_selftest.py": "11044fcf0e8a4adc601622d311d060a452468034bfa8d92a66d7a904b9ccb8f7",
