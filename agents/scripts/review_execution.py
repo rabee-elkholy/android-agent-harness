@@ -55,6 +55,22 @@ def _resolve_changed_module_count(repo: Path, manifest: dict, plan: dict, policy
     return {"count": 1, "source": "conservative"}
 
 
+def brief_pointer_prompt(role: str, brief_path: str, brief_text: str) -> str:
+    """One-line reviewer prompt naming the current brief by path and content hash.
+
+    Hosts pass this instead of re-emitting the whole brief; the reviewer reads the file.
+    The hash binds the pointer to the brief generated for this run, so a stale or
+    edited file does not match.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(str(brief_text).replace("\r\n", "\n").strip().encode("utf-8")).hexdigest()[:16]
+    return (
+        f"You are {role}. Read your complete review brief at {brief_path} (sha256 {digest}) "
+        "with your file tools and follow it exactly, including its output contract."
+    )
+
+
 def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -> dict:
     state = state_root(repo)
     directory = task_dir(repo, task_id)
@@ -151,6 +167,7 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
             },
             "brief_path": brief_file,
             "brief_content": brief_text,
+            "brief_pointer_prompt": brief_pointer_prompt(rev, brief_file, brief_text) if brief_text else "",
             "review_package_path": review_pkg_str,
             "output_contract": "HARNESS_REVIEW_RESULT_V2",
             "v2_output_contract": "HARNESS_REVIEW_RESULT_V2",

@@ -78,6 +78,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def suggest_symbols(graph, query: str, limit: int = 5) -> list[str]:
+    """Nearest symbol names for a guessed one (O29: `--find AppDatabase` in an app whose
+    database is `FitnessDatabase` returned only a generic tip)."""
+    import difflib
+    import re
+
+    names = sorted({str(getattr(node, "name", "") or "") for node in graph.nodes.values()} - {""})
+    if not names or not query:
+        return []
+    picked: list[str] = []
+    words = re.findall(r"[A-Z][a-z0-9]*|[a-z0-9]+", query)
+    role = words[-1] if words else ""
+    if len(role) >= 3:
+        same_role = [name for name in names if name.lower().endswith(role.lower()) and name != query]
+        picked.extend(sorted(same_role, key=lambda name: -difflib.SequenceMatcher(None, query.lower(), name.lower()).ratio()))
+    lowered = {name.lower(): name for name in names}
+    for match in difflib.get_close_matches(query.lower(), list(lowered), n=limit, cutoff=0.6):
+        picked.append(lowered[match])
+    unique: list[str] = []
+    for name in picked:
+        if name not in unique:
+            unique.append(name)
+    return unique[:limit]
+
+
 def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
     args = parse_args(argv)
@@ -182,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
                 live_print(f"[*] {heal_msg}", err=is_json)
             if not node:
                 live_print(f"[!] Symbol '{args.find}' not found in code graph.", err=True)
+                suggestions = suggest_symbols(engine.graph, args.find)
+                if suggestions:
+                    live_print("[*] Closest symbols: " + ", ".join(suggestions) + ". Query one of them with --find.", err=True)
                 live_print("[*] Tip: '--find' searches code AST symbols (classes, methods, composables). For feature packages use '--feature <name>', or for UI string resources use '--string <text>'.", err=True)
                 return 1
             exact_matches = [node]

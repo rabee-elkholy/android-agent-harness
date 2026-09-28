@@ -113,13 +113,22 @@ def check(repo: Path, paths: list[str], accepted: set[str] | None = None) -> tup
     findings = newly_open_components(repo, paths, accepted)
     if not findings:
         return True, "no newly exported component without a permission"
+    receiver_note = ""
+    if any("<receiver " in item for item in findings):
+        # Short certification O51: nobody mentioned that a manifest receiver does not get implicit broadcasts.
+        receiver_note = (
+            " Note for receivers: since Android 8 a receiver declared in the manifest does not get implicit broadcasts; "
+            "other apps must target the package (Intent.setPackage or an explicit component), so tell the developer "
+            "and put it in the phone checks."
+        )
     return False, (
         "EXPORTED_COMPONENT_WITHOUT_PERMISSION: " + "; ".join(findings)
         + ". Any app can invoke these. Add android:permission (a signature-level permission for internal callers) "
         "or set android:exported=\"false\". If public access is intended, that is the developer's decision: stop and ask "
         "the developer to run, in their own terminal, `python .agents/scripts/exported_component_guard.py --accept "
-        "<android:name> --source developer_terminal --proof-reference \"<why it must be public>\"`. The agent must not "
-        "run it, and tools:ignore does not waive this check."
+        "<android:name> --source developer_terminal --proof-reference \"<why it must be public>\"`, leaving the reason "
+        "for the developer to write. The agent must not run it, and tools:ignore does not waive this check."
+        + receiver_note
     )
 
 

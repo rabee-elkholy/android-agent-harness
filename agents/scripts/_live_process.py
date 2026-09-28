@@ -63,8 +63,13 @@ def sublog(msg: str, *, bullet: str = "*", indent: int = 2) -> None:
     live_print(formatted)
 
 
+STEP_HEARTBEAT_SEC = 30.0
+# run_streaming prints its own heartbeat (naming the last output line); a step around it stays quiet.
+_streaming_active = [0]
+
+
 @contextlib.contextmanager
-def step_progress(name: str, step: int | None = None, total: int | None = None, heartbeat_sec: float = 5.0):  # type: ignore[return]
+def step_progress(name: str, step: int | None = None, total: int | None = None, heartbeat_sec: float = STEP_HEARTBEAT_SEC):  # type: ignore[return]
     """Context manager that prints step progress markers with elapsed time, sublogs, and heartbeat."""
     global _active_step_has_sublogs, _last_sublog_time
     clean_name = name.strip()
@@ -89,10 +94,13 @@ def step_progress(name: str, step: int | None = None, total: int | None = None, 
             return
         while not stop_heartbeat.wait(1.0):
             now = time.time()
+            if _streaming_active[0]:
+                _last_sublog_time[0] = now
+                continue
             if (now - _last_sublog_time[0]) >= heartbeat_sec:
                 _last_sublog_time[0] = now
                 elapsed = int(now - t0)
-                sublog(f"still running ({elapsed}s)...", bullet="[-]")
+                sublog(f"{formatted.strip()}: still running ({elapsed}s)", bullet="[-]")
 
     worker = None
     if heartbeat_sec > 0:
@@ -181,6 +189,7 @@ def run_streaming(
 
     worker = threading.Thread(target=heartbeat, name="harness-heartbeat", daemon=True)
     worker.start()
+    _streaming_active[0] += 1
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -210,6 +219,7 @@ def run_streaming(
             pass
         raise
     finally:
+        _streaming_active[0] -= 1
         stop.set()
         if proc.stdout is not None:
             proc.stdout.close()

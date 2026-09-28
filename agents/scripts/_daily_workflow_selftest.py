@@ -267,7 +267,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
             {"id": "data", "title": "Data layer"}, {"id": "ui", "title": "Settings screen"},
         ]))
         text = plan_summary(plan)
-        self.assertTrue(text.startswith("PLAN_SUMMARY_BEGIN\nTask: plan-summary (FEATURE)"))
+        self.assertTrue(text.startswith("PLAN_SUMMARY_BEGIN\nTask: plan-summary (FEATURE, BOUNDED)"))
         self.assertIn("Phases: 2\n  1. data: Data layer\n  2. ui: Settings screen", text)
         self.assertIn("Files: app/src/main/kotlin/com/example/Login.kt", text)
         self.assertIn("Surfaces: BUSINESS_LOGIC", text)
@@ -276,15 +276,20 @@ class DailyWorkflowSelftest(unittest.TestCase):
         single = draft(self._draft_ns("plan-summary-single"))
         self.assertIn("Phases: none (single phase)", plan_summary(single))
 
-    def test_plan_summary_discloses_the_redacted_approval_payload(self) -> None:
+    def test_plan_summary_is_readable_and_plan_md_discloses_the_payload(self) -> None:
+        # Short certification O53/O44/O46: the approval question showed the whole approval payload
+        # (repository binding, skills, architecture contract) as one paragraph. The summary is now the
+        # reviewable fields plus a link to the generated plan.md, which carries the redacted payload.
         from plan_authority import plan_payload
+        from plan_document import plan_document_path
         from workflow import plan_summary
 
         plan = draft(self._draft_ns(
             "plan-summary-authority",
             planning_depth="BOUNDED",
+            approach="Add a nullable note column and migration 26->27",
             test_strategy="Targeted unit tests",
-            device_strategy="PHYSICAL_PREFERRED",
+            device_strategy="1. Open the water screen -> target shows",
             risks="Database compatibility,authorization=Bearer TOPSECRET123456",
             rollback="Restore feature flag; api_key=TOPSECRET123456",
             external_write=["mcp:release-server:high-impact"],
@@ -298,39 +303,84 @@ class DailyWorkflowSelftest(unittest.TestCase):
                 "critical_boundary": True,
             }],
         ))
-        text = plan_summary(plan)
+        document = plan_document_path(task_dir(self.repo, "plan-summary-authority"))
+        text = plan_summary(plan, document)
 
-        self.assertIn(f"Plan ID: {plan['plan_id']}", text)
-        self.assertIn("Planning depth: BOUNDED", text)
-        self.assertIn("Device strategy: PHYSICAL_PREFERRED", text)
+        self.assertIn("Approach: Add a nullable note column and migration 26->27", text)
+        self.assertIn("Device strategy: 1. Open the water screen -> target shows", text)
         self.assertIn("Risks: Database compatibility, authorization=[REDACTED]", text)
         self.assertIn("Rollback: Restore feature flag; api_key=[REDACTED]", text)
         self.assertIn("External writes: mcp:release-server:high-impact", text)
-        self.assertIn(
-            "Architecture contract: " + json.dumps(redact(plan["architecture_contract"]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-            text,
-        )
-        self.assertIn(
-            "Phase authority: " + json.dumps(redact(plan["phases"][0]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-            text,
-        )
-        self.assertIn(
-            "Skills: " + json.dumps(redact(plan["skills"]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-            text,
-        )
-        self.assertIn(
-            "Repository binding: " + json.dumps(redact(plan["repository"]), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-            text,
-        )
-        self.assertIn(f"Base delivery snapshot: {plan['base_delivery_snapshot_sha256']}", text)
-        self.assertIn(f"Base change set: {plan['base_change_set_sha256']}", text)
-        self.assertIn("Scoped phase review: enabled", text)
-        self.assertIn(
-            "Approval payload (redacted): "
-            + json.dumps(redact(plan_payload(plan)), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-            text,
-        )
+        self.assertIn(f"Full plan: [plan.md]({document.resolve().as_uri()})", text)
+        self.assertIn(f"Plan hash: {plan['plan_sha256'][:12]}", text)
+        for noise in ("Repository binding", "Approval payload", "Skills:", "Architecture contract", "Base change set", "{"):
+            self.assertNotIn(noise, text)
+        self.assertLess(len(text.splitlines()), 25)
         self.assertNotIn("TOPSECRET123456", text)
+
+        body = document.read_text(encoding="utf-8")
+        self.assertIn(f"Plan hash: `{plan['plan_sha256'][:12]}`", body)
+        self.assertIn("## Approach\n\nAdd a nullable note column and migration 26->27", body)
+        self.assertIn("1. Open the water screen -> target shows", body)
+        login = (self.repo / "app/src/main/kotlin/com/example/Login.kt").resolve().as_uri()
+        self.assertIn(f"[app/src/main/kotlin/com/example/Login.kt]({login})", body)
+        self.assertIn("## What needs you", body)
+        payload = json.dumps(redact(plan_payload(plan)), ensure_ascii=False, sort_keys=True, indent=2)
+        self.assertIn(payload, body)
+        self.assertNotIn("TOPSECRET123456", body)
+
+    def test_approach_is_bound_by_the_plan_hash(self) -> None:
+        from plan_authority import validate_plan_hash
+
+        plan = draft(self._draft_ns("approach-bound", approach="Change the toast text only"))
+        self.assertTrue(validate_plan_hash(plan)[0])
+        tampered = dict(plan, approach="Also delete the database")
+        self.assertFalse(validate_plan_hash(tampered)[0])
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="approach-bound"))
+        legacy = draft(self._draft_ns("approach-absent"))
+        self.assertNotIn("approach", legacy)
+        self.assertTrue(validate_plan_hash(legacy)[0])
+
+    def test_revise_regenerates_plan_md_with_what_changed(self) -> None:
+        from plan_document import plan_document_path
+
+        first = draft(self._draft_ns("plan-doc-revise", approach="Show a toast"))
+        document = plan_document_path(task_dir(self.repo, "plan-doc-revise"))
+        self.assertIn(first["plan_sha256"][:12], document.read_text(encoding="utf-8"))
+        revised = revise(argparse.Namespace(**{**vars(self._draft_ns("plan-doc-revise")), "outcome": None,
+                                               "approach": "Show a snackbar instead", "risks": "Snackbar overlaps FAB",
+                                               "planning_depth": None}))
+        body = document.read_text(encoding="utf-8")
+        self.assertIn(f"Plan hash: `{revised['plan_sha256'][:12]}`", body)
+        self.assertNotIn(f"Plan hash: `{first['plan_sha256'][:12]}`", body)
+        self.assertIn(f"## What changed from the previous plan (`{first['plan_sha256'][:12]}`)", body)
+        self.assertIn("- Approach: Show a toast → Show a snackbar instead", body)
+        self.assertIn("- Risks: added Snackbar overlaps FAB", body)
+
+    def test_draft_output_names_plan_gaps_and_the_approval_question(self) -> None:
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        def run(task_id: str, *extra: str) -> str:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ret = workflow_main(["draft", "--repo", str(self.repo), "--task-id", task_id, "--outcome", "Show a message",
+                                     "--kind", "FEATURE", "--expected-files", "app/src/main/kotlin/com/example/Login.kt",
+                                     "--force", *extra])
+            self.assertEqual(0, ret)
+            return out.getvalue()
+
+        bare = run("gaps-bare")
+        self.assertIn("PLAN_GAPS=approach,risks,device checks", bare)
+        self.assertIn("APPROVAL_QUESTION:", bare)
+        self.assertIn("/goal", bare)
+        self.assertIn("Never paste plan.json", bare)
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="gaps-bare"))
+        full = run("gaps-full", "--approach", "Edit Login.kt message", "--risks", "Wrong locale",
+                   "--device-strategy", "1. Log in -> message shows")
+        self.assertNotIn("PLAN_GAPS=", full)
+        self.assertIn("Full plan: [plan.md](", full)
 
     def test_revise_prints_the_new_authority_disclosure_and_hash(self) -> None:
         import contextlib
@@ -2795,6 +2845,34 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertEqual("skip", act["choices"][1]["id"])
         self.assertIn("device install-start", act["choices"][0]["command"])
         self.assertIn("device skip-validation", act["choices"][1]["command"])
+
+    def test_NEXT_006b_unattended_install_setting_installs_without_asking(self) -> None:
+        """Short certification O50: setup I.10 = allow was never read; the router always asked."""
+        from unittest import mock
+        import _product
+
+        plan, tdir, policy, manifest = self._setup_verifying_task("task-next-006b")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy["gates"] = ["preflight", "assemble"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = True
+        policy["device_required"] = True
+        atomic_write_json(Path(current["policy"]), policy)
+        self._record_evidence(manifest, run_id, "preflight", "PASS")
+        self._record_evidence(manifest, run_id, "assemble", "PASS")
+
+        with mock.patch.object(_product, "INSTALL_CONFIRM", "allow"):
+            act = resolve_next_action(self.repo, "task-next-006b", plan)
+            self.assertEqual("DEVICE_INSTALL", act["code"])
+            self.assertEqual("HARNESS_COMMAND", act["kind"])
+            self.assertIn("device install-start", act["command"])
+            # A failed attempt (no phone, install error) goes back to the developer's choice.
+            self._record_evidence(manifest, run_id, "device_install", "FAIL")
+            act = resolve_next_action(self.repo, "task-next-006b", plan)
+            self.assertEqual("MOBILE_VALIDATION_DECISION", act["code"])
+        with mock.patch.object(_product, "INSTALL_CONFIRM", "confirm"):
+            self.assertEqual("MOBILE_VALIDATION_DECISION", resolve_next_action(self.repo, "task-next-006b", plan)["code"])
 
     def test_NEXT_007_sensitive_approval_required_resolves_sensitive_approval(self) -> None:
         """NEXT-007: When sensitive change is ready for final approval, resolve SENSITIVE_APPROVAL."""

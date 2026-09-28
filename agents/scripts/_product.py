@@ -25,7 +25,7 @@ DEVICE_TARGET_POLICY = "allow"  # allow, physical-only, or emulator-only
 # Git history and index remain developer-owned. Host hooks deny agent-driven Git mutations.
 GIT_POLICY = "never"
 # Install confirmation (setup wizard I.10): "confirm" (agent must ask the developer before device install)
-# | "allow" (install without asking). Enforced via the invocation reminder; the safety hook cannot see chat.
+# | "allow" (install without asking). The task router installs directly on "allow" and asks only if that fails.
 INSTALL_CONFIRM = "confirm"
 # Project tracker (setup wizard I.20). Absent/empty = zoho_sprints (historical default).
 # Options: zoho_sprints | github_projects | jira_mcp | linear_mcp | none

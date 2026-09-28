@@ -160,6 +160,32 @@ class HookTests(unittest.TestCase):
             self.assertEqual("deny", res["decision"], command)
             self.assertEqual("DEVELOPER_AUTHORITY", res.get("reason_code"), command)
 
+    def test_denied_cancel_hands_the_developer_the_command_and_blocks_undo(self):
+        """Short certification O55: after a denied cancel the agent resumed the task and reverted
+        files by hand under the plan's authority. The denial names the developer's command, and
+        until the developer acts the agent may not resume, revise or edit."""
+        self.activate("IMPLEMENTING", task_kind="FEATURE")
+        edit = {"TargetFile": "app/A.kt"}
+        self.assertEqual("allow", self.call("write_to_file", edit)["decision"])
+        res = self.call("run_command", {"CommandLine": "python .agents/scripts/workflow.py cancel --repo . --task-id task-one"})
+        self.assertEqual("DEVELOPER_AUTHORITY", res.get("reason_code"))
+        self.assertIn("ask_question", res["reason"])
+        self.assertIn("python .agents/scripts/workflow.py cancel --repo . --task-id task-one", res["reason"])
+        for command in ("python .agents/scripts/workflow.py resume --repo . --task-id task-one",
+                        "python .agents/harness.py task revise --task-id task-one --outcome x"):
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertEqual("deny", res["decision"], command)
+            self.assertEqual("CANCEL_PENDING", res.get("reason_code"), command)
+        res = self.call("write_to_file", edit)
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("CANCEL_PENDING", res.get("reason_code"))
+        # Reading stays allowed, and the request lapses so a stale marker never locks the task.
+        self.assertNotEqual("CANCEL_PENDING", self.call("run_command", {"CommandLine": "git status"}).get("reason_code"))
+        marker = self.state / "cancel-requested.json"
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        marker.write_text(json.dumps({**data, "requested_at": data["requested_at"] - 31 * 60}), encoding="utf-8")
+        self.assertEqual("allow", self.call("write_to_file", edit)["decision"])
+
     def test_draft_force_denial_points_to_revise(self):
         """Round 4: an agent fixing a pending plan tried draft --force; the denial must name the real path."""
         res = self.call("run_command", {"CommandLine": 'python .agents/scripts/workflow.py draft --repo . --task-id t --outcome "x" --force'})

@@ -362,7 +362,7 @@ Final Verifier
 
 The harness is engineered primary-first for **Google Antigravity**:
 
-For materially ambiguous work, Antigravity's `/grill-me` can clarify design decisions before plan drafting. After approval, `/goal` can sustain execution while the Harness router remains the authority for next actions and completion.
+For materially ambiguous work, Antigravity's `/grill-me` can clarify design decisions before plan drafting; the agent suggests it for design, migration, compatibility and security decisions. After approval, `/goal` can sustain execution while the Harness router remains the authority for next actions and completion; the approval question reminds the developer to type it. Every plan also gets a readable, generated `plan.md` linked from the approval question.
 
 - **Review Protocol V2**: Specialist reviewers return structured, machine-verifiable JSON (`HARNESS_REVIEW_RESULT_V2`) rather than fragile text tokens. Findings are typed, prioritized, and cryptographically bound to the frozen delivery snapshot, change set, and review package digest.
 - **Dedicated Custom Reviewer Subagents**: Seven core specialist reviewers are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md` (`bug-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `regression-impact-reviewer-agent`, `test-quality-reviewer-agent`, `spec-compliance-agent`).

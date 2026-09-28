@@ -50,3 +50,4 @@ It keeps state, tasks, answers, notes and developer instructions, and rolls back
 Run: `python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json`
 Doctor validates the harness and each selected host's adapter (Antigravity: hooks, 7 reviewers in `.agents/agents/`, Review Protocol V2).
 On success show 0 changed app files and the installed version, and say: “Android Agent Harness is ready. Open a NEW chat at the project root.”
+END OF PROMPT (5 phases).

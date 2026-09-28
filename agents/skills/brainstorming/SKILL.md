@@ -10,15 +10,15 @@ Planning depth is advisory and categorizes tasks into two levels:
 - **BOUNDED (Default)**: Normal bug fixes, targeted UI tweaks, single-screen features, small repository methods, or isolated Room migrations. These tasks skip architectural design ceremony and proceed directly to the standard implementation plan.
 - **ARCHITECTURAL**: Multi-module restructuring, public API redesigns, persistence or networking layer swaps, major authentication redesigns, or app-wide state pattern migrations.
 
-For `ARCHITECTURAL` tasks, activate this skill to author a concise **Design-Lite** section inside the single `implementation_plan.md` artifact before requesting approval.
+For `ARCHITECTURAL` tasks, activate this skill to work out a concise **Design-Lite** and carry the selected approach into the plan: `workflow.py draft --approach "..." --risks "..."`. The harness renders it in the approval summary and in the generated `plan.md`.
 
 > [!IMPORTANT]
-> **Single Approval Invariant**: The Design-Lite exploration does NOT create an extra approval round. The single interactive **Proceed** button on `implementation_plan.md` authorizes both the chosen design approach and the implementation plan.
+> **Single Approval Invariant**: The Design-Lite exploration does NOT create an extra approval round. The one plan approval (bound to the plan hash, which covers `--approach`) authorizes both the chosen design approach and the implementation plan.
 
 ---
 
 ## 2. Design-Lite Structure (ARCHITECTURAL Tasks)
-When authoring an architectural plan, include a concise section with:
+When preparing an architectural plan, settle these points (the selected approach goes into `--approach`, trade-off risks into `--risks`):
 1. **Goal & Constraints**: What must change and what non-negotiable boundaries exist.
 2. **Current Architecture**: The existing pattern, module topology, or contract.
 3. **Option A (Minimal / Evolutionary)**: Smallest blast radius, builds on existing code structure.
@@ -55,4 +55,4 @@ Before proposing an approach, verify that it adheres to strict platform invarian
 
 ### Phase 4: Developer Alignment & Spec Locking
 - Present trade-offs concisely to the developer in chat or via `ask_question` when user preferences are needed.
-- Lock the agreed technical specification before authoring the `implementation_plan.md` artifact.
+- Lock the agreed technical specification before running `workflow.py draft`.

@@ -20,7 +20,7 @@ from baseline_capture import (  # noqa: E402
     parse_report,
     test_key,
 )
-from run_tests_gate import baseline_advisory, classify_failures, report_paths, report_signatures  # noqa: E402
+from run_tests_gate import baseline_advisory, classify_failures, report_paths, report_signatures, verdict_lines  # noqa: E402
 
 FAILURES: list[str] = []
 ROOT = Path(tempfile.mkdtemp())
@@ -173,7 +173,20 @@ def test_new_error_type_on_known_test_is_new_regression() -> None:
     check(len(new_regressions) == 1 and not ignored, "new error type on known test is flagged NEW_REGRESSION")
 
 
+def test_verdict_lines_explain_gradle_fail_over_baseline() -> None:
+    # Short certification O48: "[RESULT] FAIL" from Gradle was followed by "[SUCCESS] passed" with no reason.
+    passed_over_baseline = verdict_lines(True, "1 pre-existing failure(s) ignored via baseline (1 known)", 1, [])
+    texts = [text for text, _ in passed_over_baseline]
+    check(any("already failed before this task" in t for t in texts), "baseline pass explains the Gradle FAIL line")
+    check(texts[-1].startswith("[SUCCESS] Unit-test gate passed"), "baseline pass ends with SUCCESS")
+    clean = [text for text, _ in verdict_lines(True, "all tests passed", 0, [])]
+    check(clean == ["[SUCCESS] Unit-test gate passed: all tests passed"], "clean pass has no baseline note")
+    regress = verdict_lines(False, "", 1, ["A#a", "B#b"])
+    check(regress[0][0].startswith("[FAIL] NEW_REGRESSION: 2") and all(err for _, err in regress), "new regressions are errors")
+
+
 def main() -> int:
+    test_verdict_lines_explain_gradle_fail_over_baseline()
     test_parse_report()
     test_parse_corrupt()
     test_fingerprint_stability()

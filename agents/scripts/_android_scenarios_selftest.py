@@ -1366,6 +1366,11 @@ class ExportedComponentGuardTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn('<receiver android:name=".New">', detail)
         self.assertNotIn(".Old", detail)
+        # Short certification O51: a manifest receiver gets no implicit broadcasts; the gate says so.
+        self.assertIn("does not get implicit broadcasts", detail)
+        self.assertIn("leaving the reason for the developer to write", detail)
+        self.write('<receiver android:name=".Old" android:exported="true"/><service android:name=".Svc" android:exported="true"/>')
+        self.assertNotIn("implicit broadcasts", check(self.repo, [self.rel], accepted=set())[1])
 
     def test_permission_or_not_exported_passes(self) -> None:
         from exported_component_guard import check

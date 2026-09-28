@@ -1494,6 +1494,44 @@ class PreflightScopeV42Tests(unittest.TestCase):
         ok, msg = check_room_working_tree(paths=None, repo=self.tmp)
         self.assertTrue(ok, msg)
 
+    def test_PREFLIGHT42_003c_only_the_changed_database_is_checked(self) -> None:
+        """Short certification O54: one database file changed and the gate reported all five
+        databases of the app (a changed database file counted as a migration source of the others)."""
+        from unittest import mock
+        import room_guard
+
+        pkg = self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example"
+        builder = "Room.databaseBuilder(ctx, {name}::class.java, \"{name}\")"
+        for name, entity in (("AppDatabase", "User"), ("LogsDatabase", "Log")):
+            (pkg / f"{name}.kt").write_text(
+                "package com.example\n"
+                f"@Database(entities = [{entity}::class], version = 1)\n"
+                f"abstract class {name} : RoomDatabase() {{\n"
+                f"    fun build(ctx: Context) = {builder.format(name=name)}.build()\n"
+                "}\n"
+                f"data class {entity}(val id: Int)\n",
+                encoding="utf-8",
+            )
+        subprocess.run(["git", "add", "."], cwd=self.tmp, check=True)
+        subprocess.run(["git", "commit", "-m", "two databases", "-q"], cwd=self.tmp, check=True)
+        (pkg / "AppDatabase.kt").write_text(
+            "package com.example\n"
+            "@Database(entities = [User::class], version = 2)\n"
+            "abstract class AppDatabase : RoomDatabase() {\n"
+            f"    fun build(ctx: Context) = {builder.format(name='AppDatabase')}.addMigrations(MIGRATION_1_2).build()\n"
+            "    val MIGRATION_1_2 = object : Migration(1, 2) { override fun migrate(db: SupportSQLiteDatabase) { db.execSQL(\"ALTER TABLE User ADD COLUMN note TEXT\") } }\n"
+            "}\n"
+            "data class User(val id: Int, val note: String? = null)\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(room_guard, "git_head_text", wraps=room_guard.git_head_text) as head:
+            ok, msg = room_guard.check_room_working_tree(paths=None, repo=self.tmp)
+        self.assertTrue(ok, msg)
+        self.assertIn("AppDatabase.kt", msg)
+        self.assertNotIn("LogsDatabase", msg)
+        asked = [call.args[0] for call in head.call_args_list]
+        self.assertEqual(len(asked), len(set(asked)), "each HEAD file is read once per gate run")
+
     def test_PREFLIGHT42_004_unrelated_dirty_business_logic_does_not_elevate_resource_task(self) -> None:
         """PREFLIGHT42-004: Unrelated dirty BUSINESS_LOGIC + current RESOURCE_UI task -> classification reflects RESOURCE_UI."""
         # Pre-existing unrelated dirty business logic before task begins

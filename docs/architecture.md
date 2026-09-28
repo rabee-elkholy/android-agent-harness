@@ -15,7 +15,7 @@ stateDiagram-v2
 
 The approval hash includes plan identity, requested outcome, scope, tests, device strategy, risks, rollback, skills, repository identity, and base snapshot. `begin` consumes a single-use nonce. New surfaces or modules require a revised plan and fresh approval.
 
-`draft` and `revise` render `PLAN_SUMMARY` from the registered approval payload, including external writes, device strategy, risks, rollback, architecture contract, phase authority, and repository binding. Display redaction does not modify the plan or its approval hash. Secret-shaped assignments, including compound names such as `access_token` and `client_secret`, are redacted; use credential references rather than putting credentials in a plan. Redaction is not a general-purpose secret detector.
+`draft` and `revise` render `PLAN_SUMMARY` from the registered approval payload: the reviewable fields (outcome, approach, files, tests, device strategy, risks, rollback, external writes, phases) and a link to `plan.md`. `plan.md` is generated next to `plan.json` on every draft and revise; it adds clickable file links, the gates and reviewers that will run, what needs the developer, a "what changed" section after a revise, and the full redacted approval payload (architecture contract, phase authority, repository binding). The plan hash covers the whole payload. Display redaction does not modify the plan or its approval hash. Secret-shaped assignments, including compound names such as `access_token` and `client_secret`, are redacted; use credential references rather than putting credentials in a plan. Redaction is not a general-purpose secret detector.
 
 ## Delivery identity
 

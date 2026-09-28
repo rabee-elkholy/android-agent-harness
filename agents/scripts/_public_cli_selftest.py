@@ -1241,6 +1241,40 @@ class PhaseDRepairSelftest(unittest.TestCase):
         data = json.loads(proc.stdout)
         self.assertEqual(data.get("status"), "PASS")
 
+    def test_init_consumes_only_temporary_answers_files(self) -> None:
+        """Short certification O41: the agent's cleanup of the chat answers file was refused outside a
+        task, so it stayed in ~/.android-harness. Setup removes it once saved; other files stay."""
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("harness_cli_answers", str(KIT / "harness_cli.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        home = self.repo / "home" / ".android-harness"
+        kit = home / "kit"
+        kit.mkdir(parents=True)
+        elsewhere = self.repo / "project-answers.json"
+        temp_answers = home / "answers-temp.json"
+        kit_file = kit / "answers.json"
+        for path in (elsewhere, temp_answers, kit_file):
+            path.write_text("{}", encoding="utf-8")
+        outside_temp = self.repo / "home" / "tmp"
+        outside_temp.mkdir()
+        app = self.repo / "home" / ".android-harness" / "app"
+        app.mkdir()
+        inside_app = app / "answers.json"
+        inside_app.write_text("{}", encoding="utf-8")
+        with mock.patch.object(mod, "KIT_DIR", kit), mock.patch("tempfile.gettempdir", return_value=str(outside_temp)):
+            mod._consume_temp_answers(temp_answers, app)
+            mod._consume_temp_answers(elsewhere, app)
+            mod._consume_temp_answers(kit_file, app)
+            mod._consume_temp_answers(inside_app, app)
+            mod._consume_temp_answers(None, app)
+        self.assertFalse(temp_answers.exists())
+        self.assertTrue(elsewhere.exists())
+        self.assertTrue(kit_file.exists())
+        self.assertTrue(inside_app.exists(), "a file inside the app checkout is never deleted")
+
     def test_git_fetch_timeout_exits_nonzero_and_preserves_valid_kit(self) -> None:
         """Git fetch timeout during provisioning exits non-zero with remediation and leaves existing kit intact."""
         import importlib.util

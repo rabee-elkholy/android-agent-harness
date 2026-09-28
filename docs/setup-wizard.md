@@ -38,7 +38,7 @@ toggle. The harness never commits, rebases, resets, or pushes automatically.
 | `I.15` | **Unit Tests Gate** | `Yes` | Run the targeted unit-test task before assemble. |
 | `I.22` | **Device Verification** | `Manual Smoke` | Interactive manual verification on device *(Recommended)* or disabled. |
 | `I.4` | **Device Target Policy** | `Physical + Emulator` | *(Cascading: skipped if I.22 is disabled)* Both allowed *(Recommended)* or physical phone only. |
-| `I.10` | **Install Confirmation** | `Ask first` | *(Cascading: skipped if I.22 is disabled)* Require confirmation before device installation. |
+| `I.10` | **Install Confirmation** | `Ask first` | *(Cascading: skipped if I.22 is disabled)* `Ask first` asks before each phone install; `Install without asking` lets the router install directly and ask only if that attempt fails. |
 
 The full interview protocol the installing agent executes lives in
 [`setup-prompt.md`](setup-prompt.md).

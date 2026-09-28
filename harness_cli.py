@@ -574,10 +574,38 @@ def cmd_init(args: argparse.Namespace) -> int:
     if port_code != 0:
         print("[!] Engine port reported failures; review doctor output above.")
         return port_code
+    _consume_temp_answers(answers_source, repo)
     print()
     print("[SUCCESS] Android Agent Harness installed; run doctor for local validation.")
     print(f"[VERIFY] Run anytime: android-harness doctor --repo \"{repo}\"")
     return 0
+
+
+def _consume_temp_answers(path: Path | None, repo: Path) -> None:
+    """Delete a chat-created answers file once setup has copied it into `.harness-setup/answers.json`.
+
+    Only a file in the harness home (~/.android-harness, outside the kit) or the system temp
+    directory is removed, and never one inside the app checkout; the agent's own cleanup is
+    refused by the hook outside a task, so it would stay.
+    """
+    if path is None:
+        return
+    import tempfile
+
+    try:
+        resolved = path.resolve()
+        roots = [KIT_DIR.parent.resolve(), Path(tempfile.gettempdir()).resolve()]
+        if (
+            resolved.is_file()
+            and resolved.suffix == ".json"
+            and any(resolved.is_relative_to(r) for r in roots)
+            and not resolved.is_relative_to(KIT_DIR.resolve())
+            and not resolved.is_relative_to(Path(repo).resolve())
+        ):
+            resolved.unlink()
+            print(f"[i] Removed the temporary answers file {resolved} (saved as .harness-setup/answers.json).")
+    except OSError as exc:
+        print(f"[i] Could not remove the temporary answers file {path}: {exc}")
 
 
 def cmd_update(args: argparse.Namespace) -> int:
@@ -661,6 +689,7 @@ def cmd_update(args: argparse.Namespace) -> int:
                     print(f"[FAIL] App checkout update failed with exit code {port_code}; success was not recorded.")
                     return port_code
                 completed = True
+                _consume_temp_answers(temp_answers, repo)
                 print("[SUCCESS] App checkout updated and verified.")
                 return 0
         finally:

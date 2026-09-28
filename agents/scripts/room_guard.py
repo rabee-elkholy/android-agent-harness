@@ -292,6 +292,20 @@ def iter_database_files(repo: Path | None = None) -> list[Path]:
     return db_files
 
 
+def _belongs_to_database(candidate: Path, class_name: str, other_classes: set[str]) -> bool:
+    """Whether a changed candidate file can carry migrations for this database."""
+    try:
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    if "@Database" in text and not (class_name and re.search(rf"\b{re.escape(class_name)}\b", text)):
+        return False
+    mentions_other = any(re.search(rf"\b{re.escape(name)}\b", text) for name in other_classes)
+    if mentions_other and not (class_name and re.search(rf"\b{re.escape(class_name)}\b", text)):
+        return False
+    return True
+
+
 def check_room_working_tree(
     modified_rels: list[str] | Path | None = None,
     repo: Path | None = None,
@@ -312,6 +326,13 @@ def check_room_working_tree(
     def _rel(path: Path) -> str:
         return path.relative_to(root).as_posix()
 
+    head_cache: dict[str, str | None] = {}
+
+    def head_text(rel: str) -> str | None:
+        if rel not in head_cache:
+            head_cache[rel] = git_head_text(rel, root)
+        return head_cache[rel]
+
     paths = changed_paths(repo=root, include_deleted=True) if modified_rels is None else [root / r for r in modified_rels]
     changed_src = [p for p in paths if p.suffix in (".kt", ".java") and p.is_file()]
 
@@ -330,8 +351,8 @@ def check_room_working_tree(
     if not has_room_triggers:
         for p in paths:
             if p.suffix in (".kt", ".java") and not p.is_file():
-                head_text = git_head_text(_rel(p), root) or ""
-                if any(token in head_text for token in room_tokens):
+                deleted_text = head_text(_rel(p)) or ""
+                if any(token in deleted_text for token in room_tokens):
                     has_room_triggers = True
                     break
 
@@ -347,7 +368,7 @@ def check_room_working_tree(
             rel = _rel(p)
             changed_rels.add(rel)
             changed_types.add(p.stem)
-            head_content = git_head_text(rel, root)
+            head_content = head_text(rel)
             if head_content:
                 changed_types.update(declared_type_names(head_content))
 
@@ -360,12 +381,15 @@ def check_room_working_tree(
             continue
         databases.append((path, parse_database_source(text, _rel(path), root, source_index)))
 
+    def other_database_classes(decl: DatabaseDecl) -> set[str]:
+        return {d.class_name for _, d in databases if d.class_name and d.class_name != decl.class_name}
+
     affected: list[tuple[Path, DatabaseDecl, DatabaseDecl | None, str]] = []
     for path, decl in databases:
         reasons = []
         if decl.rel in changed_rels:
             reasons.append("database file changed")
-        old_text = git_head_text(decl.rel, root)
+        old_text = head_text(decl.rel)
         old_decl = parse_database_source(old_text, decl.rel, root, source_index) if old_text else None
 
         all_entities = set(decl.entity_names)
@@ -378,11 +402,14 @@ def check_room_working_tree(
         if hit:
             reasons.append("entities changed: " + ", ".join(hit))
 
-        candidate_files = find_candidate_migration_files(path, changed_src, root)
+        candidate_files = [
+            p for p in find_candidate_migration_files(path, changed_src, root)
+            if _belongs_to_database(p, decl.class_name, other_database_classes(decl))
+        ]
         candidate_rels = {_rel(p) for p in candidate_files}
         for deleted in paths:
             if deleted.suffix in (".kt", ".java") and not deleted.is_file():
-                previous = git_head_text(_rel(deleted), root) or ""
+                previous = head_text(_rel(deleted)) or ""
                 if "Migration" in previous or "databaseBuilder" in previous:
                     candidate_rels.add(_rel(deleted))
         if candidate_rels & changed_rels:
@@ -422,7 +449,7 @@ def check_room_working_tree(
         if old_ver is not None:
             sources = set(find_candidate_migration_files(path, changed_src, root)) | {path}
             sources.update(p for p in paths if p.suffix in (".kt", ".java"))
-            old_bodies = [text for p in sources if (text := git_head_text(_rel(p), root))]
+            old_bodies = [text for p in sources if (text := head_text(_rel(p)))]
             new_bodies = [p.read_text(encoding="utf-8", errors="replace") for p in sources if p.is_file()]
             historical = registered_migration_edges(old_bodies, new_decl.class_name, other_db_classes)
             current_edges = registered_migration_edges(new_bodies, new_decl.class_name, other_db_classes)

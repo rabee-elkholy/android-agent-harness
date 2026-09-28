@@ -229,6 +229,25 @@ class ChatInstallationDocsTests(unittest.TestCase):
         adapter = (KIT / "agents/tool-adapters/AGENTS.md.template").read_text(encoding="utf-8")
         self.assertLessEqual(len(kernel) + len(adapter), 12_000)
 
+    def test_antigravity_adapter_is_bounded_and_prompts_goal_and_grill_me(self) -> None:
+        # Short certification O45: /goal and /grill-me are developer-typed; the agent never reminded
+        # the developer. The approval question carries the /goal line and the adapter tells the agent
+        # to suggest /grill-me inside ask_question before drafting risky decisions.
+        from workflow import APPROVAL_QUESTION_GUIDE
+
+        gemini = (KIT / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
+        self.assertLessEqual(len(gemini), 23_000, "GEMINI.md grows unbounded; move detail into router output")
+        self.assertIn("type /goal as its own message", APPROVAL_QUESTION_GUIDE)
+        self.assertIn("`APPROVAL_QUESTION` line", gemini)
+        self.assertIn("to type `/goal` as its own message after approving", gemini)
+        self.assertIn("suggest inside an `ask_question` that the developer types `/grill-me` first", gemini)
+        self.assertIn("an existing destructive fallback, users on older schema versions and downgrade", gemini)
+        self.assertIn("Cancel is the developer's", gemini)
+        self.assertIn("`reviewer_prompts[role]`", gemini)
+        self.assertIn("never write their reason for them", gemini)
+        reminder = (KIT / "agents/scripts/pre_invocation_reminder.py").read_text(encoding="utf-8")
+        self.assertIn("types `/grill-me` before you draft", reminder)
+
     def test_all_tool_adapters_contain_mobile_walkthrough_and_independent_review_rules(self) -> None:
         templates_dir = KIT / "agents" / "tool-adapters"
         adapters = [

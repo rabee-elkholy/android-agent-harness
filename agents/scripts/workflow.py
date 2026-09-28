@@ -366,6 +366,7 @@ def assert_single_live_task(repo: Path, allowed_task_id: str | None = None) -> l
 def draft(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
+    _clear_cancel_request(repo)
 
     # 0. Reconcile clean delivered tasks automatically before conflict checks
     reconcile_delivery(repo)
@@ -445,7 +446,21 @@ def draft(args: argparse.Namespace) -> dict:
                     "Use 'workflow.py revise' to update it or cancel it first via 'workflow.py cancel'."
                 )
 
-    return _build_and_save_plan(repo, args, task_id, is_revision=False)
+    plan = _build_and_save_plan(repo, args, task_id, is_revision=False)
+    _write_plan_document(repo, task_id, plan)
+    return plan
+
+
+def _write_plan_document(repo: Path, task_id: str, plan: dict, previous: dict | None = None) -> Path:
+    from plan_document import write_plan_document
+
+    directory = task_dir(repo, task_id)
+    policy_file = directory / "preliminary-policy.json"
+    try:
+        policy = read_json(policy_file) if policy_file.is_file() else {}
+    except (OSError, ValueError):
+        policy = {}
+    return write_plan_document(repo, directory, plan, policy=policy, previous=previous)
 
 
 def _resolve_task_context_for_draft(repo: Path, task_context_id: str | None) -> dict[str, Any] | None:
@@ -622,6 +637,15 @@ def is_architecture_neutral_scope(
     if surfaces and not (surfaces <= NEUTRAL_ARCHITECTURE_SURFACES):
         return False
     return all(is_architecture_neutral_path(p) for p in scope_files)
+
+
+def _install_confirm_policy() -> str:
+    """Setup answer I.10: "allow" installs on the phone without asking; anything else asks first."""
+    try:
+        import _product
+        return str(getattr(_product, "INSTALL_CONFIRM", "confirm") or "confirm").strip().lower()
+    except Exception:
+        return "confirm"
 
 
 def _plan_scope_policy() -> str:
@@ -1052,6 +1076,7 @@ def _build_and_save_plan(
             revision_number=int((old_plan or {}).get("revision_number", 1)) + 1,
             zoho_link=zoho_link,
             scoped_phase_review_enabled=scoped_phase_review_val,
+            approach=getattr(args, "approach", None) or "",
         )
         plan["task_baseline"] = old_baseline
         plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
@@ -1143,6 +1168,7 @@ def _build_and_save_plan(
         phases=parsed_phases,
         zoho_link=zoho_link,
         scoped_phase_review_enabled=scoped_phase_review_val,
+        approach=getattr(args, "approach", None) or "",
     )
     if cached_ctx and cached_ctx.get("context_id"):
         plan["task_context_id"] = cached_ctx["context_id"]
@@ -1306,7 +1332,7 @@ def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argp
             new_files = normalize_expected_files(repo, args.expected_files)
             surfaces |= set(classify(repo, task_changes=[{"path": item} for item in new_files]).get("surfaces") or [])
         merged.expected_surfaces = joined(sorted(surfaces))
-    for name in ("test_strategy", "device_strategy", "rollback"):
+    for name in ("test_strategy", "device_strategy", "rollback", "approach"):
         if not given(name) and old_plan.get(name):
             setattr(merged, name, old_plan[name])
     if not given("risks") and old_plan.get("risks"):
@@ -1389,6 +1415,7 @@ def revise(args: argparse.Namespace) -> dict:
             os.replace(parked_run_file, current_run_file)
         raise
     parked_run_file.unlink(missing_ok=True)
+    _write_plan_document(repo, task_id, result, previous=old_plan)
     return result
 
 
@@ -1913,7 +1940,13 @@ def cancel(args: argparse.Namespace) -> dict:
             pass
     from discovery_receipt import clear_latest_discovery_receipt
     clear_latest_discovery_receipt(repo)
+    _clear_cancel_request(repo)
     return plan
+
+
+def _clear_cancel_request(repo: Path) -> None:
+    """A lifecycle command that actually ran settles a pending cancel request (the hook's CANCEL_PENDING)."""
+    (state_root(repo) / "cancel-requested.json").unlink(missing_ok=True)
 
 
 def recover_stale(args: argparse.Namespace) -> dict:
@@ -1964,6 +1997,7 @@ def recover_stale(args: argparse.Namespace) -> dict:
 def resume(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     assert_single_live_task(repo, allowed_task_id=args.task_id)
+    _clear_cancel_request(repo)
     plan = _load_plan(repo, args.task_id)
     status = plan.get("status")
 
@@ -3811,6 +3845,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                                 "reviewers": sorted(not_dispatched),
                                 "package_path": str(pkg_path),
                                 "briefs": briefs,
+                                "reviewer_prompts": _reviewer_prompts(exec_profile, sorted(not_dispatched)),
                                 "review_execution_profile": exec_profile,
                             },
                             "expected": {"success_statuses": ["PASS"]},
@@ -3922,6 +3957,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                             "reviewers": sorted(req_set - dispatched_reviewers),
                             "package_path": str(pkg_path),
                             "briefs": briefs,
+                            "reviewer_prompts": _reviewer_prompts(exec_profile, sorted(req_set - dispatched_reviewers)),
                             "review_execution_profile": exec_profile,
                         },
                         "expected": {"success_statuses": ["PASS"]},
@@ -4027,6 +4063,23 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         if device_required:
             if not has_skip_evidence("mobile_validation_skip"):
                 if not has_pass_evidence("device_install") or not has_pass_evidence("device_launch"):
+                    try:
+                        store.read(snapshot, run_id, "device_install")
+                        install_attempted = True
+                    except Exception:
+                        install_attempted = False
+                    if _install_confirm_policy() == "allow" and not install_attempted:
+                        # The developer chose unattended install at setup; ask only if it does not work.
+                        return {
+                            "code": "DEVICE_INSTALL",
+                            "kind": "HARNESS_COMMAND",
+                            "command": "python .agents/harness.py device install-start",
+                            "blocking": True,
+                            "reason": "Install and launch on the connected phone (setup: install without asking). "
+                                      "If it fails, the developer decides whether to retry or skip.",
+                            "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                            "expected": {"success_exit_codes": [0]},
+                        }
                     return {
                         "code": "MOBILE_VALIDATION_DECISION",
                         "kind": "DEVELOPER_ACTION",
@@ -4495,8 +4548,15 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
     command.add_argument("--expected-surfaces")
     command.add_argument("--expected-modules")
     command.add_argument("--test-strategy")
-    command.add_argument("--device-strategy")
-    command.add_argument("--risks")
+    command.add_argument(
+        "--approach",
+        help="How the change will be made, in a few sentences (which classes/functions change and why); shown to the developer",
+    )
+    command.add_argument("--risks", help="Comma-separated risks the developer should know before approving")
+    command.add_argument(
+        "--device-strategy",
+        help="Phone checks the developer will do, each with its expected result (e.g. '1. Open X -> Y shows; 2. ...')",
+    )
     command.add_argument("--rollback")
     command.add_argument(
         "--external-write", action="append", default=[], metavar="INTEGRATION",
@@ -4631,8 +4691,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def plan_summary(plan: dict) -> str:
-    """Canonical text of the registered plan; the agent presents it verbatim for approval."""
+def _reviewer_prompts(profile: Any, roles: list[str]) -> dict[str, str]:
+    """Role -> one-line brief pointer the host passes as the reviewer Prompt."""
+    reviewers = (profile or {}).get("reviewers") if isinstance(profile, dict) else {}
+    prompts = {}
+    for role in roles:
+        pointer = str(((reviewers or {}).get(role) or {}).get("brief_pointer_prompt") or "")
+        if pointer:
+            prompts[role] = pointer
+    return prompts
+
+
+def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
+    """Canonical, reviewable text of the registered plan; the agent presents it verbatim for approval.
+
+    The full redacted approval payload (bindings, skills, architecture contract) lives in the
+    generated plan.md, which the summary links; the plan hash covers both.
+    """
     authority = plan_payload(plan)
 
     def listed(values: Any) -> str:
@@ -4650,22 +4725,15 @@ def plan_summary(plan: dict) -> str:
     phases = authority.get("phases") or []
     lines = [
         "PLAN_SUMMARY_BEGIN",
-        f"Task: {plan.get('task_id')} ({plan.get('task_kind') or 'AUTO'})",
-        f"Plan schema: {plan.get('schema_version') or 'unknown'}",
-        f"Plan ID: {plan.get('plan_id') or ''}",
-        f"Planning depth: {plan.get('planning_depth') or 'STANDARD'}",
+        f"Task: {plan.get('task_id')} ({plan.get('task_kind') or 'AUTO'}, {plan.get('planning_depth') or 'BOUNDED'})",
         f"Outcome: {displayed(plan.get('requested_outcome'), default='')}",
+        f"Approach: {displayed(authority.get('approach'), default='not stated')}",
         f"Phases: {len(phases) if phases else 'none (single phase)'}",
     ]
     for index, phase in enumerate(phases, 1):
         if isinstance(phase, dict):
             phase_title = phase.get("title") or phase.get("description") or ""
             lines.append(f"  {index}. {phase.get('id')}: {displayed(phase_title, default='')}")
-    for phase in phases:
-        if isinstance(phase, dict):
-            lines.append(f"  Phase authority: {displayed(phase)}")
-    scoped_review = authority.get("scoped_phase_review_enabled")
-    scoped_review_text = "policy-selected" if scoped_review is None else ("enabled" if scoped_review else "disabled")
     lines += [
         f"Files: {listed(authority.get('expected_files'))}",
         f"Modules: {listed(authority.get('expected_modules'))}",
@@ -4675,19 +4743,27 @@ def plan_summary(plan: dict) -> str:
         f"Risks: {listed(authority.get('risks'))}",
         f"Rollback: {displayed(authority.get('rollback'))}",
         f"External writes: {listed(authority.get('external_writes'))}",
-        f"Architecture contract: {displayed(authority.get('architecture_contract'))}",
-        f"Skills: {displayed(authority.get('skills'))}",
-        f"Repository binding: {displayed(authority.get('repository'))}",
-        f"Base delivery snapshot: {displayed(authority.get('base_delivery_snapshot_sha256'))}",
-        f"Base change set: {displayed(authority.get('base_change_set_sha256'))}",
-        f"Supersedes plan hash: {displayed(authority.get('supersedes_plan_sha256'))}",
-        f"Zoho link: {displayed(authority.get('zoho_link'))}",
-        f"Scoped phase review: {scoped_review_text}",
-        f"Approval payload (redacted): {displayed(authority)}",
+    ]
+    if authority.get("supersedes_plan_sha256"):
+        lines.append(f"Supersedes plan hash: {str(authority['supersedes_plan_sha256'])[:12]}")
+    if authority.get("zoho_link"):
+        lines.append(f"Zoho link: {displayed(authority.get('zoho_link'))}")
+    if plan_document is not None:
+        lines.append(f"Full plan: [plan.md]({Path(plan_document).resolve().as_uri()})")
+    lines += [
         f"Plan hash: {str(plan.get('plan_sha256') or '')[:12]}",
         "PLAN_SUMMARY_END",
     ]
     return "\n".join(lines)
+
+
+APPROVAL_QUESTION_GUIDE = (
+    "APPROVAL_QUESTION: ask with ask_question, options Approve / Request changes / Cancel task. "
+    "Question text, in the developer's language: (1) what will change and how, the risks and the phone checks, "
+    "only as the summary states them; (2) the PLAN_SUMMARY block verbatim, keeping the plan.md link; "
+    "(3) on Antigravity, the line: after approving, type /goal as its own message to let me continue without stopping. "
+    "Never paste plan.json or command output into the question."
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4726,7 +4802,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         if args.action in ("draft", "revise"):
-            print(plan_summary(result))
+            from plan_document import plan_document_path, plan_gaps
+
+            document = plan_document_path(task_dir(Path(args.repo).resolve(), result["task_id"]))
+            print(plan_summary(result, document if document.is_file() else None))
+            gaps = plan_gaps(result)
+            if gaps:
+                print(
+                    "PLAN_GAPS=" + ",".join(gaps) + ": the developer cannot review these. Before asking for approval, run "
+                    "`workflow.py revise` with --approach / --risks / --device-strategy (phone steps with expected results)."
+                )
+            print(APPROVAL_QUESTION_GUIDE)
         if args.action == "approve":
             print(f"APPROVED_PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
         print(f"TASK_STATUS={result.get('status', 'READY')}")

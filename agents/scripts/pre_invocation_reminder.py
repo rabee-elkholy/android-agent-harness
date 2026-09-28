@@ -23,6 +23,9 @@ def _message() -> str:
             "Search only inside the scope that graph or task-context query returned; for anything wider, query the graph again. "
             "Pre-planning clarification: When asked to explore edge cases, study scenarios, or validate architecture first, present and discuss them directly in plain chat before drafting any plan. Guessing edge cases or missing business logic is strictly prohibited. "
             "Clarify ambiguous requirements via `ask_question` or plain chat BEFORE drafting the plan. "
+            "For a design, migration, backward-compatibility or security decision (Room schema, exported component, permission), "
+            "suggest in `ask_question` that the developer types `/grill-me` before you draft. "
+            "Draft with --approach, --risks and --device-strategy so the developer can review the plan. "
             "Verification plan must use strict 6-step headings."
         )
     status = str(plan.get("status") or "UNKNOWN")

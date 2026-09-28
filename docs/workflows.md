@@ -61,11 +61,12 @@ behavior retain their existing semantics; no directory/glob syntax is introduced
 
 `task status --next --json` exposes canonical dispatch data at `next_action.inputs`.
 Plain status emits it once as `NEXT_ACTION_INPUTS=<JSON>` for final/phase dispatch
-only. Use the returned roster, and pass each exact current brief's full content as
-`invoke_subagent.Prompt`. Final profiles already include `brief_content` and
-`brief_path`; phase inputs provide current brief paths, which the host must read.
-A path alone is not a valid Prompt. V1 fallback and V2 exact-brief validation remain
-unchanged. This is CLI visibility, not a new dispatch mechanism. WAIT and protocol
+only. Use the returned roster. For final dispatch, pass `reviewer_prompts[role]` as
+`invoke_subagent.Prompt`: a one-line pointer naming the current brief's path and the
+first 16 hex characters of its content hash; the reviewer reads the brief itself, and
+the hook refuses a stale or other-role pointer. The exact brief content (`brief_content`)
+is still accepted. Phase inputs provide current brief paths, which the host must read
+and pass in full; a bare path is not a valid Prompt. V1 fallback is unchanged. This is CLI visibility, not a new dispatch mechanism. WAIT and protocol
 retry actions never authorize redispatch; trusted completion and same-model
 inheritance remain governed by the existing host contract.
 

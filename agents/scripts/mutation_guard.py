@@ -742,7 +742,12 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     except ValidationError as exc:
         lower = normalized.lower()
         if any(kw in lower for kw in ("task-context", "task_context", "project_graph", "doctor", "preflight")):
-            return False, f"Harness read-only inspection command was not recognized or has invalid arguments: '{normalized}'. Detail: {exc}"
+            return False, (
+                f"Harness read-only inspection command was not recognized or has invalid arguments: '{normalized}'. "
+                "Without a task use the public entry points: `python .agents/harness.py preflight` (diagnostic, writes no evidence), "
+                "`python .agents/harness.py doctor`, `python .agents/harness.py task-context --file <path> --json`. "
+                f"Detail: {exc}"
+            )
         return False, f"mutation requires an active approved plan: {exc}"
     status = str(plan.get("status") or "")
     entry, arguments = _entry(normalized, repo)

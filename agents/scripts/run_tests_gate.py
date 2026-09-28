@@ -328,6 +328,24 @@ def evaluate_unit_test_execution(
     }
 
 
+def verdict_lines(ok: bool, detail: str, code: int, new_regressions: list) -> list[tuple[str, bool]]:
+    """The gate's closing lines as (text, is_error)."""
+    if new_regressions:
+        lines = [(f"[FAIL] NEW_REGRESSION: {len(new_regressions)} test(s) failed that are absent from the baseline:", True)]
+        lines += [(f"  - {item}", True) for item in new_regressions[:30]]
+        if len(new_regressions) > 30:
+            lines.append((f"  ... and {len(new_regressions) - 30} more", True))
+        return lines
+    if not ok:
+        return [(f"[FAIL] Unit-test gate blocked: {detail}", True)]
+    lines = []
+    if code != 0:
+        # Short certification O48: the Gradle result line above says FAIL; say why the gate still passes.
+        lines.append(("[*] Gradle's FAIL above comes only from tests that already failed before this task (baseline).", False))
+    lines.append((f"[SUCCESS] Unit-test gate passed: {detail}", False))
+    return lines
+
+
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Baseline-aware unit-test delivery gate")
@@ -522,17 +540,8 @@ def main(argv=None) -> int:
         outcome=outcome,
         baseline=baseline,
     )
-    new_regressions = data.get("new_regressions", [])
-    if new_regressions:
-        live_print(f"[FAIL] NEW_REGRESSION: {len(new_regressions)} test(s) failed that are absent from the baseline:", err=True)
-        for item in new_regressions[:30]:
-            live_print(f"  - {item}", err=True)
-        if len(new_regressions) > 30:
-            live_print(f"  ... and {len(new_regressions) - 30} more", err=True)
-    elif not ok:
-        live_print(f"[FAIL] Unit-test gate blocked: {detail}", err=True)
-    else:
-        live_print(f"[SUCCESS] Unit-test gate passed: {detail}")
+    for text, is_error in verdict_lines(ok, detail, code, data.get("new_regressions", [])):
+        live_print(text, err=is_error)
 
     write_gate_result("unit_tests", {
         "schema_version": 2,

@@ -13,12 +13,13 @@ import re
 import shlex
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
 from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed, join_continuations  # noqa: E402
-from _vnext_common import active_review_package_path, read_json, sha256_file, validate_id  # noqa: E402
+from _vnext_common import active_review_package_path, read_json, sha256_file, state_root, validate_id  # noqa: E402
 
 
 from policy_vocab import (
@@ -93,16 +94,17 @@ TASK_ENTRYPOINTS = {"harness.py", "harness", "harness_cli.py", "harness_cli", "a
 WORKFLOW_VALUE_FLAGS = {"--repo", "--task-id"}
 
 
-def _developer_authority_violation(command: str) -> bool:
-    """Cancel, and approval from any source other than the conversation, belong to the developer.
+def _lifecycle_calls(command: str) -> list[tuple[str, list[str]]]:
+    """(subcommand, arguments) for each workflow.py / `harness.py task` call in the command.
 
-    Decided from the actual lifecycle subcommand and its --source value, never from
-    free text such as an outcome ("Fix cancel button") or an approval quote.
+    Read from the actual command tokens, never from free text such as an outcome
+    ("Fix cancel button") or an approval quote.
     """
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError:
         tokens = command.split()
+    calls: list[tuple[str, list[str]]] = []
     for index, token in enumerate(tokens):
         name = token.strip(";&|").replace("\\", "/").rsplit("/", 1)[-1].lower()
         if name in WORKFLOW_ENTRYPOINTS:
@@ -123,8 +125,18 @@ def _developer_authority_violation(command: str) -> bool:
             break
         if "-h" in rest or "--help" in rest:
             continue  # reading usage changes nothing
+        calls.append((subcommand, rest))
+    return calls
+
+
+def _developer_authority_violation(command: str) -> str:
+    """Cancel, and approval from any source other than the conversation, belong to the developer.
+
+    Returns the violated action ("cancel" or "approve"), or "" when the command is allowed.
+    """
+    for subcommand, rest in _lifecycle_calls(command):
         if subcommand == "cancel":
-            return True
+            return "cancel"
         if subcommand in ("approve", "approve-sensitive"):
             source = ""
             for pos, part in enumerate(rest):
@@ -133,8 +145,49 @@ def _developer_authority_violation(command: str) -> bool:
                 elif part == "--source" and pos + 1 < len(rest):
                     source = rest[pos + 1]
             if source.strip(";&|").lower() != "conversation":
-                return True
-    return False
+                return "approve"
+    return ""
+
+
+CANCEL_REQUEST_FILE = "cancel-requested.json"
+CANCEL_REQUEST_TTL_SECONDS = 30 * 60
+
+
+def _cancel_command(task_id: str) -> str:
+    return f"python .agents/scripts/workflow.py cancel --repo . --task-id {task_id or '<id>'}"
+
+
+def _record_cancel_request(task_id: str) -> None:
+    """The agent tried to cancel: until the developer does, it may not resume or edit to undo the work."""
+    if not task_id:
+        return
+    try:
+        from _vnext_common import atomic_write_json
+        atomic_write_json(state_root(REPO) / CANCEL_REQUEST_FILE, {"task_id": task_id, "requested_at": time.time()})
+    except Exception:
+        pass
+
+
+def _pending_cancel(task_id: str) -> bool:
+    if not task_id:
+        return False
+    marker = state_root(REPO) / CANCEL_REQUEST_FILE
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    fresh = time.time() - float(data.get("requested_at") or 0) < CANCEL_REQUEST_TTL_SECONDS
+    return fresh and str(data.get("task_id") or "") == task_id
+
+
+def _cancel_pending_message(task_id: str) -> str:
+    return (
+        f"The developer asked to cancel task '{task_id}', and cancelling is theirs. Do not resume the task or edit files "
+        "to undo the work. Ask with ask_question: say what cancelling does (the task closes; the developer restores "
+        f"or keeps the files), and give the command for their own terminal: `{_cancel_command(task_id)}`. "
+        "If the developer decides to continue the task instead, they run "
+        f"`python .agents/scripts/workflow.py resume --repo . --task-id {task_id}` themselves."
+    )
 
 
 RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", re.I)
@@ -330,8 +383,17 @@ def _handle_command(command: str) -> None:
         active_tid = str(p.get("task_id") or "")
     except Exception:
         pass
-    if _developer_authority_violation(command):
+    violated = _developer_authority_violation(command)
+    if violated == "cancel":
+        _record_cancel_request(active_tid)
+        emit("deny", "Denied by local safety boundary: developer_authority. " + _cancel_pending_message(active_tid or "<id>"),
+             tool="run_command", command=command, reason_code="DEVELOPER_AUTHORITY", task_id=active_tid)
+        return
+    if violated:
         emit("deny", "Denied by local safety boundary: developer_authority.", tool="run_command", command=command, reason_code="DEVELOPER_AUTHORITY", task_id=active_tid)
+        return
+    if _pending_cancel(active_tid) and any(sub in ("resume", "revise") for sub, _ in _lifecycle_calls(command)):
+        emit("deny", _cancel_pending_message(active_tid), tool="run_command", command=command, reason_code="CANCEL_PENDING", task_id=active_tid)
         return
     for code, pattern in DANGEROUS:
         if pattern.search(command):
@@ -908,11 +970,14 @@ def _handle_subagent(name: str, args: dict) -> None:
                 if not supplied_prompt:
                     emit("deny", "Subagent entry Prompt is empty.", tool=name, reason_code="MISSING_SUBAGENT_PROMPT")
                     return
-                expected_prompt = str(reviewer_routes[matched].get("brief_content") or "").replace("\r\n", "\n").strip()
-                if supplied_prompt != expected_prompt:
+                route = reviewer_routes[matched]
+                expected_prompt = str(route.get("brief_content") or "").replace("\r\n", "\n").strip()
+                expected_pointer = str(route.get("brief_pointer_prompt") or "").strip()
+                if supplied_prompt != expected_prompt and not (expected_pointer and supplied_prompt == expected_pointer):
                     emit(
                         "deny",
-                        f"Reviewer prompt for '{matched}' does not match the generated reviewer brief.",
+                        f"Reviewer prompt for '{matched}' does not match the generated reviewer brief. Pass the router's "
+                        "`reviewer_prompts[role]` one-line pointer (preferred) or the exact current brief content.",
                         tool=name,
                         reason_code="REVIEWER_PROMPT_MISMATCH",
                     )
@@ -1678,6 +1743,13 @@ def main() -> None:
                 return
             if all_temp:
                 emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
+                return
+            try:
+                pending_tid = str(active_plan(REPO).get("task_id") or "")
+            except Exception:
+                pending_tid = ""
+            if _pending_cancel(pending_tid):
+                emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
                 return
             allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
             emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)

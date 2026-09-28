@@ -456,6 +456,22 @@ class GraphDiscoverySelftest(unittest.TestCase):
         begun = workflow.begin_task(args_begin)
         self.assertEqual("IMPLEMENTING", begun.get("status"))
 
+    def test_O29_missing_symbol_suggests_the_closest_names(self) -> None:
+        # Short certification O29: `--find AppDatabase` in an app whose database is FitnessDatabase
+        # returned only a generic tip.
+        from types import SimpleNamespace
+        from project_graph import suggest_symbols
+
+        names = ["FitnessDatabase", "FoodsDatabase", "WaterDao", "WaterTargetEntity", "HomeActivity", "SelectionView"]
+        graph = SimpleNamespace(nodes={n: SimpleNamespace(name=n) for n in names})
+        by_role = suggest_symbols(graph, "AppDatabase")
+        self.assertEqual({"FitnessDatabase", "FoodsDatabase"}, set(by_role[:2]))
+        self.assertNotIn("WaterDao", by_role)
+        self.assertEqual("WaterDao", suggest_symbols(graph, "WaterDAO")[0])
+        self.assertIn("SelectionView", suggest_symbols(graph, "SelectionsView"))
+        self.assertEqual([], suggest_symbols(graph, "Zq"))
+        self.assertEqual([], suggest_symbols(SimpleNamespace(nodes={}), "AppDatabase"))
+
     def test_public_graph_cli_facade(self) -> None:
         """harness_cli.py graph --feature <name> --json executes cleanly and produces structured JSON."""
         harness_script = KIT / "harness_cli.py"

@@ -4,6 +4,38 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.7] - 2026-09-28
+
+Fixes from a short certification on a real app (Antigravity, Gemini 3.8 Flash): update by chat prompt, an exported receiver with `/goal`, a Room migration with `/grill-me`, and commit refusal. The update, the delivery path, the exported-component gate and the Room gate (pre-existing destructive fallback as a warning) all held; these changes fix how the developer is asked to decide.
+
+### Plan approval
+- O53/O44: the approval summary disclosed the whole approval payload (repository binding, skills, architecture contract, snapshot hashes) and one agent pasted it as a single paragraph. `PLAN_SUMMARY` now holds the reviewable fields only (outcome, approach, files, tests, phone checks, risks, rollback) and links the full plan. The plan hash still covers everything.
+- O46: `draft` and `revise` write a readable `plan.md` next to `plan.json`, generated from it (never hand-written): outcome, approach, clickable file links, risks and harness notes for the change type, tests, phone checks, the gates and reviewers that will run, what needs the developer, and the full redacted approval payload. Every `revise` rewrites it with the new plan hash and a "what changed" section.
+- `draft`/`revise` take `--approach` (bound by the plan hash when given; earlier plans keep their hash), and print `PLAN_GAPS=` when the approach, risks or phone steps are missing, plus one `APPROVAL_QUESTION` line saying how to ask: an explanation in the developer's language, the summary verbatim with its plan.md link, and on Antigravity the `/goal` line.
+
+### Developer decisions
+- O55: after its cancel was refused, the agent resumed the task and reverted files by hand under the plan's approval. The refusal now tells the agent to ask with `ask_question` and hand over the exact cancel command; until the developer cancels (or 30 minutes pass), `resume`, `revise` and file edits on that task are refused (`CANCEL_PENDING`). A developer-run cancel, resume or new draft clears it.
+- O50: setup answer I.10 "install without asking" was stored but never read, so the phone install was always asked. With `allow`, the router installs directly (`DEVICE_INSTALL`) and asks only if that attempt fails.
+- O45/O52: the Antigravity rules and the idle reminder tell the agent to suggest `/grill-me` inside `ask_question` before drafting a design, migration, compatibility or security decision, and under `/grill-me` for Room to ask first about an existing destructive fallback, older schema versions and downgrade.
+- O31: gate commands the developer runs keep the `--proof-reference` reason for the developer to write.
+
+### Reviewers
+- O35b: the agent still opened every reviewer brief to paste it as the prompt. The router now gives `reviewer_prompts[role]`, a one-line pointer to the current brief bound by its content hash, and the hook accepts it (a stale or other-role pointer is refused).
+
+### Gate messages and logs
+- O51: for a newly exported receiver, the gate notes that manifest receivers get no implicit broadcasts since Android 8, so callers must target the package.
+- O47/O54: step heartbeats come every 30 seconds instead of 5 and name the step; a step around a streaming Gradle run no longer prints a second heartbeat.
+- O54: the Room gate reported every database of the app when one changed (a changed database file counted as a migration source of the others) and asked Git for the same HEAD file many times; it checks the changed database only and reads each HEAD file once per run.
+- O29: `graph --find` with a name that does not exist (`AppDatabase` in an app with `FitnessDatabase`) lists the closest symbols, same-role names first.
+- O40: the chat install/update prompt ends with `END OF PROMPT (5 phases).`, so an agent can tell it has the whole file instead of fetching it again.
+- O48: when the unit-test gate passes over baseline failures, it says that the Gradle FAIL line above comes only from those known failures.
+- O43: an unrecognized read-only command without a task names the public entry points (`harness.py preflight`, `doctor`, `task-context`). Inline `python -c` stays refused (O39): the hook cannot prove it only reads.
+- O41: `init` and `update` delete a chat-created answers file in the harness home or the system temp directory once it is saved as `.harness-setup/answers.json` (never a file inside the app checkout or the kit); the agent's own cleanup is refused outside a task.
+- The brainstorming skill described an `implementation_plan.md` artifact with a Proceed button; it now points to `draft --approach` and the generated `plan.md`.
+
+### Maintainer tooling
+- The three longest selftest suites run as shards in parallel mode, longest work first (up to 4 workers by default; 8 contended on disk and git and was not faster).
+
 ## [1.1.6] - 2026-09-28
 
 Readable gate logs, and updating an installed harness from chat.

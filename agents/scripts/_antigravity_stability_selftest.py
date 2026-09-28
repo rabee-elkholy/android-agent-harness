@@ -855,6 +855,25 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "\r\n# Bug Reviewer Brief Content\r\n"}])
         self.assertEqual("allow", res["decision"])
 
+    def test_V2_IDENTITY_009b_brief_pointer_prompt_passes_and_stale_pointer_denied(self):
+        # Short certification O35b: re-emitting every brief made the agent open each brief file.
+        # The router's one-line pointer (path + content hash) is accepted instead.
+        from review_execution import brief_pointer_prompt, resolve_execution_profile
+
+        prof = resolve_execution_profile(self.repo, "task-v2", host="antigravity")
+        route = prof["reviewers"]["bug-reviewer-agent"]
+        pointer = route["brief_pointer_prompt"]
+        self.assertEqual(brief_pointer_prompt("bug-reviewer-agent", route["brief_path"], route["brief_content"]), pointer)
+        self.assertIn(route["brief_path"], pointer)
+        stale = brief_pointer_prompt("bug-reviewer-agent", route["brief_path"], "# An older brief")
+        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": stale}])
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("REVIEWER_PROMPT_MISMATCH", res.get("reason_code"))
+        other_role = brief_pointer_prompt("security-reviewer-agent", route["brief_path"], route["brief_content"])
+        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": other_role}])
+        self.assertEqual("REVIEWER_PROMPT_MISMATCH", res.get("reason_code"))
+        self.assertEqual("allow", self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": pointer}])["decision"])
+
     def test_V2_IDENTITY_010_model_or_Model_denied(self):
         res1 = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content", "model": "inherit"}])
         self.assertEqual("deny", res1["decision"])
@@ -1200,6 +1219,29 @@ class TestGradleProgress(unittest.TestCase):
              mock.patch.object(live, 'enable_line_buffered_stdio'), mock.patch.object(live, 'live_print'):
             self.assertEqual((1, '', []), live.run_streaming(['missing-gradle']))
             worker.assert_not_called()
+
+    def test_O47_step_heartbeat_names_the_step_and_yields_to_streaming(self):
+        # Short certification O47/O54: a 85 s Room gate printed 16 bare "still running" lines, and a
+        # Gradle run inside a step printed two heartbeats in two formats.
+        import time as real_time
+        from unittest import mock
+        import _live_process as live
+
+        self.assertGreaterEqual(live.STEP_HEARTBEAT_SEC, 30)
+        with mock.patch.object(live, 'live_print') as output:
+            with live.step_progress("Room Database Migrations", heartbeat_sec=1):
+                real_time.sleep(2.3)
+        beats = [c.args[0] for c in output.call_args_list if 'still running' in c.args[0]]
+        self.assertTrue(beats)
+        self.assertTrue(all("Room Database Migrations: still running" in b for b in beats), beats)
+        live._streaming_active[0] += 1
+        try:
+            with mock.patch.object(live, 'live_print') as output:
+                with live.step_progress("Gradle step", heartbeat_sec=1):
+                    real_time.sleep(2.3)
+            self.assertFalse([c for c in output.call_args_list if 'still running' in c.args[0]])
+        finally:
+            live._streaming_active[0] -= 1
 
     def test_O3_real_child_preserves_output_and_exit_codes(self):
         from unittest import mock
