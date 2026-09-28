@@ -187,8 +187,10 @@ class ChatInstallationDocsTests(unittest.TestCase):
 
     def test_chat_prompt_covers_approved_install_and_update_paths(self) -> None:
         for marker in (
-            "CLEAN INSTALL only",
+            "INSTALL: no `.agents` and no `.harness-setup`",
+            "UPDATE: `.harness-setup/ownership-v1.json` exists",
             "harness_cli.py init --repo",
+            "harness_cli.py update --repo <app-root> --kit <kit-dir> --no-refresh",
             "STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL",
             "Phase 1: Read-only discovery",
             "Phase 2: Kit bootstrap approval",
@@ -1396,6 +1398,27 @@ class LifecycleTests(RepoCase):
         self.assertEqual("PASS", updated["status"])
         for name in views:
             self.assertTrue((context / name).is_file(), f"update removed {name}")
+
+    def test_update_preserves_developer_instructions_and_notes(self) -> None:
+        """Update silently dropped `context instruct` records: the file is created after install, so it is
+        neither managed nor under state/, and was not in PRESERVE_GLOBS."""
+        self._answers()
+        install(self.repo, KIT)
+        instruct = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/scripts/generate_project_context.py"), "instruct",
+             "Use MVI for new screens", "--source", "developer_terminal", "--proof-reference", "maintainer",
+             "--repo", str(self.repo)],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, instruct.returncode, instruct.stderr)
+        instructions = self.repo / ".agents/project-context/developer-instructions.json"
+        notes = self.repo / ".agents/project-context/project-notes.md"
+        write(notes, notes.read_text(encoding="utf-8") + "\n- Project note kept across updates.\n")
+        before_instructions = instructions.read_bytes()
+        updated = update(self.repo, KIT)
+        self.assertEqual("PASS", updated["status"])
+        self.assertEqual(before_instructions, instructions.read_bytes(), "update dropped developer instructions")
+        self.assertIn("Project note kept across updates.", notes.read_text(encoding="utf-8"))
 
     def test_install_captures_unit_test_baseline_for_real_gradle_projects(self) -> None:
         """Pre-existing test failures are only tolerable once a clean-tree baseline exists."""
@@ -4006,13 +4029,22 @@ class CleanInstallV2SpecificationTests(RepoCase):
         prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
         self.assertNotIn("kit-stage-v1.0.59", prompt_text)
 
-    def test_PROMPT_CLEAN_001_advertises_clean_install_only(self) -> None:
+    # The prompt was clean-install only while Clean Install V2 (answers schema 2) had no in-place path from
+    # schema-1 installs. Every install is schema 2 now and same-major update is transactional, so the prompt
+    # detects the mode: it updates an existing install instead of telling the developer to uninstall it.
+    def test_PROMPT_CLEAN_001_detects_install_or_update_and_never_deletes(self) -> None:
         prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
-        self.assertIn("CLEAN INSTALL only", prompt_text)
+        self.assertIn("Pick the mode; never delete project files.", prompt_text)
+        self.assertNotIn("uninstall it first", prompt_text)
+        self.assertIn("UPDATE keeps the saved answers; skip to Phase 4.", prompt_text)
+        self.assertIn("never delete or overwrite them", prompt_text)
 
-    def test_PROMPT_CLEAN_002_no_update_command(self) -> None:
+    def test_PROMPT_CLEAN_002_update_uses_the_staged_pinned_kit(self) -> None:
+        # --no-refresh: the kit was staged at this prompt's tag in Phase 2; refreshing could move it to another release.
         prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
-        self.assertNotIn("update --no-refresh", prompt_text)
+        self.assertIn("update --repo <app-root> --kit <kit-dir> --no-refresh", prompt_text)
+        update_index = prompt_text.index("UPDATE: `python <kit-dir>/harness_cli.py update")
+        self.assertLess(prompt_text.index("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL"), update_index)
 
     def test_PROMPT_CLEAN_003_no_replace_legacy_command(self) -> None:
         prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")

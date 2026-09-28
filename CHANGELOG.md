@@ -6,7 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.1.6] - 2026-09-28
 
-Readable gate logs.
+Readable gate logs, and updating an installed harness from chat.
+
+### Update
+- An update dropped developer instructions: `.agents/project-context/developer-instructions.json` (written by `context instruct` after install) was neither under `state/` nor preserved, so every update deleted it without a message. It is preserved now, like project notes.
+- The chat prompt `docs/install-or-update-prompt.md` performed a clean install only and told the developer to uninstall an existing harness; the update notice, and `harness_cli.py update` without `--repo`, pointed to it. The prompt now detects the mode: a new project gets the clean install, an installed one gets `harness_cli.py update --repo <app-root> --kit <kit-dir> --no-refresh` with the staged kit at the prompt's tag, keeping state, tasks, answers, notes and instructions. It still stops for an active task (the developer finishes it or cancels it in their terminal), for user-modified managed files (listed, never deleted), and when the install is already current.
+- Verified on a real app install (v1.1.3 → 1.1.6): refused with an open task; after cancelling, updated with identical developer instructions, notes, answers and task history, no app file changed, `doctor --install-check` 37/37 PASS; a hand-edited `GEMINI.md` refused the update by name and kept the edit.
 
 ### Every host
 - Gradle gates (unit tests, assemble, baseline) no longer stream per-build warnings (`warning:`, `w:`, `[WARN]`, JVM sharing notices) or Gradle's summary chatter (`FROM-CACHE` tasks, deprecation hints, configuration-cache and problems-report lines, the actionable-task count). The full output is kept under `state/logs/gradle/` (newest 20 runs), and every Gradle gate ends with one line: `[RESULT] PASS|FAIL|ENV <task> in <duration> | <n> warning lines not shown | full log: <path>`.

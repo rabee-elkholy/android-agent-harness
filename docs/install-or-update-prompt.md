@@ -6,54 +6,46 @@
 Never bypass hooks. Keep files in English. Run commands directly; use `ask_question` for approvals.
 
 ## Phase 1: Read-only discovery
-This onboarding performs CLEAN INSTALL only.
+Pick the mode; never delete project files.
+- INSTALL: no `.agents` and no `.harness-setup`. An app-owned `.agents`: STOP, the developer moves it first.
+- UPDATE: `.harness-setup/ownership-v1.json` exists. Installed version is `.agents/VERSION`; if it is not older than `<version>`, STOP (up to date).
+Require a root Gradle Wrapper.
 
-Require:
-- root Gradle Wrapper
-- no active Harness task
-- no `.agents` (if the app has its own, STOP: move it first)
-- no incompatible `.harness-setup`
-
-If a Harness is already installed, STOP: tell the developer to uninstall it first, then rerun the clean installer. Do not auto-delete project files.
-
-Active task check: If `.agents/state/active-task.json` exists with an active task, STOP immediately. Tell developer:
-"An active task `<id>` is currently recorded. Please finish or cancel it before updating: `python .agents/scripts/workflow.py cancel --repo . --task-id <id>`". Do NOT search the repository or try to resume the active task.
+Active task check: If `.agents/state/active-task.json` points to a task that is not DELIVERED or CANCELLED, STOP. Tell the developer to finish it, or cancel it in their own terminal: `python .agents/scripts/workflow.py cancel --repo . --task-id <id>`. Do not resume or search.
 
 Path and Location Rules:
 `<cache-root>` is `%USERPROFILE%\.android-harness` or `~/.android-harness`.
 `<version>` is the Kit version shown in the header above.
 `<kit-dir>` is `<cache-root>\kit` or `<cache-root>/kit` at detached `v1.1.6`.
 `<staging-dir>` is `<cache-root>\kit-stage-<version>-<nonce>` or `<cache-root>/kit-stage-<version>-<nonce>`.
-`<kit-dir>` and `<staging-dir>` MUST NOT be inside `<app-root>`. Both must be strictly external to the app repository.
+`<kit-dir>` and `<staging-dir>` MUST NOT be inside `<app-root>`; both stay external to the app repository.
 Never run a clone command without an explicit destination.
 Never clone to `<app-root>/android-agent-harness`, `<app-root>/kit`, or `<app-root>/kit-stage-*`.
 
 ## Phase 2: Kit bootstrap approval
-Read-only path check before clone: Resolve `<app-root>`, `<kit-dir>`, and `<staging-dir>`.
-STOP if `<kit-dir>` or `<staging-dir>` is equal to or contained by `<app-root>`.
-Command with explicit external destination:
+STOP if `<kit-dir>` or `<staging-dir>` is equal to or inside `<app-root>`.
 `git clone --depth 1 --branch v1.1.6 --single-branch https://github.com/rabee-elkholy/android-agent-harness.git <staging-dir>`
 Verify: `git -C <staging-dir> describe --tags --exact-match`
 Verify version: `python <staging-dir>/harness_cli.py version --kit <staging-dir>`
 Staging replaces `<kit-dir>`; rollback is `<kit-dir>.previous`.
 **STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL.** Permits cache operations only, not app installation/removal.
 
-## Phase 3: Authoritative interview
+## Phase 3: Authoritative interview (INSTALL only)
+UPDATE keeps the saved answers; skip to Phase 4.
 Run: `python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>`
-The setup wizard payload is the sole interview authority. Ask **only** the questions returned; respect `recommended` (1 per question). Context preview: `python <kit-dir>/harness_cli.py context preview --repo <app-root>`.
-- For AI host: the developer's host; default **Google Antigravity** (`antigravity`).
-- No model selection or escalation questions are asked; reviewer model is inherited by omission.
-- For Reviewer Call Safety Cap: select recommended default of `20`.
-If a question contains `conditional_text_input`, and the selected option equals `when_option`, ask exactly that nested prompt and save the value under `answer_key`. Do not invent any other follow-up questions.
+The setup wizard payload is the sole interview authority. Ask **only** the questions returned; respect `recommended` (1 per question); answers use each option's `id`. Context preview: `python <kit-dir>/harness_cli.py context preview --repo <app-root>`.
+- AI host: default **Google Antigravity** (`antigravity`). No model questions; reviewers inherit the model.
+If a question contains `conditional_text_input` and the selected option equals `when_option`, ask exactly that nested prompt and save it under `answer_key`.
 
 ## Phase 4: Lifecycle approval and execution
 **STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.**
-create `<temp-answers>.json` outside `<app-root>`, then run:
+INSTALL: create `<temp-answers>.json` outside `<app-root>`, then run:
 `python <kit-dir>/harness_cli.py init --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json`
 It backs up the app, installs `.agents/` and each selected host's files: Antigravity `.agents/hooks.json`, `.agents/agents/<reviewer>/agent.md`, `GEMINI.md`; Claude Code `CLAUDE.md`, `.claude/agents/`, `.claude/settings.json` hook.
+UPDATE: `python <kit-dir>/harness_cli.py update --repo <app-root> --kit <kit-dir> --no-refresh`
+It keeps state, tasks, answers, notes and developer instructions, and rolls back on failure. If it names user-modified managed files, show them and STOP; never delete or overwrite them.
 
 ## Phase 5: Verification
 Run: `python <kit-dir>/harness_cli.py doctor --install-check --repo <app-root> --kit <kit-dir> --json`
 Doctor validates the harness and each selected host's adapter (Antigravity: hooks, 7 reviewers in `.agents/agents/`, Review Protocol V2).
-Optionally verify kit version: `python <kit-dir>/harness_cli.py version --kit <kit-dir>`
-On success show 0 changed app files and say: “Android Agent Harness is successfully configured. Open a NEW chat at the project root.”
+On success show 0 changed app files and the installed version, and say: “Android Agent Harness is ready. Open a NEW chat at the project root.”

@@ -45,6 +45,8 @@ INTERNAL_EXCLUDE_PATTERNS = (
 )
 PRESERVE_GLOBS = (
     ".agents/project-context/project-notes.md",
+    # Written by `context instruct` after install; an update must not drop developer instructions.
+    ".agents/project-context/developer-instructions.json",
     ".agents/project-context/architecture-policy.json",
     ".agents/project-context/project-facts.json",
     # Rendered from project-facts.json; doctor requires them after every update.
