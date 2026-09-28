@@ -1034,6 +1034,78 @@ QUICK_SELFTEST_SUITES = (
 assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
 
 
+SELFTEST_PASS_MARKER = "harness-selftest-pass.json"
+SELFTEST_MAX_AUTO_JOBS = 4
+
+
+def _selftest_jobs(requested: int | None) -> int:
+    """Worker count: --jobs, then HARNESS_SELFTEST_JOBS, then min(4, CPUs). Suites are independent
+    processes that each work in their own temporary directories."""
+    if requested is not None:
+        return max(1, int(requested))
+    raw = os.environ.get("HARNESS_SELFTEST_JOBS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return max(1, min(SELFTEST_MAX_AUTO_JOBS, os.cpu_count() or 1))
+
+
+def _selftest_env() -> dict[str, str] | None:
+    """Suite environment. HARNESS_SELFTEST_TMP points temporary fixtures at a dedicated directory
+    (for example one excluded from antivirus scanning); without it the environment is unchanged."""
+    root = os.environ.get("HARNESS_SELFTEST_TMP", "").strip()
+    if not root:
+        return None
+    Path(root).mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["TEMP"] = env["TMP"] = env["TMPDIR"] = root
+    return env
+
+
+def _git_output(kit: Path, *argv: str) -> str:
+    try:
+        proc = subprocess.run(["git", *argv], cwd=str(kit), capture_output=True, text=True, check=False)
+    except OSError:
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def selftest_pass_marker(kit: Path) -> Path | None:
+    """Untracked record of the last full pass, kept inside the kit's .git directory."""
+    rel = _git_output(kit, "rev-parse", "--git-path", SELFTEST_PASS_MARKER)
+    if not rel:
+        return None
+    marker = Path(rel)
+    return marker if marker.is_absolute() else kit / marker
+
+
+def clean_head_tree(kit: Path) -> str:
+    """HEAD's tree when the working tree has no changes at all; otherwise empty."""
+    if _git_output(kit, "status", "--porcelain", "--untracked-files=normal"):
+        return ""
+    return _git_output(kit, "rev-parse", "HEAD^{tree}")
+
+
+def _record_full_pass(kit: Path) -> None:
+    tree = clean_head_tree(kit)
+    marker = selftest_pass_marker(kit)
+    if not tree or marker is None:
+        return
+    try:
+        marker.write_text(json.dumps({"tree": tree, "python": sys.version.split()[0]}) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _run_suite(runner_code: str, capture: bool, env: dict[str, str] | None):
+    kwargs = {"text": True, "encoding": "utf-8", "errors": "replace"}
+    if env is not None:
+        kwargs["env"] = env
+    if capture:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.STDOUT
+    return subprocess.run([sys.executable, "-c", runner_code], **kwargs)
+
+
 def cmd_selftest(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     prev_cwd = Path.cwd()
@@ -1044,40 +1116,74 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     _lp_spec = _ilu.spec_from_file_location("_live_process", str(_lp_path))
     _lp_mod = _ilu.module_from_spec(_lp_spec)  # type: ignore[arg-type]
     _lp_spec.loader.exec_module(_lp_mod)  # type: ignore[union-attr]
-    _step = _lp_mod.step_progress
     _live = _lp_mod.live_print
     try:
-        scripts = QUICK_SELFTEST_SUITES if getattr(args, "quick", False) else FULL_SELFTEST_SUITES
-        mode = "QUICK" if getattr(args, "quick", False) else "FULL"
-        _live(f"selftest mode: {mode}")
+        quick = bool(getattr(args, "quick", False))
+        scripts = QUICK_SELFTEST_SUITES if quick else FULL_SELFTEST_SUITES
+        mode = "QUICK" if quick else "FULL"
         total = len(scripts)
-        timings: list[tuple[str, float]] = []
-        for idx, script in enumerate(scripts, 1):
-            label = script.replace("_selftest.py", "").lstrip("_")
-            _live(f"selftest: {label} [{idx}/{total}]")
-            t0 = time.time()
+        jobs = min(_selftest_jobs(getattr(args, "jobs", None)), total)
+        env = _selftest_env()
+        _live(f"selftest mode: {mode} (jobs: {jobs})")
+        if env is not None:
+            _live(f"selftest temp: {env['TEMP']}")
+
+        def runner_code(script: str) -> str:
             target = _script_root(kit) / script
-            runner_code = (
+            return (
                 "import sys, os;"
                 "sys.path.insert(0, r'" + str(_script_root(kit)) + "');"
                 "from _live_process import enable_subtask_test_runner;"
                 "enable_subtask_test_runner();"
                 "import runpy; runpy.run_path(r'" + str(target) + "', run_name='__main__')"
             )
-            proc = subprocess.run(
-                [sys.executable, "-c", runner_code],
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            code = proc.returncode
-            elapsed = time.time() - t0
-            timings.append((label, elapsed))
-            if code != 0:
-                _live(f"selftest: {label} [{idx}/{total}] [Fail] ({elapsed:.1f}s)")
-                return code
-            _live(f"selftest: {label} [{idx}/{total}] [Done] ({elapsed:.1f}s)")
+
+        def label_of(script: str) -> str:
+            return script.replace("_selftest.py", "").lstrip("_")
+
+        timings: list[tuple[str, float]] = []
+        failures: list[tuple[str, int]] = []
+        if jobs <= 1:
+            for idx, script in enumerate(scripts, 1):
+                label = label_of(script)
+                _live(f"selftest: {label} [{idx}/{total}]")
+                t0 = time.time()
+                code = _run_suite(runner_code(script), capture=False, env=env).returncode
+                elapsed = time.time() - t0
+                timings.append((label, elapsed))
+                if code != 0:
+                    _live(f"selftest: {label} [{idx}/{total}] [Fail] ({elapsed:.1f}s)")
+                    return code
+                _live(f"selftest: {label} [{idx}/{total}] [Done] ({elapsed:.1f}s)")
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def run(script: str) -> tuple[str, int, float, str]:
+                t0 = time.time()
+                proc = _run_suite(runner_code(script), capture=True, env=env)
+                output = proc.stdout if isinstance(getattr(proc, "stdout", None), str) else ""
+                return script, int(proc.returncode or 0), time.time() - t0, output
+
+            done = 0
+            with ThreadPoolExecutor(max_workers=jobs) as pool:
+                futures = [pool.submit(run, script) for script in scripts]
+                for future in as_completed(futures):
+                    script, code, elapsed, output = future.result()
+                    done += 1
+                    label = label_of(script)
+                    timings.append((label, elapsed))
+                    if code != 0:
+                        failures.append((label, code))
+                        _live(output.rstrip())
+                        _live(f"selftest: {label} [{done}/{total}] [Fail] ({elapsed:.1f}s)")
+                    else:
+                        _live(f"selftest: {label} [{done}/{total}] [Done] ({elapsed:.1f}s)")
+            if failures:
+                _live(f"\nselftest failed: {', '.join(label for label, _ in failures)}")
+                return failures[0][1]
         _live(f"\n✅ All {total} selftest suites passed.")
+        if not quick:
+            _record_full_pass(kit)
         timings.sort(key=lambda x: x[1], reverse=True)
         _live("Slowest suites:")
         for rank, (t_label, t_el) in enumerate(timings[:5], 1):
@@ -1319,6 +1425,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--quick",
         action="store_true",
         help="Run high-value developer-loop selftest subset.",
+    )
+    sp.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="Suites to run in parallel (default: HARNESS_SELFTEST_JOBS or min(4, CPUs); 1 streams output).",
     )
     sp.set_defaults(func=cmd_selftest)
 

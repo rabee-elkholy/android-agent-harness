@@ -289,6 +289,26 @@ def publish_release(tag: str, title: str, notes: str) -> bool:
     return True
 
 
+def _selftest_already_passed_tree() -> str:
+    """Tree of a clean HEAD whose full selftest pass harness_cli recorded; empty otherwise."""
+    def git(*argv: str) -> str:
+        proc = subprocess.run(["git", *argv], cwd=ROOT, capture_output=True, text=True, check=False)
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+
+    if git("status", "--porcelain", "--untracked-files=normal"):
+        return ""
+    tree = git("rev-parse", "HEAD^{tree}")
+    rel = git("rev-parse", "--git-path", "harness-selftest-pass.json")
+    if not tree or not rel:
+        return ""
+    marker = Path(rel) if Path(rel).is_absolute() else ROOT / rel
+    try:
+        recorded = json.loads(marker.read_text(encoding="utf-8")).get("tree")
+    except (OSError, ValueError):
+        return ""
+    return tree if recorded == tree else ""
+
+
 def main(argv: list[str] | None = None) -> int:
     # Ensure stdout/stderr use UTF-8 so emoji progress markers render on Windows
     import os as _os
@@ -385,6 +405,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print("[i] Running in DRY-RUN mode (no git mutations or remote changes).")
 
+    # A full selftest that already passed on this exact, clean tree is not repeated: the version
+    # bump below changes only version pins and checksums, and exact-commit CI still gates the tag.
+    passed_tree = _selftest_already_passed_tree()
     # Step 1: Check CHANGELOG.md for the target version
     changelog_path = ROOT / "CHANGELOG.md"
     if changelog_path.is_file():
@@ -420,7 +443,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [dry-run] Would pin URLs to v{target_version} and compute prompt hashes.")
 
     # Step 3: Run Tests
-    if not args.skip_tests:
+    if not args.skip_tests and passed_tree:
+        print(f"[3/5] Full selftest already passed on tree {passed_tree[:12]}; not repeated (CI still gates the tag).")
+        if validate_release and not args.dry_run:
+            with step_progress("[3b/5] Running release validation & packaging check"):
+                val_errors = validate_release(ROOT, target_version)
+                if val_errors:
+                    print("[FAIL] Release validation failed:")
+                    for err in val_errors:
+                        print(f"  - {err}")
+                    raise RuntimeError("release validation failed")
+                if not verify_packaging():
+                    raise RuntimeError("packaging check failed")
+    elif not args.skip_tests:
         print("Running complete deterministic selftest suite [3/5]")
         t0 = time.time()
         selftest_cmd = [sys.executable, str(ROOT / "harness_cli.py"), "selftest", "--kit", str(ROOT)]

@@ -1577,6 +1577,62 @@ class TestSpeedTests(unittest.TestCase):
                 ret = harness_cli.cmd_selftest(args)
                 self.assertNotEqual(0, ret)
 
+    def test_testmode_004b_parallel_jobs_report_every_failure_and_return_nonzero(self) -> None:
+        """TESTMODE-004b: parallel suites run through subprocess.run; any failing suite fails the run."""
+        import harness_cli
+        from unittest.mock import patch, MagicMock
+        args = harness_cli.build_parser().parse_args(["selftest", "--quick", "--jobs", "3", "--kit", str(KIT)])
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(kwargs)
+            failing = "_hook_selftest.py" in argv[-1]
+            return MagicMock(returncode=1 if failing else 0, stdout="suite output\n")
+
+        with patch.object(harness_cli, "_verify_kit_checksums", return_value=None), patch("subprocess.run", side_effect=fake_run):
+            ret = harness_cli.cmd_selftest(args)
+        self.assertNotEqual(0, ret)
+        self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), len(calls))
+        self.assertTrue(all(kw.get("stdout") is not None for kw in calls), "parallel suites capture output")
+
+    def test_testmode_004c_selftest_tmp_reaches_every_suite(self) -> None:
+        """TESTMODE-004c: HARNESS_SELFTEST_TMP sets TEMP/TMP/TMPDIR for suites; unset leaves the environment alone."""
+        import harness_cli
+        from unittest.mock import patch, MagicMock
+        tmp_root = tempfile.mkdtemp(prefix="selftest_tmp_")
+        args = harness_cli.build_parser().parse_args(["selftest", "--quick", "--jobs", "1", "--kit", str(KIT)])
+        for value, expect_env in ((tmp_root, True), ("", False)):
+            with patch.dict(os.environ, {"HARNESS_SELFTEST_TMP": value}), \
+                    patch.object(harness_cli, "_verify_kit_checksums", return_value=None), \
+                    patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                self.assertEqual(0, harness_cli.cmd_selftest(args))
+                for call in mock_run.call_args_list:
+                    env = call.kwargs.get("env")
+                    if expect_env:
+                        self.assertEqual(tmp_root, env["TEMP"])
+                        self.assertEqual(tmp_root, env["TMPDIR"])
+                    else:
+                        self.assertIsNone(env)
+
+    def test_testmode_004d_full_pass_marker_binds_the_clean_tree_only(self) -> None:
+        """TESTMODE-004d: a full pass is recorded for a clean HEAD tree; a dirty tree records nothing."""
+        import harness_cli
+        repo = Path(tempfile.mkdtemp(prefix="selftest_marker_"))
+        ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / "a.txt").write_text("a\n", encoding="utf-8")
+        subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+        subprocess.run(["git", *ident, "commit", "-q", "-m", "a"], cwd=repo, check=True)
+        harness_cli._record_full_pass(repo)
+        marker = harness_cli.selftest_pass_marker(repo)
+        self.assertEqual(harness_cli.clean_head_tree(repo), json.loads(marker.read_text(encoding="utf-8"))["tree"])
+        marker.unlink()
+        (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+        self.assertEqual("", harness_cli.clean_head_tree(repo))
+        harness_cli._record_full_pass(repo)
+        self.assertFalse(marker.exists())
+
     def test_testmode_005_unknown_selftest_flag_fails_parser(self) -> None:
         """TESTMODE-005: unknown selftest flag fails CLI argument parser."""
         import harness_cli

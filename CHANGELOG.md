@@ -4,6 +4,29 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.5] - 2026-09-28
+
+Stricter proof for the remaining certification findings, plus a faster local selftest.
+
+### Every host (Antigravity included)
+- O13: an explicit plan file list is authoritative for resources too. A resource surface no longer admits any `/res/` file; an unplanned resource needs `revise` (the files already approved stay authorized). Both ends of a rename count, and the final verifier re-checks the frozen task delta, including runs prepared by older versions.
+- Delivery identity covers generator/build inputs (Protocol Buffers, SQLDelight, GraphQL, YAML, scripts) and Git file modes, including divergent staged and working-tree modes; `core.filemode=false` keeps normal staging.
+- Gate reruns append hash-linked attempts instead of overwriting frozen evidence; the latest attempt is authoritative, and a corrupt or invalid history, or an explicit `HARNESS_RUN_ID` that is not the active run, fails closed.
+- An interrupted `prepare-verification` recovers the original frozen policy, manifest and review results from the persisted run, keeping review findings and round accounting. A missing, malformed or mismatched declared task baseline blocks classification and preparation.
+- `PLAN_SUMMARY` redacts compound credential keys and quoted values; plan hashing and approval binding are unchanged.
+- O3: long Gradle gates print one quiet-output heartbeat instead of duplicate lines; progress cleanup also runs on interruption.
+
+### Antigravity
+- O20/O35: `task status --next` exposes the router's dispatch inputs once as `NEXT_ACTION_INPUTS=<JSON>` (the JSON output already had them): the reviewer roster and each current brief's path and content. The rules use `--next --json` and pass the exact current brief content as `Prompt`, so the agent no longer searches for brief files.
+
+### Maintainer tooling
+- `selftest` runs suites in parallel (`--jobs`, default `HARNESS_SELFTEST_JOBS` or min(4, CPUs); `--jobs 1` streams as before). `HARNESS_SELFTEST_TMP` points suite temporary files at a dedicated directory, for example one excluded from antivirus scanning.
+- A full pass on a clean tree is recorded in `.git/harness-selftest-pass.json`; `scripts_dev/release_version.py` does not repeat the full suite for that exact tree (release validation still runs and exact-commit CI still gates the tag).
+
+### Known limitations
+- O15: a new Gradle daemon per run was not traced to harness code; the runner preserves explicit daemon arguments and environment. It needs the client's Gradle/JVM settings and daemon logs.
+- Router-emitted developer questions (`DEVELOPER_PROMPT`) are still rule-driven, not generated (O10).
+
 ## [1.1.4] - 2026-09-27
 
 Fixes for the Antigravity certification round on a real bilingual app (Gemini 3.8 Flash, harness v1.1.3). Three findings dead-ended a task; each now has a regression test that fails on v1.1.3.
