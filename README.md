@@ -181,6 +181,16 @@ In an installed repository, daily commands use the local launcher:
 python .agents/harness.py doctor --json
 ```
 
+### Updating
+
+At the start of a conversation, an installed harness tells the agent (at most once a day) when a newer release exists. To update, finish or cancel the active task, then paste the same prompt with the new version in a new chat, or run:
+
+```bash
+python ~/.android-harness/kit/harness_cli.py update --repo /path/to/android-project
+```
+
+The update is transactional and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. It refuses while a task is active, and it lists managed files you edited by hand instead of overwriting them.
+
 For advanced configuration, see [docs/install-or-update-prompt.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md) and [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md).
 
 ---
@@ -435,7 +445,7 @@ Each component is implemented using Python standard-library modules with zero ex
 - **Python Matrix**: Python 3.10, 3.11, 3.12, 3.13, and 3.14 (standard library only; zero pip dependencies).
 - **Validation**: Full deterministic selftest suite (`python harness_cli.py selftest`), syntax compilation across all scripts (`python -m compileall`), wheel packaging and lifecycle tests, security/adversarial boundary validation, and multi-phase Android workflow scenario tests.
 
-All pull requests and commits run the complete matrix on GitHub Actions.
+Every pull request and push to `main` runs on GitHub Actions: the complete suite on Linux, and the quick suite on each supported OS and Python version (see [docs/compatibility-matrix.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)). A release is tagged only after that CI passes on the exact commit.
 
 ---
 
@@ -463,7 +473,7 @@ We welcome contributions! Please review [CONTRIBUTING.md](https://github.com/rab
 
 1. **Standard Library Only**: All runtime engine code must use Python standard library only.
 2. **Safety Invariants**: Never weaken approval gates, plan nonces, or evidence binding.
-3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly.
+3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly. Suites run in parallel (`--jobs N`, default up to 4; `--jobs 1` streams output). On Windows, pointing `HARNESS_SELFTEST_TMP` at a folder excluded from antivirus scanning shortens the run considerably.
 
 For security reports, refer to [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
 
