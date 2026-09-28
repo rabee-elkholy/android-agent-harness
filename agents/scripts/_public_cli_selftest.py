@@ -1592,8 +1592,42 @@ class TestSpeedTests(unittest.TestCase):
         with patch.object(harness_cli, "_verify_kit_checksums", return_value=None), patch("subprocess.run", side_effect=fake_run):
             ret = harness_cli.cmd_selftest(args)
         self.assertNotEqual(0, ret)
-        self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), len(calls))
+        expected = sum(harness_cli.SELFTEST_SHARDS.get(script, 1) for script in harness_cli.QUICK_SELFTEST_SUITES)
+        self.assertEqual(expected, len(calls), "one process per suite, and per shard of a sharded suite")
         self.assertTrue(all(kw.get("stdout") is not None for kw in calls), "parallel suites capture output")
+
+    def test_testmode_004f_sharded_suites_run_every_test_exactly_once(self) -> None:
+        """TESTMODE-004f: contiguous shards cover the whole suite with no gap or repeat; a failing test fails its shard."""
+        from _live_process import run_test_shard, shard_tests
+        for size in (0, 1, 3, 7, 695):
+            for count in (1, 2, 3, 4, 8):
+                items = list(range(size))
+                parts = [shard_tests(items, index, count) for index in range(count)]
+                self.assertEqual(items, [x for part in parts for x in part], (size, count))
+        module = Path(tempfile.mkdtemp(prefix="shard_mod_")) / "_tiny_selftest.py"
+        module.write_text(
+            "import unittest, os\n"
+            "class A(unittest.TestCase):\n"
+            "    def test_1(self): open(os.environ['SHARD_LOG'], 'a').write('A1\\n')\n"
+            "    def test_2(self): open(os.environ['SHARD_LOG'], 'a').write('A2\\n')\n"
+            "class B(unittest.TestCase):\n"
+            "    def test_1(self): open(os.environ['SHARD_LOG'], 'a').write('B1\\n')\n"
+            "    def test_2(self):\n"
+            "        open(os.environ['SHARD_LOG'], 'a').write('B2\\n')\n"
+            "        self.assertFalse(os.environ.get('SHARD_FAIL'))\n",
+            encoding="utf-8",
+        )
+        log = module.parent / "ran.txt"
+        from unittest import mock
+        import contextlib
+        import io
+        with mock.patch.dict(os.environ, {"SHARD_LOG": str(log)}), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, run_test_shard(str(module), 0, 2))
+            self.assertEqual(0, run_test_shard(str(module), 1, 2))
+        self.assertEqual(["A1", "A2", "B1", "B2"], log.read_text(encoding="utf-8").split())
+        with mock.patch.dict(os.environ, {"SHARD_LOG": str(log), "SHARD_FAIL": "1"}), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, run_test_shard(str(module), 0, 2))
+            self.assertEqual(1, run_test_shard(str(module), 1, 2))
 
     def test_testmode_004e_parallel_run_shows_starts_and_running_suites(self) -> None:
         """TESTMODE-004e: captured suites announce their start, and long ones are listed while they run."""

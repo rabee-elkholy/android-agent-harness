@@ -300,3 +300,39 @@ def enable_subtask_test_runner() -> None:
     unittest.TextTestRunner = SubtaskTestRunner
     unittest.runner.TextTestRunner = SubtaskTestRunner
 
+
+def shard_tests(tests: list, index: int, count: int) -> list:
+    """Contiguous slice `index` of `count` near-equal slices, in load order.
+
+    Contiguous slices keep each test class together, so class fixtures run once per shard, and the
+    slices of all shards together are exactly the full list.
+    """
+    size = -(-len(tests) // count) if count > 0 else len(tests)
+    return tests[index * size:(index + 1) * size]
+
+
+def run_test_shard(path: str, index: int, count: int) -> int:
+    """Load a selftest module and run shard `index` of `count`; exit status 0 only when it passes."""
+    import importlib.util
+    import unittest
+    from pathlib import Path
+
+    name = f"selftest_shard_{Path(path).stem}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules[name] = module
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    tests: list = []
+
+    def walk(suite) -> None:
+        for item in suite:
+            if isinstance(item, unittest.TestSuite):
+                walk(item)
+            else:
+                tests.append(item)
+
+    walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+    picked = shard_tests(tests, index, count)
+    result = unittest.TextTestRunner().run(unittest.TestSuite(picked))
+    return 0 if result.wasSuccessful() else 1
+

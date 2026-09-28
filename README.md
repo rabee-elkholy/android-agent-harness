@@ -473,7 +473,7 @@ We welcome contributions! Please review [CONTRIBUTING.md](https://github.com/rab
 
 1. **Standard Library Only**: All runtime engine code must use Python standard library only.
 2. **Safety Invariants**: Never weaken approval gates, plan nonces, or evidence binding.
-3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly. Suites run in parallel (`--jobs N`, default up to 4; `--jobs 1` streams output). On Windows, pointing `HARNESS_SELFTEST_TMP` at a folder excluded from antivirus scanning shortens the run considerably.
+3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly. Suites run in parallel (`--jobs N`, default up to 4; the largest suites are split into shards; `--jobs 1` streams output). On Windows, pointing `HARNESS_SELFTEST_TMP` at a folder excluded from antivirus scanning shortens the run considerably.
 
 For security reports, refer to [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
 

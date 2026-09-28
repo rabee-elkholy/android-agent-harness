@@ -1037,10 +1037,31 @@ assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
 SELFTEST_PASS_MARKER = "harness-selftest-pass.json"
 SELFTEST_MAX_AUTO_JOBS = 4
 SELFTEST_PROGRESS_SECONDS = 30
+# Suites long enough to dominate a parallel run are split into contiguous shards (parallel mode only).
+SELFTEST_SHARDS = {
+    "_daily_workflow_selftest.py": 4,
+    "_vnext_selftest.py": 2,
+    "_phase_review_v2_selftest.py": 2,
+}
+# Measured full-suite seconds on Windows (2026-09-28); only the start order uses them, longest first,
+# so the long suites never begin last. Unlisted suites count as short.
+SELFTEST_EXPECTED_SECONDS = {
+    "_daily_workflow_selftest.py": 1420,
+    "_vnext_selftest.py": 455,
+    "_phase_review_v2_selftest.py": 380,
+    "_worktree_handoff_selftest.py": 160,
+    "_stabilization_v41_selftest.py": 140,
+    "_android_scenarios_selftest.py": 125,
+    "_public_cli_selftest.py": 100,
+    "_security_selftest.py": 80,
+    "_hook_selftest.py": 60,
+    "_performance_selftest.py": 45,
+    "_stabilization_v42_selftest.py": 45,
+}
 
 
 def _selftest_jobs(requested: int | None) -> int:
-    """Worker count: --jobs, then HARNESS_SELFTEST_JOBS, then min(4, CPUs). Suites are independent
+    """Worker count: --jobs, then HARNESS_SELFTEST_JOBS, then min(8, CPUs). Suites are independent
     processes that each work in their own temporary directories."""
     if requested is not None:
         return max(1, int(requested))
@@ -1120,30 +1141,42 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         quick = bool(getattr(args, "quick", False))
         scripts = QUICK_SELFTEST_SUITES if quick else FULL_SELFTEST_SUITES
         mode = "QUICK" if quick else "FULL"
-        total = len(scripts)
-        jobs = min(_selftest_jobs(getattr(args, "jobs", None)), total)
+        jobs = _selftest_jobs(getattr(args, "jobs", None))
+        # Work items: (script, shard index, shard count). One process per item.
+        items = [(script, 0, 1) for script in scripts]
+        if jobs > 1:
+            items = [
+                (script, index, SELFTEST_SHARDS.get(script, 1))
+                for script in scripts
+                for index in range(SELFTEST_SHARDS.get(script, 1))
+            ]
+        total = len(items)
+        jobs = min(jobs, total)
         env = _selftest_env()
         _live(f"selftest mode: {mode} (jobs: {jobs})")
         if env.get("HARNESS_SELFTEST_TMP", "").strip():
             _live(f"selftest temp: {env['TEMP']}")
 
-        def runner_code(script: str) -> str:
+        def runner_code(script: str, index: int = 0, count: int = 1) -> str:
             target = _script_root(kit) / script
-            return (
+            head = (
                 "import sys, os;"
                 "sys.path.insert(0, r'" + str(_script_root(kit)) + "');"
-                "from _live_process import enable_subtask_test_runner;"
+                "from _live_process import enable_subtask_test_runner, run_test_shard;"
                 "enable_subtask_test_runner();"
-                "import runpy; runpy.run_path(r'" + str(target) + "', run_name='__main__')"
             )
+            if count > 1:
+                return head + f"sys.exit(run_test_shard(r'{target}', {index}, {count}))"
+            return head + "import runpy; runpy.run_path(r'" + str(target) + "', run_name='__main__')"
 
-        def label_of(script: str) -> str:
-            return script.replace("_selftest.py", "").lstrip("_")
+        def label_of(script: str, index: int = 0, count: int = 1) -> str:
+            base = script.replace("_selftest.py", "").lstrip("_")
+            return f"{base}#{index + 1}/{count}" if count > 1 else base
 
         timings: list[tuple[str, float]] = []
         failures: list[tuple[str, int]] = []
         if jobs <= 1:
-            for idx, script in enumerate(scripts, 1):
+            for idx, (script, _, _) in enumerate(items, 1):
                 label = label_of(script)
                 _live(f"selftest: {label} [{idx}/{total}]")
                 t0 = time.time()
@@ -1161,23 +1194,25 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             lock = threading.Lock()
             running: dict[str, float] = {}
 
-            def run(script: str) -> tuple[str, int, float, str]:
-                label = label_of(script)
+            def run(item: tuple[str, int, int]) -> tuple[str, int, float, str]:
+                label = label_of(*item)
                 t0 = time.time()
                 with lock:
                     running[label] = t0
                 _live(f"selftest: {label} [start]")
                 try:
-                    proc = _run_suite(runner_code(script), capture=True, env=env)
+                    proc = _run_suite(runner_code(*item), capture=True, env=env)
                 finally:
                     with lock:
                         running.pop(label, None)
                 output = proc.stdout if isinstance(getattr(proc, "stdout", None), str) else ""
-                return script, int(proc.returncode or 0), time.time() - t0, output
+                return label, int(proc.returncode or 0), time.time() - t0, output
 
             done = 0
             with ThreadPoolExecutor(max_workers=jobs) as pool:
-                pending = {pool.submit(run, script) for script in scripts}
+                # Longest work first (shards of the big suites), so no worker starts one at the end.
+                ordered = sorted(items, key=lambda item: SELFTEST_EXPECTED_SECONDS.get(item[0], 10) / item[2], reverse=True)
+                pending = {pool.submit(run, item) for item in ordered}
                 while pending:
                     finished, pending = wait(pending, timeout=SELFTEST_PROGRESS_SECONDS, return_when=FIRST_COMPLETED)
                     if not finished:
@@ -1189,9 +1224,8 @@ def cmd_selftest(args: argparse.Namespace) -> int:
                             _live("selftest: running " + ", ".join(f"{name} {now - t0:.0f}s" for name, t0 in active))
                         continue
                     for future in finished:
-                        script, code, elapsed, output = future.result()
+                        label, code, elapsed, output = future.result()
                         done += 1
-                        label = label_of(script)
                         timings.append((label, elapsed))
                         if code != 0:
                             failures.append((label, code))
@@ -1202,7 +1236,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             if failures:
                 _live(f"\nselftest failed: {', '.join(label for label, _ in failures)}")
                 return failures[0][1]
-        _live(f"\n✅ All {total} selftest suites passed.")
+        _live(f"\n✅ All {len(scripts)} selftest suites passed ({total} processes).")
         if not quick:
             _record_full_pass(kit)
         timings.sort(key=lambda x: x[1], reverse=True)
@@ -1451,7 +1485,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--jobs",
         type=int,
         default=None,
-        help="Suites to run in parallel (default: HARNESS_SELFTEST_JOBS or min(4, CPUs); 1 streams output).",
+        help="Suites to run in parallel (default: HARNESS_SELFTEST_JOBS or min(8, CPUs); 1 streams output).",
     )
     sp.set_defaults(func=cmd_selftest)
 
