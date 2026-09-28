@@ -20,6 +20,7 @@ Fixes from a short certification on a real app (Antigravity, Gemini 3.8 Flash): 
 - O31: gate commands the developer runs keep the `--proof-reference` reason for the developer to write.
 
 ### Reviewers
+- Reviewer brief pointers accept symlink aliases of the current brief path (including macOS `/var` and `/private/var`); stale hashes, other roles, and different paths remain refused.
 - O35b: the agent still opened every reviewer brief to paste it as the prompt. The router now gives `reviewer_prompts[role]`, a one-line pointer to the current brief bound by its content hash, and the hook accepts it (a stale or other-role pointer is refused).
 
 ### Gate messages and logs

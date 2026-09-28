@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import sys
 from pathlib import Path
@@ -69,6 +70,26 @@ def brief_pointer_prompt(role: str, brief_path: str, brief_text: str) -> str:
         f"You are {role}. Read your complete review brief at {brief_path} (sha256 {digest}) "
         "with your file tools and follow it exactly, including its output contract."
     )
+
+
+
+def pointer_matches(supplied: str, role: str, brief_path: str, brief_text: str) -> bool:
+    """Match the complete pointer while treating symlink aliases as the same brief."""
+    match = re.fullmatch(
+        r"You are (?P<role>[^\s]+)\. Read your complete review brief at (?P<path>[^\r\n]+) "
+        r"\(sha256 (?P<digest>[0-9a-f]{16})\) "
+        r"with your file tools and follow it exactly, including its output contract\.",
+        supplied.replace("\r\n", "\n").strip(),
+    )
+    if not match or match["role"] != role or not brief_path:
+        return False
+    try:
+        if Path(match["path"]).resolve() != Path(brief_path).resolve():
+            return False
+    except (OSError, RuntimeError, ValueError):
+        return False
+    # Reuse the generator's normalized hash and exact pointer contract.
+    return supplied.replace("\r\n", "\n").strip() == brief_pointer_prompt(role, match["path"], brief_text)
 
 
 def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -> dict:

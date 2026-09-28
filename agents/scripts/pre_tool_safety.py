@@ -777,7 +777,7 @@ def _handle_subagent(name: str, args: dict) -> None:
         reviewer_routes = {}
         if protocol >= 2:
             try:
-                from review_execution import resolve_execution_profile
+                from review_execution import pointer_matches, resolve_execution_profile
                 review_host = str(current.get("review_host") or "").strip().lower()
                 profile = resolve_execution_profile(REPO, str(active["task_id"]), host=review_host)
                 if not isinstance(profile, dict) or not profile.get("reviewers"):
@@ -972,8 +972,9 @@ def _handle_subagent(name: str, args: dict) -> None:
                     return
                 route = reviewer_routes[matched]
                 expected_prompt = str(route.get("brief_content") or "").replace("\r\n", "\n").strip()
-                expected_pointer = str(route.get("brief_pointer_prompt") or "").strip()
-                if supplied_prompt != expected_prompt and not (expected_pointer and supplied_prompt == expected_pointer):
+                if supplied_prompt != expected_prompt and not pointer_matches(
+                    supplied_prompt, matched, str(route.get("brief_path") or ""), expected_prompt,
+                ):
                     emit(
                         "deny",
                         f"Reviewer prompt for '{matched}' does not match the generated reviewer brief. Pass the router's "

@@ -5107,6 +5107,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="review_orch_test_")
         self.repo = Path(self.temp_dir.name).resolve()
+        # Parallel shards invoke the kit hook; its default audit file is shared.
+        # Bind both hook subprocesses and audit readers to this test's own state.
+        self._hook_env = mock.patch.dict(os.environ, {
+            "HARNESS_HOOK_STATE": str(self.repo / ".agents" / "state" / "hook-state.json"),
+        })
+        self._hook_env.start()
+        self.addCleanup(self._hook_env.stop)
         run_git(self.repo, "init", "-q")
         run_git(self.repo, "config", "user.name", "Daily Test")
         run_git(self.repo, "config", "user.email", "daily@example.invalid")
@@ -6011,6 +6018,16 @@ class ReviewOrchestrationTests(unittest.TestCase):
         current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
         prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
         self.assertEqual("antigravity", prof.get("host"))
+
+    def test_REVIEW_HOST_AUDIT_isolated_from_other_worker(self) -> None:
+        """Another worker's last audit record cannot replace this hook's reason."""
+        own_state = self.repo / ".agents" / "state"
+        write_file(own_state / "audit_log.jsonl", json.dumps({"reason_code": "REVIEW_HOST_REQUIRED"}) + "\n")
+        other_engine = self.repo / "other-worker" / "scripts" / "pre_tool_safety.py"
+        write_file(other_engine.parent.parent / "state" / "audit_log.jsonl",
+                   json.dumps({"reason_code": "UNKNOWN_MUTATION_TOOL"}) + "\n")
+        result = _with_audit_reason({"decision": "deny"}, dict(os.environ), other_engine)
+        self.assertEqual("REVIEW_HOST_REQUIRED", result["reason_code"])
 
     def test_REVIEW_HOST_ANTIGRAVITY_001_hostless_prepare_denied_by_antigravity_hook(self) -> None:
         """REVIEW-HOST-ANTIGRAVITY-001: Hostless prepare-verification is denied by Antigravity safety hook."""
