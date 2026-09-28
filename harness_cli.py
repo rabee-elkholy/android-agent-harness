@@ -1036,6 +1036,7 @@ assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
 
 SELFTEST_PASS_MARKER = "harness-selftest-pass.json"
 SELFTEST_MAX_AUTO_JOBS = 4
+SELFTEST_PROGRESS_SECONDS = 30
 
 
 def _selftest_jobs(requested: int | None) -> int:
@@ -1154,28 +1155,50 @@ def cmd_selftest(args: argparse.Namespace) -> int:
                     return code
                 _live(f"selftest: {label} [{idx}/{total}] [Done] ({elapsed:.1f}s)")
         else:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import threading
+            from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+            lock = threading.Lock()
+            running: dict[str, float] = {}
 
             def run(script: str) -> tuple[str, int, float, str]:
+                label = label_of(script)
                 t0 = time.time()
-                proc = _run_suite(runner_code(script), capture=True, env=env)
+                with lock:
+                    running[label] = t0
+                _live(f"selftest: {label} [start]")
+                try:
+                    proc = _run_suite(runner_code(script), capture=True, env=env)
+                finally:
+                    with lock:
+                        running.pop(label, None)
                 output = proc.stdout if isinstance(getattr(proc, "stdout", None), str) else ""
                 return script, int(proc.returncode or 0), time.time() - t0, output
 
             done = 0
             with ThreadPoolExecutor(max_workers=jobs) as pool:
-                futures = [pool.submit(run, script) for script in scripts]
-                for future in as_completed(futures):
-                    script, code, elapsed, output = future.result()
-                    done += 1
-                    label = label_of(script)
-                    timings.append((label, elapsed))
-                    if code != 0:
-                        failures.append((label, code))
-                        _live(output.rstrip())
-                        _live(f"selftest: {label} [{done}/{total}] [Fail] ({elapsed:.1f}s)")
-                    else:
-                        _live(f"selftest: {label} [{done}/{total}] [Done] ({elapsed:.1f}s)")
+                pending = {pool.submit(run, script) for script in scripts}
+                while pending:
+                    finished, pending = wait(pending, timeout=SELFTEST_PROGRESS_SECONDS, return_when=FIRST_COMPLETED)
+                    if not finished:
+                        # Captured suites print nothing until they end; say what is still running.
+                        now = time.time()
+                        with lock:
+                            active = sorted(running.items(), key=lambda item: item[1])
+                        if active:
+                            _live("selftest: running " + ", ".join(f"{name} {now - t0:.0f}s" for name, t0 in active))
+                        continue
+                    for future in finished:
+                        script, code, elapsed, output = future.result()
+                        done += 1
+                        label = label_of(script)
+                        timings.append((label, elapsed))
+                        if code != 0:
+                            failures.append((label, code))
+                            _live(output.rstrip())
+                            _live(f"selftest: {label} [{done}/{total}] [Fail] ({elapsed:.1f}s)")
+                        else:
+                            _live(f"selftest: {label} [{done}/{total}] [Done] ({elapsed:.1f}s)")
             if failures:
                 _live(f"\nselftest failed: {', '.join(label for label, _ in failures)}")
                 return failures[0][1]
