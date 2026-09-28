@@ -1595,6 +1595,29 @@ class TestSpeedTests(unittest.TestCase):
         self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), len(calls))
         self.assertTrue(all(kw.get("stdout") is not None for kw in calls), "parallel suites capture output")
 
+    def test_testmode_004e_parallel_run_shows_starts_and_running_suites(self) -> None:
+        """TESTMODE-004e: captured suites announce their start, and long ones are listed while they run."""
+        import harness_cli
+        import contextlib
+        import io
+        import time as _time
+        from unittest.mock import patch, MagicMock
+        args = harness_cli.build_parser().parse_args(["selftest", "--quick", "--jobs", "2", "--kit", str(KIT)])
+
+        def fake_run(argv, **kwargs):
+            if "_hook_selftest.py" in argv[-1]:
+                _time.sleep(0.3)
+            return MagicMock(returncode=0, stdout="")
+
+        buf = io.StringIO()
+        with patch.object(harness_cli, "_verify_kit_checksums", return_value=None), \
+                patch.object(harness_cli, "SELFTEST_PROGRESS_SECONDS", 0.05), \
+                patch("subprocess.run", side_effect=fake_run), contextlib.redirect_stdout(buf):
+            self.assertEqual(0, harness_cli.cmd_selftest(args))
+        out = buf.getvalue()
+        self.assertIn("selftest: hook [start]", out)
+        self.assertIn("selftest: running hook", out)
+
     def test_testmode_004c_selftest_tmp_reaches_every_suite(self) -> None:
         """TESTMODE-004c: HARNESS_SELFTEST_TMP sets TEMP/TMP/TMPDIR for suites; unset leaves them alone; update checks are off."""
         import harness_cli
