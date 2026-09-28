@@ -183,6 +183,16 @@ def main(argv: list[str] | None = None) -> int:
 
     live_print("\n==================================================")
     overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok and arch_ok and exported_ok
+    checks = (
+        ("hook selftest", hook_code == 0),
+        ("string parity", str_code == 0),
+        ("Room migrations", db_ok),
+        ("Kotlin lint", lint_code == 0),
+        ("plan authority", risk_ok),
+        ("architecture drift", arch_ok),
+        ("exported components", exported_ok),
+    )
+    failed_checks = [name for name, ok in checks if not ok]
     common = {
         "schema_version": 2,
         "producer": "preflight_check",
@@ -199,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
             "architecture_drift": arch_ok,
             "exported_components": exported_ok,
         },
-        "detail": "" if overall_pass else "preflight steps failed; see step exit codes",
+        "detail": "" if overall_pass else "failed: " + ", ".join(failed_checks),
     }
     if not diagnostic:
         write_gate_result("preflight", common)
@@ -214,9 +224,12 @@ def main(argv: list[str] | None = None) -> int:
                 "exit_code": 0 if db_ok else 1, "detail": db_msg,
             })
     if overall_pass:
-        live_print("[SUCCESS] PREFLIGHT PASSED: ready for review packaging.")
+        live_print(f"[SUCCESS] PREFLIGHT PASSED: ready for review packaging ({len(checks)} checks).")
         return 0
-    live_print("[FAIL] PREFLIGHT FAILED: fix the issues above before review packaging.")
+    live_print(
+        f"[FAIL] PREFLIGHT FAILED ({len(failed_checks)} of {len(checks)} checks): {', '.join(failed_checks)}. "
+        "Fix the issues above before review packaging."
+    )
     return 1
 
 

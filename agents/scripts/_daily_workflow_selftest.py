@@ -542,12 +542,16 @@ class DailyWorkflowSelftest(unittest.TestCase):
         import preflight_check
         write_file(self.repo / "app/src/main/AndroidManifest.xml", '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application/></manifest>\n')
         argv = ["--repo", str(self.repo), "--diagnostic"]
-        with contextlib.redirect_stdout(io.StringIO()):
+        passed = io.StringIO()
+        with contextlib.redirect_stdout(passed):
             self.assertEqual(0, preflight_check.main(argv))
+        self.assertIn("[SUCCESS] PREFLIGHT PASSED: ready for review packaging (7 checks).", passed.getvalue())
         out = io.StringIO()
         with mock.patch("exported_component_guard.check", side_effect=RuntimeError("parser exploded")), contextlib.redirect_stdout(out):
             self.assertEqual(1, preflight_check.main(argv))
         self.assertIn("[FAIL] EXPORTED_COMPONENT_CHECK_ERROR: parser exploded", out.getvalue())
+        # The closing line names the failed checks instead of pointing back at the whole log.
+        self.assertIn("[FAIL] PREFLIGHT FAILED (1 of 7 checks): exported components.", out.getvalue())
 
     def test_public_command_catalog_has_no_unknown_flags(self) -> None:
         """Verify command catalog references only valid flags for each CLI tool."""
