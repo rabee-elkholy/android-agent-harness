@@ -1759,6 +1759,57 @@ class TaskFlagAliasSelftest(unittest.TestCase):
             self._parses("phase_review", ["finalize", flag, "t1", "--phase-id", "p1"])
 
 
+class ReadableGradleLogSelftest(unittest.TestCase):
+    """Gradle gates show tasks and failures live, hide per-build noise, and end with one result line."""
+
+    def test_live_filter_keeps_tasks_and_errors_and_hides_noise(self) -> None:
+        from run_gradle_task import is_warning, should_echo_gradle
+        shown = (
+            "> Task :app:compileDebugKotlin",
+            "e: file:///App.kt:12:5 Unresolved reference: foo",
+            "StreakEventManagerTest > clears streaks FAILED",
+            "BUILD FAILED in 2m 3s",
+            "BUILD SUCCESSFUL in 1m 56s",
+            "Starting a Gradle Daemon (subsequent builds will be faster)",
+        )
+        hidden = (
+            "warning: Binding adapter AK(android.widget.ImageView, java.lang.String) already exists",
+            "[WARN] Incremental annotation processing requested, but support is disabled",
+            "w: file:///A.kt:3:1 'x' is deprecated",
+            "OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes",
+            "Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.",
+            "You can use '--warning-mode all' to show the individual deprecation warnings.",
+            "For more on this, please refer to https://docs.gradle.org/...",
+            "Configuration cache entry stored.",
+            "[Incubating] Problems report is available at: file:///x.html",
+            "86 actionable tasks: 36 executed, 50 from cache",
+            "> Task :app:hiltAggregateDepsDebugUnitTest FROM-CACHE",
+            "> Task :app:preBuild UP-TO-DATE",
+        )
+        for line in shown:
+            self.assertTrue(should_echo_gradle(line), line)
+        for line in hidden:
+            self.assertFalse(should_echo_gradle(line), line)
+        self.assertEqual(4, sum(is_warning(line) for line in hidden))
+
+    def test_result_line_and_raw_log_retention(self) -> None:
+        import run_gradle_task
+        from unittest import mock
+        root = Path(tempfile.mkdtemp(prefix="gradle_log_"))
+        with mock.patch.dict(os.environ, {"HARNESS_STATE_ROOT": str(root / "state")}):
+            paths = []
+            for i in range(run_gradle_task.RAW_LOG_KEEP + 3):
+                with mock.patch.object(run_gradle_task.time, "strftime", lambda fmt, i=i: f"20260928-{i:06d}"):
+                    paths.append(run_gradle_task.save_raw_log(root, ":app:assembleDebug", f"log {i}\n"))
+        kept = sorted((root / "state" / "logs" / "gradle").glob("*.log"))
+        self.assertEqual(run_gradle_task.RAW_LOG_KEEP, len(kept))
+        self.assertEqual(paths[-1], kept[-1])
+        self.assertEqual("log 22\n", kept[-1].read_text(encoding="utf-8"))
+        line = run_gradle_task.result_line("PASS", ":app:assembleDebug", "1m 56s", 37, kept[-1])
+        self.assertEqual(f"[RESULT] PASS :app:assembleDebug in 1m 56s | 37 warning lines not shown | full log: {kept[-1]}", line)
+        self.assertEqual("[RESULT] FAIL :app:test in 3.0s", run_gradle_task.result_line("FAIL", ":app:test", "3.0s", 0, None))
+
+
 class UpdateNoticeSelftest(unittest.TestCase):
     """The turn-start reminder tells the agent about a newer release at most once a day."""
 

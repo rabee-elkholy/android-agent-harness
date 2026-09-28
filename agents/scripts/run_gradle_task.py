@@ -65,6 +65,24 @@ SUPPRESSED_PATTERNS = [
     re.compile(r"^Note: Some input files use unchecked"),
 ]
 KOTLIN_WARNING = re.compile(r"^w:\s")
+# Warnings the build reports on every run; hidden from the live log, counted, and kept in the full log.
+WARNING_PATTERNS = [
+    KOTLIN_WARNING,
+    re.compile(r"^warning:\s", re.IGNORECASE),
+    re.compile(r"^\[WARN\]\s"),
+    re.compile(r"^OpenJDK 64-Bit Server VM warning:"),
+]
+# Gradle summary chatter with no task-specific information.
+NOISE_PATTERNS = [
+    re.compile(r"^> Task :.*FROM-CACHE"),
+    re.compile(r"^Deprecated Gradle features were used"),
+    re.compile(r"^You can use '--warning-mode all'"),
+    re.compile(r"^For more on this, please refer to"),
+    re.compile(r"^Configuration cache entry (stored|reused)"),
+    re.compile(r"^\[Incubating\] Problems report is available"),
+    re.compile(r"^\d+ actionable tasks?:"),
+]
+RAW_LOG_KEEP = 20
 
 
 def is_boilerplate(line: str) -> bool:
@@ -74,13 +92,43 @@ def is_boilerplate(line: str) -> bool:
     return any(p.search(s) for p in SUPPRESSED_PATTERNS)
 
 
+def is_warning(line: str) -> bool:
+    s = line.strip()
+    return any(p.match(s) for p in WARNING_PATTERNS)
+
+
 def should_echo_gradle(line: str) -> bool:
     s = line.strip()
-    if not s or is_boilerplate(s):
+    if not s or is_boilerplate(s) or is_warning(s):
         return False
-    if KOTLIN_WARNING.match(s):
-        return False
-    return True
+    return not any(p.match(s) for p in NOISE_PATTERNS)
+
+
+def save_raw_log(repo: Path, task_label: str, raw_log: str) -> Path | None:
+    """Full Gradle output under the state directory; the newest RAW_LOG_KEEP files are kept."""
+    try:
+        from _vnext_common import state_root
+
+        log_dir = state_root(repo) / "logs" / "gradle"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", task_label).strip("_") or "gradle"
+        path = log_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}.log"
+        path.write_text(raw_log, encoding="utf-8")
+        for old in sorted(log_dir.glob("*.log"))[:-RAW_LOG_KEEP]:
+            old.unlink(missing_ok=True)
+        return path
+    except Exception:
+        return None
+
+
+def result_line(outcome: str, task_label: str, duration: str, hidden_warnings: int, log_path: Path | None) -> str:
+    """One closing line per Gradle gate: outcome, duration, hidden warning count, full log location."""
+    parts = [f"[RESULT] {outcome} {task_label} in {duration}"]
+    if hidden_warnings:
+        parts.append(f"{hidden_warnings} warning line{'s' if hidden_warnings != 1 else ''} not shown")
+    if log_path is not None:
+        parts.append(f"full log: {log_path}")
+    return " | ".join(parts)
 
 
 def with_plain_console(task_args: list[str]) -> list[str]:
@@ -360,6 +408,9 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
             label="gradle",
         )
 
+    elapsed_text = f"{time.time() - started:.1f}s"
+    hidden_warnings = sum(1 for line in raw_log.splitlines() if is_warning(line))
+    log_path = save_raw_log(run_root, task_label, raw_log)
     important_lines = list(echoed)
     for line in raw_log.splitlines():
         if "BUILD FAILED" in line or line.strip().startswith("e: ") or " FAILED" in line:
@@ -372,6 +423,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
             live_print(f"[!] BUILD FAILED (exit {code}) — environment problem, no code fixes allowed")
             record("ENV", EXIT_ENV, verdict.env_class, verdict.reason)
             emit_env_failure(verdict, "run_gradle_task.py")
+            live_print(result_line("ENV", task_label, elapsed_text, hidden_warnings, log_path))
             return EXIT_ENV
         record("FAIL", code, verdict.env_class, verdict.reason)
         if outcome is not None:
@@ -401,6 +453,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
         if artifact_error:
             record("FAIL", 1, "CODE", artifact_error)
             live_print(f"[!] BUILD OUTPUT AMBIGUOUS: {artifact_error}", err=True)
+            live_print(result_line("FAIL", task_label, elapsed_text, hidden_warnings, log_path))
             return 1
         record("PASS", 0, artifact_set=artifact_set)
         hint = _duration_hint(raw_log)
@@ -415,6 +468,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
             live_print(f"[+] Installable artifact set: {artifact_set['artifact_set_sha256'][:12]}")
             for member in artifact_set["members"]:
                 live_print(f"    {member['path']} ({int(member['size']) / (1024 * 1024):.1f} MB)")
+        live_print(result_line("PASS", task_label, hint, hidden_warnings, log_path))
         return 0
 
     live_print(f"[!] BUILD FAILED (exit {code})")
@@ -425,6 +479,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
         live_print("--- Isolated Error Output ---")
         for item in important_lines[-80:]:
             live_print(f"  {item}")
+    live_print(result_line("FAIL", task_label, elapsed_text, hidden_warnings, log_path))
     return code
 
 
