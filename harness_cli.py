@@ -1049,15 +1049,15 @@ def _selftest_jobs(requested: int | None) -> int:
     return max(1, min(SELFTEST_MAX_AUTO_JOBS, os.cpu_count() or 1))
 
 
-def _selftest_env() -> dict[str, str] | None:
-    """Suite environment. HARNESS_SELFTEST_TMP points temporary fixtures at a dedicated directory
-    (for example one excluded from antivirus scanning); without it the environment is unchanged."""
-    root = os.environ.get("HARNESS_SELFTEST_TMP", "").strip()
-    if not root:
-        return None
-    Path(root).mkdir(parents=True, exist_ok=True)
+def _selftest_env() -> dict[str, str]:
+    """Suite environment. Update checks never touch the network in suites. HARNESS_SELFTEST_TMP points
+    temporary fixtures at a dedicated directory (for example one excluded from antivirus scanning)."""
     env = dict(os.environ)
-    env["TEMP"] = env["TMP"] = env["TMPDIR"] = root
+    env["HARNESS_UPDATE_CHECK"] = "off"
+    root = env.get("HARNESS_SELFTEST_TMP", "").strip()
+    if root:
+        Path(root).mkdir(parents=True, exist_ok=True)
+        env["TEMP"] = env["TMP"] = env["TMPDIR"] = root
     return env
 
 
@@ -1096,10 +1096,8 @@ def _record_full_pass(kit: Path) -> None:
         pass
 
 
-def _run_suite(runner_code: str, capture: bool, env: dict[str, str] | None):
-    kwargs = {"text": True, "encoding": "utf-8", "errors": "replace"}
-    if env is not None:
-        kwargs["env"] = env
+def _run_suite(runner_code: str, capture: bool, env: dict[str, str]):
+    kwargs = {"text": True, "encoding": "utf-8", "errors": "replace", "env": env}
     if capture:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.STDOUT
@@ -1125,7 +1123,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         jobs = min(_selftest_jobs(getattr(args, "jobs", None)), total)
         env = _selftest_env()
         _live(f"selftest mode: {mode} (jobs: {jobs})")
-        if env is not None:
+        if env.get("HARNESS_SELFTEST_TMP", "").strip():
             _live(f"selftest temp: {env['TEMP']}")
 
         def runner_code(script: str) -> str:

@@ -1,11 +1,15 @@
 """Lightweight, non-blocking check for newer Android Agent Harness releases on GitHub.
 
-Supports 24h caching, release notes fetching, and "Remind me tomorrow" snoozing.
+Supports 24h caching, release notes fetching, "Remind me tomorrow" snoozing, and a
+once-a-day notice that the turn-start reminder shows to the agent. Set
+HARNESS_UPDATE_CHECK=off to disable every network check (selftests do).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 import time
 import urllib.request
@@ -17,6 +21,10 @@ if hasattr(sys.stdout, "reconfigure"):
 GITHUB_REPO = "rabee-elkholy/android-agent-harness"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 CACHE_TTL_SECONDS = 86400  # 24 hours
+RETRY_AFTER_FAILURE_SECONDS = 3600  # an offline or rate-limited check retries after an hour
+NOTICE_INTERVAL_SECONDS = 86400  # the agent is told about a given release at most once a day
+NETWORK_TIMEOUT_SECONDS = 2.5
+VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
 def get_current_version() -> str:
@@ -32,6 +40,10 @@ def get_cache_file() -> Path:
     return state_dir / "update_cache.json"
 
 
+def checks_disabled() -> bool:
+    return os.environ.get("HARNESS_UPDATE_CHECK", "").strip().lower() in {"0", "off", "false", "no"}
+
+
 def parse_semver(v: str) -> tuple[int, ...]:
     v = v.lstrip("v").strip()
     parts = []
@@ -43,128 +55,105 @@ def parse_semver(v: str) -> tuple[int, ...]:
     return tuple(parts[:3])
 
 
-def snooze(days: float = 1.0) -> None:
+def _read_cache() -> dict:
     cache_path = get_cache_file()
-    now = time.time()
-    snooze_until = now + (days * 86400)
-    data = {}
     if cache_path.is_file():
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
         except Exception:
             pass
-    data["snoozed_until"] = snooze_until
-    cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return {}
+
+
+def _write_cache(data: dict) -> None:
+    try:
+        get_cache_file().write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def snooze(days: float = 1.0) -> None:
+    data = _read_cache()
+    data["snoozed_until"] = time.time() + (days * 86400)
+    _write_cache(data)
 
 
 def is_snoozed() -> bool:
-    cache_path = get_cache_file()
-    if cache_path.is_file():
-        try:
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
-            return time.time() < data.get("snoozed_until", 0)
-        except Exception:
-            pass
-    return False
+    try:
+        return time.time() < float(_read_cache().get("snoozed_until", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+
+
+def _fetch_latest(current_ver: str) -> dict | None:
+    """Latest published release as {version, html_url, notes}, or None on any failure."""
+    req = urllib.request.Request(API_URL, headers={"User-Agent": f"AndroidHarnessKit/{current_ver}"})
+    try:
+        with urllib.request.urlopen(req, timeout=NETWORK_TIMEOUT_SECONDS) as resp:
+            if resp.status != 200:
+                return None
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    tag = str(data.get("tag_name") or "").strip().lstrip("v")
+    if not VERSION_RE.fullmatch(tag):
+        return None
+    html_url = str(data.get("html_url") or "")
+    if not html_url.startswith(f"https://github.com/{GITHUB_REPO}/"):
+        html_url = f"https://github.com/{GITHUB_REPO}/releases/tag/v{tag}"
+    return {"version": tag, "html_url": html_url, "notes": str(data.get("body") or "")}
+
+
+def _result(current_ver: str, cache: dict, snoozed: bool) -> dict:
+    latest_ver = str(cache.get("latest_version") or current_ver)
+    if not VERSION_RE.fullmatch(latest_ver):
+        latest_ver = current_ver
+    has_up = parse_semver(latest_ver) > parse_semver(current_ver)
+    return {
+        "has_update": has_up and not snoozed,
+        "raw_has_update": has_up,
+        "current": current_ver,
+        "latest": latest_ver,
+        "notes": str(cache.get("notes") or ""),
+        "html_url": str(cache.get("html_url") or ""),
+        "snoozed": snoozed,
+    }
 
 
 def check_for_update(force: bool = False) -> dict:
-    """Returns dict: {has_update, current, latest, notes, html_url, snoozed}."""
+    """Returns dict: {has_update, raw_has_update, current, latest, notes, html_url, snoozed}."""
     current_ver = get_current_version()
-    cache_path = get_cache_file()
-    now = time.time()
+    cache = _read_cache()
     snoozed = is_snoozed()
-
-    if not force and cache_path.is_file():
-        try:
-            cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if now - cached.get("timestamp", 0) < CACHE_TTL_SECONDS:
-                latest_ver = cached.get("latest_version", current_ver)
-                html_url = cached.get("html_url", "")
-                notes = cached.get("notes", "")
-                has_up = parse_semver(latest_ver) > parse_semver(current_ver)
-                return {
-                    "has_update": has_up and not snoozed,
-                    "raw_has_update": has_up,
-                    "current": current_ver,
-                    "latest": latest_ver,
-                    "notes": notes,
-                    "html_url": html_url,
-                    "snoozed": snoozed,
-                }
-        except Exception:
-            pass
-
-    req = urllib.request.Request(
-        API_URL,
-        headers={"User-Agent": f"AndroidHarnessKit/{current_ver}"},
-    )
+    now = time.time()
+    if checks_disabled():
+        return _result(current_ver, cache, snoozed)
     try:
-        with urllib.request.urlopen(req, timeout=2.5) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read().decode("utf-8"))
-                latest_tag = data.get("tag_name", "").lstrip("v")
-                html_url = data.get("html_url", f"https://github.com/{GITHUB_REPO}")
-                notes = data.get("body", "")
-                
-                # Keep existing snooze timestamp if present
-                existing_snooze = 0
-                if cache_path.is_file():
-                    try:
-                        existing_snooze = json.loads(cache_path.read_text(encoding="utf-8")).get("snoozed_until", 0)
-                    except Exception:
-                        pass
-
-                cache_path.write_text(
-                    json.dumps(
-                        {
-                            "timestamp": now,
-                            "latest_version": latest_tag,
-                            "html_url": html_url,
-                            "notes": notes,
-                            "snoozed_until": existing_snooze,
-                        },
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
-                has_up = parse_semver(latest_tag) > parse_semver(current_ver)
-                return {
-                    "has_update": has_up and not snoozed,
-                    "raw_has_update": has_up,
-                    "current": current_ver,
-                    "latest": latest_tag,
-                    "notes": notes,
-                    "html_url": html_url,
-                    "snoozed": snoozed,
-                }
-    except Exception:
-        try:
-            cache_path.write_text(
-                json.dumps(
-                    {
-                        "timestamp": now - CACHE_TTL_SECONDS + 3600,
-                        "latest_version": current_ver,
-                        "html_url": f"https://github.com/{GITHUB_REPO}",
-                        "notes": "",
-                        "snoozed_until": 0,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
+        fresh = now < float(cache.get("next_check_at", 0) or 0)
+    except (TypeError, ValueError):
+        fresh = False
+    if force or not fresh:
+        latest = _fetch_latest(current_ver)
+        if latest is not None:
+            cache.update(
+                latest_version=latest["version"],
+                html_url=latest["html_url"],
+                notes=latest["notes"],
+                timestamp=now,
+                next_check_at=now + CACHE_TTL_SECONDS,
             )
-        except Exception:
-            pass
+        else:
+            # Keep the last known release and the snooze; only postpone the next attempt.
+            cache["next_check_at"] = now + RETRY_AFTER_FAILURE_SECONDS
+        _write_cache(cache)
+    return _result(current_ver, cache, snoozed)
 
-    return {
-        "has_update": False,
-        "raw_has_update": False,
-        "current": current_ver,
-        "latest": current_ver,
-        "notes": "",
-        "html_url": "",
-        "snoozed": snoozed,
-    }
+
+def install_prompt_url(version: str) -> str:
+    tag = str(version or "").strip().lstrip("v") or "main"
+    return f"https://raw.githubusercontent.com/{GITHUB_REPO}/v{tag}/docs/install-or-update-prompt.md"
 
 
 def update_banner() -> str:
@@ -177,9 +166,33 @@ def update_banner() -> str:
     return ""
 
 
-def install_prompt_url(version: str) -> str:
-    tag = str(version or "").strip().lstrip("v") or "main"
-    return f"https://raw.githubusercontent.com/{GITHUB_REPO}/v{tag}/docs/install-or-update-prompt.md"
+def update_notice() -> str:
+    """One-line notice for the agent at the start of a conversation, at most once a day per release.
+
+    Never raises; empty when there is no newer release, it is snoozed, checks are disabled, or the
+    developer was already told about this release in the last day.
+    """
+    try:
+        res = check_for_update(force=False)
+        if not res["has_update"]:
+            return ""
+        cache = _read_cache()
+        now = time.time()
+        told = str(cache.get("notified_version") or "")
+        told_at = float(cache.get("notified_at", 0) or 0)
+        if told == res["latest"] and now - told_at < NOTICE_INTERVAL_SECONDS:
+            return ""
+        cache["notified_version"] = res["latest"]
+        cache["notified_at"] = now
+        _write_cache(cache)
+        return (
+            f"Harness update available: v{res['latest']} (installed v{res['current']}). Tell the developer once, "
+            f"and offer the update prompt {install_prompt_url(res['latest'])} for a new chat; never update without "
+            "the developer's request, and finish or cancel an active task first. To pause this notice: "
+            "`python .agents/scripts/check_kit_update.py --snooze 7`."
+        )
+    except Exception:
+        return ""
 
 
 def main() -> int:

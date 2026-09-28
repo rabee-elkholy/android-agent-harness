@@ -19,6 +19,10 @@ Stricter proof for the remaining certification findings, plus a faster local sel
 ### Antigravity
 - O20/O35: `task status --next` exposes the router's dispatch inputs once as `NEXT_ACTION_INPUTS=<JSON>` (the JSON output already had them): the reviewer roster and each current brief's path and content. The rules use `--next --json` and pass the exact current brief content as `Prompt`, so the agent no longer searches for brief files.
 
+### Update notice
+- An installed harness now tells the agent, at the start of a conversation and at most once a day per release, that a newer release exists, with the update prompt link; the agent tells the developer and never updates on its own. The update checker existed but its notice was never shown.
+- The checker kept retrying the network on every call after a non-200 answer, wiped the developer's snooze after a failed check, and put the unvalidated release tag into its message. A failed check now keeps the snooze and the last known release and retries after an hour; tags must be `X.Y.Z`. `HARNESS_UPDATE_CHECK=off` disables network checks; selftest suites always run with it off.
+
 ### Maintainer tooling
 - `selftest` runs suites in parallel (`--jobs`, default `HARNESS_SELFTEST_JOBS` or min(4, CPUs); `--jobs 1` streams as before). `HARNESS_SELFTEST_TMP` points suite temporary files at a dedicated directory, for example one excluded from antivirus scanning.
 - A full pass on a clean tree is recorded in `.git/harness-selftest-pass.json`; `scripts_dev/release_version.py` does not repeat the full suite for that exact tree (release validation still runs and exact-commit CI still gates the tag).

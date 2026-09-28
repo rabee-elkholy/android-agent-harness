@@ -80,12 +80,23 @@ def _compact_message() -> str:
     return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. For unrelated work or updates, cancel active task first (workflow.py cancel). Ask developer before guessing missing scenarios."
 
 
+def _update_notice() -> str:
+    """Newer-release notice at the start of a conversation (cached, at most once a day, never raises)."""
+    try:
+        from check_kit_update import update_notice
+        return update_notice()
+    except Exception:
+        return ""
+
+
 def main() -> None:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
         invocation = int(payload.get("invocationNum") or 0) if isinstance(payload, dict) else 0
         msg = _message() if invocation in (0, 1) else _compact_message()
+        if invocation in (0, 1):
+            msg = f"{msg} {_update_notice()}".strip()
         print(json.dumps({"injectSteps": [{"ephemeralMessage": msg}]}))
     except Exception:
         print("{}")
