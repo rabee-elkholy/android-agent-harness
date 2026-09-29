@@ -470,6 +470,42 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual(0, rc_deliv)
         self.assertEqual(0, len(api.descriptions), "Bug description must NEVER be modified")
 
+    def test_ZOHO_LIFE_005b_report_takes_plain_items_and_missing_report_names_the_command(self):
+        """Antigravity CLI run: JSON arrays in PowerShell failed three times, and delivery without a report
+        only said "run prepare-report first"."""
+        import contextlib
+        import io
+        tid = "T-ZOHO-005B"
+        self._create_task(tid, {
+            "status": "DELIVERED",
+            "task_kind": "BUG",
+            "zoho_link": {"item_id": "1055", "sprint_id": "sprint-1", "item_type": "Bug"},
+            "external_writes": ["zoho_sprints"],
+            "delivery_commit_sha": "abc123456789",
+        })
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+        self.assertEqual(1, rc)
+        self.assertIn(f"zoho prepare-report --task-id {tid} --objective", err.getvalue())
+        self.assertIn('--impact "<impact area>" --tests "<test case>"', err.getvalue())
+
+        rc = zoho_sync.main([
+            "prepare-report", "--repo", str(self.repo), "--task-id", tid,
+            "--objective", "Fix login null crash", "--changes", "Added null safety check",
+            "--impact", "LoginScreen", "--impact", "Session restore", "--tests", "testLoginNull",
+        ])
+        self.assertEqual(0, rc)
+        report = read_json(workflow.task_dir(self.repo, tid) / "zoho-delivery-report.json")
+        self.assertIn("Session restore", json.dumps(report, ensure_ascii=False))
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = zoho_sync.main(["prepare-report", "--repo", str(self.repo), "--task-id", tid,
+                                 "--objective", "x", "--changes", "y", "--impact", "A"])
+        self.assertEqual(1, rc)
+        self.assertIn('give 1 to 30 --tests items, e.g. --tests "<first>"', err.getvalue())
+
     def test_ZOHO_LIFE_006_bug_report_to_comment(self):
         """ZOHO-LIFE-006: Bug report goes to Comment, then status set to Ready To ReTest."""
         tid = "T-ZOHO-006"

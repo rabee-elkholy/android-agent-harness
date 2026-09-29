@@ -44,7 +44,7 @@ The setup wizard can be rerun before installation. Clean install is the supporte
 ## Daily use (Antigravity-First)
 
 1. **Discovery & Plan**: Ask the AI to analyze first. It explores using bounded Task Context, drafts a plan, and waits for explicit developer approval before any file modification.
-2. **Approval**: Approve the plan in chat (reply "ابدأ" or "approve"). Single intake approval covers all phases in a multi-phase task without pauses.
+2. **Approval**: Approve the plan in chat (reply with an approval such as "approve", in any language). Single intake approval covers all phases in a multi-phase task without pauses.
 3. **Implementation**: The agent applies only approved changes. Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
 4. **Prepare Verification**: Once changes are ready, the agent runs:
    ```bash

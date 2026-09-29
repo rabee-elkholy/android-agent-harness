@@ -412,6 +412,18 @@ def _persist_task_context(
         pass
 
 
+def _receipt_graph_fingerprint(engine: GraphEngine, sync: dict[str, Any]) -> str:
+    """Fingerprint for a discovery receipt, with the graph cache saved to match it.
+
+    The receipt is checked against the saved graph later (draft, approval). When a saved graph
+    cache already exists, an in-memory sync that found changed files but did not save left
+    the receipt one fingerprint ahead of the on-disk sidecar, and draft failed with GRAPH_CHANGED.
+    """
+    if engine.cache_file.is_file() and (sync.get("added") or sync.get("modified") or sync.get("deleted")):
+        engine.save_cache()
+    return str(getattr(engine, "graph_fingerprint", "") or sync.get("graph_fingerprint") or "")
+
+
 def resolve_task_context(
     repo: Path,
     *,
@@ -484,7 +496,7 @@ def resolve_task_context(
         ]
         inst_conflict = _detect_instruction_conflict(matched_instructions)
 
-        graph_fp = str(sync.get("graph_fingerprint") or getattr(engine, "graph_fingerprint", "") or "")
+        graph_fp = _receipt_graph_fingerprint(engine, sync)
         receipt = None
         try:
             from discovery_receipt import create_discovery_receipt, save_discovery_receipt
@@ -653,7 +665,7 @@ def resolve_task_context(
     except Exception:
         target_surfaces = []
 
-    graph_fp = str(sync.get("graph_fingerprint") or getattr(engine, "graph_fingerprint", "") or "")
+    graph_fp = _receipt_graph_fingerprint(engine, sync)
     graph_basis = {
         "used": True,
         "sync_mode": "incremental" if not sync.get("forced_full") else "full",

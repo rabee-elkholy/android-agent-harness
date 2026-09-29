@@ -1510,6 +1510,11 @@ class GraphEngine:
 
             if persist:
                 self.save_cache()
+        elif deleted and persist:
+            # Only deletions: the fingerprint changed too, so the saved graph must follow.
+            self._rebuild_symbol_index()
+            self._rebuild_file_index()
+            self.save_cache()
 
         return {
             "added": len(added),

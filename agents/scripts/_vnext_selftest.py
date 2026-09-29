@@ -243,6 +243,18 @@ class ChatInstallationDocsTests(unittest.TestCase):
         adapter = (KIT / "agents/tool-adapters/AGENTS.md.template").read_text(encoding="utf-8")
         self.assertLessEqual(len(kernel) + len(adapter), 12_000)
 
+    def test_agent_instructions_are_english_only(self) -> None:
+        # The model answers in the chat's language; Arabic example phrases in the rules only added noise.
+        # Zoho task templates keep their Arabic headings (they are output formats, not instructions).
+        import re
+        arabic = re.compile("[؀-ۿ]")
+        paths = sorted((KIT / "agents/tool-adapters").glob("*.template")) + [
+            KIT / "agents/rules/harness-rules.md", KIT / "AGENTS.md", KIT / "GEMINI.md", KIT / "docs/quickstart.md",
+            KIT / "docs/install-or-update-prompt.md", KIT / "docs/install-or-update-steps.md",
+        ]
+        offenders = [str(p.relative_to(KIT)) for p in paths if p.is_file() and arabic.search(p.read_text(encoding="utf-8"))]
+        self.assertEqual([], offenders)
+
     def test_antigravity_adapter_is_bounded_and_prompts_goal_and_grill_me(self) -> None:
         # Short certification O45: /goal and /grill-me are developer-typed; the agent never reminded
         # the developer. The approval question carries the /goal line and the adapter tells the agent

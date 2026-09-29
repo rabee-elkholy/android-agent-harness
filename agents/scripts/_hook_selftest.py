@@ -281,6 +281,16 @@ class HookTests(unittest.TestCase):
                 self.assertEqual("allow", self.call("run_command", {"CommandLine": command})["decision"])
         self.assertEqual("deny", self.call("run_command", {"CommandLine": start})["decision"])
 
+        # Antigravity CLI run: `deliver` unlinks the active task, then the documented public form
+        # `harness.py zoho delivery-sync` was refused ("no task is active").
+        (self.state / "active-task.json").unlink()
+        public_delivery = "python .agents/harness.py zoho delivery-sync --task-id task-one"
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": public_delivery})["decision"])
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": public_delivery.replace("task-one", "other-task")})["decision"])
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": "python .agents/harness.py zoho start-sync --task-id task-one"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py zoho --help"})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": "python .agents/harness.py zoho prepare-report --help"})["decision"])
+
     def test_router_resume_for_stale_ready_delivery_is_allowed(self):
         """The router routes a stale READY task to `task resume`; the hook must not block its own advice."""
         self.activate(status="READY_FOR_DELIVERY")
@@ -361,6 +371,12 @@ class HookTests(unittest.TestCase):
             [],
             check_material_drift(plan, ["LOCALIZATION", "RESOURCE_UI"], [":app"], actual_files=["app/src/main/res/values/strings.xml"]),
         )
+
+    def test_READ_ONLY_commands_catalog_allowed_while_verifying(self):
+        # Antigravity CLI run: `harness.py commands` (read-only) was refused during VERIFYING.
+        self.activate(status="VERIFYING")
+        res = self.call("run_command", {"CommandLine": "python .agents/harness.py commands"})
+        self.assertEqual("allow", res["decision"])
 
     def test_MUTATION_SCOPE_002d_existing_test_of_another_feature_needs_revised_plan(self):
         # O65 (real app): with the default "Policy-selected relevant tests" strategy every test file in

@@ -11,6 +11,12 @@ Resolve project topology, feature boundaries, callers, callees, UI screens, View
 
 ### Command
 ```bash
+# Public façade (preferred)
+python .agents/harness.py graph --feature <feature_name> --json
+python .agents/harness.py graph --find <SymbolName> --json
+python .agents/harness.py task-context --file <path> --json   # or --symbol <name>
+
+# Engine scripts
 python .agents/scripts/project_graph.py --feature <feature_name>
 # or
 python .agents/scripts/project_graph.py --find <SymbolName>
@@ -18,7 +24,8 @@ python .agents/scripts/project_graph.py --find <SymbolName>
 
 ### Inputs
 - `--feature <feature_name>`: Name or path token of the feature slice.
-- `--find <SymbolName>`: Specific Kotlin class, interface, or symbol to locate.
+- `--find <SymbolName>`: Specific Kotlin class, interface, or symbol to locate. A missing symbol prints the closest names; query one of them.
+- `task-context --file <path>`: bounded context for one exact target file. It records a discovery receipt that `draft` binds to the plan; the receipt and the saved graph always carry the same fingerprint.
 
 ### Expected Output
 - Human-readable slice and call hierarchy (callers, callees, UI layer, ViewModel, Data layer).
@@ -71,8 +78,9 @@ python .agents/scripts/workflow.py draft \
   --expected-surfaces "<comma-separated surfaces>" \
   --expected-modules "<comma-separated modules>" \
   --expected-files "<comma-separated expected files>" \
-  --test-strategy <UNIT_ONLY|DEVICE_ONLY|FULL|NONE> \
-  --device-strategy <EMULATOR_PREFERRED|PHYSICAL_PREFERRED|ANY|NONE> \
+  --test-strategy "<test plan; default: Policy-selected relevant tests>" \
+  --approach "<how the change is made: which classes/functions change and why>" \
+  --device-strategy "<numbered phone checks, each with its expected result: 1. Open X -> Y shows; 2. ...>" \
   --risks "<comma-separated risks>" \
   --rollback "<rollback instructions>" \
   --external-write "<scope: zoho_sprints, mcp:<server>, mcp:<server>:high-impact>" \
@@ -86,10 +94,17 @@ python .agents/scripts/workflow.py draft \
 
 > `--planning-depth`: `BOUNDED` for normal scoped tasks (default); `ARCHITECTURAL` for explicit architecture migration or broad structural architectural work.
 > `--external-write`: Append `--external-write zoho_sprints` for Zoho mutation, `mcp:<server>` for generic MCP write operations, or `mcp:<server>:high-impact` for sensitive MCP mutations (deploy, drop, delete).
-> `--zoho-*`: Optional flags to bind the task to an existing Zoho Sprints item.
+> `--zoho-*`: Optional flags to bind the task to an existing Zoho Sprints item. When the developer wants the item's status or a comment updated, also pass `--external-write zoho_sprints` (draft prints `ZOHO_WRITE_NOT_PLANNED=` when it is missing).
+> Draft and revise print, in order: `PLAN_SUMMARY_BEGIN`..`PLAN_SUMMARY_END` (a list, one field per line), `PLAN_DOCUMENT_URI=` (the plan.md link), `APPROVAL_CALLOUTS:` (`/goal`, `/grill-me` reminders), `PRE_EXISTING_CHANGES=` (the developer's uncommitted files that predate the task), `ZOHO_WRITE_NOT_PLANNED=`, `PLAN_GAPS=` (revise first) and `APPROVAL_QUESTION:` (how to ask). Ask with `ask_question`: the plan.md link as a clickable Markdown link, a short explanation, then the summary lines as plain text, never in a code block.
+
+# 1b. Revise the plan (new scope, missing fields, Zoho write); a revised plan needs approval again
+python .agents/scripts/workflow.py revise --repo . --task-id <id> [any draft flag to change]
 
 # 2. Record developer approval (atomically transitions directly to IMPLEMENTING)
-python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED
+python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED --plan-hash <Plan hash from PLAN_SUMMARY>
+
+# Authoritative next action at any point (the router)
+python .agents/harness.py task status --task-id <id> --next --json
 
 # 2b. Linked Zoho start sync (when task has approved zoho_link)
 python .agents/harness.py zoho start-sync --task-id <id>
@@ -100,8 +115,9 @@ python .agents/harness.py zoho start-sync --task-id <id>
 # 4. Advance phase checkpoint (for multi-phase plans; autonomous execution without developer prompt)
 python .agents/scripts/workflow.py checkpoint-phase --repo . --task-id <id>
 
-# 5. Prepare verification (freezes review package and initializes run)
-python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>
+# 5. Prepare verification (freezes review package and initializes run); the router names the host
+python .agents/harness.py task prepare-verification --repo . --task-id <id> --host <antigravity|claude|...>
+# engine form: python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>
 
 # 6. Resume implementation (if verification findings require code fixes)
 python .agents/scripts/workflow.py resume --repo . --task-id <id>
@@ -121,7 +137,8 @@ python .agents/scripts/workflow.py deliver --repo . --task-id <id>
 # 9b. Linked Zoho delivery sync (when task has approved zoho_link, after developer git commit)
 python .agents/harness.py zoho delivery-sync --task-id <id>
 
-# Cancel task
+# Cancel task: developer-owned. The agent puts this exact command in an ask_question and never runs
+# cancel, resume or file edits to undo the work itself.
 python .agents/scripts/workflow.py cancel --repo . --task-id <id>
 ```
 
@@ -144,9 +161,8 @@ Execute deterministic checks (strings parity, fast Kotlin lint, plan authority, 
 
 ### Command
 ```bash
-python .agents/scripts/preflight.py
-# or
-python .agents/scripts/preflight_check.py
+python .agents/harness.py preflight
+# engine scripts: python .agents/scripts/preflight.py  (or preflight_check.py)
 ```
 
 ### Expected Output
@@ -164,23 +180,34 @@ Run project unit tests (`testDebugUnitTest`) through Gradle Wrapper.
 
 ### Commands
 ```bash
-# 1. Run unit tests gate (GREEN phase verification)
-python .agents/scripts/run_tests_gate.py
+# 0. Before the task's first edit: record which unit tests already fail (the router asks for it once)
+python .agents/harness.py test --record-start
 
-# 2. Capture executable RED failure proof (BUG tasks only, before fixing code)
-python .agents/scripts/run_tests_gate.py --capture-red
+# 1. Run unit tests gate (GREEN phase verification)
+python .agents/harness.py test
+# engine form: python .agents/scripts/run_tests_gate.py
+
+# 2. Capture executable RED failure proof (BUG tasks, after writing the failing test, before fixing code)
+python .agents/harness.py test --capture-red
+# engine form: python .agents/scripts/run_tests_gate.py --capture-red
 ```
 
 ### Expected Output
-- For standard unit test gate: Execution status of Gradle unit test task, passed/failed test counts. Exit code: `0` = all tests pass; non-zero = unit test failure.
+- For standard unit test gate: Execution status of Gradle unit test task, passed/failed test counts. Exit code: `0` = the gate passed; non-zero = `NEW_REGRESSION` or a build failure.
+- For `--record-start`: writes `task-start-failures.json` in the task folder and lists the tests that already fail; exit code `0`. It runs only while the task has changed nothing (after any task edit it refuses and records nothing). If the untouched project's tests do not run, it records nothing (`status: BUILD_FAILED`) and says to tell the developer.
 - For `--capture-red`: Schema 3 `red-evidence.json` capturing executed reproduction tests and failure signatures. Exit code: `0` on successful RED capture (real test assertion failure).
 - Preconditions for `--capture-red`:
-  - Active task kind must be `BUG`.
+  - Used for `BUG` tasks whose router step is `CAPTURE_RED_EVIDENCE`.
   - Must occur BEFORE modifying production/application files (enforces pre-RED task-delta check; fails if non-test files are modified).
-  - Requires genuine assertion test failure (exit code 1); compilation failure (exit code 2) or clean pass (exit code 0) is rejected, and failing reports must be written by this run (stale reports are rejected).
-  - Only failures that reproduce this task are recorded: known baseline failures never count, and when the task added or changed test files, only failures from those files count.
+  - Requires a genuine failing test written by this run; a build failure or a clean pass is rejected, and stale reports from an earlier run are rejected.
+  - Only failures that reproduce this task are recorded: known baseline failures never count; when the task added or changed test files, only failures from those files count; otherwise only the tests of planned files (`Foo` -> `FooTest`, `FooTests`, `FooSpec`) count. Another feature's failing test is never the reproduction.
+  - On an untouched tree it also writes `task-start-failures.json`, like `--record-start`.
   - Debug evidence or logs cannot substitute for executable RED evidence.
-- Pre-existing failures: with no `.agents/state/baseline.json`, every old failing test reads as `NEW_REGRESSION`. Install captures the baseline once on a clean tree; otherwise the developer runs `python .agents/scripts/baseline_capture.py --run-tests` on a clean working tree.
+- Pre-existing failures:
+  - Baseline (`.agents/state/baseline.json`, captured at install on a clean tree) failures are tolerated as `BASELINE_IGNORED`.
+  - A failure recorded in `task-start-failures.json` that fails the same way after the change is tolerated and printed as "already failed the same way before this task's fix ... Tell the developer" (`task_start_ignored`). The RED reproduction itself and any failure that changed still block.
+  - Anything else is `NEW_REGRESSION`. When those tests belong to files outside the plan, never edit them under this plan: fix the planned production code if the change broke them; otherwise ask the developer with `ask_question` (revise the plan to include them, have them record a baseline on a clean tree with `python .agents/scripts/baseline_capture.py --run-tests`, or cancel).
+- Editing an existing test file outside `expected_files` is scope drift unless it is the test of a planned file; new test files stay allowed.
 
 > **Instruction**: Do not inspect test gate script before execution.
 
@@ -194,8 +221,8 @@ Generate immutable review package and record specialist subagent reviews.
 ### Commands
 ```bash
 # 1. Generate review package (auto-detects active task; --task-id <id> is optional)
-python .agents/scripts/review_package.py
-# or explicitly: python .agents/scripts/review_package.py --task-id <id>
+python .agents/harness.py review package --task-id <id>
+# engine form: python .agents/scripts/review_package.py [--task-id <id>]
 
 # 2. Record reviewer completion (Protocol V2 trusted completion):
 python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <subagent_conversation_id>
@@ -209,8 +236,9 @@ python .agents/scripts/record_review.py --task <id> --from-subagent <reviewer_na
 # 5. Validate or dispute reviewer findings (technical adjudication):
 python .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <finding_id> --status <FALSE_POSITIVE|CONFIRMED> --reason "<technical_explanation>"
 
-# 6. Developer review override (only if explicitly requested by developer on non-sensitive surfaces)
-python .agents/scripts/record_review.py --task <id> --override-reviews --proof-reference "<developer_confirmation>"
+# 6. Developer review override (router step REVIEW_OVERRIDE_REQUIRED; non-sensitive surfaces only).
+#    Show the developer this exact command; they run it in their own terminal, never the agent.
+python .agents/scripts/record_review.py --task <id> --override-reviews --source developer_terminal --proof-reference "<developer_confirmation>"
 ```
 
 ### Expected Output
@@ -239,13 +267,17 @@ python .agents/scripts/run_device.py status
 python .agents/harness.py assemble
 
 # 3. Install and launch on target device/emulator
-python .agents/scripts/run_device.py install-start
+python .agents/harness.py device install-start
+# engine form: python .agents/scripts/run_device.py install-start
+
+# 3a. Device sign-off (router step DEVICE_SIGNOFF_REQUIRED): ask the developer with ask_question, giving the
+#     numbered walkthrough steps and the expected result of each; the answer is PASS or FAIL.
 
 # 3b. Optional skip validation (when developer explicitly requests to skip device verification)
 python .agents/scripts/run_device.py skip-validation --task-id <id> --proof-reference "<developer_skip_confirmation>"
 
 # 4. Capture screen (optional)
-python .agents/scripts/capture_screen.py
+python .agents/scripts/capture_screen.py [--name <prefix>]
 ```
 
 ### Expected Output
@@ -268,11 +300,27 @@ Verify harness installation health, tool adapters, file checksums, and configura
 
 ### Commands
 ```bash
-# Public CLI façade (preferred)
-python harness_cli.py doctor --repo . --json
+# In the Android project (preferred)
+python .agents/harness.py doctor
+
+# From the kit checkout, against a project
+python harness_cli.py doctor --repo <app-root> --json
 
 # Internal engine script
 python .agents/scripts/harness_doctor.py
+```
+
+### Version and updates
+```bash
+python .agents/harness.py version       # installed harness version
+python .agents/harness.py update-info   # newer release? prints exactly how the developer updates
+```
+When the developer asks to update the harness, run `update-info` and follow what it prints; never look for another way (package managers, the web, copying files). A task that is still open blocks an update; cancelling it is the developer's.
+
+### Project context
+```bash
+python .agents/harness.py context status    # freshness of the derived project context
+python .agents/harness.py context refresh   # refresh it when doctor reports it stale
 ```
 
 ### Expected Output
@@ -289,11 +337,13 @@ python .agents/scripts/harness_doctor.py
 Run deterministic safety suite verifying all harness invariants.
 
 ### Commands
+Runs from the harness kit checkout (maintainers), not from an Android project.
+
 ```bash
-# Quick selftest (6 high-value developer-loop suites: hook, security, critical_safety, daily_workflow, public_cli, graph_discovery)
+# Quick selftest (7 developer-loop suites: hook, security, critical_safety, daily_workflow, public_cli, graph_discovery, antigravity_stability)
 python harness_cli.py selftest --quick
 
-# Full selftest (all 19 deterministic test suites)
+# Full selftest (all 22 deterministic test suites, run in parallel; --jobs N sets the workers)
 python harness_cli.py selftest
 ```
 
@@ -320,10 +370,9 @@ python .agents/scripts/room_guard.py
 
 # 5. Architecture contract drift check (verifies code adheres to architectural policy)
 python .agents/scripts/architecture_drift.py --repo . --task-id <id>
-
-# 6. Feature module / slice scaffolding
-python .agents/scripts/new_feature_scaffold.py --feature <feature_name>
 ```
+
+New screens and features are written by hand following the project's existing patterns (the task context names them); `new_feature_scaffold.py` is disabled and generates nothing.
 
 ---
 
@@ -349,33 +398,40 @@ When an exception occurs:
 
 | Step / Tool | Canonical Command | Description |
 | :--- | :--- | :--- |
-| **Discovery** | `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`) | Fast AST/symbol project graph analysis |
-| **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded, read-only context for one task target |
+| **Discovery** | `python .agents/harness.py graph --feature <name> --json` (or `--find <Symbol>`; engine: `project_graph.py`) | Fast AST/symbol project graph analysis |
+| **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded context for one task target; records the discovery receipt |
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
+| **Draft Plan** | `python .agents/scripts/workflow.py draft --repo . --task-id <id> ...` | Register the plan and print the approval material |
+| **Revise Plan** | `python .agents/scripts/workflow.py revise --repo . --task-id <id> ...` | Change the plan; approval is asked again |
+| **Approve** | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<reply>" --enforcement-tier RULE_ENFORCED --plan-hash <hash>` | Record the developer's approval of the shown plan |
+| **Next Action** | `python .agents/harness.py task status --task-id <id> --next --json` | The router: the single next step and why |
+| **Cancel Task** | `python .agents/scripts/workflow.py cancel --repo . --task-id <id>` | Developer-owned: put it in an ask_question, never run it |
 | **Context Note** | `python .agents/harness.py context note "<note>"` | Record architectural convention/note |
-| **Zoho Start Sync**| `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item |
-| **Preflight Gate** | `python .agents/scripts/preflight.py` (or `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
-| **Unit Tests** | `python .agents/scripts/run_tests_gate.py` | Run unit tests gate (GREEN phase) |
-| **Capture RED** | `python .agents/scripts/run_tests_gate.py --capture-red` | Capture executable test failure proof for BUG tasks |
+| **Zoho Start Sync**| `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item; on `ENV`, tell the developer |
+| **Preflight Gate** | `python .agents/harness.py preflight` (engine: `preflight.py` / `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
+| **Record Start** | `python .agents/harness.py test --record-start` | Before the first edit: record the tests that already fail |
+| **Unit Tests** | `python .agents/harness.py test` (engine: `run_tests_gate.py`) | Run unit tests gate (GREEN phase) |
+| **Capture RED** | `python .agents/harness.py test --capture-red` (engine: `run_tests_gate.py --capture-red`) | Capture executable test failure proof for BUG tasks |
 | **Checkpoint Phase** | `python .agents/scripts/workflow.py checkpoint-phase --repo . --task-id <id>` | Advance multi-phase plan checkpoint autonomously |
 | **Strings Check** | `python .agents/scripts/check_strings.py` | Standalone strings parity across locales |
 | **Fast Lint** | `python .agents/scripts/fast_kt_lint.py` | Standalone fast Kotlin AST linter |
 | **Room Guard** | `python .agents/scripts/room_guard.py` | Standalone Room schema & migration check |
 | **Arch Drift** | `python .agents/scripts/architecture_drift.py --repo . --task-id <id>` | Validate code against architecture contract |
 | **Logcat Doctor** | `python .agents/scripts/logcat_doctor.py` | Triage crashes and runtime exceptions |
-| **Feature Scaffold**| `python .agents/scripts/new_feature_scaffold.py --feature <name>` | Scaffold feature conventions and ViewModel |
-| **Review Package** | `python .agents/scripts/review_package.py` | Generate immutable review package markdown |
+| **Prepare Verification** | `python .agents/harness.py task prepare-verification --repo . --task-id <id> --host <host>` | Freeze the change and start the verification run |
+| **Review Package** | `python .agents/harness.py review package --task-id <id>` (engine: `review_package.py`) | Generate immutable review package markdown |
 | **Review Complete**| `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` | Record trusted reviewer completion |
 | **Review Finalize**| `python .agents/harness.py review finalize --task <id>` | Aggregate review evidence once all reviewers complete |
 | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation; add `--reopen` at READY_FOR_DELIVERY when the developer requests changes |
 | **Assemble** | `python .agents/harness.py assemble` | Build application debug artifact (derived assemble task) |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
-| **Device Deploy** | `python .agents/scripts/run_device.py install-start` | Install and launch on target device/emulator |
+| **Device Deploy** | `python .agents/harness.py device install-start` (engine: `run_device.py install-start`) | Install and launch on target device/emulator |
 | **Device Skip** | `python .agents/scripts/run_device.py skip-validation --task-id <id> --proof-reference "<phrase>"` | Record explicit developer skip of mobile validation |
-| **Screen Capture** | `python .agents/scripts/capture_screen.py --output-name <name>` | Capture device screen for verification proof |
-| **Harness Doctor** | `python harness_cli.py doctor --repo . --json` | Health check harness installation & adapters |
-| **Selftest Quick** | `python harness_cli.py selftest --quick` | Run high-value developer-loop selftest (6 suites) |
-| **Selftest Full** | `python harness_cli.py selftest` | Run complete deterministic selftest (19 suites) |
+| **Screen Capture** | `python .agents/scripts/capture_screen.py --name <prefix>` | Capture device screen for verification proof |
+| **Harness Doctor** | `python .agents/harness.py doctor` (kit: `harness_cli.py doctor --repo <app> --json`) | Health check harness installation & adapters |
+| **Version / Update** | `python .agents/harness.py version` / `python .agents/harness.py update-info` | Installed version; how to update to a newer release |
+| **Selftest Quick** | `python harness_cli.py selftest --quick` | Kit checkout only: developer-loop selftest (7 suites) |
+| **Selftest Full** | `python harness_cli.py selftest` | Kit checkout only: complete deterministic selftest (22 suites) |
 | **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
 | **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
 | **Zoho Delivery Sync**| `python .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item |

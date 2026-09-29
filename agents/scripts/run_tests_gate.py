@@ -9,9 +9,9 @@ classifies every failure:
   NEW_REGRESSION    failed now and is absent from the baseline -> BLOCK (exit 1)
   BASELINE_IGNORED  failed now and is recorded in the baseline -> tolerated
                     (pre-existing debt, never reported as a regression)
-  TASK_START_IGNORED failed the same way in this task's pre-fix `--capture-red`
-                    run and is not the task's reproduction -> tolerated and
-                    named (it predates the task, O64)
+  TASK_START_IGNORED failed the same way in this task's run before its first edit
+                    (`--record-start` or `--capture-red`) and is not the
+                    task's reproduction -> tolerated and named (O64)
 
 Writes the `unit_tests` gate artifact consumed by final_verdict.py. When the
 Gradle run fails environmentally, the exit-30 protocol applies unchanged.
@@ -409,8 +409,8 @@ def _predating_lines(task_start_ignored: list | None) -> list[tuple[str, bool]]:
     if not task_start_ignored:
         return []
     lines = [(
-        f"[*] {len(task_start_ignored)} test(s) already failed the same way before this task's fix (recorded by "
-        "--capture-red); they are not this task's and are not edited under it. Tell the developer:",
+        f"[*] {len(task_start_ignored)} test(s) already failed the same way before this task's fix (recorded before "
+        "its first edit); they are not this task's and are not edited under it. Tell the developer:",
         False,
     )]
     lines += [(f"  - {item}", False) for item in task_start_ignored[:30]]
@@ -437,11 +437,73 @@ def verdict_lines(
     return lines
 
 
+def _record_task_start(
+    task_label: str, failed: list[dict], baseline: dict | None, code: int, outcome: dict,
+    reports_before: dict, task: str | list[str],
+) -> int:
+    """`--record-start`: the same record `--capture-red` writes, for any task kind (O64)."""
+    from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline
+    from mutation_guard import active_plan
+    from _vnext_common import atomic_write_json, utc_now
+
+    try:
+        plan = active_plan(REPO)
+    except Exception:
+        plan = {}
+    task_id = str(plan.get("task_id") or "")
+    if not task_id or plan.get("status") != "IMPLEMENTING":
+        live_print("[FAIL] --record-start needs an active task in IMPLEMENTING.", err=True)
+        return 1
+    task_manifest = build_task_manifest(REPO, load_task_baseline(REPO, task_id), expected_files=plan.get("expected_files"))
+    if task_manifest.get("task_changes"):
+        live_print(
+            "[FAIL] --record-start runs only before the task's first edit: this task already changed files, so a "
+            "failure now cannot be shown to predate it. Nothing was recorded; continue the task.",
+            err=True,
+        )
+        return 1
+    _failed, fresh = _failures_with_freshness(REPO, task, reports_before)
+    attributable = code == 0 or (bool(failed) and bool(fresh) and bool(outcome.get("test_failure_only")))
+    # A green run means every test passed now; reports left by older runs prove nothing.
+    recordable = failed if attributable and code != 0 else []
+    start_failures, _known, _size = classify_failures(recordable, baseline)
+    atomic_write_json(_task_directory(REPO, task_id) / TASK_START_FAILURES, {
+        "schema_version": 1,
+        "task_id": task_id,
+        "captured_at": utc_now(),
+        "pre_fix_delivery_snapshot_sha256": build_manifest(REPO)["delivery_snapshot_sha256"],
+        "gradle_task": task_label,
+        "status": "RECORDED" if attributable else "BUILD_FAILED",
+        "failures": [
+            {"test_name": str(item.get("test_name") or ""), "fingerprint": str(item.get("fingerprint") or "")}
+            for item in start_failures
+        ],
+    })
+    if not attributable:
+        live_print(
+            f"[!] The untouched project's unit tests did not run cleanly (exit {code}); nothing is recorded as "
+            "failing before the task. Tell the developer the project does not build its tests before this change.",
+            err=True,
+        )
+        return 0
+    if start_failures:
+        live_print(f"[*] {len(start_failures)} test(s) already fail before this task; they are recorded and are not this task's:")
+        for item in start_failures[:30]:
+            live_print(f"  - {item.get('test_name')}")
+    else:
+        live_print("[+] No unit test fails before this task (beyond the baseline).")
+    return 0
+
+
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Baseline-aware unit-test delivery gate")
     parser.add_argument("task", nargs="?", default=None, help="Gradle unit-test task (default: _product UNIT_TEST_TASK)")
     parser.add_argument("--capture-red", action="store_true", help="Record failing test reproduction evidence as RED evidence for BUG tasks")
+    parser.add_argument(
+        "--record-start", action="store_true",
+        help="Before the task's first edit, record which unit tests already fail (they never count as this task's regressions)",
+    )
     args = parser.parse_args(argv)
 
     from run_gradle_task import run_gradle
@@ -491,6 +553,8 @@ def main(argv=None) -> int:
         live_print(advisory, err=True)
 
     failed = collect_task_failures(REPO, task)
+    if getattr(args, "record_start", False):
+        return _record_task_start(task_label, failed, baseline, code, outcome, reports_before, task)
     if getattr(args, "capture_red", False):
         if not failed:
             live_print("[FAIL] --capture-red requested but no failing tests were detected.", err=True)

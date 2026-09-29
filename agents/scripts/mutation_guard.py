@@ -156,7 +156,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
     if name in {"harness_cli", "android-harness"}:
-        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"]):
+        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"]):
             return True
         if args[:1] == ["task-context"]:
             targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
@@ -692,9 +692,15 @@ ZOHO_LIFECYCLE_STATES = {
 def _zoho_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str] | None:
     """Allow only the audited zoho_sync lifecycle commands for a Zoho-linked task in scope."""
     name, args = _entry(command, repo)
+    if name in {"harness_cli", "android-harness"} and args[:1] == ["zoho"]:
+        # The public form (`harness.py zoho delivery-sync`) runs zoho_sync.py; after `deliver` no task is
+        # active, and the public form was refused while the script form was allowed.
+        name, args = "zoho_sync", args[1:]
     if name != "zoho_sync":
         return None
     action = args[0] if args else ""
+    if action in {"--help", "-h"} or args[1:2] in (["--help"], ["-h"]):
+        return True, "zoho_sync help only prints usage"
     if action not in ZOHO_LIFECYCLE_STATES:
         return False, f"zoho_sync '{action}' is not an audited lifecycle command"
     task_id = args[args.index("--task-id") + 1] if "--task-id" in args and args.index("--task-id") + 1 < len(args) else ""

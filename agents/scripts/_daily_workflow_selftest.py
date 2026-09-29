@@ -271,7 +271,11 @@ class DailyWorkflowSelftest(unittest.TestCase):
             {"id": "data", "title": "Data layer"}, {"id": "ui", "title": "Settings screen"},
         ]))
         text = plan_summary(plan)
-        self.assertTrue(text.startswith("PLAN_SUMMARY_BEGIN\nTask: plan-summary (FEATURE, BOUNDED)"))
+        self.assertTrue(text.startswith("PLAN_SUMMARY_BEGIN\n- Task: plan-summary (FEATURE, BOUNDED)"))
+        # Each field is a list item: as plain Markdown lines they rendered as one paragraph in chat.
+        body = text.splitlines()[1:-1]
+        self.assertTrue(all(line.startswith(("- ", "  ")) for line in body), body)
+        self.assertTrue(text.endswith("\n- Plan hash: " + plan["plan_sha256"][:12] + "\nPLAN_SUMMARY_END"))
         self.assertIn("Phases: 2\n  1. data: Data layer\n  2. ui: Settings screen", text)
         self.assertIn("Files: app/src/main/kotlin/com/example/Login.kt", text)
         self.assertIn("Surfaces: BUSINESS_LOGIC", text)
@@ -496,6 +500,30 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertIn("Rollback: Disable the integration", summary)
         self.assertIn("External writes: mcp:tracker", summary)
         self.assertIn(f"Plan hash: {revised['plan_sha256'][:12]}", summary)
+
+    def test_goal_reminder_is_not_repeated_after_an_approval(self) -> None:
+        # O68 (real app): the developer typed /goal after the first approval; a later revise (to add the
+        # Zoho write) repeated the /goal reminder in the second approval question.
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        def revise(*extra: str) -> str:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ret = workflow_main(["revise", "--repo", str(self.repo), "--task-id", "goal-once", *extra])
+            self.assertEqual(0, ret)
+            return out.getvalue()
+
+        draft(self._draft_ns("goal-once"))
+        before_approval = revise("--risks", "Wrong message")
+        self.assertIn("**`/goal`**", before_approval, "not approved yet: the reminder still helps")
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id="goal-once", source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id="goal-once"))
+        after_approval = revise("--external-write", "zoho_sprints")
+        self.assertIn("APPROVAL_QUESTION:", after_approval)
+        self.assertNotIn("**`/goal`**", after_approval)
 
     def test_plan_summary_redacts_compound_credentials_without_changing_approval(self) -> None:
         from workflow import plan_summary
@@ -3231,6 +3259,13 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
         self.assertEqual("HARNESS_COMMAND", act["kind"])
         self.assertIn("--capture-red", act["command"])
+        # O64: the reproduction test is itself a task edit, so the old failures are recorded first.
+        self.assertIn("Before writing the reproduction test, run `python .agents/harness.py test --record-start`", act["reason"])
+        self.assertEqual("RECORD_TASK_START_FAILURES", act["before_first_edit"]["code"])
+        write_file(self.repo / "app/src/test/kotlin/com/example/MainActivityTest.kt", "class MainActivityTest\n")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
+        self.assertNotIn("before_first_edit", act, "after the first edit nothing can be recorded as older")
 
     def _bug_task_next_action(self, task_id: str, *, surfaces: str, files: str, test_strategy: str | None) -> dict:
         ns = dict(
@@ -6231,8 +6266,14 @@ class ReviewOrchestrationTests(unittest.TestCase):
 
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
-        brief_content = dispatch["review_execution_profile"]["reviewers"]["bug-reviewer-agent"]["brief_content"]
-        self.assertEqual(brief_p.read_text(encoding="utf-8"), brief_content)
+        # The host-facing output no longer carries full brief texts: Antigravity keeps only the end of
+        # long output, cut the prompts off and the agent made up brief hashes. The one-line pointer is
+        # the contract now; the reviewer reads the brief file it names.
+        route = dispatch["review_execution_profile"]["reviewers"]["bug-reviewer-agent"]
+        self.assertNotIn("brief_content", route)
+        self.assertEqual(str(brief_p), route["brief_path"])
+        brief_content = dispatch["reviewer_prompts"]["bug-reviewer-agent"]
+        self.assertEqual(route["brief_pointer_prompt"], brief_content)
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
@@ -7449,6 +7490,17 @@ class GitDeliveryTests(ReviewOrchestrationTests):
         self.assertEqual("DEVELOPER_ACTION", action.get("kind"))
         self.assertTrue(action.get("blocking"))
         self.assertEqual("", action.get("command"))
+        self.assertNotIn("from before the task", action["reason"])
+
+        # Antigravity CLI run: a planned file also held the developer's uncommitted edit from before the
+        # task; the commit question did not say that the whole-file commit includes it.
+        atomic_write_json(tdir / "task-baseline.json", {
+            "task_id": task_id, "changes": [{"path": "app/src/main/kotlin/com/example/MainActivity.kt", "status": "M"}],
+        })
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertIn("also hold the developer's own edits from before the task", action["reason"])
+        self.assertIn("also contain their own uncommitted edits from before the task", action["instructions"])
+        self.assertIn("app/src/main/kotlin/com/example/MainActivity.kt", action["reason"])
 
     def test_GIT_DELIVERY_002_model_is_not_given_executable_git_mutation(self) -> None:
         """GIT-DELIVERY-002: Model is not given an executable Git mutation command."""
@@ -7712,6 +7764,70 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         self.assertIn("hardcoded string in MainActivity.kt", act["reason"])
         resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         self.assertEqual("IMPLEMENTING", read_json(tdir / "plan.json")["status"])
+
+    def test_ROUTER_STATUS_001_next_step_comes_first_and_carries_reviewer_prompts(self) -> None:
+        """Antigravity CLI run: hosts cut the middle of long output, so the next step leads the status JSON,
+        and reviewer prompts are named in the reason instead of only deep inside inputs."""
+        from workflow import _prompt_hint, status as task_status
+        task_id = "router-status-order"
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Status order", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        out = task_status(argparse.Namespace(repo=str(self.repo), task_id=task_id, next=True, host=None))
+        # Antigravity keeps the end of long output: the next step comes last.
+        self.assertEqual(["task_state", "next_actions", "next_action"], list(out)[-3:])
+        self.assertIn("plan_sha256", out)
+        from workflow import _compact_for_host
+        action = {
+            "code": "DISPATCH_REVIEWERS", "reviewer_prompts": {"bug-reviewer-agent": "Review ..."},
+            "briefs": {"bug-reviewer-agent": "# Brief\nlong text"},
+            "inputs": {"review_execution_profile": {"reviewers": {"bug-reviewer-agent": {
+                "brief_path": "b.md", "brief_content": "# Brief\nlong text", "brief_pointer_prompt": "Review ..."}}}},
+            "expected": {},
+        }
+        compact = _compact_for_host(action)
+        self.assertEqual("reviewer_prompts", list(compact)[-1], "the prompts are the last thing the host shows")
+        self.assertEqual({"bug-reviewer-agent": "see brief_path"}, compact["briefs"])
+        route = compact["inputs"]["review_execution_profile"]["reviewers"]["bug-reviewer-agent"]
+        self.assertNotIn("brief_content", route)
+        self.assertEqual("Review ...", route["brief_pointer_prompt"])
+        self.assertIn("brief_content", action["inputs"]["review_execution_profile"]["reviewers"]["bug-reviewer-agent"],
+                      "the router's own action is not changed")
+        # Phase reviewers have no pointer; their hook matches the brief text, so it stays.
+        phase = {"code": "DISPATCH_PHASE_REVIEWERS", "briefs": {"bug-reviewer-agent": "# Brief\ntext"},
+                 "inputs": {"review_execution_profile": {"reviewers": {"bug-reviewer-agent": {"brief_content": "# Brief\ntext"}}}}}
+        self.assertEqual(phase, _compact_for_host(phase))
+        hint = _prompt_hint({"bug-reviewer-agent": "Review task t run r: read and follow brief.md"})
+        self.assertIn("do not open the brief files", hint)
+        self.assertIn("bug-reviewer-agent: `Review task t run r: read and follow brief.md`", hint)
+        self.assertEqual("", _prompt_hint({}))
+
+    def test_ROUTER_RECORD_START_001_first_edit_is_preceded_by_a_test_record(self) -> None:
+        """O64: a code task is told to record the already-failing tests before its first edit, once."""
+        task_id = "router-record-start"
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Record start", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act["code"])
+        self.assertIn("Before the first edit, run `python .agents/harness.py test --record-start` once", act["reason"])
+        self.assertEqual("RECORD_TASK_START_FAILURES", act["before_first_edit"]["code"])
+
+        write_file(task_dir(self.repo, task_id) / "task-start-failures.json", json.dumps({"task_id": task_id, "failures": []}))
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertNotIn("--record-start", act["reason"], "recorded once, never asked again")
+        self.assertNotIn("before_first_edit", act)
 
     def test_ROUTER_GATE_FAIL_002_other_features_failing_tests_go_to_the_developer(self) -> None:
         """O64 (real app): the router said "fix it within the approved scope" for another feature's failing

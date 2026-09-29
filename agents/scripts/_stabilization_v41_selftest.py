@@ -579,6 +579,55 @@ class RedGreenTemporalTests(unittest.TestCase):
         self.assertNotEqual(0, code)
         self.assertIn("NEW_REGRESSION", out)
 
+    def _record_start(self, gradle) -> tuple[int, str]:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from run_tests_gate import main as tests_gate_main
+
+        shutil.rmtree(self.tmp / "app" / "build" / "test-results", ignore_errors=True)
+        out = io.StringIO()
+        with mock.patch("run_tests_gate.REPO", self.tmp), \
+             mock.patch("_repo_files.REPO", self.tmp), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=gradle), \
+             mock.patch("sys.argv", ["run_tests_gate.py", "--record-start"]), \
+             redirect_stdout(out), redirect_stderr(out):
+            code = tests_gate_main()
+        return code, out.getvalue()
+
+    def test_RED_009_record_start_covers_tasks_without_a_reproduction(self) -> None:
+        """O64 for FEATURE-like tasks: one run before the first edit records the old failures."""
+        task_id = "task-red-009"
+        self._begin_bug(task_id)
+        other = self._report("com.example.food.FoodPlanViewModelTest", "onDayClick", "LanguageControl not mocked")
+        code, out = self._record_start(_gradle_writing_reports(dict([other])))
+        self.assertEqual(0, code, out)
+        self.assertIn("1 test(s) already fail before this task", out)
+        start = read_json(task_dir(self.tmp, task_id) / "task-start-failures.json")
+        self.assertEqual("RECORDED", start["status"])
+        self.assertEqual(["com.example.food.FoodPlanViewModelTest#onDayClick"], [i["test_name"] for i in start["failures"]])
+
+        code, out = self._run_gate(_gradle_writing_reports(dict([other])))
+        self.assertEqual(0, code, out)
+        self.assertEqual(["com.example.food.FoodPlanViewModelTest#onDayClick"], self.gate_results[-1]["task_start_ignored"])
+
+        # After the first edit nothing can be shown to predate the task.
+        (task_dir(self.tmp, task_id) / "task-start-failures.json").unlink()
+        _write_text(self.tmp / "app/src/main/kotlin/com/example/Calc.kt", "class Calc { val fixed = true }\n")
+        code, out = self._record_start(_gradle_writing_reports(dict([other])))
+        self.assertEqual(1, code)
+        self.assertIn("runs only before the task's first edit", out)
+        self.assertFalse((task_dir(self.tmp, task_id) / "task-start-failures.json").exists())
+
+    def test_RED_010_record_start_on_a_build_that_does_not_run_records_nothing(self) -> None:
+        task_id = "task-red-010"
+        self._begin_bug(task_id)
+        code, out = self._record_start(_gradle_writing_reports({}, test_failure_only=False))
+        self.assertEqual(0, code, out)
+        self.assertIn("did not run cleanly", out)
+        start = read_json(task_dir(self.tmp, task_id) / "task-start-failures.json")
+        self.assertEqual("BUILD_FAILED", start["status"])
+        self.assertEqual([], start["failures"])
+
     def test_RED_008_only_unrelated_failures_are_no_reproduction(self) -> None:
         task_id = "task-red-008"
         self._begin_bug(task_id)

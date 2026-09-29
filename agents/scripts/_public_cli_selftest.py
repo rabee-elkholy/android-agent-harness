@@ -1455,6 +1455,14 @@ class PhaseDRepairSelftest(unittest.TestCase):
             (kit / "agents" / "VERSION").write_text("1.0.54\n", encoding="utf-8")
 
             fetch_ok = subprocess.CompletedProcess(["git", "fetch"], 0)
+            # The working-checkout and shallow probes are covered by their own test below.
+            probes = (
+                mock.patch.object(harness_cli_mod, "_working_checkout_reason", return_value=""),
+                mock.patch.object(harness_cli_mod, "_kit_git", return_value=(0, "true")),
+            )
+            for probe in probes:
+                probe.start()
+                self.addCleanup(probe.stop)
 
             with mock.patch(
                 "subprocess.run",
@@ -1480,6 +1488,50 @@ class PhaseDRepairSelftest(unittest.TestCase):
                     harness_cli_mod.refresh_kit(kit, "1.0.55")
             self.assertIn("git symbolic-ref", str(symbolic_ctx.exception))
             self.assertIn("timed out after 30s", str(symbolic_ctx.exception))
+
+    def test_refresh_never_moves_a_working_checkout_or_makes_it_shallow(self) -> None:
+        # Running `update --kit <the maintainer's own clone>` switched that clone from main to the
+        # release tag and made its whole history shallow (fetch --depth 1).
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("harness_cli_working_kit", str(KIT / "harness_cli.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory(prefix="harness_working_kit_") as td:
+            kit = Path(td)
+            (kit / "agents").mkdir()
+            (kit / "agents" / "VERSION").write_text("9.9.8\n", encoding="utf-8")
+            for command in (["init", "-q", "-b", "main"], ["add", "."],
+                            ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "kit"], ["tag", "v9.9.8"]):
+                subprocess.run(["git", *command], cwd=kit, check=True)
+            with self.assertRaises(SystemExit) as ctx:
+                mod.refresh_kit(kit, "9.9.8")
+            self.assertIn("is a working checkout (it is on branch 'main')", str(ctx.exception))
+            self.assertIn("--no-refresh", str(ctx.exception))
+            head = subprocess.run(["git", "symbolic-ref", "--short", "HEAD"], cwd=kit, capture_output=True, text=True)
+            self.assertEqual("main", head.stdout.strip(), "the branch is untouched")
+
+            subprocess.run(["git", "checkout", "-q", "--detach", "v9.9.8"], cwd=kit, check=True)
+            (kit / "agents" / "VERSION").write_text("9.9.8-local\n", encoding="utf-8")
+            self.assertEqual("it has uncommitted changes", mod._working_checkout_reason(kit))
+            subprocess.run(["git", "checkout", "-q", "--", "."], cwd=kit, check=True)
+            self.assertEqual("", mod._working_checkout_reason(kit), "a detached, clean release checkout is a kit")
+
+            calls = []
+            real_run = subprocess.run
+
+            def fake_run(cmd, **kwargs):
+                # Probes run for real; the network fetch and the checkout are recorded only.
+                if "fetch" in cmd or "checkout" in cmd:
+                    calls.append(cmd)
+                    return subprocess.CompletedProcess(cmd, 0, "", "")
+                return real_run(cmd, **kwargs)
+
+            with mock.patch.object(mod.subprocess, "run", side_effect=fake_run):
+                mod.refresh_kit(kit, "9.9.8")
+            fetch = next(cmd for cmd in calls if "fetch" in cmd)
+            self.assertNotIn("--depth", fetch, "a full clone is never fetched shallow")
 
 
 class PhaseEDecoupleZohoSelftest(unittest.TestCase):

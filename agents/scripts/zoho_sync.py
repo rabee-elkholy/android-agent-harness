@@ -62,6 +62,14 @@ def resolve_new_item_type(task_kind: str, explicit_type: str | None = None) -> s
     return "Task"
 
 
+def prepare_report_command(task_id: str) -> str:
+    return (
+        f'python .agents/harness.py zoho prepare-report --task-id {task_id} --objective "<root cause or goal>" '
+        '--changes "<what was changed>" --impact "<impact area>" --tests "<test case>" '
+        "(repeat --impact / --tests once per item)"
+    )
+
+
 def cmd_prepare_report(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
@@ -83,30 +91,32 @@ def cmd_prepare_report(args: argparse.Namespace) -> int:
         sys.stderr.write("ERROR: --changes must be non-empty\n")
         return 1
 
-    try:
-        raw_impact = json.loads(args.impact_json) if isinstance(args.impact_json, str) else args.impact_json
-        if not isinstance(raw_impact, list) or not (1 <= len(raw_impact) <= 20):
-            sys.stderr.write("ERROR: --impact-json must be a JSON array of 1 to 20 items\n")
-            return 1
-        impact_list = [str(x).strip() for x in raw_impact if str(x).strip()]
-        if not impact_list:
-            sys.stderr.write("ERROR: --impact-json items must be non-empty strings\n")
-            return 1
-    except Exception as exc:
-        sys.stderr.write(f"ERROR: invalid --impact-json: {exc}\n")
-        return 1
+    def _items(plain: list | None, raw_json: Any, name: str, limit: int) -> list[str] | None:
+        # Plain repeated flags avoid JSON quoting, which PowerShell broke three times in a live run.
+        if plain:
+            raw = list(plain)
+        elif raw_json is not None:
+            try:
+                raw = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+            except Exception as exc:
+                sys.stderr.write(f"ERROR: invalid --{name}-json: {exc}. Use --{name} \"<item>\" once per item instead.\n")
+                return None
+        else:
+            raw = []
+        if not isinstance(raw, list) or not (1 <= len(raw) <= limit):
+            sys.stderr.write(f"ERROR: give 1 to {limit} --{name} items, e.g. --{name} \"<first>\" --{name} \"<second>\".\n")
+            return None
+        items = [str(x).strip() for x in raw if str(x).strip()]
+        if not items:
+            sys.stderr.write(f"ERROR: --{name} items must be non-empty text\n")
+            return None
+        return items
 
-    try:
-        raw_tests = json.loads(args.tests_json) if isinstance(args.tests_json, str) else args.tests_json
-        if not isinstance(raw_tests, list) or not (1 <= len(raw_tests) <= 30):
-            sys.stderr.write("ERROR: --tests-json must be a JSON array of 1 to 30 items\n")
-            return 1
-        tests_list = [str(x).strip() for x in raw_tests if str(x).strip()]
-        if not tests_list:
-            sys.stderr.write("ERROR: --tests-json items must be non-empty strings\n")
-            return 1
-    except Exception as exc:
-        sys.stderr.write(f"ERROR: invalid --tests-json: {exc}\n")
+    impact_list = _items(getattr(args, "impact", None), getattr(args, "impact_json", None), "impact", 20)
+    if impact_list is None:
+        return 1
+    tests_list = _items(getattr(args, "tests", None), getattr(args, "tests_json", None), "tests", 30)
+    if tests_list is None:
         return 1
 
     # Security validation (Section 48): no secrets, no absolute paths, no raw diff
@@ -299,7 +309,10 @@ def cmd_delivery(args: argparse.Namespace) -> int:
 
     report_file = tdir / "zoho-delivery-report.json"
     if not report_file.is_file():
-        sys.stderr.write("ERROR: DELIVERY_REPORT_MISSING: zoho-delivery-report.json not found. Run prepare-report first.\n")
+        sys.stderr.write(
+            "ERROR: DELIVERY_REPORT_MISSING: prepare the delivery report first, in the Zoho comment language:\n"
+            f"{prepare_report_command(task_id)}\n"
+        )
         return 1
 
     report_data = read_json(report_file)
@@ -464,8 +477,10 @@ def build_parser() -> argparse.ArgumentParser:
     prep_cmd = sub.add_parser("prepare-report", parents=[common])
     prep_cmd.add_argument("--objective", required=True, help="Objective or root cause")
     prep_cmd.add_argument("--changes", required=True, help="Functional solution or changes")
-    prep_cmd.add_argument("--impact-json", required=True, help="JSON array of impact areas (1..20)")
-    prep_cmd.add_argument("--tests-json", required=True, help="JSON array of test cases (1..30)")
+    prep_cmd.add_argument("--impact", action="append", help="One impact area; repeat for each (1..20)")
+    prep_cmd.add_argument("--tests", action="append", help="One test case; repeat for each (1..30)")
+    prep_cmd.add_argument("--impact-json", default=None, help="Alternative: JSON array of impact areas (1..20)")
+    prep_cmd.add_argument("--tests-json", default=None, help="Alternative: JSON array of test cases (1..30)")
     prep_cmd.set_defaults(handler=cmd_prepare_report)
 
     start_cmd = sub.add_parser("start", aliases=["start-sync"], parents=[common])

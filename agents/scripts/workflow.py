@@ -3088,7 +3088,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         if not red_evidence_file.is_file() and bug_requires_executable_red(
             plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(tdir),
         ):
-            return {
+            capture = {
                 "code": "CAPTURE_RED_EVIDENCE",
                 "kind": "HARNESS_COMMAND",
                 "command": "python .agents/harness.py test --capture-red",
@@ -3097,6 +3097,16 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 "inputs": {"repo": ".", "task_id": task_id},
                 "expected": {"success_exit_codes": [0]},
             }
+            if _should_record_task_start(repo, task_id, plan) and not _task_has_changes(repo, task_id, plan):
+                # O64: once the reproduction test is written, nothing can be shown to predate the task.
+                record = "python .agents/harness.py test --record-start"
+                capture["reason"] = (
+                    f"Before writing the reproduction test, run `{record}` once to record which unit tests already "
+                    "fail on the untouched project. Then write a test that fails because of the defect and run "
+                    "`python .agents/harness.py test --capture-red` before changing production code."
+                )
+                capture["before_first_edit"] = {"code": "RECORD_TASK_START_FAILURES", "kind": "HARNESS_COMMAND", "command": record}
+            return capture
 
         pending_handoff_f = tdir / "pending-handoff.json"
         if pending_handoff_f.is_file():
@@ -3523,6 +3533,15 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             done_command = f"python .agents/harness.py task prepare-verification {identity} --host {run_host}"
             action["reason"] = f"Continue the approved change. When it is complete, run: {done_command}"
             action["on_complete"] = {"code": "PREPARE_VERIFICATION", "kind": "HARNESS_COMMAND", "command": done_command}
+        elif _should_record_task_start(repo, task_id, plan):
+            # O64: without a record, an old failing test in another feature blocks the gate later and
+            # has to go to the developer; one run on the untouched tree settles it up front.
+            record = "python .agents/harness.py test --record-start"
+            action["reason"] += (
+                f" Before the first edit, run `{record}` once: it records which unit tests already fail "
+                "on the untouched project, so the gate never counts them against this task."
+            )
+            action["before_first_edit"] = {"code": "RECORD_TASK_START_FAILURES", "kind": "HARNESS_COMMAND", "command": record}
         return action
 
     if state == "VERIFYING":
@@ -3860,12 +3879,14 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                                     "expected": {},
                                 }
 
+                        prompts = _reviewer_prompts(exec_profile, sorted(not_dispatched))
                         return {
                             "code": "DISPATCH_REVIEWERS",
                             "kind": "HOST_ACTION",
                             "command": "",
                             "blocking": True,
-                            "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))}.",
+                            "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))}.{_prompt_hint(prompts)}",
+                            "reviewer_prompts": prompts,
                             "reviewers": sorted(not_dispatched),
                             "package_path": str(pkg_path),
                             "briefs": briefs,
@@ -3972,12 +3993,14 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                         "--from-subagent <role>=<transcript-path>`."
                     )
                 if not req_set.issubset(dispatched_reviewers):
+                    prompts = _reviewer_prompts(exec_profile, sorted(req_set - dispatched_reviewers))
                     return {
                         "code": "DISPATCH_REVIEWERS",
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(req_set - dispatched_reviewers))}.{record_hint}",
+                        "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(req_set - dispatched_reviewers))}.{_prompt_hint(prompts)}{record_hint}",
+                        "reviewer_prompts": prompts,
                         "reviewers": sorted(req_set - dispatched_reviewers),
                         "package_path": str(pkg_path),
                         "briefs": briefs,
@@ -4291,6 +4314,18 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
 
             scope_part = f"({scope})" if scope else ""
             suggested_commit = f"{prefix}{scope_part}: {outcome}"
+            try:
+                baseline_paths = {
+                    str(item.get("path") or "") for item in (load_task_baseline(repo, task_id) or {}).get("changes") or []
+                }
+            except Exception:
+                baseline_paths = set()
+            mixed = sorted(path for path in dirty if path in baseline_paths)
+            mixed_note = (
+                f" These files also hold the developer's own edits from before the task, which a whole-file commit "
+                f"includes; say so in the commit question: {', '.join(mixed)}."
+                if mixed else ""
+            )
 
             return {
                 "code": "DEVELOPER_GIT_COMMIT_REQUIRED",
@@ -4298,7 +4333,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 "command": "",
                 "blocking": True,
                 "reason": (
-                    f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}. "
+                    f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}.{mixed_note} "
                     "Human Git Authority requires the developer to review and commit changes before final delivery. "
                     f"If the developer requests changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
                 ),
@@ -4313,7 +4348,8 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 },
                 "instructions": (
                     f"Developer action required: Commit uncommitted task files ({', '.join(sorted(dirty))}).\n"
-                    f"Suggested commit: {suggested_commit}\n"
+                    + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
+                    + f"Suggested commit: {suggested_commit}\n"
                     "The model must NOT run git commit commands. Await developer commit."
                 ),
                 "expected": {},
@@ -4361,12 +4397,17 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
 
             report_file = tdir / "zoho-delivery-report.json"
             if not report_file.exists():
+                from zoho_sync import prepare_report_command
+
                 return {
                     "code": "PREPARE_ZOHO_DELIVERY_REPORT",
                     "kind": "HOST_ACTION",
                     "command": "",
                     "blocking": True,
-                    "reason": "Prepare structured functional report for Zoho delivery sync.",
+                    "reason": (
+                        "Prepare the structured functional report for the Zoho delivery sync, then run "
+                        f"`python .agents/harness.py zoho delivery-sync --task-id {task_id}`: {prepare_report_command(task_id)}"
+                    ),
                     "required_schema": {
                         "objective_or_root_cause": "string",
                         "solution_or_changes": "string",
@@ -4503,7 +4544,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "inputs": act.get("inputs", {}),
         "expected": act.get("expected", {}),
     }
-    for k in ("choices", "reviewers", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
+    for k in ("choices", "reviewer_prompts", "reviewers", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
         if k in act:
             res_entry[k] = act[k]
     return [res_entry]
@@ -4557,7 +4598,40 @@ def status(args: argparse.Namespace) -> dict:
                 "expected": next_act.get("expected", {}),
             }
         ]
+        # Antigravity keeps only the end of long tool output. With the full review briefs inside, the
+        # reviewer prompts were cut off and the agent made up brief hashes. The host-facing JSON carries
+        # brief paths and one-line prompts only, and ends with the next step and its prompts.
+        last = ("task_state", "next_actions", "next_action")
+        compact = {key: _compact_for_host(plan[key]) for key in last}
+        plan = {**{k: v for k, v in plan.items() if k not in last}, **compact}
     return plan
+
+
+def _compact_for_host(value: Any, prompts: dict | None = None) -> Any:
+    """Replace full brief texts by their one-line pointer where one exists, and put reviewer prompts last.
+
+    A brief without a pointer (phase reviewers) keeps its text: the hook matches that text.
+    """
+    if isinstance(value, list):
+        return [_compact_for_host(item, prompts) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if prompts is None:
+        prompts = dict(value.get("reviewer_prompts") or (value.get("inputs") or {}).get("reviewer_prompts") or {})
+    out: dict = {}
+    for key, item in value.items():
+        if key == "brief_content" and value.get("brief_pointer_prompt"):
+            continue
+        if key == "briefs" and isinstance(item, dict):
+            out[key] = {
+                role: ("see brief_path" if role in prompts and isinstance(text, str) and "\n" in text else text)
+                for role, text in item.items()
+            }
+            continue
+        out[key] = _compact_for_host(item, prompts)
+    if "reviewer_prompts" in out:
+        out["reviewer_prompts"] = out.pop("reviewer_prompts")
+    return out
 
 
 def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool = False) -> None:
@@ -4723,6 +4797,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _prompt_hint(prompts: dict[str, str]) -> str:
+    """The reviewer prompts inside the reason, which hosts show even when they cut long output."""
+    if not prompts:
+        return ""
+    listed = "; ".join(f"{role}: `{prompt}`" for role, prompt in sorted(prompts.items()))
+    return f" Pass each reviewer exactly its one-line prompt (do not open the brief files): {listed}."
+
+
 def _reviewer_prompts(profile: Any, roles: list[str]) -> dict[str, str]:
     """Role -> one-line brief pointer the host passes as the reviewer Prompt."""
     reviewers = (profile or {}).get("reviewers") if isinstance(profile, dict) else {}
@@ -4782,11 +4864,37 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
         lines.append(f"Zoho link: {displayed(authority.get('zoho_link'))}")
     if plan_document is not None:
         lines.append(f"Full plan: [plan.md]({Path(plan_document).resolve().as_uri()})")
-    lines += [
-        f"Plan hash: {str(plan.get('plan_sha256') or '')[:12]}",
-        "PLAN_SUMMARY_END",
-    ]
-    return "\n".join(lines)
+    lines.append(f"Plan hash: {str(plan.get('plan_sha256') or '')[:12]}")
+    # Markdown joins single-newline lines into one paragraph; as a list each field stays on its own line.
+    body = [line if line.startswith("  ") else f"- {line}" for line in lines[1:]]
+    return "\n".join([lines[0], *body, "PLAN_SUMMARY_END"])
+
+
+def _should_record_task_start(repo: Path, task_id: str, plan: dict) -> bool:
+    """A code task whose pre-edit test failures are not recorded yet (task-start or RED run)."""
+    from plan_authority import CODE_SURFACES
+
+    tdir = task_dir(repo, task_id)
+    if (tdir / "task-start-failures.json").is_file() or (tdir / "red-evidence.json").is_file():
+        return False
+    return bool(set(plan.get("expected_surfaces") or []) & set(CODE_SURFACES))
+
+
+def _task_has_changes(repo: Path, task_id: str, plan: dict) -> bool:
+    try:
+        manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"))
+    except Exception:
+        return True
+    return bool(manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes"))
+
+
+def _task_was_approved_before(repo: Path, task_id: str) -> bool:
+    """True when an earlier plan of this task (archived by revise) had been approved."""
+    history = task_dir(repo, task_id) / "plan-history"
+    try:
+        return any(read_json(path).get("approval") for path in history.glob("*.json"))
+    except (OSError, ValueError, ValidationError):
+        return False
 
 
 def pre_existing_changes_line(repo: Path, plan: dict) -> str:
@@ -4879,6 +4987,9 @@ def main(argv: list[str] | None = None) -> int:
             except (OSError, ValueError):
                 preliminary = {}
             callouts = accelerator_callouts(result, preliminary)
+            if args.action == "revise" and _task_was_approved_before(Path(args.repo).resolve(), result["task_id"]):
+                # O68: the developer already saw the /goal reminder at the first approval.
+                callouts = [line for line in callouts if "**`/goal`**" not in line]
             if callouts:
                 print("APPROVAL_CALLOUTS:")
                 for callout in callouts:

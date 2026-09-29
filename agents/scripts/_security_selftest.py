@@ -2703,6 +2703,11 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         step1 = resolve_next_action(self.repo, task_id)
         self.assertEqual("DISPATCH_REVIEWERS", step1["code"])
         self.assertEqual(["bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent"], step1["reviewers"])
+        # Antigravity CLI run: the prompts sat deep in inputs after the full briefs and the host cut them
+        # out of the tool output; they are also a top-level field and part of the reason.
+        self.assertEqual(step1["inputs"].get("reviewer_prompts", {}), step1.get("reviewer_prompts", {}))
+        for role, prompt in (step1.get("reviewer_prompts") or {}).items():
+            self.assertIn(f"{role}: `{prompt}`", step1["reason"])
 
         # SAME-MODEL-BATCH-002: one already DISPATCHED -> not returned again
         ledger["reviewers"]["bug-reviewer-agent"]["state"] = REVIEW_DISPATCHED

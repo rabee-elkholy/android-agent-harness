@@ -328,6 +328,32 @@ class GraphDiscoverySelftest(unittest.TestCase):
         self.assertFalse(fresh)
         self.assertIn("GRAPH_CHANGED", reason)
 
+    def test_graph_008f_task_context_receipt_matches_the_saved_graph(self) -> None:
+        """Antigravity CLI run: the developer edited a file after the graph was built; task-context wrote a
+        receipt with the new fingerprint but kept the old graph, and draft failed with GRAPH_CHANGED."""
+        from _graph_core import GraphEngine
+        from task_context import resolve_task_context
+        GraphEngine(self.repo).sync()
+        target = self.repo / "app/src/main/kotlin/com/example/profile/ProfileViewModel.kt"
+        target.write_text(target.read_text(encoding="utf-8") + "\n// developer edit\n", encoding="utf-8")
+        resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/profile/ProfileViewModel.kt")
+        receipt = load_latest_discovery_receipt(self.repo)
+        self.assertIsNotNone(receipt)
+        self.assertEqual((True, "FRESH"), check_discovery_freshness(self.repo, receipt))
+
+        # Deleting a file alone also changes the fingerprint; the saved graph follows it.
+        (self.repo / "app/src/main/kotlin/com/example/payments").mkdir(parents=True, exist_ok=True)
+        extra = self.repo / "app/src/main/kotlin/com/example/payments/Extra.kt"
+        extra.write_text("package com.example.payments\nclass Extra\n", encoding="utf-8")
+        engine = GraphEngine(self.repo)
+        engine.sync()
+        extra.unlink()
+        engine = GraphEngine(self.repo)
+        result = engine.sync()
+        self.assertEqual(1, result["deleted"])
+        sidecar = engine.cache_file.with_name(engine.cache_file.name + ".fingerprint")
+        self.assertEqual(result["graph_fingerprint"], sidecar.read_text(encoding="utf-8").strip())
+
     def test_graph_008e_ending_a_task_clears_the_latest_receipt(self) -> None:
         """GRAPH-008E: A receipt from a finished task does not anchor the next task's search."""
         from discovery_receipt import clear_latest_discovery_receipt

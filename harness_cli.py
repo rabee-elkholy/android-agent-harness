@@ -418,16 +418,52 @@ def ensure_kit(explicit: str | None) -> Path:
     return KIT_DIR
 
 
+def _kit_git(kit: Path, *args: str) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(kit), *args],
+            check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 1, ""
+    return proc.returncode, proc.stdout.strip()
+
+
+def _working_checkout_reason(kit: Path) -> str:
+    """Why this clone is someone's working checkout rather than a pinned kit ("" when it is a kit).
+
+    A pinned kit is a detached release checkout. Re-pinning a checkout on a branch, or one with
+    uncommitted changes, would silently move the developer's work to a tag.
+    """
+    code, branch = _kit_git(kit, "symbolic-ref", "-q", "--short", "HEAD")
+    if code == 0 and branch:
+        return f"it is on branch '{branch}'"
+    code, changes = _kit_git(kit, "status", "--porcelain", "--untracked-files=no")
+    if code == 0 and changes:
+        return "it has uncommitted changes"
+    return ""
+
+
 def refresh_kit(kit: Path, target_version: str | None = None) -> None:
     """Re-pin an existing kit clone to an exact release tag. Never floats to main."""
-    if not (kit / ".git").is_dir():
+    if not (kit / ".git").exists():
         print(f"[i] Kit at {kit} is not a git checkout; skipping pin.")
         return
     want = (target_version or "").strip().lstrip("v") or _read_version_file(kit)
     tag = f"v{want}"
+    working = _working_checkout_reason(kit)
+    if working:
+        raise SystemExit(
+            f"[ERROR] Kit at {kit} is a working checkout ({working}); pinning would switch it to {tag}. "
+            "Nothing was changed. To install from it as it is, add --no-refresh; otherwise use a release "
+            "clone (the default kit under ~/.android-harness)."
+        )
     print(f"[*] Pinning kit at {kit} to {tag} ...")
     git_env = os.environ.copy()
     git_env["GIT_TERMINAL_PROMPT"] = "0"
+    # A full clone must stay full: --depth on it would make the whole history shallow.
+    _code, shallow = _kit_git(kit, "rev-parse", "--is-shallow-repository")
+    depth = ["--depth", "1"] if shallow != "false" else []
     try:
         fetch = subprocess.run(
             [
@@ -435,8 +471,7 @@ def refresh_kit(kit: Path, target_version: str | None = None) -> None:
                 "-C",
                 str(kit),
                 "fetch",
-                "--depth",
-                "1",
+                *depth,
                 "--force",
                 "origin",
                 f"refs/tags/{tag}:refs/tags/{tag}",
