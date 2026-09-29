@@ -1308,13 +1308,16 @@ def cmd_kit_promote(args: argparse.Namespace) -> int:
     try:
         if kit_dir.exists():
             if previous.exists():
-                shutil.rmtree(previous)
+                shutil.rmtree(previous, ignore_errors=True)
             kit_dir.rename(previous)
             moved_old = True
         staging.rename(kit_dir)
     except OSError as exc:
         if moved_old and not kit_dir.exists():
-            previous.rename(kit_dir)
+            try:
+                previous.rename(kit_dir)
+            except OSError:
+                pass
         print(f"[FAIL] could not promote the staged kit: {exc}", file=sys.stderr)
         return 1
     kept = f"; previous kit kept at {previous}" if moved_old else ""
