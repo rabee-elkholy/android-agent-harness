@@ -4760,8 +4760,10 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
 APPROVAL_QUESTION_GUIDE = (
     "APPROVAL_QUESTION: ask with ask_question, options Approve / Request changes / Cancel task. "
     "Question text, in the developer's language: (0) on Antigravity, the APPROVAL_CALLOUTS lines first, each as its own "
-    "highlighted block with the same emoji and bold command; (1) what will change and how, the risks and the phone checks, "
-    "only as the summary states them; (2) the PLAN_SUMMARY block verbatim, keeping the plan.md link. "
+    "highlighted block with the same emoji and bold command; (1) a prominent, clickable markdown link to plan.md OUTSIDE "
+    "any code block (e.g. '[Full plan (plan.md)](file://...)') so the developer can click it directly, and on "
+    "Antigravity also mirror plan.md into the conversation artifact directory as a UserFacing artifact; (2) what will "
+    "change and how, the risks and the phone checks, only as the summary states them; (3) the PLAN_SUMMARY block verbatim. "
     "Never paste plan.json or command output into the question."
 )
 
@@ -4806,6 +4808,8 @@ def main(argv: list[str] | None = None) -> int:
 
             document = plan_document_path(task_dir(Path(args.repo).resolve(), result["task_id"]))
             print(plan_summary(result, document if document.is_file() else None))
+            if document.is_file():
+                print(f"PLAN_DOCUMENT_URI={Path(document).resolve().as_uri()}")
             from plan_document import accelerator_callouts
 
             try:
