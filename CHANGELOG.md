@@ -4,6 +4,11 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [Unreleased]
+
+### Maintainer tooling
+- A full selftest records the tree of the files as they were tested, even before they are committed (built in a throwaway index; the real index is untouched). Committing exactly those files then lets `release_version.py` skip its own full run instead of repeating 15+ minutes on identical files. A file changed while the suites ran records nothing.
+
 ## [1.1.9] - 2026-09-29
 
 The chat installer fits the host's fetch limit, and the kit replacement is one command. Found while updating a production app from 1.1.7 to 1.1.8 (the update itself succeeded: 0 app files changed, uncommitted developer work untouched, project context byte-identical), and while fixing a real bug on that app afterwards.

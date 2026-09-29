@@ -44,6 +44,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import uuid
@@ -1197,10 +1198,33 @@ def clean_head_tree(kit: Path) -> str:
     return _git_output(kit, "rev-parse", "HEAD^{tree}")
 
 
-def _record_full_pass(kit: Path) -> None:
-    tree = clean_head_tree(kit)
+def working_tree_id(kit: Path) -> str:
+    """Git tree id of the files as they are now: tracked edits and new files, ignored files left out.
+
+    Built in a throwaway index, so the real index and HEAD are untouched. Committing exactly these
+    files gives a HEAD tree with this id, so a pass recorded before the commit still counts after it.
+    """
+    with tempfile.TemporaryDirectory(prefix="harness-tree-") as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        for argv in (["read-tree", "HEAD"], ["add", "-A"]):
+            try:
+                proc = subprocess.run(["git", *argv], cwd=str(kit), env=env, capture_output=True, check=False, timeout=120)
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
+            if proc.returncode != 0:
+                return ""
+        try:
+            proc = subprocess.run(["git", "write-tree"], cwd=str(kit), env=env, capture_output=True, text=True, check=False, timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _record_full_pass(kit: Path, tree_at_start: str = "") -> None:
+    tree = working_tree_id(kit)
     marker = selftest_pass_marker(kit)
-    if not tree or marker is None:
+    # A file changed while the suites ran: the pass proves neither version.
+    if not tree or marker is None or (tree_at_start and tree != tree_at_start):
         return
     try:
         marker.write_text(json.dumps({"tree": tree, "python": sys.version.split()[0]}) + "\n", encoding="utf-8")
@@ -1231,6 +1255,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         quick = bool(getattr(args, "quick", False))
         scripts = QUICK_SELFTEST_SUITES if quick else FULL_SELFTEST_SUITES
         mode = "QUICK" if quick else "FULL"
+        tree_at_start = "" if quick else working_tree_id(kit)
         jobs = _selftest_jobs(getattr(args, "jobs", None))
         # Work items: (script, shard index, shard count). One process per item.
         items = [(script, 0, 1) for script in scripts]
@@ -1328,7 +1353,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
                 return failures[0][1]
         _live(f"\n✅ All {len(scripts)} selftest suites passed ({total} processes).")
         if not quick:
-            _record_full_pass(kit)
+            _record_full_pass(kit, tree_at_start)
         timings.sort(key=lambda x: x[1], reverse=True)
         _live("Slowest suites:")
         for rank, (t_label, t_el) in enumerate(timings[:5], 1):

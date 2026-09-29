@@ -1893,8 +1893,13 @@ class TestSpeedTests(unittest.TestCase):
                     else:
                         self.assertEqual(os.environ.get("TEMP"), env.get("TEMP"))
 
-    def test_testmode_004d_full_pass_marker_binds_the_clean_tree_only(self) -> None:
-        """TESTMODE-004d: a full pass is recorded for a clean HEAD tree; a dirty tree records nothing."""
+    def test_testmode_004d_full_pass_marker_binds_the_exact_files(self) -> None:
+        """TESTMODE-004d: a full pass records the tree of the files as they were tested, committed or not.
+
+        A pass run before committing used to record nothing, so the release re-ran the whole suite
+        (15+ minutes) on identical files. Committing exactly the tested files now matches the marker;
+        a file changed during the run records nothing, and the real index is never touched.
+        """
         import harness_cli
         repo = Path(tempfile.mkdtemp(prefix="selftest_marker_"))
         ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
@@ -1906,9 +1911,25 @@ class TestSpeedTests(unittest.TestCase):
         marker = harness_cli.selftest_pass_marker(repo)
         self.assertEqual(harness_cli.clean_head_tree(repo), json.loads(marker.read_text(encoding="utf-8"))["tree"])
         marker.unlink()
+
+        # Uncommitted edit and a new file: recorded as the tree they would commit to.
         (repo / "a.txt").write_text("changed\n", encoding="utf-8")
-        self.assertEqual("", harness_cli.clean_head_tree(repo))
-        harness_cli._record_full_pass(repo)
+        (repo / "b.txt").write_text("new\n", encoding="utf-8")
+        start = harness_cli.working_tree_id(repo)
+        harness_cli._record_full_pass(repo, start)
+        recorded = json.loads(marker.read_text(encoding="utf-8"))["tree"]
+        self.assertEqual(start, recorded)
+        staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=repo, capture_output=True, text=True).stdout
+        self.assertEqual("", staged.strip(), "the real index is untouched")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", *ident, "commit", "-q", "-m", "b"], cwd=repo, check=True)
+        self.assertEqual(recorded, harness_cli.clean_head_tree(repo), "committing the tested files matches the marker")
+        marker.unlink()
+
+        # A file changed while the suites ran: nothing is recorded.
+        start = harness_cli.working_tree_id(repo)
+        (repo / "a.txt").write_text("edited mid-run\n", encoding="utf-8")
+        harness_cli._record_full_pass(repo, start)
         self.assertFalse(marker.exists())
 
     def test_testmode_005_unknown_selftest_flag_fails_parser(self) -> None:
