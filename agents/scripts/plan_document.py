@@ -32,6 +32,40 @@ SURFACE_NOTES = {
 }
 
 
+# Decisions worth a developer-typed `/grill-me` before the plan is approved.
+GRILL_ME_REASONS = {
+    "ROOM_SCHEMA": "a database schema change (migration, users on older versions, downgrade)",
+    "MANIFEST_PERMISSION": "an exported component or permission (who may call it)",
+    "PUBLIC_API": "a public contract other code depends on",
+}
+
+
+def accelerator_callouts(plan: dict, policy: dict | None = None) -> list[str]:
+    """Highlighted `/goal` and `/grill-me` reminders, only when the task calls for them.
+
+    `/goal` and `/grill-me` are typed by the developer; the agent cannot run them, so the
+    approval question carries these lines at its top (short certification O45).
+    """
+    policy = policy or {}
+    lines: list[str] = []
+    surfaces = set(plan.get("expected_surfaces") or [])
+    reasons = [GRILL_ME_REASONS[s] for s in sorted(surfaces) if s in GRILL_ME_REASONS]
+    if str(plan.get("planning_depth") or "").upper() == "ARCHITECTURAL":
+        reasons.append("an architecture decision")
+    if reasons:
+        lines.append(
+            "> ⚠️ **`/grill-me`**: this task involves " + "; ".join(reasons)
+            + ". To be asked the hard questions before this plan is approved, type `/grill-me` instead of approving."
+        )
+    multi_step = bool(policy.get("reviewers")) or "device" in (policy.get("gates") or []) or len(plan.get("phases") or []) > 1
+    if multi_step:
+        lines.append(
+            "> ⚡ **`/goal`**: after approving, type `/goal` as its own message so the work continues "
+            "without stopping at every step (it still stops for your phone check and commit)."
+        )
+    return lines
+
+
 def plan_document_path(task_directory: Path) -> Path:
     return task_directory / PLAN_DOCUMENT_NAME
 
@@ -104,6 +138,9 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
         f"Plan hash: `{plan_hash[:12]}` (the hash the approval is bound to). Generated from `plan.json`; do not edit.",
         "",
     ]
+    callouts = accelerator_callouts(plan, policy)
+    for callout in callouts:
+        lines += [callout, ""]
     if previous:
         lines += [
             f"## What changed from the previous plan (`{str(previous.get('plan_sha256') or '')[:12]}`)",

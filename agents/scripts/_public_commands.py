@@ -397,6 +397,14 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "model_facing": True,
         "description": "Print active harness engine release version.",
     },
+    {
+        "command": "update-info",
+        "read_only": True,
+        "valid_states": ["ANY"],
+        "required_inputs": [],
+        "model_facing": True,
+        "description": "Check for a newer harness release and print exactly how the developer updates this installation.",
+    },
 ]
 
 

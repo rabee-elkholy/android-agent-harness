@@ -156,7 +156,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
     if name in {"harness_cli", "android-harness"}:
-        if args[:1] in (["version"], ["doctor"], ["explain"]):
+        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"]):
             return True
         if args[:1] == ["task-context"]:
             targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
@@ -748,7 +748,13 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
                 "`python .agents/harness.py doctor`, `python .agents/harness.py task-context --file <path> --json`. "
                 f"Detail: {exc}"
             )
-        return False, f"mutation requires an active approved plan: {exc}"
+        return False, (
+            f"'{normalized}' is not a recognized read-only command, and no task is active, so it is refused. "
+            "Without a task use the read-only harness commands (`python .agents/harness.py doctor`, `version`, "
+            "`update-info`, `graph`, `task-context --file <path> --json`) or plain reads (git status/log/diff, ls, cat); "
+            "anything that changes the project needs a task: `python .agents/scripts/workflow.py draft`. "
+            f"(mutation requires an active approved plan: {exc})"
+        )
     status = str(plan.get("status") or "")
     entry, arguments = _entry(normalized, repo)
     action = _workflow_action(normalized, repo)

@@ -20,7 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 GITHUB_REPO = "rabee-elkholy/android-agent-harness"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CACHE_TTL_SECONDS = 86400  # 24 hours
+CACHE_TTL_SECONDS = 6 * 3600  # a release shows up within hours; one unauthenticated API call per 6 h per project
 RETRY_AFTER_FAILURE_SECONDS = 3600  # an offline or rate-limited check retries after an hour
 NOTICE_INTERVAL_SECONDS = 86400  # the agent is told about a given release at most once a day
 NETWORK_TIMEOUT_SECONDS = 2.5
@@ -154,6 +154,41 @@ def check_for_update(force: bool = False) -> dict:
 def install_prompt_url(version: str) -> str:
     tag = str(version or "").strip().lstrip("v") or "main"
     return f"https://raw.githubusercontent.com/{GITHUB_REPO}/v{tag}/docs/install-or-update-prompt.md"
+
+
+def pending_update_note(repo: Path) -> str:
+    """Non-empty when an update was interrupted and never recorded (O59)."""
+    journal_path = Path(repo) / ".harness-setup" / "update-journal.json"
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if str(journal.get("status") or "") == "COMPLETED" or str(journal.get("stage") or "") == "COMPLETED":
+        return ""
+    target = str(journal.get("to_version") or "?")
+    if str(journal.get("status") or "") == "ROLLED_BACK":
+        return f"The update to v{target} was rolled back; the installed engine is the previous one. Run the update again."
+    return f"An update to v{target} was interrupted before it was recorded; run the update again (it recovers first)."
+
+
+def update_instructions(repo: Path, *, force: bool = True) -> str:
+    """How to update this installation, for `harness.py update-info` (O56)."""
+    res = check_for_update(force=force)
+    lines = [f"Installed harness: v{res['current']}. Latest release: v{res['latest']}."]
+    pending = pending_update_note(repo)
+    if pending:
+        lines.append(f"[WARN] {pending}")
+    if res["raw_has_update"] or pending:
+        target = res["latest"] if res["raw_has_update"] else res["current"]
+        lines += [
+            "How to update (the developer's decision; finish or cancel an active task first):",
+            f"  1. In a NEW chat at the project root, send: Read {install_prompt_url(target)} and follow all instructions.",
+            "  2. Or in the developer's own terminal: python <kit-dir>/harness_cli.py update --repo <app-root> --kit <kit-dir>",
+            "Never update the harness any other way (no package manager, no copying files).",
+        ]
+    else:
+        lines.append("Up to date. Nothing to do.")
+    return "\n".join(lines)
 
 
 def update_banner() -> str:

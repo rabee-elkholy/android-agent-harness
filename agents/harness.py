@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|phase-review|device|verify|zoho|version|commands> [args...]"
+            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|phase-review|device|verify|zoho|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -45,6 +45,20 @@ def main(argv: list[str] | None = None) -> int:
             print("[ERROR] Installed harness VERSION is missing", file=sys.stderr)
             return 2
         print(version_file.read_text(encoding="utf-8").strip())
+        sys.path.insert(0, str(AGENTS_ROOT / "scripts"))
+        try:
+            from check_kit_update import pending_update_note
+            pending = pending_update_note(REPO_ROOT)
+        except Exception:
+            pending = ""
+        if pending:
+            print(f"[WARN] {pending} See: python .agents/harness.py update-info", file=sys.stderr)
+        return 0
+
+    if command == "update-info":
+        sys.path.insert(0, str(AGENTS_ROOT / "scripts"))
+        from check_kit_update import update_instructions
+        print(update_instructions(REPO_ROOT, force="--offline" not in args))
         return 0
 
     if command == "context":

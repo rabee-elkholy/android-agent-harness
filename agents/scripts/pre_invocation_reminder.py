@@ -26,6 +26,7 @@ def _message() -> str:
             "For a design, migration, backward-compatibility or security decision (Room schema, exported component, permission), "
             "suggest in `ask_question` that the developer types `/grill-me` before you draft. "
             "Draft with --approach, --risks and --device-strategy so the developer can review the plan. "
+            "To update the harness itself, run `python .agents/harness.py update-info` and follow it. "
             "Verification plan must use strict 6-step headings."
         )
     status = str(plan.get("status") or "UNKNOWN")

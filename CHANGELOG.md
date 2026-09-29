@@ -4,6 +4,20 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.8] - 2026-09-29
+
+Updating a real installation: found while updating a production app from 1.1.6 to 1.1.7, plus highlighted `/goal` and `/grill-me` reminders.
+
+### Update
+- O59: an update killed mid-way looked finished. `.agents/VERSION` named the new release as soon as the engine was copied, so the chat prompt's "installed version is not older: up to date" check stopped there while the update journal was still open. VERSION now names the new release only once the update is recorded; `doctor` and `doctor --install-check` fail on an open or rolled-back update journal, and `harness.py version` warns about it. The leftover `.agents.previous-*` and `.agents-stage-*` folders are excluded from the app's `git status`.
+- O60: recovery after a killed update restored `.agents` only. The adapter files the update had already rewritten (`GEMINI.md`, `AGENTS.md`, `CLAUDE.md`, `.claude/*`) stayed new, so the next update refused them as user edits and pointed to uninstall plus reinstall. The update journal now records those files, and recovery restores them from the pre-update backup; for journals written by older versions, a file is restored when its backup copy matches the ownership record.
+- O56: asked to update, the agent searched npm, the web and the harness scripts. `python .agents/harness.py update-info` (read-only) checks for a newer release and prints the exact prompt and command for this installation; the Antigravity rules and the idle reminder point to it.
+- O58: a new release stayed invisible for up to a day because the release check was cached for 24 hours. It is re-checked every six hours now (one unauthenticated API call per project); the notice itself still appears at most once a day per release.
+- O57: a command refused while no task is active said "cannot read JSON artifact ... active-task.json". The refusal now says the command is not a recognized read-only one and lists the read-only harness commands and what needs a task.
+
+### Plan approval
+- `/goal` and `/grill-me` reminders are highlighted blocks, printed by `draft`/`revise` as `APPROVAL_CALLOUTS` and placed at the top of the approval question and of `plan.md`, only when the task calls for them: `/grill-me` for a Room schema change, an exported component or permission, a public contract, or an architectural plan (the block names the decision); `/goal` when the task has reviewers, a phone check or several phases.
+
 ## [1.1.7] - 2026-09-28
 
 Fixes from a short certification on a real app (Antigravity, Gemini 3.8 Flash): update by chat prompt, an exported receiver with `/goal`, a Room migration with `/grill-me`, and commit refusal. The update, the delivery path, the exported-component gate and the Room gate (pre-existing destructive fallback as a warning) all held; these changes fix how the developer is asked to decide.

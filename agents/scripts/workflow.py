@@ -4759,9 +4759,9 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
 
 APPROVAL_QUESTION_GUIDE = (
     "APPROVAL_QUESTION: ask with ask_question, options Approve / Request changes / Cancel task. "
-    "Question text, in the developer's language: (1) what will change and how, the risks and the phone checks, "
-    "only as the summary states them; (2) the PLAN_SUMMARY block verbatim, keeping the plan.md link; "
-    "(3) on Antigravity, the line: after approving, type /goal as its own message to let me continue without stopping. "
+    "Question text, in the developer's language: (0) on Antigravity, the APPROVAL_CALLOUTS lines first, each as its own "
+    "highlighted block with the same emoji and bold command; (1) what will change and how, the risks and the phone checks, "
+    "only as the summary states them; (2) the PLAN_SUMMARY block verbatim, keeping the plan.md link. "
     "Never paste plan.json or command output into the question."
 )
 
@@ -4806,6 +4806,18 @@ def main(argv: list[str] | None = None) -> int:
 
             document = plan_document_path(task_dir(Path(args.repo).resolve(), result["task_id"]))
             print(plan_summary(result, document if document.is_file() else None))
+            from plan_document import accelerator_callouts
+
+            try:
+                policy_file = task_dir(Path(args.repo).resolve(), result["task_id"]) / "preliminary-policy.json"
+                preliminary = read_json(policy_file) if policy_file.is_file() else {}
+            except (OSError, ValueError):
+                preliminary = {}
+            callouts = accelerator_callouts(result, preliminary)
+            if callouts:
+                print("APPROVAL_CALLOUTS:")
+                for callout in callouts:
+                    print(callout)
             gaps = plan_gaps(result)
             if gaps:
                 print(

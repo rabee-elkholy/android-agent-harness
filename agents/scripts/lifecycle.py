@@ -39,6 +39,8 @@ EXCLUDE_BEGIN = "# BEGIN ANDROID AGENT HARNESS MANAGED BLOCK"
 EXCLUDE_END = "# END ANDROID AGENT HARNESS MANAGED BLOCK"
 INTERNAL_EXCLUDE_PATTERNS = (
     ".agents/",
+    ".agents.previous-*/",
+    ".agents-stage-*/",
     ".harness-setup/",
     ".harness-backup/",
     ".harness-recovery/",
@@ -768,6 +770,38 @@ def recover_interrupted_uninstall(repo: Path) -> dict | None:
     return {"status": "RECOVERED", "action": "restored_pre_uninstall_state"}
 
 
+def _restore_adapters_after_interrupt(repo: Path, journal: dict) -> list[str]:
+    """Put the managed files outside `.agents` back as they were before a killed update."""
+    backup_raw = str(journal.get("backup") or "")
+    if not backup_raw:
+        return []
+    backup = Path(backup_raw) if Path(backup_raw).is_absolute() else repo / backup_raw
+    if not backup.is_dir():
+        return []
+    before = journal.get("adapters_before")
+    if isinstance(before, dict):
+        _rollback_adapters(repo, backup, before)
+        return sorted(before)
+    # Journals written before 1.1.8 carry no adapter snapshot: restore each managed file outside
+    # `.agents` whose bytes differ from the ownership record while the backup copy matches it.
+    restored: list[str] = []
+    try:
+        ownership = _read_ownership(repo)
+    except Exception:
+        return restored
+    for entry in ownership.get("entries") or []:
+        rel = str(entry.get("path") or "")
+        want = entry.get("post_install_sha256")
+        if not rel or not want or rel.startswith(".agents/"):
+            continue
+        source, target = backup / rel, repo / rel
+        if _hash_or_none(target) != want and source.is_file() and _hash_or_none(source) == want:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            restored.append(rel)
+    return restored
+
+
 def recover_interrupted_update(repo: Path) -> dict | None:
     journal_path = repo / ".harness-setup" / "update-journal.json"
     if not journal_path.is_file():
@@ -851,6 +885,7 @@ def recover_interrupted_update(repo: Path) -> dict | None:
             _safe_replace_dir(old_target, agents_dir, fallback_copy=True)
         else:
             _safe_restore_from_backup(old_target, agents_dir)
+        journal["adapters_restored"] = _restore_adapters_after_interrupt(repo, journal)
         journal["status"] = "ROLLED_BACK"
         journal["stage"] = "ROLLED_BACK"
         journal["recovered_at"] = utc_now()
@@ -1023,6 +1058,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
             "ownership_before_sha256": ownership.get("ownership_sha256"),
             "ownership_after_sha256": None,
             "legacy_reference_migrated": legacy_migrated,
+            "adapters_before": before,
             "started_at": utc_now(),
         }
         journal_path = repo / ".harness-setup" / "update-journal.json"
@@ -1039,6 +1075,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
             _set_stage("OLD_ENGINE_MOVED")
 
             _install_engine(repo, kit, answers, init_context=False)
+            atomic_write_bytes(repo / ".agents" / "VERSION", f"{current_version}\n".encode("utf-8"))
             _set_stage("NEW_ENGINE_INSTALLED")
 
             if (old_agents / "state").is_dir():
@@ -1086,6 +1123,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
             _set_stage("APP_SNAPSHOT_VERIFIED")
 
         with step_progress("4. Updating ownership manifest"):
+            atomic_write_bytes(repo / ".agents" / "VERSION", (kit / "agents" / "VERSION").read_bytes())
             new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
             journal["ownership_after_sha256"] = new_ownership.get("ownership_sha256")
             _set_stage("OWNERSHIP_WRITTEN")

@@ -1917,6 +1917,49 @@ class UpdateNoticeSelftest(unittest.TestCase):
         self.now[0] += 86401
         self.assertIn("v1.1.5", self.cku.update_notice(), "reminded again after a day")
 
+    def test_a_new_release_is_seen_within_six_hours(self) -> None:
+        # O58: the cache hid a release for up to 24 h; three releases in two days went unnoticed.
+        self.cku.check_for_update()
+        self.latest = {"version": "1.1.6", "html_url": "", "notes": ""}
+        self.now[0] += 5 * 3600
+        self.assertEqual("1.1.5", self.cku.check_for_update()["latest"], "cached within the window")
+        self.now[0] += 3601
+        self.assertEqual("1.1.6", self.cku.check_for_update()["latest"], "re-checked after six hours")
+
+    def test_update_info_says_how_to_update_and_reports_an_interrupted_update(self) -> None:
+        # O56: asked to update, the agent searched npm and the web. O59: an interrupted update read as done.
+        repo = self.tmp / "app"
+        (repo / ".harness-setup").mkdir(parents=True)
+        text = self.cku.update_instructions(repo)
+        self.assertIn("Installed harness: v1.1.4. Latest release: v1.1.5.", text)
+        self.assertIn("v1.1.5/docs/install-or-update-prompt.md and follow all instructions", text)
+        self.assertIn("harness_cli.py update --repo <app-root> --kit <kit-dir>", text)
+        self.assertIn("Never update the harness any other way", text)
+        journal = repo / ".harness-setup" / "update-journal.json"
+        journal.write_text(json.dumps({"status": "PREPARED", "stage": "CONTEXT_RESTORED", "to_version": "1.1.5"}), encoding="utf-8")
+        self.assertIn("interrupted before it was recorded", self.cku.pending_update_note(repo))
+        self.latest = {"version": "1.1.4", "html_url": "", "notes": ""}
+        self.now[0] += 7 * 3600
+        pending = self.cku.update_instructions(repo)
+        self.assertIn("[WARN] An update to v1.1.5 was interrupted", pending)
+        self.assertIn("How to update", pending, "an interrupted update still gets the instructions")
+        journal.write_text(json.dumps({"status": "COMPLETED", "stage": "COMPLETED", "to_version": "1.1.5"}), encoding="utf-8")
+        self.assertEqual("", self.cku.pending_update_note(repo))
+        self.assertIn("Up to date. Nothing to do.", self.cku.update_instructions(repo))
+
+    def test_update_info_is_read_only_for_the_hook(self) -> None:
+        from mutation_guard import command_allowed
+
+        repo = self.tmp / "hookrepo"
+        repo.mkdir()
+        allowed, reason = command_allowed(repo, "python .agents/harness.py update-info")
+        self.assertTrue(allowed, reason)
+        # O57: an unknown command with no task names what to do instead of an internal file.
+        allowed, reason = command_allowed(repo, "npm list -g --depth=0")
+        self.assertFalse(allowed)
+        self.assertIn("not a recognized read-only command, and no task is active", reason)
+        self.assertIn("update-info", reason)
+
     def test_no_notice_when_current_snoozed_or_disabled(self) -> None:
         self.latest = {"version": "1.1.4", "html_url": "", "notes": ""}
         self.assertEqual("", self.cku.update_notice())

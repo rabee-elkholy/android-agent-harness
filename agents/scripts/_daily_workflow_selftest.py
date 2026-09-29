@@ -329,6 +329,40 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertIn(payload, body)
         self.assertNotIn("TOPSECRET123456", body)
 
+    def test_goal_and_grill_me_callouts_are_highlighted_only_when_the_task_calls_for_them(self) -> None:
+        # 1.1.8: the developer asked that the /goal and /grill-me reminders stand out, and only
+        # appear when the task needs them.
+        from plan_document import accelerator_callouts
+
+        room = {"expected_surfaces": ["ROOM_SCHEMA", "PERSISTENCE"], "planning_depth": "BOUNDED"}
+        multi = {"reviewers": ["bug-reviewer-agent"], "gates": ["preflight", "device"]}
+        lines = accelerator_callouts(room, multi)
+        self.assertEqual(2, len(lines))
+        self.assertTrue(lines[0].startswith("> ⚠️ **`/grill-me`**"))
+        self.assertIn("database schema change", lines[0])
+        self.assertTrue(lines[1].startswith("> ⚡ **`/goal`**"))
+        exported = accelerator_callouts({"expected_surfaces": ["MANIFEST_PERMISSION"]}, {})
+        self.assertEqual(1, len(exported))
+        self.assertIn("exported component or permission", exported[0])
+        self.assertIn("architecture decision", accelerator_callouts({"planning_depth": "ARCHITECTURAL"}, {})[0])
+        # A small change with no reviewers, no phone check and one phase gets no reminder.
+        self.assertEqual([], accelerator_callouts({"expected_surfaces": ["RESOURCE_UI"]}, {"reviewers": [], "gates": ["preflight"]}))
+        self.assertEqual(1, len(accelerator_callouts({"phases": [{"id": "a"}, {"id": "b"}]}, {})))
+
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            workflow_main(["draft", "--repo", str(self.repo), "--task-id", "callouts", "--outcome", "Show a message",
+                           "--kind", "FEATURE", "--expected-files", "app/src/main/kotlin/com/example/Login.kt", "--force"])
+        text = out.getvalue()
+        self.assertIn("APPROVAL_CALLOUTS:", text)
+        self.assertIn("> ⚡ **`/goal`**", text)
+        document = (task_dir(self.repo, "callouts") / "plan.md").read_text(encoding="utf-8")
+        self.assertIn("> ⚡ **`/goal`**", document.split("## Outcome")[0])
+
     def test_approach_is_bound_by_the_plan_hash(self) -> None:
         from plan_authority import validate_plan_hash
 

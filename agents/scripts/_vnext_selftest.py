@@ -237,9 +237,9 @@ class ChatInstallationDocsTests(unittest.TestCase):
 
         gemini = (KIT / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
         self.assertLessEqual(len(gemini), 23_000, "GEMINI.md grows unbounded; move detail into router output")
-        self.assertIn("type /goal as its own message", APPROVAL_QUESTION_GUIDE)
+        self.assertIn("APPROVAL_CALLOUTS lines first", APPROVAL_QUESTION_GUIDE)
         self.assertIn("`APPROVAL_QUESTION` line", gemini)
-        self.assertIn("to type `/goal` as its own message after approving", gemini)
+        self.assertIn("first the `APPROVAL_CALLOUTS` lines, each a highlighted block", gemini)
         self.assertIn("suggest inside an `ask_question` that the developer types `/grill-me` first", gemini)
         self.assertIn("an existing destructive fallback, users on older schema versions and downgrade", gemini)
         self.assertIn("Cancel is the developer's", gemini)
@@ -1438,6 +1438,65 @@ class LifecycleTests(RepoCase):
         self.assertEqual("PASS", updated["status"])
         self.assertEqual(before_instructions, instructions.read_bytes(), "update dropped developer instructions")
         self.assertIn("Project note kept across updates.", notes.read_text(encoding="utf-8"))
+
+    def _kill_update_after_adapters_are_rewritten(self) -> tuple[Path, bytes]:
+        """An update killed after writing the new adapter rules, as happened on a real app (O59/O60)."""
+        self._answers()
+        install(self.repo, KIT)
+        agents_md = self.repo / "AGENTS.md"
+        original = agents_md.read_bytes()
+        real_configure = lifecycle_module._configure
+
+        def configure_newer_rules(repo, kit, answers):
+            real_configure(repo, kit, answers)
+            write(agents_md, agents_md.read_text(encoding="utf-8") + "\n- A rule from the newer release.\n")
+
+        class Killed(BaseException):
+            pass
+
+        with mock.patch.object(lifecycle_module, "_configure", configure_newer_rules), \
+             mock.patch.object(lifecycle_module, "_verify_app_snapshot", side_effect=Killed()):
+            with self.assertRaises(Killed):
+                update(self.repo, KIT)
+        return agents_md, original
+
+    def test_killed_update_never_reads_as_finished_and_recovers_its_adapters(self) -> None:
+        agents_md, original = self._kill_update_after_adapters_are_rewritten()
+        ownership = json.loads((self.repo / ".harness-setup/ownership-v1.json").read_text(encoding="utf-8"))
+        journal = json.loads((self.repo / ".harness-setup/update-journal.json").read_text(encoding="utf-8"))
+        self.assertEqual("CONTEXT_RESTORED", journal["stage"])
+        self.assertIn("AGENTS.md", journal["adapters_before"])
+        # O59: until the update is recorded, VERSION keeps the installed release.
+        self.assertEqual(ownership["harness_version"], (self.repo / ".agents/VERSION").read_text(encoding="utf-8").strip())
+        self.assertNotEqual(original, agents_md.read_bytes())
+        self.assertTrue(list(self.repo.glob(".agents.previous-*")))
+        exclude = subprocess.run(["git", "rev-parse", "--git-path", "info/exclude"], cwd=self.repo,
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        self.assertIn(".agents.previous-*/", (self.repo / exclude).read_text(encoding="utf-8"))
+        from doctor.engine import HarnessDoctor
+        doctor = HarnessDoctor(self.repo, run_selftest=False)
+        doctor.check_update_journal()
+        self.assertEqual(["FAIL"], [r.status for r in doctor.results if r.name == "Update Journal"])
+        # O60: the next update recovers the adapters too, instead of refusing them as user edits.
+        updated = update(self.repo, KIT)
+        self.assertEqual("PASS", updated["status"])
+        self.assertEqual(original, agents_md.read_bytes())
+        self.assertFalse(list(self.repo.glob(".agents.previous-*")))
+        self.assertEqual((KIT / "agents/VERSION").read_text(encoding="utf-8").strip(),
+                         (self.repo / ".agents/VERSION").read_text(encoding="utf-8").strip())
+
+    def test_killed_update_from_an_older_journal_restores_adapters_from_the_backup(self) -> None:
+        # Journals written before 1.1.8 carry no adapter snapshot (the real Rashaqa case).
+        agents_md, original = self._kill_update_after_adapters_are_rewritten()
+        journal_path = self.repo / ".harness-setup/update-journal.json"
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal.pop("adapters_before")
+        write(journal_path, json.dumps(journal))
+        recovered = lifecycle_module.recover_interrupted_update(self.repo)
+        self.assertEqual("restored_previous_engine", recovered["action"])
+        self.assertEqual(original, agents_md.read_bytes())
+        self.assertIn("AGENTS.md", json.loads(journal_path.read_text(encoding="utf-8"))["adapters_restored"])
+        self.assertEqual("PASS", update(self.repo, KIT)["status"])
 
     def test_install_captures_unit_test_baseline_for_real_gradle_projects(self) -> None:
         """Pre-existing test failures are only tolerable once a clean-tree baseline exists."""

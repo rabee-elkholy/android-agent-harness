@@ -183,13 +183,13 @@ python .agents/harness.py doctor --json
 
 ### Updating
 
-At the start of a conversation, an installed harness tells the agent (at most once a day) when a newer release exists. To update, finish or cancel the active task, then paste the same prompt with the new version in a new chat, or run:
+At the start of a conversation, an installed harness tells the agent (at most once a day, checking for new releases every six hours) when a newer release exists. Ask the agent to update and it runs `python .agents/harness.py update-info`, which prints the exact prompt and command for this installation. To update, finish or cancel the active task, then paste the same prompt with the new version in a new chat, or run:
 
 ```bash
 python ~/.android-harness/kit/harness_cli.py update --repo /path/to/android-project
 ```
 
-The update is transactional and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. It refuses while a task is active, and it lists managed files you edited by hand instead of overwriting them.
+The update is transactional and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. It refuses while a task is active, and it lists managed files you edited by hand instead of overwriting them. If an update is interrupted (the process is killed), `.agents/VERSION` keeps the previous release and `doctor` reports it; running the update again rolls the interrupted one back, including `GEMINI.md`/`AGENTS.md`/`CLAUDE.md`, and applies it from the start.
 
 For advanced configuration, see [docs/install-or-update-prompt.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md) and [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md).
 

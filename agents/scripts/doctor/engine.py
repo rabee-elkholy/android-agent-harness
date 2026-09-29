@@ -1395,6 +1395,16 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(cat, "Trusted Transcript Resolver", "FAIL", f"Trusted transcript roots resolver error: {exc}")
 
+    def check_update_journal(self) -> None:
+        """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""
+        try:
+            from check_kit_update import pending_update_note
+            note = pending_update_note(self.repo)
+        except Exception:
+            note = ""
+        if note:
+            self.log("File Structure", "Update Journal", "FAIL", note, ["See: python .agents/harness.py update-info"])
+
     def run_all(self) -> list[CheckResult]:
         if self.live_stream:
             print("==================================================", flush=True)
@@ -1402,6 +1412,7 @@ class HarnessDoctor:
             print("==================================================", flush=True)
         self.check_environment()
         self.check_file_structure()
+        self.check_update_journal()
         self.check_subagent_roster()
         self.check_product_config()
         self.check_template_leaks()
@@ -1419,6 +1430,7 @@ class HarnessDoctor:
     def run_install_check(self) -> list[CheckResult]:
         """Fast post-install structural check suitable for short-lived chat tools."""
         self.check_file_structure()
+        self.check_update_journal()
         self.check_product_config()
         self.check_template_leaks()
         self.check_project_context(is_install_check=True)
