@@ -1275,6 +1275,76 @@ class PhaseDRepairSelftest(unittest.TestCase):
         self.assertTrue(kit_file.exists())
         self.assertTrue(inside_app.exists(), "a file inside the app checkout is never deleted")
 
+    def test_kit_promote_replaces_the_kit_only_with_an_exact_tagged_stage(self) -> None:
+        """O62: the prompt said "staging replaces <kit-dir>" with no command; the agent read harness_cli.py
+        again and again to find one."""
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("harness_cli_promote", str(KIT / "harness_cli.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cache = self.repo / "cache"
+        kit = cache / "kit"
+        (kit / "agents").mkdir(parents=True)
+        (kit / "agents" / "VERSION").write_text("9.9.8\n", encoding="utf-8")
+
+        def stage(name: str, version: str, tag: str) -> Path:
+            staged = cache / name
+            (staged / "agents").mkdir(parents=True)
+            (staged / "agents" / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+            for command in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "kit"], ["tag", tag]):
+                subprocess.run(["git", *command], cwd=staged, check=True)
+            return staged
+
+        def promote(staged: Path) -> int:
+            with mock.patch.object(mod, "_verify_kit_checksums"):
+                return mod.cmd_kit_promote(argparse.Namespace(staging=str(staged), kit_dir=str(kit)))
+
+        wrong = stage("kit-stage-9.9.9-a", "9.9.9", "v9.9.7")
+        self.assertEqual(1, promote(wrong), "a stage whose tag does not match its VERSION is refused")
+        self.assertEqual("9.9.8", (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+        outside = self.repo / "elsewhere" / "kit-stage-9.9.9-b"
+        outside.mkdir(parents=True)
+        self.assertEqual(2, promote(outside), "only a kit-stage-* folder next to the kit")
+        good = stage("kit-stage-9.9.9-c", "9.9.9", "v9.9.9")
+        self.assertEqual(0, promote(good))
+        self.assertEqual("9.9.9", (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("9.9.8", (cache / "kit.previous" / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertFalse(good.exists())
+
+    def test_chat_steps_prints_the_mode_and_real_paths_and_is_read_only(self) -> None:
+        # O61: Antigravity reads about 2000 characters of a URL; Phases 3-5 come from the kit instead.
+        from mutation_guard import command_allowed
+
+        def steps(repo: Path) -> str:
+            run = subprocess.run(
+                [sys.executable, str(KIT / "harness_cli.py"), "chat-steps", "--repo", str(repo), "--kit", str(KIT)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            self.assertEqual(0, run.returncode, run.stderr)
+            return run.stdout
+
+        installed = self.repo / ".harness-setup" / "ownership-v1.json"
+        self.assertTrue(installed.is_file())
+        self.assertTrue(steps(self.repo).startswith("Mode: UPDATE."))
+        fresh = self.repo / "fresh-app"
+        fresh.mkdir()
+        run_out = steps(fresh)
+        self.assertTrue(run_out.startswith("Mode: INSTALL."), run_out[:120])
+        run = argparse.Namespace(stdout=steps(self.repo))
+        self.assertIn(f"--repo {self.repo}", run.stdout)
+        self.assertNotIn("<app-root>", run.stdout)
+        self.assertNotIn("<kit-dir>", run.stdout)
+        self.assertIn("END OF STEPS (Phases 3-5).", run.stdout)
+        cache = Path.home() / ".android-harness"
+        allowed, reason = command_allowed(self.repo, f"python {cache / 'kit' / 'harness_cli.py'} chat-steps --repo {self.repo}")
+        self.assertTrue(allowed, reason)
+        allowed, reason = command_allowed(self.repo, f"python {cache / 'kit-stage-v9-x' / 'harness_cli.py'} kit-promote --staging {cache / 'kit-stage-v9-x'}")
+        self.assertTrue(allowed, reason)
+        allowed, _ = command_allowed(self.repo, f"python {cache / 'kit' / 'harness_cli.py'} kit-promote --staging {self.repo / 'kit-stage-v9-x'}")
+        self.assertFalse(allowed, "kit-promote may only move folders inside the harness cache")
+
     def test_git_fetch_timeout_exits_nonzero_and_preserves_valid_kit(self) -> None:
         """Git fetch timeout during provisioning exits non-zero with remediation and leaves existing kit intact."""
         import importlib.util

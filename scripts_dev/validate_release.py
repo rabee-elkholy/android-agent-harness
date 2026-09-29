@@ -209,6 +209,9 @@ def answer_schema_drift_errors(repo_root: Path) -> list[str]:
     if not prompt_path.is_file():
         return ["docs/install-or-update-prompt.md is missing"]
     text = prompt_path.read_text(encoding="utf-8")
+    steps_path = repo_root / "docs" / "install-or-update-steps.md"
+    if steps_path.is_file():
+        text += "\n" + steps_path.read_text(encoding="utf-8")
 
     wizard_dir = repo_root / "agents" / "scripts"
     if str(wizard_dir) not in sys.path:

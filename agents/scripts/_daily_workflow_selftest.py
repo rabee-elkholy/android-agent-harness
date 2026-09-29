@@ -7153,12 +7153,12 @@ class DocumentationConsistencyTests(unittest.TestCase):
         self.assertNotIn("reviewer-model", setup_doc.lower())
 
     def test_active_docs_describe_reviewer_call_safety_cap(self) -> None:
-        for p in ["README.md", "docs/quickstart.md", "docs/install-or-update-prompt.md"]:
+        for p in ["README.md", "docs/quickstart.md", "docs/install-or-update-steps.md"]:
             content = (self.root / p).read_text(encoding="utf-8")
             self.assertIn("Reviewer Call Safety Cap", content, f"missing in {p}")
 
     def test_antigravity_setup_docs_mention_agents_agents_dir(self) -> None:
-        for p in ["README.md", "docs/quickstart.md", "docs/install-or-update-prompt.md", "docs/setup-prompt.md"]:
+        for p in ["README.md", "docs/quickstart.md", "docs/install-or-update-steps.md", "docs/setup-prompt.md"]:
             content = (self.root / p).read_text(encoding="utf-8")
             self.assertIn(".agents/agents/", content, f"missing in {p}")
 

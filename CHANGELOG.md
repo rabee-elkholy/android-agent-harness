@@ -4,6 +4,14 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.9] - 2026-09-29
+
+The chat installer fits the host's fetch limit, and the kit replacement is one command. Found while updating a production app from 1.1.7 to 1.1.8 (the update itself succeeded: 0 app files changed, uncommitted developer work untouched, project context byte-identical).
+
+### Chat install and update
+- O61: Antigravity's `read_url_content` returns about 2000 characters, and the prompt was 4051, so the agent saw it cut off in Phase 2 and spent many steps re-fetching it (PowerShell, a web search, the GitHub API). `install-or-update-prompt.md` is now a short first page (Phases 1-2, under 1850 characters, ending with `END OF PAGE`); after the kit is in place, `python <kit-dir>/harness_cli.py chat-steps --repo <app-root>` prints Phases 3-5 from the kit with this installation's paths filled in and the mode (INSTALL or UPDATE) already decided. The bootstrap approval now comes before the clone in the text as well.
+- O62: "Staging replaces `<kit-dir>`" had no command, and the agent read `harness_cli.py` repeatedly to find one. `python <staging-dir>/harness_cli.py kit-promote --staging <staging-dir>` checks that the stage is exactly at its release tag and passes the kit checksums, keeps the old kit as `kit.previous`, and moves the stage into place. The hook allows it only for folders inside `~/.android-harness`, and allows `chat-steps` as read-only.
+
 ## [1.1.8] - 2026-09-29
 
 Updating a real installation: found while updating a production app from 1.1.6 to 1.1.7, plus highlighted `/goal` and `/grill-me` reminders.

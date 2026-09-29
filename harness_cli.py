@@ -1283,6 +1283,60 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_kit_promote(args: argparse.Namespace) -> int:
+    """Chat installer Phase 2: replace the cached kit with a verified staged clone (O62)."""
+    kit_dir = Path(args.kit_dir).expanduser().absolute() if args.kit_dir else KIT_DIR
+    staging = Path(args.staging).expanduser().absolute()
+    if staging.parent.resolve() != kit_dir.parent.resolve() or not staging.name.startswith("kit-stage-"):
+        print(f"[FAIL] --staging must be a kit-stage-* folder next to {kit_dir}: {staging}", file=sys.stderr)
+        return 2
+    if not (staging / "agents" / "VERSION").is_file():
+        print(f"[FAIL] {staging} is not a kit checkout (agents/VERSION missing).", file=sys.stderr)
+        return 2
+    version = _read_version_file(staging)
+    describe = subprocess.run(
+        ["git", "-C", str(staging), "describe", "--tags", "--exact-match"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=60,
+    )
+    tag = describe.stdout.strip()
+    if describe.returncode != 0 or tag != f"v{version}":
+        print(f"[FAIL] staged kit is not exactly at tag v{version} (describe: {tag or describe.stderr.strip()}).", file=sys.stderr)
+        return 1
+    _verify_kit_checksums(staging)
+    previous = kit_dir.with_name(kit_dir.name + ".previous")
+    moved_old = False
+    try:
+        if kit_dir.exists():
+            if previous.exists():
+                shutil.rmtree(previous)
+            kit_dir.rename(previous)
+            moved_old = True
+        staging.rename(kit_dir)
+    except OSError as exc:
+        if moved_old and not kit_dir.exists():
+            previous.rename(kit_dir)
+        print(f"[FAIL] could not promote the staged kit: {exc}", file=sys.stderr)
+        return 1
+    kept = f"; previous kit kept at {previous}" if moved_old else ""
+    print(f"[OK] Kit v{version} ({tag}) is now at {kit_dir}{kept}.")
+    return 0
+
+
+def cmd_chat_steps(args: argparse.Namespace) -> int:
+    """Chat installer Phases 3-5 with this installation's paths filled in (O61: hosts truncate long pages)."""
+    kit = resolve_kit(args.kit)
+    repo = Path(args.repo).expanduser().absolute()
+    steps_file = kit / "docs" / "install-or-update-steps.md"
+    if not steps_file.is_file():
+        print(f"[FAIL] {steps_file} is missing; the kit is incomplete.", file=sys.stderr)
+        return 1
+    mode = "UPDATE" if (repo / ".harness-setup" / "ownership-v1.json").is_file() else "INSTALL"
+    text = steps_file.read_text(encoding="utf-8").replace("<kit-dir>", str(kit)).replace("<app-root>", str(repo))
+    print(f"Mode: {mode}. Kit v{_read_version_file(kit)} at {kit}. App: {repo}.")
+    print(text)
+    return 0
+
+
 def _resolve_audit_path(repo: Path | None, kit: Path) -> Path:
     """Audit log of the checkout whose hooks actually ran.
 
@@ -1517,6 +1571,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Suites to run in parallel (default: HARNESS_SELFTEST_JOBS or min(8, CPUs); 1 streams output).",
     )
     sp.set_defaults(func=cmd_selftest)
+
+    sp = sub.add_parser("kit-promote", help="Chat installer: replace the cached kit with a verified staged clone.")
+    sp.add_argument("--staging", required=True, help="The kit-stage-* folder cloned in Phase 2.")
+    sp.add_argument("--kit-dir", default=None, help=argparse.SUPPRESS)
+    sp.set_defaults(func=cmd_kit_promote)
+
+    sp = sub.add_parser("chat-steps", help="Chat installer: print Phases 3-5 for this app with paths filled in.")
+    sp.add_argument("--repo", required=True, help="Android project root.")
+    sp.add_argument("--kit", default=None, help="Kit checkout (default: the cached kit).")
+    sp.set_defaults(func=cmd_chat_steps)
 
     sp = sub.add_parser("version", help="Print the active kit engine version.")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")

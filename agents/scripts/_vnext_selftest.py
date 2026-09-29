@@ -159,11 +159,23 @@ class GuidanceTests(unittest.TestCase):
         self.assertIs(init_args.func, setup_args.func)
 
 
+def _chat_installer_text() -> str:
+    """The chat installer as the agent follows it: the short first page, then the Phases 3-5 the kit prints."""
+    page = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+    steps = (KIT / "docs" / "install-or-update-steps.md").read_text(encoding="utf-8")
+    return page + "\n" + steps
+
+
+# Antigravity's read_url_content returns about 2000 characters, including a ~150 character header (O61).
+CHAT_PAGE_LIMIT = 1850
+
+
 class ChatInstallationDocsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.version = (KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
         self.readme = (KIT / "README.md").read_text(encoding="utf-8")
-        self.prompt = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.page = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        self.prompt = _chat_installer_text()
 
     def test_chat_installation_is_primary_and_terminal_is_alternative(self) -> None:
         chat_heading = "### Chat installation (recommended)"
@@ -178,10 +190,13 @@ class ChatInstallationDocsTests(unittest.TestCase):
 
     def test_chat_prompt_is_pinned_and_self_contained(self) -> None:
         tag = f"v{self.version}"
-        self.assertIn(f"--branch {tag} --single-branch", self.prompt)
-        self.assertIn("describe --tags --exact-match", self.prompt)
+        self.assertIn(f"--branch {tag} --single-branch", self.page)
+        self.assertIn("describe --tags --exact-match", self.page)
         self.assertIn("recommended", self.prompt)
-        self.assertLessEqual(len(self.prompt.encode("utf-8")), 4096)
+        self.assertLessEqual(len(self.page), CHAT_PAGE_LIMIT, "the first page must survive the host's fetch limit")
+        self.assertTrue(self.page.rstrip().endswith("END OF PAGE (Phases 1-2)."))
+        self.assertIn("harness_cli.py kit-promote --staging <staging-dir>", self.page)
+        self.assertIn("harness_cli.py chat-steps --repo <app-root>", self.page)
         self.assertNotIn("android-agent-harness/main/", self.prompt)
         self.assertNotIn("releases/latest", self.prompt)
 
@@ -208,7 +223,6 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn(".claude/agents/", phase4)
         self.assertIn(".agents/agents/", phase4)
         self.assertIn("selected host", phase5)
-        self.assertLessEqual(len(self.prompt.encode("utf-8")), 4096)
 
     def test_single_shot_proceed_and_followup_execution_rules(self) -> None:
         harness_rules = (KIT / "agents" / "rules" / "harness-rules.md").read_text(encoding="utf-8")
@@ -288,7 +302,7 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn("run 'python harness_cli.py uninstall --apply' then 'python harness_cli.py init --answers-json <answers.json>'", lifecycle_script)
 
     def test_install_or_update_prompt_pins_and_unpinned_header_detection(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         current_version = (KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip()
         self.assertIn(f"> **Kit version**: `v{current_version}`", prompt_text)
         self.assertNotIn("&& python", prompt_text)
@@ -474,7 +488,7 @@ class ChatInstallationLifecycleTests(RepoCase):
             self.assertIn("outside harness boundary were modified", str(ctx.exception))
 
     def test_chat_installation_prompt_contract_and_schema_alignment(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertIn("setup wizard payload is the sole interview authority", prompt_text)
         self.assertIn("Ask **only** the questions returned", prompt_text)
         self.assertNotIn("Canonical Questions Reference", prompt_text)
@@ -482,12 +496,13 @@ class ChatInstallationLifecycleTests(RepoCase):
         self.assertIn("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL", prompt_text)
 
     def test_chat_installation_has_separate_bootstrap_and_lifecycle_approvals(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         bootstrap_gate = prompt_text.index("STOP AND WAIT FOR EXPLICIT KIT BOOTSTRAP APPROVAL")
         clone = prompt_text.index("git clone --depth 1")
         lifecycle_gate = prompt_text.index("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL")
         answers_write = prompt_text.index("create `<temp-answers>.json`")
-        self.assertLess(clone, bootstrap_gate)
+        # The bootstrap is approved before anything is cloned into the cache.
+        self.assertLess(bootstrap_gate, clone)
         self.assertLess(bootstrap_gate, lifecycle_gate)
         self.assertLess(lifecycle_gate, answers_write)
         self.assertIn("not app installation/removal", prompt_text)
@@ -4079,7 +4094,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
     # 61. Chat Installer Contract Tests
     # -------------------------------------------------------------
     def test_PROMPT_KIT_001_prompt_states_kit_external(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertTrue(
             "MUST NOT be inside `<app-root>`" in prompt_text
             or "MUST NOT be inside <app-root>" in prompt_text
@@ -4087,31 +4102,31 @@ class CleanInstallV2SpecificationTests(RepoCase):
         self.assertIn("external to the app repository", prompt_text)
 
     def test_PROMPT_KIT_002_prompt_clone_has_explicit_dest(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertIn("git clone --depth 1 --branch v", prompt_text)
         self.assertIn("<staging-dir>", prompt_text)
         self.assertIn("Never run a clone command without an explicit destination", prompt_text)
 
     def test_PROMPT_KIT_003_prompt_never_recommends_nested_clone(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertTrue(
             "Never clone to `<app-root>/android-agent-harness" in prompt_text
             or "Never clone to <app-root>/android-agent-harness" in prompt_text
         )
 
     def test_PROMPT_KIT_004_prompt_identifies_setup_wizard_as_sole_authority(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertIn("The setup wizard payload is the sole interview authority", prompt_text)
 
     def test_PROMPT_VERSION_001_no_stale_staging_literal(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertNotIn("kit-stage-v1.0.59", prompt_text)
 
     # The prompt was clean-install only while Clean Install V2 (answers schema 2) had no in-place path from
     # schema-1 installs. Every install is schema 2 now and same-major update is transactional, so the prompt
     # detects the mode: it updates an existing install instead of telling the developer to uninstall it.
     def test_PROMPT_CLEAN_001_detects_install_or_update_and_never_deletes(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertIn("Pick the mode; never delete project files.", prompt_text)
         self.assertNotIn("uninstall it first", prompt_text)
         self.assertIn("UPDATE keeps the saved answers; skip to Phase 4.", prompt_text)
@@ -4119,13 +4134,13 @@ class CleanInstallV2SpecificationTests(RepoCase):
 
     def test_PROMPT_CLEAN_002_update_uses_the_staged_pinned_kit(self) -> None:
         # --no-refresh: the kit was staged at this prompt's tag in Phase 2; refreshing could move it to another release.
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertIn("update --repo <app-root> --kit <kit-dir> --no-refresh", prompt_text)
         update_index = prompt_text.index("UPDATE: `python <kit-dir>/harness_cli.py update")
         self.assertLess(prompt_text.index("STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL"), update_index)
 
     def test_PROMPT_CLEAN_003_no_replace_legacy_command(self) -> None:
-        prompt_text = (KIT / "docs" / "install-or-update-prompt.md").read_text(encoding="utf-8")
+        prompt_text = _chat_installer_text()
         self.assertNotIn("--replace-legacy", prompt_text)
 
     def test_QUICKSTART_KIT_001_quickstart_contains_no_kit_dot(self) -> None:

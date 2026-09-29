@@ -156,7 +156,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
     if name in {"harness_cli", "android-harness"}:
-        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"]):
+        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"]):
             return True
         if args[:1] == ["task-context"]:
             targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
@@ -201,7 +201,19 @@ def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
         or name == "setup_wizard" and args[:1] == ["write"]
         or name == "git" and args[:1] == ["clone"] and len(args) >= 3
         and _is_harness_cache_path(args[-1])
+        or name in {"harness_cli", "android-harness"} and args[:1] == ["kit-promote"]
+        and _staging_argument_in_cache(args)
     )
+
+
+def _staging_argument_in_cache(args: list[str]) -> bool:
+    """`kit-promote` only moves folders inside the harness cache (~/.android-harness)."""
+    for index, arg in enumerate(args):
+        if arg == "--staging" and index + 1 < len(args):
+            return _is_harness_cache_path(args[index + 1])
+        if arg.startswith("--staging="):
+            return _is_harness_cache_path(arg.split("=", 1)[1])
+    return False
 
 
 def _workflow_action(command: str, repo: Path | str = ".") -> str:
