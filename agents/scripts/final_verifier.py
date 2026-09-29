@@ -395,7 +395,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     task_changes = recorded_manifest.get("task_changes") if "task_changes" in recorded_manifest else None
     drift = check_material_drift(
         plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest, task_only=True),
-        actual_files=changed_file_paths(recorded_manifest),
+        actual_files=changed_file_paths(recorded_manifest), repo=repo,
     )
     if drift:
         return _blocked("PLAN_APPROVAL_REQUIRED", ["material plan drift: " + ", ".join(drift)], checks)

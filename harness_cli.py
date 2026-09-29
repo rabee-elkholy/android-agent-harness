@@ -41,6 +41,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -176,19 +177,44 @@ def _verify_kit_checksums(kit: Path) -> None:
             raise SystemExit(f"[ERROR] Kit release checksum mismatch for {rel}")
 
 
+def _remove_tree(path: Path) -> bool:
+    """Delete a folder, clearing read-only flags first (Git marks its object files read-only on Windows).
+
+    Returns True when the folder is gone.
+    """
+    def _retry_writable(func, target, _exc) -> None:
+        for item in (target, os.path.dirname(target)):
+            try:
+                os.chmod(item, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+            except OSError:
+                pass
+        try:
+            func(target)
+        except OSError:
+            pass
+
+    if not os.path.lexists(path):
+        return True
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_retry_writable)
+    else:
+        shutil.rmtree(path, onerror=_retry_writable)
+    return not os.path.lexists(path)
+
+
 def _recover_stale_kit(dest: Path) -> None:
     """Recover from interrupted promotions or remove stale backup kits."""
     previous = dest.with_name(f"{dest.name}.previous")
     if dest.is_dir() and _has_engine(dest):
         if previous.exists():
-            shutil.rmtree(previous, ignore_errors=True)
+            _remove_tree(previous)
     elif previous.is_dir() and not dest.exists():
         try:
             os.replace(previous, dest)
         except OSError:
             pass
     elif previous.is_dir() and dest.is_dir() and not _has_engine(dest):
-        shutil.rmtree(dest, ignore_errors=True)
+        _remove_tree(dest)
         try:
             os.replace(previous, dest)
         except OSError:
@@ -260,7 +286,7 @@ def _provision_pinned(url: str, dest: Path, version: str) -> None:
         has_prev = False
         if dest.exists():
             if previous.exists():
-                shutil.rmtree(previous, ignore_errors=True)
+                _remove_tree(previous)
             try:
                 os.replace(dest, previous)
                 has_prev = True
@@ -273,9 +299,9 @@ def _provision_pinned(url: str, dest: Path, version: str) -> None:
             if not _has_engine(dest) or _read_version_file(dest) != version:
                 raise RuntimeError("Engine validation failed after kit promotion")
             if has_prev and previous.exists():
-                shutil.rmtree(previous, ignore_errors=True)
+                _remove_tree(previous)
         except Exception as exc:
-            shutil.rmtree(dest, ignore_errors=True)
+            _remove_tree(dest)
             if has_prev and previous.exists():
                 try:
                     os.replace(previous, dest)
@@ -284,7 +310,7 @@ def _provision_pinned(url: str, dest: Path, version: str) -> None:
             raise SystemExit(f"[ERROR] Failed promoting staged kit to {dest}: {exc}")
     finally:
         if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
+            _remove_tree(staging)
 
 
 def _script_root(kit: Path) -> Path:
@@ -379,7 +405,7 @@ def ensure_kit(explicit: str | None) -> Path:
     print(f"[*] Provisioning Android Agent Harness at pinned tag v{requested} into {KIT_DIR} ...")
     _provision_pinned(KIT_REPO_URL, KIT_DIR, requested)
     if not _has_engine(KIT_DIR):
-        shutil.rmtree(KIT_DIR, ignore_errors=True)
+        _remove_tree(KIT_DIR)
         raise SystemExit(
             f"[ERROR] Kit checkout at v{requested} has no harness engine. {_manual_remediation(requested)}"
         )
@@ -1304,21 +1330,33 @@ def cmd_kit_promote(args: argparse.Namespace) -> int:
         return 1
     _verify_kit_checksums(staging)
     previous = kit_dir.with_name(kit_dir.name + ".previous")
+    if kit_dir.exists() and not _remove_tree(previous):
+        print(
+            f"[FAIL] could not delete the old backup {previous}; nothing was changed. "
+            "Close any program using it and run kit-promote again.",
+            file=sys.stderr,
+        )
+        return 1
     moved_old = False
     try:
         if kit_dir.exists():
-            if previous.exists():
-                shutil.rmtree(previous, ignore_errors=True)
-            kit_dir.rename(previous)
+            os.replace(kit_dir, previous)
             moved_old = True
-        staging.rename(kit_dir)
+        os.replace(staging, kit_dir)
     except OSError as exc:
-        if moved_old and not kit_dir.exists():
-            try:
-                previous.rename(kit_dir)
-            except OSError:
-                pass
-        print(f"[FAIL] could not promote the staged kit: {exc}", file=sys.stderr)
+        if not moved_old:
+            print(f"[FAIL] could not promote the staged kit: {exc}. Nothing was changed.", file=sys.stderr)
+            return 1
+        try:
+            os.replace(previous, kit_dir)
+        except OSError as restore_exc:
+            print(
+                f"[FAIL] could not promote the staged kit: {exc}. The old kit is now at {previous} and could not "
+                f"be moved back ({restore_exc}); rename {previous} to {kit_dir} before using the harness.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"[FAIL] could not promote the staged kit: {exc}. The old kit is back at {kit_dir}.", file=sys.stderr)
         return 1
     kept = f"; previous kit kept at {previous}" if moved_old else ""
     print(f"[OK] Kit v{version} ({tag}) is now at {kit_dir}{kept}.")

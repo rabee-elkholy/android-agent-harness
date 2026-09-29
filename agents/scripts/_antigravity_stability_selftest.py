@@ -20,6 +20,10 @@ sys.path.insert(0, str(SCRIPTS))
 def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
     """Hook stdout carries only decision/reason; the reason code is in the audit log."""
     state = env.get("HARNESS_HOOK_STATE")
+    if not state and Path(engine).resolve().parent == Path(__file__).resolve().parent:
+        # The kit's own agents/state log is shared by every parallel selftest worker, so its
+        # last line can belong to another process (flaky reason codes on CI).
+        raise AssertionError("hook call on the kit engine needs HARNESS_HOOK_STATE for an isolated audit log")
     audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
     lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
     if not lines:

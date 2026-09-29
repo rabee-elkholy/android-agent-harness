@@ -1723,7 +1723,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     else:
         policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
     actual_task_paths = changed_file_paths(manifest)
-    drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths)
+    drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths, repo=repo)
     # The final verifier refuses a mandatory skill the approved plan did not name; a companion
     # surface such as COMPOSE_UI is not material drift but can add one. Stop here, before any gate
     # or review runs, instead of at complete (N12).
@@ -2545,7 +2545,8 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
     if run_gradle_fn is None:
         return False, "phase policy requires unit tests but no gradle wrapper or passing test evidence was found"
 
-    from run_tests_gate import evaluate_unit_test_execution, report_signatures
+    from run_tests_gate import evaluate_unit_test_execution, load_task_start_failures, report_signatures
+    task_start = load_task_start_failures(repo)
     aggregated_evidence: dict[str, Any] = {"status": "PASS", "modules": {}}
     total_ignored = 0
     total_failed = 0
@@ -2585,6 +2586,7 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
             code=res,
             reports_before=reports_before,
             outcome=outcome,
+            task_start=task_start,
         )
         if not ok:
             atomic_write_json(test_file, {
@@ -3003,6 +3005,25 @@ def cmd_task_reconcile_handoff(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     from task_git_lineage import reconcile_handoff
     return reconcile_handoff(repo, args.task_id)
+
+
+def _regressions_outside_plan(plan: dict, manifest: dict, regressions: Any) -> list[str]:
+    """Failing tests whose class is neither a planned file's test nor a test this task changed."""
+    if not isinstance(regressions, list) or not regressions:
+        return []
+    from plan_authority import changed_file_paths, is_test_path, planned_test_classes
+
+    owned = planned_test_classes(plan.get("expected_files") or [])
+    try:
+        owned |= {Path(path).stem for path in changed_file_paths(manifest) if is_test_path(path)}
+    except Exception:
+        pass
+    outside = []
+    for name in regressions:
+        simple = str(name).partition("#")[0].rpartition(".")[2].partition("$")[0]
+        if simple and simple not in owned and simple not in outside:
+            outside.append(simple)
+    return outside
 
 
 def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host: str | None = None) -> dict[str, Any]:
@@ -3579,12 +3600,23 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             if rec.get("status") != "FAIL" or rec.get("change_set_sha256") != change_set:
                 return None
             detail = str((rec.get("evidence") or {}).get("detail") or "see gate output")
+            reason = f"The {name} gate failed on the frozen change set: {detail}. Resume implementation, fix it within the approved scope, then prepare verification again."
+            outside = _regressions_outside_plan(plan, manifest, (rec.get("evidence") or {}).get("new_regressions"))
+            if outside:
+                # O64: "fix it within the approved scope" sent the agent into another feature's tests.
+                reason += (
+                    f" {len(outside)} failing test(s) belong to files outside this plan ({', '.join(outside[:5])}). "
+                    "Never edit those tests under this plan. If this change broke them, fix the production code in "
+                    "the planned files. If they were already failing before the task, do not resume: ask the developer "
+                    "with ask_question whether to revise the plan to include them, record them as pre-existing "
+                    "(their own baseline capture on a clean tree), or cancel the task."
+                )
             return {
                 "code": "RESUME_IMPLEMENTATION",
                 "kind": "HARNESS_COMMAND",
                 "command": f"python .agents/harness.py task resume --task-id {task_id}",
                 "blocking": True,
-                "reason": f"The {name} gate failed on the frozen change set: {detail}. Resume implementation, fix it within the approved scope, then prepare verification again.",
+                "reason": reason,
                 "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "failed_gate": name},
                 "expected": {"success_statuses": ["IMPLEMENTING"]},
             }
@@ -4757,13 +4789,42 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
     return "\n".join(lines)
 
 
+def pre_existing_changes_line(repo: Path, plan: dict) -> str:
+    """Name the developer's uncommitted files that predate the task (O66).
+
+    Task deltas already exclude them, but a planned file among them carries the developer's
+    own edits into the task's commit, and the developer should know that before approving.
+    """
+    try:
+        baseline = load_task_baseline(repo, str(plan.get("task_id") or "")) or {}
+    except Exception:
+        return ""
+    paths = sorted({str(item.get("path") or "") for item in baseline.get("changes") or [] if item.get("path")})
+    paths = [path for path in paths if not path.startswith((".agents/", ".harness-"))]
+    if not paths:
+        return ""
+    planned = {str(item).replace("\\", "/").strip("/") for item in plan.get("expected_files") or []}
+    shared = [path for path in paths if path in planned]
+    line = f"PRE_EXISTING_CHANGES={len(paths)} file(s) already had uncommitted changes before this task: {', '.join(paths[:10])}"
+    if len(paths) > 10:
+        line += f" (+{len(paths) - 10} more)"
+    line += ". They are not part of the task and are never reverted or committed by it."
+    if shared:
+        line += (
+            f" Planned files among them: {', '.join(shared)}; the developer's own edits there will be in the same "
+            "file, so the task's commit includes them unless the developer commits or stashes them first. Say this "
+            "in the approval question."
+        )
+    return line
+
+
 APPROVAL_QUESTION_GUIDE = (
     "APPROVAL_QUESTION: ask with ask_question, options Approve / Request changes / Cancel task. "
     "Question text, in the developer's language: (0) on Antigravity, the APPROVAL_CALLOUTS lines first, each as its own "
-    "highlighted block with the same emoji and bold command; (1) a prominent, clickable markdown link to plan.md OUTSIDE "
-    "any code block (e.g. '[Full plan (plan.md)](file://...)') so the developer can click it directly, and on "
-    "Antigravity also mirror plan.md into the conversation artifact directory as a UserFacing artifact; (2) what will "
-    "change and how, the risks and the phone checks, only as the summary states them; (3) the PLAN_SUMMARY block verbatim. "
+    "highlighted block with the same emoji and bold command; (1) the PLAN_DOCUMENT_URI as a clickable markdown link, "
+    "'[Full plan (plan.md)](<PLAN_DOCUMENT_URI>)'; (2) what will change and how, the risks and the phone checks, only as "
+    "the summary states them; (3) the PLAN_SUMMARY lines verbatim as plain text, never inside a code block (a link in a "
+    "code block cannot be clicked). "
     "Never paste plan.json or command output into the question."
 )
 
@@ -4822,6 +4883,17 @@ def main(argv: list[str] | None = None) -> int:
                 print("APPROVAL_CALLOUTS:")
                 for callout in callouts:
                     print(callout)
+            pre_existing = pre_existing_changes_line(Path(args.repo).resolve(), result)
+            if pre_existing:
+                print(pre_existing)
+            zoho_item = (result.get("zoho_link") or {}).get("item_id")
+            if zoho_item and "zoho_sprints" not in (result.get("external_writes") or []):
+                # O67: the developer asked to update the linked item at the end; the plan could not.
+                print(
+                    f"ZOHO_WRITE_NOT_PLANNED=the plan links Zoho item {zoho_item} but cannot update it. If the developer "
+                    "wants its status or a comment updated, run `workflow.py revise` with --external-write zoho_sprints "
+                    "before asking for approval."
+                )
             gaps = plan_gaps(result)
             if gaps:
                 print(

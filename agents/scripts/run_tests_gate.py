@@ -9,6 +9,9 @@ classifies every failure:
   NEW_REGRESSION    failed now and is absent from the baseline -> BLOCK (exit 1)
   BASELINE_IGNORED  failed now and is recorded in the baseline -> tolerated
                     (pre-existing debt, never reported as a regression)
+  TASK_START_IGNORED failed the same way in this task's pre-fix `--capture-red`
+                    run and is not the task's reproduction -> tolerated and
+                    named (it predates the task, O64)
 
 Writes the `unit_tests` gate artifact consumed by final_verdict.py. When the
 Gradle run fails environmentally, the exit-30 protocol applies unchanged.
@@ -139,6 +142,63 @@ def classify_failures(failed: list[dict], baseline: dict | None) -> tuple[list[d
     return new_regressions, ignored, len(known)
 
 
+TASK_START_FAILURES = "task-start-failures.json"
+
+
+def _task_directory(repo: Path, task_id: str) -> Path:
+    state = repo / ".agents/state" if (repo / ".agents").is_dir() else repo / "agents/state"
+    return state / "tasks" / task_id
+
+
+def load_task_start_failures(repo: Path, task_id: str | None = None) -> dict:
+    """Failures recorded before the task's fix, minus its RED reproduction.
+
+    Returns {test_name: fingerprint}. A reproduction test must turn green, so it is never tolerated.
+    """
+    try:
+        from _vnext_common import read_json
+
+        if not task_id:
+            from mutation_guard import active_plan
+
+            task_id = str(active_plan(repo).get("task_id") or "")
+        if not task_id:
+            return {}
+        directory = _task_directory(repo, task_id)
+        path = directory / TASK_START_FAILURES
+        if not path.is_file():
+            return {}
+        data = read_json(path)
+        if str(data.get("task_id") or "") != task_id:
+            return {}
+        recorded = {
+            str(item.get("test_name") or ""): str(item.get("fingerprint") or "")
+            for item in data.get("failures") or []
+            if item.get("test_name") and item.get("fingerprint")
+        }
+        red_path = directory / "red-evidence.json"
+        if red_path.is_file():
+            for item in read_json(red_path).get("failed_tests") or []:
+                recorded.pop(str(item.get("test_id") or ""), None)
+        return recorded
+    except Exception:
+        return {}
+
+
+def split_task_start_failures(failed: list[dict], task_start: dict | None) -> tuple[list[dict], list[dict]]:
+    """(still failing, predating the task): a match needs the same test and the same failure."""
+    if not task_start:
+        return list(failed), []
+    remaining: list[dict] = []
+    predating: list[dict] = []
+    for item in failed:
+        if task_start.get(str(item.get("test_name") or "")) == str(item.get("fingerprint") or ""):
+            predating.append(item)
+        else:
+            remaining.append(item)
+    return remaining, predating
+
+
 def resolve_target_task(repo: Path, requested_task: str | None) -> str:
     if requested_task:
         return requested_task
@@ -235,17 +295,26 @@ def _test_class_simple_name(test_name: str) -> str:
     return test_name.partition("#")[0].rpartition(".")[2].partition("$")[0]
 
 
-def select_red_reproduction(failed: list[dict], baseline: dict | None, task_test_paths: list[str]) -> list[dict]:
+def select_red_reproduction(
+    failed: list[dict],
+    baseline: dict | None,
+    task_test_paths: list[str],
+    planned_classes: set[str] | None = None,
+) -> list[dict]:
     """Failing tests that reproduce this task's defect.
 
     Known baseline failures are never a reproduction. When the task added or changed
     test files, only failures from those files count; otherwise an existing failing
-    test may itself be the reproduction.
+    test of a planned file may itself be the reproduction. A failure in another
+    feature's test is not this defect (O64: a real app's unrelated failures were
+    recorded as the reproduction and later blocked the gate as regressions).
     """
     candidates, _ignored, _known = classify_failures(failed, baseline)
     task_test_classes = {Path(p).stem for p in task_test_paths}
     if not task_test_classes:
-        return candidates
+        if planned_classes is None:
+            return candidates
+        task_test_classes = set(planned_classes)
     return [item for item in candidates if _test_class_simple_name(str(item.get("test_name") or "")) in task_test_classes]
 
 
@@ -256,6 +325,7 @@ def evaluate_unit_test_execution(
     reports_before: dict[str, tuple[int, int]] | None = None,
     outcome: dict | None = None,
     baseline: dict | None = None,
+    task_start: dict | None = None,
 ) -> tuple[bool, str, dict]:
     """Evaluate unit-test execution results with baseline-aware regression semantics.
 
@@ -302,6 +372,8 @@ def evaluate_unit_test_execution(
         }
 
     new_regressions, ignored, baseline_size = classify_failures(failed, baseline)
+    new_regressions, predating = split_task_start_failures(new_regressions, task_start)
+    predating_names = [item["test_name"] for item in predating]
     if new_regressions:
         names = [item["test_name"] for item in new_regressions]
         detail = f"{len(new_regressions)} NEW_REGRESSION failure(s): {', '.join(names[:5])}"
@@ -315,33 +387,52 @@ def evaluate_unit_test_execution(
             "exit_code": 1,
             "new_regressions": names,
             "baseline_ignored": len(ignored),
+            "task_start_ignored": predating_names,
             "total_failed": len(failed),
             **summary,
         }
 
-    return True, f"{len(ignored)} pre-existing failure(s) ignored via baseline ({baseline_size} known)", {
+    detail = f"{len(ignored)} pre-existing failure(s) ignored via baseline ({baseline_size} known)"
+    if predating_names:
+        detail += f"; {len(predating_names)} failure(s) predate this task (same failure before the fix)"
+    return True, detail, {
         "status": "PASS",
         "exit_code": 0,
         "baseline_ignored": len(ignored),
+        "task_start_ignored": predating_names,
         "total_failed": len(failed),
         **summary,
     }
 
 
-def verdict_lines(ok: bool, detail: str, code: int, new_regressions: list) -> list[tuple[str, bool]]:
+def _predating_lines(task_start_ignored: list | None) -> list[tuple[str, bool]]:
+    if not task_start_ignored:
+        return []
+    lines = [(
+        f"[*] {len(task_start_ignored)} test(s) already failed the same way before this task's fix (recorded by "
+        "--capture-red); they are not this task's and are not edited under it. Tell the developer:",
+        False,
+    )]
+    lines += [(f"  - {item}", False) for item in task_start_ignored[:30]]
+    return lines
+
+
+def verdict_lines(
+    ok: bool, detail: str, code: int, new_regressions: list, task_start_ignored: list | None = None
+) -> list[tuple[str, bool]]:
     """The gate's closing lines as (text, is_error)."""
     if new_regressions:
         lines = [(f"[FAIL] NEW_REGRESSION: {len(new_regressions)} test(s) failed that are absent from the baseline:", True)]
         lines += [(f"  - {item}", True) for item in new_regressions[:30]]
         if len(new_regressions) > 30:
             lines.append((f"  ... and {len(new_regressions) - 30} more", True))
-        return lines
+        return lines + _predating_lines(task_start_ignored)
     if not ok:
         return [(f"[FAIL] Unit-test gate blocked: {detail}", True)]
-    lines = []
+    lines = _predating_lines(task_start_ignored)
     if code != 0:
         # Short certification O48: the Gradle result line above says FAIL; say why the gate still passes.
-        lines.append(("[*] Gradle's FAIL above comes only from tests that already failed before this task (baseline).", False))
+        lines.append(("[*] Gradle's FAIL above comes only from tests that already failed before this task.", False))
     lines.append((f"[SUCCESS] Unit-test gate passed: {detail}", False))
     return lines
 
@@ -454,12 +545,38 @@ def main(argv=None) -> int:
                 live_print("[FAIL] Cannot capture RED evidence: application source modifications already detected before capture.", err=True)
                 return 1
 
+            # Only a run on the untouched tree proves a failure predates the task: an edited shared
+            # test helper could itself break other tests, so any task change records nothing.
+            recorded_start = not pre_red_changes
+            start_failures, _known_start, _size = classify_failures(failed, test_baseline)
+            if recorded_start:
+                atomic_write_json(task_d / TASK_START_FAILURES, {
+                    "schema_version": 1,
+                    "task_id": task_id,
+                    "captured_at": utc_now(),
+                    "pre_fix_delivery_snapshot_sha256": live_manifest["delivery_snapshot_sha256"],
+                    "gradle_task": task_label,
+                    "failures": [
+                        {"test_name": str(item.get("test_name") or ""), "fingerprint": str(item.get("fingerprint") or "")}
+                        for item in start_failures
+                    ],
+                })
+
+            from plan_authority import planned_test_classes
+
             task_test_paths = [_change_p(c) for c in pre_red_changes if is_test_repro_path(_change_p(c))]
-            failed = select_red_reproduction(failed, test_baseline, task_test_paths)
+            all_failed = failed
+            failed = select_red_reproduction(
+                failed, test_baseline, task_test_paths, planned_test_classes(plan.get("expected_files") or [])
+            )
             if not failed:
+                outside = sorted({_test_class_simple_name(str(item.get("test_name") or "")) for item in all_failed})
                 live_print(
-                    "[FAIL] Cannot capture RED evidence: no failing test reproduces this task's defect "
-                    "(failures are known baseline debt or come from tests outside the task's test changes).",
+                    "[FAIL] Cannot capture RED evidence: no failing test reproduces this task's defect. The failing "
+                    f"tests ({', '.join(outside[:8]) or 'none'}) are known baseline debt or belong to files outside "
+                    "this plan" + ("; they are recorded as failing before the task" if recorded_start else "")
+                    + ". Write a test that fails because of the defect in the plan's test file, then run "
+                    "--capture-red again.",
                     err=True,
                 )
                 return 1
@@ -539,8 +656,11 @@ def main(argv=None) -> int:
         reports_before=reports_before,
         outcome=outcome,
         baseline=baseline,
+        task_start=load_task_start_failures(REPO),
     )
-    for text, is_error in verdict_lines(ok, detail, code, data.get("new_regressions", [])):
+    for text, is_error in verdict_lines(
+        ok, detail, code, data.get("new_regressions", []), data.get("task_start_ignored")
+    ):
         live_print(text, err=is_error)
 
     write_gate_result("unit_tests", {

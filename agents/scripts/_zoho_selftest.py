@@ -721,13 +721,20 @@ class ZohoLifecycleTests(unittest.TestCase):
             "zoho_link": {"item_id": "1018", "sprint_id": "sprint-1", "item_type": "Task"},
             "external_writes": ["zoho_sprints"],
         })
-        with mock.patch.object(server, "handle_call_tool", side_effect=OSError("DNS failure")):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with mock.patch.object(server, "handle_call_tool", side_effect=OSError("DNS failure")), contextlib.redirect_stdout(out):
             rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
         tdir = workflow.task_dir(self.repo, tid)
         sync_res = read_json(tdir / "zoho-start-sync.json")
         self.assertEqual("ENV", sync_res.get("status"))
         self.assertNotEqual("PASS", sync_res.get("status"))
+        # O67: the agent carried on silently and then called the Zoho MCP tool directly.
+        printed = json.loads(out.getvalue())
+        self.assertIn("Tell the developer now that Zoho item 1018 was not moved to In progress: DNS failure", printed["next"])
+        self.assertIn("Do not call Zoho MCP tools directly", printed["next"])
 
     def test_ZOHO_LIFE_019_delivered_local_state_remains_delivered_during_tracker_outage(self):
         """ZOHO-LIFE-019: Delivered local state remains DELIVERED during tracker outage."""

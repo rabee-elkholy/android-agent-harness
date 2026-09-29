@@ -247,7 +247,17 @@ def cmd_start(args: argparse.Namespace) -> int:
             "updated_at": utc_now(),
         })
         sys.stderr.write(f"WARNING: Zoho start sync recorded ENV_BLOCKED: {exc}\n")
-        sys.stdout.write(json.dumps({"status": "ENV", "operation_id": op_id, "detail": str(exc)}, indent=2) + "\n")
+        sys.stdout.write(json.dumps({
+            "status": "ENV",
+            "operation_id": op_id,
+            "detail": str(exc),
+            # O67: the agent continued silently, then called the Zoho MCP tool directly (denied).
+            "next": (
+                f"Tell the developer now that Zoho item {item_id} was not moved to In progress: {exc}. "
+                "Do not call Zoho MCP tools directly. Continue the task; after the developer fixes this, run "
+                f"`python .agents/harness.py zoho start-sync --task-id {task_id}` again."
+            ),
+        }, indent=2) + "\n")
         return 0
 
 

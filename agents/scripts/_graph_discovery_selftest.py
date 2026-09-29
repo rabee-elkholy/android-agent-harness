@@ -62,6 +62,10 @@ def _run_git(repo: Path, *args: str) -> None:
 def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
     """Hook stdout carries only decision/reason; the reason code is in the audit log."""
     state = env.get("HARNESS_HOOK_STATE")
+    if not state and Path(engine).resolve().parent == Path(__file__).resolve().parent:
+        # The kit's own agents/state log is shared by every parallel selftest worker, so its
+        # last line can belong to another process (flaky reason codes on CI).
+        raise AssertionError("hook call on the kit engine needs HARNESS_HOOK_STATE for an isolated audit log")
     audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
     lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
     if not lines:
@@ -113,11 +117,18 @@ class GraphDiscoverySelftest(unittest.TestCase):
         _run_git(self.repo, "add", ".")
         _run_git(self.repo, "commit", "-qm", "initial commit")
 
-        self.env = {**os.environ, "HARNESS_REPO": str(self.repo)}
+        # The hook's audit log lives outside the fixture repo and apart from other parallel workers.
+        self.hook_state_dir = tempfile.TemporaryDirectory(prefix="graph_disc_hook_")
+        self.env = {
+            **os.environ,
+            "HARNESS_REPO": str(self.repo),
+            "HARNESS_HOOK_STATE": str(Path(self.hook_state_dir.name) / "hook-state.json"),
+        }
         self.safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+        self.hook_state_dir.cleanup()
 
     def _invoke_safety(self, tool_name: str, tool_args: dict) -> dict:
         payload = json.dumps({"toolName": tool_name, "toolArgs": tool_args})

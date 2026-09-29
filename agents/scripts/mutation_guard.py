@@ -364,6 +364,7 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             surfaces,
             modules,
             actual_files=[rel_posix],
+            repo=root,
         )
         if drift:
             hint = _all_missing_surfaces_hint(root, plan, rel_posix, drift, classify, check_material_drift)

@@ -6,14 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.1.9] - 2026-09-29
 
-The chat installer fits the host's fetch limit, and the kit replacement is one command. Found while updating a production app from 1.1.7 to 1.1.8 (the update itself succeeded: 0 app files changed, uncommitted developer work untouched, project context byte-identical).
+The chat installer fits the host's fetch limit, and the kit replacement is one command. Found while updating a production app from 1.1.7 to 1.1.8 (the update itself succeeded: 0 app files changed, uncommitted developer work untouched, project context byte-identical), and while fixing a real bug on that app afterwards.
 
 ### Chat install and update
 - O61: Antigravity's `read_url_content` returns about 2000 characters, and the prompt was 4051, so the agent saw it cut off in Phase 2 and spent many steps re-fetching it (PowerShell, a web search, the GitHub API). `install-or-update-prompt.md` is now a short first page (Phases 1-2, under 1850 characters, ending with `END OF PAGE`); after the kit is in place, `python <kit-dir>/harness_cli.py chat-steps --repo <app-root>` prints Phases 3-5 from the kit with this installation's paths filled in and the mode (INSTALL or UPDATE) already decided. The bootstrap approval now comes before the clone in the text as well.
 - O62: "Staging replaces `<kit-dir>`" had no command, and the agent read `harness_cli.py` repeatedly to find one. `python <staging-dir>/harness_cli.py kit-promote --staging <staging-dir>` checks that the stage is exactly at its release tag and passes the kit checksums, keeps the old kit as `kit.previous`, and moves the stage into place. The hook allows it only for folders inside `~/.android-harness`, and allows `chat-steps` as read-only.
+- `kit-promote` and the terminal kit provisioning delete old kits with read-only files cleared first: Git leaves its object files read-only on Windows, so the second update could not remove `kit.previous` and failed. A failed promotion now says whether nothing changed, the old kit was put back, or exactly where the old kit is and how to restore it.
 
 ### Plan approval UX
-- O63: The link to `plan.md` was rendered inside the fenced `PLAN_SUMMARY` code block, making it plain text and unclickable in chat interfaces. `APPROVAL_QUESTION_GUIDE` and the adapters now instruct the agent to place a prominent, clickable markdown link to `plan.md` outside any code block, and on Antigravity to mirror `plan.md` into the conversation artifact directory as a user-facing artifact. `workflow.py draft` and `revise` now also print `PLAN_DOCUMENT_URI` explicitly.
+- O63: The agent put the `PLAN_SUMMARY` block in a code block, so its `plan.md` link could not be clicked. `workflow.py draft` and `revise` print `PLAN_DOCUMENT_URI`; the approval guide and adapters ask for that link as a clickable markdown link first and for the summary lines as plain text, never in a code block.
+- O66: A draft now prints `PRE_EXISTING_CHANGES=` naming the developer's uncommitted files that predate the task, and which planned files among them will carry the developer's own edits into the task's commit.
+- O67: A draft that links a Zoho item without `--external-write zoho_sprints` prints `ZOHO_WRITE_NOT_PLANNED=`, so the plan is revised before approval instead of after it. A Zoho start sync that cannot reach the tracker (for example `team_id`/`project_id` missing, now named with the config path) tells the agent to tell the developer and not to call the Zoho MCP tools directly.
+
+### Tests that failed before the task
+- O64: On a real app, `--capture-red` recorded another feature's failing tests (FoodPlanViewModelTest, BaseViewModelPaymentStatusTest) as the reproduction of an unrelated bug, and after the fix the unit-test gate blocked on the same failures as `NEW_REGRESSION` and told the agent to "fix it within the approved scope"; the agent spent the session editing those tests. Now `--capture-red` records every failure of its pre-fix run as `task-start-failures.json`; with no task test change, only failures of the planned files' tests (`Foo` -> `FooTest`, `FooTests`, `FooSpec`) count as the reproduction. The gate tolerates a failure that fails exactly the same way as before the fix and names it for the developer (`task_start_ignored`); the reproduction itself and any changed failure still block. When failing tests belong to files outside the plan, the router says never to edit them, to fix the planned production code if the change broke them, and otherwise to ask the developer.
+- O65: With the default test strategy every test file in the module was writable under any plan. An existing test file outside `expected_files` is now scope drift unless it is the test of a planned file; new test files stay allowed. The hook, `prepare-verification` and the final verifier use the same check.
+
+### CI
+- The macOS job failed on `VERIFY_SCOPE_007` because those tests read the reason code from the kit's shared audit log, which parallel workers also write. The tests now use their own audit log, and the helper refuses a hook call on the kit engine without one.
 
 ## [1.1.8] - 2026-09-29
 

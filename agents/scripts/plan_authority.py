@@ -465,12 +465,61 @@ def require_mutation(plan: dict) -> None:
         raise ValidationError("mutation blocked: approval was not consumed by this task")
 
 
+TEST_CLASS_SUFFIXES = ("Tests", "Test", "Spec")
+
+
+def is_test_path(path: str) -> bool:
+    lower = "/" + str(path or "").replace("\\", "/").strip("/").lower()
+    return "/test/" in lower or "/androidtest/" in lower or lower.endswith(("test.kt", "test.java", "tests.kt", "tests.java"))
+
+
+def planned_test_classes(expected_files: list[str] | set[str]) -> set[str]:
+    """Simple class names of the tests that belong to the plan's files.
+
+    An expected test file names its own class; an expected source file `Foo.kt` also owns
+    `FooTest`, `FooTests` and `FooSpec`.
+    """
+    classes: set[str] = set()
+    for item in expected_files or []:
+        stem = Path(str(item).replace("\\", "/")).stem
+        if not stem:
+            continue
+        classes.add(stem)
+        if not is_test_path(str(item)):
+            classes.update(stem + suffix for suffix in TEST_CLASS_SUFFIXES)
+    return classes
+
+
+def _tracked_paths(repo: Path, paths: list[str]) -> set[str]:
+    """Paths Git already tracks, i.e. files that existed before this task. Unknown -> all tracked."""
+    import subprocess
+
+    if not paths:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "-z", "--", *paths],
+            capture_output=True, check=False, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set(paths)
+    if proc.returncode != 0:
+        return set(paths)
+    return {item for item in proc.stdout.decode("utf-8", "replace").split(chr(0)) if item}
+
+
 def check_material_drift(
     plan: dict,
     actual_surfaces: list[str],
     actual_modules: list[str] | None = None,
     actual_files: list[str] | None = None,
+    repo: Path | str | None = None,
 ) -> list[str]:
+    """Material scope drift between the approved plan and the actual change.
+
+    With `repo`, an unlisted test file is allowed only when it is new or is the test of a
+    planned file: editing another feature's existing test needs a revised plan (O65).
+    """
     expected_surfaces = set(normalize_expected_surfaces(plan.get("expected_surfaces") or []))
     actual_surface_set = set(normalize_expected_surfaces(actual_surfaces))
     expected_modules = set(plan.get("expected_modules") or [])
@@ -500,14 +549,15 @@ def check_material_drift(
     if expected_files and actual_files is not None:
         test_strategy = str(plan.get("test_strategy") or "").lower()
         adds_tests = any(kw in test_strategy for kw in ("test", "add", "unit", "tdd", "new")) or bool(expected_surfaces & {"TEST_ONLY"})
-        for f in actual_files:
-            f_norm = f.replace("\\", "/").strip("/")
-            if f_norm in expected_files:
-                continue
-            f_lower = f_norm.lower()
-            is_test = "/test/" in f"/{f_lower}" or "/androidtest/" in f"/{f_lower}" or f_lower.endswith(("test.kt", "test.java", "tests.kt"))
-            if is_test and adds_tests:
-                continue
+        unlisted = [f.replace("\\", "/").strip("/") for f in actual_files]
+        unlisted = [f for f in unlisted if f not in expected_files]
+        unlisted_tests = [f for f in unlisted if is_test_path(f)]
+        existing_tests = _tracked_paths(Path(repo), unlisted_tests) if repo is not None and unlisted_tests else set()
+        planned_classes = planned_test_classes(expected_files)
+        for f_norm in unlisted:
+            if is_test_path(f_norm) and adds_tests:
+                if f_norm not in existing_tests or Path(f_norm).stem in planned_classes:
+                    continue
             # Surface compatibility does not expand an explicit approved file list.
             unplanned_files.add(f_norm)
 

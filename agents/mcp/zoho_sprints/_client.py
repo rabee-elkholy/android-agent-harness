@@ -70,7 +70,7 @@ class ZohoSprintsAPI:
         suffixes = self.config.get("title_strip_suffixes") or []
         self.title_strip_suffixes = [str(s) for s in suffixes if str(s).strip()]
         if not self.team_id or not self.project_id:
-            raise RuntimeError("Zoho Sprints config needs team_id and project_id.")
+            raise RuntimeError(f"Zoho Sprints config needs team_id and project_id ({self.config_path}).")
 
     def save_config(self) -> None:
         path = Path(self.config_path)

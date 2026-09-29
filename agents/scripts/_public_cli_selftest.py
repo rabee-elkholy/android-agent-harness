@@ -1312,6 +1312,70 @@ class PhaseDRepairSelftest(unittest.TestCase):
         self.assertEqual("9.9.9", (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip())
         self.assertEqual("9.9.8", (cache / "kit.previous" / "agents" / "VERSION").read_text(encoding="utf-8").strip())
         self.assertFalse(good.exists())
+        # The kit is a Git clone: on Windows Git leaves its object files read-only, so the next update has to
+        # delete a kit.previous full of read-only files before it can move the current kit aside.
+        locked = cache / "kit.previous" / ".git-objects" / "pack.idx"
+        locked.parent.mkdir(parents=True)
+        locked.write_text("x", encoding="utf-8")
+        os.chmod(locked, stat.S_IREAD)
+        newer = stage("kit-stage-9.9.10-d", "9.9.10", "v9.9.10")
+        self.assertEqual(0, promote(newer), "a read-only file in the old backup does not block the next update")
+        self.assertEqual("9.9.10", (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("9.9.9", (cache / "kit.previous" / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+
+    def test_kit_promote_failure_says_where_the_kit_is(self) -> None:
+        """A failed promotion never leaves the developer guessing: the old kit is put back, or the message names it."""
+        import importlib.util
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("harness_cli_promote_fail", str(KIT / "harness_cli.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cache = self.repo / "cache-fail"
+        kit = cache / "kit"
+        (kit / "agents").mkdir(parents=True)
+        (kit / "agents" / "VERSION").write_text("9.9.8\n", encoding="utf-8")
+        staged = cache / "kit-stage-9.9.9-a"
+        (staged / "agents").mkdir(parents=True)
+        (staged / "agents" / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+        for command in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "kit"], ["tag", "v9.9.9"]):
+            subprocess.run(["git", *command], cwd=staged, check=True)
+        real_replace = os.replace
+
+        def promote_with(failing_calls: set[int]) -> tuple[int, str]:
+            calls = {"n": 0}
+
+            def replace(src, dst):
+                calls["n"] += 1
+                if calls["n"] in failing_calls:
+                    raise OSError("simulated: file in use")
+                return real_replace(src, dst)
+
+            err = io.StringIO()
+            with mock.patch.object(mod, "_verify_kit_checksums"), mock.patch.object(mod.os, "replace", replace), redirect_stderr(err):
+                code = mod.cmd_kit_promote(argparse.Namespace(staging=str(staged), kit_dir=str(kit)))
+            return code, err.getvalue()
+
+        code, err = promote_with({1})
+        self.assertEqual(1, code)
+        self.assertIn("Nothing was changed", err)
+        self.assertEqual("9.9.8", (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+
+        code, err = promote_with({2})
+        self.assertEqual(1, code)
+        self.assertIn(f"The old kit is back at {kit}", err)
+        self.assertEqual("9.9.8", (kit / "agents" / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertTrue(staged.is_dir(), "the stage is kept so the promotion can be retried")
+
+        code, err = promote_with({2, 3})
+        previous = cache / "kit.previous"
+        self.assertEqual(1, code)
+        self.assertIn(f"The old kit is now at {previous}", err)
+        self.assertIn(f"rename {previous} to {kit}", err)
+        self.assertFalse(kit.exists())
+        self.assertEqual("9.9.8", (previous / "agents" / "VERSION").read_text(encoding="utf-8").strip())
 
     def test_chat_steps_prints_the_mode_and_real_paths_and_is_read_only(self) -> None:
         # O61: Antigravity reads about 2000 characters of a URL; Phases 3-5 come from the kit instead.

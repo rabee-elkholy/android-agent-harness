@@ -19,6 +19,10 @@ ENGINE = SCRIPTS / "pre_tool_safety.py"
 def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
     """Hook stdout carries only decision/reason; the reason code is in the audit log."""
     state = env.get("HARNESS_HOOK_STATE")
+    if not state and Path(engine).resolve().parent == Path(__file__).resolve().parent:
+        # The kit's own agents/state log is shared by every parallel selftest worker, so its
+        # last line can belong to another process (flaky reason codes on CI).
+        raise AssertionError("hook call on the kit engine needs HARNESS_HOOK_STATE for an isolated audit log")
     audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
     lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
     if not lines:
@@ -357,6 +361,31 @@ class HookTests(unittest.TestCase):
             [],
             check_material_drift(plan, ["LOCALIZATION", "RESOURCE_UI"], [":app"], actual_files=["app/src/main/res/values/strings.xml"]),
         )
+
+    def test_MUTATION_SCOPE_002d_existing_test_of_another_feature_needs_revised_plan(self):
+        # O65 (real app): with the default "Policy-selected relevant tests" strategy every test file in
+        # :app was writable, so after an unrelated test failed the agent edited FoodPlanViewModelTest.
+        other = self.repo / "app/src/test/kotlin/com/example/food/FoodPlanViewModelTest.kt"
+        own = self.repo / "app/src/test/kotlin/com/example/MainActivityTest.kt"
+        for path in (other, own):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("package com.example\nclass T {}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "tests"], cwd=self.repo, check=True)
+        self.activate(
+            expected_files=["app/src/main/kotlin/com/example/MainActivity.kt"],
+            expected_surfaces=["BUSINESS_LOGIC"],
+            expected_modules=[":app"],
+            test_strategy="Policy-selected relevant tests",
+        )
+        res = self.call("replace_file_content", {"TargetFile": str(other)})
+        self.assertEqual("deny", res["decision"])
+        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
+        self.assertIn("FoodPlanViewModelTest.kt", res["reason"])
+        mirror = self.call("replace_file_content", {"TargetFile": str(own)})
+        self.assertEqual("allow", mirror["decision"], "the test of a planned file stays writable")
+        new_test = self.call("write_to_file", {"TargetFile": "app/src/test/kotlin/com/example/LoginFlowTest.kt"})
+        self.assertEqual("allow", new_test["decision"], "a new test file stays writable")
 
     def test_MUTATION_SCOPE_002c_module_inference_uses_plan_modules(self):
         # A plan scoped to the root module must not have app/ targets rewritten to :app.

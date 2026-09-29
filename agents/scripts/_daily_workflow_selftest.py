@@ -96,6 +96,10 @@ CHANGED_ACTIVITY = "package com.example\n\nclass MainActivity { val x = 5 }\n"
 def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
     """Hook stdout carries only decision/reason; the reason code is in the audit log."""
     state = env.get("HARNESS_HOOK_STATE")
+    if not state and Path(engine).resolve().parent == Path(__file__).resolve().parent:
+        # The kit's own agents/state log is shared by every parallel selftest worker, so its
+        # last line can belong to another process (flaky reason codes on CI).
+        raise AssertionError("hook call on the kit engine needs HARNESS_HOOK_STATE for an isolated audit log")
     audit = Path(state).with_name("audit_log.jsonl") if state else Path(engine).resolve().parent.parent / "state" / "audit_log.jsonl"
     lines = audit.read_text(encoding="utf-8").splitlines() if audit.is_file() else []
     if not lines:
@@ -415,6 +419,59 @@ class DailyWorkflowSelftest(unittest.TestCase):
                    "--device-strategy", "1. Log in -> message shows")
         self.assertNotIn("PLAN_GAPS=", full)
         self.assertIn("Full plan: [plan.md](", full)
+        # O63: the agent wrapped the summary in a code block, so the plan.md link could not be clicked.
+        document = (task_dir(self.repo, "gaps-full") / "plan.md").resolve().as_uri()
+        self.assertIn(f"PLAN_DOCUMENT_URI={document}" + chr(10), full)
+        self.assertIn("PLAN_DOCUMENT_URI as a clickable markdown link", full)
+        self.assertIn("never inside a code block", full)
+        self.assertNotIn("artifact directory", full, "no unverifiable copy of plan.md outside the task")
+
+    def test_draft_names_the_developers_uncommitted_files(self) -> None:
+        # O66 (real app): three uncommitted developer files predated the task, one of them a planned file;
+        # nothing told the developer their own edits there would go into the task's commit.
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        planned = "app/src/main/kotlin/com/example/Repo.kt"
+        other = "app/src/main/kotlin/com/example/ListRequest.kt"
+        for path in (planned, other):
+            write_file(self.repo / path, "package com.example\nclass X\n")
+        run_git(self.repo, "add", planned, other)
+        run_git(self.repo, "commit", "-qm", "fixture files")
+        for path in (planned, other):
+            write_file(self.repo / path, "package com.example\nclass X { val wip = 1 }\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ret = workflow_main(["draft", "--repo", str(self.repo), "--task-id", "wip-files", "--outcome", "Fix inquiry",
+                                 "--kind", "FEATURE", "--expected-files", planned, "--force"])
+        self.assertEqual(0, ret)
+        text = out.getvalue()
+        self.assertIn("PRE_EXISTING_CHANGES=2 file(s) already had uncommitted changes before this task:", text)
+        self.assertIn(other, text)
+        self.assertIn(f"Planned files among them: {planned};", text)
+        self.assertIn("the task's commit includes them", text)
+        self.assertNotIn("ZOHO_WRITE_NOT_PLANNED", text)
+
+    def test_draft_names_a_linked_zoho_item_it_cannot_update(self) -> None:
+        # O67 (real app): the developer asked to update the Zoho bug at the end, the plan had no Zoho write,
+        # and the first start-sync after approval needed a second revise and approval.
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        def run(task_id: str, *extra: str) -> str:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ret = workflow_main(["draft", "--repo", str(self.repo), "--task-id", task_id, "--outcome", "Fix inquiry",
+                                     "--kind", "BUG", "--expected-files", "app/src/main/kotlin/com/example/Login.kt",
+                                     "--zoho-item-id", "818", "--zoho-item-type", "Bug", "--force", *extra])
+            self.assertEqual(0, ret)
+            return out.getvalue()
+
+        self.assertIn("ZOHO_WRITE_NOT_PLANNED=the plan links Zoho item 818 but cannot update it", run("zoho-read-only"))
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="zoho-read-only"))
+        self.assertNotIn("ZOHO_WRITE_NOT_PLANNED", run("zoho-write", "--external-write", "zoho_sprints"))
 
     def test_revise_prints_the_new_authority_disclosure_and_hash(self) -> None:
         import contextlib
@@ -6500,6 +6557,7 @@ class VerifyingScopeTests(unittest.TestCase):
             **os.environ,
             "HARNESS_REPO": str(self.repo),
             "HARNESS_REPO_DIR": str(self.repo),
+            "HARNESS_HOOK_STATE": str(self.state / "hook-state.json"),
             "PYTHONPATH": str(KIT / "agents" / "scripts"),
         }
 
@@ -7654,6 +7712,47 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         self.assertIn("hardcoded string in MainActivity.kt", act["reason"])
         resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         self.assertEqual("IMPLEMENTING", read_json(tdir / "plan.json")["status"])
+
+    def test_ROUTER_GATE_FAIL_002_other_features_failing_tests_go_to_the_developer(self) -> None:
+        """O64 (real app): the router said "fix it within the approved scope" for another feature's failing
+        tests, and the agent spent the session editing FoodPlanViewModelTest."""
+        task_id = "router-gate-fail-002"
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 1 }\n")
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Gate failure routing", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="COMPOSE_UI", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        tdir = task_dir(self.repo, task_id)
+        current = read_json(tdir / "current-run.json")
+        manifest = read_json(Path(current["manifest"]))
+        store = EvidenceStore(state_root(self.repo))
+        common = dict(
+            snapshot=manifest["delivery_snapshot_sha256"], run_id=current["run_id"],
+            harness_version=(KIT / "agents" / "VERSION").read_text(encoding="utf-8").strip(),
+            change_set=manifest["change_set_sha256"], name="preflight", producer="preflight_check",
+        )
+        plan = read_json(tdir / "plan.json")
+        own_only = {"detail": "1 NEW_REGRESSION", "new_regressions": ["com.example.MainActivityTest#shows"]}
+        store.write(status="FAIL", evidence=own_only, **common)
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("RESUME_IMPLEMENTATION", act["code"])
+        self.assertNotIn("outside this plan", act["reason"], "the planned file's own test is the agent's to fix")
+
+        mixed = {"detail": "2 NEW_REGRESSION", "new_regressions": [
+            "com.example.MainActivityTest#shows",
+            "com.example.food.FoodPlanViewModelTest#onDayClick_shouldUpdateCurrentDate",
+        ]}
+        store.write(status="FAIL", evidence=mixed, **common)
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertIn("1 failing test(s) belong to files outside this plan (FoodPlanViewModelTest)", act["reason"])
+        self.assertIn("Never edit those tests under this plan", act["reason"])
+        self.assertIn("ask the developer with ask_question", act["reason"])
 
     def test_ROUTER_COMPLETE_001_reaches_ready_for_delivery_without_loop(self) -> None:
         task_id = "router-comp-001"

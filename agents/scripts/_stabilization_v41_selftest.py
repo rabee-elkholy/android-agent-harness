@@ -497,6 +497,9 @@ class RedGreenTemporalTests(unittest.TestCase):
         self.assertEqual(["com.example.CalcTest#testAdd"], [t["test_id"] for t in red["failed_tests"]])
         debug = read_json(task_dir(self.tmp, task_id) / "debug-evidence.json")
         self.assertEqual(["com.example.CalcTest#testAdd"], [e["test_name"] for e in debug["entries"]])
+        # The task already changed a test file, which could itself break other tests: nothing is
+        # recorded as failing before the task, so StreakTest stays a regression at the gate.
+        self.assertFalse((task_dir(self.tmp, task_id) / "task-start-failures.json").exists())
 
     def test_RED_006_baseline_failures_never_become_red(self) -> None:
         """An existing failing test may be the reproduction, but known baseline debt never is."""
@@ -519,6 +522,72 @@ class RedGreenTemporalTests(unittest.TestCase):
         (task_dir(self.tmp, task_id) / "red-evidence.json").unlink()
         self.assertNotEqual(0, self._capture_red(_gradle_writing_reports(dict([debt]))))
         self.assertFalse((task_dir(self.tmp, task_id) / "red-evidence.json").is_file())
+
+    def _run_gate(self, gradle) -> tuple[int, str]:
+        self.gate_results: list[dict] = []
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from run_tests_gate import main as tests_gate_main
+
+        # Gradle replaces the results folder on each run; an earlier run's report is not left behind.
+        shutil.rmtree(self.tmp / "app" / "build" / "test-results", ignore_errors=True)
+        out = io.StringIO()
+        with mock.patch("run_tests_gate.REPO", self.tmp), \
+             mock.patch("_repo_files.REPO", self.tmp), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=gradle), \
+             mock.patch("sys.argv", ["run_tests_gate.py"]), \
+             mock.patch("run_tests_gate.write_gate_result", side_effect=lambda name, data: self.gate_results.append(data)), \
+             redirect_stdout(out), redirect_stderr(out):
+            code = tests_gate_main()
+        return code, out.getvalue()
+
+    def test_RED_007_other_features_failures_predate_the_task(self) -> None:
+        """O64 (real app): with no task test change, capture-red took another feature's failing tests as the
+        defect's reproduction, and the gate later blocked on the same failures as NEW_REGRESSION."""
+        task_id = "task-red-007"
+        self._begin_bug(task_id)
+        repro = self._report("com.example.CalcTest", "testAdd", "expected 5")
+        other = self._report("com.example.food.FoodPlanViewModelTest", "onDayClick", "LanguageControl not mocked")
+        self.assertEqual(0, self._capture_red(_gradle_writing_reports(dict([repro, other]))))
+        tdir = task_dir(self.tmp, task_id)
+        red = read_json(tdir / "red-evidence.json")
+        self.assertEqual(["com.example.CalcTest#testAdd"], [t["test_id"] for t in red["failed_tests"]])
+        start = read_json(tdir / "task-start-failures.json")
+        self.assertEqual(task_id, start["task_id"])
+        self.assertEqual(
+            ["com.example.CalcTest#testAdd", "com.example.food.FoodPlanViewModelTest#onDayClick"],
+            sorted(item["test_name"] for item in start["failures"]),
+        )
+
+        # The fix turned the reproduction green; the other feature's test still fails the same way.
+        code, out = self._run_gate(_gradle_writing_reports(dict([other])))
+        self.assertEqual(0, code, out)
+        self.assertIn("already failed the same way before this task's fix", out)
+        self.assertIn("com.example.food.FoodPlanViewModelTest#onDayClick", out)
+        self.assertEqual(["com.example.food.FoodPlanViewModelTest#onDayClick"],
+                         self.gate_results[-1]["task_start_ignored"])
+
+        # The reproduction must turn green: it is never tolerated as predating the task.
+        code, out = self._run_gate(_gradle_writing_reports(dict([repro, other])))
+        self.assertNotEqual(0, code)
+        self.assertIn("NEW_REGRESSION: 1 test(s)", out)
+        self.assertIn("com.example.CalcTest#testAdd", out)
+
+        # The same test failing differently after the change is a regression.
+        changed = self._report("com.example.food.FoodPlanViewModelTest", "onDayClick", "NullPointerException")
+        code, out = self._run_gate(_gradle_writing_reports(dict([changed])))
+        self.assertNotEqual(0, code)
+        self.assertIn("NEW_REGRESSION", out)
+
+    def test_RED_008_only_unrelated_failures_are_no_reproduction(self) -> None:
+        task_id = "task-red-008"
+        self._begin_bug(task_id)
+        other = self._report("com.example.food.FoodPlanViewModelTest", "onDayClick", "LanguageControl not mocked")
+        self.assertNotEqual(0, self._capture_red(_gradle_writing_reports(dict([other]))))
+        tdir = task_dir(self.tmp, task_id)
+        self.assertFalse((tdir / "red-evidence.json").is_file())
+        self.assertEqual(["com.example.food.FoodPlanViewModelTest#onDayClick"],
+                         [item["test_name"] for item in read_json(tdir / "task-start-failures.json")["failures"]])
 
     def test_RED_002_pre_red_code_fix_rejected(self) -> None:
         task_id = "task-red-002"
