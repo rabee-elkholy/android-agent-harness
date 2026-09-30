@@ -754,6 +754,7 @@ def resolve_task_context(
     })
     if receipt:
         base["discovery"] = receipt
+    _add_line_numbers(root, base, target_nodes)
     if expansion_action:
         base["recommended_action"] = expansion_action
     if result_status in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
@@ -768,6 +769,58 @@ def resolve_task_context(
                 candidate_surfaces=target_surfaces,
             )
     return base
+
+
+def _add_line_numbers(root: Path, result: dict[str, Any], target_nodes: list[GraphNode]) -> None:
+    """Point the agent at the lines that matter so it opens ranges instead of whole files.
+
+    The target gets an outline (declarations with start and end lines), each dependency the
+    line of its declaration, and each dependent or test the lines that mention the target's
+    symbols. ``read_ranges`` repeats them as one list and comes last, so a host that keeps
+    only the end of long output still sees it.
+    """
+    try:
+        from _source_outline import as_ranges, declaration_line, line_count, outline, reference_lines
+    except ImportError:
+        return
+    target = result.get("target") or {}
+    target_path = str(target.get("path") or "")
+    if not target_path:
+        return
+    entries = outline(root / target_path)
+    target["line_count"] = line_count(root / target_path)
+    target["outline"] = entries
+    names = {node.name for node in target_nodes if node.name}
+    names |= {entry["name"] for entry in entries if entry["kind"] not in ("val", "var", "fun", "method")}
+    read_ranges: list[str] = []
+    if entries:
+        top = [e for e in entries if e["kind"] not in ("val", "var")][:8]
+        read_ranges.append(
+            f"{target_path} ({target['line_count']} lines): "
+            + "; ".join(f"{e['kind']} {e['name']} L{e['line']}-L{e['end_line']}" for e in top)
+        )
+    for item in result.get("direct_dependencies") or []:
+        line = declaration_line(root / str(item.get("path") or ""), str(item.get("name") or ""))
+        if line:
+            item["line"] = line
+            read_ranges.append(f"{item['path']}: {item['name']} declared at L{line}")
+    seen: dict[str, str] = {}
+    for key in ("direct_dependents", "tests"):
+        for item in result.get(key) or []:
+            path = str(item.get("path") or "")
+            if path not in seen:
+                seen[path] = as_ranges(reference_lines(root / path, names))
+                if seen[path]:
+                    label = "test" if key == "tests" else "uses the target"
+                    read_ranges.append(f"{path}: {label} at {seen[path]}")
+            if seen[path]:
+                item["reference_lines"] = seen[path]
+    if read_ranges:
+        result["read_ranges_note"] = (
+            "Open these line ranges (with a few lines of margin) instead of whole files; "
+            "the numbers come from a lexical scan of the current files."
+        )
+        result["read_ranges"] = read_ranges
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -799,6 +852,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Module/source set: {target_info.get('module')} / {target_info.get('source_set')}")
         for warning in result.get("warnings") or []:
             print(f"  Warning: {warning}")
+        if result.get("read_ranges"):
+            print("  Read ranges:")
+            for item in result["read_ranges"]:
+                print(f"    {item}")
     return 0 if result["status"] in {"RESOLVED", "AMBIGUOUS", "ADVISORY_STALE_FALLBACK_USED"} else 1
 
 

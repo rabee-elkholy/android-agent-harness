@@ -291,7 +291,8 @@ class ZohoPolicyTests(unittest.TestCase):
             plan,
         )
         self.assertFalse(allowed)
-        self.assertIn("workflow.py revise --external-write zoho_sprints", reason)
+        self.assertIn("harness.py zoho authorize", reason)
+        self.assertIn("Do not revise the task plan", reason)
 
     def test_ZOHO_009_language_template_obeys_configured_language(self) -> None:
         """ZOHO-009: Language template formatting obeys configured ZOHO_LANGUAGE."""
@@ -717,10 +718,54 @@ class ZohoLifecycleTests(unittest.TestCase):
             rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         output = stderr_buf.getvalue()
         self.assertEqual(1, rc)
-        self.assertIn("workflow.py revise --external-write zoho_sprints", output)
+        self.assertIn("harness.py zoho authorize", output)
         self.assertNotIn("curl", output.lower())
         self.assertNotIn("python -c", output)
         self.assertNotIn("requests.", output)
+
+    def test_ZOHO_LIFE_016b_update_zoho_grants_writes_without_a_plan_revision(self):
+        """Real app: after the commit the developer typed `update zoho`; the agent had to revise the code plan
+        with --external-write and approve it again. The developer's `update zoho` is now the grant."""
+        import io
+        import zoho_grant
+        from integrations.base import validate_external_write
+        from integrations.zoho_sprints.integration import ZohoSprintsIntegration
+        integ = ZohoSprintsIntegration()
+        tid = "T-ZOHO-016B"
+        self._create_task(tid, {
+            "status": "READY_FOR_DELIVERY",
+            "execution_nonce": "n1",
+            "approval": {"single_use_nonce": "n1"},
+            "zoho_link": {"item_id": "873", "item_type": "Task"},
+            "external_writes": [],
+        })
+        plan = {"status": "READY_FOR_DELIVERY", "execution_nonce": "n1", "approval": {"single_use_nonce": "n1"}, "external_writes": []}
+        write = {"status": "In progress", "operation_id": "op-873"}
+        self.assertFalse(validate_external_write(integ, "zoho_update_task_status", write, plan)[0])
+
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            self.assertEqual(1, zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", "ok go"]))
+        self.assertIn("update zoho", err.getvalue())
+        self.assertIsNone(zoho_grant.active_grant(self.repo))
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            self.assertEqual(0, zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", "Update Zoho"]))
+        self.assertIn("ZOHO_WRITE_GRANTED", out.getvalue())
+        grant = zoho_grant.active_grant(self.repo)
+        self.assertIsNotNone(grant)
+        self.assertEqual((True, ""), validate_external_write(integ, "zoho_update_task_status", write, plan, grant=grant))
+        # The Zoho rules still apply under the grant.
+        self.assertFalse(validate_external_write(integ, "zoho_update_task_status", {"status": "Done", "operation_id": "op"}, plan, grant=grant)[0])
+        self.assertFalse(validate_external_write(integ, "zoho_update_task_status", {"status": "In progress"}, plan, grant=grant)[0])
+        from mutation_guard import command_allowed
+        self.assertTrue(command_allowed(self.repo, 'python .agents/harness.py zoho authorize --proof-reference "update zoho"')[0])
+        # It expires.
+        path = zoho_grant._state(self.repo) / zoho_grant.GRANT_FILE
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["expires_epoch"] = data["granted_epoch"] - 1
+        path.write_text(json.dumps(data), encoding="utf-8")
+        self.assertIsNone(zoho_grant.active_grant(self.repo))
 
     def test_ZOHO_LIFE_017_language_mapping_preserved(self):
         """ZOHO-LIFE-017: Language mapping is preserved in delivery report formatting."""

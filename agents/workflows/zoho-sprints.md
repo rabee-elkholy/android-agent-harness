@@ -37,9 +37,11 @@ This still counts as a mutate. Do it only on an explicit create request (includi
 
 ## `update zoho` (mutate)
 
-Never `Done` / `Solved`. The approved task plan must list
-`--external-write zoho_sprints`; an Android delivery plan without that field is
-not tracker-write authority.
+Never `Done` / `Solved`. Show the developer exactly what will be written first. When they type
+`update zoho`, run `python .agents/harness.py zoho authorize --proof-reference "<their message>"`:
+it grants Zoho writes for 30 minutes without touching the task plan. Never revise the task plan
+(or re-run its approval and reviews) just to update the tracker. A plan approved with
+`--external-write zoho_sprints` also allows the writes.
 
 For every mutation, generate one stable `operation_id` from the task id and intended action (for example `SP-123-ready-retest-abc1234`) and reuse it on retries. If the server reports an unknown previous outcome, inspect the item before deciding whether a new operation is needed; never change the id just to force a retry.
 

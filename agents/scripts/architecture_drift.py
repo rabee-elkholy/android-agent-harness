@@ -38,6 +38,49 @@ def _lookup_family(repo: Path, family_id: str | None) -> dict[str, Any] | None:
     return None
 
 
+_UNKNOWN = object()
+
+
+def _baseline_reader(repo: Path, task_id: str | None):
+    """Return a function giving a file's text at the start of the task.
+
+    It returns "" for a file that did not exist then, and ``_UNKNOWN`` when that cannot be
+    told (no task baseline, or the developer's uncommitted edits to it predate the task).
+    """
+    import subprocess
+
+    try:
+        from delivery_manifest import load_task_baseline
+
+        base = load_task_baseline(repo, task_id) or {}
+    except Exception:
+        base = {}
+    head = str((base.get("repository") or {}).get("head") or "")
+    dirty = {str((c or {}).get("path") or c) if isinstance(c, dict) else str(c) for c in base.get("changes") or []}
+
+    def read(rel: str):
+        if not head or rel in dirty:
+            return _UNKNOWN
+        proc = subprocess.run(
+            ["git", "show", f"{head}:{rel}"], cwd=str(repo), capture_output=True,
+            text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        if proc.returncode != 0:
+            listed = subprocess.run(
+                ["git", "cat-file", "-e", head], cwd=str(repo), capture_output=True, check=False,
+            )
+            return "" if listed.returncode == 0 else _UNKNOWN
+        return proc.stdout
+
+    return read
+
+
+def _is_compose_screen(txt: str) -> bool:
+    has_comp_content = "@Composable" in txt or "setContent" in txt
+    has_xml_binding = "inflate(" in txt or "binding" in txt or "R.layout." in txt
+    return has_comp_content and not has_xml_binding
+
+
 def check_architecture_drift(
     repo: Path,
     contract: dict[str, Any] | None,
@@ -119,6 +162,14 @@ def check_architecture_drift(
         source_toolkit = source_dims.get("ui_toolkit")
         source_stream = source_dims.get("state_stream")
         source_base = source_dims.get("state_holder_base")
+        # A transition is something this task did: a file that was already Compose (or already on
+        # StateFlow) before the task is the project's existing code, not drift. The real app's
+        # task was stopped four times for a Compose paywall fragment it only passed a flag to.
+        baseline_text = _baseline_reader(repo, task_id)
+
+        def already(rel: str, predicate) -> bool:
+            before = baseline_text(rel)
+            return before is not _UNKNOWN and bool(before) and predicate(before)
 
         for p in modified_kt_files:
             rel = p.relative_to(repo).as_posix()
@@ -131,9 +182,7 @@ def check_architecture_drift(
             if source_toolkit == "xml":
                 is_fragment_target = "fragment" in p.stem.lower() or "activity" in p.stem.lower() or ("class " in txt and ("Fragment" in txt or "Activity" in txt))
                 if is_fragment_target:
-                    has_comp_content = "@Composable" in txt or "setContent" in txt
-                    has_xml_binding = "inflate(" in txt or "binding" in txt or "R.layout." in txt
-                    if has_comp_content and not has_xml_binding:
+                    if _is_compose_screen(txt) and not already(rel, _is_compose_screen):
                         violations.append(
                             f"Unauthorized UI toolkit transition (XML -> Compose) in {rel} during {mode} mode"
                         )
@@ -141,14 +190,20 @@ def check_architecture_drift(
             # 2. Check ViewModel base family replacement (e.g. BaseViewModel -> MviViewModel)
             if "class " in txt and "ViewModel" in txt:
                 is_legacy_base = source_base == "BaseViewModel"
-                if is_legacy_base and "MviViewModel" in txt and "BaseViewModel" not in txt:
+                def on_mvi(text: str) -> bool:
+                    return "MviViewModel" in text and "BaseViewModel" not in text
+
+                if is_legacy_base and on_mvi(txt) and not already(rel, on_mvi):
                     violations.append(
                         f"Unauthorized ViewModel base transition (BaseViewModel -> MviViewModel) in {rel} during {mode} mode"
                     )
 
                 # Check LiveData -> StateFlow architectural transition
                 is_livedata_stream = source_stream == "livedata"
-                if is_livedata_stream and "MutableStateFlow" in txt and "LiveData" not in txt:
+                def on_state_flow(text: str) -> bool:
+                    return "MutableStateFlow" in text and "LiveData" not in text
+
+                if is_livedata_stream and on_state_flow(txt) and not already(rel, on_state_flow):
                     violations.append(
                         f"Unauthorized state stream transition (LiveData -> StateFlow) in {rel} during {mode} mode"
                     )

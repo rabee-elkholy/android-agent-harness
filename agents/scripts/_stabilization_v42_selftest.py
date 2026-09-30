@@ -1894,6 +1894,37 @@ class MissingBaselineGuidanceTests(unittest.TestCase):
         self.assertIn("NEW_REGRESSION", detail)
         self.assertIn("baseline_capture.py --run-tests", detail)
 
+    def test_a_compile_error_is_named_in_the_verdict(self) -> None:
+        """Real app: the verdict and router said "not attributable exclusively to fresh failing-test reports"
+        for a plain compile error; the file and line were only in the lines above."""
+        from run_gradle_task import first_build_error
+        from run_tests_gate import evaluate_unit_test_execution
+
+        kotlin = (
+            "> Task :app:compileDebugKotlin\n"
+            "e: file:///E:/AndroidProjects/App/app/src/main/java/com/x/NotificationFragment.kt:96:25 Unresolved reference 'callMeasurementSDk'.\n"
+            "> Task :app:compileDebugKotlin FAILED\n"
+        )
+        self.assertEqual(
+            "E:/AndroidProjects/App/app/src/main/java/com/x/NotificationFragment.kt:96 Unresolved reference 'callMeasurementSDk'.",
+            first_build_error(kotlin),
+        )
+        java = "C:\\app\\src\\main\\java\\com\\x\\PaymentActivity.java:41: error: cannot find symbol\n"
+        self.assertEqual("C:/app/src/main/java/com/x/PaymentActivity.java:41 cannot find symbol", first_build_error(java))
+        self.assertEqual("", first_build_error("> Task :app:testDebugUnitTest FAILED\n"))
+
+        with mock.patch("run_tests_gate.load_baseline", return_value=None):
+            ok, detail, _ = evaluate_unit_test_execution(
+                self.tmp, ":app:testDebugUnitTest", 1, reports_before=None,
+                outcome={"test_failure_only": False, "first_error": "app/src/main/java/com/x/A.kt:96 Unresolved reference 'x'."},
+            )
+            self.assertFalse(ok)
+            self.assertEqual("the build failed before the tests ran: compile error at app/src/main/java/com/x/A.kt:96 Unresolved reference 'x'.", detail)
+            ok, detail, _ = evaluate_unit_test_execution(
+                self.tmp, ":app:testDebugUnitTest", 1, reports_before=None, outcome={"test_failure_only": False},
+            )
+            self.assertIn("failed for a reason other than failing tests (exit code 1)", detail)
+
 
 def _gradle_tests_only_failed(code: int, test_failure_only: bool = True):
     """Mimic run_gradle's outcome attribution for a finished Gradle test run."""

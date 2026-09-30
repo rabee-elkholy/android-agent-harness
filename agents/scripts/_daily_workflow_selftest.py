@@ -337,39 +337,25 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertIn(payload, body)
         self.assertNotIn("TOPSECRET123456", body)
 
-    def test_goal_and_grill_me_callouts_are_highlighted_only_when_the_task_calls_for_them(self) -> None:
-        # 1.1.8: the developer asked that the /goal and /grill-me reminders stand out, and only
-        # appear when the task needs them.
-        from plan_document import accelerator_callouts
-
-        room = {"expected_surfaces": ["ROOM_SCHEMA", "PERSISTENCE"], "planning_depth": "BOUNDED"}
-        multi = {"reviewers": ["bug-reviewer-agent"], "gates": ["preflight", "device"]}
-        lines = accelerator_callouts(room, multi)
-        self.assertEqual(2, len(lines))
-        self.assertTrue(lines[0].startswith("> ⚠️ **`/grill-me`**"))
-        self.assertIn("database schema change", lines[0])
-        self.assertTrue(lines[1].startswith("> ⚡ **`/goal`**"))
-        exported = accelerator_callouts({"expected_surfaces": ["MANIFEST_PERMISSION"]}, {})
-        self.assertEqual(1, len(exported))
-        self.assertIn("exported component or permission", exported[0])
-        self.assertIn("architecture decision", accelerator_callouts({"planning_depth": "ARCHITECTURAL"}, {})[0])
-        # A small change with no reviewers, no phone check and one phase gets no reminder.
-        self.assertEqual([], accelerator_callouts({"expected_surfaces": ["RESOURCE_UI"]}, {"reviewers": [], "gates": ["preflight"]}))
-        self.assertEqual(1, len(accelerator_callouts({"phases": [{"id": "a"}, {"id": "b"}]}, {})))
-
+    def test_no_goal_or_grill_me_reminders(self) -> None:
+        # 1.1.11: the developer removed the /goal and /grill-me reminders from the harness.
         import contextlib
         import io
+        import plan_document
         from workflow import main as workflow_main
 
+        self.assertFalse(hasattr(plan_document, "accelerator_callouts"))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             workflow_main(["draft", "--repo", str(self.repo), "--task-id", "callouts", "--outcome", "Show a message",
-                           "--kind", "FEATURE", "--expected-files", "app/src/main/kotlin/com/example/Login.kt", "--force"])
+                           "--kind", "FEATURE", "--expected-files", "app/src/main/kotlin/com/example/Login.kt",
+                           "--expected-surfaces", "ROOM_SCHEMA,PERSISTENCE", "--force"])
         text = out.getvalue()
-        self.assertIn("APPROVAL_CALLOUTS:", text)
-        self.assertIn("> ⚡ **`/goal`**", text)
         document = (task_dir(self.repo, "callouts") / "plan.md").read_text(encoding="utf-8")
-        self.assertIn("> ⚡ **`/goal`**", document.split("## Outcome")[0])
+        for shown in (text, document):
+            self.assertNotIn("/goal", shown)
+            self.assertNotIn("/grill-me", shown)
+            self.assertNotIn("APPROVAL_CALLOUTS", shown)
 
     def test_approach_is_bound_by_the_plan_hash(self) -> None:
         from plan_authority import validate_plan_hash
@@ -416,18 +402,30 @@ class DailyWorkflowSelftest(unittest.TestCase):
         bare = run("gaps-bare")
         self.assertIn("PLAN_GAPS=approach,risks,device checks", bare)
         self.assertIn("APPROVAL_QUESTION:", bare)
-        self.assertIn("/goal", bare)
+        self.assertNotIn("/goal", bare)
         self.assertIn("Never paste plan.json", bare)
         cancel(argparse.Namespace(repo=str(self.repo), task_id="gaps-bare"))
         full = run("gaps-full", "--approach", "Edit Login.kt message", "--risks", "Wrong locale",
                    "--device-strategy", "1. Log in -> message shows")
         self.assertNotIn("PLAN_GAPS=", full)
-        self.assertIn("Full plan: [plan.md](", full)
+        # Real app: the question carried the plan twice (a translated summary, then every field verbatim with
+        # full paths, hashes, "Rollback" and "External writes: none"). It carries one short brief.
+        brief = full[full.index("APPROVAL_BRIEF_BEGIN"):full.index("APPROVAL_BRIEF_END")]
+        self.assertIn("- What changes: Edit Login.kt message", brief)
+        self.assertIn("- Files (1): Login.kt", brief)
+        self.assertIn("- Phone checks: 1. Log in -> message shows", brief)
+        self.assertIn("- Risks: Wrong locale", brief)
+        for noise in ("Task:", "Modules:", "Surfaces:", "Rollback:", "External writes", "Plan hash", "app/src/main"):
+            self.assertNotIn(noise, brief)
+        self.assertNotIn("PLAN_SUMMARY_BEGIN", full, "the full field list lives in plan.md")
+        plan = read_json(task_dir(self.repo, "gaps-full") / "plan.json")
+        self.assertIn(f"PLAN_HASH={plan['plan_sha256'][:12]}" + chr(10), full)
+        self.assertIn("no second summary of the same plan", full)
         # O63: the agent wrapped the summary in a code block, so the plan.md link could not be clicked.
         document = (task_dir(self.repo, "gaps-full") / "plan.md").resolve().as_uri()
         self.assertIn(f"PLAN_DOCUMENT_URI={document}" + chr(10), full)
         self.assertIn("PLAN_DOCUMENT_URI as a clickable markdown link", full)
-        self.assertIn("never inside a code block", full)
+        self.assertIn("never in a code block", full)
         self.assertNotIn("artifact directory", full, "no unverifiable copy of plan.md outside the task")
 
     def test_draft_names_the_developers_uncommitted_files(self) -> None:
@@ -495,11 +493,11 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertEqual(0, ret)
         revised = read_json(task_dir(self.repo, "plan-summary-revise") / "plan.json")
         summary = out.getvalue()
-        self.assertIn("Device strategy: ANY", summary)
+        self.assertIn("Phone checks: ANY", summary)
         self.assertIn("Risks: Network outage", summary)
-        self.assertIn("Rollback: Disable the integration", summary)
-        self.assertIn("External writes: mcp:tracker", summary)
-        self.assertIn(f"Plan hash: {revised['plan_sha256'][:12]}", summary)
+        self.assertEqual("Disable the integration", revised["rollback"], "kept in the plan (and plan.md), not in the question")
+        self.assertIn("Writes outside the repo: mcp:tracker", summary)
+        self.assertIn(f"PLAN_HASH={revised['plan_sha256'][:12]}", summary)
 
     def test_goal_reminder_is_not_repeated_after_an_approval(self) -> None:
         # O68 (real app): the developer typed /goal after the first approval; a later revise (to add the
@@ -517,13 +515,99 @@ class DailyWorkflowSelftest(unittest.TestCase):
 
         draft(self._draft_ns("goal-once"))
         before_approval = revise("--risks", "Wrong message")
-        self.assertIn("**`/goal`**", before_approval, "not approved yet: the reminder still helps")
+        self.assertNotIn("`/goal`", before_approval)
         record_approval(argparse.Namespace(repo=str(self.repo), task_id="goal-once", source="conversation",
                                            proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
         begin_task(argparse.Namespace(repo=str(self.repo), task_id="goal-once"))
         after_approval = revise("--external-write", "zoho_sprints")
         self.assertIn("APPROVAL_QUESTION:", after_approval)
         self.assertNotIn("**`/goal`**", after_approval)
+        self.assertNotIn("/grill-me", after_approval, "shown at the first approval; the re-approval asks only about the change")
+        self.assertNotIn("APPROVAL_BRIEF_BEGIN", after_approval, "the unchanged plan is not repeated")
+        self.assertIn("never ask first whether to revise", after_approval)
+
+        # Real app (P6): the second approval repeated the whole plan; it asks only about the change,
+        # and (P5) names the file behind a drifted surface.
+        self.assertIn("REVISION_CHANGES=External writes: + zoho_sprints", after_approval)
+        self.assertIn("ask only about the change", after_approval)
+        self.assertIn("Approve / Request changes / Cancel task", after_approval)
+        plan_file = task_dir(self.repo, "goal-once") / "plan.json"
+        plan = read_json(plan_file)
+        plan["material_drift_causes"] = {"surface:AUTH": ["app/src/main/kotlin/com/example/SignIn.kt"]}
+        atomic_write_json(plan_file, plan)
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id="goal-once", source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        again = revise("--expected-surfaces", "BUSINESS_LOGIC,AUTH")
+        self.assertIn("REVISION_CHANGES=Surfaces: + AUTH", again)
+        self.assertIn("DRIFT_CAUSES=surface:AUTH from app/src/main/kotlin/com/example/SignIn.kt", again)
+
+    def test_draft_warns_when_planned_files_hold_payment_or_sign_in_code(self) -> None:
+        # Real app (P3b): a paywall plan listed PaymentActivity and the sign-in fragment without AUTH or
+        # BILLING; verification then stopped for a second approval mid-task.
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        pay = "app/src/main/kotlin/com/example/PaymentActivity.kt"
+        write_file(self.repo / pay, "package com.example\nimport com.android.billingclient.api.BillingClient\n"
+                                    "class PaymentActivity { fun purchase(c: BillingClient) {} }\n")
+        run_git(self.repo, "add", pay)
+        run_git(self.repo, "commit", "-qm", "payment")
+
+        def draft_out(task_id: str, surfaces: str) -> str:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ret = workflow_main(["draft", "--repo", str(self.repo), "--task-id", task_id, "--outcome", "Paywall after onboarding",
+                                     "--kind", "FEATURE", "--expected-files", pay, "--expected-surfaces", surfaces, "--force"])
+            self.assertEqual(0, ret)
+            return out.getvalue()
+
+        warned = draft_out("paywall-plan", "BUSINESS_LOGIC")
+        self.assertIn(f"SENSITIVE_PLANNED_FILES=BILLING: {pay}.", warned)
+        self.assertIn("so the developer approves once", warned)
+        cancel(argparse.Namespace(repo=str(self.repo), task_id="paywall-plan"))
+        self.assertNotIn("SENSITIVE_PLANNED_FILES", draft_out("paywall-billing", "BUSINESS_LOGIC,BILLING"))
+
+    def test_named_surfaces_take_in_what_the_planned_files_already_are(self) -> None:
+        # Real app: the agent named its own surfaces; the planned fragment was already Compose (and another
+        # already did network calls), so the write guard and verification each stopped the task for another approval.
+        screen = "app/src/main/kotlin/com/example/PaywallFragment.kt"
+        write_file(self.repo / screen, "package com.example\nimport androidx.compose.runtime.Composable\n"
+                                       "import com.android.billingclient.api.BillingClient\n"
+                                       "class PaywallFragment { @Composable fun Content() {} fun buy(c: BillingClient) {} }\n")
+        run_git(self.repo, "add", screen)
+        run_git(self.repo, "commit", "-qm", "paywall")
+        result = draft(argparse.Namespace(
+            repo=str(self.repo), task_id="named-surfaces", outcome="Pass a flag to the paywall", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent=None, architecture_target_scope=None, architecture_target_family=None,
+            expected_files=screen, phases=None, force=True,
+        ))
+        surfaces = set(read_json(task_dir(self.repo, result["task_id"]) / "plan.json")["expected_surfaces"])
+        self.assertIn("BUSINESS_LOGIC", surfaces, "the agent's surfaces stay")
+        self.assertIn("COMPOSE_UI", surfaces, "the file's existing Compose code is part of the plan from the start")
+        self.assertNotIn("BILLING", surfaces, "existing purchase code is not taken in silently; SENSITIVE_PLANNED_FILES names it")
+
+    def test_draft_and_revise_json_carry_the_approval_material(self) -> None:
+        # Real app (P1): the agent passed --json to draft and revise, got only plan.json, searched for
+        # plan.md and wrote the approval question itself (no Cancel option, no files).
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ret = workflow_main(["draft", "--repo", str(self.repo), "--task-id", "json-draft", "--outcome", "Show a message",
+                                 "--kind", "FEATURE", "--expected-files", "app/src/main/kotlin/com/example/Login.kt",
+                                 "--force", "--json"])
+        self.assertEqual(0, ret)
+        text = out.getvalue()
+        data = json.loads(text[text.index("\n{") + 1:] if not text.startswith("{") else text)  # after progress lines
+        material = data["approval_material"]
+        self.assertTrue(material.startswith("APPROVAL_BRIEF_BEGIN\n- What changes: Show a message"))
+        self.assertIn("PLAN_DOCUMENT_URI=", material)
+        self.assertIn("Approve / Request changes / Cancel task", material)
+        self.assertEqual("json-draft", data["task_id"], "the plan fields are still there")
 
     def test_plan_summary_redacts_compound_credentials_without_changing_approval(self) -> None:
         from workflow import plan_summary
@@ -641,6 +725,16 @@ class DailyWorkflowSelftest(unittest.TestCase):
         plan = read_json(task_dir(self.repo, "modules-union") / "plan.json")
         self.assertEqual([":app", ":core"], plan["expected_modules"])
         self.assertEqual(["BUSINESS_LOGIC"], plan["expected_surfaces"])
+
+    def test_cancel_in_chat_records_the_developers_words(self) -> None:
+        # Real app: the developer said "cancel the task" in chat and was told to run the command in a terminal.
+        draft(self._draft_ns("chat-cancel"))
+        with self.assertRaises(ValidationError):
+            cancel(argparse.Namespace(repo=str(self.repo), task_id="chat-cancel", source="conversation", proof_reference=" "))
+        plan = cancel(argparse.Namespace(repo=str(self.repo), task_id="chat-cancel", source="conversation",
+                                         proof_reference="cancel the task"))
+        self.assertEqual("CANCELLED", plan["status"])
+        self.assertEqual({"source": "conversation", "proof_reference": "cancel the task"}, plan["cancellation"])
 
     def test_cancel_clears_the_latest_discovery_receipt(self) -> None:
         # Round 5 hardening: a finished task's discovery anchor must not carry into the next task.
@@ -3002,7 +3096,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["reviewers"] = []
         policy["assemble_required"] = False
         policy["device_required"] = False
-        policy["sensitive"] = True
+        policy["surfaces"] = sorted(set(policy.get("surfaces") or []) | {"AUTH"})
         atomic_write_json(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
@@ -3011,6 +3105,34 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertEqual("SENSITIVE_APPROVAL", act["code"])
         self.assertEqual("DEVELOPER_ACTION", act["kind"])
         self.assertIn("approve-sensitive", act["command"])
+
+    def test_NEXT_007b_sensitive_surfaces_route_to_approval_before_complete(self) -> None:
+        """Real app: the run's surfaces had AUTH and BILLING but `policy.sensitive` was unset, so the router
+        said COMPLETE_TASK, complete failed on a missing sensitive_approval.json, and the router said
+        COMPLETE_TASK again. The router now asks what the final verifier requires."""
+        plan, tdir, policy, manifest = self._setup_verifying_task("task-next-007b")
+        current = read_json(tdir / "current-run.json")
+        run_id = current["run_id"]
+        policy["gates"] = ["preflight"]
+        policy["reviewers"] = []
+        policy["assemble_required"] = False
+        policy["device_required"] = False
+        policy["sensitive"] = False
+        policy["surfaces"] = ["AUTH", "BILLING", "XML_UI"]
+        atomic_write_json(Path(current["policy"]), policy)
+        self._record_evidence(manifest, run_id, "preflight", "PASS")
+
+        act = resolve_next_action(self.repo, "task-next-007b", plan)
+        self.assertEqual("SENSITIVE_APPROVAL", act["code"])
+        self.assertIn("touches AUTH, BILLING", act["reason"])
+        self.assertIn("task approve-sensitive --repo . --task-id task-next-007b", act["command"])
+        self._record_evidence(manifest, run_id, "sensitive_approval", "PASS")
+        self.assertNotEqual("SENSITIVE_APPROVAL", resolve_next_action(self.repo, "task-next-007b", plan)["code"])
+        # A bare `sensitive` flag without a sensitive surface: approve-sensitive would refuse, so never ask.
+        policy["surfaces"] = ["XML_UI"]
+        policy["sensitive"] = True
+        atomic_write_json(Path(current["policy"]), policy)
+        self.assertNotEqual("SENSITIVE_APPROVAL", resolve_next_action(self.repo, "task-next-007b", plan)["code"])
 
     def test_NEXT_008_every_generated_command_accepted_by_guard(self) -> None:
         """NEXT-008: Every generated command is accepted by current guard under matching state."""
@@ -3881,21 +4003,24 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
     """
 
     def _setup_verifying_task_clean(self, task_id: str):
-        draft(argparse.Namespace(
-            repo=str(self.repo),
-            task_id=task_id,
-            outcome="Verification ready task",
-            kind="FEATURE",
-            planning_depth="BOUNDED",
-            expected_surfaces="COMPOSE_UI",
-            expected_modules=":app",
-            architecture_intent="EXISTING_CHANGE",
-            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
-            architecture_target_family=None,
-            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
-            phases=None,
-            force=True,
-        ))
+        # A task that never edits its file: keep the surfaces exactly as named (P11 would add the file's
+        # BUSINESS_LOGIC, which matters only once the file is edited).
+        with mock.patch("workflow._with_planned_file_surfaces", side_effect=lambda _repo, expected, *_a, **_k: expected):
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id=task_id,
+                outcome="Verification ready task",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="COMPOSE_UI",
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=True,
+            ))
         record_approval(argparse.Namespace(
             repo=str(self.repo),
             task_id=task_id,
@@ -5326,6 +5451,77 @@ class ReviewOrchestrationTests(unittest.TestCase):
         )
 
         return current, run_id, pkg_sha, tdir
+
+    def test_later_round_carries_untouched_reviewers_and_the_verifier_accepts_it(self) -> None:
+        """P16 end to end: a fix to one file reruns only the reviewers it routes plus owners and regression;
+        the final verifier recomputes the same narrowed policy from the saved manifests."""
+        from final_verifier import validate_policy_artifact
+
+        task_id = "carry-e2e"
+        pay = "app/src/main/kotlin/com/example/Pay.kt"
+        text = "app/src/main/res/values/strings.xml"
+        write_file(self.repo / pay, "package com.example\nclass Pay\n")
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay\">Pay</string>\n</resources>\n")
+        run_git(self.repo, "add", pay, text)
+        run_git(self.repo, "commit", "-qm", "pay fixture")
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Paywall label", kind="FEATURE", planning_depth="BOUNDED",
+            expected_surfaces="BILLING,LOCALIZATION,RESOURCE_UI", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope=pay, architecture_target_family=None,
+            expected_files=f"{pay},{text}", phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / pay, "package com.example\nimport com.android.billingclient.api.BillingClient\n"
+                                    "class Pay { fun buy(c: BillingClient) = c.isReady }\n")
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay\">Pay now</string>\n</resources>\n")
+        first = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        tdir = task_dir(self.repo, task_id)
+        policy1 = read_json(Path(first["policy"]))
+        manifest1 = read_json(Path(first["manifest"]))
+        required = sorted(policy1["reviewers"])
+        self.assertIn("bug-reviewer-agent", required)
+        EvidenceStore(state_root(self.repo)).write(
+            snapshot=manifest1["delivery_snapshot_sha256"], run_id=first["run_id"], name="reviews",
+            producer="review_orchestrator", harness_version="1.1.11", change_set=manifest1["change_set_sha256"],
+            status="FAIL", evidence={
+                "reviewers": required,
+                "reports": [{"reviewer": r, "verdict": "FINDINGS" if r == "bug-reviewer-agent" else "PASS"} for r in required],
+                "blocking_findings": [{"reviewer": "bug-reviewer-agent"}],
+            },
+        )
+        plan = read_json(tdir / "plan.json")
+        plan.update(status="BLOCKED", review_rounds=1, blocked_reviewers=["bug-reviewer-agent"])
+        workflow.save_plan(tdir / "plan.json", plan)
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+
+        # The fix touches only the text.
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay\">Pay today</string>\n</resources>\n")
+        second = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        policy2 = read_json(Path(second["policy"]))
+        self.assertEqual(2, policy2["review_round"])
+        self.assertEqual([text], policy2["fix_delta"]["files"])
+        rerun = set(policy2["reviewers"])
+        carried = {item["reviewer"] for item in policy2["carried_reviews"]}
+        self.assertIn("bug-reviewer-agent", rerun, "the finding owner reruns")
+        self.assertIn("regression-impact-reviewer-agent", rerun)
+        self.assertTrue(carried, "a reviewer the text change does not route keeps its PASS")
+        self.assertFalse(rerun & carried)
+        manifest2 = read_json(Path(second["manifest"]))
+        expected, error, status = validate_policy_artifact(
+            self.repo, read_json(tdir / "plan.json"), policy2, state_root(self.repo), Path(second["policy"]),
+            current_change_set=manifest2["change_set_sha256"], task_changes=manifest2.get("task_changes"),
+        )
+        self.assertIsNone(error, error)
+        self.assertEqual("PASS", status)
+        # A policy that claims more carried reviews than the delta allows is refused.
+        forged = dict(policy2, reviewers=["bug-reviewer-agent"])
+        forged["policy_sha256"] = canonical_sha256({k: v for k, v in forged.items() if k != "policy_sha256"})
+        self.assertIsNotNone(validate_policy_artifact(
+            self.repo, read_json(tdir / "plan.json"), forged, state_root(self.repo), Path(second["policy"]),
+            current_change_set=manifest2["change_set_sha256"], task_changes=manifest2.get("task_changes"),
+        )[1])
 
     def test_prepare_retry_retains_previous_review_round_after_plan_save_failure(self) -> None:
         task_id = "prepare-publish-failure"
@@ -7476,6 +7672,7 @@ class GitDeliveryTests(ReviewOrchestrationTests):
         }
         p_path = tdir / "plan.json"
         atomic_write_json(p_path, plan)
+        atomic_write_json(tdir / f"manifest-run-{task_id}.json", manifest)  # as prepare-verification saves it
         active = {"task_id": task_id, "plan_path": str(p_path)}
         atomic_write_json(state_root(self.repo) / "active-task.json", active)
         return plan, tdir
@@ -7543,9 +7740,18 @@ class GitDeliveryTests(ReviewOrchestrationTests):
 
         action = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("DELIVERY_STALE_AFTER_COMMIT", action.get("code"))
-        self.assertEqual("TASK_STATE", action.get("kind"))
+        # Real app: the developer edited a verified file before committing and the agent resumed on its own;
+        # the router names the file and has the developer decide first.
+        self.assertEqual("DEVELOPER_ACTION", action.get("kind"))
         self.assertTrue(action.get("blocking"))
         self.assertIn("task resume", action.get("command", ""))
+        self.assertEqual(["app/src/main/kotlin/com/example/MainActivity.kt"], action.get("changed_files"))
+        self.assertIn("Content changed after verification: app/src/main/kotlin/com/example/MainActivity.kt", action["reason"])
+        self.assertIn("ask the developer", action["reason"])
+        from workflow import finalize_ready_delivery
+        with self.assertRaises(ValidationError) as ctx:
+            finalize_ready_delivery(self.repo, task_id)
+        self.assertIn("Changed after verification: app/src/main/kotlin/com/example/MainActivity.kt", str(ctx.exception))
 
     def test_GIT_DELIVERY_005_unrelated_non_delivery_noise_does_not_create_false_blocker(self) -> None:
         """GIT-DELIVERY-005: Unrelated non-delivery noise does not create a false blocker."""
@@ -7608,21 +7814,24 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         self, task_id: str, change_after_begin: str | None = None, expected_surfaces: str = "COMPOSE_UI",
     ) -> tuple[dict, Path]:
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 1 }\n")
-        draft(argparse.Namespace(
-            repo=str(self.repo),
-            task_id=task_id,
-            outcome="Router completion test task",
-            kind="FEATURE",
-            planning_depth="BOUNDED",
-            expected_surfaces=expected_surfaces,
-            expected_modules=":app",
-            architecture_intent="EXISTING_CHANGE",
-            architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
-            architecture_target_family=None,
-            expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
-            phases=None,
-            force=True,
-        ))
+        # These tests are about completion routing: keep the plan's surfaces exactly as named (P11 would add
+        # the file's BUSINESS_LOGIC, which matters only once the file is edited).
+        with mock.patch("workflow._with_planned_file_surfaces", side_effect=lambda _repo, expected, *_a, **_k: expected):
+            draft(argparse.Namespace(
+                repo=str(self.repo),
+                task_id=task_id,
+                outcome="Router completion test task",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces=expected_surfaces,
+                expected_modules=":app",
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+                architecture_target_family=None,
+                expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+                phases=None,
+                force=True,
+            ))
         record_approval(argparse.Namespace(
             repo=str(self.repo),
             task_id=task_id,
@@ -7828,6 +8037,111 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertNotIn("--record-start", act["reason"], "recorded once, never asked again")
         self.assertNotIn("before_first_edit", act)
+
+    def test_fix_delta_names_only_the_files_changed_since_the_review(self) -> None:
+        from workflow import _fix_delta
+
+        task_id = "fix-delta"
+        draft(self._draft_ns(task_id))
+        tdir = task_dir(self.repo, task_id)
+        login = "app/src/main/kotlin/com/example/Login.kt"
+        other = "app/src/main/kotlin/com/example/Other.kt"
+        write_file(self.repo / login, "package com.example\nclass Login { fun fixed() = 1 }\n")
+        write_file(self.repo / other, "package com.example\nclass Other\n")
+        reviewed = {"task_changes": [{"path": login, "content_identity": "git:a", "status": "M"},
+                                     {"path": other, "content_identity": "git:b", "status": "A"}]}
+        atomic_write_json(tdir / "manifest-run-old.json", reviewed)
+        current = {"task_changes": [{"path": login, "content_identity": "git:c", "status": "M"},
+                                    {"path": other, "content_identity": "git:b", "status": "A"}]}
+        plan = read_json(tdir / "plan.json")
+        delta = _fix_delta(self.repo, task_id, "run-old", current, plan)
+        self.assertIsNotNone(delta, "a computable delta must never fall back silently")
+        self.assertEqual([login], delta["files"])
+        self.assertTrue(delta["reviewers"], "the changed Kotlin file routes reviewers")
+        self.assertIsNone(_fix_delta(self.repo, task_id, "run-missing", current, plan), "unknown: everyone reruns")
+        self.assertEqual({"files": [], "reviewers": []}, _fix_delta(self.repo, task_id, "run-old", reviewed, plan))
+        deleted = {"task_changes": [{"path": other, "content_identity": "git:b", "status": "A"}]}
+        self.assertEqual({"files": [login], "reviewers": ["regression-impact-reviewer-agent"]},
+                         _fix_delta(self.repo, task_id, "run-old", deleted, plan))
+
+    def test_ROUTER_RECORD_START_002_approve_prints_the_step_before_the_first_edit(self) -> None:
+        """Real app: approve printed only TASK_STATUS, the agent started editing, and the record the router
+        asks for before the first edit never happened."""
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        plan = draft(argparse.Namespace(
+            repo=str(self.repo), task_id="approve-next", outcome="Record first", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ret = workflow_main(["approve", "--repo", str(self.repo), "--task-id", "approve-next", "--source", "conversation",
+                                 "--proof-reference", "ok", "--enforcement-tier", "RULE_ENFORCED",
+                                 "--plan-hash", plan["plan_sha256"][:12]])
+        self.assertEqual(0, ret, out.getvalue())
+        text = out.getvalue()
+        self.assertIn("TASK_STATUS=IMPLEMENTING", text)
+        self.assertIn("BEFORE_FIRST_EDIT=python .agents/harness.py test --record-start", text)
+        self.assertIn("NEXT_REASON=Implement code changes within approved scope", text)
+
+    def test_ROUTER_COMPILE_001_source_changes_are_compiled_before_prepare_verification(self) -> None:
+        """P7 (real app): a compile error found by the test gate after prepare-verification cost a full
+        Gradle run and a resume; the router asks for a compile-only build first, when one can be derived."""
+        from _variants import compile_task_for
+
+        self.assertEqual(":app:compileDebugSources", compile_task_for(":app:assembleDebug"))
+        self.assertEqual(":app:compileProdDebugSources", compile_task_for(":app:assembleProdDebug"))
+        self.assertEqual(":feature:core:compileDebugSources", compile_task_for(":feature:core:assemble"))
+        self.assertEqual("", compile_task_for(":app:bundleRelease"), "not an assemble task: nothing is guessed")
+        self.assertEqual("", compile_task_for(""))
+
+        task_id = "router-compile"
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Compile first", kind="FEATURE",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(task_dir(self.repo, task_id) / "task-start-failures.json", json.dumps({"task_id": task_id, "failures": []}))
+        write_file(self.repo / "gradlew", "#!/bin/sh\n")
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val compiled = 2 }\n")
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act["code"])
+        self.assertIn("first run `python .agents/harness.py compile`", act["reason"])
+        self.assertIn("compileDebugSources", act["reason"])
+        self.assertIn("Then run: python .agents/harness.py task prepare-verification", act["reason"])
+        self.assertEqual("PREPARE_VERIFICATION", act["on_complete"]["code"])
+
+        # No Gradle wrapper: the command could not run, so it is not suggested.
+        (self.repo / "gradlew").unlink()
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertNotIn("harness.py compile", act["reason"])
+        self.assertIn("When it is complete, run: python .agents/harness.py task prepare-verification", act["reason"])
+
+        # A build task that is not an assemble task: no compile task is guessed, the flow is unchanged.
+        write_file(self.repo / "gradlew", "#!/bin/sh\n")
+        with mock.patch("_variants.resolve_assemble_task", return_value=":app:bundleRelease"):
+            act = resolve_next_action(self.repo, task_id, plan)
+        self.assertNotIn("harness.py compile", act["reason"])
+        # A missing project configuration: resolution fails and the flow is unchanged.
+        from _variants import ValidationError as VariantError
+        with mock.patch("_variants.resolve_assemble_task", side_effect=VariantError("ASSEMBLE_TASK_RESOLUTION_FAILED")):
+            act = resolve_next_action(self.repo, task_id, plan)
+            from _variants import resolve_compile_task
+            task, note = resolve_compile_task(self.repo)
+        self.assertNotIn("harness.py compile", act["reason"])
+        self.assertEqual("", task)
+        self.assertIn("ASSEMBLE_TASK_RESOLUTION_FAILED", note)
+        (self.repo / "gradlew").unlink()
 
     def test_ROUTER_GATE_FAIL_002_other_features_failing_tests_go_to_the_developer(self) -> None:
         """O64 (real app): the router said "fix it within the approved scope" for another feature's failing

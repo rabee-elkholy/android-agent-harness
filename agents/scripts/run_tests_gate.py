@@ -352,7 +352,16 @@ def evaluate_unit_test_execution(
 
     test_failure_only = bool((outcome or {}).get("test_failure_only"))
     if code != 0 and (not failed or not fresh_failures or not test_failure_only):
-        return False, f"Gradle failure is not attributable exclusively to fresh failing-test reports (exit code {code})", {
+        first_error = str((outcome or {}).get("first_error") or "")
+        if first_error:
+            # A live run: the verdict said only "not attributable ... to fresh failing-test reports".
+            detail = f"the build failed before the tests ran: compile error at {first_error}"
+        else:
+            detail = (
+                f"the Gradle run failed for a reason other than failing tests (exit code {code}); "
+                "read the [ERROR] lines above"
+            )
+        return False, detail, {
             "status": "FAIL",
             "exit_code": code,
             **summary,
@@ -495,6 +504,130 @@ def _record_task_start(
     return 0
 
 
+def _test_source(repo: Path, simple: str) -> str:
+    """The repository path of the test class `simple` (exactly one match), or ""."""
+    import subprocess
+
+    from plan_authority import is_test_path
+
+    proc = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", f"*{simple}.kt", f"*{simple}.java"],
+        cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+    )
+    matches = [line for line in proc.stdout.splitlines() if Path(line).stem == simple and is_test_path(line)]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def _unrelated_failures(repo: Path, plan: dict, task_id: str, failed: list[dict]) -> tuple[list[dict], list[str]]:
+    """Failing tests this task cannot have caused as far as the source shows: (unrelated, refusals).
+
+    Unrelated means the test is not a planned or changed test and its source names no type or
+    top-level function declared in a production file the task changed. An indirect break (through a
+    class the test does not name) cannot be seen this way, which is why the developer confirms.
+    """
+    from delivery_manifest import build_task_manifest, load_task_baseline
+    from plan_authority import changed_file_paths, is_test_path, planned_test_classes
+    from _source_outline import outline, reference_lines
+
+    manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"))
+    changed = changed_file_paths(manifest)
+    owned = planned_test_classes(plan.get("expected_files") or []) | {Path(p).stem for p in changed if is_test_path(p)}
+    names: set[str] = set()
+    for rel in changed:
+        if is_test_path(rel) or not rel.endswith((".kt", ".java")):
+            continue
+        names.add(Path(rel).stem)
+        # Types, and functions a test can call by name (top level); a member named like a method the test
+        # also calls (onCreate) says nothing about the test depending on this file.
+        names |= {
+            e["name"] for e in outline(repo / rel)
+            if e["kind"] not in ("val", "var", "method", "fun") or (e["kind"] == "fun" and e.get("top_level"))
+        }
+    unrelated: list[dict] = []
+    refusals: list[str] = []
+    seen: dict[str, str] = {}
+    for item in failed:
+        name = str(item.get("test_name") or "")
+        simple = name.partition("#")[0].rpartition(".")[2].partition("$")[0]
+        if simple not in seen:
+            source = _test_source(repo, simple) if simple else ""
+            if not simple or simple in owned:
+                seen[simple] = f"{simple or name}: a test of this task's own files"
+            elif not source:
+                seen[simple] = f"{simple}: its source file could not be found, so it cannot be shown to be unrelated"
+            else:
+                hits = reference_lines(repo / source, names)
+                used = sorted(n for n in names if hits and reference_lines(repo / source, {n}))
+                seen[simple] = f"{simple}: mentions {', '.join(used[:5])}, which this task changed" if hits else ""
+        if seen[simple]:
+            if seen[simple] not in refusals:
+                refusals.append(seen[simple])
+        else:
+            unrelated.append(item)
+    return unrelated, refusals
+
+
+def _record_unrelated(failed: list[dict], code: int, outcome: dict, reports_before: dict, task, proof: str) -> int:
+    """`--record-unrelated`: after the developer confirms, tolerate failing tests the change cannot touch.
+
+    Real app: a task began without `--record-start`, another feature's stale test failed at the gate,
+    and the only advice was a baseline capture on a clean tree, which the task's own edits made
+    impossible; the agent offered to rewrite that test under a revised plan instead.
+    """
+    from mutation_guard import active_plan
+    from _vnext_common import atomic_write_json, read_json, utc_now
+
+    try:
+        plan = active_plan(REPO)
+    except Exception:
+        plan = {}
+    task_id = str(plan.get("task_id") or "")
+    if not task_id or plan.get("status") not in ("IMPLEMENTING", "VERIFYING"):
+        live_print("[FAIL] --record-unrelated needs an active task in IMPLEMENTING or VERIFYING.", err=True)
+        return 1
+    if not proof.strip():
+        live_print("[FAIL] --record-unrelated needs --proof-reference with the developer's confirmation.", err=True)
+        return 1
+    _failed, fresh = _failures_with_freshness(REPO, task, reports_before)
+    if code == 0 or not failed:
+        live_print("[+] No unit test fails; nothing to record.")
+        return 0
+    if not fresh or not outcome.get("test_failure_only"):
+        live_print(f"[FAIL] The Gradle run failed for a reason other than failing tests (exit {code}); nothing was recorded.", err=True)
+        return 1
+    # Tests already recorded (at the start or earlier) are tolerated by the gate; they are not judged again.
+    failed, _already = split_task_start_failures(failed, load_task_start_failures(REPO, task_id))
+    if not failed:
+        live_print("[+] Every failing test is already recorded as not this task's; nothing new to record.")
+        return 0
+    unrelated, refusals = _unrelated_failures(REPO, plan, task_id, failed)
+    path = _task_directory(REPO, task_id) / TASK_START_FAILURES
+    try:
+        data = read_json(path) if path.is_file() else {}
+    except Exception:
+        data = {}
+    if str(data.get("task_id") or "") != task_id:
+        data = {"schema_version": 1, "task_id": task_id, "captured_at": utc_now(), "status": "RECORDED_LATE", "failures": []}
+    known = {(str(i.get("test_name")), str(i.get("fingerprint"))) for i in data.get("failures") or []}
+    for item in unrelated:
+        key = (str(item.get("test_name") or ""), str(item.get("fingerprint") or ""))
+        if key not in known:
+            data.setdefault("failures", []).append({
+                "test_name": key[0], "fingerprint": key[1], "source": "DEVELOPER_CONFIRMED_UNRELATED",
+                "proof_reference": proof.strip()[:500], "recorded_at": utc_now(),
+            })
+            known.add(key)
+    if unrelated:
+        atomic_write_json(path, data)
+        live_print(f"[*] {len(unrelated)} failing test(s) recorded as not this task's (the developer confirmed; they name nothing this task changed):")
+        for item in unrelated[:30]:
+            live_print(f"  - {item.get('test_name')}")
+        live_print("[*] Run `python .agents/harness.py test` again; these no longer count against the task.")
+    for line in refusals:
+        live_print(f"[FAIL] Not recorded: {line}. Fix it within the plan, or ask the developer.", err=True)
+    return 1 if refusals else 0
+
+
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Baseline-aware unit-test delivery gate")
@@ -504,7 +637,15 @@ def main(argv=None) -> int:
         "--record-start", action="store_true",
         help="Before the task's first edit, record which unit tests already fail (they never count as this task's regressions)",
     )
+    parser.add_argument(
+        "--record-unrelated", action="store_true",
+        help="After the developer confirms, record failing tests that name nothing this task changed as not this task's",
+    )
+    parser.add_argument("--proof-reference", default="", help="The developer's confirmation (with --record-unrelated)")
     args = parser.parse_args(argv)
+    if args.record_unrelated and not args.proof_reference.strip():
+        live_print("[FAIL] --record-unrelated needs --proof-reference with the developer's confirmation.", err=True)
+        return 1
 
     from run_gradle_task import run_gradle
 
@@ -555,6 +696,9 @@ def main(argv=None) -> int:
     failed = collect_task_failures(REPO, task)
     if getattr(args, "record_start", False):
         return _record_task_start(task_label, failed, baseline, code, outcome, reports_before, task)
+    if getattr(args, "record_unrelated", False):
+        remaining, _known, _size = classify_failures(failed, baseline)
+        return _record_unrelated(remaining, code, outcome, reports_before, task, args.proof_reference)
     if getattr(args, "capture_red", False):
         if not failed:
             live_print("[FAIL] --capture-red requested but no failing tests were detected.", err=True)

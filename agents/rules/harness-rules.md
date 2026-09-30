@@ -88,7 +88,7 @@ python .agents/scripts/review_policy.py --repo . --json
 - READY_FOR_DELIVERY means local evidence is complete; Git and release actions remain developer-owned.
 - Unrelated prior task changes block new tasks unless explicitly overridden.
 - CI verifies only; cannot synthesize approval, implement fixes, publish, mutate trackers, or perform destructive recovery.
-- Tracker provider `none` disables tracker behavior. Zoho writes require explicit `update zoho` trigger, approved `zoho_sprints` scope, and stable `operation_id`. Failures become `PM_SYNC_PENDING`; never set Done/Solved automatically.
+- Tracker provider `none` disables tracker behavior. Zoho writes need an explicit `update zoho` (`harness.py zoho authorize`) and a stable `operation_id`. Failures become `PM_SYNC_PENDING`; never set Done/Solved automatically.
 
 ## 8. Enforcement truth
 

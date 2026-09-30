@@ -136,16 +136,21 @@ def _developer_authority_violation(command: str) -> str:
     """
     for subcommand, rest in _lifecycle_calls(command):
         if subcommand == "cancel":
-            return "cancel"
+            # The developer asked in chat: the agent runs it with their words as proof, like an approval.
+            if _flag(rest, "--source").lower() != "conversation" or not _flag(rest, "--proof-reference"):
+                return "cancel"
         if subcommand in ("approve", "approve-sensitive"):
-            source = ""
-            for pos, part in enumerate(rest):
-                if part.startswith("--source="):
-                    source = part.split("=", 1)[1]
-                elif part == "--source" and pos + 1 < len(rest):
-                    source = rest[pos + 1]
-            if source.strip(";&|").lower() != "conversation":
+            if _flag(rest, "--source").lower() != "conversation":
                 return "approve"
+    return ""
+
+
+def _flag(rest: list[str], name: str) -> str:
+    for pos, part in enumerate(rest):
+        if part.startswith(name + "="):
+            return part.split("=", 1)[1].strip(";&|").strip()
+        if part == name and pos + 1 < len(rest):
+            return rest[pos + 1].strip(";&|").strip()
     return ""
 
 
@@ -182,11 +187,10 @@ def _pending_cancel(task_id: str) -> bool:
 
 def _cancel_pending_message(task_id: str) -> str:
     return (
-        f"The developer asked to cancel task '{task_id}', and cancelling is theirs. Do not resume the task or edit files "
-        "to undo the work. Ask with ask_question: say what cancelling does (the task closes; the developer restores "
-        f"or keeps the files), and give the command for their own terminal: `{_cancel_command(task_id)}`. "
-        "If the developer decides to continue the task instead, they run "
-        f"`python .agents/scripts/workflow.py resume --repo . --task-id {task_id}` themselves."
+        f"Cancelling task '{task_id}' is the developer's decision. Only when the developer asked for it in the chat, run "
+        f"`{_cancel_command(task_id)} --source conversation --proof-reference \"<the developer's words>\"`. Never cancel on "
+        "your own, and never resume the task or edit files to undo the work: the task closes and the files stay as they "
+        "are for the developer to keep or restore. If they did not ask, ask them with ask_question first."
     )
 
 
@@ -1070,12 +1074,18 @@ def _handle_subagent(name: str, args: dict) -> None:
 
 def _handle_external_mutation(integration, tool_name: str, args: dict) -> None:
     try:
+        grant = None
+        if integration.name == "zoho_sprints":
+            from zoho_grant import active_grant
+            grant = active_grant(REPO)
         try:
-            plan = active_plan(REPO)
+            plan = active_plan(REPO) or {}
         except Exception:
+            plan = {}
+        if not plan and not grant:
             emit("deny", f"{integration.display_name} mutation is not included in the active approved plan.", tool=tool_name)
             return
-        allowed, reason = validate_external_write(integration, tool_name, args, plan)
+        allowed, reason = validate_external_write(integration, tool_name, args, plan, grant=grant)
         if not allowed:
             emit("deny", reason, tool=tool_name)
             return

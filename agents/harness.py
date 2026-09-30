@@ -29,12 +29,57 @@ def _run(script: str, args: list[str]) -> int:
     return proc.returncode
 
 
+# Commands after which the agent needs the next step. A real delivery called `task status --next --json`
+# after each of them (six times from review finalize to ready), one extra model turn each.
+# `verify` prints a JSON report and is left out so its output stays parseable.
+NEXT_STEP_COMMANDS = frozenset({"preflight", "test", "assemble", "device", "review"})
+
+
+def _print_next_step() -> None:
+    """Print the active task's next action as NEXT_ACTION= / NEXT_REASON= (best effort, never fails)."""
+    import contextlib
+    import io
+
+    try:
+        sys.path.insert(0, str(SCRIPTS))
+        from mutation_guard import active_plan
+
+        plan = active_plan(REPO_ROOT) or {}
+        task_id = str(plan.get("task_id") or "")
+        if not task_id or str(plan.get("status") or "") in ("", "DELIVERED", "CANCELLED"):
+            return
+        from workflow import resolve_next_action
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            action = resolve_next_action(REPO_ROOT, task_id, plan)
+    except Exception:
+        return
+    code = str(action.get("code") or "")
+    if not code:
+        return
+    command = str(action.get("command") or "")
+    if code.startswith("DISPATCH_") or code.startswith("RETRY_"):
+        command = f"python .agents/harness.py task status --task-id {task_id} --next --json (for the exact payload)"
+    print(f"NEXT_ACTION={code}: {command or '(no command: ' + str(action.get('kind') or 'action') + ')'}", flush=True)
+    if action.get("reason"):
+        print(f"NEXT_REASON={action['reason']}", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
+    args = list(argv if argv is not None else sys.argv[1:])
+    code = _main(args)
+    # Never after --json (the output must stay pure JSON) or help.
+    if args and args[0] in NEXT_STEP_COMMANDS and not {"--json", "-h", "--help"} & set(args):
+        _print_next_step()
+    return code
+
+
+def _main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|preflight|test|assemble|review|phase-review|device|verify|zoho|version|update-info|commands> [args...]"
+            "<context|task-context|graph|task|doctor|preflight|test|compile|assemble|review|phase-review|device|verify|zoho|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -96,6 +141,18 @@ def main(argv: list[str] | None = None) -> int:
             sys.path.insert(0, str(SCRIPTS))
             from _variants import resolve_assemble_task
             task_str = resolve_assemble_task(REPO_ROOT)
+            forwarded = [task_str]
+        return _run("run_gradle_task.py", forwarded)
+    if command == "compile":
+        forwarded = list(args)
+        if not forwarded:
+            sys.path.insert(0, str(SCRIPTS))
+            from _variants import resolve_compile_task
+            task_str, note = resolve_compile_task(REPO_ROOT)
+            if not task_str:
+                print(f"[WARN] {note}", file=sys.stderr)
+                return 3
+            print(f"[*] {note}")
             forwarded = [task_str]
         return _run("run_gradle_task.py", forwarded)
     if command == "review":

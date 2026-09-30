@@ -150,6 +150,37 @@ def resolve_assemble_task(repo: Path | str | None = None, flavor: str | None = N
     return f"{module.rstrip(':')}:assemble{active_var or 'Debug'}"
 
 
+def compile_task_for(assemble: str) -> str:
+    """Map an assemble task to the task that compiles the same variant without packaging.
+
+    ``:app:assembleProdDebug`` becomes ``:app:compileProdDebugSources``. A bare
+    ``assemble`` (library default) compiles every variant with
+    ``compileDebugSources``. Returns "" when the task is not an assemble task.
+    """
+    task = str(assemble or "").strip()
+    match = re.fullmatch(r"(?P<module>(?::[\w.-]+)*):assemble(?P<variant>\w*)", task)
+    if not match:
+        return ""
+    variant = match.group("variant") or "Debug"
+    return f"{match.group('module')}:compile{variant}Sources"
+
+
+def resolve_compile_task(repo: Path | str | None = None) -> tuple[str, str]:
+    """Return (compile_task, note). The task is "" when it cannot be derived."""
+    try:
+        assemble = resolve_assemble_task(repo)
+    except ValidationError as exc:
+        return "", str(exc)
+    task = compile_task_for(assemble)
+    if task:
+        return task, f"compile task derived from assemble task {assemble}"
+    return "", (
+        f"COMPILE_TASK_UNKNOWN: the configured build task {assemble!r} is not an assemble task, so no "
+        "compile-only task can be derived. Run `python .agents/harness.py compile <gradle task>` with the "
+        "project's compile task, or skip this check and let prepare-verification build the project."
+    )
+
+
 def assemble_task(flavor: str | None = None) -> str:
     return resolve_assemble_task(flavor=flavor)
 

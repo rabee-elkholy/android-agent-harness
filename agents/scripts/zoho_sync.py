@@ -13,11 +13,13 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, state_root, utc_now, validate_id
 from integrations.zoho_sprints.policy import ZohoPolicyResolver
+from zoho_grant import active_grant, authorize_command, record_grant
 
 _SERVER_MODULE = None
 
@@ -169,11 +171,13 @@ def cmd_start(args: argparse.Namespace) -> int:
         sys.stderr.write(f"ERROR: Task '{task_id}' has no linked Zoho item.\n")
         return 1
 
-    external_writes = plan.get("external_writes") or []
+    external_writes = list(plan.get("external_writes") or [])
+    if "zoho_sprints" not in external_writes and active_grant(repo):
+        external_writes.append("zoho_sprints")
     if "zoho_sprints" not in external_writes:
         msg = (
-            "EXTERNAL_WRITE_SCOPE_REQUIRED: zoho_sprints external write scope is required. "
-            "Run 'workflow.py revise --external-write zoho_sprints' and obtain developer approval."
+            "EXTERNAL_WRITE_SCOPE_REQUIRED: Zoho writes need the developer's explicit `update zoho`. When they type it, "
+            f"run `{authorize_command()}`; do not revise the task plan for a tracker update."
         )
         sys.stderr.write(f"ERROR: {msg}\n")
         return 1
@@ -292,11 +296,13 @@ def cmd_delivery(args: argparse.Namespace) -> int:
         sys.stderr.write(f"ERROR: Task '{task_id}' has no linked Zoho item.\n")
         return 1
 
-    external_writes = plan.get("external_writes") or []
+    external_writes = list(plan.get("external_writes") or [])
+    if "zoho_sprints" not in external_writes and active_grant(repo):
+        external_writes.append("zoho_sprints")
     if "zoho_sprints" not in external_writes:
         msg = (
-            "EXTERNAL_WRITE_SCOPE_REQUIRED: zoho_sprints external write scope is required. "
-            "Run 'workflow.py revise --external-write zoho_sprints' and obtain developer approval."
+            "EXTERNAL_WRITE_SCOPE_REQUIRED: Zoho writes need the developer's explicit `update zoho`. When they type it, "
+            f"run `{authorize_command()}`; do not revise the task plan for a tracker update."
         )
         sys.stderr.write(f"ERROR: {msg}\n")
         return 1
@@ -467,6 +473,18 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_authorize(args: argparse.Namespace) -> int:
+    """Record the developer's `update zoho` as a short-lived Zoho write grant."""
+    try:
+        grant = record_grant(Path(args.repo).resolve(), args.proof_reference, source=args.source)
+    except Exception as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        return 1
+    print(f"ZOHO_WRITE_GRANTED until {time.strftime('%H:%M', time.localtime(grant['expires_epoch']))} "
+          "(the developer's `update zoho`). Write only what the developer saw.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -491,6 +509,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_cmd = sub.add_parser("status", parents=[common])
     status_cmd.set_defaults(handler=cmd_status)
+
+    auth_cmd = sub.add_parser("authorize", help="Record the developer's explicit `update zoho` (30 minutes)")
+    auth_cmd.add_argument("--repo", default=".", help="Repository root")
+    auth_cmd.add_argument("--source", choices=["conversation", "developer_terminal"], default="conversation")
+    auth_cmd.add_argument("--proof-reference", required=True, help="The developer's message containing `update zoho`")
+    auth_cmd.set_defaults(handler=cmd_authorize)
 
     return parser
 

@@ -383,8 +383,13 @@ def decide_later_round(
     task_kind: str = "FEATURE",
     current_change_set: str | None = None,
     plan: dict | None = None,
+    fix_delta: dict | None = None,
 ) -> dict:
-    """Narrow a later round while retaining tamper-evident prior PASS coverage."""
+    """Narrow a later round while retaining tamper-evident prior PASS coverage.
+
+    ``fix_delta`` ({"files": [...], "reviewers": [...]}) names the files changed since the reviewed
+    run and the reviewers those files route. Without it, any production change reruns every reviewer.
+    """
     result = decide(classification, skills_root, project_kind=project_kind, task_kind=task_kind, plan=plan)
     current_required = set(result.get("reviewers") or [])
     previous_required = set(previous_policy.get("reviewers") or [])
@@ -406,8 +411,20 @@ def decide_later_round(
     prod_surfaces = set(result.get("surfaces") or []) - {"TEST_ONLY", "DOCS"}
     current_cs = current_change_set or classification.get("change_set_sha256")
     if current_cs and current_cs != source_change_set and prod_surfaces:
-        carried = []
-        rerun = set(current_required)
+        if fix_delta is None:
+            carried = []
+            rerun = set(current_required)
+        else:
+            # A real task fixed two bug findings and all five reviewers ran again. A reviewer whose
+            # area the fix does not touch keeps its PASS; everyone the fix routes reruns, as do the
+            # finding owners and the regression reviewer, which sees the whole change.
+            rerun |= set(fix_delta.get("reviewers") or []) & current_required
+            carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
+            rerun |= current_required - set(carried)
+            result["fix_delta"] = {
+                "files": sorted(str(item) for item in fix_delta.get("files") or []),
+                "reviewers": sorted(str(item) for item in fix_delta.get("reviewers") or []),
+            }
 
     result["reviewers"] = sorted(rerun)
     result["review_status"] = "REQUIRED" if rerun else "NONE"

@@ -610,7 +610,7 @@ class TestCanonicalDraftRow(unittest.TestCase):
 
 
 class TestAntigravityPlanHashApproval(unittest.TestCase):
-    """B3: the documented Antigravity approval binds the plan hash shown in PLAN_SUMMARY."""
+    """B3: the documented Antigravity approval binds the plan hash that draft prints (PLAN_HASH)."""
 
     DOCS = (REPO_ROOT / "GEMINI.md", REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template")
 
@@ -623,7 +623,7 @@ class TestAntigravityPlanHashApproval(unittest.TestCase):
             with self.subTest(path=path.name):
                 self.assertGreaterEqual(len(commands), 2)
                 for command in commands:
-                    self.assertIn("--plan-hash <hash from PLAN_SUMMARY>", command)
+                    self.assertIn("--plan-hash <hash from PLAN_HASH>", command)
 
     def test_documented_approval_accepts_the_shown_plan_and_rejects_a_mismatch(self):
         import argparse

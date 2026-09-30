@@ -477,6 +477,63 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
     return issues
 
 
+def lint_java_file(file_path: Path, modified_lines: set[int] | None = None) -> list[dict]:
+    """Inline FQCNs in Java (the only rule here that applies to Java).
+
+    Real app: an inline FQCN in PaymentActivity.java passed preflight (Kotlin only) and was found by
+    the convention reviewer, which cost a blocked review round, a resume and a second full review.
+    """
+    try:
+        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception as e:
+        return [{"file": str(file_path), "line": 1, "type": "IO_ERROR", "msg": str(e)}]
+    issues: list[dict] = []
+    # Java has no import alias: when the simple name is already imported from another package, or is the
+    # file's own class, the qualified name is the only way to write it.
+    imported: dict[str, str] = {}
+    for line in lines:
+        found = re.match(r"\s*import\s+(?!static\b)([\w.]+)\s*;", line)
+        if found:
+            imported[found.group(1).rsplit(".", 1)[-1]] = found.group(1)
+    declared = set(re.findall(r"\b(?:class|interface|enum|record)\s+(\w+)", "\n".join(lines)))
+
+    def unavoidable(qualified: str) -> bool:
+        parts = qualified.split(".")
+        type_at = next((i for i, part in enumerate(parts) if part[:1].isupper()), None)
+        if type_at is None:
+            return False
+        simple, owner = parts[type_at], ".".join(parts[: type_at + 1])
+        return simple in declared or (simple in imported and imported[simple] != owner)
+
+    in_block_comment = False
+    for idx, line in enumerate(lines, 1):
+        trimmed = line.strip()
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+            continue
+        if trimmed.startswith("/*"):
+            if "*/" not in trimmed[2:]:
+                in_block_comment = True
+            continue
+        if modified_lines is not None and idx not in modified_lines:
+            continue
+        if trimmed.startswith(("import ", "package ", "//", "*", "@")):
+            continue
+        for match in FQCN_PATTERN.finditer(line):
+            val = match.group(0)
+            if FQCN_WHITELIST.match(val) or _in_string_or_comment(line, match.start()) or unavoidable(val):
+                continue
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "INLINE_FQCN",
+                "msg": f"Inline FQCN forbidden: '{trimmed}'. Add an import at the top.",
+            })
+            break
+    return issues
+
+
 def lint_build_script(file_path: Path) -> list[dict[str, Any]]:
     issues = []
     try:
@@ -523,13 +580,19 @@ def main() -> int:
             if not any(x in p.parts for x in skip)
         ]
         modified_lines_map = {p: None for p in target_files}
+        java_files = [
+            p for root in roots for p in repo_glob(root, "**/*.java") if not any(x in p.parts for x in skip)
+        ]
+        java_lines_map = {p: None for p in java_files}
     else:
         target_files = [p for p in changed_paths() if p.suffix == ".kt"]
         modified_lines_map = get_modified_lines_map(REPO, target_files)
+        java_files = [p for p in changed_paths() if p.suffix == ".java"]
+        java_lines_map = get_modified_lines_map(REPO, java_files) if java_files else {}
 
     build_files = [p for p in changed_paths() if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")]
 
-    if not target_files and not build_files:
+    if not target_files and not build_files and not java_files:
         git_head_proc = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=REPO,
@@ -554,6 +617,8 @@ def main() -> int:
     all_issues = []
     for path in target_files:
         all_issues.extend(lint_file(path, modified_lines=modified_lines_map.get(path)))
+    for path in java_files:
+        all_issues.extend(lint_java_file(path, modified_lines=java_lines_map.get(path)))
     for bf in build_files:
         all_issues.extend(lint_build_script(bf))
 

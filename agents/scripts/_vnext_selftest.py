@@ -255,28 +255,29 @@ class ChatInstallationDocsTests(unittest.TestCase):
         offenders = [str(p.relative_to(KIT)) for p in paths if p.is_file() and arabic.search(p.read_text(encoding="utf-8"))]
         self.assertEqual([], offenders)
 
-    def test_antigravity_adapter_is_bounded_and_prompts_goal_and_grill_me(self) -> None:
-        # Short certification O45: /goal and /grill-me are developer-typed; the agent never reminded
-        # the developer. The approval question carries the /goal line and the adapter tells the agent
-        # to suggest /grill-me inside ask_question before drafting risky decisions.
+    def test_antigravity_adapter_is_bounded_and_asks_hard_questions_itself(self) -> None:
+        # 1.1.11: /goal and /grill-me were removed; the agent asks the developer about risky decisions
+        # itself before drafting, and follows the router without stopping after approval.
         from workflow import APPROVAL_QUESTION_GUIDE
 
         gemini = (KIT / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
         self.assertLessEqual(len(gemini), 23_000, "GEMINI.md grows unbounded; move detail into router output")
-        self.assertIn("APPROVAL_CALLOUTS lines first", APPROVAL_QUESTION_GUIDE)
+        self.assertNotIn("APPROVAL_CALLOUTS", APPROVAL_QUESTION_GUIDE)
+        self.assertNotIn("/goal", gemini)
+        self.assertNotIn("/grill-me", gemini)
         self.assertIn("`APPROVAL_QUESTION` line", gemini)
-        self.assertIn("first the `APPROVAL_CALLOUTS` lines, each a highlighted block", gemini)
-        self.assertIn("lines verbatim as plain text, never in a code block", gemini)
+        self.assertIn("`APPROVAL_BRIEF` lines translated, each said once, as plain text, never in a code block", gemini)
         self.assertNotIn("artifact directory", gemini)
         claude = (KIT / "agents/tool-adapters/CLAUDE.md.template").read_text(encoding="utf-8")
-        self.assertIn("summary lines verbatim as plain text, never in a code block", claude)
-        self.assertIn("suggest inside an `ask_question` that the developer types `/grill-me` first", gemini)
+        self.assertIn("each said once, as plain text, never in a code block", claude)
+        self.assertIn("ask the developer about it with `ask_question`", gemini)
         self.assertIn("an existing destructive fallback, users on older schema versions and downgrade", gemini)
         self.assertIn("Cancel is the developer's", gemini)
         self.assertIn("`reviewer_prompts[role]`", gemini)
         self.assertIn("never write their reason for them", gemini)
         reminder = (KIT / "agents/scripts/pre_invocation_reminder.py").read_text(encoding="utf-8")
-        self.assertIn("types `/grill-me` before you draft", reminder)
+        self.assertIn("ask the developer about it with `ask_question` before you draft", reminder)
+        self.assertNotIn("/grill-me", reminder)
 
     def test_all_tool_adapters_contain_mobile_walkthrough_and_independent_review_rules(self) -> None:
         templates_dir = KIT / "agents" / "tool-adapters"

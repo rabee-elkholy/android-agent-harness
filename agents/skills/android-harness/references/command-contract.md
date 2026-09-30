@@ -95,13 +95,13 @@ python .agents/scripts/workflow.py draft \
 > `--planning-depth`: `BOUNDED` for normal scoped tasks (default); `ARCHITECTURAL` for explicit architecture migration or broad structural architectural work.
 > `--external-write`: Append `--external-write zoho_sprints` for Zoho mutation, `mcp:<server>` for generic MCP write operations, or `mcp:<server>:high-impact` for sensitive MCP mutations (deploy, drop, delete).
 > `--zoho-*`: Optional flags to bind the task to an existing Zoho Sprints item. When the developer wants the item's status or a comment updated, also pass `--external-write zoho_sprints` (draft prints `ZOHO_WRITE_NOT_PLANNED=` when it is missing).
-> Draft and revise print, in order: `PLAN_SUMMARY_BEGIN`..`PLAN_SUMMARY_END` (a list, one field per line), `PLAN_DOCUMENT_URI=` (the plan.md link), `APPROVAL_CALLOUTS:` (`/goal`, `/grill-me` reminders), `PRE_EXISTING_CHANGES=` (the developer's uncommitted files that predate the task), `ZOHO_WRITE_NOT_PLANNED=`, `PLAN_GAPS=` (revise first) and `APPROVAL_QUESTION:` (how to ask). Ask with `ask_question`: the plan.md link as a clickable Markdown link, a short explanation, then the summary lines as plain text, never in a code block.
+> Draft and revise print, in order: `APPROVAL_BRIEF_BEGIN`..`APPROVAL_BRIEF_END` (what changes, file names, sensitive areas, outside writes, phone checks, risks; omitted after a revise of an approved plan, which prints `REVISION_CHANGES=` and `DRIFT_CAUSES=` instead), `PLAN_HASH=` (for `approve --plan-hash`), `PLAN_DOCUMENT_URI=` (the plan.md link), `PRE_EXISTING_CHANGES=` (the developer's uncommitted files that predate the task), `ZOHO_WRITE_NOT_PLANNED=`, `PLAN_GAPS=` (revise first) and `APPROVAL_QUESTION:` (how to ask). Ask with `ask_question`: the plan.md link as a clickable Markdown link, then the brief lines, each once, as plain text, never in a code block. `python .agents/scripts/workflow.py plan-summary` still prints every field of the plan.
 
 # 1b. Revise the plan (new scope, missing fields, Zoho write); a revised plan needs approval again
 python .agents/scripts/workflow.py revise --repo . --task-id <id> [any draft flag to change]
 
 # 2. Record developer approval (atomically transitions directly to IMPLEMENTING)
-python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED --plan-hash <Plan hash from PLAN_SUMMARY>
+python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH>
 
 # Authoritative next action at any point (the router)
 python .agents/harness.py task status --task-id <id> --next --json
@@ -137,9 +137,9 @@ python .agents/scripts/workflow.py deliver --repo . --task-id <id>
 # 9b. Linked Zoho delivery sync (when task has approved zoho_link, after developer git commit)
 python .agents/harness.py zoho delivery-sync --task-id <id>
 
-# Cancel task: developer-owned. The agent puts this exact command in an ask_question and never runs
-# cancel, resume or file edits to undo the work itself.
-python .agents/scripts/workflow.py cancel --repo . --task-id <id>
+# Cancel task: the developer's decision. When the developer asks in chat, the agent runs it with their
+# words as proof; it never cancels on its own and never resumes or edits files to undo the work.
+python .agents/scripts/workflow.py cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"
 ```
 
 ### Expected Output
@@ -405,7 +405,7 @@ When an exception occurs:
 | **Revise Plan** | `python .agents/scripts/workflow.py revise --repo . --task-id <id> ...` | Change the plan; approval is asked again |
 | **Approve** | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<reply>" --enforcement-tier RULE_ENFORCED --plan-hash <hash>` | Record the developer's approval of the shown plan |
 | **Next Action** | `python .agents/harness.py task status --task-id <id> --next --json` | The router: the single next step and why |
-| **Cancel Task** | `python .agents/scripts/workflow.py cancel --repo . --task-id <id>` | Developer-owned: put it in an ask_question, never run it |
+| **Cancel Task** | `python .agents/scripts/workflow.py cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"` | Only when the developer asks in chat; files stay as they are |
 | **Context Note** | `python .agents/harness.py context note "<note>"` | Record architectural convention/note |
 | **Zoho Start Sync**| `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item; on `ENV`, tell the developer |
 | **Preflight Gate** | `python .agents/harness.py preflight` (engine: `preflight.py` / `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
@@ -418,6 +418,7 @@ When an exception occurs:
 | **Room Guard** | `python .agents/scripts/room_guard.py` | Standalone Room schema & migration check |
 | **Arch Drift** | `python .agents/scripts/architecture_drift.py --repo . --task-id <id>` | Validate code against architecture contract |
 | **Logcat Doctor** | `python .agents/scripts/logcat_doctor.py` | Triage crashes and runtime exceptions |
+| **Compile** | `python .agents/harness.py compile [gradle task]` | Compile the configured variant without tests or packaging (assemble task mapped to `compile<Variant>Sources`); run it before prepare-verification. Exits 3 with `COMPILE_TASK_UNKNOWN` or `ASSEMBLE_TASK_RESOLUTION_FAILED` when no compile task can be derived: pass the task explicitly or skip the check |
 | **Prepare Verification** | `python .agents/harness.py task prepare-verification --repo . --task-id <id> --host <host>` | Freeze the change and start the verification run |
 | **Review Package** | `python .agents/harness.py review package --task-id <id>` (engine: `review_package.py`) | Generate immutable review package markdown |
 | **Review Complete**| `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` | Record trusted reviewer completion |

@@ -277,6 +277,52 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
             self.assertFalse(passed_xml)
             self.assertIn("XML layouts instead of preferred Compose family", msg_xml)
 
+    def test_architecture_drift_ignores_what_the_file_already_was(self) -> None:
+        """Real app: a Fragment that already hosted a Compose paywall got one line (a custom variable),
+        and PRESERVE mode reported "XML -> Compose transition" four times, through three revises."""
+        import subprocess
+
+        def git(*args: str) -> str:
+            return subprocess.run(["git", *args], cwd=str(self.repo), capture_output=True, text=True, check=True).stdout.strip()
+
+        git("init", "-q")
+        git("config", "user.email", "arch@example.invalid")
+        git("config", "user.name", "Arch")
+        paywall = self._write("feature/pay/PaywallFragment.kt",
+                              "class PaywallFragment : Fragment() { @Composable fun PaywallContent() {} }\n")
+        xml_screen = self._write("feature/pay/PlanFragment.kt",
+                                 "class PlanFragment : Fragment() { val b = inflate(R.layout.plan) }\n")
+        git("add", ".")
+        git("commit", "-qm", "base")
+        head = git("rev-parse", "HEAD")
+        contract = {
+            "mode": "PRESERVE", "target_scope": "feature/pay",
+            "source_dimensions": {"ui_toolkit": "xml", "state_holder_base": "BaseViewModel", "state_stream": "livedata"},
+        }
+        baseline = {"repository": {"head": head}, "changes": []}
+        paywall.write_text("class PaywallFragment : Fragment() { @Composable fun PaywallContent() { skip(true) } }\n", encoding="utf-8")
+        with mock.patch("delivery_manifest.load_task_baseline", return_value=baseline):
+            passed, msg, _ = check_architecture_drift(self.repo, contract, task_changes=[{"path": "feature/pay/PaywallFragment.kt"}])
+        self.assertTrue(passed, f"already Compose before the task: {msg}")
+
+        # A real transition in the same task is still stopped.
+        xml_screen.write_text("class PlanFragment : Fragment() { fun v() = setContent { Plan() } }\n", encoding="utf-8")
+        new_screen = self._write("feature/pay/NewFragment.kt", "class NewFragment : Fragment() { @Composable fun C() {} }\n")
+        with mock.patch("delivery_manifest.load_task_baseline", return_value=baseline):
+            passed, msg, violations = check_architecture_drift(self.repo, contract, task_changes=[
+                {"path": "feature/pay/PaywallFragment.kt"}, {"path": "feature/pay/PlanFragment.kt"}, {"path": "feature/pay/NewFragment.kt"}])
+        self.assertFalse(passed)
+        self.assertEqual(2, len(violations), violations)
+        self.assertTrue(any("PlanFragment.kt" in v for v in violations))
+        self.assertTrue(any("NewFragment.kt" in v for v in violations), "a new Compose screen in an XML family is a transition")
+
+        # Uncommitted developer edits that predate the task: their original content is unknown, so the check stays strict.
+        dirty = {"repository": {"head": head}, "changes": [{"path": "feature/pay/PaywallFragment.kt"}]}
+        with mock.patch("delivery_manifest.load_task_baseline", return_value=dirty):
+            passed, _msg, _ = check_architecture_drift(self.repo, contract, task_changes=[{"path": "feature/pay/PaywallFragment.kt"}])
+        self.assertFalse(passed)
+        self.assertTrue(new_screen.is_file())
+
     # --- 8. SIM-01 through SIM-10 Consumer-Model Usability Simulations ---
 
     def test_sim_01_bug_in_legacy_xml_screen(self) -> None:

@@ -628,6 +628,66 @@ class RedGreenTemporalTests(unittest.TestCase):
         self.assertEqual("BUILD_FAILED", start["status"])
         self.assertEqual([], start["failures"])
 
+    def _gate_with(self, argv: list[str], gradle) -> tuple[int, str]:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from run_tests_gate import main as tests_gate_main
+
+        shutil.rmtree(self.tmp / "app" / "build" / "test-results", ignore_errors=True)
+        out = io.StringIO()
+        with mock.patch("run_tests_gate.REPO", self.tmp), \
+             mock.patch("_repo_files.REPO", self.tmp), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=gradle), \
+             mock.patch("sys.argv", ["run_tests_gate.py", *argv]), \
+             redirect_stdout(out), redirect_stderr(out):
+            code = tests_gate_main()
+        return code, out.getvalue()
+
+    def test_RED_011_developer_confirmed_unrelated_failures_after_the_first_edit(self) -> None:
+        """Real app: the task began without --record-start; another feature's stale test failed at the gate
+        and the only advice was a clean-tree baseline capture the task's edits made impossible."""
+        task_id = "task-red-011"
+        _write_text(self.tmp / "app/src/test/kotlin/com/example/food/FoodPlanViewModelTest.kt",
+                    "package com.example.food\nclass FoodPlanViewModelTest { fun onDayClick() {} }\n")
+        _write_text(self.tmp / "app/src/test/kotlin/com/example/billing/PriceTest.kt",
+                    "package com.example.billing\nimport com.example.Calc\nclass PriceTest { fun total() { Calc() } }\n")
+        # Calls a method named like one of Calc's members (compute): not a dependency on Calc.
+        _write_text(self.tmp / "app/src/test/kotlin/com/example/other/ShapeTest.kt",
+                    "package com.example.other\nclass ShapeTest { fun area() { Shape().compute() } }\n")
+        self._begin_bug(task_id)
+        _write_text(self.tmp / "app/src/main/kotlin/com/example/Calc.kt",
+                    "package com.example\nclass Calc { val fixed = true\n    fun compute() = 1\n}\n")
+        other = self._report("com.example.food.FoodPlanViewModelTest", "onDayClick", "LanguageControl not mocked")
+        related = self._report("com.example.billing.PriceTest", "total", "expected 5")
+        shape = self._report("com.example.other.ShapeTest", "area", "expected 4")
+
+        code, out = self._gate_with(["--record-unrelated"], _gradle_writing_reports(dict([other])))
+        self.assertEqual(1, code)
+        self.assertIn("needs --proof-reference", out)
+
+        code, out = self._gate_with(["--record-unrelated", "--proof-reference", "yes, it failed before"],
+                                    _gradle_writing_reports(dict([other, related, shape])))
+        self.assertEqual(1, code, "one test could not be recorded")
+        self.assertIn("2 failing test(s) recorded as not this task's", out)
+        self.assertIn("Not recorded: PriceTest: mentions Calc, which this task changed", out)
+        start = read_json(task_dir(self.tmp, task_id) / "task-start-failures.json")
+        self.assertEqual(["com.example.food.FoodPlanViewModelTest#onDayClick", "com.example.other.ShapeTest#area"],
+                         sorted(i["test_name"] for i in start["failures"]), "a member name (compute) is not a dependency")
+        self.assertEqual("DEVELOPER_CONFIRMED_UNRELATED", start["failures"][0]["source"])
+        self.assertEqual("yes, it failed before", start["failures"][0]["proof_reference"])
+        # Asking again judges only what is not recorded yet.
+        code, out = self._gate_with(["--record-unrelated", "--proof-reference", "yes"], _gradle_writing_reports(dict([other])))
+        self.assertEqual(0, code, out)
+        self.assertIn("already recorded", out)
+
+        code, out = self._run_gate(_gradle_writing_reports(dict([other])))
+        self.assertEqual(0, code, out)
+        self.assertEqual(["com.example.food.FoodPlanViewModelTest#onDayClick"], self.gate_results[-1]["task_start_ignored"])
+        # The related one still counts against the task.
+        code, out = self._run_gate(_gradle_writing_reports(dict([other, related])))
+        self.assertNotEqual(0, code)
+        self.assertIn("com.example.billing.PriceTest#total", out)
+
     def test_RED_008_only_unrelated_failures_are_no_reproduction(self) -> None:
         task_id = "task-red-008"
         self._begin_bug(task_id)

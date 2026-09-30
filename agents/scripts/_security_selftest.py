@@ -627,6 +627,42 @@ class SecurityTests(unittest.TestCase):
         preview_issues = [iss for iss in issues if iss["type"] == "MISSING_COMPOSE_PREVIEW"]
         self.assertEqual([], preview_issues, "Test files must not require Compose previews")
 
+    def test_fast_lint_finds_inline_fqcn_in_changed_java_lines(self):
+        """Real app: an inline FQCN in PaymentActivity.java passed preflight and blocked the review round."""
+        sys.path.insert(0, str(SCRIPTS))
+        from fast_kt_lint import lint_java_file
+        java = self.repo / "app/src/main/java/com/test/PaymentActivity.java"
+        java.parent.mkdir(parents=True, exist_ok=True)
+        java.write_text(
+            "package com.test;\n"                                                     # 1
+            "import androidx.appcompat.app.AppCompatActivity;\n"                      # 2
+            "public class PaymentActivity extends AppCompatActivity {\n"              # 3
+            "    void go() { startActivity(new android.content.Intent(this, X.class)); }\n"  # 4
+            "    // android.content.Intent in a comment\n"                           # 5
+            "    String s = \"androidx.core.Foo\";\n"                                 # 6
+            "    int v = android.os.Build.VERSION.SDK_INT;\n"                        # 7
+            "}\n",
+            encoding="utf-8",
+        )
+        issues = lint_java_file(java, modified_lines={2, 4, 5, 6, 7})
+        self.assertEqual([4], [iss["line"] for iss in issues])
+        self.assertEqual("INLINE_FQCN", issues[0]["type"])
+        self.assertEqual([], lint_java_file(java, modified_lines={5, 6}), "only changed lines are checked")
+        # Java has no import alias: with another Intent imported (or declared), the qualified name is required.
+        clash = self.repo / "app/src/main/java/com/test/Router.java"
+        clash.write_text(
+            "package com.test;\n"
+            "import com.test.nav.Intent;\n"
+            "class Router {\n"
+            "    void go() { new android.content.Intent(); }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], lint_java_file(clash, modified_lines={4}))
+        own = self.repo / "app/src/main/java/com/test/Intent.java"
+        own.write_text("package com.test;\npublic class Intent {\n    Object x = new android.content.Intent();\n}\n", encoding="utf-8")
+        self.assertEqual([], lint_java_file(own, modified_lines={3}))
+
     def test_delivery_manifest_normalizes_local_properties_slashes(self):
         sys.path.insert(0, str(SCRIPTS))
         from delivery_manifest import _external_inputs
@@ -1080,6 +1116,10 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("PLAN_APPROVAL_REQUIRED: material drift detected", str(ctx.exception))
         current_p = self.repo / f"agents/state/tasks/{task_id}/current-run.json"
         self.assertFalse(current_p.exists())
+        # A live run: the developer re-approved without being told which change pulled a surface in.
+        self.assertIn("surface:BUSINESS_LOGIC (from app/src/main/Auth.kt)", str(ctx.exception))
+        saved = json.loads(plan_file.read_text(encoding="utf-8"))
+        self.assertEqual(["app/src/main/Auth.kt"], saved["material_drift_causes"]["surface:BUSINESS_LOGIC"])
 
     def test_N12_skill_drift_stops_at_prepare_verification_not_at_complete(self):
         # Certification round 2 (T8): the change added COMPOSE_UI, a companion surface that is not
@@ -1523,6 +1563,43 @@ class SecurityTests(unittest.TestCase):
         )
         self.assertEqual([], later["carried_reviews"])
         self.assertEqual(set(previous["reviewers"]), set(later["reviewers"]))
+
+    def test_REVIEW_RERUN_002_fix_delta_keeps_untouched_reviewers(self):
+        """Real app: fixing two bug findings in two files ran all five reviewers again. With the fix delta
+        known, a reviewer whose area it does not touch keeps its PASS; owners, the reviewers the delta
+        routes and the regression reviewer rerun; a reviewer that did not pass before reruns."""
+        from review_policy import decide_later_round
+        skills_root = SCRIPTS.parent / "skills"
+        previous = {"reviewers": ["bug-reviewer-agent", "convention-reviewer-agent", "perf-anr-guardian-agent",
+                                  "regression-impact-reviewer-agent", "security-reviewer-agent"], "surfaces": ["BILLING"]}
+        cls = {"surfaces": ["BILLING", "BUSINESS_LOGIC", "COROUTINES", "XML_UI"], "severity": "HIGH", "changed_files": 6, "changed_lines": 200}
+
+        def later(delta):
+            return decide_later_round(
+                cls, skills_root, previous_policy=previous, finding_owners=["bug-reviewer-agent"],
+                passed_reviewers=["convention-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent",
+                                  "security-reviewer-agent"],
+                source_snapshot="s1" * 32, source_change_set="cs1" * 32, current_change_set="cs2" * 32,
+                source_run_id="r1", round_number=2, fix_delta=delta,
+            )
+
+        from review_policy import decide
+        required = set(decide(cls, skills_root)["reviewers"])
+        result = later({"files": ["app/src/main/java/Onboarding.kt"], "reviewers": ["bug-reviewer-agent", "convention-reviewer-agent"]})
+        rerun = set(result["reviewers"])
+        carried = {item["reviewer"] for item in result["carried_reviews"]}
+        self.assertIn("bug-reviewer-agent", rerun, "finding owner")
+        self.assertIn("convention-reviewer-agent", rerun, "routed by the fix delta")
+        self.assertIn("regression-impact-reviewer-agent", rerun, "always sees the whole change")
+        self.assertEqual(required, rerun | carried, "every required reviewer is either rerun or carried")
+        self.assertFalse(rerun & carried)
+        self.assertTrue(carried <= {"perf-anr-guardian-agent", "security-reviewer-agent"})
+        self.assertTrue(carried, "an untouched reviewer keeps its PASS")
+        self.assertEqual(["app/src/main/java/Onboarding.kt"], result["fix_delta"]["files"])
+        for item in result["carried_reviews"]:
+            self.assertEqual("cs1" * 32, item["source_change_set"])
+        # Unknown delta: the old rule, everyone reruns.
+        self.assertEqual([], later(None)["carried_reviews"])
 
     def test_AUTH_SIGNOFF_001_model_call_denied(self):
         """AUTH-SIGNOFF-001: lead agent cannot invoke device signoff directly through model tool call"""

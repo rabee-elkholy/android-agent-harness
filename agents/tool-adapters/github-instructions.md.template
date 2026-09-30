@@ -16,6 +16,6 @@ Follow the repo-root `AGENTS.md` and `.agents/rules/harness-rules.md`. The rules
 - Finding Adjudication: Adjudicate false positives via `{{PY}} .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <id> --status FALSE_POSITIVE --reason "<rationale>"`.
 - Zero-Polling Invariant: Never poll background tasks or subagents in a loop. Yield execution and wait for reactive messages.
 - 6-Tier Dynamic Risk Model: Central policy (`review_policy.py`) evaluates changes into 6 risk tiers (`T0_TRIVIAL` to `T5_CRITICAL`) and is the sole runtime authority for required gates, reviewer roster, and device verification. Execute exactly the policy-resolved roster.
-- Next-Action Command Guidance: After completing each lifecycle phase or verification step, query `{{PY}} .agents/harness.py task status --task-id <id> --next` for the authoritative next action instead of memorizing long sequential stages.
+- Next-Action Command Guidance: After completing each lifecycle phase or verification step, query `{{PY}} .agents/harness.py task status --task-id <id> --next` for the authoritative next action instead of memorizing long sequential stages. When a command's output already ends with `NEXT_ACTION=` and `NEXT_REASON=`, follow them directly; do not query status again.
 - Mobile Verification Walkthrough: After device installation (`run_device.py install-start`), the agent MUST output a complete, numbered test walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat before asking for verification.
 - {{GIT_POLICY}}

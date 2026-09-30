@@ -3,6 +3,7 @@
 Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. Codex reads `AGENTS.md` automatically; this pointer exists for tools that also look for `CODEX.md`.
 
 - Python: `{{PY}}`
+- Compile check (before prepare-verification): `{{PY}} .agents/harness.py compile`
 - Assemble: `{{PY}} .agents/harness.py assemble`
 - Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.
 - Device: {{DEVICE_POLICY}}
@@ -22,7 +23,7 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`. Codex reads `AGENTS.md`
 - {{GIT_POLICY}}
 - Independent Reviews: Reviewer roles selected by policy MUST be executed independently. The lead agent is strictly forbidden from self-certifying reviews using `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes; evaluations must come from actual reviewer runs.
 - 6-Tier Dynamic Risk Model: Review policy (`review_policy.py`) evaluates changes into 6 risk tiers (`T0_TRIVIAL` through `T5_CRITICAL`) and is the sole runtime authority for risk tier, required gates, reviewer roster, and device requirements. Execute exactly the policy-resolved roster; when reviewers are omitted by policy, do not dispatch reviewers.
-- Next-Action Command Router: After every lifecycle transition or verification step, query `{{PY}} .agents/harness.py task status --task-id <id> --next --host codex` for the authoritative next action instead of memorizing long sequential stages. Codex Goal can sustain execution after approval; the Harness router remains completion authority.
+- Next-Action Command Router: After every lifecycle transition or verification step, query `{{PY}} .agents/harness.py task status --task-id <id> --next --host codex` for the authoritative next action instead of memorizing long sequential stages. When a command's output already ends with `NEXT_ACTION=` and `NEXT_REASON=`, follow them directly; do not query status again. Codex Goal can sustain execution after approval; the Harness router remains completion authority.
 - Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or asking for verification. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker to the developer; NEVER hallucinate device serials, never claim the app is running when it is not, and NEVER ask the developer to verify a build that was not installed. When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking for sign-off. Never ask if it passed without detailing feature navigation.
 - Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes is an administrative context action, NOT an Android code delivery task. Directly record the note using `{{PY}} .agents/harness.py context note "<note>"`.
 

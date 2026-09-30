@@ -199,6 +199,20 @@ def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
 
 
 
+_KOTLIN_ERROR = re.compile(r"^e: (?:file:/+)?(?P<path>.+?\.kts?):(?P<line>\d+)(?::\d+)? (?P<msg>.+)$")
+_JAVA_ERROR = re.compile(r"^(?P<path>\S.*?\.java):(?P<line>\d+): error: (?P<msg>.+)$")
+
+
+def first_build_error(raw_log: str) -> str:
+    """The first compiler error as "path:line message", or "" when there is none."""
+    for raw in raw_log.splitlines():
+        line = raw.strip()
+        match = _KOTLIN_ERROR.match(line) or _JAVA_ERROR.match(line)
+        if match:
+            return f"{match['path'].replace(chr(92), '/')}:{match['line']} {match['msg'].strip()}"
+    return ""
+
+
 def test_failure_only(task: str, raw_log: str) -> bool:
     """Attribute a nonzero exit to one test task, never to another build failure."""
     failures = re.findall(r"Execution failed for task ['\"]([^'\"]+)['\"]", raw_log)
@@ -428,6 +442,7 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
         record("FAIL", code, verdict.env_class, verdict.reason)
         if outcome is not None:
             outcome["test_failure_only"] = test_failure_only(task_label, raw_log)
+            outcome["first_error"] = first_build_error(raw_log)
 
     if code == 0:
         artifact_set = None

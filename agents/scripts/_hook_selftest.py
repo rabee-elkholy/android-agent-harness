@@ -146,6 +146,8 @@ class HookTests(unittest.TestCase):
             'python .agents/harness.py task approve --task-id t --source=conversation --proof-reference "ok, approve it"',
             "python .agents/scripts/workflow.py cancel --help",
             "python .agents/harness.py task approve -h",
+            # 1.1.11: the developer asked in chat to cancel; their words are the proof, as for an approval.
+            'python .agents/scripts/workflow.py cancel --repo . --task-id t --source conversation --proof-reference "cancel the task"',
         ]
         denied = [
             "python .agents/scripts/workflow.py cancel --repo . --task-id t",
@@ -155,6 +157,8 @@ class HookTests(unittest.TestCase):
             "python .agents/harness.py task approve --task-id t --proof-reference ok",
             "python .agents/harness.py task approve-sensitive --task-id t --source host_native --proof-reference ok",
             "git status; python .agents/scripts/workflow.py cancel --task-id t",
+            "python .agents/scripts/workflow.py cancel --repo . --task-id t --source conversation",
+            'python .agents/scripts/workflow.py cancel --repo . --task-id t --source developer_terminal --proof-reference "x"',
         ]
         for command in allowed:
             res = self.call("run_command", {"CommandLine": command})
@@ -1073,7 +1077,7 @@ class GenericMCPTests(unittest.TestCase):
             "Arguments": {"item_id": "1", "status": "In progress", "operation_id": "op-1"},
         })
         self.assertEqual("deny", res1["decision"])
-        self.assertIn("zoho_sprints", res1.get("reason", ""))
+        self.assertIn("zoho authorize", res1.get("reason", ""))
 
         # 2. Specialized scope approved, but missing operation_id is rejected by specialized integration
         self.activate(external_writes=["zoho_sprints"])

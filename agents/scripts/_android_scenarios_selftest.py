@@ -2128,6 +2128,20 @@ class DeviceFlowTests(MobileValidationTests):
         self.assertEqual("", act["command"])
         self.assertTrue(act["blocking"])
         self.assertEqual(["PASS", "FAIL"], act.get("accepted_responses"))
+        self.assertNotIn("approve-sensitive", act["reason"])
+
+    def test_DEVICE_FLOW_001b_sensitive_approval_rides_on_the_signoff_question(self) -> None:
+        """Real app: the phone check and the sensitive-change approval were two questions, the second
+        found only when `complete` failed. A sensitive run asks both in the sign-off question."""
+        plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-001b")
+        policy["surfaces"] = sorted(set(policy.get("surfaces") or []) | {"BILLING"})
+        atomic_write_json(Path(current["policy"]), policy)
+        from workflow import resolve_next_action
+        act = resolve_next_action(self.repo, "dev-flow-001b", read_json(tdir / "plan.json"))
+        self.assertEqual("DEVICE_SIGNOFF_REQUIRED", act["code"])
+        self.assertIn("also touches BILLING", act["reason"])
+        self.assertIn("same ask_question", act["reason"])
+        self.assertIn("task approve-sensitive --repo . --task-id dev-flow-001b", act["reason"])
 
     def test_DEVICE_FLOW_002_no_developer_approval_means_no_pass(self) -> None:
         """DEVICE_FLOW_002: no developer approval means no PASS evidence in store."""

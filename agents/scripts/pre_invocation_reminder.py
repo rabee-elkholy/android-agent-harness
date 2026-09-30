@@ -24,7 +24,8 @@ def _message() -> str:
             "Pre-planning clarification: When asked to explore edge cases, study scenarios, or validate architecture first, present and discuss them directly in plain chat before drafting any plan. Guessing edge cases or missing business logic is strictly prohibited. "
             "Clarify ambiguous requirements via `ask_question` or plain chat BEFORE drafting the plan. "
             "For a design, migration, backward-compatibility or security decision (Room schema, exported component, permission), "
-            "suggest in `ask_question` that the developer types `/grill-me` before you draft. "
+            "ask the developer about it with `ask_question` before you draft (for Room: an existing destructive fallback, "
+            "users on older schema versions, downgrade). "
             "Draft with --approach, --risks and --device-strategy so the developer can review the plan. "
             "To update the harness itself, run `python .agents/harness.py update-info` and follow it. "
             "Verification plan must use strict 6-step headings."
@@ -58,7 +59,7 @@ def _message() -> str:
             next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
         else:
             next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
-    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, ask the developer to cancel this task in their own terminal (`workflow.py cancel --task-id {task_id}`; cancel is developer-owned); do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`."
+    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, the task must be cancelled first: only when the developer asks, run `workflow.py cancel --repo . --task-id {task_id} --source conversation --proof-reference \"<their words>\"`; do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`."
 
 
 def _compact_message() -> str:

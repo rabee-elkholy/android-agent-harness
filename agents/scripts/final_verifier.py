@@ -245,6 +245,16 @@ def validate_policy_artifact(
                 for item in (source_reviews.get("evidence") or {}).get("reports") or []
                 if str(item.get("verdict") or "").upper() == "PASS"
             ]
+            # The narrowed round (P16) is recomputed from the same saved manifests, never read from the policy.
+            from review_fix_delta import compute_fix_delta
+
+            current_manifest_path = policy_path.with_name(policy_path.name.replace("policy-", "manifest-", 1))
+            fix_delta = None
+            if policy.get("fix_delta") is not None and current_manifest_path.is_file():
+                fix_delta = compute_fix_delta(
+                    repo, policy_path.parent, source_run_id, read_json(current_manifest_path), plan,
+                    agents_root / "skills", configured_kind,
+                )
             expected_policy = decide_later_round(
                 current_classification,
                 agents_root / "skills",
@@ -259,6 +269,7 @@ def validate_policy_artifact(
                 task_kind=task_kind,
                 current_change_set=current_change_set,
                 plan=plan,
+                fix_delta=fix_delta,
             )
         except (ValidationError, OSError, ValueError, TypeError) as exc:
             return None, f"later-round policy source is invalid: {exc}", "BLOCKED"

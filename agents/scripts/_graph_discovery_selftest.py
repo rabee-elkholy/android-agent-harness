@@ -172,6 +172,97 @@ class GraphDiscoverySelftest(unittest.TestCase):
         self.assertIsNotNone(latest)
         self.assertEqual(DISCOVERY_D1_TARGETED_GRAPH, latest.get("mode"))
 
+    def test_graph_001d_task_context_names_the_lines_to_read(self) -> None:
+        """A real task opened whole files ~90 times; task-context now gives line ranges to open instead."""
+        screen = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "profile" / "ProfileScreen.kt"
+        screen.write_text(
+            "package com.example.profile\n\n"
+            "import com.example.profile.ProfileViewModel\n\n"
+            "class ProfileScreen {\n"
+            "    // ProfileViewModel in a comment is not a use\n"
+            "    private val vm = ProfileViewModel()\n"
+            "    fun show() = vm.refresh()\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        import task_context
+        ctx = task_context.resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/profile/ProfileViewModel.kt")
+        self.assertEqual("RESOLVED", ctx.get("status"))
+        target = ctx["target"]
+        self.assertEqual(5, target["line_count"])
+        self.assertEqual(
+            [{"line": 3, "end_line": 5, "kind": "class", "name": "ProfileViewModel", "top_level": True},
+             {"line": 4, "end_line": 4, "kind": "fun", "name": "refresh"}],
+            target["outline"],
+        )
+        ranges = ctx["read_ranges"]
+        self.assertIn(
+            "app/src/main/kotlin/com/example/profile/ProfileViewModel.kt (5 lines): class ProfileViewModel L3-L5; fun refresh L4-L4",
+            ranges,
+        )
+        self.assertIn("app/src/main/kotlin/com/example/profile/ProfileScreen.kt: uses the target at L7", ranges,
+                      "the import and the comment are not uses")
+        self.assertEqual("read_ranges", [key for key in ctx if key in ("read_ranges", "read_ranges_note", "target")][-1],
+                         "the ranges come after the rest, where a host that keeps the end of output sees them")
+
+    def test_graph_001e_source_outline_edge_cases(self) -> None:
+        from _source_outline import as_ranges, outline, reference_lines
+
+        kotlin = self.repo / "Edge.kt"
+        kotlin.write_text(
+            "package x\n"                                   # 1
+            "\n"                                            # 2
+            "data class Edge(\n"                            # 3
+            "    val id: Int,\n"                            # 4  constructor parameter: not listed
+            "    val name: String,\n"                       # 5
+            ") : Base() {\n"                                # 6
+            "    val label = \"{ not a brace\"\n"          # 7
+            "    /* fun hidden() { */\n"                    # 8
+            "    fun render(\n"                             # 9  multi-line signature
+            "        a: Int,\n"                             # 10
+            "    ): String {\n"                             # 11
+            "        val local = a\n"                       # 12 local: not listed
+            "        return \"$local\"\n"                   # 13
+            "    }\n"                                       # 14
+            "    companion object {\n"                      # 15
+            "        fun create() = Edge(1, \"a\")\n"       # 16 expression body
+            "    }\n"                                       # 17
+            "}\n"                                           # 18
+            "@Composable\n"                                 # 19
+            "fun <T> List<T>.edgeScreen(items: List<T>)\n"  # 20 brace on the next line
+            "{\n"                                           # 21
+            "}\n",                                          # 22
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            [(3, 18, "class", "Edge"), (7, 7, "val", "label"), (9, 14, "fun", "render"),
+             (15, 17, "companion object", "Companion"), (16, 16, "fun", "create"), (20, 22, "fun", "edgeScreen")],
+            [(e["line"], e["end_line"], e["kind"], e["name"]) for e in outline(kotlin)],
+        )
+        java = self.repo / "Legacy.java"
+        java.write_text(
+            "package x;\n"                                  # 1
+            "public class Legacy {\n"                       # 2
+            "    private final String s = \"}\";\n"        # 3
+            "    public static int twice(int v) {\n"        # 4
+            "        return v * 2;\n"                       # 5
+            "    }\n"                                       # 6
+            "    private void run()\n"                      # 7
+            "    {\n"                                       # 8
+            "    }\n"                                       # 9
+            "}\n",                                          # 10
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            [(2, 10, "class", "Legacy"), (4, 6, "method", "twice"), (7, 9, "method", "run")],
+            [(e["line"], e["end_line"], e["kind"], e["name"]) for e in outline(java)],
+        )
+        self.assertIn(16, reference_lines(kotlin, {"Edge"}))
+        self.assertNotIn(8, reference_lines(kotlin, {"hidden"}), "a block comment is not a use")
+        self.assertEqual("L3-L5, L9", as_ranges([5, 3, 4, 9, 9]))
+        self.assertEqual("", as_ranges([]))
+        self.assertEqual([], outline(self.repo / "missing.kt"))
+
     def test_graph_002_feature_level_request(self) -> None:
         """GRAPH-002: Feature-level request routes to D2 FEATURE_GRAPH with project_graph anchor."""
         decision = route_discovery(

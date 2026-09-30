@@ -301,7 +301,7 @@ Best-effort/warning is acceptable for non-authoritative convenience such as opti
 
 ### 4.3 Do not add a state machine for a prompting convenience
 
-Host-native accelerators such as Antigravity `/goal` and `/grill-me` must not become kernel states.
+Host-native prompting conveniences must not become kernel states.
 
 Correctness must remain identical without them.
 
@@ -433,8 +433,7 @@ Use native capabilities where proven:
 - exact Review V2 dispatch;
 - trusted transcript-backed completion;
 - reactive completion;
-- same-model inheritance by omission;
-- `/grill-me` and `/goal` as optional workflow accelerators.
+- same-model inheritance by omission.
 
 ### 7.2 Claude Code
 
@@ -454,51 +453,13 @@ Prefer truthful reduced enforcement over fake parity.
 
 ---
 
-## 8. Antigravity Native Accelerators
+## 8. Planning Questions and Continuous Execution
 
-These improve behavior but are not correctness dependencies.
+The harness does not depend on host slash commands (`/goal` and `/grill-me` were removed in 1.1.11).
 
-### `/grill-me`
+Before planning, the agent asks the developer about material ambiguity (new subsystem, architecture choice, migration, cross-module behavior, sensitive business behavior, substantial error or backward-compatibility decisions), not about every tiny bug. Resolved decisions feed the task plan and are not asked again unless new evidence reopens them. A durable rule is recorded as Project Note/Developer Instruction only when the developer clearly states or approves it as durable.
 
-Recommended before planning when material ambiguity exists, especially:
-
-- new subsystem;
-- architecture choice;
-- migration;
-- cross-module behavior;
-- sensitive business behavior;
-- substantial error/backward-compat decisions.
-
-Do not use it for every tiny bug.
-
-Resolved interview decisions should feed the task plan. Do not ask the same material question again unless new evidence reopens it.
-
-A durable rule is recorded as Project Note/Developer Instruction only when the developer clearly states or approves it as durable.
-
-### `/goal`
-
-Recommended after task-plan approval for non-trivial Antigravity work.
-
-Meaning:
-
-```text
-/goal = execution persistence
-Harness router = execution/completion authority
-```
-
-The agent continues the router loop until terminal completion or a real human/blocker boundary.
-
-`/goal` never:
-
-- grants approval;
-- overrides scope;
-- bypasses device sign-off;
-- performs developer-owned Git;
-- bypasses review;
-- changes reviewer model selection;
-- turns ENV_BLOCKED into success.
-
-The harness must remain fully correct when `/goal` is not used.
+After approval the agent follows the router until terminal completion or a real human/blocker boundary. Continuing never grants approval, overrides scope, bypasses device sign-off, review or developer-owned Git, changes reviewer model selection, or turns ENV_BLOCKED into success.
 
 ---
 

@@ -222,7 +222,10 @@ def build_budget_exhausted_remediation(policy: dict, calls_used: int, requested:
     sensitive = sorted(set(policy.get("surfaces") or []) & {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
     severity = str(policy.get("severity") or "").upper()
     parts = [
-        f"REVIEW_BUDGET_EXHAUSTED: Used {calls_used} reviewer calls, requested {requested} this round, budget is {budget}."
+        f"REVIEW_BUDGET_EXHAUSTED: Used {calls_used} reviewer calls, requested {requested} this round, budget is {budget}. "
+        # Real app: the agent searched the repository for where the budget lives and found nothing.
+        "The budget is MODEL_CALL_BUDGET in .agents/scripts/_product.py (from model_call_budget in "
+        ".harness-setup/answers.json, which a harness update re-applies); only the developer changes it."
     ]
     if sensitive:
         parts.append(
@@ -798,16 +801,7 @@ def _build_and_save_plan(
             # The planned files, not the context file, set the surfaces (N2 residual). Each file is read
             # the way the write guard reads it: a tracked file's existing sign-in or purchase text does
             # not make the plan sensitive; its diff is judged at verification.
-            from mutation_guard import PRE_EXISTING_CONTENT_SURFACES, _is_tracked
-            planned_surfaces: set[str] = set()
-            unread: list[str] = []
-            for p in norm_expected_files:
-                found = set(classify(repo, task_changes=[{"path": p}], candidate_paths=[p], progress=False).get("surfaces") or [])
-                if _is_tracked(repo, p):
-                    found -= PRE_EXISTING_CONTENT_SURFACES
-                planned_surfaces |= found
-                if not found:
-                    unread.append(p)
+            planned_surfaces, unread = _planned_file_surfaces(repo, norm_expected_files)
             expected = sorted(planned_surfaces | set(_surfaces_from_paths(unread)))
         elif norm_expected_files:
             file_class = classify(repo, task_changes=[{"path": p} for p in norm_expected_files])
@@ -818,6 +812,7 @@ def _build_and_save_plan(
             expected = list(DEFAULT_APP_SURFACES)
         else:
             expected = []
+
 
 
     # Phase Plan Enforcement
@@ -887,6 +882,9 @@ def _build_and_save_plan(
             resolved_kind = "FEATURE"
     else:
         resolved_kind = raw_kind
+    if norm_expected_files and files_named_by_plan and raw_expected:
+        expected = _with_planned_file_surfaces(repo, expected, norm_expected_files, classification, resolved_kind,
+                                               getattr(args, "outcome", None) or "")
     policy_input = dict(classification)
     policy_input["surfaces"] = expected
     with step_progress("Evaluating routing policy"):
@@ -1710,6 +1708,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             task_kind=str(plan.get("task_kind") or "FEATURE"),
             current_change_set=str(manifest["change_set_sha256"]),
             plan=plan,
+            fix_delta=_fix_delta(repo, args.task_id, str(previous_current["run_id"]), manifest, plan),
         )
         calls_used = int(plan.get("review_calls_used") or 0)
         if calls_used + int(policy.get("estimated_calls_this_round") or 0) > int(policy.get("model_call_budget") or 0):
@@ -1731,10 +1730,14 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     drift = [*drift, *(f"skill:{skill}" for skill in unplanned_mandatory_skills(plan, policy))]
     if drift:
         plan["material_drift"] = drift
+        causes = _drift_causes(repo, manifest, drift, plan)
+        plan["material_drift_causes"] = causes
         save_plan(_plan_path(repo, args.task_id), plan)
         remediation_cmd = build_remediation_command(repo, args.task_id, plan, policy, manifest)
+        # A live run: the developer re-approved without being told which change pulled in AUTH/BILLING.
+        named = [f"{item} (from {', '.join(causes[item])})" if causes.get(item) else str(item) for item in drift]
         raise ValidationError(
-            f"PLAN_APPROVAL_REQUIRED: material drift detected: {', '.join(str(k) for k in drift)}. "
+            f"PLAN_APPROVAL_REQUIRED: material drift detected: {', '.join(named)}. "
             "Reconciliation and plan approval are required before verification run can begin.\n"
             f"To reconcile, update the plan using:\n{remediation_cmd}\nand obtain developer approval."
         )
@@ -1925,10 +1928,15 @@ def complete(args: argparse.Namespace) -> dict:
 def cancel(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
+    source = str(getattr(args, "source", None) or "developer_terminal")
+    proof = str(getattr(args, "proof_reference", None) or "").strip()
+    if source == "conversation" and not proof:
+        raise ValidationError("cancel --source conversation needs --proof-reference with the developer's words")
     plan["status"] = "CANCELLED"
     plan["approval"] = None
     plan["execution_nonce"] = None
     plan["cancelled_at"] = utc_now()
+    plan["cancellation"] = {"source": source, "proof_reference": proof[:500]} if proof else {"source": source}
     save_plan(_plan_path(repo, args.task_id), plan)
     active_path = state_root(repo) / "active-task.json"
     if active_path.is_file():
@@ -2085,9 +2093,13 @@ def finalize_ready_delivery(
         manifest = build_manifest(repo)
         current_snapshot = manifest["delivery_snapshot_sha256"]
         if current_snapshot != ready_snapshot:
+            changed = changed_since_verification(repo, task_id, plan, manifest)
+            named = f" Changed after verification: {', '.join(changed[:10])}." if changed else ""
             raise ValidationError(
                 f"delivery snapshot mismatch: current repository ({current_snapshot[:12]}) "
-                f"differs from verified ready snapshot ({ready_snapshot[:12]}). Content was modified after verification."
+                f"differs from verified ready snapshot ({ready_snapshot[:12]}). Content was modified after verification.{named} "
+                "Do not resume on your own: ask the developer whether to verify these changes (their own edits "
+                "before the commit count too)."
             )
 
     try:
@@ -3525,13 +3537,17 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         }
         try:
             task_manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"))
-            has_task_changes = bool(task_manifest.get("task_changes") if "task_changes" in task_manifest else task_manifest.get("changes"))
+            task_changes = task_manifest.get("task_changes") if "task_changes" in task_manifest else task_manifest.get("changes")
+            has_task_changes = bool(task_changes)
         except Exception:
-            has_task_changes = False
+            task_changes, has_task_changes = [], False
         if has_task_changes:
             # Only the model knows when the approved change is finished; hand it the exit.
             done_command = f"python .agents/harness.py task prepare-verification {identity} --host {run_host}"
             action["reason"] = f"Continue the approved change. When it is complete, run: {done_command}"
+            compile_hint = _compile_check_hint(repo, task_changes)
+            if compile_hint:
+                action["reason"] = f"Continue the approved change. {compile_hint} Then run: {done_command}"
             action["on_complete"] = {"code": "PREPARE_VERIFICATION", "kind": "HARNESS_COMMAND", "command": done_command}
         elif _should_record_task_start(repo, task_id, plan):
             # O64: without a record, an old failing test in another feature blocks the gate later and
@@ -3609,6 +3625,18 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             except Exception:
                 return False
 
+        # The final verifier requires a run-bound sensitive approval whenever the run's surfaces include a
+        # sensitive one. The router asked only when `policy.sensitive` was set, so a real task was sent to
+        # `complete`, failed on a missing sensitive_approval.json, and was sent to `complete` again.
+        sensitive_touched = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
+        # Exactly the condition `approve-sensitive` accepts and the verifier requires, so the router never
+        # asks for an approval the command would refuse (nothing sets a bare `policy.sensitive` flag).
+        sensitive_pending = bool(sensitive_touched) and not has_pass_evidence("sensitive_approval")
+        sensitive_command = (
+            f'python .agents/harness.py task approve-sensitive {identity} --source conversation '
+            '--proof-reference "<developer answer>" --enforcement-tier RULE_ENFORCED'
+        )
+
         def failed_gate_action(name: str) -> dict | None:
             # A deterministic FAIL on this frozen change set will fail again if re-run;
             # the fix happens in IMPLEMENTING under the same approval. ENV is retried.
@@ -3627,8 +3655,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     f" {len(outside)} failing test(s) belong to files outside this plan ({', '.join(outside[:5])}). "
                     "Never edit those tests under this plan. If this change broke them, fix the production code in "
                     "the planned files. If they were already failing before the task, do not resume: ask the developer "
-                    "with ask_question whether to revise the plan to include them, record them as pre-existing "
-                    "(their own baseline capture on a clean tree), or cancel the task."
+                    "with ask_question whether they were failing before this task (options: 'Yes, not this task's' / "
+                    "'No, fix them in this task' / 'Cancel task'). On yes, run `python .agents/harness.py test "
+                    "--record-unrelated --proof-reference \"<the developer's answer>\"` (it records only tests that "
+                    "name nothing this task changed and says why it refuses any other), then `python .agents/harness.py "
+                    "test` again, without resuming. On 'fix them', resume and revise the plan to include them."
                 )
             return {
                 "code": "RESUME_IMPLEMENTATION",
@@ -4179,12 +4210,21 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                         pass
                     app_id = str(inst_ev.get("application_id") or "")
                     serial_hash = str(inst_ev.get("serial_sha256") or inst_ev.get("serial_hash") or "")[:12]
+                    signoff_reason = "Present mobile verification walkthrough to developer and obtain explicit PASS or FAIL sign-off."
+                    if sensitive_pending:
+                        # One question instead of two: the final approval of sensitive changes rides on the sign-off.
+                        signoff_reason += (
+                            f" This change also touches {', '.join(sensitive_touched) or 'sensitive code'}, which needs the "
+                            "developer's final approval: ask both in the same ask_question (options 'Works - approve the "
+                            f"changes' / 'Failed'). On the first, run the device signoff with --verdict PASS, then `{sensitive_command}`, "
+                            "both with the developer's answer as --proof-reference."
+                        )
                     return {
                         "code": "DEVICE_SIGNOFF_REQUIRED",
                         "kind": "DEVELOPER_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": "Present mobile verification walkthrough to developer and obtain explicit PASS or FAIL sign-off.",
+                        "reason": signoff_reason,
                         "inputs": {
                             "repo": ".",
                             "task_id": task_id,
@@ -4198,17 +4238,20 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     }
 
         # 7. Sensitive approval
-        if bool(policy.get("sensitive")):
-            if not has_pass_evidence("sensitive_approval") and not (plan.get("approval") or {}).get("sensitive_approved"):
-                return {
-                    "code": "SENSITIVE_APPROVAL",
-                    "kind": "DEVELOPER_ACTION",
-                    "command": f'python .agents/harness.py task approve-sensitive {identity} --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED',
-                    "blocking": True,
-                    "reason": "Sensitive core change requires explicit final developer approval before delivery.",
-                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
-                    "expected": {"success_statuses": ["PASS"]},
-                }
+        if sensitive_pending:
+            return {
+                "code": "SENSITIVE_APPROVAL",
+                "kind": "DEVELOPER_ACTION",
+                "command": sensitive_command,
+                "blocking": True,
+                "reason": (
+                    f"This change touches {', '.join(sensitive_touched) or 'sensitive code'}: ask the developer with "
+                    "ask_question for the final approval of those changes (options 'Approve' / 'Request changes'), "
+                    "then run the command with their answer as --proof-reference."
+                ),
+                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                "expected": {"success_statuses": ["PASS"]},
+            }
 
         # 8. A BUG task that skipped CAPTURE_RED cannot complete; the final verifier applies this rule.
         from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
@@ -4260,15 +4303,22 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         live_manifest = build_manifest(repo)
         live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
         if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
+            changed = changed_since_verification(repo, task_id, plan, live_manifest)
+            named = ", ".join(changed[:10]) if changed else "files outside the task's list"
             return {
                 "code": "DELIVERY_STALE_AFTER_COMMIT",
-                "kind": "TASK_STATE",
+                "kind": "DEVELOPER_ACTION",
                 "command": f"python .agents/harness.py task resume --task-id {task_id}",
                 "blocking": True,
+                # Real app: the developer edited a verified file before committing; the router said "resume",
+                # the agent resumed without asking, and a full re-review ran out of review budget.
                 "reason": (
-                    f"Delivery snapshot mismatch: current repository ({live_snapshot[:12]}) differs from verified ready snapshot ({ready_snapshot[:12]}). "
-                    "Content was modified after verification (e.g. by a commit hook or formatter). Resume task to reverify."
+                    f"Content changed after verification: {named}. Before anything else, ask the developer with "
+                    "ask_question (it may be their own edit before the commit, or a formatter or commit hook): 'Verify "
+                    "these changes' / 'Cancel task'. On 'Verify', run the command, then prepare verification again; "
+                    "only the reviewers these files need run again."
                 ),
+                "changed_files": changed,
                 "inputs": {
                     "repo": ".",
                     "task_id": task_id,
@@ -4768,7 +4818,10 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--developer-allow-dirty-tree", action="store_true", help="Explicit developer-terminal override to deliver while verified task files remain uncommitted")
     command.add_argument("--source", choices=("developer_terminal", "host_native", "conversation"), default=None, help="Authority source for delivery override")
     command.set_defaults(handler=deliver_task)
-    sub.add_parser("cancel", parents=[common]).set_defaults(handler=cancel)
+    cancel_cmd = sub.add_parser("cancel", parents=[common])
+    cancel_cmd.add_argument("--source", choices=["conversation", "developer_terminal"], default="developer_terminal")
+    cancel_cmd.add_argument("--proof-reference", default="", help="The developer's words asking to cancel (with --source conversation)")
+    cancel_cmd.set_defaults(handler=cancel)
     resume_cmd = sub.add_parser("resume", parents=[common])
     resume_cmd.add_argument("--reopen", action="store_true", help="Reopen a verified READY task because the developer requested changes before committing")
     resume_cmd.set_defaults(handler=resume)
@@ -4870,6 +4923,36 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
     return "\n".join([lines[0], *body, "PLAN_SUMMARY_END"])
 
 
+def _drift_causes(repo: Path, manifest: dict, drift: list, plan: dict) -> dict[str, list[str]]:
+    """Which changed files bring each drifted surface or skill (for the developer's re-approval)."""
+    from change_classifier import classify
+    from plan_authority import changed_file_paths
+
+    changes = manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes")
+    by_path = {str(c.get("path") if isinstance(c, dict) else c): c for c in changes or []}
+    per_file: dict[str, set[str]] = {}
+    for path in changed_file_paths(manifest):
+        change = by_path.get(path) or {"path": path}
+        try:
+            surfaces = classify(repo, task_changes=[change], candidate_paths=[path], progress=False).get("surfaces") or []
+        except Exception:
+            surfaces = []
+        per_file[path] = set(surfaces)
+    causes: dict[str, list[str]] = {}
+    planned = set(plan.get("expected_surfaces") or [])
+    for item in drift:
+        kind, _, name = str(item).partition(":")
+        if kind == "surface":
+            causes[str(item)] = sorted(p for p, s in per_file.items() if name in s)
+        elif kind == "file":
+            causes[str(item)] = [name]
+        elif kind == "skill":
+            # A mandatory skill follows from surfaces the plan did not list.
+            unplanned = {s for surfaces in per_file.values() for s in surfaces} - planned
+            causes[str(item)] = sorted(p for p, s in per_file.items() if s & unplanned)
+    return {k: v[:5] for k, v in causes.items() if v}
+
+
 def _should_record_task_start(repo: Path, task_id: str, plan: dict) -> bool:
     """A code task whose pre-edit test failures are not recorded yet (task-start or RED run)."""
     from plan_authority import CODE_SURFACES
@@ -4878,6 +4961,36 @@ def _should_record_task_start(repo: Path, task_id: str, plan: dict) -> bool:
     if (tdir / "task-start-failures.json").is_file() or (tdir / "red-evidence.json").is_file():
         return False
     return bool(set(plan.get("expected_surfaces") or []) & set(CODE_SURFACES))
+
+
+_COMPILED_SUFFIXES = (".kt", ".kts", ".java", ".xml", ".aidl")
+
+
+def _compile_check_hint(repo: Path, task_changes) -> str:
+    """P7: ask for a compile-only build before prepare-verification when source files changed.
+
+    A compile error found after prepare-verification costs a full test-gate run and a resume;
+    the compile task catches it in seconds. Returns "" when no source changed or when the
+    project's build task cannot be turned into a compile task (no Gradle wrapper, unknown
+    or non-assemble task), so the agent is never sent to a command that cannot work.
+    """
+    paths = [str((item or {}).get("path") or "") for item in (task_changes or []) if isinstance(item, dict)]
+    if not any(path.lower().endswith(_COMPILED_SUFFIXES) for path in paths):
+        return ""
+    if not any((repo / name).is_file() for name in ("gradlew", "gradlew.bat")):
+        return ""
+    try:
+        from _variants import resolve_compile_task
+
+        task, _note = resolve_compile_task(repo)
+    except Exception:
+        task = ""
+    if not task:
+        return ""
+    return (
+        "When it is complete, first run `python .agents/harness.py compile` "
+        f"({task}, no tests) and fix any compile error it names."
+    )
 
 
 def _task_has_changes(repo: Path, task_id: str, plan: dict) -> bool:
@@ -4928,13 +5041,264 @@ def pre_existing_changes_line(repo: Path, plan: dict) -> str:
 
 APPROVAL_QUESTION_GUIDE = (
     "APPROVAL_QUESTION: ask with ask_question, options Approve / Request changes / Cancel task. "
-    "Question text, in the developer's language: (0) on Antigravity, the APPROVAL_CALLOUTS lines first, each as its own "
-    "highlighted block with the same emoji and bold command; (1) the PLAN_DOCUMENT_URI as a clickable markdown link, "
-    "'[Full plan (plan.md)](<PLAN_DOCUMENT_URI>)'; (2) what will change and how, the risks and the phone checks, only as "
-    "the summary states them; (3) the PLAN_SUMMARY lines verbatim as plain text, never inside a code block (a link in a "
-    "code block cannot be clicked). "
-    "Never paste plan.json or command output into the question."
+    "Question text, in the developer's language: (1) the PLAN_DOCUMENT_URI as a clickable markdown link, "
+    "'[Full plan (plan.md)](<PLAN_DOCUMENT_URI>)'; (2) the APPROVAL_BRIEF lines, translated, each said once, as plain "
+    "text (never in a code block). Add nothing else: no second summary of the same plan, no task id, hashes, modules "
+    "or surface lists (they are in plan.md). Never paste plan.json or command output. Pass PLAN_HASH to approve "
+    "--plan-hash."
 )
+
+
+REAPPROVAL_QUESTION_GUIDE = (
+    "APPROVAL_QUESTION: this plan was approved before; ask only about the change, with ask_question, options "
+    "Approve / Request changes / Cancel task. When the developer asked for this change, this is the only question: "
+    "never ask first whether to revise. Question text, in the developer's language: (1) what changed, from "
+    "REVISION_CHANGES; (2) why, from DRIFT_CAUSES when present (name each file and what it brought in); (3) the "
+    "PLAN_DOCUMENT_URI as a clickable markdown link for the full plan. Do not repeat the unchanged plan or the "
+    "APPROVAL_BRIEF, and never paste plan.json or command output. Pass PLAN_HASH to approve --plan-hash."
+)
+
+
+def approval_brief(plan: dict) -> str:
+    """What the developer needs to decide on, once (the approval question shows this, not the full plan).
+
+    A real approval question carried the plan twice (a translated summary, then every summary field
+    verbatim, full paths, hashes, "Rollback", "External writes: none"). The full plan stays in plan.md.
+    """
+    authority = plan_payload(plan)
+    files = [str(item) for item in authority.get("expected_files") or [] if str(item)]
+    names = [Path(item).name for item in files]
+    attention = sorted(set(authority.get("expected_surfaces") or []) & SENSITIVE_SURFACES)
+    lines = [f"What changes: {redact(authority.get('approach') or plan.get('requested_outcome') or 'not stated')}"]
+    phases = [phase for phase in authority.get("phases") or [] if isinstance(phase, dict)]
+    if len(phases) > 1:
+        lines.append("Phases: " + "; ".join(
+            f"{index}. {redact(phase.get('title') or phase.get('description') or phase.get('id'))}"
+            for index, phase in enumerate(phases, 1)))
+    if names:
+        shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+        lines.append(f"Files ({len(names)}): {shown}")
+    if attention:
+        lines.append(f"Touches: {', '.join(attention)} (reviewed with extra care)")
+    writes = [str(item) for item in authority.get("external_writes") or [] if str(item)]
+    if writes:
+        lines.append(f"Writes outside the repo: {', '.join(writes)}")
+    device = str(authority.get("device_strategy") or "").strip()
+    if device:
+        lines.append(f"Phone checks: {redact(device)}")
+    risks = [str(redact(item)) for item in authority.get("risks") or [] if str(item)]
+    if risks:
+        lines.append(f"Risks: {'; '.join(risks)}")
+    return "\n".join(["APPROVAL_BRIEF_BEGIN", *(f"- {line}" for line in lines), "APPROVAL_BRIEF_END"])
+
+_DIFF_FIELDS = (
+    ("expected_surfaces", "Surfaces"), ("expected_files", "Files"), ("expected_modules", "Modules"),
+    ("external_writes", "External writes"), ("skills", "Skills"), ("risks", "Risks"),
+)
+_TEXT_FIELDS = (
+    ("requested_outcome", "Outcome"), ("approach", "Approach"), ("device_strategy", "Phone checks"),
+    ("test_strategy", "Tests"),
+)
+
+
+def _names(values: Any) -> set[str]:
+    out = set()
+    for item in values or []:
+        out.add(str(item.get("id") or item.get("name") or item) if isinstance(item, dict) else str(item))
+    return out
+
+
+def revision_changes(old: dict, new: dict) -> list[str]:
+    """Field-by-field changes between a superseded plan and its revision (P6: ask only about the change)."""
+    lines = []
+    for key, label in _DIFF_FIELDS:
+        before, after = _names(old.get(key)), _names(new.get(key))
+        added, removed = sorted(after - before), sorted(before - after)
+        if added or removed:
+            parts = [f"+ {item}" for item in added] + [f"- {item}" for item in removed]
+            lines.append(f"{label}: {', '.join(parts)}")
+    for key, label in _TEXT_FIELDS:
+        if str(old.get(key) or "").strip() != str(new.get(key) or "").strip():
+            lines.append(f"{label}: changed (see plan.md)")
+    if len(old.get("phases") or []) != len(new.get("phases") or []):
+        lines.append(f"Phases: {len(old.get('phases') or [])} -> {len(new.get('phases') or [])}")
+    return lines
+
+
+def changed_since_verification(repo: Path, task_id: str, plan: dict, live_manifest: dict) -> list[str]:
+    """Paths whose content differs between the verified ready run and the repository now ([] if unknown)."""
+    run_id = str(plan.get("ready_run_id") or plan.get("verification_run_id") or "")
+    if not run_id:
+        try:
+            run_id = str(read_json(task_dir(repo, task_id) / "current-run.json").get("run_id") or "")
+        except (OSError, ValueError, ValidationError):
+            return []
+    try:
+        validate_id(run_id, "run_id")
+        ready = read_json(task_dir(repo, task_id) / f"manifest-{run_id}.json")
+    except (OSError, ValueError, ValidationError):
+        return []
+
+    def identities(data: dict) -> dict[str, tuple]:
+        return {
+            str(item.get("path")): (item.get("content_identity"), item.get("git_mode"))
+            for item in data.get("files") or [] if isinstance(item, dict) and item.get("path")
+        }
+
+    before, after = identities(ready), identities(live_manifest)
+    if not before or not after:
+        return []
+    return sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
+
+
+def _fix_delta(repo: Path, task_id: str, previous_run_id: str, manifest: dict, plan: dict) -> dict | None:
+    """Files changed since the reviewed run, and the reviewers those files alone route (None when unknown)."""
+    from review_fix_delta import compute_fix_delta
+
+    return compute_fix_delta(repo, task_dir(repo, task_id), previous_run_id, manifest, plan, skills_root(repo), project_kind(repo))
+
+
+def _with_planned_file_surfaces(
+    repo: Path, expected: list[str], files: list[str], classification: dict, task_kind: str, outcome: str,
+) -> list[str]:
+    """Surfaces named by the agent are a floor (P11).
+
+    The write guard and verification read the planned files' whole content, so a Compose or network
+    file the agent left out stopped a real task for a second (and third) approval mid-way. A surface
+    the files already have is added when leaving it out would stop the task: as surface drift, or
+    through a mandatory skill it brings (COMPOSE_UI adds compose-inspector). One that would not stop
+    anything (the generic BUSINESS_LOGIC of a Kotlin file) is left out, so it routes no extra reviewer.
+    Sign-in and purchase code already in a tracked file stays out: SENSITIVE_PLANNED_FILES names it.
+    """
+    from final_verifier import unplanned_mandatory_skills
+    from plan_authority import check_material_drift
+
+    from_content, _unread = _planned_file_surfaces(repo, files)
+    extra = sorted(from_content - set(expected))
+    if not extra:
+        return expected
+    drifting = {item.split(":", 1)[1] for item in check_material_drift(
+        {"expected_surfaces": expected, "requested_outcome": outcome}, extra) if item.startswith("surface:")}
+
+    def skills_for(surfaces: list[str]) -> dict:
+        return decide({**classification, "surfaces": surfaces}, skills_root(repo), project_kind=project_kind(repo), task_kind=task_kind)
+
+    try:
+        planned_skills = {"skills": skills_for(list(expected))["skills"]["skills"]}
+        for surface in extra:
+            if surface not in drifting and unplanned_mandatory_skills(planned_skills, skills_for([*expected, surface])):
+                drifting.add(surface)
+    except Exception:
+        pass
+    return sorted(set(expected) | drifting)
+
+
+def _planned_file_surfaces(repo: Path, files: list[str]) -> tuple[set[str], list[str]]:
+    """Surfaces the classifier reads from the planned files, the way the write guard reads them.
+
+    A tracked file's existing sign-in or purchase text does not make the plan sensitive (its diff
+    is judged at verification). Returns the surfaces and the files that yielded none.
+    """
+    from mutation_guard import PRE_EXISTING_CONTENT_SURFACES, _is_tracked
+
+    surfaces: set[str] = set()
+    unread: list[str] = []
+    for rel in files:
+        try:
+            found = set(classify(repo, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False).get("surfaces") or [])
+        except Exception:
+            found = set()
+        if _is_tracked(repo, rel):
+            found -= PRE_EXISTING_CONTENT_SURFACES
+        surfaces |= found
+        if not found:
+            unread.append(rel)
+    return surfaces, unread
+
+
+def sensitive_planned_files_line(repo: Path, plan: dict) -> str:
+    """Planned files that already contain sign-in, purchase or security code the plan's surfaces omit (P3b).
+
+    Edits there are judged on the actual diff at prepare-verification; if the change touches that code,
+    the plan needs a second approval mid-task. Saying so before the first approval lets the developer
+    include those surfaces once.
+    """
+    from change_classifier import classify
+    from mutation_guard import PRE_EXISTING_CONTENT_SURFACES
+
+    planned = set(plan.get("expected_surfaces") or [])
+    found: dict[str, set[str]] = {}
+    for rel in plan.get("expected_files") or []:
+        rel = str(rel).replace("\\", "/").strip("/")
+        if not rel or not (repo / rel).is_file():
+            continue
+        try:
+            surfaces = set(classify(repo, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False).get("surfaces") or [])
+        except Exception:
+            continue
+        for surface in (surfaces & PRE_EXISTING_CONTENT_SURFACES) - planned:
+            found.setdefault(surface, set()).add(rel)
+    if not found:
+        return ""
+    listed = "; ".join(f"{surface}: {', '.join(sorted(files)[:3])}" for surface, files in sorted(found.items()))
+    return (
+        f"SENSITIVE_PLANNED_FILES={listed}. These planned files already contain that code. If the change will "
+        "touch it, add those surfaces now (`workflow.py revise --expected-surfaces ...`) so the developer approves "
+        "once; otherwise verification stops for a second approval. Say this in the approval question."
+    )
+
+
+def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
+    """What draft/revise print for the approval question; the same text in --json as `approval_material`."""
+    from plan_document import plan_document_path, plan_gaps
+
+    lines: list[str] = []
+    directory = task_dir(repo, result["task_id"])
+    document = plan_document_path(directory)
+    old: dict = {}
+    superseded = str(result.get("supersedes_plan_sha256") or "")
+    if action == "revise" and superseded and _task_was_approved_before(repo, result["task_id"]):
+        try:
+            old = read_json(directory / "plan-history" / f"{superseded}.json")
+        except (OSError, ValueError, ValidationError):
+            old = {}
+    reapproval = bool(old)
+    if not reapproval:
+        lines.append(approval_brief(result))
+    lines.append(f"PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
+    if document.is_file():
+        lines.append(f"PLAN_DOCUMENT_URI={Path(document).resolve().as_uri()}")
+    pre_existing = pre_existing_changes_line(repo, result)
+    if pre_existing:
+        lines.append(pre_existing)
+    sensitive = sensitive_planned_files_line(repo, result)
+    if sensitive:
+        lines.append(sensitive)
+    zoho_item = (result.get("zoho_link") or {}).get("item_id")
+    if zoho_item and "zoho_sprints" not in (result.get("external_writes") or []):
+        # O67: the developer asked to update the linked item at the end; the plan could not.
+        lines.append(
+            f"ZOHO_WRITE_NOT_PLANNED=the plan links Zoho item {zoho_item} but cannot update it. If the developer "
+            "wants the task to move it to In progress when work starts, add --external-write zoho_sprints before "
+            "asking for approval. A later update needs no plan change: show the developer the text, and when they "
+            "type `update zoho`, run `python .agents/harness.py zoho authorize --proof-reference \"<their message>\"`."
+        )
+    gaps = plan_gaps(result)
+    if gaps:
+        lines.append(
+            "PLAN_GAPS=" + ",".join(gaps) + ": the developer cannot review these. Before asking for approval, run "
+            "`workflow.py revise` with --approach / --risks / --device-strategy (phone steps with expected results)."
+        )
+    if reapproval:
+        changes = revision_changes(old, result)
+        lines.append("REVISION_CHANGES=" + ("; ".join(changes) if changes else "no scope change"))
+        causes = old.get("material_drift_causes") or {}
+        if causes:
+            lines.append("DRIFT_CAUSES=" + "; ".join(f"{item} from {', '.join(files)}" for item, files in causes.items()))
+        lines.append(REAPPROVAL_QUESTION_GUIDE)
+    else:
+        lines.append(APPROVAL_QUESTION_GUIDE)
+    return lines
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4970,51 +5334,31 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"TASK_STATUS={result.get('status', 'READY')}")
     elif args.json:
+        if args.action in ("draft", "revise"):
+            # A live run passed --json to draft and revise and got none of this, so the agent wrote the
+            # approval question itself (no Cancel option, no files).
+            lines = approval_material_lines(Path(args.repo).resolve(), result, args.action)
+            result = {**result, "approval_material": "\n".join(lines)}
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         if args.action in ("draft", "revise"):
-            from plan_document import plan_document_path, plan_gaps
-
-            document = plan_document_path(task_dir(Path(args.repo).resolve(), result["task_id"]))
-            print(plan_summary(result, document if document.is_file() else None))
-            if document.is_file():
-                print(f"PLAN_DOCUMENT_URI={Path(document).resolve().as_uri()}")
-            from plan_document import accelerator_callouts
-
-            try:
-                policy_file = task_dir(Path(args.repo).resolve(), result["task_id"]) / "preliminary-policy.json"
-                preliminary = read_json(policy_file) if policy_file.is_file() else {}
-            except (OSError, ValueError):
-                preliminary = {}
-            callouts = accelerator_callouts(result, preliminary)
-            if args.action == "revise" and _task_was_approved_before(Path(args.repo).resolve(), result["task_id"]):
-                # O68: the developer already saw the /goal reminder at the first approval.
-                callouts = [line for line in callouts if "**`/goal`**" not in line]
-            if callouts:
-                print("APPROVAL_CALLOUTS:")
-                for callout in callouts:
-                    print(callout)
-            pre_existing = pre_existing_changes_line(Path(args.repo).resolve(), result)
-            if pre_existing:
-                print(pre_existing)
-            zoho_item = (result.get("zoho_link") or {}).get("item_id")
-            if zoho_item and "zoho_sprints" not in (result.get("external_writes") or []):
-                # O67: the developer asked to update the linked item at the end; the plan could not.
-                print(
-                    f"ZOHO_WRITE_NOT_PLANNED=the plan links Zoho item {zoho_item} but cannot update it. If the developer "
-                    "wants its status or a comment updated, run `workflow.py revise` with --external-write zoho_sprints "
-                    "before asking for approval."
-                )
-            gaps = plan_gaps(result)
-            if gaps:
-                print(
-                    "PLAN_GAPS=" + ",".join(gaps) + ": the developer cannot review these. Before asking for approval, run "
-                    "`workflow.py revise` with --approach / --risks / --device-strategy (phone steps with expected results)."
-                )
-            print(APPROVAL_QUESTION_GUIDE)
+            for line in approval_material_lines(Path(args.repo).resolve(), result, args.action):
+                print(line)
         if args.action == "approve":
             print(f"APPROVED_PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
         print(f"TASK_STATUS={result.get('status', 'READY')}")
+        if args.action == "approve" and result.get("task_id"):
+            # Real app: approve printed only the status, the agent started editing, and the test record
+            # the router asks for before the first edit never happened; an old failing test in another
+            # feature then stopped verification and cost two approvals.
+            try:
+                upcoming = resolve_next_action(Path(args.repo).resolve(), str(result["task_id"]), result)
+            except Exception:
+                upcoming = {}
+            if upcoming.get("before_first_edit"):
+                print(f"BEFORE_FIRST_EDIT={upcoming['before_first_edit'].get('command')}")
+            if upcoming.get("reason"):
+                print(f"NEXT_REASON={upcoming['reason']}")
         for item in result.get("next_actions") or []:
             print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")
             print(f"NEXT_REASON={item.get('reason')}")

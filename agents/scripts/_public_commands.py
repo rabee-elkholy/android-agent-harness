@@ -174,6 +174,14 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "description": "Run policy-resolved unit or instrumented tests.",
     },
     {
+        "command": "compile",
+        "read_only": True,
+        "valid_states": ["IMPLEMENTING", "VERIFYING"],
+        "required_inputs": [],
+        "model_facing": True,
+        "description": "Compile the configured variant without tests or packaging (catch compile errors before prepare-verification).",
+    },
+    {
         "command": "assemble",
         "read_only": False,
         "valid_states": ["IMPLEMENTING", "VERIFYING"],

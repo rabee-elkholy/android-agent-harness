@@ -1655,7 +1655,7 @@ class PhaseEDecoupleZohoSelftest(unittest.TestCase):
         self._activate_plan(external_writes=[])
         res_empty = self._invoke_hook("zoho_create_task", {"name": "Test Bug", "operation_id": "op-1"})
         self.assertEqual("deny", res_empty["decision"])
-        self.assertIn("Zoho mutation is not included in the active approved plan", res_empty["reason"])
+        self.assertIn("zoho authorize", res_empty["reason"])
 
     def test_zoho_mutation_denied_without_operation_id(self) -> None:
         """Zoho mutation is denied if operation_id is missing (idempotency requirement)."""
@@ -1999,6 +1999,49 @@ class UnknownCommandHintSelftest(unittest.TestCase):
             code = entry.main(["checkpoint-phase", "--task-id", "t1", "--phase-id", "p1"])
         self.assertEqual(2, code)
         self.assertIn("python .agents/harness.py task checkpoint-phase", err.getvalue())
+
+
+class NextStepAfterCommandSelftest(unittest.TestCase):
+    """Real app: after each delivery step the agent ran `task status --next --json` (six times from review
+    finalize to ready); the step commands now end with the next action."""
+
+    def _entry(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("installed_harness_entry_next", KIT / "agents" / "harness.py")
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        return entry
+
+    def test_step_commands_end_with_the_next_action(self) -> None:
+        import contextlib
+        import io
+        from unittest import mock
+
+        entry = self._entry()
+        plan = {"task_id": "t1", "status": "VERIFYING"}
+        action = {"code": "DEVICE_INSTALL", "kind": "HARNESS_COMMAND", "command": "python .agents/harness.py device install-start",
+                  "reason": "Install the verified build."}
+
+        def run(argv):
+            out = io.StringIO()
+            with mock.patch.object(entry, "_run", return_value=0), \
+                 mock.patch("mutation_guard.active_plan", return_value=plan), \
+                 mock.patch("workflow.resolve_next_action", return_value=action), \
+                 contextlib.redirect_stdout(out):
+                code = entry.main(argv)
+            return code, out.getvalue()
+
+        code, text = run(["assemble"])
+        self.assertEqual(0, code)
+        self.assertIn("NEXT_ACTION=DEVICE_INSTALL: python .agents/harness.py device install-start\n", text)
+        self.assertIn("NEXT_REASON=Install the verified build.", text)
+        self.assertNotIn("NEXT_ACTION", run(["review", "status", "--task", "t1", "--json"])[1], "JSON output stays pure")
+        self.assertNotIn("NEXT_ACTION", run(["graph", "--find", "X"])[1], "not a delivery step")
+        action.update(code="DISPATCH_REVIEWERS", command="")
+        self.assertIn("task status --task-id t1 --next --json (for the exact payload)", run(["review", "finalize", "--task", "t1"])[1])
+        self.assertNotIn("NEXT_ACTION", run(["verify", "--task-id", "t1"])[1], "verify prints a JSON report")
+        plan["status"] = "DELIVERED"
+        self.assertNotIn("NEXT_ACTION", run(["assemble"])[1])
 
 
 class TaskFlagAliasSelftest(unittest.TestCase):

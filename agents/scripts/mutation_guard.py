@@ -701,6 +701,9 @@ def _zoho_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str]
     action = args[0] if args else ""
     if action in {"--help", "-h"} or args[1:2] in (["--help"], ["-h"]):
         return True, "zoho_sync help only prints usage"
+    if action == "authorize":
+        # The script refuses a proof without the developer's `update zoho`; it writes only a 30-minute grant.
+        return True, "records the developer's explicit `update zoho` as a short-lived Zoho write grant"
     if action not in ZOHO_LIFECYCLE_STATES:
         return False, f"zoho_sync '{action}' is not an audited lifecycle command"
     task_id = args[args.index("--task-id") + 1] if "--task-id" in args and args.index("--task-id") + 1 < len(args) else ""
@@ -710,8 +713,10 @@ def _zoho_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str]
         plan = read_json(_state_root(Path(repo)) / "tasks" / task_id / "plan.json")
     except Exception:
         return False, f"zoho_sync: no plan found for task '{task_id}'"
-    if not plan.get("zoho_link") or "zoho_sprints" not in (plan.get("external_writes") or []):
-        return False, f"zoho_sync: task '{task_id}' has no approved Zoho link and zoho_sprints external-write scope"
+    from zoho_grant import active_grant
+
+    if not plan.get("zoho_link") or ("zoho_sprints" not in (plan.get("external_writes") or []) and not active_grant(Path(repo))):
+        return False, f"zoho_sync: task '{task_id}' has no approved Zoho link and no Zoho write scope or `update zoho` grant"
     states = ZOHO_LIFECYCLE_STATES[action]
     status = str(plan.get("status") or "")
     if states is not None and status not in states:
@@ -797,7 +802,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
         or action in {"verify", "complete"}
-        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["assemble"], ["device"], ["review"]))
+        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.
