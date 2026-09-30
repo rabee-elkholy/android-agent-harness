@@ -2133,6 +2133,46 @@ class UpdateNoticeSelftest(unittest.TestCase):
         self.now[0] += 3601
         self.assertEqual("1.1.6", self.cku.check_for_update()["latest"], "re-checked after six hours")
 
+    def test_check_reports_whether_it_reached_github(self) -> None:
+        live = self.cku.check_for_update(force=True)
+        self.assertTrue(live["checked_live"])
+        self.assertEqual(self.now[0], live["checked_at"])
+        self.now[0] += 60
+        self.assertFalse(self.cku.check_for_update()["checked_live"], "answered from the cache")
+        self.latest = None
+        offline = self.cku.check_for_update(force=True)
+        self.assertFalse(offline["checked_live"])
+        self.assertEqual("1.1.5", offline["latest"])
+
+    def test_update_command_always_asks_github_and_says_when_it_could_not(self) -> None:
+        # Real app, an hour after v1.1.9 was published: `harness_cli.py update` answered from the 6-hour
+        # cache, pinned the kit to v1.1.8 again and reported success.
+        import contextlib
+        import importlib.util
+        import io
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("harness_cli_update_check", str(KIT / "harness_cli.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        calls = []
+
+        def fake_check(force=False):
+            calls.append(force)
+            return {"latest": "1.1.8", "checked_live": False, "checked_at": 0}
+
+        args = argparse.Namespace(kit=None, no_refresh=False, force=False, repo=None, answers_json=None)
+        out = io.StringIO()
+        with mock.patch.object(mod, "ensure_kit", return_value=KIT), \
+                mock.patch.object(mod, "refresh_kit"), \
+                mock.patch.object(mod, "_read_version_file", return_value="1.1.8"), \
+                mock.patch.object(self.cku, "check_for_update", fake_check), \
+                contextlib.redirect_stdout(out):
+            mod.cmd_update(args)
+        self.assertEqual([True], calls, "an update never trusts the cached release")
+        self.assertIn("Could not reach GitHub to check for a newer release", out.getvalue())
+        self.assertIn("checked never", out.getvalue())
+
     def test_update_info_says_how_to_update_and_reports_an_interrupted_update(self) -> None:
         # O56: asked to update, the agent searched npm and the web. O59: an interrupted update read as done.
         repo = self.tmp / "app"

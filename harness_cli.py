@@ -682,8 +682,17 @@ def cmd_update(args: argparse.Namespace) -> int:
         try:
             from check_kit_update import check_for_update
 
-            info = check_for_update(force=args.force)
+            # An update is an explicit request: always ask GitHub. The 6-hour cache is for passive
+            # notices; right after a release it made `update` stay on the previous version silently.
+            info = check_for_update(force=True)
             latest = info.get("latest") or current
+            if info.get("checked_live") is False:
+                seen = info.get("checked_at") or 0
+                when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(seen)) if seen else "never"
+                print(
+                    f"[!] Could not reach GitHub to check for a newer release; using the release last seen "
+                    f"(v{latest}, checked {when}). A newer release may exist: run the update again when online."
+                )
         except Exception as exc:
             latest = current
             print(f"[i] Update check skipped ({exc}).")

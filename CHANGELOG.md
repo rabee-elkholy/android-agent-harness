@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Update
+- `harness_cli.py update` always asks GitHub for the latest release. An hour after v1.1.9 was published it answered from the 6-hour notice cache, pinned the kit to v1.1.8 again and reported success on a real app. The cache now only serves the passive update notices; when GitHub cannot be reached, the update says so and names the release and time it last saw.
+
 ### Maintainer tooling
 - A full selftest records the tree of the files as they were tested, even before they are committed (built in a throwaway index; the real index is untouched). Committing exactly those files then lets `release_version.py` skip its own full run instead of repeating 15+ minutes on identical files. A file changed while the suites ran records nothing.
 

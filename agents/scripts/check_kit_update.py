@@ -134,8 +134,10 @@ def check_for_update(force: bool = False) -> dict:
         fresh = now < float(cache.get("next_check_at", 0) or 0)
     except (TypeError, ValueError):
         fresh = False
+    checked_live = False
     if force or not fresh:
         latest = _fetch_latest(current_ver)
+        checked_live = latest is not None
         if latest is not None:
             cache.update(
                 latest_version=latest["version"],
@@ -148,7 +150,10 @@ def check_for_update(force: bool = False) -> dict:
             # Keep the last known release and the snooze; only postpone the next attempt.
             cache["next_check_at"] = now + RETRY_AFTER_FAILURE_SECONDS
         _write_cache(cache)
-    return _result(current_ver, cache, snoozed)
+    result = _result(current_ver, cache, snoozed)
+    result["checked_live"] = checked_live
+    result["checked_at"] = float(cache.get("timestamp") or 0)
+    return result
 
 
 def install_prompt_url(version: str) -> str:
