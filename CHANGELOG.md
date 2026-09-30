@@ -4,7 +4,9 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
-## [Unreleased]
+## [1.1.10] - 2026-09-30
+
+`harness_cli.py update` always checks for the latest release, and a selftest run before committing counts for the release.
 
 ### Update
 - `harness_cli.py update` always asks GitHub for the latest release. An hour after v1.1.9 was published it answered from the 6-hour notice cache, pinned the kit to v1.1.8 again and reported success on a real app. The cache now only serves the passive update notices; when GitHub cannot be reached, the update says so and names the release and time it last saw.
