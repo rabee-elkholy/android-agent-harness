@@ -426,6 +426,10 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertIn(f"PLAN_DOCUMENT_URI={document}" + chr(10), full)
         self.assertIn("PLAN_DOCUMENT_URI as a clickable markdown link", full)
         self.assertIn("never in a code block", full)
+        # Real app: "plain text" gave an unformatted list; code names at line starts broke right-to-left text.
+        self.assertIn("bold label", full)
+        self.assertIn("no emoji", full)
+        self.assertIn("right-to-left language, start every line with a word in that language", full)
         self.assertNotIn("artifact directory", full, "no unverifiable copy of plan.md outside the task")
 
     def test_draft_names_the_developers_uncommitted_files(self) -> None:

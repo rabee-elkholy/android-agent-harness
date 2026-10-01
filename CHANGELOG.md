@@ -4,6 +4,13 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.12] - 2026-10-01
+
+The approval question is formatted and reads correctly in right-to-left languages.
+
+### Plan approval
+- The first live run of 1.1.11 showed the approval brief as an unformatted list, and in Arabic the lines that began with a code name (`LegacyRevenuePaywallFragment`, `'sale'`) came out scrambled. The guide asked for "plain text". It now asks for markdown: a short bold heading, one bullet per line with a bold label, numbered phone-check steps, no emoji; in a right-to-left language every line starts with a word in that language and every code name, file name, value and English term is in backticks. A re-approval question is formatted the same way, and the Antigravity and Claude instructions apply the rule to every developer question (sign-off and commit included).
+
 ## [1.1.11] - 2026-09-30
 
 Found while following real tasks on a production app (a paywall after onboarding, then a skip button on the paywall).

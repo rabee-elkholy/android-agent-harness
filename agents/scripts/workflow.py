@@ -5039,13 +5039,23 @@ def pre_existing_changes_line(repo: Path, plan: dict) -> str:
     return line
 
 
+# Real app (1.1.11): "as plain text" produced an unformatted list, and lines that began with a code name
+# (`LegacyRevenuePaywallFragment`, 'sale') came out scrambled in an Arabic (right-to-left) question.
+QUESTION_FORMAT = (
+    "a short bold heading, then one bullet per line starting with a bold label (what changes, files, sensitive "
+    "areas or outside writes, phone checks, risks); numbered sub-steps for phone checks; no emoji. "
+    "For a right-to-left language, start every line with a word in that language, never with a code name, and put "
+    "every code name, file name, value and English term in backticks so it keeps its place in the sentence."
+)
+
+
 APPROVAL_QUESTION_GUIDE = (
     "APPROVAL_QUESTION: ask with ask_question, options Approve / Request changes / Cancel task. "
     "Question text, in the developer's language: (1) the PLAN_DOCUMENT_URI as a clickable markdown link, "
-    "'[Full plan (plan.md)](<PLAN_DOCUMENT_URI>)'; (2) the APPROVAL_BRIEF lines, translated, each said once, as plain "
-    "text (never in a code block). Add nothing else: no second summary of the same plan, no task id, hashes, modules "
-    "or surface lists (they are in plan.md). Never paste plan.json or command output. Pass PLAN_HASH to approve "
-    "--plan-hash."
+    "'[Full plan (plan.md)](<PLAN_DOCUMENT_URI>)'; (2) the APPROVAL_BRIEF lines, translated, each said once, as "
+    f"markdown (never in a code block): {QUESTION_FORMAT} Add nothing else: no second summary of the same plan, no "
+    "task id, hashes, modules or surface lists (they are in plan.md). Never paste plan.json or command output. Pass "
+    "PLAN_HASH to approve --plan-hash."
 )
 
 
@@ -5054,8 +5064,9 @@ REAPPROVAL_QUESTION_GUIDE = (
     "Approve / Request changes / Cancel task. When the developer asked for this change, this is the only question: "
     "never ask first whether to revise. Question text, in the developer's language: (1) what changed, from "
     "REVISION_CHANGES; (2) why, from DRIFT_CAUSES when present (name each file and what it brought in); (3) the "
-    "PLAN_DOCUMENT_URI as a clickable markdown link for the full plan. Do not repeat the unchanged plan or the "
-    "APPROVAL_BRIEF, and never paste plan.json or command output. Pass PLAN_HASH to approve --plan-hash."
+    "PLAN_DOCUMENT_URI as a clickable markdown link for the full plan. Format it as markdown: "
+    f"{QUESTION_FORMAT} Do not repeat the unchanged plan or the APPROVAL_BRIEF, and never paste plan.json or "
+    "command output. Pass PLAN_HASH to approve --plan-hash."
 )
 
 
