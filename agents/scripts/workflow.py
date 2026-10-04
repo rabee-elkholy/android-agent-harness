@@ -1412,9 +1412,33 @@ def revise(args: argparse.Namespace) -> dict:
         if parked_run_file.is_file() and not current_run_file.exists():
             os.replace(parked_run_file, current_run_file)
         raise
+    if old_plan.get("approval") and _same_plan(old_plan, result):
+        # Real app: the agent revised an approved plan without changing anything, to reset a stuck review
+        # round, and the developer got a third approval question saying "no scope change". Nothing is
+        # replaced: the approved plan and its verification run stay as they were.
+        atomic_write_json(plan_p, old_plan)
+        current_run_file.unlink(missing_ok=True)
+        if parked_run_file.is_file():
+            os.replace(parked_run_file, current_run_file)
+        raise ValidationError(
+            "NO_PLAN_CHANGE: the revision is identical to the approved plan, so there is nothing for the developer "
+            "to approve and nothing was changed. Do not ask the developer. Continue with: "
+            f"python .agents/harness.py task status --task-id {task_id} --next"
+        )
     parked_run_file.unlink(missing_ok=True)
     _write_plan_document(repo, task_id, result, previous=old_plan)
     return result
+
+
+def _same_plan(old: dict, new: dict) -> bool:
+    """True when a revision changes nothing the developer approved (only its own lineage fields differ)."""
+    lineage = {"supersedes_plan_sha256", "plan_id"}
+    try:
+        before = {k: v for k, v in plan_payload(old).items() if k not in lineage}
+        after = {k: v for k, v in plan_payload(new).items() if k not in lineage}
+    except Exception:
+        return False
+    return before == after
 
 
 def recover_active(args: argparse.Namespace) -> dict:
@@ -1684,6 +1708,25 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 "change_set_sha256": previous_manifest["change_set_sha256"],
             }
         previous_policy = read_json(Path(previous_current["policy"]))
+        # Real app: a later round stopped before its reviews (its unit tests failed and the agent resumed),
+        # and the next prepare read reviews.json from that run and failed on every retry. A run that never
+        # reached its reviews is skipped: the round goes back to the run whose reviews it was built on.
+        store_for_rounds = EvidenceStore(state_root(repo))
+        for _hop in range(10):
+            if (store_for_rounds.run_dir(str(previous_current["delivery_snapshot_sha256"]), str(previous_current["run_id"])) / "reviews.json").is_file():
+                break
+            source = previous_policy.get("later_round_source") or {}
+            source_run = str(source.get("run_id") or "")
+            if not source_run:
+                break
+            validate_id(source_run, "run_id")
+            previous_current = {
+                "run_id": source_run,
+                "policy": str(task_dir(repo, args.task_id) / f"policy-{source_run}.json"),
+                "delivery_snapshot_sha256": str(source.get("snapshot") or ""),
+                "change_set_sha256": str(source.get("change_set") or ""),
+            }
+            previous_policy = read_json(Path(previous_current["policy"]))
         previous_reviews = EvidenceStore(state_root(repo)).read(
             str(previous_current["delivery_snapshot_sha256"]),
             str(previous_current["run_id"]),

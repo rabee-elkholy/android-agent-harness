@@ -33,10 +33,15 @@ PRE_EXISTING_CONTENT_SURFACES = {"AUTH", "BILLING", "SECURITY", "SENSITIVE_DATA"
 
 
 def _is_tracked(root: Path, rel_posix: str) -> bool:
+    """True when the file is in the last commit (existed before the task).
+
+    A file only staged (the IDE adds new files to the index) is new: its sign-in or purchase code is
+    part of the change, never "existing content".
+    """
     import subprocess
     try:
         return subprocess.run(
-            ["git", "ls-files", "--error-unmatch", "--", rel_posix],
+            ["git", "cat-file", "-e", f"HEAD:{rel_posix}"],
             cwd=str(root), capture_output=True, check=False, timeout=10,
         ).returncode == 0
     except Exception:
@@ -782,6 +787,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     status = str(plan.get("status") or "")
     entry, arguments = _entry(normalized, repo)
     action = _workflow_action(normalized, repo)
+    if action == "cancel":
+        # Real app: the developer chose "Cancel task" for a READY task; the cancel was refused in that state,
+        # so the agent tried deliver, then resumed the task on its own to be able to cancel it. Who may cancel
+        # is decided before this (the developer's words as proof); the state never blocks it.
+        return True, f"cancel of {status.lower() or 'the'} task on the developer's request"
     if status == "IMPLEMENTING":
         if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I) or (entry == "harness_cli" and arguments[:1] == ["device"]):
             return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."

@@ -4,6 +4,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.13] - 2026-10-04
+
+A new test file the IDE staged is no longer taken for an existing one, a cancel the developer asked for works in every task state, and a review round that stopped before its reviews no longer breaks the next one.
+
+### Review rounds
+- A later review round stopped before its reviews (its unit tests failed, so the agent resumed), and every following `prepare-verification` failed with "cannot read JSON artifact ... reviews.json": it took the previous round's reviews from that abandoned run. With no route out, the agent read `--help` pages, tried to copy `reviews.json` by hand (refused) and ran `recover-active` and `--force`. A run that never reached its reviews is now skipped: the round is built on the run whose reviews it continues.
+
+### Plan approval
+- With no route out of the stuck round, the agent revised the approved plan without changing anything, which reset the rounds and sent the developer a third approval question that said "no scope change". A revise that changes nothing in an approved plan is now refused (`NO_PLAN_CHANGE`): the approved plan and its run stay as they were, and the agent is told to continue without asking.
+
+### Cancel
+- The developer chose "Cancel task" for a task in READY_FOR_DELIVERY; the cancel was refused in that state, so the agent tried `deliver` and then resumed the task on its own just to cancel it. A cancel on the developer's request (their words as proof) is now allowed in every task state; without the proof it is still refused.
+
+### Scope check
+- A BUG task's reproduction test was accepted at prepare-verification, then staged (the IDE adds new files to the Git index), and `complete` refused it as an existing test of another feature (`git ls-files` counts staged files). The agent revised the plan, asked for a second approval, and ran preflight, unit tests, six reviewers and the phone check again on byte-identical code. A file now counts as existing only when it is in the last commit (HEAD). The same rule applies where the write guard leaves out the sign-in and purchase code a file already had: a new staged file's code is part of the change.
+
 ## [1.1.12] - 2026-10-01
 
 The approval question is formatted and reads correctly in right-to-left languages.

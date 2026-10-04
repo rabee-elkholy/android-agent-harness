@@ -136,6 +136,18 @@ class HookTests(unittest.TestCase):
         audit = [json.loads(line) for line in (self.state / "audit_log.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(all(record.get("reason_code") for record in audit))
 
+    def test_cancel_on_request_is_allowed_in_every_task_state(self):
+        # Real app: "Cancel task" on a READY task was refused by state, and the agent resumed the task itself.
+        cmd = ('python .agents/scripts/workflow.py cancel --repo . --task-id task-one --source conversation '
+               '--proof-reference "Cancel task"')
+        for status in ("AWAITING_DEVELOPER_APPROVAL", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"):
+            self.activate(status)
+            res = self.call("run_command", {"CommandLine": cmd})
+            self.assertEqual("allow", res["decision"], (status, res.get("reason")))
+        self.activate("READY_FOR_DELIVERY")
+        res = self.call("run_command", {"CommandLine": "python .agents/scripts/workflow.py cancel --repo . --task-id task-one"})
+        self.assertEqual("DEVELOPER_AUTHORITY", res.get("reason_code"), "without the developer's words it is still refused")
+
     def test_developer_authority_is_decided_by_subcommand_not_free_text(self):
         """Task text mentioning cancel/approve is ordinary; only the real subcommand and --source matter."""
         allowed = [
@@ -406,6 +418,28 @@ class HookTests(unittest.TestCase):
         self.assertEqual("allow", mirror["decision"], "the test of a planned file stays writable")
         new_test = self.call("write_to_file", {"TargetFile": "app/src/test/kotlin/com/example/LoginFlowTest.kt"})
         self.assertEqual("allow", new_test["decision"], "a new test file stays writable")
+
+    def test_MUTATION_SCOPE_002e_a_staged_new_test_is_still_new(self):
+        # Real app: the BUG task's reproduction test passed prepare-verification, then the IDE staged it, and
+        # `complete` called it an existing test of another feature (git ls-files counts the index), so the
+        # task went through a revise, a second approval and every gate and reviewer again.
+        from plan_authority import check_material_drift
+        from mutation_guard import _is_tracked
+
+        old = "app/src/test/kotlin/com/example/food/FoodPlanViewModelTest.kt"
+        new = "app/src/test/kotlin/com/example/pay/PaymentOnboardingFlowTest.kt"
+        for rel in (old, new):
+            (self.repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / rel).write_text("package com.example\nclass T {}\n", encoding="utf-8")
+        subprocess.run(["git", "add", old], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "old test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "add", new], cwd=self.repo, check=True)  # staged, never committed
+        plan = {"expected_files": ["app/src/main/kotlin/com/example/MainActivity.kt"], "expected_surfaces": ["BUSINESS_LOGIC"],
+                "test_strategy": "Policy-selected relevant tests"}
+        self.assertEqual([], check_material_drift(plan, ["BUSINESS_LOGIC"], actual_files=[new], repo=self.repo))
+        self.assertEqual([f"file:{old}"], check_material_drift(plan, ["BUSINESS_LOGIC"], actual_files=[old], repo=self.repo))
+        self.assertFalse(_is_tracked(self.repo, new), "staged but not committed: new")
+        self.assertTrue(_is_tracked(self.repo, old))
 
     def test_MUTATION_SCOPE_002c_module_inference_uses_plan_modules(self):
         # A plan scoped to the root module must not have app/ targets rewritten to :app.

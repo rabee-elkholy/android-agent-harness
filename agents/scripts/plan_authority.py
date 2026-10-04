@@ -491,14 +491,19 @@ def planned_test_classes(expected_files: list[str] | set[str]) -> set[str]:
 
 
 def _tracked_paths(repo: Path, paths: list[str]) -> set[str]:
-    """Paths Git already tracks, i.e. files that existed before this task. Unknown -> all tracked."""
+    """Paths in the last commit, i.e. files that existed before this task. Unknown -> all tracked.
+
+    Real app: a new reproduction test was accepted at prepare-verification, then staged (the IDE adds new
+    files to the index), and `complete` called it an existing test of another feature: `git ls-files`
+    counts staged files. A staged file that is not in HEAD is new.
+    """
     import subprocess
 
     if not paths:
         return set()
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), "ls-files", "-z", "--", *paths],
+            ["git", "-C", str(repo), "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", *paths],
             capture_output=True, check=False, timeout=60,
         )
     except (OSError, subprocess.SubprocessError):

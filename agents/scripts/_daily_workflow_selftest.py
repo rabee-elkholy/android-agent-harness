@@ -730,6 +730,31 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertEqual([":app", ":core"], plan["expected_modules"])
         self.assertEqual(["BUSINESS_LOGIC"], plan["expected_surfaces"])
 
+    def test_revise_without_any_change_to_an_approved_plan_is_refused(self) -> None:
+        # Real app: the agent revised an approved plan without changing it (to reset a stuck review round);
+        # the developer got a third approval question that said "no scope change".
+        import contextlib
+        import io
+        from workflow import main as workflow_main
+
+        draft(self._draft_ns("noop-revise"))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id="noop-revise", source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        plan_file = task_dir(self.repo, "noop-revise") / "plan.json"
+        approved = read_json(plan_file)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            ret = workflow_main(["revise", "--repo", str(self.repo), "--task-id", "noop-revise"])
+        self.assertEqual(1, ret)
+        self.assertIn("NO_PLAN_CHANGE", err.getvalue())
+        self.assertIn("Do not ask the developer", err.getvalue())
+        self.assertEqual(approved, read_json(plan_file), "the approved plan is kept as it was")
+        # A real change still makes a new plan for the developer to approve.
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, workflow_main(["revise", "--repo", str(self.repo), "--task-id", "noop-revise",
+                                               "--risks", "New risk"]))
+        self.assertNotEqual(approved["plan_sha256"], read_json(plan_file)["plan_sha256"])
+
     def test_cancel_in_chat_records_the_developers_words(self) -> None:
         # Real app: the developer said "cancel the task" in chat and was told to run the command in a terminal.
         draft(self._draft_ns("chat-cancel"))
@@ -5519,6 +5544,19 @@ class ReviewOrchestrationTests(unittest.TestCase):
         )
         self.assertIsNone(error, error)
         self.assertEqual("PASS", status)
+        # Real app: that round stopped before its reviews (its unit tests failed) and the agent resumed; the next
+        # prepare read reviews.json from the abandoned run and failed on every retry.
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay\">Pay this week</string>\n</resources>\n")
+        third = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        policy3 = read_json(Path(third["policy"]))
+        self.assertEqual(first["run_id"], policy3["later_round_source"]["run_id"], "built on the run that has reviews")
+        self.assertIn("bug-reviewer-agent", policy3["reviewers"])
+        manifest3 = read_json(Path(third["manifest"]))
+        self.assertIsNone(validate_policy_artifact(
+            self.repo, read_json(tdir / "plan.json"), policy3, state_root(self.repo), Path(third["policy"]),
+            current_change_set=manifest3["change_set_sha256"], task_changes=manifest3.get("task_changes"),
+        )[1])
         # A policy that claims more carried reviews than the delta allows is refused.
         forged = dict(policy2, reviewers=["bug-reviewer-agent"])
         forged["policy_sha256"] = canonical_sha256({k: v for k, v in forged.items() if k != "policy_sha256"})
