@@ -45,7 +45,7 @@
     "agents/scripts/_graph_core.py": "37d42402cc6f8a702313588cb9285d6c8c34c9a7ed6fb2494deee68e408d3686",
     "agents/scripts/_graph_discovery_selftest.py": "d702f3259c0e7865f478e2d6b2a78d8db2289854bc28b057d8922b50a93d8cb5",
     "agents/scripts/_graph_selftest.py": "2b3a27b6863a8aee145c0dd2b06103f47c8f0199efc722427cf0eb9d085f247a",
-    "agents/scripts/_hook_selftest.py": "b2c46672cfeb3b8242ba8fb748ba6c15325749d3ed7bda43763f197917b6ab47",
+    "agents/scripts/_hook_selftest.py": "e7b86b2912b80eee6f12cb024aa90f9dfc5ff597524803a5df28276b2a519a1b",
     "agents/scripts/_installer_config.py": "efaa4283f665f8dc9eb6988b2f5ca5c3196b1d9373cc4da0208efd7d67a2772c",
     "agents/scripts/_live_process.py": "483c4dbca2cbb71fa8d85209b73470562374f3b16d3607464cd0b4cc59fff836",
     "agents/scripts/_modules.py": "a5145e4219b4085341258ed7d1b830af22e044398ea1f6895b0cbc43737d99e3",
@@ -66,7 +66,7 @@
     "agents/scripts/_vnext_common.py": "cedffc3e8183162843f8ba73066fc22b57e159258718e56a9f8c12544526cbb1",
     "agents/scripts/_vnext_selftest.py": "6bf20f75b694a501e6785e0950852e0909e1df10a0c3ed6196775866e0459578",
     "agents/scripts/_worktree_handoff_selftest.py": "95ebebb840593b6686e551ac180e973139a8eb1348458b8f9115906175c4311f",
-    "agents/scripts/_zoho_selftest.py": "22c7d4d2483a129acd8124c96281aea7a4ff4f0f0e0336a642d328ad9bd310cf",
+    "agents/scripts/_zoho_selftest.py": "7c8a7754788169e87bdd5b98f46ff1b1f479dfb4c17085ad3475ee4b368b6b72",
     "agents/scripts/antigravity_runtime.py": "550c879cf3f6af8c94eb1de48b424799fabf4047e3b935d04249c53ee0815b7d",
     "agents/scripts/antigravity_tools.py": "d4881d146fc7406c62cc188db7c3bc80d1408dc02826c37d22d02bdc49f98556",
     "agents/scripts/architecture_drift.py": "02b3991a2a6b82cf67dea2b414dd9f3ec565871d8f394d54d8911c2cd2635343",
@@ -118,7 +118,7 @@
     "agents/scripts/policy_vocab.py": "204043dc25002ded074f87ef071206f8f2d600061a9771b9f3d8472f345cd0d4",
     "agents/scripts/post_tool_reconcile.py": "5a14a01b8ad1c159c3a02ce269a2e5a143b9287c1f13011d6d45b5ea87dba962",
     "agents/scripts/pre_invocation_reminder.py": "bdf0806c5d0b43dd4d3af003a82052cc5055149b8a75cd54544e63f341a47072",
-    "agents/scripts/pre_tool_safety.py": "8cb7a614af230ea1c7f3da3170b4bb90291d2dcda8c06c37ee5c7a3475948d70",
+    "agents/scripts/pre_tool_safety.py": "23662653bb2b9d26152fbeb4cbf273b35e7d1e5d84e0c524d658ff6da441cb6e",
     "agents/scripts/preflight.py": "2bf4bfafd04ac08af90657b0205b45d104535c0ae8806a4ef82a3d0e64aebd6b",
     "agents/scripts/preflight_check.py": "34c5575898714bb2bfb33190363f957608d8c53a049c3458f22f1251af15ed96",
     "agents/scripts/project_context.py": "c673a6a6f08d75c560fa3143e8c3548bbcde43dbc62875ef797dc266357ab78f",
@@ -146,7 +146,7 @@
     "agents/scripts/wizard/questions.py": "02d45311d91db90c16a9e90193aded860a02a6f3d8ddd09313ed0f9b98feef5d",
     "agents/scripts/wizard/schema.py": "d6bdb98d53d12cc784c7e33fa496f01e2f188e6bf05cfff0e435d52bd24a207e",
     "agents/scripts/workflow.py": "ff50a87cb0454e787ddb4746e39d9d18c47e1a922e4547bbd003a7179b0bbe1a",
-    "agents/scripts/zoho_grant.py": "c2e44ebecdbc70a789a2820850accd2ba9dd427227a3c3f78904fd7797356249",
+    "agents/scripts/zoho_grant.py": "1a18220753c70b147a8699d9e80faf17798ab0a3a2ea79e2a82a31ce4368cef6",
     "agents/scripts/zoho_sync.py": "05ff3ea91abee5a555cf75be3acd657fb6461259ed096e9114c1bfeda0432ae0",
     "agents/settings.json": "88a159a4ed918331db339f4d3b3b0570e7257ad270bd6bd74f8b66783d8d4ee8",
     "agents/skills/android-harness/SKILL.md": "bcc7123d0217b5d8ffe8d426b55b17ef0b8f4eff79846daef14eebd4ca69b882",
@@ -198,7 +198,7 @@
     "agents/workflows/perf-audit.md": "e7e78a14369ca08b2c48706433014af9ba0f78c9305a06aaf4c90273c3c0dd0a",
     "agents/workflows/preflight.md": "1dc00a35726e6386c0a3209cfd2ef1d9ee36e871753c6d83bfce8d126233f845",
     "agents/workflows/test-quality-audit.md": "e6e2483f581a7d1aeed4643adef6b2d0769d6063e44a3f374f956c0c54f69774",
-    "agents/workflows/zoho-sprints.md": "76a92d9fe7883b563a49ccb43cf01c3a09297944332dba0b3203221910a8e7cf"
+    "agents/workflows/zoho-sprints.md": "b14513a652839f7ca47d26902066e3b3f27d7f01ad1c499262b2f14983d532df"
   },
   "schema_version": 1
 }

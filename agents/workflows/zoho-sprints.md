@@ -38,7 +38,7 @@ This still counts as a mutate. Do it only on an explicit create request (includi
 ## `update zoho` (mutate)
 
 Never `Done` / `Solved`. Show the developer exactly what will be written first. When they type
-`update zoho`, run `python .agents/harness.py zoho authorize --proof-reference "<their message>"`:
+`update zoho` (or the same order in their language, e.g. حدث زوهو), run `python .agents/harness.py zoho authorize --proof-reference "<their message>"`:
 it grants Zoho writes for 30 minutes without touching the task plan. Never revise the task plan
 (or re-run its approval and reviews) just to update the tracker. A plan approved with
 `--external-write zoho_sprints` also allows the writes.

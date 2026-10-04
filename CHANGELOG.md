@@ -4,6 +4,14 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.14] - 2026-10-04
+
+A Zoho update ordered in the chat goes through.
+
+### Zoho
+- The developer wrote "حدث زوهو بتعديلات سلة الخير" (update Zoho, in Arabic) and `zoho authorize` refused it for lacking the English words `update zoho`. The order is now accepted in Arabic as well (حدث / تحديث + زوهو); looking at Zoho or updating the code is still not an order to write.
+- After the developer chose the "update zoho" option, the hook's `tracker_write` boundary refused `zoho authorize` itself, because its proof contained "update zoho" (it also refused a `draft` whose outcome said "Update Zoho"). The agent then read the hook's source looking for a way. A single call of a harness entry point (`harness.py`, `workflow.py`, `zoho_sync.py`) with nothing chained to it is now exempt: those commands enforce Zoho authority themselves. Raw tracker writes, and anything chained after a harness call, are still refused.
+
 ## [1.1.13] - 2026-10-04
 
 A new test file the IDE staged is no longer taken for an existing one, a cancel the developer asked for works in every task state, and a review round that stopped before its reviews no longer breaks the next one.

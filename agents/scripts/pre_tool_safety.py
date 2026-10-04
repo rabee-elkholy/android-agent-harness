@@ -154,6 +154,31 @@ def _flag(rest: list[str], name: str) -> str:
     return ""
 
 
+AUDITED_HARNESS_ENTRY = re.compile(
+    r"^\s*(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py)\s+\S*?(?:harness|workflow|zoho_sync)\.py\s", re.I,
+)
+
+
+def _audited_harness_command(command: str) -> bool:
+    """One harness entry-point call and nothing chained to it.
+
+    `tracker_write` stops tracker writes through raw shell (curl, ad-hoc scripts). Real app: it also
+    refused the harness's own audited `zoho authorize --proof-reference "... update zoho ..."` (the
+    words that grant the write) and a `draft` whose outcome said "Update Zoho". The harness commands
+    enforce Zoho authority themselves; a chained command is never exempt.
+    """
+    if not AUDITED_HARNESS_ENTRY.match(command or ""):
+        return False
+    try:
+        from mutation_guard import SHELL_LAUNDERING, _operator_text_any_shell
+    except Exception:
+        return False
+    outside_quotes = _operator_text_any_shell(command)
+    if outside_quotes is None or SHELL_LAUNDERING.search(outside_quotes):
+        return False
+    return not re.search(r";|&&|\|\||\n", outside_quotes)
+
+
 CANCEL_REQUEST_FILE = "cancel-requested.json"
 CANCEL_REQUEST_TTL_SECONDS = 30 * 60
 
@@ -401,6 +426,8 @@ def _handle_command(command: str) -> None:
         return
     for code, pattern in DANGEROUS:
         if pattern.search(command):
+            if code == "tracker_write" and _audited_harness_command(command):
+                continue
             hint = f" {DENY_HINTS[code]}" if code in DENY_HINTS else ""
             emit("deny", f"Denied by local safety boundary: {code}.{hint}", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)
             return

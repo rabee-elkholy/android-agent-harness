@@ -752,6 +752,11 @@ class ZohoLifecycleTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             self.assertEqual(0, zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", "Update Zoho"]))
         self.assertIn("ZOHO_WRITE_GRANTED", out.getvalue())
+        # Real app: the developer gave the order in Arabic ("حدث زوهو ...").
+        self.assertTrue(zoho_grant.is_update_zoho("حدث زوهو بتعديلات"))
+        self.assertTrue(zoho_grant.is_update_zoho("تحديث زوهو"))
+        self.assertFalse(zoho_grant.is_update_zoho("شوف زوهو"), "looking at Zoho is not an order to write")
+        self.assertFalse(zoho_grant.is_update_zoho("حدث الكود"), "updating the code is not a Zoho write")
         grant = zoho_grant.active_grant(self.repo)
         self.assertIsNotNone(grant)
         self.assertEqual((True, ""), validate_external_write(integ, "zoho_update_task_status", write, plan, grant=grant))

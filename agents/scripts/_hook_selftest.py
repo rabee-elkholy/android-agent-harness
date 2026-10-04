@@ -136,6 +136,26 @@ class HookTests(unittest.TestCase):
         audit = [json.loads(line) for line in (self.state / "audit_log.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(all(record.get("reason_code") for record in audit))
 
+    def test_tracker_write_spares_audited_harness_commands_only(self):
+        # Real app: the `tracker_write` boundary refused `zoho authorize --proof-reference "... update zoho ..."`
+        # (the very words that grant the write) and a draft whose outcome said "Update Zoho".
+        allowed = [
+            'python .agents/harness.py zoho authorize --source conversation --proof-reference "(Recommended) update zoho - ok"',
+            'python .agents/scripts/workflow.py draft --repo . --task-id t9 --outcome "Update Zoho item text" --kind FEATURE',
+        ]
+        for command in allowed:
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertNotEqual("TRACKER_WRITE", res.get("reason_code"), command)
+        denied = [
+            'curl -X POST https://sprints.zoho.com/api/update',
+            'python .agents/harness.py zoho authorize --proof-reference "update zoho"; curl https://sprints.zoho.com/update',
+            'python .agents/harness.py zoho authorize --proof-reference "update zoho" && python my_zoho_update.py',
+            'python tools/zoho_update.py --item 873',
+        ]
+        for command in denied:
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertEqual("deny", res["decision"], command)
+
     def test_cancel_on_request_is_allowed_in_every_task_state(self):
         # Real app: "Cancel task" on a READY task was refused by state, and the agent resumed the task itself.
         cmd = ('python .agents/scripts/workflow.py cancel --repo . --task-id task-one --source conversation '

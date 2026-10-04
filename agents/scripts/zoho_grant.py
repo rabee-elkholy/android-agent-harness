@@ -9,12 +9,35 @@ operation id per write, no Done/Solved, no edit of a Bug's description).
 """
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
 GRANT_FILE = "zoho-write-grant.json"
 GRANT_TTL_SECONDS = 30 * 60
 TRIGGER = "update zoho"
+
+
+_ARABIC_MARKS = re.compile("[ً-ْـ]")  # harakat, shadda and tatweel
+_ARABIC_UPDATE = ("حدث", "تحديث", "حدثه", "حدثها")
+_ZOHO_WORDS = ("zoho", "زوهو")
+
+
+def is_update_zoho(text: str) -> bool:
+    """The developer's explicit order: `update zoho`, or the same order in Arabic (حدث زوهو / تحديث زوهو).
+
+    Real app: the developer wrote "حدث زوهو بتعديلات ..." and the grant refused it for lacking the English
+    words.
+    """
+    plain = _ARABIC_MARKS.sub("", " ".join(str(text or "").split())).lower()
+    if TRIGGER in plain:
+        return True
+    words = re.findall(r"[\w؀-ۿ]+", plain)
+    for index, word in enumerate(words):
+        if word in _ARABIC_UPDATE or (word.startswith("و") and word[1:] in _ARABIC_UPDATE):
+            if any(zoho in " ".join(words[index + 1:index + 3]) for zoho in _ZOHO_WORDS):
+                return True
+    return False
 
 
 def _state(repo: Path) -> Path:
@@ -29,9 +52,9 @@ def record_grant(repo: Path, proof_reference: str, source: str = "conversation")
     from _vnext_common import ValidationError, atomic_write_json, utc_now
 
     proof = " ".join(str(proof_reference or "").split())
-    if TRIGGER not in proof.lower():
+    if not is_update_zoho(proof):
         raise ValidationError(
-            f"ZOHO_GRANT_NEEDS_UPDATE_ZOHO: the proof must be the developer's message containing `{TRIGGER}`; "
+            f"ZOHO_GRANT_NEEDS_UPDATE_ZOHO: the proof must be the developer's message ordering it (`{TRIGGER}`, or حدث زوهو); "
             "show the developer what will be written first and wait for it."
         )
     grant = {
@@ -63,7 +86,7 @@ def active_grant(repo: Path) -> dict | None:
             return None
     except (TypeError, ValueError):
         return None
-    if TRIGGER not in str(data.get("proof_reference") or "").lower():
+    if not is_update_zoho(str(data.get("proof_reference") or "")):
         return None
     return data
 
