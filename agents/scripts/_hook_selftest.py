@@ -156,6 +156,21 @@ class HookTests(unittest.TestCase):
             res = self.call("run_command", {"CommandLine": command})
             self.assertEqual("deny", res["decision"], command)
 
+    def test_merge_checks_without_a_task_are_reads(self):
+        # Real app, no task open, checking whether a merge was done right: `git merge-base --is-ancestor`
+        # was refused as git_mutation (the `git merge` pattern matched `merge-base`), `git log x ^HEAD`
+        # as shell laundering (the `^`), and `harness.py compile` because no task was open.
+        for command in ("git merge-base --is-ancestor 00f6fcdbdd HEAD", "git merge-base HEAD main",
+                        "git log features/develop-update-onboarding ^HEAD --oneline", "git rev-list --count ^main HEAD",
+                        "git branch -a --contains 00f6fcdbdd", "python .agents/harness.py compile"):
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertEqual("allow", res["decision"], (command, res.get("reason")))
+        for command in ("git merge feature", "git merge --abort", "git log ^HEAD; g^it pu^sh", "g^it pu^sh",
+                        "git log x ^& calc", "git checkout ^HEAD", "python .agents/harness.py compile :app:installDebug",
+                        "python .agents/harness.py assemble"):
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertEqual("deny", res["decision"], command)
+
     def test_tracker_write_spares_audited_harness_commands_only(self):
         # Real app: the `tracker_write` boundary refused `zoho authorize --proof-reference "... update zoho ..."`
         # (the very words that grant the write) and a draft whose outcome said "Update Zoho".

@@ -4,6 +4,13 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.19] - 2026-10-05
+
+Checking a merge with no task open no longer runs into refusals.
+
+### Read-only commands
+- With no task open, the agent checked whether a merge was done right and was refused three times. `git merge-base --is-ancestor <commit> HEAD` was called a git mutation: the pattern for `git merge` also matched `merge-base`. It now matches only the whole subcommand, and `git merge-base` and `git rev-list` are read commands. `git log <branch> ^HEAD` was called shell laundering because of the `^` (cmd.exe drops it inside a word, so `g^it pu^sh` runs `git push`). A `^` that starts an argument of a read-only `git log`, `rev-list`, `show`, `diff` or `merge-base` is now accepted; inside a word, or before an operator, it is still refused. `python .agents/harness.py compile` was refused because no task was open. The bare command compiles the harness-derived task and writes build outputs only, so it now runs without a task; a named Gradle task, and `assemble`, still need one.
+
 ## [1.1.18] - 2026-10-05
 
 An update no longer refuses a project whose reviewer budget was raised in the setup answers.

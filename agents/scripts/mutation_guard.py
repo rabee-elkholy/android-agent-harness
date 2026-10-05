@@ -22,6 +22,8 @@ BOOTSTRAP_ACTIONS = {
     "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
+GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base)\s", re.I)
+GIT_REV_EXCLUSION = re.compile(r"(?<=\s)\^(?=[\w./-])")
 
 
 # Read-only PowerShell cmdlets (Antigravity on Windows runs PowerShell). Pipes,
@@ -146,7 +148,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             args = args[2:]
         if is_read_only_git_branch(args):
             return True
-        if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe", "grep", "blame"}:
+        if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe", "grep", "blame", "merge-base", "rev-list"}:
             return False
         if any(arg.startswith(("--output", "--ext-diff", "--textconv")) for arg in args[1:]):
             return False
@@ -767,6 +769,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     )
     if operator_text is None:
         return False, "unterminated quote in command"
+    if GIT_RANGE_READ.match(normalized):
+        # `^` is refused because cmd.exe drops it inside a word (`g^it pu^sh` runs `git push`); a
+        # revision exclusion (`git log branch ^HEAD`) starts an argument of a read-only git command,
+        # where cmd dropping it leaves a read-only command, so only that position is spared.
+        operator_text = GIT_REV_EXCLUSION.sub("", operator_text)
     if SHELL_LAUNDERING.search(operator_text):
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
     segments = _split_segments(normalized)
@@ -792,6 +799,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     try:
         plan = active_plan(repo)
     except ValidationError as exc:
+        # Real app: checking a merge with `harness.py compile` was refused with no task open. The bare
+        # command compiles the harness-derived task and writes build outputs only; a named Gradle task
+        # could be anything, so it still needs a task.
+        if _entry(normalized, repo) == ("harness_cli", ["compile"]):
+            return True, "compile check without a task writes build outputs only"
         lower = normalized.lower()
         if any(kw in lower for kw in ("task-context", "task_context", "project_graph", "doctor", "preflight")):
             return False, (
