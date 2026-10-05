@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 
-def generate_product_py(repo: Path, answers: dict) -> Path:
+def product_values(repo: Path, answers: dict) -> dict:
+    """The values `_product.py` is rendered from; an update regenerates the file from these."""
     from _enforcement import detect
     from review_sources import primary_host_from_tools
     product_name = answers.get("product") or repo.name
@@ -86,11 +87,19 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
         # Installs whose answers predate this key accept a draft without --expected-files.
         "PLAN_SCOPE": answers.get("plan_scope") or "legacy",
     }
+    return values
+
+
+def render_product_py(values: dict) -> str:
     lines = ['"""Generated project identity and vNext policy configuration."""', "from __future__ import annotations", ""]
     lines.extend(f"{key} = {value!r}" for key, value in values.items())
+    return "\n".join(lines) + "\n"
+
+
+def generate_product_py(repo: Path, answers: dict) -> Path:
     target = repo / ".agents" / "scripts" / "_product.py"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    target.write_text(render_product_py(product_values(repo, answers)), encoding="utf-8")
     return target
 
 

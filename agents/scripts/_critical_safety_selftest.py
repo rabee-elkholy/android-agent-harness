@@ -430,6 +430,38 @@ class CriticalSafetyTests(unittest.TestCase):
         finally:
             fixture.tearDown()
 
+    def test_update_accepts_a_product_config_rendered_from_the_answers(self):
+        # Real app: the developer raised the reviewer budget in answers.json and _product.py together;
+        # update then refused "user-modified managed files require clean recovery: _product.py".
+        fixture = fixtures.LifecycleTests()
+        fixture.setUp()
+        try:
+            fixture._answers()
+            lifecycle.install(fixture.repo, fixtures.KIT)
+            answers_path = fixture.repo / ".harness-setup/answers.json"
+            product = fixture.repo / ".agents/scripts/_product.py"
+            original = product.read_text(encoding="utf-8")
+            self.assertIn("MODEL_CALL_BUDGET = 20\n", original)
+            # Changed here only: a hand edit the answers do not produce is still a conflict.
+            product.write_text(original.replace("MODEL_CALL_BUDGET = 20\n", "MODEL_CALL_BUDGET = 30\n"), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, r"user-modified managed files require clean recovery.*_product\.py"):
+                lifecycle.update(fixture.repo, fixtures.KIT)
+            # Other code in the file is a conflict even when every value matches.
+            product.write_text(original + "import os\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, r"_product\.py"):
+                lifecycle.update(fixture.repo, fixtures.KIT)
+            # Changed in both, as the setup question would: the update proceeds and keeps the value.
+            answers = json.loads(answers_path.read_text(encoding="utf-8"))
+            answers["model_call_budget"] = 30
+            answers_path.write_text(json.dumps(answers), encoding="utf-8")
+            product.write_text(original.replace("MODEL_CALL_BUDGET = 20\n", "MODEL_CALL_BUDGET = 30\n"), encoding="utf-8")
+            lifecycle.update(fixture.repo, fixtures.KIT)
+            self.assertIn("MODEL_CALL_BUDGET = 30\n", product.read_text(encoding="utf-8"))
+            # The new ownership record matches the regenerated file, so the next update is clean.
+            lifecycle.update(fixture.repo, fixtures.KIT)
+        finally:
+            fixture.tearDown()
+
     def test_update_preserves_history_and_rejects_active_task(self):
         fixture = fixtures.LifecycleTests()
         fixture.setUp()

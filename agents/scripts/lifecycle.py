@@ -200,6 +200,37 @@ def _load_answers(repo: Path) -> dict:
     return data
 
 
+PRODUCT_CONFIG = ".agents/scripts/_product.py"
+
+
+def _product_config_matches_answers(repo: Path, overrides: dict) -> bool:
+    """Whether `_product.py` is exactly what the setup answers render, in the generator's own form.
+
+    The file is regenerated from answers.json on every update, so a value changed in both (a budget
+    raised by the developer) is the answers' rendering, not a hand edit; a value changed only here,
+    or any other code in the file, is still a conflict. Keys a newer kit adds are not compared.
+    """
+    import ast
+
+    from _installer_config import product_values, render_product_py
+
+    path = repo / PRODUCT_CONFIG
+    try:
+        text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        current: dict = {}
+        for node in tree.body[2:]:
+            if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+                return False
+            current[node.targets[0].id] = ast.literal_eval(node.value)
+        if text != render_product_py(current):
+            return False
+        rendered = product_values(repo, {**_load_answers(repo), **(overrides or {})})
+    except Exception:
+        return False
+    return bool(current) and all(key in rendered and rendered[key] == value for key, value in current.items())
+
+
 def _hash_or_none(path: Path) -> str | None:
     return sha256_file(path) if path.is_file() and not path.is_symlink() else None
 
@@ -1022,6 +1053,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
         current_hash = _hash_or_none(path)
         if current_hash != entry.get("post_install_sha256") and not any(Path(rel).match(pattern) for pattern in PRESERVE_GLOBS):
             if rel.startswith(legacy_ref_prefix):
+                continue
+            if rel == PRODUCT_CONFIG and _product_config_matches_answers(repo, answers):
                 continue
             conflicts.append(rel)
     if conflicts:

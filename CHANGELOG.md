@@ -4,6 +4,13 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.18] - 2026-10-05
+
+An update no longer refuses a project whose reviewer budget was raised in the setup answers.
+
+### Update
+- Updating a real app refused with "user-modified managed files require clean recovery: .agents/scripts/_product.py" and offered only an uninstall and reinstall: the reviewer budget had been raised to 20 in `.harness-setup/answers.json` and `_product.py` together. The update regenerates `_product.py` from the answers anyway, so a file that is exactly what the answers render, in the generator's own form, is no longer a conflict. A value changed only in `_product.py`, or any other code added to it, is still refused.
+
 ## [1.1.17] - 2026-10-05
 
 Reviewers now see the approved approach, and one of them checks that every item of it was implemented. A bug's failing-test proof survives a re-approved revision of the plan.
