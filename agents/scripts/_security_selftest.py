@@ -2354,7 +2354,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
 
     def test_REASON_INSTALL_003_normalized_answers_contain_no_allow_model_escalation(self):
         from wizard import questions
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["gemini"], "i20": "none", "review_call_budget": "10"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["gemini"], "i20": "none", "review_call_budget": "12"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         norm = questions.normalize(raw, facts)
         self.assertNotIn("allow_model_escalation", norm)

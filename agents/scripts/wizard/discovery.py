@@ -795,7 +795,7 @@ def auto_from_facts(facts: dict) -> dict:
         "agents_git": "gitignore",
         "gemini_config": "merge-allowlist" if facts.get("gemini") else "skip",
         "assemble_now": "tests-only",
-        "model_call_budget": 10,
+        "model_call_budget": 20,
         "unit_test_scope": "changed_modules",
         "plan_scope": "files_required",
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",

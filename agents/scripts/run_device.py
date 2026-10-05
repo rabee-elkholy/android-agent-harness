@@ -635,6 +635,10 @@ def main() -> int:
     parser.add_argument("--user", default=None, help="Target user ID for multi-user / work profile devices (e.g. 0)")
     parser.add_argument("--force", action="store_true", help="Bypass APK freshness check (emergency manual use only)")
     parser.add_argument("--grant-runtime-permissions", action="store_true", help="Explicitly grant requested runtime permissions during install")
+    parser.add_argument(
+        "--allow-downgrade", action="store_true",
+        help="Install over a newer build on the phone (adb install -d, debug builds); keeps the app's data",
+    )
     parser.add_argument("--confirm-destructive", action="store_true", help="Required for uninstall")
     parser.add_argument("--task-id", default=None, help="Task ID for signoff")
     parser.add_argument("--proof-reference", default=None, help="Proof reference / reason for signoff")
@@ -791,6 +795,8 @@ def main() -> int:
         install_cmd = ["install-multiple" if len(apk_paths) > 1 else "install", "-r"]
         if args.grant_runtime_permissions:
             install_cmd.append("-g")
+        if getattr(args, "allow_downgrade", False):
+            install_cmd.append("-d")
         install_cmd.extend(["--user", target_user])
         install_cmd.extend(str(apk) for apk in apk_paths)
         with step_progress("Installing APK on device"):
@@ -801,6 +807,18 @@ def main() -> int:
             code = code or 1
             verdict = classify_adb_failure(code, log)
             live_print(f"[!] adb install failed (exit {code})", err=True)
+            if "INSTALL_FAILED_VERSION_DOWNGRADE" in log and not getattr(args, "allow_downgrade", False):
+                # Real app: a newer build was on the phone; the only offers were "skip the phone check" or
+                # "delete the app". Name both real remedies; the developer chooses (a downgrade keeps the
+                # data, which an older build may not read if the newer one changed the database).
+                live_print(
+                    "[i] The phone has a newer build of the app than this one. Ask the developer which to do: "
+                    "(1) install over it keeping the app's data: `python .agents/harness.py device install-start "
+                    "--allow-downgrade` (an older build can crash on data a newer build migrated); or (2) start "
+                    "clean: the developer uninstalls the app from the phone, then `python .agents/harness.py device "
+                    "install-start`. Do not recommend skipping the phone check for this.",
+                    err=True,
+                )
             record_device("install", "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason, artifact_set_sha=artifact_set_sha, application_id=actual_application_id, target_user=target_user, preexisting_package=preexisting_package)
             emit_env_failure(verdict, "run_device.py", serial=serial)
             return exit_for(verdict)

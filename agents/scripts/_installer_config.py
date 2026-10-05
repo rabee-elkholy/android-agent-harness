@@ -78,7 +78,9 @@ def generate_product_py(repo: Path, answers: dict) -> Path:
         "ENFORCEMENT_BY_HOST": enforcement["by_host"],
         "SELECTED_AI_TOOLS": list(tools) if isinstance(tools, list) else [part.strip() for part in str(tools).split(",") if part.strip()],
         "PRIMARY_AI_HOST": primary_host_from_tools(tools),
-        "MODEL_CALL_BUDGET": int(answers.get("model_call_budget") or 20),
+        # 12 is the floor: a sign-in or payment change takes six reviewers per round, so a lower cap
+        # stopped a real task after one finding (an older install had 10).
+        "MODEL_CALL_BUDGET": max(12, int(answers.get("model_call_budget") or 20)),
         # Installs whose answers predate this key keep single-task unit-test targeting.
         "UNIT_TEST_SCOPE": answers.get("unit_test_scope") or "legacy",
         # Installs whose answers predate this key accept a draft without --expected-files.

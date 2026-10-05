@@ -425,6 +425,7 @@ When an exception occurs:
 | **Review Finalize**| `python .agents/harness.py review finalize --task <id>` | Aggregate review evidence once all reviewers complete |
 | **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation; add `--reopen` at READY_FOR_DELIVERY when the developer requests changes |
 | **Assemble** | `python .agents/harness.py assemble` | Build application debug artifact (derived assemble task) |
+| **Device Install over a newer build** | `python .agents/harness.py device install-start --allow-downgrade` | When the phone has a newer build (`INSTALL_FAILED_VERSION_DOWNGRADE`) and the developer chooses to keep its data (`adb install -d`) |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
 | **Device Deploy** | `python .agents/harness.py device install-start` (engine: `run_device.py install-start`) | Install and launch on target device/emulator |
 | **Device Skip** | `python .agents/scripts/run_device.py skip-validation --task-id <id> --proof-reference "<phrase>"` | Record explicit developer skip of mobile validation |

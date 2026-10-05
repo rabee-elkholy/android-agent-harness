@@ -9,6 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _vnext_common import atomic_write_bytes, atomic_write_json  # noqa: E402
 from review_sources import has_trusted_review_source, primary_host_from_tools  # noqa: E402
+
+# Same floor as review_policy.MIN_MODEL_CALL_BUDGET: two full review rounds of a sign-in or payment change.
+MIN_MODEL_CALL_BUDGET = 12
 from .schema import validate_raw_answers  # noqa: E402
 from .discovery import (
     _flavor_pascal,
@@ -542,12 +545,12 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                     "label": t(lang, "review_call_budget_20"),
                 },
                 {
-                    "id": "10",
-                    "label": t(lang, "review_call_budget_10"),
+                    "id": "12",
+                    "label": t(lang, "review_call_budget_12"),
                 },
                 {
-                    "id": "5",
-                    "label": t(lang, "review_call_budget_5"),
+                    "id": "30",
+                    "label": t(lang, "review_call_budget_30"),
                 },
                 {
                     "id": "custom",
@@ -557,7 +560,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "conditional_text_input": {
                 "when_option": "custom",
                 "answer_key": "review_call_budget_text",
-                "prompt": "Enter maximum reviewer calls (whole number 1–100).",
+                "prompt": "Enter maximum reviewer calls (whole number 12–100).",
                 "required": True,
             },
         }
@@ -605,7 +608,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
             options[0]["recommended"] = True
 
     prev_budget = prev.get("model_call_budget")
-    if prev_budget is not None and str(prev_budget) in {"5", "10", "20"}:
+    if prev_budget is not None and str(prev_budget) in {"12", "20", "30"}:
         prev_budget_choice = str(prev_budget)
     elif prev_budget is not None:
         prev_budget_choice = "custom"
@@ -915,12 +918,13 @@ def normalize(raw: dict, facts: dict) -> dict:
         )
 
     if (
-        model_call_budget < 1
+        model_call_budget < MIN_MODEL_CALL_BUDGET
         or model_call_budget > 100
     ):
         raise SystemExit(
             "Reviewer call safety cap "
-            "must be between 1 and 100."
+            f"must be between {MIN_MODEL_CALL_BUDGET} and 100 "
+            "(a change to sign-in or payment code takes 6 reviewers per round)."
         )
 
     asked = sorted(
@@ -1117,7 +1121,7 @@ def existing_defaults(repo: Path) -> dict[str, object]:
             defaults[qid] = value
     if "model_call_budget" in answers:
         budget_val = str(answers.get("model_call_budget"))
-        defaults["review_call_budget"] = budget_val if budget_val in {"5", "10", "20"} else "custom"
+        defaults["review_call_budget"] = budget_val if budget_val in {"12", "20", "30"} else "custom"
         if budget_val not in {"5", "10", "20"}:
             defaults["review_call_budget_text"] = budget_val
     else:

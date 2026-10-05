@@ -33,6 +33,7 @@ def _run(script: str, args: list[str]) -> int:
 # after each of them (six times from review finalize to ready), one extra model turn each.
 # `verify` prints a JSON report and is left out so its output stays parseable.
 NEXT_STEP_COMMANDS = frozenset({"preflight", "test", "assemble", "device", "review"})
+NEXT_STEP_TASK_ACTIONS = frozenset({"prepare-verification", "approve-sensitive", "complete", "resume"})
 
 
 def _print_next_step() -> None:
@@ -54,6 +55,8 @@ def _print_next_step() -> None:
             action = resolve_next_action(REPO_ROOT, task_id, plan)
     except Exception:
         return
+    if not isinstance(action, dict):
+        return
     code = str(action.get("code") or "")
     if not code:
         return
@@ -69,7 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     code = _main(args)
     # Never after --json (the output must stay pure JSON) or help.
-    if args and args[0] in NEXT_STEP_COMMANDS and not {"--json", "-h", "--help"} & set(args):
+    step = args[0] in NEXT_STEP_COMMANDS if args else False
+    # Real app: after `task approve-sensitive`, `task complete` and `task prepare-verification` the agent
+    # still queried status for the next step; those lifecycle steps print it too.
+    step = step or (len(args) > 1 and args[0] == "task" and args[1] in NEXT_STEP_TASK_ACTIONS)
+    if step and not {"--json", "-h", "--help"} & set(args):
         _print_next_step()
     return code
 

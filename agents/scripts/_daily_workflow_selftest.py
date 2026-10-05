@@ -3113,6 +3113,16 @@ class NextActionEngineTests(DailyWorkflowSelftest):
             self._record_evidence(manifest, run_id, "device_install", "FAIL")
             act = resolve_next_action(self.repo, "task-next-006b", plan)
             self.assertEqual("MOBILE_VALIDATION_DECISION", act["code"])
+            self.assertIn("never skipping", act["reason"])
+            # Real app: a newer build on the phone failed the install, and the agent recommended skipping the
+            # phone check of a payment change. The router offers the real fix.
+            self._record_evidence(manifest, run_id, "device_install", "FAIL", evidence={
+                "detail": "Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 918 is older than current 919]"})
+            act = resolve_next_action(self.repo, "task-next-006b", plan)
+            self.assertEqual("MOBILE_VALIDATION_DECISION", act["code"])
+            self.assertIn("INSTALL_FAILED_VERSION_DOWNGRADE", act["reason"])
+            self.assertEqual(["run", "allow_downgrade", "skip"], [c["id"] for c in act["choices"]])
+            self.assertIn("device install-start --allow-downgrade", act["choices"][1]["command"])
         with mock.patch.object(_product, "INSTALL_CONFIRM", "confirm"):
             self.assertEqual("MOBILE_VALIDATION_DECISION", resolve_next_action(self.repo, "task-next-006b", plan)["code"])
 

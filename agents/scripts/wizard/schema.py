@@ -171,16 +171,16 @@ def validate_raw_answers(payload: Any) -> list[str]:
     # Validate review_call_budget
     if "review_call_budget" in payload:
         choice = str(payload["review_call_budget"]).strip()
-        if choice not in {"5", "10", "20", "custom"}:
-            errors.append("review_call_budget must be 5, 10, 20, or custom")
+        if choice not in {"12", "20", "30", "custom"}:
+            errors.append("review_call_budget must be 12, 20, 30, or custom")
         if choice == "custom":
             raw_custom = str(payload.get("review_call_budget_text") or "").strip()
             if not raw_custom.isdigit():
                 errors.append("review_call_budget_text must be a whole number")
             else:
                 budget = int(raw_custom)
-                if budget < 1 or budget > 100:
-                    errors.append("review_call_budget_text must be between 1 and 100")
+                if budget < 12 or budget > 100:
+                    errors.append("review_call_budget_text must be between 12 and 100")
 
     # Validate i4 (Device testing policy)
     if "i4" in payload:

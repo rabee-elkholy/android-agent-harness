@@ -191,14 +191,14 @@ T = {
         "review_call_budget_20": (
             "20 — Review-heavy / large critical work (Recommended)"
         ),
-        "review_call_budget_10": (
-            "10 — Balanced"
+        "review_call_budget_12": (
+            "12 — Minimum: two full review rounds of a sign-in or payment change"
         ),
-        "review_call_budget_5": (
-            "5 — Economy"
+        "review_call_budget_30": (
+            "30 — Large or long tasks"
         ),
         "review_call_budget_custom": (
-            "Custom value (1–100)"
+            "Custom value (12–100)"
         ),
         "i19": (
             "Which Gradle flavor or custom build type do you test daily? "

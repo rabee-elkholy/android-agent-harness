@@ -4,6 +4,22 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.15] - 2026-10-05
+
+The approval question no longer ends with a stray English line, and the reviewer budget can no longer be set too low for a payment change.
+
+### Plan approval
+- A real Arabic approval question, otherwise in the new format, ended with "Review the plan above; click Proceed, or reply with an approval in chat.": an old instruction told the agent to say it on every first plan. It was redundant (the options are the request) and broke the developer's language. The instructions now say the approval question is the request and nothing is added to it.
+
+### Review budget
+- A real payment task stopped at its second review round with `REVIEW_BUDGET_EXHAUSTED` (6 + 6 calls, budget 10): a change to sign-in or payment code takes six reviewers per round, and the fix touched payment code again, so all six were rightly needed. The reviewer call cap now has a floor of 12 (two full rounds of such a change). The setup question offers 20 (recommended), 12, 30 or a custom value from 12 to 100; the discovery default is 20; an older install with less than 12 gets 12 on update and at runtime.
+
+### Phone check
+- The install failed because the phone had a newer build (`INSTALL_FAILED_VERSION_DOWNGRADE`, version code 918 over 919). The harness called it an environment problem with no remedy, and the agent recommended skipping the phone check of a payment change. `device install-start --allow-downgrade` now installs over a newer build (`adb install -d`, keeps the app's data); on that failure the output names both remedies (install over it, or the developer uninstalls first) and says the older build may not read data a newer one migrated. After any failed install the router's question recommends fixing and retrying, never skipping (naming the sensitive areas the change touches), and offers the downgrade option when that was the failure.
+
+### Next step
+- After `task approve-sensitive` and `task complete` the agent still ran `task status --next --json` to find the next step. `task prepare-verification`, `approve-sensitive`, `complete` and `resume` now end with `NEXT_ACTION=` / `NEXT_REASON=` like the other step commands (never with `--json`).
+
 ## [1.1.14] - 2026-10-04
 
 A Zoho update ordered in the chat goes through.

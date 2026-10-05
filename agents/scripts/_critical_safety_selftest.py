@@ -510,6 +510,12 @@ class CriticalSafetyTests(unittest.TestCase):
                 self.assertEqual(["--user", "10"], commands[0][2:4])
                 self.assertEqual(["shell", "am", "start", "--user", "10", "-n", "com.example.debug/com.example.MainActivity"], commands[1])
                 self.assertEqual(1, sum("get-current-user" in call.args[0] for call in probe.call_args_list))
+            # Real app: a newer build on the phone; the developer may choose to install over it (adb -d).
+            with mock.patch.object(sys, "argv", ["run_device.py", "install-start", "--allow-downgrade"]), mock.patch.object(run_device, "DEFAULT_ACTIVITY", "com.example/.MainActivity"), mock.patch.object(run_device.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="10\n")):
+                adb.reset_mock()
+                self.assertEqual(0, run_device.main())
+                install_cmd = [call.args[1] for call in adb.call_args_list][0]
+                self.assertEqual(["install", "-r", "-d", "--user", "10"], install_cmd[:5])
 
     def test_unclassified_delivery_file_not_masked_by_docs(self):
         fixture = fixtures.RepoCase()

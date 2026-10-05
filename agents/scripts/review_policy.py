@@ -57,10 +57,13 @@ ROUTING = {
 }
 
 
+MIN_MODEL_CALL_BUDGET = 12  # two full review rounds of a sign-in or payment change (six reviewers each)
+
+
 def _configured_model_call_budget() -> int:
     try:
         from _product import MODEL_CALL_BUDGET
-        return max(0, int(MODEL_CALL_BUDGET))
+        return max(MIN_MODEL_CALL_BUDGET, int(MODEL_CALL_BUDGET))
     except (ImportError, TypeError, ValueError):
         return 20
 

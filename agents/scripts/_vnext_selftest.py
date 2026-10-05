@@ -265,6 +265,9 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertNotIn("APPROVAL_CALLOUTS", APPROVAL_QUESTION_GUIDE)
         self.assertNotIn("/goal", gemini)
         self.assertNotIn("/grill-me", gemini)
+        # Real app: the approval question ended with an English "Review the plan above; click Proceed ..." line.
+        self.assertNotIn("click Proceed, or reply with an approval", gemini)
+        self.assertIn("The approval question is the request", gemini)
         self.assertIn("in a right-to-left language, start each line with a word in that language", gemini)
         self.assertIn("`APPROVAL_QUESTION` line", gemini)
         self.assertIn("`APPROVAL_BRIEF` lines translated, each said once, as markdown with bold labels, never in a code block", gemini)
@@ -338,7 +341,7 @@ class ChatInstallationLifecycleTests(RepoCase):
                 "i5": ":app",
                 "i6": "com.example.fixture.MainActivity",
                 "i14": ["codex"],
-                "review_call_budget": "10",
+                "review_call_budget": "12",
                 "i20": "none",
             }),
         )
@@ -437,7 +440,7 @@ class ChatInstallationLifecycleTests(RepoCase):
             "i2": sys.executable,
             "i5": ":app",
             "i6": "com.example.MainActivity",
-            "review_call_budget": "10",
+            "review_call_budget": "12",
         }
         errors = validate_raw_answers(raw_interactive)
         self.assertEqual([], errors)
@@ -3509,7 +3512,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
         self.assertIsNotNone(q)
         self.assertEqual(5, q["station"])
         option_ids = [opt["id"] for opt in q["options"]]
-        self.assertEqual(["20", "10", "5", "custom"], option_ids)
+        self.assertEqual(["20", "12", "30", "custom"], option_ids)
 
     def test_SETUP_V2_006_normalized_answers_contain_no_allow_model_escalation(self) -> None:
         """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
@@ -3553,17 +3556,17 @@ class CleanInstallV2SpecificationTests(RepoCase):
     def test_SETUP_V2_012_invalid_review_call_budget_rejected(self) -> None:
         from wizard.schema import validate_raw_answers
         errors = validate_raw_answers({"review_call_budget": "50"})
-        self.assertTrue(any("review_call_budget must be 5, 10, 20, or custom" in e for e in errors))
+        self.assertTrue(any("review_call_budget must be 12, 20, 30, or custom" in e for e in errors))
 
     def test_SETUP_V2_013_custom_budget_0_rejected(self) -> None:
         from wizard.schema import validate_raw_answers
         errors = validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "0"})
-        self.assertTrue(any("between 1 and 100" in e for e in errors))
+        self.assertTrue(any("between 12 and 100" in e for e in errors))
 
     def test_SETUP_V2_014_custom_budget_101_rejected(self) -> None:
         from wizard.schema import validate_raw_answers
         errors = validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "101"})
-        self.assertTrue(any("between 1 and 100" in e for e in errors))
+        self.assertTrue(any("between 12 and 100" in e for e in errors))
 
     def test_SETUP_V2_015_custom_budget_decimal_rejected(self) -> None:
         from wizard.schema import validate_raw_answers
@@ -3635,12 +3638,17 @@ class CleanInstallV2SpecificationTests(RepoCase):
                 product = generate_product_py(self.repo, answers).read_text(encoding="utf-8")
                 self.assertIn(f"PRIMARY_AI_HOST = {primary!r}", product)
 
-    def test_SETUP_V2_021_budget_5_maps_to_integer_5(self) -> None:
+    def test_SETUP_V2_021_budget_30_maps_to_integer_30_and_below_12_is_refused(self) -> None:
+        # Real app: a budget of 10 stopped a payment task after one finding (six reviewers per round).
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "5"}
+        from wizard.schema import validate_raw_answers
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "30"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
-        res = wq.normalize(raw, facts)
-        self.assertEqual(5, res["model_call_budget"])
+        self.assertEqual(30, wq.normalize(raw, facts)["model_call_budget"])
+        with self.assertRaises(SystemExit):
+            wq.normalize({**raw, "review_call_budget": "custom", "review_call_budget_text": "10"}, facts)
+        self.assertTrue(any("between 12 and 100" in e for e in validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "11"})))
+        self.assertFalse(validate_raw_answers({"review_call_budget": "custom", "review_call_budget_text": "12"}))
 
     def test_SETUP_V2_022_budget_20_maps_to_integer_20(self) -> None:
         import wizard.questions as wq
@@ -3672,11 +3680,15 @@ class CleanInstallV2SpecificationTests(RepoCase):
         content = out.read_text(encoding="utf-8")
         self.assertTrue("GIT_POLICY = 'never'" in content or 'GIT_POLICY = "never"' in content)
 
-    def test_PRODUCT_V2_002_model_call_budget_10_default(self) -> None:
+    def test_PRODUCT_V2_002_an_older_budget_below_12_is_raised_to_12(self) -> None:
         import _installer_config as ic
         out = ic.generate_product_py(self.repo, {"schema": 2, "model_call_budget": 10, "product": "Test"})
         content = out.read_text(encoding="utf-8")
-        self.assertIn("MODEL_CALL_BUDGET = 10", content)
+        self.assertIn("MODEL_CALL_BUDGET = 12", content)
+        from review_policy import _configured_model_call_budget
+        with mock.patch.dict(sys.modules, {"_product": type(sys)("_product")}):
+            sys.modules["_product"].MODEL_CALL_BUDGET = 10
+            self.assertEqual(12, _configured_model_call_budget(), "an installed 10 counts as 12 at runtime")
 
     def test_PRODUCT_V2_003_no_allow_model_escalation_in_product(self) -> None:
         """REASON-INSTALL-004: generated _product.py contains no ALLOW_MODEL_ESCALATION"""
@@ -4096,7 +4108,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
                 "i5": ":app",
                 "i6": "com.example.clean.MainActivity",
                 "i14": ["gemini"],
-                "review_call_budget": "10",
+                "review_call_budget": "12",
                 "i20": "none",
             }),
         )

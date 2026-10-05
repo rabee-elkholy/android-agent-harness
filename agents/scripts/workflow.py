@@ -4193,9 +4193,10 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             if not has_skip_evidence("mobile_validation_skip"):
                 if not has_pass_evidence("device_install") or not has_pass_evidence("device_launch"):
                     try:
-                        store.read(snapshot, run_id, "device_install")
+                        install_record = store.read(snapshot, run_id, "device_install")
                         install_attempted = True
                     except Exception:
+                        install_record = {}
                         install_attempted = False
                     if _install_confirm_policy() == "allow" and not install_attempted:
                         # The developer chose unattended install at setup; ask only if it does not work.
@@ -4209,24 +4210,41 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                             "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
                             "expected": {"success_exit_codes": [0]},
                         }
+                    reason = "Mobile validation is recommended/required by policy, but the developer may explicitly skip it."
+                    choices = [
+                        {
+                            "id": "run",
+                            "label": "Run Mobile Validation",
+                            "command": "python .agents/harness.py device install-start",
+                        },
+                        {
+                            "id": "skip",
+                            "label": "Skip Mobile Validation",
+                            "command": f'python .agents/harness.py device skip-validation --task-id {task_id} --source conversation --proof-reference "<developer phrase>"',
+                        },
+                    ]
+                    failed_detail = str(((install_record or {}).get("evidence") or {}).get("detail") or "")
+                    if install_attempted and str((install_record or {}).get("status") or "").upper() != "PASS":
+                        # Real app: a newer build on the phone failed the install and the agent recommended
+                        # skipping the phone check of a payment change. A failed install is fixed and retried.
+                        reason = (
+                            f"The install failed{': ' + failed_detail[:200] if failed_detail else ''}. Ask the developer how "
+                            "to fix it and retry; recommend a retry, never skipping (skip only when the developer chooses it"
+                            f"{', and this change touches ' + ', '.join(sensitive_touched) if sensitive_touched else ''})."
+                        )
+                        if "VERSION_DOWNGRADE" in failed_detail.upper():
+                            choices.insert(1, {
+                                "id": "allow_downgrade",
+                                "label": "Install over the newer build on the phone (keeps the app's data)",
+                                "command": "python .agents/harness.py device install-start --allow-downgrade",
+                            })
                     return {
                         "code": "MOBILE_VALIDATION_DECISION",
                         "kind": "DEVELOPER_ACTION",
                         "command": "python .agents/harness.py device install-start",
                         "blocking": True,
-                        "reason": "Mobile validation is recommended/required by policy, but the developer may explicitly skip it.",
-                        "choices": [
-                            {
-                                "id": "run",
-                                "label": "Run Mobile Validation",
-                                "command": "python .agents/harness.py device install-start",
-                            },
-                            {
-                                "id": "skip",
-                                "label": "Skip Mobile Validation",
-                                "command": f'python .agents/harness.py device skip-validation --task-id {task_id} --source conversation --proof-reference "<developer phrase>"',
-                            },
-                        ],
+                        "reason": reason,
+                        "choices": choices,
                         "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
                         "expected": {},
                     }
