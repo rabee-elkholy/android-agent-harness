@@ -179,6 +179,26 @@ def _audited_harness_command(command: str) -> bool:
     return not re.search(r";|&&|\|\||\n", outside_quotes)
 
 
+def _read_only_git_branch_command(command: str) -> bool:
+    """A single `git branch` call that only lists or names branches, with nothing chained to it."""
+    import shlex
+
+    try:
+        from mutation_guard import SHELL_LAUNDERING, _operator_text_any_shell, is_read_only_git_branch
+    except Exception:
+        return False
+    outside_quotes = _operator_text_any_shell(command or "")
+    if outside_quotes is None or SHELL_LAUNDERING.search(outside_quotes) or re.search(r";|&&|\|\||\n", outside_quotes):
+        return False
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    if not tokens or tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower() not in {"git", "git.exe"}:
+        return False
+    return is_read_only_git_branch(tokens[1:])
+
+
 CANCEL_REQUEST_FILE = "cancel-requested.json"
 CANCEL_REQUEST_TTL_SECONDS = 30 * 60
 
@@ -427,6 +447,8 @@ def _handle_command(command: str) -> None:
     for code, pattern in DANGEROUS:
         if pattern.search(command):
             if code == "tracker_write" and _audited_harness_command(command):
+                continue
+            if code == "git_mutation" and _read_only_git_branch_command(command):
                 continue
             hint = f" {DENY_HINTS[code]}" if code in DENY_HINTS else ""
             emit("deny", f"Denied by local safety boundary: {code}.{hint}", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)

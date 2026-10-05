@@ -567,6 +567,19 @@ def _unrelated_failures(repo: Path, plan: dict, task_id: str, failed: list[dict]
     return unrelated, refusals
 
 
+def _print_base_moved(plan: dict) -> None:
+    """When the branch moved under the task, say so instead of letting the agent retry (TASK_BASE_MOVED)."""
+    try:
+        from task_base import base_moved, moved_message
+
+        task_id = str((plan or {}).get("task_id") or "")
+        moved = base_moved(REPO, task_id) if task_id else None
+    except Exception:
+        moved = None
+    if moved:
+        live_print(f"[!] {moved_message(moved, task_id)}", err=True)
+
+
 def _record_unrelated(failed: list[dict], code: int, outcome: dict, reports_before: dict, task, proof: str) -> int:
     """`--record-unrelated`: after the developer confirms, tolerate failing tests the change cannot touch.
 
@@ -625,6 +638,8 @@ def _record_unrelated(failed: list[dict], code: int, outcome: dict, reports_befo
         live_print("[*] Run `python .agents/harness.py test` again; these no longer count against the task.")
     for line in refusals:
         live_print(f"[FAIL] Not recorded: {line}. Fix it within the plan, or ask the developer.", err=True)
+    if refusals:
+        _print_base_moved(plan)
     return 1 if refusals else 0
 
 
@@ -751,6 +766,7 @@ def main(argv=None) -> int:
             )
             if has_fix_code:
                 live_print("[FAIL] Cannot capture RED evidence: application source modifications already detected before capture.", err=True)
+                _print_base_moved(plan)
                 return 1
 
             # Only a run on the untouched tree proves a failure predates the task: an edited shared

@@ -4,6 +4,17 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.16] - 2026-10-05
+
+A branch switch in the middle of a task is named instead of failing gates, and a third review round keeps the reviewers carried since the first.
+
+### Branch switch mid-task
+- The developer switched branch while a task was open. The task's changes are measured from the commit it started on, so every difference between the branches counted as the task's: `approve` said only "repository identity changed before implementation: head" (the agent worked around it with a revise and a second approval), `--capture-red` refused five times with "application source modifications already detected" although only a test had changed, and `--record-unrelated` called another feature's test this task's own. When the task's base commit is no longer under HEAD (a switch, reset or rebase; commits on top are fine) the router now returns `TASK_BASE_MOVED` naming both branches and asks the developer to switch back or cancel and start again; `--capture-red` and `--record-unrelated` print the same, and the `approve` refusal names the branch and commit the plan was drafted on.
+- `git branch --show-current` (and other read-only `git branch` forms) was refused as a git mutation. Listing or naming branches is now read-only; creating, deleting or renaming one, or anything chained after it, is still refused.
+
+### Review rounds
+- Round 3 after a test-only fix sent back the bug, performance and security reviewers that had been carried since round 1: the round counted only the previous round's own reviewers as covered, so the carried ones looked newly required. A round now counts the previous round's carries as covered too, so they stay carried unless the fix routes their reviewer. The final verifier recomputes the same, end to end over three rounds.
+
 ## [1.1.15] - 2026-10-05
 
 The approval question no longer ends with a stray English line, and the reviewer budget can no longer be set too low for a payment change.

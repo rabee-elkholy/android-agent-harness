@@ -118,11 +118,34 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
     return "", []
 
 
+READ_ONLY_GIT_BRANCH_FLAGS = frozenset({
+    "--show-current", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "-l",
+    "--merged", "--no-merged", "--contains", "--no-contains",
+})
+
+
+def is_read_only_git_branch(args: list[str]) -> bool:
+    """`git branch` that only lists or names branches (real app: `--show-current` was refused as a mutation)."""
+    if args[:1] != ["branch"]:
+        return False
+    rest = args[1:]
+    for index, arg in enumerate(rest):
+        if arg in READ_ONLY_GIT_BRANCH_FLAGS:
+            continue
+        # The value of --contains/--merged and friends (a commit or branch name).
+        if index > 0 and rest[index - 1] in {"--merged", "--no-merged", "--contains", "--no-contains"} and not arg.startswith("-"):
+            continue
+        return False
+    return True
+
+
 def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     if name == "git":
         if args[:1] == ["-C"] and len(args) >= 3:
             args = args[2:]
+        if is_read_only_git_branch(args):
+            return True
         if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe", "grep", "blame"}:
             return False
         if any(arg.startswith(("--output", "--ext-diff", "--textconv")) for arg in args[1:]):

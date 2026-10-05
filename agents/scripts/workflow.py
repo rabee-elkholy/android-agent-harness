@@ -3123,6 +3123,21 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             "expected": {"success_exit_codes": [0], "success_statuses": ["IMPLEMENTING"]},
         }
 
+    if state in {"IMPLEMENTING", "VERIFYING", "BLOCKED"}:
+        from task_base import base_moved, moved_message
+
+        moved = base_moved(repo, task_id)
+        if moved:
+            return {
+                "code": "TASK_BASE_MOVED",
+                "kind": "DEVELOPER_ACTION",
+                "command": "",
+                "blocking": True,
+                "reason": moved_message(moved, task_id),
+                "inputs": {"repo": ".", "task_id": task_id, **moved},
+                "expected": {},
+            }
+
     if state == "IMPLEMENTING":
         tdir = task_dir(repo, task_id)
         # Check Zoho start sync (Sections 46, 47)

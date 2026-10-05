@@ -136,6 +136,18 @@ class HookTests(unittest.TestCase):
         audit = [json.loads(line) for line in (self.state / "audit_log.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(all(record.get("reason_code") for record in audit))
 
+    def test_read_only_git_branch_is_not_a_mutation(self):
+        # Real app: `git branch --show-current` was refused as git_mutation after a branch switch.
+        for command in ("git branch --show-current", "git branch", "git branch -a", "git branch -vv",
+                        "git branch --contains HEAD"):
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertNotEqual("GIT_MUTATION", res.get("reason_code"), command)
+            self.assertEqual("allow", res["decision"], (command, res.get("reason")))
+        for command in ("git branch -D old", "git branch new-branch", "git branch -m a b",
+                        "git branch --show-current; git branch -D old", "git branch --show-current && git checkout x"):
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertEqual("deny", res["decision"], command)
+
     def test_tracker_write_spares_audited_harness_commands_only(self):
         # Real app: the `tracker_write` boundary refused `zoho authorize --proof-reference "... update zoho ..."`
         # (the very words that grant the write) and a draft whose outcome said "Update Zoho".

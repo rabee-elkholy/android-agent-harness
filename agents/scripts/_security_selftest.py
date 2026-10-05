@@ -1601,6 +1601,46 @@ class SecurityTests(unittest.TestCase):
         # Unknown delta: the old rule, everyone reruns.
         self.assertEqual([], later(None)["carried_reviews"])
 
+        # Real app, round 3: round 2 reran convention, regression and test-quality and carried the other
+        # three from round 1; test-quality had a finding and the fix touched only its test file. Only the
+        # reviewers that fix routes run again; the earlier carries still stand.
+        round2 = {
+            "reviewers": ["convention-reviewer-agent", "regression-impact-reviewer-agent", "test-quality-reviewer-agent"],
+            "surfaces": ["BILLING"],
+            "carried_reviews": [
+                {"reviewer": r, "source_snapshot": "s1" * 32, "source_change_set": "cs1" * 32, "source_run_id": "r1",
+                 "covered_surfaces": ["BILLING"], "invalidation_reason": None}
+                for r in ("bug-reviewer-agent", "perf-anr-guardian-agent", "security-reviewer-agent")
+            ],
+        }
+        round3 = decide_later_round(
+            cls, skills_root, previous_policy=round2, finding_owners=["test-quality-reviewer-agent"],
+            passed_reviewers=["convention-reviewer-agent", "regression-impact-reviewer-agent"],
+            source_snapshot="s2" * 32, source_change_set="cs2" * 32, current_change_set="cs3" * 32,
+            source_run_id="r2", round_number=3,
+            fix_delta={"files": ["app/src/test/java/PaymentGatewayTest.kt"],
+                       "reviewers": ["regression-impact-reviewer-agent", "test-quality-reviewer-agent"]},
+        )
+        rerun3 = set(round3["reviewers"])
+        carried3 = {item["reviewer"] for item in round3["carried_reviews"]}
+        self.assertEqual({"regression-impact-reviewer-agent", "test-quality-reviewer-agent"}, rerun3,
+                         "only the finding owner and the reviewers the fix routes")
+        self.assertTrue({"bug-reviewer-agent", "perf-anr-guardian-agent", "security-reviewer-agent"} & required <= carried3,
+                        "carried since round 1, untouched by a test-only fix")
+        self.assertTrue(required <= rerun3 | carried3, "every required reviewer is reviewed or carried")
+        self.assertFalse(rerun3 & carried3)
+        # The same carry ends when the fix routes its reviewer.
+        round3b = decide_later_round(
+            cls, skills_root, previous_policy=round2, finding_owners=["test-quality-reviewer-agent"],
+            passed_reviewers=["convention-reviewer-agent", "regression-impact-reviewer-agent"],
+            source_snapshot="s2" * 32, source_change_set="cs2" * 32, current_change_set="cs3" * 32,
+            source_run_id="r2", round_number=3,
+            fix_delta={"files": ["app/src/main/java/Pay.kt"], "reviewers": ["security-reviewer-agent"]},
+        )
+        if "security-reviewer-agent" in required:
+            self.assertIn("security-reviewer-agent", round3b["reviewers"])
+            self.assertNotIn("security-reviewer-agent", {item["reviewer"] for item in round3b["carried_reviews"]})
+
     def test_AUTH_SIGNOFF_001_model_call_denied(self):
         """AUTH-SIGNOFF-001: lead agent cannot invoke device signoff directly through model tool call"""
         from pre_tool_safety import DANGEROUS

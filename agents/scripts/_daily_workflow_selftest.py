@@ -5575,6 +5575,76 @@ class ReviewOrchestrationTests(unittest.TestCase):
             current_change_set=manifest2["change_set_sha256"], task_changes=manifest2.get("task_changes"),
         )[1])
 
+    def test_third_round_keeps_carries_from_the_first_and_the_verifier_accepts_it(self) -> None:
+        """Real app: round 3 after a test-only fix sent back reviewers carried since round 1."""
+        from final_verifier import validate_policy_artifact
+
+        task_id = "carry-three"
+        pay = "app/src/main/kotlin/com/example/Pay3.kt"
+        text = "app/src/main/res/values/strings.xml"
+        write_file(self.repo / pay, "package com.example\nclass Pay3\n")
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay3\">Pay</string>\n</resources>\n")
+        run_git(self.repo, "add", pay, text)
+        run_git(self.repo, "commit", "-qm", "pay3 fixture")
+        draft(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, outcome="Paywall label", kind="FEATURE", planning_depth="BOUNDED",
+            expected_surfaces="BILLING,LOCALIZATION,RESOURCE_UI", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope=pay, architecture_target_family=None,
+            expected_files=f"{pay},{text}", phases=None, force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / pay, "package com.example\nimport com.android.billingclient.api.BillingClient\n"
+                                    "class Pay3 { fun buy(c: BillingClient) = c.isReady }\n")
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay3\">Pay now</string>\n</resources>\n")
+        tdir = task_dir(self.repo, task_id)
+        store = EvidenceStore(state_root(self.repo))
+
+        def finish_round(run: dict, owner: str) -> list[str]:
+            policy = read_json(Path(run["policy"]))
+            manifest = read_json(Path(run["manifest"]))
+            reviewers = sorted(policy["reviewers"])
+            store.write(
+                snapshot=manifest["delivery_snapshot_sha256"], run_id=run["run_id"], name="reviews",
+                producer="review_orchestrator", harness_version="1.1.15", change_set=manifest["change_set_sha256"],
+                status="FAIL", evidence={
+                    "reviewers": reviewers,
+                    "reports": [{"reviewer": r, "verdict": "FINDINGS" if r == owner else "PASS"} for r in reviewers],
+                    "blocking_findings": [{"reviewer": owner}],
+                },
+            )
+            plan = read_json(tdir / "plan.json")
+            plan.update(status="BLOCKED", review_rounds=int(plan.get("review_rounds") or 0) + 1, blocked_reviewers=[owner])
+            workflow.save_plan(tdir / "plan.json", plan)
+            workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+            return reviewers
+
+        first = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        finish_round(first, "bug-reviewer-agent")
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay3\">Pay today</string>\n</resources>\n")
+        second = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        policy2 = read_json(Path(second["policy"]))
+        carried2 = {item["reviewer"] for item in policy2["carried_reviews"]}
+        self.assertTrue(carried2, "round 2 carries reviewers the text fix does not route")
+        owner2 = "regression-impact-reviewer-agent"
+        finish_round(second, owner2)
+        write_file(self.repo / text, "<resources>\n    <string name=\"pay3\">Pay this week</string>\n</resources>\n")
+        third = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        policy3 = read_json(Path(third["policy"]))
+        carried3 = {item["reviewer"] for item in policy3["carried_reviews"]}
+        self.assertEqual(3, policy3["review_round"])
+        self.assertTrue(carried2 - set(policy3["reviewers"]) <= carried3,
+                        "a reviewer carried since round 1 stays carried when the fix does not route it")
+        self.assertFalse(carried2 & set(policy3["reviewers"]) - set(policy3["fix_delta"]["reviewers"]) - {owner2})
+        manifest3 = read_json(Path(third["manifest"]))
+        expected, error, status = validate_policy_artifact(
+            self.repo, read_json(tdir / "plan.json"), policy3, state_root(self.repo), Path(third["policy"]),
+            current_change_set=manifest3["change_set_sha256"], task_changes=manifest3.get("task_changes"),
+        )
+        self.assertIsNone(error, error)
+        self.assertEqual("PASS", status)
+
     def test_prepare_retry_retains_previous_review_round_after_plan_save_failure(self) -> None:
         task_id = "prepare-publish-failure"
         current, run_id, _, tdir = self._setup_v2_task(task_id)
@@ -8115,6 +8185,43 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         deleted = {"task_changes": [{"path": other, "content_identity": "git:b", "status": "A"}]}
         self.assertEqual({"files": [login], "reviewers": ["regression-impact-reviewer-agent"]},
                          _fix_delta(self.repo, task_id, "run-old", deleted, plan))
+
+    def test_ROUTER_TASK_BASE_MOVED_branch_switch_mid_task_goes_to_the_developer(self) -> None:
+        """Real app: the developer switched branch mid-task; capture-red refused five times with a misleading
+        message and the agent kept retrying until the developer mentioned the switch."""
+        from task_base import base_moved
+
+        run_git(self.repo, "checkout", "-q", "-b", "task-branch")
+        write_file(self.repo / "app/src/main/kotlin/com/example/Base.kt", "package com.example\nclass Base\n")
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-qm", "base of the task")
+        task_id = "base-moved"
+        draft(self._draft_ns(task_id))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                           proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertIsNone(base_moved(self.repo, task_id))
+        # A commit on top of the base is not a move.
+        write_file(self.repo / "app/src/main/kotlin/com/example/Wip.kt", "package com.example\nclass Wip\n")
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/Wip.kt")  # task state stays untracked, as in a real app
+        run_git(self.repo, "commit", "-qm", "wip on top")
+        self.assertIsNone(base_moved(self.repo, task_id))
+        self.assertNotEqual("TASK_BASE_MOVED", resolve_next_action(self.repo, task_id, plan)["code"])
+        # Another branch that does not contain the base: the developer decides.
+        run_git(self.repo, "checkout", "-q", "-b", "other-branch", "HEAD~2")
+        moved = base_moved(self.repo, task_id)
+        self.assertIsNotNone(moved)
+        self.assertEqual("task-branch", moved["base_branch"])
+        self.assertEqual("other-branch", moved["branch"])
+        act = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("TASK_BASE_MOVED", act["code"])
+        self.assertEqual("DEVELOPER_ACTION", act["kind"])
+        self.assertIn("this task started on task-branch", act["reason"])
+        self.assertIn("now on other-branch", act["reason"])
+        self.assertIn("Do not retry", act["reason"])
+        run_git(self.repo, "checkout", "-q", "task-branch")
+        self.assertNotEqual("TASK_BASE_MOVED", resolve_next_action(self.repo, task_id, plan)["code"])
 
     def test_ROUTER_RECORD_START_002_approve_prints_the_step_before_the_first_edit(self) -> None:
         """Real app: approve printed only TASK_STATUS, the agent started editing, and the record the router

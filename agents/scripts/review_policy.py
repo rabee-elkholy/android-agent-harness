@@ -396,8 +396,15 @@ def decide_later_round(
     result = decide(classification, skills_root, project_kind=project_kind, task_kind=task_kind, plan=plan)
     current_required = set(result.get("reviewers") or [])
     previous_required = set(previous_policy.get("reviewers") or [])
+    # The previous round covered its own reviewers and the PASS it carried from earlier rounds. Real app
+    # (round 3): reviewers carried since round 1 counted as newly required and were sent back to review.
+    still_carried = {
+        str(item.get("reviewer") or "")
+        for item in previous_policy.get("carried_reviews") or []
+        if not item.get("invalidation_reason")
+    } & current_required
     owners = set(finding_owners) & previous_required
-    promoted = current_required - previous_required
+    promoted = current_required - previous_required - still_carried
     rerun = owners | promoted
     if rerun or previous_required:
         rerun.add("regression-impact-reviewer-agent")
@@ -423,7 +430,8 @@ def decide_later_round(
             # finding owners and the regression reviewer, which sees the whole change.
             rerun |= set(fix_delta.get("reviewers") or []) & current_required
             carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
-            rerun |= current_required - set(carried)
+            # An earlier carry still stands unless this fix routes its reviewer.
+            rerun |= current_required - set(carried) - (still_carried - rerun)
             result["fix_delta"] = {
                 "files": sorted(str(item) for item in fix_delta.get("files") or []),
                 "reviewers": sorted(str(item) for item in fix_delta.get("reviewers") or []),

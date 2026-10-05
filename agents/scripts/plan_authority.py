@@ -375,7 +375,7 @@ def approve_and_begin(
     current_repo = repository_identity(repo)
     for key in ("root_sha256", "git_common_dir_sha256", "head", "branch"):
         if current_repo.get(key) != (plan.get("repository") or {}).get(key):
-            raise ValidationError(f"repository identity changed before implementation: {key}")
+            raise ValidationError(_identity_changed_message(key, plan.get("repository") or {}, current_repo))
 
     current = build_manifest(repo)
     if current["delivery_snapshot_sha256"] != plan.get("base_delivery_snapshot_sha256"):
@@ -445,7 +445,7 @@ def begin(repo: Path, plan: dict) -> dict:
     current_repo = repository_identity(repo)
     for key in ("root_sha256", "git_common_dir_sha256", "head", "branch"):
         if current_repo.get(key) != (plan.get("repository") or {}).get(key):
-            raise ValidationError(f"repository identity changed before implementation: {key}")
+            raise ValidationError(_identity_changed_message(key, plan.get("repository") or {}, current_repo))
     current = build_manifest(repo)
     if current["delivery_snapshot_sha256"] != plan.get("base_delivery_snapshot_sha256"):
         raise ValidationError("delivery snapshot changed before implementation")
@@ -488,6 +488,20 @@ def planned_test_classes(expected_files: list[str] | set[str]) -> set[str]:
         if not is_test_path(str(item)):
             classes.update(stem + suffix for suffix in TEST_CLASS_SUFFIXES)
     return classes
+
+
+def _identity_changed_message(key: str, planned: dict, current: dict) -> str:
+    """Real app: "repository identity changed before implementation: head" after a branch switch, with no
+    hint; the agent worked around it with a revise and a second approval question."""
+    if key in ("head", "branch"):
+        was = f"{planned.get('branch') or '?'} at {str(planned.get('head') or '')[:10]}"
+        now = f"{current.get('branch') or '?'} at {str(current.get('head') or '')[:10]}"
+        return (
+            f"repository identity changed before implementation: {key} (the plan was drafted on {was}; the "
+            f"checkout is now on {now}). Ask the developer whether to switch back, or to draft the plan again "
+            "on this branch (`workflow.py revise` binds it to the current checkout, then ask for approval)."
+        )
+    return f"repository identity changed before implementation: {key}"
 
 
 def _tracked_paths(repo: Path, paths: list[str]) -> set[str]:
