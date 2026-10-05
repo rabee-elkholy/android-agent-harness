@@ -3428,6 +3428,38 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
         self.assertNotIn("before_first_edit", act, "after the first edit nothing can be recorded as older")
 
+    def test_ROUTE_CMD_011d_red_captured_before_a_revision_still_binds(self) -> None:
+        """Real app: RED captured under the approved plan, then a re-approved revision added the missing half;
+        `complete` refused with "RED defect evidence is bound to a different plan hash" and had no way out."""
+        from final_verifier import red_plan_hashes
+        task_id = "route-cmd-011d"
+        ns = dict(
+            repo=str(self.repo), task_id=task_id, outcome="Bug fix task", kind="BUG",
+            planning_depth="BOUNDED", expected_surfaces="BUSINESS_LOGIC", expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
+            architecture_target_family=None, expected_files="app/src/main/kotlin/com/example/MainActivity.kt",
+            phases=None, force=True,
+        )
+        approve = argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                     proof_reference="approved", enforcement_tier="RULE_ENFORCED")
+        draft(argparse.Namespace(**ns))
+        record_approval(approve)
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        directory = task_dir(self.repo, task_id)
+        captured_under = read_json(directory / "plan.json")["plan_sha256"]
+        revise(argparse.Namespace(**{**ns, "outcome": "Bug fix task and the paywall half",
+                                     "expected_files": "app/src/main/kotlin/com/example/MainActivity.kt,app/src/main/kotlin/com/example/Paywall.kt"}))
+        record_approval(approve)
+        plan = read_json(directory / "plan.json")
+        self.assertNotEqual(captured_under, plan["plan_sha256"])
+        self.assertIn(captured_under, red_plan_hashes(directory, plan, plan["plan_sha256"]))
+        # A refusal the router did not foresee names the way out, so the agent never offers to rewrite evidence.
+        with mock.patch("workflow.verify_task", return_value={"status": "BLOCKED", "blocked_by": ["some gate"]}), \
+                self.assertRaises(ValidationError) as ctx:
+            complete(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertIn("delivery cannot be completed: some gate. Harness evidence is never edited", str(ctx.exception))
+        self.assertIn("`workflow.py cancel`, which keeps the code changes", str(ctx.exception))
+
     def _bug_task_next_action(self, task_id: str, *, surfaces: str, files: str, test_strategy: str | None) -> dict:
         ns = dict(
             repo=str(self.repo), task_id=task_id, outcome="Bug fix task", kind="BUG",

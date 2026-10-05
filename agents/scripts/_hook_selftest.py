@@ -136,6 +136,14 @@ class HookTests(unittest.TestCase):
         audit = [json.loads(line) for line in (self.state / "audit_log.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(all(record.get("reason_code") for record in audit))
 
+    def test_get_item_is_read_only_during_implementation(self):
+        # Real app: `Get-Item env:GRADLE_USER_HOME` was refused as a shell mutation during IMPLEMENTING.
+        self.activate("IMPLEMENTING", task_kind="FEATURE")
+        res = self.call("run_command", {"CommandLine": "Get-Item env:GRADLE_USER_HOME"})
+        self.assertEqual("allow", res["decision"], res.get("reason"))
+        res = self.call("run_command", {"CommandLine": "Get-Item app | Remove-Item -Recurse"})
+        self.assertEqual("deny", res["decision"])
+
     def test_read_only_git_branch_is_not_a_mutation(self):
         # Real app: `git branch --show-current` was refused as git_mutation after a branch switch.
         for command in ("git branch --show-current", "git branch", "git branch -a", "git branch -vv",

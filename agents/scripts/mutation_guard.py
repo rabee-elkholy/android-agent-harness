@@ -26,7 +26,7 @@ SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 
 # Read-only PowerShell cmdlets (Antigravity on Windows runs PowerShell). Pipes,
 # redirection and $(...) are rejected before this by SHELL_LAUNDERING.
-POWERSHELL_READ_CMDLETS = {"get-childitem", "gci", "dir", "get-content", "gc", "select-string", "sls", "test-path", "get-location"}
+POWERSHELL_READ_CMDLETS = {"get-childitem", "gci", "dir", "get-content", "gc", "select-string", "sls", "test-path", "get-location", "get-item", "gi"}
 
 # Content-derived surfaces that a pre-edit check must not take from a tracked file's existing text.
 PRE_EXISTING_CONTENT_SURFACES = {"AUTH", "BILLING", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}

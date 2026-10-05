@@ -1957,7 +1957,14 @@ def complete(args: argparse.Namespace) -> dict:
         return plan
     result = verify_task(args)
     if result.get("status") != "APPROVED":
-        raise ValidationError("delivery cannot be completed: " + "; ".join(result.get("blocked_by") or [str(result.get("status"))]))
+        # Real app: with no remedy named, the agent recommended rewriting red-evidence.json to the developer.
+        raise ValidationError(
+            "delivery cannot be completed: " + "; ".join(result.get("blocked_by") or [str(result.get("status"))])
+            + ". Harness evidence is never edited, deleted or skipped, and is not offered to the developer as an "
+            "option. Run `task status --next` for the remedy; if it still routes to COMPLETE_TASK, the harness "
+            "contradicts itself: tell the developer the refusal verbatim and offer to keep the task open for a "
+            "harness fix or to cancel it (`workflow.py cancel`, which keeps the code changes)."
+        )
     plan = _load_plan(repo, args.task_id)
     plan["status"] = "READY_FOR_DELIVERY"
     plan["ready_at"] = utc_now()

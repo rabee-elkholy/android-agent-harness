@@ -1390,6 +1390,30 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("Auth.kt", text)
         self.assertIn("review-package.md", text)
 
+    def test_BRIEF_002_one_reviewer_checks_every_approved_approach_item(self):
+        """Real app: the commit question came with half the approved approach undone and every reviewer
+        passed it, because no brief carried the approach."""
+        from review_package import generate_task_brief
+        pkg_dir = self.repo / "test_pkg_dir2"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        meta = {"run_id": "run-1", "package_sha256": "abcdef1234567890abcdef"}
+        plan = {"outcome": "Paywall attribution", "approach": "1. Pass the paywall offering context. 2. Configure the device user id."}
+        policy = {"surfaces": ["BILLING"], "reviewers": ["bug-reviewer-agent", "security-reviewer-agent", "regression-impact-reviewer-agent"]}
+        changes = [{"path": "app/src/main/Pay.kt"}]
+        texts = {
+            r: generate_task_brief(self.repo, "t2", r, pkg_dir, meta, plan, policy, changes).read_text(encoding="utf-8")
+            for r in policy["reviewers"]
+        }
+        for text in texts.values():
+            self.assertIn("**Approved Approach**: 1. Pass the paywall offering context. 2. Configure the device user id.", text)
+        self.assertIn("plan item not implemented", texts["bug-reviewer-agent"])
+        self.assertNotIn("plan item not implemented", texts["security-reviewer-agent"])
+        self.assertNotIn("plan item not implemented", texts["regression-impact-reviewer-agent"], "one owner, no duplicate findings")
+        # Without a bug reviewer the regression reviewer owns the check.
+        policy2 = {"surfaces": ["XML_UI"], "reviewers": ["regression-impact-reviewer-agent"]}
+        text = generate_task_brief(self.repo, "t3", "regression-impact-reviewer-agent", pkg_dir, meta, plan, policy2, changes).read_text(encoding="utf-8")
+        self.assertIn("plan item not implemented", text)
+
     def test_REDGREEN_001(self):
         """REDGREEN-001: applicable BUG cannot claim enforced RED->GREEN without bound RED evidence"""
         import argparse

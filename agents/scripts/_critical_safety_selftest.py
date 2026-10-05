@@ -110,6 +110,42 @@ class CriticalSafetyTests(unittest.TestCase):
                     self.assertEqual(1, cli.cmd_update(args))
                 self.assertEqual(original, answers.read_bytes())
 
+    def test_red_evidence_survives_a_revision_of_the_plan_it_was_captured_under(self):
+        # Real app: a BUG task captured RED under plan r2, the developer re-approved r3 to add the missing
+        # half, and `complete` refused forever ("RED defect evidence is bound to a different plan hash");
+        # the agent then offered to edit the evidence file.
+        from plan_authority import plan_payload
+        from _vnext_common import canonical_sha256
+
+        def plan(n: int, supersedes: str | None, approved: bool, task: str = "t1") -> dict:
+            record = {"task_id": task, "task_kind": "BUG", "requested_outcome": f"fix r{n}", "expected_files": [f"A{n}.kt"]}
+            if supersedes:
+                record["supersedes_plan_sha256"] = supersedes
+            record["plan_sha256"] = canonical_sha256(plan_payload(record))
+            if approved:
+                record["approval"] = {"plan_sha256": record["plan_sha256"]}
+            return record
+
+        with tempfile.TemporaryDirectory() as directory:
+            task_dir = Path(directory)
+            (task_dir / "plan-history").mkdir()
+            draft = plan(1, None, False)
+            r2 = plan(2, draft["plan_sha256"], True)
+            r3 = plan(3, r2["plan_sha256"], True)
+            for archived in (draft, r2):
+                (task_dir / "plan-history" / f"{archived['plan_sha256']}.json").write_text(json.dumps(archived), encoding="utf-8")
+            accepted = final_verifier.red_plan_hashes(task_dir, r3, r3["plan_sha256"])
+            self.assertEqual({r3["plan_sha256"], r2["plan_sha256"]}, accepted, "an unapproved draft never binds RED")
+            # A history file rewritten after archiving breaks the chain instead of extending it.
+            forged = dict(r2, requested_outcome="something else")
+            (task_dir / "plan-history" / f"{r2['plan_sha256']}.json").write_text(json.dumps(forged), encoding="utf-8")
+            self.assertEqual({r3["plan_sha256"]}, final_verifier.red_plan_hashes(task_dir, r3, r3["plan_sha256"]))
+            # Another task's plan is never an ancestor.
+            other = plan(2, None, True, task="t2")
+            (task_dir / "plan-history" / f"{other['plan_sha256']}.json").write_text(json.dumps(other), encoding="utf-8")
+            r3_other = plan(3, other["plan_sha256"], True)
+            self.assertEqual({r3_other["plan_sha256"]}, final_verifier.red_plan_hashes(task_dir, r3_other, r3_other["plan_sha256"]))
+
     def test_final_verifier_rejects_mixed_device_evidence(self):
         digest = "a" * 64
         artifact = {"artifact_set_sha256": digest, "application_id": "com.example.debug"}

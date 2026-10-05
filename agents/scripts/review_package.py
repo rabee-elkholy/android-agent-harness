@@ -327,12 +327,14 @@ def generate_task_brief(
     expected_surfaces = plan.get('expected_surfaces') or policy.get('surfaces') or []
     expected_modules = plan.get('expected_modules') or []
 
+    approach = " ".join(str(plan.get("approach") or "").split())
     brief_lines = [
         f"# LEAN TASK BRIEF: {role_info['title']} (`{reviewer}`)",
         f"**Task ID**: {task_id} | **Run ID**: {metadata.get('run_id')} | **Package SHA**: `{pkg_sha12}`",
         "",
         "## 1. Approved Objective & Scope",
         f"- **Outcome**: {req_outcome}",
+        f"- **Approved Approach**: {approach or 'not stated'}",
         f"- **Task Kind**: {task_kind}",
         f"- **Expected Surfaces**: {', '.join(expected_surfaces) or 'NONE'}",
         f"- **Expected Modules**: {', '.join(expected_modules) or 'NONE'}",
@@ -358,6 +360,16 @@ def generate_task_brief(
     if len(changed_paths) > 20:
         brief_lines.append(f"  * *(and {len(changed_paths) - 20} more files; see complete package)*")
 
+    routed = set(policy.get("reviewers") or [])
+    completeness_owner = "bug-reviewer-agent" if "bug-reviewer-agent" in routed else "regression-impact-reviewer-agent"
+    if approach and reviewer == completeness_owner:
+        # Real app: a task reached the commit question with half its approved approach undone (the paywall
+        # part was postponed) and every reviewer passed it; nobody was shown the approach.
+        brief_lines.extend([
+            "- **Plan completeness (you own this check)**: compare every item of the Approved Approach with the "
+            "diff. An item the diff does not implement is a HIGH finding titled `plan item not implemented`, "
+            "naming the item; do not accept a deferral the developer did not approve.",
+        ])
     brief_lines.extend([
         "",
         "## 3. Review Package Reference",

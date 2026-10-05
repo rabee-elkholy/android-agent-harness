@@ -4,6 +4,20 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.17] - 2026-10-05
+
+Reviewers now see the approved approach, and one of them checks that every item of it was implemented. A bug's failing-test proof survives a re-approved revision of the plan.
+
+### Bug proof after a plan revision
+- A real BUG task captured its failing test (RED) under the approved plan, then the developer re-approved a revision that added the missing half. Every gate passed, the router said `COMPLETE_TASK`, and `complete` refused each time with "RED defect evidence is bound to a different plan hash": the proof was bound to the plan it was captured under and nothing could rebind it (it can only be captured before the fix). The agent tried to edit the evidence file (refused) and then offered to edit or delete it, or skip closing the task. RED evidence now stays valid when it is bound to an approved plan that the current plan revised, followed through the archived plan history; each archived plan must still match its own hash and task, an unapproved draft never counts, and evidence from any other plan is still refused.
+- The `complete` refusal named no way out, so the agent put "rewrite the evidence file" to the developer as the recommended option. A refusal now says harness evidence is never edited, deleted or skipped nor offered as an option, points to `task status --next` for the remedy, and when the router still says `COMPLETE_TASK` tells the agent to report the refusal verbatim and offer to keep the task open or cancel it (which keeps the code changes).
+
+### Review
+- A real payment task reached the commit question with part of its approved approach (the paywall half) not implemented, and every reviewer passed it: each reviewer's brief carried the plan's outcome but not its approach, so nobody could compare the diff with what the developer approved. Every brief now states the approved approach, and the bug reviewer (the regression reviewer when no bug reviewer is routed) owns a plan-completeness check: an approach item the diff does not implement is a HIGH `plan item not implemented` finding, and a deferral the developer did not approve is not accepted. One owner, so the finding is not reported six times.
+
+### Read-only commands
+- `Get-Item env:GRADLE_USER_HOME` was refused as a shell mutation during implementation. `Get-Item` (`gi`) is now a read command; piping it into a writing command is still refused.
+
 ## [1.1.16] - 2026-10-05
 
 A branch switch in the middle of a task is named instead of failing gates, and a third review round keeps the reviewers carried since the first.

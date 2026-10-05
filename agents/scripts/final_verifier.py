@@ -62,6 +62,33 @@ def alternate_reproduction_recorded(task_directory: Path) -> bool:
     return any(str((e or {}).get("kind") or "").lower() in ALTERNATE_REPRODUCTION_KINDS for e in entries if isinstance(e, dict))
 
 
+def red_plan_hashes(task_directory: Path, plan: dict, plan_hash: str) -> set[str]:
+    """Plan hashes a RED reproduction may be bound to: the current plan and every approved plan it revised.
+
+    RED is captured once, before the fix; a later revision of the same task (scope added after review)
+    does not undo that reproduction. Each archived plan must still match its own hash and task, so a
+    rewritten history file breaks the chain instead of extending it.
+    """
+    accepted = {plan_hash}
+    seen = {plan_hash}
+    previous = str(plan.get("supersedes_plan_sha256") or "")
+    while previous and previous not in seen:
+        seen.add(previous)
+        try:
+            archived = read_json(task_directory / "plan-history" / f"{previous}.json")
+        except Exception:
+            break
+        valid, archived_hash = validate_plan_hash(
+            archived, archived.get("plan_sha256"), payload_fn=plan_payload, hash_fn=canonical_sha256
+        )
+        if not valid or archived_hash != previous or archived.get("task_id") != plan.get("task_id"):
+            break
+        if (archived.get("approval") or {}).get("plan_sha256") == previous:
+            accepted.add(previous)
+        previous = str(archived.get("supersedes_plan_sha256") or "")
+    return accepted
+
+
 def _configured_project_kind() -> str:
     try:
         from _product import PROJECT_KIND
@@ -508,6 +535,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         repro_defect_ids: set[str] = set()
         repro_classes: set[str] = set()
         binding_errors: list[str] = []
+        red_plans = red_plan_hashes(task_directory, plan, expected_plan_hash)
 
         if red_ev_path.is_file():
             try:
@@ -520,7 +548,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     binding_errors.append("RED evidence SHA-256 signature is invalid or corrupted")
                 if r2.get("task_id") and r2.get("task_id") != plan.get("task_id"):
                     binding_errors.append(f"RED evidence task_id mismatch: {r2.get('task_id')} != {plan.get('task_id')}")
-                if r2.get("plan_sha256") and r2.get("plan_sha256") != expected_plan_hash:
+                if r2.get("plan_sha256") and r2.get("plan_sha256") not in red_plans:
                     binding_errors.append("RED defect evidence is bound to a different plan hash")
                 base_file = task_directory / "task-baseline.json"
                 base_matches = True
@@ -548,7 +576,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     and producer == "run_tests_gate"
                     and is_hash_valid
                     and r2.get("task_id") == plan.get("task_id")
-                    and r2.get("plan_sha256") == expected_plan_hash
+                    and r2.get("plan_sha256") in red_plans
                     and base_matches
                     and r2.get("reproduction_kind") == "FAILING_TEST"
                     and bool(r2.get("failed_tests"))
@@ -590,7 +618,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             if red_err is None and str(red_rec.get("status") or "").upper() == "PASS":
                 rev = red_rec.get("evidence") or {}
                 red_plan_hash = rev.get("plan_sha256")
-                if red_plan_hash and red_plan_hash != expected_plan_hash:
+                if red_plan_hash and red_plan_hash not in red_plans:
                     binding_errors.append("RED defect evidence is bound to a different plan hash")
                 pre_fix_snap = rev.get("pre_fix_delivery_snapshot_sha256")
                 if pre_fix_snap and pre_fix_snap == snapshot:
@@ -605,7 +633,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 rp = rev.get("red_payload") or {}
                 if rp.get("schema_version") == 3 and red_rec.get("producer") == "run_tests_gate":
                     exp_rp_hash = canonical_sha256({k: v for k, v in rp.items() if k != "red_sha256"})
-                    if rp.get("red_sha256") == exp_rp_hash and rp.get("task_id") == plan.get("task_id") and rp.get("plan_sha256") == expected_plan_hash and bool(rp.get("failed_tests")):
+                    if rp.get("red_sha256") == exp_rp_hash and rp.get("task_id") == plan.get("task_id") and rp.get("plan_sha256") in red_plans and bool(rp.get("failed_tests")):
                         has_executable_red = True
         except Exception:
             pass
