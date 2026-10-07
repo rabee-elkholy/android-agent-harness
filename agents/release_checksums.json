@@ -63,7 +63,7 @@
     "agents/scripts/_stabilization_v42_selftest.py": "960b379645c5b7b49af9c1fb9a4aed7c97b4d41daa6bd7c8b5cadaef3fddf435",
     "agents/scripts/_variants.py": "66d883335e37ae0b5505da762bdec50ec36450c9dbc44907b9a6476ed5b2eb9d",
     "agents/scripts/_verification_recipes.py": "5bf892d82818020c4f7fff063a3983d383b2b4ee50fc459b29a44eb53f2f1209",
-    "agents/scripts/_verification_value_selftest.py": "d878b221d19128a93f00640497dcbda092ebb7e2c9538eba35e9dc3e7bc69eda",
+    "agents/scripts/_verification_value_selftest.py": "77f01f5dc46ca2700ace6552a7fbe6c46401b12855cb02d5aac12818b1f655fa",
     "agents/scripts/_vnext_common.py": "cedffc3e8183162843f8ba73066fc22b57e159258718e56a9f8c12544526cbb1",
     "agents/scripts/_vnext_selftest.py": "8a4d46cde850d2e4c632923c9f2e0f5d679d36112463fcab53733c19f02271c9",
     "agents/scripts/_worktree_handoff_selftest.py": "95ebebb840593b6686e551ac180e973139a8eb1348458b8f9115906175c4311f",

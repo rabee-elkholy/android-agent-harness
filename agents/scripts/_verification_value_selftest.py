@@ -19,6 +19,8 @@ from verification_contract import validate_contract, coverage_report, bind_evide
 from journey_runner import execute_journey, validate_journey
 from task_metrics import record_operation, metrics_report
 
+TEST_HARNESS_VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_bytes().decode("utf-8").strip()
+
 
 def contract(method="test", required=True):
     return {"schema_version": 1, "criteria": [
@@ -360,7 +362,7 @@ class PublicWorkflowContracts(unittest.TestCase):
             subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True)
         (self.repo / ".git/info/exclude").write_text(".agents/\napp/build/\n")
         (self.repo / ".agents/state").mkdir(parents=True)
-        (self.repo / ".agents/VERSION").write_text("1.1.19\n")
+        (self.repo / ".agents/VERSION").write_text(TEST_HARNESS_VERSION + "\n")
         (self.repo / "app").mkdir()
         (self.repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n')
         (self.repo / "settings.gradle.kts").write_text('include(":app")\n')
@@ -402,7 +404,7 @@ class PublicWorkflowContracts(unittest.TestCase):
             if gate in ("preflight", "unit_tests"):
                 self.store.write(snapshot=self.current["delivery_snapshot_sha256"], run_id=self.current["run_id"],
                                  name=gate, producer="preflight_check" if gate == "preflight" else "run_tests_gate",
-                                 harness_version="1.1.19", change_set=self.current["change_set_sha256"], status="PASS",
+                                 harness_version=TEST_HARNESS_VERSION, change_set=self.current["change_set_sha256"], status="PASS",
                                  evidence={"executed": 1, "test_outcomes": {"Tests#refresh": "PASS"}})
 
     def install_choice_fixture(self):
@@ -416,7 +418,7 @@ class PublicWorkflowContracts(unittest.TestCase):
         for name in ("assemble", "device_install", "device_launch"):
             self.store.write(snapshot=self.current["delivery_snapshot_sha256"], run_id=self.current["run_id"],
                 name=name, producer="run_gradle_task" if name == "assemble" else "run_device",
-                harness_version="1.1.19", change_set=self.current["change_set_sha256"], status="PASS",
+                harness_version=TEST_HARNESS_VERSION, change_set=self.current["change_set_sha256"], status="PASS",
                 evidence={"artifact_set_sha256": digest, "serial_sha256": hashlib.sha256(b"fixture").hexdigest(),
                           "target_user": "0", "application_id": "com.example",
                           "install_reference": digest, "artifact_set": artifact_set}, allow_pass_retry=True)
