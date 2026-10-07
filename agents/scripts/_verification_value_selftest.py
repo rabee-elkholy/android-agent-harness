@@ -291,6 +291,25 @@ class JourneyContracts(unittest.TestCase):
         self.assertEqual(1, len(observations))
         self.assertEqual(2, len(finds))
 
+    def test_checkpoint_fallback_uses_remaining_step_budget(self):
+        value = journey()
+        value["steps"] *= 2
+        transport = FakeTransport()
+        clock = [100.0]
+        budgets = []
+        def observe(*args):
+            clock[0] += 0.6
+            return [[], [object()]]
+        transport.observe_present = observe
+        def find(selector, timeout):
+            budgets.append(timeout)
+            return [object()]
+        transport.find = find
+        with patch("journey_runner.time.monotonic", side_effect=lambda: clock[0]):
+            self.assertEqual("PASS", execute_journey(value, transport)["status"])
+        self.assertAlmostEqual(0.4, budgets[0])
+        self.assertEqual(1, budgets[1])
+
     def test_batched_identity_fails_closed_for_disconnection_or_malformed_output(self):
         from journey_runner import AdbTransport
         transport = AdbTransport("fixture", "com.example", [])

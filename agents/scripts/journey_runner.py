@@ -103,13 +103,17 @@ def execute_journey(value, transport):
                         break
                     selectors.append(following["selector"])
                 if len(selectors) > 1:
+                    step_deadline = time.monotonic() + timeout
                     checkpoint = transport.observe_present(selectors, timeout)
+                    timeout = max(0.0, step_deadline - time.monotonic())
             if action != "back":
                 if action == "assert_present" and checkpoint:
                     found = checkpoint.pop(0)
                     # A missing selector retains its own bounded polling behavior.
                     if not found:
                         checkpoint = []
+                        if timeout <= 0:
+                            raise TimeoutError("journey step deadline")
                         found = transport.find(step["selector"], timeout)
                 else:
                     checkpoint = []
