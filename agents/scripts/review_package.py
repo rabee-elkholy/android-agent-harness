@@ -200,6 +200,18 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         arch_section.append("\n")
         extras.insert(0, "\n".join(arch_section))
 
+    if "verification_contract" in plan:
+        criteria = plan["verification_contract"]["criteria"]
+        extras.append("\n## Approved acceptance criteria\n" + json.dumps(criteria, ensure_ascii=False) +
+                      "\nCheck semantic relevance of evidence and assertions. For V2 output, include an optional "
+                      "criterion_results mapping of explicitly assessed review-method criterion IDs to PASS, FAIL, "
+                      "or NEEDS_CONTEXT. Never infer a criterion PASS from overall test/build success.\n")
+        if plan["verification_contract"].get("device_validation") == "manual_or_automatic":
+            extras.append("\n## Complete mobile validation replacement\n" +
+                          json.dumps(plan["verification_contract"]["journeys"], ensure_ascii=False) +
+                          "\nAssess whether these executable steps and assertions cover the entire approved mobile walkthrough. "
+                          "Automatic PASS replaces manual repetition only for this approved scope; subjective human judgments "
+                          "and final sensitive approval cannot be claimed by a replay.\n")
     instructions = plan.get("developer_instructions") or []
     if instructions:
         inst_lines = ["\n## Applicable Developer Constraints\n"]

@@ -118,3 +118,5 @@ Execute commands in this strict sequential order. Every command is fully specifi
 | 15b | **Zoho Delivery Sync** | `{{PY}} .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item (when plan has zoho_link) |
 | - | **Context Note** | `{{PY}} .agents/harness.py context note "<note>"` | Record architectural convention/note |
 | - | **Context Instruct** | `{{PY}} .agents/harness.py context instruct "<instruction>" --scope "<scope>" --source conversation --proof-reference "<phrase>" --strength REQUIREMENT` | Add scoped developer instruction to developer-instructions.json |
+
+For optional criteria, journeys, and metrics, follow the kernel and canonical router.

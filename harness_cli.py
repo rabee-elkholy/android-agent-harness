@@ -1078,6 +1078,13 @@ def cmd_commands(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_journey(args: argparse.Namespace) -> int:
+    forward = list(args.journey_args)
+    if forward[:1] == ["--"]:
+        forward = forward[1:]
+    return _dispatch_pipeline_script(args, "journey_runner.py", forward)
+
+
 def cmd_device(args: argparse.Namespace) -> int:
     """Deploy or test on device via run_device.py."""
     forward = list(args.device_args)
@@ -1119,6 +1126,7 @@ FULL_SELFTEST_SUITES = (
     "_antigravity_stability_selftest.py",
     "_phase_review_v2_selftest.py",
     "_worktree_handoff_selftest.py",
+    "_verification_value_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
@@ -1129,6 +1137,7 @@ QUICK_SELFTEST_SUITES = (
     "_public_cli_selftest.py",
     "_graph_discovery_selftest.py",
     "_antigravity_stability_selftest.py",
+    "_verification_value_selftest.py",
 )
 
 assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
@@ -1604,6 +1613,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.add_argument("review_args", nargs=argparse.REMAINDER, help="Arguments passed to record_review.py")
     sp.set_defaults(func=cmd_review)
+
+    sp = sub.add_parser("journey", help="Validate or explicitly replay an approved UI journey.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("journey_args", nargs=argparse.REMAINDER)
+    sp.set_defaults(func=cmd_journey)
 
     sp = sub.add_parser("device", help="Deploy or inspect device via run_device.py.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")

@@ -386,6 +386,28 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
 
 
 def _handle_signoff(args: argparse.Namespace) -> int:
+    # Mode changes cannot race with a live complete-walkthrough replay. Acquire
+    # this lock before any central state lock, matching the automatic runner.
+    from mutation_guard import active_plan
+    from evidence_store import StateLock
+    try:
+        task_id = args.task_id or str((active_plan(REPO) or {}).get("task_id") or "")
+    except Exception:
+        return _record_signoff(args)
+    state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
+    plan_path = state / "tasks" / task_id / "plan.json"
+    try:
+        plan = read_json(plan_path) if task_id and plan_path.is_file() else {}
+        if (plan.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
+            with StateLock(state / "device-validation-execution"):
+                return _record_signoff(args)
+        return _record_signoff(args)
+    except HarnessError as exc:
+        live_print(f"[FAIL] Device validation choice could not be recorded: {exc}", err=True)
+        return 1
+
+
+def _record_signoff(args: argparse.Namespace) -> int:
     import os
     from mutation_guard import active_plan
     from _vnext_common import read_json, canonical_sha256, ValidationError
@@ -435,6 +457,18 @@ def _handle_signoff(args: argparse.Namespace) -> int:
     change_set = str(current_run.get("change_set_sha256") or "")
     plan_path = state / "tasks" / task_id / "plan.json"
     plan = read_json(plan_path) if plan_path.is_file() else {}
+    criterion_ids = sorted(set(getattr(args, "criterion_id", None) or []))
+    if criterion_ids:
+        from verification_contract import validate_contract
+        try:
+            contract = validate_contract(plan.get("verification_contract") or {})
+            allowed_ids = {c["id"] for c in contract["criteria"] if c["method"] == "manual"
+                           or (contract.get("device_validation") == "manual_or_automatic" and c["method"] == "journey")}
+            if not set(criterion_ids) <= allowed_ids:
+                raise ValidationError("sign-off criteria must be approved manual or alternative walkthrough criteria")
+        except ValidationError as exc:
+            live_print(f"[FAIL] {exc}", err=True)
+            return 1
 
     from evidence_store import EvidenceStore
     store = EvidenceStore(state)
@@ -447,9 +481,11 @@ def _handle_signoff(args: argparse.Namespace) -> int:
         if (
             str(existing.get("status") or "").upper() == verdict
             and existing_ev.get("proof_reference") == proof_ref
+            and existing_ev.get("criterion_ids", []) == criterion_ids
         ):
-            live_print(f"[SUCCESS] Device sign-off already recorded (idempotent): verdict={verdict} for task {task_id}")
-            return 0
+            if (plan.get("verification_contract") or {}).get("device_validation") != "manual_or_automatic":
+                live_print(f"[SUCCESS] Device sign-off already recorded (idempotent): verdict={verdict} for task {task_id}")
+                return 0
     except Exception:
         pass
 
@@ -526,6 +562,7 @@ def _handle_signoff(args: argparse.Namespace) -> int:
             "proof_reference": proof_ref,
             "proof_reference_sha256": canonical_sha256(proof_ref),
             "verdict": verdict,
+            "criterion_ids": criterion_ids,
             "target_user": str(install_ev.get("target_user") or install_ev.get("user") or getattr(args, "user", None) or "0"),
             "serial_sha256": str(install_ev.get("serial_sha256") or install_ev.get("serial_hash") or ""),
             "serial_hash": str(install_ev.get("serial_sha256") or install_ev.get("serial_hash") or ""),
@@ -534,6 +571,19 @@ def _handle_signoff(args: argparse.Namespace) -> int:
         },
         allow_pass_retry=True,
     )
+    if (plan.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
+        from verification_contract import bind_evidence
+        from evidence_store import StateLock
+        with StateLock(state):
+            assert_active_run_fresh(REPO, task_id)
+            signoff = store.read(snapshot, run_id, "device_signoff")
+            store.write(snapshot=snapshot, run_id=run_id, name="device_validation_result", producer="device_validation",
+                        harness_version=harness_version, change_set=change_set, status=verdict,
+                        evidence={"mode": "manual", "signoff_sha256": signoff["artifact_sha256"]},
+                        lock=False, allow_pass_retry=True)
+            if verdict == "PASS":
+                for identity in criterion_ids:
+                    bind_evidence(plan, current_run, store, identity, "device_signoff", lock=False)
     live_print(f"[SUCCESS] Device sign-off recorded: verdict={verdict} for task {task_id} (run {run_id[:12]})")
     return 0
 
@@ -622,7 +672,7 @@ def _handle_skip_validation(args: argparse.Namespace) -> int:
 def main() -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
-    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff", "skip-validation", "status"])
+    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff", "skip-validation", "status", "validate-automatically"])
     parser.add_argument("-s", "--serial", default=None, help="Physical device serial")
     parser.add_argument(
         "--flavor",
@@ -641,6 +691,7 @@ def main() -> int:
     )
     parser.add_argument("--confirm-destructive", action="store_true", help="Required for uninstall")
     parser.add_argument("--task-id", default=None, help="Task ID for signoff")
+    parser.add_argument("--criterion-id", action="append", default=[], help="Manual criterion explicitly verified by the developer; repeat per criterion")
     parser.add_argument("--proof-reference", default=None, help="Proof reference / reason for signoff")
     parser.add_argument("--verdict", choices=["PASS", "FAIL"], default="PASS", help="Signoff verdict")
     parser.add_argument("--source", choices=["developer_terminal", "host_native", "conversation"], default=None, help="Authority source for signoff")
@@ -667,6 +718,19 @@ def main() -> int:
 
     if args.action == "skip-validation":
         return _handle_skip_validation(args)
+
+    if args.action == "validate-automatically":
+        from journey_runner import run_device_validation
+        import json
+        try:
+            if not args.task_id or not args.serial:
+                raise HarnessError("--task-id and the installed --serial are required")
+            result = run_device_validation(REPO, args.task_id, args.serial, args.source, args.proof_reference, args.approval_token)
+            live_print(json.dumps(result, indent=2))
+            return 0 if result["status"] == "PASS" else EXIT_ENV if result["status"] == "ENV" else 1
+        except HarnessError as exc:
+            live_print(f"[FAIL] {exc}", err=True)
+            return 1
 
     try:
         active_flavor, _task = resolve_or_raise(args.flavor)
@@ -884,6 +948,8 @@ def main() -> int:
                 live_print(f"   - {r}")
             live_print("=" * 60)
             live_print("[!] CRITICAL: DO NOT simply ask 'Did it pass' without first explaining the 4 test sections above in chat!\n")
+            if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
+                live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
         except Exception:
             pass
 

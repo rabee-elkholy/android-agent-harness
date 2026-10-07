@@ -520,6 +520,7 @@ No. Deterministic checks (Room schema guards, string parity, fast ktlint, and ta
 
 MIT License. See [LICENSE](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE).
 
+- [Optional acceptance evidence, reusable journeys, and local metrics](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/verification-value.md)
 - [Quickstart Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/quickstart.md)
 - [Architecture Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/architecture.md)
 - [Workflow Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows.md)

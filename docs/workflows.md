@@ -87,3 +87,7 @@ command/environment, project and user Gradle properties, selected Java/JVM crite
 and daemon logs. Gradle's [daemon compatibility documentation](https://docs.gradle.org/current/userguide/gradle_daemon.html)
 and [build environment precedence](https://docs.gradle.org/current/userguide/build_environment.html)
 explain why incompatible JVM settings or explicit disabling can prevent reuse.
+
+## Optional verification value
+
+New tasks can select an approved JSON verification contract for criterion-specific acceptance evidence and reusable UI journeys. Definitions remain project-owned outside `.agents`; installation, update, and uninstall do not manage them. Existing tasks are unchanged. Local operation timings are enabled only through `HARNESS_LOCAL_METRICS=1`, with reports generated on demand. These features add no setup question or external service. See [verification-value.md](verification-value.md) for schema examples, prerequisite gates, and commands.

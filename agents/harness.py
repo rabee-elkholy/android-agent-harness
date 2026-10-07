@@ -13,6 +13,7 @@ TASK_SUBCOMMANDS = frozenset({
     "draft", "revise", "checkpoint-phase", "begin-next-phase", "present-plan", "approve", "approve-sensitive",
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
+    "coverage", "bind-evidence", "metrics",
 })
 
 
@@ -70,7 +71,39 @@ def _print_next_step() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
+    import os
+    import time
+    started = time.time()
+    monotonic = time.monotonic()
     code = _main(args)
+    # Explicit opt-in: feature-off does not read tasks or scan metrics history.
+    if os.environ.get("HARNESS_LOCAL_METRICS") == "1" and args and args[0] in {"task", "preflight", "test", "assemble", "compile", "device", "review", "journey"}:
+        try:
+            sys.path.insert(0, str(SCRIPTS))
+            from task_metrics import record_operation
+            actions = {"task": TASK_SUBCOMMANDS,
+                       "device": {"install-start", "signoff", "skip-validation", "validate-automatically"},
+                       "review": {"package", "profile", "ingest", "complete", "finalize", "dispatch", "dispatch-batch", "status"},
+                       "journey": {"validate", "list", "run"}}
+            operation = args[0]
+            if len(args) > 1 and args[1] in actions.get(args[0], ()):
+                operation += "-" + args[1]
+            if operation not in {"task-metrics", "task-coverage", "task-status", "journey-list", "journey-validate"}:
+                task_id = ""
+                for index, argument in enumerate(args):
+                    if argument == "--task-id" and index + 1 < len(args):
+                        task_id = args[index + 1]
+                    elif argument.startswith("--task-id="):
+                        task_id = argument.split("=", 1)[1]
+                if not task_id:
+                    import json
+                    active = AGENTS_ROOT / "state/active-task.json"
+                    if active.is_file() and active.stat().st_size <= 4096:
+                        task_id = str(json.loads(active.read_text(encoding="utf-8")).get("task_id") or "")
+                if task_id:
+                    record_operation(REPO_ROOT, task_id, operation, time.monotonic() - monotonic, code, started)
+        except Exception:
+            pass
     # Never after --json (the output must stay pure JSON) or help.
     step = args[0] in NEXT_STEP_COMMANDS if args else False
     # Real app: after `task approve-sensitive`, `task complete` and `task prepare-verification` the agent
@@ -86,11 +119,15 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|preflight|test|compile|assemble|review|phase-review|device|verify|zoho|version|update-info|commands> [args...]"
+            "<context|task-context|graph|task|doctor|preflight|test|compile|assemble|review|phase-review|device|journey|verify|zoho|version|update-info|commands> [args...]"
         )
         return 0
 
     command = args.pop(0)
+    if command == "task" and args and args[0] in {"coverage", "bind-evidence", "metrics"}:
+        return _run("workflow.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "journey":
+        return _run("journey_runner.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "version":
         version_file = AGENTS_ROOT / "VERSION"
         if not version_file.is_file():

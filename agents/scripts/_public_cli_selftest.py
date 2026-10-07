@@ -1773,9 +1773,10 @@ class TestSpeedTests(unittest.TestCase):
         self.assertFalse(args.quick)
 
     def test_testmode_002_selftest_quick_flag(self) -> None:
-        """TESTMODE-002: selftest --quick selects quick registry (7 suites)."""
+        """TESTMODE-002: selftest --quick selects the complete quick registry."""
         import harness_cli
-        self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), 7)
+        self.assertEqual(len(harness_cli.QUICK_SELFTEST_SUITES), 8)
+        self.assertIn("_verification_value_selftest.py", harness_cli.QUICK_SELFTEST_SUITES)
         parser = harness_cli.build_parser()
         args = parser.parse_args(["selftest", "--quick"])
         self.assertTrue(args.quick)

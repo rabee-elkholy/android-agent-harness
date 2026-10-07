@@ -459,7 +459,9 @@ The harness does not depend on host slash commands (`/goal` and `/grill-me` were
 
 Before planning, the agent asks the developer about material ambiguity (new subsystem, architecture choice, migration, cross-module behavior, sensitive business behavior, substantial error or backward-compatibility decisions), not about every tiny bug. Resolved decisions feed the task plan and are not asked again unless new evidence reopens them. A durable rule is recorded as Project Note/Developer Instruction only when the developer clearly states or approves it as durable.
 
-After approval the agent follows the router until terminal completion or a real human/blocker boundary. Continuing never grants approval, overrides scope, bypasses device sign-off, review or developer-owned Git, changes reviewer model selection, or turns ENV_BLOCKED into success.
+After approval the agent follows the router until terminal completion or a real human/blocker boundary. Continuing never grants approval, overrides scope, bypasses required device validation, review or developer-owned Git, changes reviewer model selection, or turns ENV_BLOCKED into success.
+
+For an explicitly approved complete, executable mobile walkthrough, the developer may choose manual PASS/FAIL or automatic execution after successful installation and launch. A complete snapshot/device/artifact-bound automatic PASS replaces manual repetition for that walkthrough. It does not manufacture human sign-off or final approval of sensitive changes. Failed, interrupted, partial, stale, or unavailable automatic execution cannot approve delivery; environment limitations may offer the manual alternative. Human-only judgments remain manual and cannot expose the automatic replacement option.
 
 ---
 

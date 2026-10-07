@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import canonical_sha256  # noqa: E402
+from _vnext_common import ValidationError, canonical_sha256  # noqa: E402
 from change_classifier import CRITICAL_SURFACES, HIGH_SURFACES, classify  # noqa: E402
 from skill_router import route  # noqa: E402
 
@@ -320,6 +320,17 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         intrinsic_device_required = False
 
     device_verification_mode = _configured_device_verification_mode()
+    contract = (plan or {}).get("verification_contract")
+    required_criteria = []
+    if contract is not None:
+        from verification_contract import validate_contract
+        required_criteria = [c for c in validate_contract(contract)["criteria"] if c["required"]]
+        if any(c["method"] in {"manual", "journey"} for c in required_criteria) or contract["journeys"]:
+            if device_verification_mode == "disabled" or project_kind != "application":
+                raise ValidationError("approved verification contract requires enabled application device verification")
+            intrinsic_device_required = True
+        if any(c["method"] == "review" for c in required_criteria):
+            reviewers.add("bug-reviewer-agent")
     device_required = (
         intrinsic_device_required
         and device_verification_mode != "disabled"
@@ -336,6 +347,10 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         gates.add("assemble")
     if device_required:
         gates.add("device")
+        if contract is not None:
+            gates.add("assemble")
+    if any(c["method"] == "test" for c in required_criteria):
+        gates.add("unit_tests")
 
     skills = route(skills_root, sorted(surfaces), task_kind=task_kind)
     call_budget = _configured_model_call_budget()
@@ -367,6 +382,9 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     }
     if unknown_resolved:
         result["unknown_resolution"] = "APPROVED_PLAN_FILES"
+    if contract is not None:
+        result["verification_contract_sha256"] = canonical_sha256(contract)
+        result["required_criteria"] = [c["id"] for c in required_criteria]
     result["policy_sha256"] = canonical_sha256(result)
     return result
 

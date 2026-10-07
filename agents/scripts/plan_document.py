@@ -74,6 +74,7 @@ def _changes(old: dict | None, new: dict) -> list[str]:
         "rollback": "Rollback",
         "external_writes": "External writes",
         "phases": "Phases",
+        "verification_contract": "Acceptance criteria and journeys",
     }
     lines = []
     for key, label in labels.items():
@@ -134,6 +135,19 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
                 lines.append(f"{index}. `{phase.get('id')}`: {_text(title, '')}")
                 for item in phase.get("expected_files") or []:
                     lines.append(f"   - {_file_link(repo, item)}")
+    if "verification_contract" in plan:
+        value = plan["verification_contract"]
+        lines += ["", "## Acceptance criteria and evidence", ""]
+        if value.get("device_validation") == "manual_or_automatic":
+            lines.append("Device validation: the selected journeys define the complete walkthrough. After install, choose manual PASS/FAIL or Run Automatically; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
+        for criterion in value["criteria"]:
+            obligation = "required" if criterion["required"] else "advisory"
+            lines.append(f"- `{criterion['id']}` ({obligation}, {criterion['method']}): {_text(criterion['expected'])}")
+        for journey in value["journeys"]:
+            lines.append(f"- Journey `{journey['id']}` v{journey['version']}, {journey['module']}/{journey['variant']}: "
+                         f"{_text(journey['purpose'])}; prerequisites: {_text(journey['prerequisites'])}; "
+                         f"effects: {_text(journey['effects'], 'none')}")
+        lines.append("Evidence association records provenance; reviewers still assess semantic relevance.")
     surfaces = plan.get("expected_surfaces") or []
     lines += [
         "",
@@ -174,6 +188,8 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
     ]
     if "device" in gates:
         lines.append("- Check the phone steps above and sign off Pass or Fail.")
+    if "verification_contract" in plan:
+        lines.append("- Approve the listed criteria and selected journey effects with this plan. Manual checks must name the checked criteria at sign-off.")
     lines += [
         "- Commit the changes yourself; the agent never commits or pushes.",
         "",

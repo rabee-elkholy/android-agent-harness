@@ -53,3 +53,5 @@ Execute commands in this strict sequential order. Every command is fully specifi
 | 14 | **Complete Task** | `{{PY}} .agents/scripts/workflow.py complete --repo . --task-id <id>` | Transition task to READY_FOR_DELIVERY. Required: `--task-id` |
 | 15 | **Deliver Task** | `{{PY}} .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit. Required: `--task-id` |
 | - | **Context Note** | `{{PY}} .agents/harness.py context note "<note>"` | Record architectural convention/note |
+
+For optional criteria, journeys, and metrics, follow the kernel and canonical router.

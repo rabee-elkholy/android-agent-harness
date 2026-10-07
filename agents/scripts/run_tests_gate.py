@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import sys
 import xml.etree.ElementTree as ET
+from _vnext_common import ValidationError
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -84,6 +85,29 @@ def collect_executed_tests(repo: Path, task: str | list[str]) -> list[str]:
             elif classname:
                 names.add(classname)
     return sorted(names)
+
+
+def collect_test_outcomes(repo: Path, task, reports_before=None) -> dict[str, str]:
+    """Exact fully qualified case outcomes; skipped or stale cases cannot prove coverage."""
+    outcomes: dict[str, str] = {}
+    priority = {"PASS": 0, "SKIPPED": 1, "FAIL": 2}
+    for path in report_paths(repo, task):
+        if reports_before is not None:
+            stat = path.stat()
+            if reports_before.get(path.resolve().as_posix()) == (stat.st_mtime_ns, stat.st_size):
+                continue
+        root = ET.fromstring(path.read_text(encoding="utf-8"))
+        for case in root.iter("testcase"):
+            classname, name = case.get("classname"), case.get("name")
+            if not classname or not name:
+                continue
+            identity = f"{classname}#{name}"
+            status = "FAIL" if case.find("failure") is not None or case.find("error") is not None else "SKIPPED" if case.find("skipped") is not None else "PASS"
+            if priority[status] >= priority.get(outcomes.get(identity, "PASS"), 0):
+                outcomes[identity] = status
+            if len(outcomes) > 50000:
+                raise ValidationError("too many test outcomes for acceptance coverage")
+    return outcomes
 
 
 def collect_task_failures(repo: Path, task: str | list[str]) -> list[dict]:
@@ -326,6 +350,7 @@ def evaluate_unit_test_execution(
     outcome: dict | None = None,
     baseline: dict | None = None,
     task_start: dict | None = None,
+    capture_cases: bool = False,
 ) -> tuple[bool, str, dict]:
     """Evaluate unit-test execution results with baseline-aware regression semantics.
 
@@ -341,6 +366,11 @@ def evaluate_unit_test_execution(
 
     summary = collect_test_summary(repo, task)
     summary["executed_tests"] = collect_executed_tests(repo, task)
+    if capture_cases:
+        try:
+            summary["test_outcomes"] = collect_test_outcomes(repo, task, reports_before)
+        except (OSError, ValueError, ET.ParseError, ValidationError):
+            return False, "exact acceptance test outcomes could not be validated", {"status": "FAIL", "exit_code": 1}
     failed, fresh_failures = _failures_with_freshness(repo, task, reports_before)
 
     if code == 0 and summary.get("executed", 0) == 0:
@@ -657,6 +687,7 @@ def main(argv=None) -> int:
         help="After the developer confirms, record failing tests that name nothing this task changed as not this task's",
     )
     parser.add_argument("--proof-reference", default="", help="The developer's confirmation (with --record-unrelated)")
+    parser.add_argument("--rerun-tests", action="store_true", help="Explicitly rerun selected Gradle tasks when fresh exact-case evidence is needed")
     args = parser.parse_args(argv)
     if args.record_unrelated and not args.proof_reference.strip():
         live_print("[FAIL] --record-unrelated needs --proof-reference with the developer's confirmation.", err=True)
@@ -664,6 +695,13 @@ def main(argv=None) -> int:
 
     from run_gradle_task import run_gradle
 
+    from mutation_guard import active_plan
+    try:
+        coverage_plan = active_plan(REPO) or {}
+    except Exception:
+        coverage_plan = {}
+    capture_cases = "verification_contract" in coverage_plan
+    extra_gradle = ["--rerun-tasks"] if args.rerun_tests else []
     tasks = resolve_target_tasks(REPO, args.task)
     task: str | list[str] = tasks[0] if len(tasks) == 1 else tasks
     task_label = " ".join(tasks)
@@ -673,14 +711,14 @@ def main(argv=None) -> int:
     code = 0
     if len(tasks) == 1:
         with step_progress(f"Running unit tests: {task_label}"):
-            code = run_gradle(tasks, outcome=outcome)
+            code = run_gradle([*tasks, *extra_gradle], outcome=outcome)
     else:
         # One Gradle run per module keeps failure attribution per task and runs every module's tests.
         attributable = True
         for item in tasks:
             item_outcome: dict = {}
             with step_progress(f"Running unit tests: {item}"):
-                item_code = run_gradle([item], outcome=item_outcome)
+                item_code = run_gradle([item, *extra_gradle], outcome=item_outcome)
             if item_code == EXIT_ENV:
                 code = item_code
                 break
@@ -881,6 +919,7 @@ def main(argv=None) -> int:
         outcome=outcome,
         baseline=baseline,
         task_start=load_task_start_failures(REPO),
+        capture_cases=capture_cases,
     )
     for text, is_error in verdict_lines(
         ok, detail, code, data.get("new_regressions", []), data.get("task_start_ignored")

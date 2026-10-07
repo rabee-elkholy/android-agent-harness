@@ -28,6 +28,7 @@ Follow `.agents/rules/harness-rules.md`. Analysis and planning are read-only. No
 - **Mobile Validation**: When device verification is required, execute `python .agents/harness.py device install-start` or, if developer explicitly requests skip, record honest skip via `python .agents/harness.py device skip-validation --task-id <id> --proof-reference "<phrase>"`.
 - **Sensitive Approval**: If sensitive surfaces were touched, record explicit approval via `workflow.py approve-sensitive`.
 - **Final Verify**: Run read-only delivery verification via `python .agents/harness.py verify --task-id <id>`.
+- **Optional Approved Contract**: Follow `task status --next` after installation. For an approved complete executable walkthrough, present its steps with manual PASS/FAIL and Run Automatically. Execute only the developer's choice; complete automatic PASS replaces manual repetition and binds criteria automatically. ENV may offer manual fallback; FAIL requires diagnosis. Partial journeys retain human sign-off. Inspect `task coverage` for remaining required evidence. Sensitive approval remains independent.
 - **Complete**: Seal task to `READY_FOR_DELIVERY` via `python .agents/scripts/workflow.py complete --repo . --task-id <id>`.
 
 ## 4. SHIP

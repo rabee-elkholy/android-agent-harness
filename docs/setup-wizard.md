@@ -42,3 +42,7 @@ toggle. The harness never commits, rebases, resets, or pushes automatically.
 
 The full interview protocol the installing agent executes lives in
 [`setup-prompt.md`](setup-prompt.md).
+
+## Optional verification value
+
+New tasks can select an approved JSON verification contract for criterion-specific acceptance evidence and reusable UI journeys. Definitions remain project-owned outside `.agents`; installation, update, and uninstall do not manage them. Existing tasks are unchanged. Local operation timings are enabled only through `HARNESS_LOCAL_METRICS=1`, with reports generated on demand. These features add no setup question or external service. See [verification-value.md](verification-value.md) for schema examples, prerequisite gates, and commands.

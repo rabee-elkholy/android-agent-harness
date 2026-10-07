@@ -34,3 +34,5 @@ Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 Python: `{{PY}}`. Device: {{DEVICE_POLICY}} {{GIT_POLICY}}
 
 Exit 30/[ENV-FAILURE] is an environment blocker; never change app code to hide it. Never uninstall, purchase, publish, commit, push, or mutate tracker implicitly. Tracker policy: {{PM_TRIGGER}}. {{PM_LANG_NOTE}}
+
+For optional criteria, journeys, and metrics, follow the kernel and canonical router.

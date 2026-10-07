@@ -168,6 +168,15 @@ def parse_ui_hierarchy(xml_content: str) -> list[UINode]:
     try:
         idx = xml_content.find("<hierarchy")
         xml_clean = xml_content[idx:] if idx >= 0 else xml_content
+        end = xml_clean.find("</hierarchy>")
+        if end >= 0:
+            end += len("</hierarchy>")
+            trailer = xml_clean[end:].strip()
+            # Android's exec-out dump appends this status line after the XML.
+            # Strip only its known shape; malformed XML or extra roots stay invalid.
+            if trailer and not re.fullmatch(r"UI hier(?:chary|archy) dumped to: [^\s<>]+", trailer):
+                return []
+            xml_clean = xml_clean[:end]
         root = ET.fromstring(xml_clean)
         return [_element_to_node(child) for child in root]
     except ET.ParseError:

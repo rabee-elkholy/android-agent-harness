@@ -22,3 +22,5 @@ End your reply with the evidence footer:
 (cites=0 for a clean PASS). A reply without a valid matching footer does not clear
 the delivery barrier.
 ```
+
+When the approved package contains acceptance criteria, assess the relevant expected behaviors explicitly. Trusted structured results may include `criterion_results` mapping IDs to PASS, FAIL, or NEEDS_CONTEXT. A broad review PASS does not substitute for criterion-specific proof.

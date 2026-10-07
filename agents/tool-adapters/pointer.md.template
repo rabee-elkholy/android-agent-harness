@@ -7,3 +7,5 @@ Use `{{PY}}` for `.agents/scripts/*`. The central policy selects the required te
 Device: {{DEVICE_POLICY}}
 
 {{GIT_POLICY}}
+
+For optional criteria, journeys, and metrics, follow the kernel and canonical router.

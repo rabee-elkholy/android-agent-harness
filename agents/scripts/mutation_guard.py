@@ -9,12 +9,12 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution"}
+INSPECTION_SCRIPTS = {"project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
-    "phase_review", "task_git_lineage",
+    "phase_review", "task_git_lineage", "verification_contract", "journey_runner",
 }
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
@@ -143,6 +143,13 @@ def is_read_only_git_branch(args: list[str]) -> bool:
 
 def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
+    if name == "verification_contract" and args[:1] == ["coverage"]:
+        return True
+    if name == "journey_runner" and args[:1] in (["list"], ["validate"]):
+        return True
+    if name in {"harness_cli", "android-harness"} and (
+            args[:2] in (["task", "coverage"], ["task", "metrics"], ["journey", "list"], ["journey", "validate"])):
+        return True
     if name == "git":
         if args[:1] == ["-C"] and len(args) >= 3:
             args = args[2:]
@@ -828,6 +835,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         # is decided before this (the developer's words as proof); the state never blocks it.
         return True, f"cancel of {status.lower() or 'the'} task on the developer's request"
     if status == "IMPLEMENTING":
+        if entry == "journey_runner" or (entry == "harness_cli" and arguments[:1] == ["journey"]):
+            return False, "Journey replay requires VERIFYING and current install/review evidence."
         if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I) or (entry == "harness_cli" and arguments[:1] == ["device"]):
             return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
         if re.search(r"\b(?:del(?:\s+\/[a-z]+)*\s|rmdir\b|rm\s+-rf\b|powershell\b.*-file\b|bash\s+\S+\.sh\b)", normalized, re.I):
@@ -846,8 +855,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, f"command authorized by approved plan {plan.get('plan_id')}"
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
-        or action in {"verify", "complete"}
-        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"]))
+        or action in {"verify", "complete", "bind-evidence"}
+        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.

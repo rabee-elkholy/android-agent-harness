@@ -211,6 +211,8 @@ def plan_payload(plan: dict) -> dict:
     if str(plan.get("approach") or "").strip():
         # Only plans that state an approach bind it, so earlier plan hashes stay valid.
         payload["approach"] = plan["approach"]
+    if "verification_contract" in plan:
+        payload["verification_contract"] = plan["verification_contract"]
     return payload
 
 
@@ -263,6 +265,7 @@ def create_plan(
     zoho_link: dict | None = None,
     scoped_phase_review_enabled: bool | None = None,
     approach: str = "",
+    verification_contract: dict | None = None,
 ) -> dict:
     task_id = validate_id(task_id, "task id")
     if not requested_outcome.strip():
@@ -306,6 +309,9 @@ def create_plan(
         record["scoped_phase_review_enabled"] = scoped_phase_review_enabled
     if approach and approach.strip():
         record["approach"] = approach.strip()
+    if verification_contract is not None:
+        from verification_contract import validate_contract
+        record["verification_contract"] = validate_contract(verification_contract)
     record["plan_sha256"] = canonical_sha256(plan_payload(record))
     return record
 

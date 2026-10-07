@@ -5,6 +5,46 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {'command': 'task coverage',
+     'read_only': True,
+     'valid_states': ['ANY'],
+     'required_inputs': ['task_id'],
+     'model_facing': True,
+     'description': 'Show criterion-specific evidence coverage without changing '
+                    'task state.'},
+    {'command': 'task bind-evidence',
+     'read_only': False,
+     'valid_states': ['VERIFYING'],
+     'required_inputs': ['task_id', 'criterion', 'artifact'],
+     'model_facing': True,
+     'description': 'Associate an approved criterion with current valid evidence; '
+                    'exact test case or reviewer supplied via --case.'},
+    {'command': 'task metrics',
+     'read_only': True,
+     'valid_states': ['ANY'],
+     'required_inputs': ['task_id'],
+     'model_facing': True,
+     'description': 'Render bounded local observed command timings; unavailable '
+                    'usage remains unavailable.'},
+    {'command': 'journey validate',
+     'read_only': True,
+     'valid_states': ['ANY'],
+     'required_inputs': ['file'],
+     'model_facing': True,
+     'description': 'Validate a bounded JSON journey without device actions.'},
+    {'command': 'journey list',
+     'read_only': True,
+     'valid_states': ['ANY'],
+     'required_inputs': ['task_id'],
+     'model_facing': True,
+     'description': 'List journeys pinned into a task approval.'},
+    {'command': 'journey run',
+     'read_only': False,
+     'valid_states': ['VERIFYING'],
+     'required_inputs': ['task_id', 'id', 'serial'],
+     'model_facing': True,
+     'description': 'Explicitly replay an approved journey after current review '
+                    'and artifact/install proof.'},
     {
         "command": "task draft",
         "read_only": False,
@@ -268,6 +308,14 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "required_inputs": ["task_id", "proof_reference"],
         "model_facing": True,
         "description": "Record explicit developer approval to skip mobile device verification.",
+    },
+    {
+        "command": "device validate-automatically",
+        "read_only": False,
+        "valid_states": ["VERIFYING"],
+        "required_inputs": ["task_id", "serial", "source", "proof_reference"],
+        "model_facing": True,
+        "description": "Run the complete approved walkthrough after explicit developer selection; PASS replaces manual validation.",
     },
     {
         "command": "device signoff",

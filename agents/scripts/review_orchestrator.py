@@ -484,6 +484,10 @@ def parse_structured_result(
             "recommended_fix": str(f.get("recommended_fix") or ""),
         })
 
+    criterion_results = raw_json_obj.get("criterion_results")
+    if criterion_results is not None:
+        from verification_contract import validate_criterion_results
+        validate_criterion_results(criterion_results)
     return {
         "schema_version": 2,
         "task_id": expected_task_id,
@@ -492,6 +496,7 @@ def parse_structured_result(
         "review_package_sha256": expected_package_sha256,
         "verdict": verdict,
         "findings": normalized_findings,
+        **({"criterion_results": criterion_results} if criterion_results is not None else {}),
     }
 
 
@@ -749,6 +754,7 @@ def _finalize_review_execution_locked(
             "result_sha256": res_data.get("result_sha256", ""),
             "execution_id_sha256": res_data.get("execution_id_sha256", ""),
             "independent_execution_verified": True,
+            **({"criterion_results": result_body["criterion_results"]} if "criterion_results" in result_body else {}),
         })
         for item in r_findings:
             all_findings.append({"reviewer": r, **item})

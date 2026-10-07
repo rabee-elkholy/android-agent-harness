@@ -887,9 +887,17 @@ def _build_and_save_plan(
                                                getattr(args, "outcome", None) or "")
     policy_input = dict(classification)
     policy_input["surfaces"] = expected
+    verification_contract = getattr(args, "verification_contract", None)
+    if verification_contract is not None:
+        from verification_contract import load_definition, validate_contract
+        if isinstance(verification_contract, str):
+            verification_contract = load_definition(repo, verification_contract)
+        verification_contract = validate_contract(verification_contract)
+
     with step_progress("Evaluating routing policy"):
         sublog(f"Evaluating review requirements for kind={resolved_kind}...")
-        preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo), task_kind=resolved_kind)
+        preliminary_policy = decide(policy_input, skills_root(repo), project_kind=project_kind(repo), task_kind=resolved_kind,
+                                    plan={"verification_contract": verification_contract} if verification_contract is not None else None)
         raw_revs = preliminary_policy.get("reviewers")
         if isinstance(raw_revs, list):
             req_roles = ", ".join(str(r) for r in raw_revs) or "none"
@@ -1075,6 +1083,7 @@ def _build_and_save_plan(
             zoho_link=zoho_link,
             scoped_phase_review_enabled=scoped_phase_review_val,
             approach=getattr(args, "approach", None) or "",
+            verification_contract=verification_contract,
         )
         plan["task_baseline"] = old_baseline
         plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
@@ -1167,6 +1176,7 @@ def _build_and_save_plan(
         zoho_link=zoho_link,
         scoped_phase_review_enabled=scoped_phase_review_val,
         approach=getattr(args, "approach", None) or "",
+        verification_contract=verification_contract,
     )
     if cached_ctx and cached_ctx.get("context_id"):
         plan["task_context_id"] = cached_ctx["context_id"]
@@ -1342,6 +1352,8 @@ def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argp
     if getattr(args, "scoped_phase_review", None) is None and getattr(args, "scoped_phase_review_enabled", None) is None \
             and old_plan.get("scoped_phase_review_enabled") is not None:
         merged.scoped_phase_review_enabled = old_plan["scoped_phase_review_enabled"]
+    if getattr(args, "verification_contract", None) is None and "verification_contract" in old_plan:
+        merged.verification_contract = old_plan["verification_contract"]
     return merged
 
 
@@ -2235,13 +2247,13 @@ def cmd_reconcile_delivery(args: argparse.Namespace) -> dict:
     return {"status": "PASS", "task_id": tid, "task_state": plan.get("status")}
 
 
-def verification_freshness(repo: Path, task_id: str, current_run: dict | None = None) -> dict:
+def verification_freshness(repo: Path, task_id: str, current_run: dict | None = None, *, allow_completed: bool = False) -> dict:
     """Non-mutating verification freshness resolver comparing live repository state with frozen run."""
     try:
         plan = _load_plan(repo, task_id)
     except Exception as exc:
         return {"fresh": False, "reason_code": "PLAN_LOAD_FAILED", "reason": str(exc)}
-    if plan.get("status") != "VERIFYING":
+    if plan.get("status") != "VERIFYING" and not (allow_completed and plan.get("status") == "READY_FOR_DELIVERY"):
         return {
             "fresh": False,
             "reason_code": "NOT_VERIFYING",
@@ -4270,6 +4282,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                         "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
                         "expected": {},
                     }
+                if (plan.get("verification_contract") or {}).get("journeys"):
+                    from verification_contract import journey_next_action
+                    journey_action = journey_next_action(plan, current_run, store)
+                    if journey_action:
+                        return journey_action
                 try:
                     sign_rec = store.read(snapshot, run_id, "device_signoff")
                     if str(sign_rec.get("status") or "").upper() == "FAIL":
@@ -4285,7 +4302,21 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 except Exception:
                     pass
 
-                if not has_pass_evidence("device_signoff"):
+                signoff_satisfied = has_pass_evidence("device_signoff")
+                validation_choice = (plan.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic"
+                if validation_choice:
+                    from verification_contract import automatic_validation_result, manual_journey_source
+                    signoff_satisfied = False
+                    try:
+                        automatic = automatic_validation_result(plan, current_run, store)
+                        signoff_satisfied = automatic.get("status") == "PASS"
+                    except ValidationError:
+                        try:
+                            manual_journey_source(plan, current_run, store)
+                            signoff_satisfied = has_pass_evidence("device_signoff")
+                        except ValidationError:
+                            pass
+                if not signoff_satisfied:
                     inst_ev = {}
                     try:
                         inst_ev = store.read(snapshot, run_id, "device_install").get("evidence") or {}
@@ -4302,6 +4333,27 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                             f"changes' / 'Failed'). On the first, run the device signoff with --verdict PASS, then `{sensitive_command}`, "
                             "both with the developer's answer as --proof-reference."
                         )
+                    response_choices = []
+                    accepted_responses = ["PASS", "FAIL"]
+                    if validation_choice:
+                        journey_criteria = sorted({c for j in plan["verification_contract"]["journeys"] for c in j["criteria"]})
+                        criterion_args = " ".join(f"--criterion-id {c}" for c in journey_criteria)
+                        response_choices = [
+                            {"id": "PASS", "label": "PASS - I tested this walkthrough manually",
+                             "command": f'python .agents/harness.py device signoff --task-id {task_id} --verdict PASS --source conversation --proof-reference "<developer answer>" {criterion_args}'},
+                            {"id": "FAIL", "label": "FAIL - Manual validation failed",
+                             "command": f'python .agents/harness.py device signoff --task-id {task_id} --verdict FAIL --source conversation --proof-reference "<developer answer>"'},
+                            {"id": "AUTOMATIC", "label": "Run Automatically",
+                             "command": f'python .agents/harness.py device validate-automatically --task-id {task_id} --serial <installed-device-serial> --source conversation --proof-reference "<developer answer>"'},
+                        ]
+                        accepted_responses.append("AUTOMATIC")
+                        signoff_reason += " Offer Run Automatically for the complete approved walkthrough. Its PASS replaces manual repetition; environment failure offers manual validation. Automatic PASS never supplies sensitive approval."
+                        try:
+                            previous_validation = store.read(snapshot, run_id, "device_validation_result")
+                            if previous_validation.get("status") == "ENV":
+                                signoff_reason += " Previous automatic execution could not finish in this environment. Offer manual validation or let the developer resolve the environment; never retry automatically."
+                        except ValidationError:
+                            pass
                     return {
                         "code": "DEVICE_SIGNOFF_REQUIRED",
                         "kind": "DEVELOPER_ACTION",
@@ -4315,8 +4367,9 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                             "application_id": app_id,
                             "device_target_identity": serial_hash,
                         },
-                        "instructions": "Present mobile verification walkthrough to developer and await explicit PASS / FAIL response in conversation.",
-                        "accepted_responses": ["PASS", "FAIL"],
+                        "instructions": "Present the complete mobile verification walkthrough and await the developer's selected response. Do not run automatic validation before selection.",
+                        "accepted_responses": accepted_responses,
+                        **({"choices": response_choices, "walkthrough": plan["verification_contract"]["journeys"]} if validation_choice else {}),
                         "expected": {"success_statuses": ["PASS"]},
                     }
 
@@ -4355,6 +4408,21 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
                 "expected": {},
             }
+
+        if "verification_contract" in plan:
+            from verification_contract import coverage_report
+            coverage = coverage_report(plan, current_run, store)
+            if coverage["blocking"]:
+                pending = [row for row in coverage["criteria"] if row["id"] in coverage["blocking"]]
+                return {
+                    "code": "ACCEPTANCE_EVIDENCE_REQUIRED", "kind": "HOST_ACTION", "blocking": True,
+                    "command": f"python .agents/harness.py task coverage --task-id {task_id} --json",
+                    "reason": "Inspect uncovered approved criteria and associate relevant current evidence with task bind-evidence. "
+                              "Missing manual checks require explicit developer sign-off with --criterion-id; missing or failing "
+                              "behavior requires resume and correction. Never invent a passing test or reviewer verdict.",
+                    "inputs": {"task_id": task_id, "run_id": run_id, "criteria": pending},
+                    "expected": {"success_statuses": ["VERIFIED"]},
+                }
 
         # 9. Complete task
         return {
@@ -4812,6 +4880,7 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
     command.add_argument("--architecture-target-family", default=None, help="Target architecture family ID")
     command.add_argument("--expected-files", help="Comma-separated expected target files")
     command.add_argument("--phases", help="Optional JSON string or file path defining task phases")
+    command.add_argument("--verification-contract", help="Repository-relative JSON file with optional approved criteria and journeys")
     command.add_argument("--task-context-id", default=None, help="Explicit Task Context ID for collision-safe scope binding")
     command.add_argument("--force", action="store_true", help="Bypass active task collision barriers")
     command.add_argument("--zoho-item-id", default=None, help="Linked Zoho Sprints item ID")
@@ -4845,12 +4914,49 @@ def _parse_zoho_link(args: argparse.Namespace) -> dict | None:
     return None
 
 
+def acceptance_coverage(args: argparse.Namespace) -> dict:
+    from verification_contract import active_context, coverage_report
+    repo = Path(args.repo).resolve()
+    plan, current, store = active_context(repo, args.task_id)
+    report = coverage_report(plan, current, store)
+    if plan.get("verification_contract") and current:
+        freshness = verification_freshness(repo, args.task_id, allow_completed=True)
+        if not freshness.get("fresh"):
+            for row in report["criteria"]:
+                if row["status"] == "VERIFIED":
+                    row["status"], row["detail"] = "STALE", "Delivery inputs changed"
+            report["blocking"] = [row["id"] for row in report["criteria"] if row["required"] and row["status"] != "VERIFIED"]
+    return report
+
+
+def associate_acceptance_evidence(args: argparse.Namespace) -> dict:
+    from verification_contract import active_context, bind_evidence
+    from evidence_store import StateLock
+    repo = Path(args.repo).resolve()
+    with StateLock(state_root(repo)):
+        plan, current, store = active_context(repo, args.task_id, True)
+        bind_evidence(plan, current, store, args.criterion, args.artifact, args.case, lock=False)
+    return acceptance_coverage(args)
+
+
+def local_task_metrics(args: argparse.Namespace) -> dict:
+    from task_metrics import metrics_report
+    return metrics_report(Path(args.repo).resolve(), args.task_id)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     common.add_argument("--task-id", required=True)
+    sub.add_parser("coverage", parents=[common]).set_defaults(handler=acceptance_coverage)
+    sub.add_parser("metrics", parents=[common]).set_defaults(handler=local_task_metrics)
+    binding = sub.add_parser("bind-evidence", parents=[common])
+    binding.add_argument("--criterion", required=True)
+    binding.add_argument("--artifact", required=True)
+    binding.add_argument("--case", default="")
+    binding.set_defaults(handler=associate_acceptance_evidence)
     draft_cmd = sub.add_parser("draft", parents=[common])
     _add_plan_arguments(draft_cmd, is_revision=False)
     draft_cmd.set_defaults(handler=draft)
@@ -4994,6 +5100,8 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
         f"Rollback: {displayed(authority.get('rollback'))}",
         f"External writes: {listed(authority.get('external_writes'))}",
     ]
+    if "verification_contract" in authority:
+        lines.append(f"Acceptance criteria and selected journeys: {displayed(authority['verification_contract'])}")
     if authority.get("supersedes_plan_sha256"):
         lines.append(f"Supersedes plan hash: {str(authority['supersedes_plan_sha256'])[:12]}")
     if authority.get("zoho_link"):
@@ -5180,6 +5288,14 @@ def approval_brief(plan: dict) -> str:
     device = str(authority.get("device_strategy") or "").strip()
     if device:
         lines.append(f"Phone checks: {redact(device)}")
+    if "verification_contract" in authority:
+        contract = authority["verification_contract"]
+        lines.append("Acceptance criteria: " + "; ".join(
+            f"{c['id']} ({'required' if c['required'] else 'advisory'}, {c['method']}): {redact(c['expected'])}"
+            for c in contract["criteria"]))
+        if contract["journeys"]:
+            lines.append("Selected device replays: " + "; ".join(
+                f"{j['id']}: {redact(j['purpose'])}; effects: {j['effects']}" for j in contract["journeys"]))
     risks = [str(redact(item)) for item in authority.get("risks") or [] if str(item)]
     if risks:
         lines.append(f"Risks: {'; '.join(risks)}")
