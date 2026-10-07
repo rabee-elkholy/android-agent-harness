@@ -4,6 +4,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.20] - 2026-10-07
+
+### Optional verification and faster device checks
+
+- Approved tasks can bind required acceptance criteria to exact current-run test, review, manual, or journey evidence. Missing, stale, skipped, malformed, and wrong-run evidence cannot approve completion. Existing tasks without a contract keep their established behavior.
+- Complete executable mobile walkthroughs offer manual PASS/FAIL or Run Automatically after installation and launch. A complete device/artifact-bound automatic PASS replaces manual repetition; unavailable, failed, or interrupted attempts remain blocked and are never retried implicitly.
+- Consecutive positive assertions share one screen checkpoint. Tap targets and other interactions still use fresh observations, while missing-selector fallback retains the original step deadline. Device, primary-user, foreground, and installed-artifact checks remain enforced.
+- Android hierarchy parsing accepts the standard uiautomator status trailer while rejecting malformed XML and unknown trailing content.
+- Optional local metrics report observed operation durations and attempts, remain disabled by default, and record no command arguments, input values, tokens, or costs.
+
 ## [1.1.19] - 2026-10-05
 
 Checking a merge with no task open no longer runs into refusals.
