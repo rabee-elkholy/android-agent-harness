@@ -156,7 +156,7 @@ def _compute_phase_diff(repo: Path, paths: list[str], base_ref: str | None = Non
         else:
             git_paths.append(p)
     if git_paths:
-        cmd = ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10"]
+        cmd = ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10"]
         if base_ref:
             cmd.append(base_ref)
         else:

@@ -1963,9 +1963,12 @@ def complete(args: argparse.Namespace) -> dict:
         live_manifest = build_manifest(repo)
         live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
         if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
-            raise ValidationError(
-                f"delivery cannot be completed: repository modified after verification (live snapshot {live_snapshot[:12]} != ready {ready_snapshot[:12]})"
-            )
+            from delivery_equivalence import evaluate_post_ready_changes
+            eval_res = evaluate_post_ready_changes(repo, args.task_id, plan, live_manifest)
+            if not eval_res.get("is_benign"):
+                raise ValidationError(
+                    f"delivery cannot be completed: repository modified after verification (live snapshot {live_snapshot[:12]} != ready {ready_snapshot[:12]})"
+                )
         return plan
     result = verify_task(args)
     if result.get("status") != "APPROVED":
@@ -1983,6 +1986,8 @@ def complete(args: argparse.Namespace) -> dict:
     plan["ready_delivery_snapshot_sha256"] = result["delivery_snapshot_sha256"]
     plan["ready_change_set_sha256"] = result["change_set_sha256"]
     plan["ready_run_id"] = result["run_id"]
+    from delivery_equivalence import snapshot_verified_files
+    snapshot_verified_files(repo, args.task_id, plan, result["run_id"])
     save_plan(_plan_path(repo, args.task_id), plan)
     return plan
 
@@ -2155,14 +2160,26 @@ def finalize_ready_delivery(
         manifest = build_manifest(repo)
         current_snapshot = manifest["delivery_snapshot_sha256"]
         if current_snapshot != ready_snapshot:
-            changed = changed_since_verification(repo, task_id, plan, manifest)
-            named = f" Changed after verification: {', '.join(changed[:10])}." if changed else ""
-            raise ValidationError(
-                f"delivery snapshot mismatch: current repository ({current_snapshot[:12]}) "
-                f"differs from verified ready snapshot ({ready_snapshot[:12]}). Content was modified after verification.{named} "
-                "Do not resume on your own: ask the developer whether to verify these changes (their own edits "
-                "before the commit count too)."
-            )
+            from delivery_equivalence import evaluate_post_ready_changes
+            eval_res = evaluate_post_ready_changes(repo, task_id, plan, manifest)
+            if eval_res.get("is_benign"):
+                plan["post_ready_normalization"] = {
+                    "accepted_at": utc_now(),
+                    "ready_delivery_snapshot_sha256": ready_snapshot,
+                    "live_delivery_snapshot_sha256": current_snapshot,
+                    "normalized_files": eval_res.get("normalized_files") or [],
+                }
+            else:
+                changed = changed_since_verification(repo, task_id, plan, manifest)
+                named = f" Changed after verification: {', '.join(changed[:10])}." if changed else ""
+                diff_detail = f"\nDetails: {eval_res.get('diff_summary')}" if eval_res.get("diff_summary") else ""
+                raise ValidationError(
+                    f"delivery snapshot mismatch: current repository ({current_snapshot[:12]}) "
+                    f"differs from verified ready snapshot ({ready_snapshot[:12]}). Content was modified after verification.{named}{diff_detail}\n"
+                    "Git attributes normalize line endings when configured; unproven content differences still require verification.\n"
+                    "Do not resume on your own: ask the developer whether to verify these changes (their own edits "
+                    "before the commit count too)."
+                )
 
     try:
         delivery_commit_sha = git_text(repo, "rev-parse", "HEAD")
@@ -2226,7 +2243,10 @@ def reconcile_delivery(repo: Path, task_id: str | None = None) -> tuple[dict | N
     if ready_snapshot:
         manifest = build_manifest(repo)
         if manifest.get("delivery_snapshot_sha256") != ready_snapshot:
-            return plan, "SNAPSHOT_MISMATCH"
+            from delivery_equivalence import evaluate_post_ready_changes
+            eval_res = evaluate_post_ready_changes(repo, tid, plan, manifest)
+            if not eval_res.get("is_benign"):
+                return plan, "SNAPSHOT_MISMATCH"
     plan, _ = finalize_ready_delivery(repo, tid, plan, require_clean_tree=True)
     return plan, "DELIVERED"
 
@@ -4454,8 +4474,34 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         live_manifest = build_manifest(repo)
         live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
         if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
+            dirty = _find_uncommitted_task_files(repo, task_id, plan)
+            if not dirty:
+                from delivery_equivalence import evaluate_post_ready_changes
+                eval_res = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
+                if eval_res.get("is_benign"):
+                    identity = f"--repo . --task-id {task_id}"
+                    return {
+                        "code": "DELIVER",
+                        "kind": "HARNESS_COMMAND",
+                        "command": f"python .agents/harness.py task deliver {identity}",
+                        "blocking": True,
+                        "reason": (
+                            f"Developer git commit accepted with benign normalization ({eval_res.get('diff_summary')}). "
+                            "Finalize verified delivery state."
+                        ),
+                        "inputs": {"repo": ".", "task_id": task_id},
+                        "expected": {"success_exit_codes": [0], "success_statuses": ["DELIVERED"]},
+                    }
+
             changed = changed_since_verification(repo, task_id, plan, live_manifest)
             named = ", ".join(changed[:10]) if changed else "files outside the task's list"
+            diff_detail = ""
+            if not dirty:
+                from delivery_equivalence import evaluate_post_ready_changes
+                eval_res = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
+                if eval_res.get("diff_summary"):
+                    diff_detail = f" Detected differences: {eval_res['diff_summary']}."
+
             return {
                 "code": "DELIVERY_STALE_AFTER_COMMIT",
                 "kind": "DEVELOPER_ACTION",
@@ -4464,10 +4510,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 # Real app: the developer edited a verified file before committing; the router said "resume",
                 # the agent resumed without asking, and a full re-review ran out of review budget.
                 "reason": (
-                    f"Content changed after verification: {named}. Before anything else, ask the developer with "
-                    "ask_question (it may be their own edit before the commit, or a formatter or commit hook): 'Verify "
-                    "these changes' / 'Cancel task'. On 'Verify', run the command, then prepare verification again; "
-                    "only the reviewers these files need run again."
+                    f"Content changed after verification: {named}.{diff_detail} "
+                    "Git attributes normalize line endings when configured; unproven content differences still require verification. "
+                    "Before anything else, ask the developer with ask_question (it may be their own edit before the commit, "
+                    "or an intentional refactor): 'Verify these changes' / 'Cancel task'. "
+                    "On 'Verify', run the command, then prepare verification again; only the reviewers these files need run again."
                 ),
                 "changed_files": changed,
                 "inputs": {
@@ -4536,6 +4583,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 "reason": (
                     f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}.{mixed_note} "
                     "Human Git Authority requires the developer to review and commit changes before final delivery. "
+                    "Tip: commit the verified files as-is. In the Android Studio commit dialog, keep 'Optimize imports' and 'Reformat code' unchecked to preserve the exact verified snapshot. "
                     f"If the developer requests changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
                 ),
                 "suggested_commit": suggested_commit,
@@ -4551,6 +4599,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     f"Developer action required: Commit uncommitted task files ({', '.join(sorted(dirty))}).\n"
                     + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
                     + f"Suggested commit: {suggested_commit}\n"
+                    "Tip: Commit files as-is without reformatting or reordering imports.\n"
                     "The model must NOT run git commit commands. Await developer commit."
                 ),
                 "expected": {},
@@ -5261,7 +5310,7 @@ REAPPROVAL_QUESTION_GUIDE = (
 )
 
 
-def approval_brief(plan: dict) -> str:
+def approval_brief(plan: dict, sensitive_advisory: str | None = None) -> str:
     """What the developer needs to decide on, once (the approval question shows this, not the full plan).
 
     A real approval question carried the plan twice (a translated summary, then every summary field
@@ -5282,6 +5331,14 @@ def approval_brief(plan: dict) -> str:
         lines.append(f"Files ({len(names)}): {shown}")
     if attention:
         lines.append(f"Touches: {', '.join(attention)} (reviewed with extra care)")
+    if sensitive_advisory:
+        prefix = "SENSITIVE_PLANNED_FILES="
+        if sensitive_advisory.startswith(prefix):
+            remainder = sensitive_advisory[len(prefix):]
+            summary = remainder.split(". These planned files")[0].strip()
+        else:
+            summary = sensitive_advisory.strip()
+        lines.append(f"Pre-existing sensitive code: {summary} (add to plan only if your change touches it)")
     writes = [str(item) for item in authority.get("external_writes") or [] if str(item)]
     if writes:
         lines.append(f"Writes outside the repo: {', '.join(writes)}")
@@ -5473,15 +5530,15 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
         except (OSError, ValueError, ValidationError):
             old = {}
     reapproval = bool(old)
+    sensitive = sensitive_planned_files_line(repo, result)
     if not reapproval:
-        lines.append(approval_brief(result))
+        lines.append(approval_brief(result, sensitive_advisory=sensitive))
     lines.append(f"PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
     if document.is_file():
         lines.append(f"PLAN_DOCUMENT_URI={Path(document).resolve().as_uri()}")
     pre_existing = pre_existing_changes_line(repo, result)
     if pre_existing:
         lines.append(pre_existing)
-    sensitive = sensitive_planned_files_line(repo, result)
     if sensitive:
         lines.append(sensitive)
     zoho_item = (result.get("zoho_link") or {}).get("item_id")

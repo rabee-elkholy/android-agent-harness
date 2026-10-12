@@ -9,7 +9,7 @@ This is the authoritative always-loaded contract. Route detailed Android guidanc
 
 ## 1. Developer authority and lifecycle
 
-- Read-only discussion, explanation, and discovery need no plan. Clarify material ambiguity first. If asked to study scenarios/edge cases before starting, align in chat first; never invent requirements or hide discovery in an unreviewed plan.
+- Read-only inquiries: inspect and report in chat; never draft or mutate unless implementation is explicitly requested. Align on material ambiguity/edge cases first; never invent requirements or bury discovery in a plan.
 - Code/config writes, deletion, build/install, Git history/index changes, tracker writes, and publication require an explicitly approved plan bound to task, plan hash, repository, branch/worktree, and base snapshot.
 - Silence or an unrelated reply is never approval. Record chat approval with `workflow.py approve --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` (atomic `IMPLEMENTING`; idempotent `begin`). Never ask developer to run manual shell commands.
 - **6-Tier Dynamic Risk Model**: Review policy alone assigns RISK_TIER (`T0_TRIVIAL` to `T5_CRITICAL`), gates, reviewer roster, device requirement, and skill routing. Execute its roster.

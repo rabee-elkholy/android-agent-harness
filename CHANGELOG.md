@@ -4,6 +4,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.21] - 2026-10-11
+
+### Diff line-ending normalization and sensitive planned files advisory
+
+- Line endings (CRLF vs LF) are normalized across all git diff commands (`--ignore-cr-at-eol`) in change classification, Kotlin linting, string checks, review packages, and delivery manifests, avoiding whole-file CRLF/LF diff explosions while preserving meaningful trailing whitespace and EOF/Unicode differences. Empty diffs on tracked files select no modified lines, while new files still receive full checks.
+- Planned files with existing sensitive code (billing, auth, security) are explicitly surfaced inside the `APPROVAL_BRIEF` so developers and agents are immediately aware before starting implementation.
+- Read-only inspection inquiries ("check if...", "verify that...") are governed by an explicit Inspection vs. Mutation Invariant, preventing accidental task drafting or code mutations.
+- Post-ready delivery accepts a conservative subset of Kotlin/Java import reordering and Kotlin/Java/Kotlin-script trailing whitespace. Raw strings, resources, data files, ambiguous syntax, symlinks, changed file modes, and missing or mismatched proof stay on the strict verification path. Source caches are immutable per run and bound to the approved plan, frozen manifest, repository identity, and Git content identities; status queries never manufacture them.
+
 ## [1.1.20] - 2026-10-07
 
 ### Optional verification and faster device checks

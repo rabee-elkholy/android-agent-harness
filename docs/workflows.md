@@ -37,7 +37,25 @@ developer-authority transitions must come from explicit developer approval.
 | A gate reports authoritative evidence discovery/write failure | Stop verification, resolve the state/filesystem failure, and rerun the gate. Do not treat diagnostic output or an earlier PASS as proof of this execution. |
 | `prepare-verification` fails while publishing run artifacts | After resolving the filesystem error, retry preparation while the task remains `IMPLEMENTING`. Previous completed review evidence is retained through the persisted plan's run identity. |
 | A task's declared baseline is missing or corrupt | Restore the original task state from a trusted backup. Do not recreate the baseline from the current tree or delete state to bypass the error. |
-| Delivery inputs or recorded file modes change after verification | Resume implementation, then prepare fresh verification under the approved scope. |
+| Delivery inputs or recorded file modes change after verification | The router asks the developer whether to verify the changed content or cancel. On verification, resume and prepare fresh evidence under the approved scope. |
+
+After `READY_FOR_DELIVERY`, a developer commit may preserve verification when the
+only differences are a recognized Kotlin/Java import reorder or conservative
+Kotlin/Java/Kotlin-script trailing whitespace/EOF normalization. Source caches
+are captured during completion, kept separately for each run, and checked against
+the frozen manifest, approved plan, repository, Git content identities, and file
+modes. Status queries never create a missing cache from the current tree.
+Raw strings/text blocks, resource/data changes, unsupported syntax, changed modes,
+symlinks, and incomplete or mismatched caches require the strict recovery path. Content under
+`assets`, `res`, or `resources` stays strict even with a source suffix. Older tasks
+without the bound cache can still deliver identical verified content; they cannot
+retroactively certify different content as equivalent. Successful normalization
+records the verified/live snapshot and per-file hashes without rewriting prior
+gate or reviewer results.
+
+Diff-scoped checks ignore only CR at line endings. Meaningful trailing whitespace
+remains in review diffs. An empty diff for a tracked file selects no modified lines;
+new or untracked files still receive full checks.
 
 The agent handles routine retries and harness commands. The developer intervenes only for filesystem/access decisions, unrecoverable task state, material scope changes, or other explicit authority boundaries.
 

@@ -165,7 +165,7 @@ def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) 
         except ValueError:
             rel = str(f)
 
-        cmd = ["git", "diff", "-U0"]
+        cmd = ["git", "diff", "-U0", "--ignore-cr-at-eol"]
         if cached:
             cmd.append("--cached")
         cmd.extend(["HEAD", "--", rel])
@@ -183,7 +183,7 @@ def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) 
             if cached:
                 # Fallback for fresh repos before initial commit
                 proc = subprocess.run(
-                    ["git", "diff", "-U0", "--cached", "--", rel],
+                    ["git", "diff", "-U0", "--ignore-cr-at-eol", "--cached", "--", rel],
                     cwd=repo,
                     capture_output=True,
                     text=True,
@@ -191,6 +191,11 @@ def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) 
                     errors="replace",
                     check=False,
                 )
+            if proc.returncode == 0 and not proc.stdout.strip():
+                tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel], cwd=repo, capture_output=True, check=False)
+                if tracked.returncode == 0:
+                    res[f] = set()
+                    continue
             if proc.returncode != 0 or not proc.stdout.strip():
                 # Untracked file, brand new file, or git diff returned nothing
                 res[f] = None

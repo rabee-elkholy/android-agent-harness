@@ -7801,13 +7801,13 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
 class GitDeliveryTests(ReviewOrchestrationTests):
     """GIT-DELIVERY-001 through 007: Human Git authority before delivery."""
 
-    def _setup_ready_task(self, task_id: str) -> tuple[dict, Path]:
+    def _setup_ready_task(self, task_id: str, content: str | None = None) -> tuple[dict, Path]:
         from workflow import state_root, task_dir
         tdir = task_dir(self.repo, task_id)
         tdir.mkdir(parents=True, exist_ok=True)
         # Modify the app file so it is dirty in the working tree
         target = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt"
-        write_file(target, "package com.example\nclass MainActivity { fun auth() = true }\n")
+        write_file(target, content if content is not None else "package com.example\nclass MainActivity { fun auth() = true }\n")
         manifest = build_manifest(self.repo)
         snapshot = manifest["delivery_snapshot_sha256"]
         change_set = manifest["change_set_sha256"]
@@ -7824,11 +7824,14 @@ class GitDeliveryTests(ReviewOrchestrationTests):
             "expected_modules": [":app"],
             "expected_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
         }
+        plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
         p_path = tdir / "plan.json"
         atomic_write_json(p_path, plan)
         atomic_write_json(tdir / f"manifest-run-{task_id}.json", manifest)  # as prepare-verification saves it
         active = {"task_id": task_id, "plan_path": str(p_path)}
         atomic_write_json(state_root(self.repo) / "active-task.json", active)
+        from delivery_equivalence import snapshot_verified_files
+        snapshot_verified_files(self.repo, task_id, plan, f"run-{task_id}")
         return plan, tdir
 
     def test_GIT_DELIVERY_001_ready_plus_dirty_returns_developer_git_commit_required(self) -> None:
@@ -7959,6 +7962,69 @@ class GitDeliveryTests(ReviewOrchestrationTests):
 
         action = resolve_next_action(self.repo, task_id, delivered_plan)
         self.assertEqual("TASK_DELIVERED", action.get("code"))
+
+    def test_GIT_DELIVERY_008_developer_commit_with_import_reordering_returns_deliver(self) -> None:
+        """GIT-DELIVERY-008: Developer commit with benign import reordering returns DELIVER and records normalization."""
+        task_id = "test-git-008"
+        content_v = "package com.example\n\nimport java.util.Locale\nimport kotlinx.coroutines.Dispatchers\nimport javax.inject.Inject\n\nclass MainActivity { fun auth() = true }\n"
+        plan, tdir = self._setup_ready_task(task_id, content=content_v)
+        from workflow import resolve_next_action, finalize_ready_delivery
+
+        # Developer commits, but IDE reorders imports alphabetically
+        target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        write_file(target, "package com.example\n\nimport java.util.Locale\nimport javax.inject.Inject\nimport kotlinx.coroutines.Dispatchers\n\nclass MainActivity { fun auth() = true }\n")
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat(auth): biometric login flow with optimized imports")
+
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DELIVER", action.get("code"))
+        self.assertEqual("HARNESS_COMMAND", action.get("kind"))
+        self.assertIn("task deliver", action.get("command", ""))
+        self.assertIn("IMPORT_REORDER", action.get("reason", ""))
+
+        delivered_plan, _ = finalize_ready_delivery(self.repo, task_id, plan, require_clean_tree=True)
+        self.assertEqual("DELIVERED", delivered_plan.get("status"))
+        norm = delivered_plan.get("post_ready_normalization")
+        self.assertIsNotNone(norm)
+        self.assertEqual(1, len(norm.get("normalized_files") or []))
+        self.assertEqual("IMPORT_REORDER", norm["normalized_files"][0]["classification"])
+
+    def test_GIT_DELIVERY_009_reconcile_delivery_accepts_import_reordering(self) -> None:
+        """GIT-DELIVERY-009: reconcile_delivery cleanly delivers when only import reordering occurred."""
+        task_id = "test-git-009"
+        content_v = "package com.example\n\nimport b.B\nimport a.A\n\nclass MainActivity\n"
+        plan, tdir = self._setup_ready_task(task_id, content=content_v)
+        from workflow import reconcile_delivery
+
+        # Reorder imports and commit
+        target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        write_file(target, "package com.example\n\nimport a.A\nimport b.B\n\nclass MainActivity\n")
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat: commit with reordered imports")
+
+        delivered_plan, status_code = reconcile_delivery(self.repo, task_id)
+        self.assertEqual("DELIVERED", status_code)
+        self.assertEqual("DELIVERED", delivered_plan.get("status"))
+        self.assertIsNotNone(delivered_plan.get("post_ready_normalization"))
+
+    def test_GIT_DELIVERY_010_developer_commit_with_import_deletion_returns_stale(self) -> None:
+        """GIT-DELIVERY-010: Developer commit with deleted import returns DELIVERY_STALE_AFTER_COMMIT."""
+        task_id = "test-git-010"
+        content_v = "package com.example\n\nimport b.B\nimport a.A\n\nclass MainActivity\n"
+        plan, tdir = self._setup_ready_task(task_id, content=content_v)
+        from workflow import resolve_next_action, finalize_ready_delivery
+
+        # Delete an import and commit
+        target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        write_file(target, "package com.example\n\nimport a.A\n\nclass MainActivity\n")
+        run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
+        run_git(self.repo, "commit", "-m", "feat: removed import")
+
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("DELIVERY_STALE_AFTER_COMMIT", action.get("code"))
+        with self.assertRaises(ValidationError) as ctx:
+            finalize_ready_delivery(self.repo, task_id)
+        self.assertIn("IMPORTS_MODIFIED", str(ctx.exception))
 
 
 class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):

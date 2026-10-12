@@ -529,7 +529,7 @@ def _diff_content(repo: Path, changed: ChangedFile, base_ref: str = "HEAD") -> t
     if not changed.exists or changed.status == "D":
         return _head_text(repo, before_rel, base_ref), ""
 
-    diff_cmd = ["git", "diff", "-U0", "--no-ext-diff", "--find-renames", base_ref, "--", changed.rel_posix]
+    diff_cmd = ["git", "diff", "-U0", "--no-ext-diff", "--find-renames", "--ignore-cr-at-eol", base_ref, "--", changed.rel_posix]
     if changed.old_rel_posix and changed.old_rel_posix != changed.rel_posix:
         diff_cmd.append(changed.old_rel_posix)
     proc = subprocess.run(
@@ -571,7 +571,7 @@ def _changed_line_count(repo: Path, changes: list, base_ref: str = "HEAD") -> in
     total = 0
     relevant_paths = {c.rel_posix for c in changes} | {c.old_rel_posix for c in changes if c.old_rel_posix}
     proc = subprocess.run(
-        ["git", "diff", "--numstat", base_ref, "--"], cwd=str(repo),
+        ["git", "diff", "--numstat", "--ignore-cr-at-eol", base_ref, "--"], cwd=str(repo),
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if proc.returncode == 0:

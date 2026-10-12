@@ -502,7 +502,7 @@ def build_task_diff(
         chunks: list[str] = []
         for offset in range(0, len(safe_paths), 100):
             proc = subprocess.run(
-                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", "HEAD", "--", *safe_paths[offset:offset+100]],
+                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", "HEAD", "--", *safe_paths[offset:offset+100]],
                 cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
             chunks.append(proc.stdout or "")
@@ -544,7 +544,7 @@ def build_task_diff(
                 base_lines = base_copy.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
                 try:
                     head_bytes = git(root, "show", f"HEAD:{rel}")
-                    head_lines = head_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
+                    head_lines = head_bytes.decode("utf-8", errors="replace").replace("\r\n", "\n").splitlines(keepends=True)
                 except Exception:
                     head_lines = []
                 chunk = "".join(difflib.unified_diff(base_lines, head_lines, fromfile=f"a/{rel} (baseline-dirty)", tofile=f"b/{rel} (reverted-to-head)"))
@@ -571,7 +571,7 @@ def build_task_diff(
             if old_rel and old_rel != rel:
                 pathspec.append(old_rel)
             proc = subprocess.run(
-                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", base_ref, "--", *pathspec],
+                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", base_ref, "--", *pathspec],
                 cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
             if proc.stdout:

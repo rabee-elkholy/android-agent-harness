@@ -41,7 +41,7 @@ def _git_diff(repo: Path, paths: list[str]) -> str:
     chunks: list[str] = []
     for offset in range(0, len(paths), 100):
         proc = subprocess.run(
-            ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--unified=10", "HEAD", "--", *paths[offset:offset + 100]],
+            ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", "HEAD", "--", *paths[offset:offset + 100]],
             cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
         )
         if proc.returncode != 0:

@@ -271,7 +271,7 @@ def _get_modified_lines_map(files: list[Path], repo: Path, cached: bool = False)
         except ValueError:
             rel = str(f)
 
-        cmd = ["git", "diff", "-U0"]
+        cmd = ["git", "diff", "-U0", "--ignore-cr-at-eol"]
         if cached:
             cmd.append("--cached")
         cmd.extend(["HEAD", "--", rel])
@@ -288,7 +288,7 @@ def _get_modified_lines_map(files: list[Path], repo: Path, cached: bool = False)
         if proc.returncode != 0 or not proc.stdout.strip():
             if cached:
                 proc = subprocess.run(
-                    ["git", "diff", "-U0", "--cached", "--", rel],
+                    ["git", "diff", "-U0", "--ignore-cr-at-eol", "--cached", "--", rel],
                     cwd=repo,
                     capture_output=True,
                     text=True,
@@ -296,6 +296,11 @@ def _get_modified_lines_map(files: list[Path], repo: Path, cached: bool = False)
                     errors="replace",
                     check=False,
                 )
+            if proc.returncode == 0 and not proc.stdout.strip():
+                tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel], cwd=repo, capture_output=True, check=False)
+                if tracked.returncode == 0:
+                    res[f] = set()
+                    continue
             if proc.returncode != 0 or not proc.stdout.strip():
                 res[f] = None
                 continue
@@ -384,7 +389,7 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
             rel = str(changed)
 
         proc = subprocess.run(
-            ["git", "diff", "-U0", "HEAD", "--", rel],
+            ["git", "diff", "-U0", "--ignore-cr-at-eol", "HEAD", "--", rel],
             cwd=str(repo),
             capture_output=True,
             text=True,
@@ -392,6 +397,10 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
             errors="replace",
             check=False,
         )
+        if proc.returncode == 0 and not proc.stdout.strip():
+            tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel], cwd=repo, capture_output=True, check=False)
+            if tracked.returncode == 0:
+                continue
         if proc.returncode != 0 or not proc.stdout.strip():
             if changed.exists():
                 # Untracked / new file -> consider all keys touched

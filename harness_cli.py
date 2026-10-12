@@ -1127,6 +1127,7 @@ FULL_SELFTEST_SUITES = (
     "_phase_review_v2_selftest.py",
     "_worktree_handoff_selftest.py",
     "_verification_value_selftest.py",
+    "_delivery_equivalence_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
