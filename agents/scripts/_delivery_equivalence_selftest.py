@@ -388,14 +388,20 @@ class DeliverySafetyRegressionTests(unittest.TestCase):
         self.assertFalse(evaluate_post_ready_changes(fixture.repo, plan["task_id"], plan, build_manifest(fixture.repo))["is_benign"])
 
     def test_git_mode_change_is_not_benign(self):
+        import os
         from _daily_workflow_selftest import run_git
         from workflow import resolve_next_action, deliver_task
-        from _vnext_common import ValidationError
+        from _vnext_common import git_text, ValidationError
         fixture, plan, _directory = self._fixture("safe-file-mode")
         rel = plan["expected_files"][0]
+        if os.name != "nt":
+            # Match the committed mode on hosts that track filesystem execute bits.
+            target = fixture.repo / rel
+            target.chmod(target.stat().st_mode | 0o111)
         run_git(fixture.repo, "add", rel)
         run_git(fixture.repo, "update-index", "--chmod=+x", rel)
         run_git(fixture.repo, "commit", "-qm", "Fixture mode change")
+        self.assertEqual("", git_text(fixture.repo, "status", "--porcelain", "--", rel))
         self.assertEqual("DELIVERY_STALE_AFTER_COMMIT", resolve_next_action(fixture.repo, plan["task_id"], plan)["code"])
         with self.assertRaises(ValidationError):
             deliver_task(fixture.repo, plan["task_id"])

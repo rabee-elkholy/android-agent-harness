@@ -37,7 +37,7 @@
     "agents/scripts/_baseline_selftest.py": "832aadf9242a7e1413dc3fbdf77720efc1202645a1d9148a469afd0499367b3e",
     "agents/scripts/_critical_safety_selftest.py": "36b36a5931b160b9ab3b368d254829115fc71a0ff463339ab6a4a78d79b988e3",
     "agents/scripts/_daily_workflow_selftest.py": "71be43cc0b468af0f2fadd0d7de0fed5ed8fc4404e4eb28dd48250657b6fda6c",
-    "agents/scripts/_delivery_equivalence_selftest.py": "effa3aff56427048dc4b160483425722a33b85bfa336ab630dd81f49a9fbb569",
+    "agents/scripts/_delivery_equivalence_selftest.py": "3c74e992462c773ae385058ec55ae6d11f781f850f08f3903b523e3485476631",
     "agents/scripts/_enforcement.py": "70a882d2a04228708f869726ddb3b9a11557d83aca72541e1de17011d020ef71",
     "agents/scripts/_env_codes.py": "fd47d241fa3f6a9d8c25889c75ea7238275103e42121e317f7f361320093a1d5",
     "agents/scripts/_env_codes_selftest.py": "e6a10eff6049664036374e350c8af88ac244920bd0b7655cc20b51d6702d3994",
