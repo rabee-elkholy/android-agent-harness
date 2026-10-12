@@ -94,6 +94,14 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "description": "Resume task implementation from VERIFYING or BLOCKED state.",
     },
     {
+        "command": "task review-budget",
+        "read_only": False,
+        "valid_states": ["APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"],
+        "required_inputs": ["task_id", "limit", "source", "proof_reference"],
+        "model_facing": True,
+        "description": "Record an explicit developer reviewer spending decision without editing frozen policies or review proof.",
+    },
+    {
         "command": "task validate-finding",
         "read_only": False,
         "valid_states": ["VERIFYING"],

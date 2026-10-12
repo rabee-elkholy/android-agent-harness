@@ -1128,9 +1128,11 @@ FULL_SELFTEST_SUITES = (
     "_worktree_handoff_selftest.py",
     "_verification_value_selftest.py",
     "_delivery_equivalence_selftest.py",
+    "_workflow_insight_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
+    "_workflow_insight_selftest.py",
     "_hook_selftest.py",
     "_security_selftest.py",
     "_critical_safety_selftest.py",

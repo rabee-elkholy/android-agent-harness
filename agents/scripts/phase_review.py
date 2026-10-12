@@ -70,7 +70,6 @@ ALL_PHASE_SUBSTATES = frozenset({
     PHASE_COMPLETE,
 })
 
-DEFAULT_SAFETY_CAP = 20
 MIN_RESERVED_FINAL_REVIEWERS = 2
 PHASE_REVIEW_CHANGED_LINES_TRIGGER = 180
 
@@ -632,9 +631,10 @@ def derive_final_review_reserve(repo: Path, plan: dict[str, Any], phase_policy: 
     }
 
 
-def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: dict[str, Any] | None = None) -> tuple[bool, str]:
+def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: dict[str, Any] | None = None, *, repo: Path | None = None) -> tuple[bool, str]:
     used = int(plan.get("review_calls_used") or 0)
-    cap = int(plan.get("max_review_calls") or plan.get("model_call_budget") or DEFAULT_SAFETY_CAP)
+    from review_budget import effective_review_budget
+    cap = effective_review_budget(repo, plan)
     expected_final = (reserve or {}).get("reviewers") or plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
     reserved = max(MIN_RESERVED_FINAL_REVIEWERS, int((reserve or {}).get("reserved_calls") or len(expected_final)))
     if used + dispatch_count + reserved > cap:
@@ -877,7 +877,8 @@ def _record_phase_dispatch_batch_locked(
     plan_f = tdir / "plan.json"
     plan = read_json(plan_f) if plan_f.is_file() else {}
     used_calls = int(plan.get("review_calls_used") or 0)
-    safety_cap = int(plan.get("model_call_budget") or DEFAULT_SAFETY_CAP)
+    from review_budget import effective_review_budget
+    safety_cap = effective_review_budget(repo, plan)
     expected_final = plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
     checkpoint_file = phase_dir(tdir, phase_id) / "checkpoint.json"
     reserve = (read_json(checkpoint_file).get("final_review_reserve") or {}) if checkpoint_file.is_file() else {}

@@ -259,6 +259,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
 
     if micro:
+        tier_reason = "BOUNDED_MICRO_CHANGE"
         if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI"}:
             risk_tier = "T0_TRIVIAL"
             risk_lane = "MICRO"
@@ -270,9 +271,11 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         or bool(surfaces & CRITICAL_SURFACES)
         or bool(surfaces & {"NATIVE_CODE", "MANIFEST_PERMISSION"})
     ):
+        tier_reason = "CRITICAL_SURFACE" if surfaces & (CRITICAL_SURFACES | {"NATIVE_CODE", "MANIFEST_PERMISSION"}) else "CRITICAL_SEVERITY"
         risk_tier = "T5_CRITICAL"
         risk_lane = "CRITICAL"
     elif surfaces & {"ROOM_SCHEMA", "PERSISTENCE", "DEVICE_API"}:
+        tier_reason = "DATA_OR_DEVICE_SURFACE"
         risk_tier = "T4_DATA_DEVICE"
         risk_lane = "DATA"
     elif (
@@ -280,28 +283,35 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         or planning_depth == "ARCHITECTURAL"
         or arch_intent in ("MIGRATION", "NEW_SUBSYSTEM")
     ):
+        tier_reason = "CROSS_MODULE_OR_ARCHITECTURAL_CHANGE"
         risk_tier = "T3_SUBSYSTEM"
         risk_lane = "STANDARD"
     else:
+        tier_reason = "FEATURE_RISK_FLOOR"
         risk_tier = "T2_FEATURE"
         risk_lane = "STANDARD"
 
     ui_verification_class = _derive_ui_verification_class(surfaces, micro, classification)
 
     reviewers: set[str] = set()
+    reviewer_reasons: dict[str, set[str]] = {}
+    def require_reviewers(names, reason):
+        for name in names:
+            reviewers.add(name)
+            reviewer_reasons.setdefault(name, set()).add(reason)
     for surface in surfaces:
-        reviewers.update(ROUTING.get(surface, set()))
+        require_reviewers(ROUTING.get(surface, set()), surface)
     if risk_tier == "T5_CRITICAL":
         reviewers = set(FIVE_REVIEWERS)
+        require_reviewers(FIVE_REVIEWERS, "T5_CRITICAL")
     if "TEST_ONLY" in surfaces:
-        reviewers.add("test-quality-reviewer-agent")
+        require_reviewers({"test-quality-reviewer-agent"}, "TEST_ONLY")
     if planning_depth == "ARCHITECTURAL" and not micro and "UNKNOWN" not in surfaces:
-        reviewers.add("spec-compliance-agent")
-        reviewers.add("convention-reviewer-agent")
+        require_reviewers({"spec-compliance-agent", "convention-reviewer-agent"}, "ARCHITECTURAL_PLAN")
     if arch_intent in ("MIGRATION", "NEW_SUBSYSTEM") and not micro and "UNKNOWN" not in surfaces:
-        reviewers.add("convention-reviewer-agent")
+        require_reviewers({"convention-reviewer-agent"}, arch_intent)
     if changed_modules_count > 1 and not micro and "UNKNOWN" not in surfaces and (surfaces & {"COMPOSE_UI", "XML_UI", "NAVIGATION", "BUSINESS_LOGIC"}):
-        reviewers.add("convention-reviewer-agent")
+        require_reviewers({"convention-reviewer-agent"}, "CROSS_MODULE_CHANGE")
 
     if micro:
         reviewers.clear()
@@ -309,6 +319,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         reviewers.clear()
         if unknown_resolved:
             reviewers = set(FIVE_REVIEWERS) if risk_tier == "T5_CRITICAL" else set(UNKNOWN_APPROVED_REVIEWERS)
+            reviewer_reasons = {name: {"APPROVED_UNKNOWN_FILES"} for name in reviewers}
 
     if project_kind != "application":
         intrinsic_device_required = False
@@ -330,27 +341,31 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
                 raise ValidationError("approved verification contract requires enabled application device verification")
             intrinsic_device_required = True
         if any(c["method"] == "review" for c in required_criteria):
-            reviewers.add("bug-reviewer-agent")
+            require_reviewers({"bug-reviewer-agent"}, "REQUIRED_REVIEW_CRITERION")
     device_required = (
         intrinsic_device_required
         and device_verification_mode != "disabled"
     )
 
     gates: set[str] = {"manifest", "preflight"}
+    gate_reasons = {"manifest": {"DELIVERY_SNAPSHOT"}, "preflight": {"APPROVED_SCOPE_AND_STATIC_CHECKS"}}
+    def require_gate(name, reasons):
+        gates.add(name)
+        gate_reasons.setdefault(name, set()).update(reasons)
     if surfaces & TEST_SURFACES:
-        gates.add("unit_tests")
+        require_gate("unit_tests", surfaces & TEST_SURFACES)
     if surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"}:
-        gates.add("localization")
+        require_gate("localization", surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"})
     if "ROOM_SCHEMA" in surfaces:
-        gates.add("room")
+        require_gate("room", {"ROOM_SCHEMA"})
     if risk_tier != "T0_TRIVIAL" and (surfaces - {"DOCS"}):
-        gates.add("assemble")
+        require_gate("assemble", {"NONTRIVIAL_DELIVERY_CHANGE"})
     if device_required:
-        gates.add("device")
+        require_gate("device", {ui_verification_class, "APPROVED_DEVICE_POLICY"})
         if contract is not None:
-            gates.add("assemble")
+            require_gate("assemble", {"VERIFICATION_CONTRACT_DEVICE_ARTIFACT"})
     if any(c["method"] == "test" for c in required_criteria):
-        gates.add("unit_tests")
+        require_gate("unit_tests", {"REQUIRED_TEST_CRITERION"})
 
     skills = route(skills_root, sorted(surfaces), task_kind=task_kind)
     call_budget = _configured_model_call_budget()
@@ -379,6 +394,16 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "model_call_budget": call_budget,
         "estimated_calls_this_round": len(reviewers),
         "skills": skills,
+        "explanation": {
+            "risk_tier": [tier_reason],
+            "classification": classification.get("details") or {},
+            "reviewers": {name: sorted(reviewer_reasons.get(name, ())) for name in sorted(reviewers)},
+            "gates": {name: sorted(gate_reasons[name]) for name in sorted(gates)},
+            "review_exemption": "BOUNDED_MICRO_CHANGE" if micro and not reviewers else None,
+            "device": {"ui_verification_class": ui_verification_class, "project_kind": project_kind,
+                       "configured_mode": device_verification_mode, "required": device_required,
+                       "contract_requires_device": bool(contract and (contract["journeys"] or any(c["method"] in {"manual", "journey"} for c in required_criteria)))},
+        },
     }
     if unknown_resolved:
         result["unknown_resolution"] = "APPROVED_PLAN_FILES"
@@ -489,6 +514,14 @@ def decide_later_round(
         if str(item.get("reviewer") or "")
     }
     result["carried_reviews"] = [by_reviewer[key] for key in sorted(by_reviewer)]
+    initial_reasons = result["explanation"]["reviewers"]
+    result["explanation"]["reviewers"] = {
+        name: sorted(set(initial_reasons.get(name, [])) | {"LATER_ROUND_REQUIRED"} |
+                     ({"FINDING_OWNER"} if name in owners else set())) for name in sorted(rerun)
+    }
+    result["explanation"]["carried_reviewers"] = sorted(by_reviewer)
+    if rerun or by_reviewer:
+        result["explanation"]["review_exemption"] = None
     result["policy_sha256"] = canonical_sha256({key: value for key, value in result.items() if key != "policy_sha256"})
     return result
 
@@ -687,10 +720,12 @@ def main() -> int:
     else:
         print(f"POLICY_STATUS={result['status']}")
         print(f"RISK_LANE={result['risk_lane']}")
+        print(f"RISK_REASON={','.join(result['explanation']['risk_tier'])}")
         print(f"UI_VERIFICATION_CLASS={result['ui_verification_class']}")
         print(f"REVIEWERS={','.join(result['reviewers']) or 'NONE'}")
         print(f"GATES={','.join(result['gates'])}")
         print(f"DEVICE_REQUIRED={str(result['device_required']).lower()}")
+        print("POLICY_EXPLANATION=" + json.dumps(result["explanation"], ensure_ascii=False, sort_keys=True))
     return 0 if result["status"] in ("PASS", "NO_DELIVERY_CHANGES") else 2 if result["status"] == "USER_DECISION_REQUIRED" else 1
 
 

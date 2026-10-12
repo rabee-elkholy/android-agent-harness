@@ -224,23 +224,25 @@ def build_budget_exhausted_remediation(policy: dict, calls_used: int, requested:
     parts = [
         f"REVIEW_BUDGET_EXHAUSTED: Used {calls_used} reviewer calls, requested {requested} this round, budget is {budget}. "
         # Real app: the agent searched the repository for where the budget lives and found nothing.
-        "The budget is MODEL_CALL_BUDGET in .agents/scripts/_product.py (from model_call_budget in "
-        ".harness-setup/answers.json, which a harness update re-applies); only the developer changes it."
+        "Ask for an explicit reviewer call limit, then record the answer with "
+        "`python .agents/harness.py task review-budget --task-id <task_id> --limit <approved limit> "
+        "--source conversation --proof-reference <developer answer>`. Never edit frozen policy, phase state, "
+        "or engine files, or mark an unfinished review complete."
     ]
     if sensitive:
         parts.append(
             f"Review override is FORBIDDEN due to sensitive surfaces ({', '.join(sensitive)}). "
-            "Remediation: Developer must increase 'model_call_budget' in harness setup or re-run review rounds with higher budget."
+            "Remediation: Developer must increase 'model_call_budget' through the task review-budget command."
         )
     elif severity in ("HIGH", "CRITICAL"):
         parts.append(
             f"Review override via conversation is FORBIDDEN for {severity} severity changes. "
-            "Remediation: Developer may increase 'model_call_budget', or execute review override directly from developer terminal: "
+            "Remediation: Developer may increase 'model_call_budget' through task review-budget, or execute review override directly from developer terminal: "
             "'python .agents/scripts/record_review.py --task <task_id> --override-reviews --source developer_terminal --proof-reference <ref>'."
         )
     else:
         parts.append(
-            "Remediation: Developer may either approve increasing review budget in config, or approve a review override via conversation: "
+            "Remediation: Developer may either approve task review-budget, or approve a review override via conversation: "
             "'python .agents/scripts/record_review.py --task <task_id> --override-reviews --source conversation --proof-reference <ref>'."
         )
     return " ".join(parts)
@@ -1092,6 +1094,9 @@ def _build_and_save_plan(
         elif task_context_id:
             plan["task_context_id"] = task_context_id
         plan["developer_instructions"] = _applicable_developer_instructions_for_task(repo, cached_ctx, inferred_target_scope, arch_intent)
+        # Reject non-material revisions before touching phase progress or baselines.
+        if (old_plan or {}).get("approval") and _same_plan(old_plan, plan):
+            return old_plan
         # Completed phases are checked against the plan they were reviewed under, before the
         # revision replaces it; checked afterwards, every review proof reads as stale (N4).
         if parsed_phases:
@@ -1433,7 +1438,7 @@ def revise(args: argparse.Namespace) -> dict:
         if parked_run_file.is_file():
             os.replace(parked_run_file, current_run_file)
         raise ValidationError(
-            "NO_PLAN_CHANGE: the revision is identical to the approved plan, so there is nothing for the developer "
+            "NO_PLAN_CHANGE: the revision does not change the approved task scope, so there is nothing for the developer "
             "to approve and nothing was changed. Do not ask the developer. Continue with: "
             f"python .agents/harness.py task status --task-id {task_id} --next"
         )
@@ -1444,10 +1449,28 @@ def revise(args: argparse.Namespace) -> dict:
 
 def _same_plan(old: dict, new: dict) -> bool:
     """True when a revision changes nothing the developer approved (only its own lineage fields differ)."""
-    lineage = {"supersedes_plan_sha256", "plan_id"}
+    lineage = {"supersedes_plan_sha256", "plan_id", "base_delivery_snapshot_sha256", "base_change_set_sha256"}
+    # The revision builder observes the current dirty tree, but a no-op keeps the
+    # original approved plan and task baseline. Observation alone is not new scope.
+    if old.get("task_baseline") != new.get("task_baseline"):
+        return False
     try:
         before = {k: v for k, v in plan_payload(old).items() if k not in lineage}
         after = {k: v for k, v in plan_payload(new).items() if k not in lineage}
+        # Moving already-approved files between existing semantic phases is scheduling,
+        # not new authority. Keep the original plan/hash and all phase proof unchanged.
+        approved_files = set(before.get("expected_files") or [])
+        if approved_files and before.get("expected_files") == after.get("expected_files"):
+            for payload in (before, after):
+                normalized = []
+                for phase in payload.get("phases") or []:
+                    item = dict(phase)
+                    files = item.get("expected_files")
+                    if isinstance(files, list) and set(files) <= approved_files:
+                        item.pop("expected_files")
+                    normalized.append(item)
+                if "phases" in payload:
+                    payload["phases"] = normalized
     except Exception:
         return False
     return before == after
@@ -1766,12 +1789,14 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             fix_delta=_fix_delta(repo, args.task_id, str(previous_current["run_id"]), manifest, plan),
         )
         calls_used = int(plan.get("review_calls_used") or 0)
-        if calls_used + int(policy.get("estimated_calls_this_round") or 0) > int(policy.get("model_call_budget") or 0):
+        from review_budget import effective_review_budget
+        effective_budget = effective_review_budget(repo, plan, policy)
+        if calls_used + int(policy.get("estimated_calls_this_round") or 0) > effective_budget:
             policy["status"] = "USER_DECISION_REQUIRED"
             policy["budget_blocked"] = {
                 "calls_used": calls_used,
                 "requested": int(policy.get("estimated_calls_this_round") or 0),
-                "budget": int(policy.get("model_call_budget") or 0),
+                "budget": effective_budget,
             }
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
     else:
@@ -1818,6 +1843,10 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     if policy.get("status") != "PASS":
         if policy.get("status") == "USER_DECISION_REQUIRED" and policy.get("budget_blocked"):
             b = policy["budget_blocked"]
+            plan["review_budget_blocked"] = {**b, "plan_sha256": plan["plan_sha256"],
+                                             "surfaces": policy.get("surfaces", []),
+                                             "severity": policy.get("severity", "CRITICAL")}
+            save_plan(_plan_path(repo, args.task_id), plan)
             remediation_msg = build_budget_exhausted_remediation(
                 policy=policy,
                 calls_used=int(b.get("calls_used") or 0),
@@ -1833,6 +1862,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     atomic_write_json(manifest_path, manifest)
     atomic_write_json(policy_path, policy)
     plan["status"] = "VERIFYING"
+    plan.pop("review_budget_blocked", None)
     plan["verification_run_id"] = run_id
     atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
     recipes = get_verification_recipes(policy.get("surfaces") or [])
@@ -2771,6 +2801,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         raise ValidationError(f"phase checkpoint failed: no file changes detected for phase '{phase_id}'")
 
     phase_expected_files = target_phase.get("expected_files")
+    approved_task_files = set(normalize_expected_files(repo, plan.get("expected_files") or []))
+    additional_phase_files = []
     if phase_expected_files:
         norm_expected = normalize_expected_files(repo, phase_expected_files)
         for change in phase_changes:
@@ -2779,7 +2811,9 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
             if change_path.startswith(".agents/"):
                 continue
             if change_path not in norm_expected:
-                raise ValidationError(f"phase '{phase_id}' modified file outside expected_files: {change_path}")
+                if change_path not in approved_task_files:
+                    raise ValidationError(f"phase '{phase_id}' modified file outside expected_files of the approved task: {change_path}")
+                additional_phase_files.append(change_path)
 
     phase_expected_modules = target_phase.get("expected_modules")
     if phase_expected_modules:
@@ -2790,7 +2824,7 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
             if change_path.startswith(".agents/"):
                 continue
             mod_match = any(change_path.startswith(m + "/") or change_path == m for m in norm_mods)
-            if not mod_match:
+            if not mod_match and change_path not in approved_task_files:
                 raise ValidationError(f"phase '{phase_id}' modified file outside expected_modules: {change_path}")
 
     # Phase delta classification & central policy
@@ -2925,6 +2959,7 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         "delivery_snapshot_sha256": manifest["delivery_snapshot_sha256"],
         "task_change_set_sha256": manifest["task_change_set_sha256"],
         "manifest_delta": phase_changes,
+        "additional_task_approved_files": sorted(additional_phase_files),
         "phase_path_states": phase_path_states(repo, phase_changes),
         "preflight": preflight_status,
         "compile": compile_status,
@@ -3179,6 +3214,18 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
 
     if state == "IMPLEMENTING":
         tdir = task_dir(repo, task_id)
+        budget_block = plan.get("review_budget_blocked") or {}
+        if budget_block.get("plan_sha256") == plan.get("plan_sha256") and budget_block:
+            from review_budget import effective_review_budget
+            budget = effective_review_budget(repo, plan)
+            used = int(plan.get("review_calls_used") or 0)
+            requested = int(budget_block.get("requested") or 0)
+            if used + requested > budget:
+                return {"code": "REVIEW_BUDGET_EXHAUSTED", "kind": "DEVELOPER_ACTION", "command": "", "blocking": True,
+                        "reason": build_budget_exhausted_remediation(
+                            {"surfaces": budget_block.get("surfaces", []),
+                             "severity": budget_block.get("severity", "CRITICAL")}, used, requested, budget),
+                        "inputs": {"repo": ".", "task_id": task_id}, "expected": {}}
         # Check Zoho start sync (Sections 46, 47)
         if plan.get("zoho_link") and "zoho_sprints" in (plan.get("external_writes") or []):
             start_sync_file = tdir / "zoho-start-sync.json"
@@ -3490,14 +3537,17 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     if not_dispatched:
                         checkpoint_file = phase_dir(tdir, phase_id) / "checkpoint.json"
                         reserve = (read_json(checkpoint_file).get("final_review_reserve") or {}) if checkpoint_file.is_file() else {}
-                        cap_ok, cap_msg = check_phase_safety_cap(plan, len(not_dispatched), reserve)
+                        cap_ok, cap_msg = check_phase_safety_cap(plan, len(not_dispatched), reserve, repo=repo)
                         if not cap_ok:
                             return {
                                 "code": "REVIEWER_CALL_SAFETY_CAP_REACHED",
                                 "kind": "DEVELOPER_ACTION",
                                 "command": "",
                                 "blocking": True,
-                                "reason": cap_msg,
+                                "reason": cap_msg + " Ask the developer for a higher call limit, then record that explicit answer with "
+                                          "`task review-budget --task-id " + task_id + " --limit <approved limit> --source conversation "
+                                          "--proof-reference <developer answer>`. Never edit policy, phase state or engine files, "
+                                          "mark unfinished review COMPLETE, or offer review bypass as a remedy.",
                                 "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
                                 "expected": {},
                             }
@@ -3687,6 +3737,13 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 "expected": {"success_exit_codes": [0], "success_statuses": ["IMPLEMENTING"]},
             }
 
+        from final_verifier import policy_integrity_error
+        integrity_error = policy_integrity_error(policy, Path(current_run["policy"]))
+        if integrity_error:
+            return {"code": "VERIFICATION_POLICY_INVALID", "kind": "TASK_STATE", "command": "", "blocking": True,
+                    "reason": integrity_error + ". Stop for harness diagnosis; do not edit policy/evidence, skip device checks "
+                              "as a workaround, or run complete. Keep the task open for repair or explicitly cancel it.",
+                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id}, "expected": {}}
         freshness = verification_freshness(repo, task_id, current_run)
         if not freshness.get("fresh"):
             return {
@@ -5032,6 +5089,12 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--proof-reference", required=True)
     command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
     command.set_defaults(handler=record_sensitive_approval)
+    from review_budget import record_review_budget
+    command = sub.add_parser("review-budget", parents=[common])
+    command.add_argument("--limit", type=int, required=True)
+    command.add_argument("--source", choices=("conversation", "developer_terminal"), required=True)
+    command.add_argument("--proof-reference", required=True)
+    command.set_defaults(handler=record_review_budget)
     sub.add_parser("begin", parents=[common]).set_defaults(handler=begin_task)
     command = sub.add_parser("debug-evidence", parents=[common])
     command.add_argument("--kind", required=True, help="Evidence category (e.g. reproduction, logcat, stacktrace, test_failure, limited)")

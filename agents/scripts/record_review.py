@@ -515,7 +515,8 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
     if missing:
         raise ValidationError("missing required reviewer reports: " + ", ".join(sorted(missing)))
     used_calls = int(plan.get("review_calls_used") or 0)
-    budget = int(policy.get("model_call_budget") or 0)
+    from review_budget import effective_review_budget
+    budget = effective_review_budget(repo, plan, policy)
     if used_calls + len(seen) > budget:
         from workflow import build_budget_exhausted_remediation
         msg = build_budget_exhausted_remediation(

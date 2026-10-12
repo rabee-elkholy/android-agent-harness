@@ -169,6 +169,7 @@ def _add(result: dict, surface: str, path: str, reason: str) -> None:
     result.setdefault(surface, {"files": set(), "reasons": set()})
     result[surface]["files"].add(path)
     result[surface]["reasons"].add(reason)
+    result[surface].setdefault("signals", set()).add((path, reason))
 
 
 def _read_text(path: Path) -> str:
@@ -840,6 +841,7 @@ def classify(
         surface: {
             "files": sorted(info["files"]),
             "reasons": sorted(info["reasons"]),
+            "signals": [{"path": path, "reason": reason} for path, reason in sorted(info.get("signals", ()))],
         }
         for surface, info in sorted(found.items())
     }

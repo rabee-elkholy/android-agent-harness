@@ -265,6 +265,26 @@ def _validate_mobile_skip(
     return record, None
 
 
+def policy_integrity_error(policy: dict, policy_path: Path) -> str | None:
+    """Shared early check for the router and verifier; never repairs policy evidence."""
+    if policy.get("policy_sha256") != canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"}):
+        return "policy artifact integrity mismatch"
+    try:
+        review_round = int(policy.get("review_round") or 1)
+    except (ValueError, TypeError):
+        return "policy review round is invalid"
+    if review_round > 1:
+        try:
+            from _vnext_common import validate_id
+            source = validate_id(str((policy.get("later_round_source") or {}).get("run_id") or ""))
+            previous = read_json(policy_path.parent / f"policy-{source}.json")
+            if previous.get("policy_sha256") != canonical_sha256({k: v for k, v in previous.items() if k != "policy_sha256"}):
+                return "later-round policy source is invalid: previous policy integrity mismatch"
+        except (OSError, ValueError, TypeError, AttributeError, ValidationError) as exc:
+            return f"later-round policy source is invalid: {exc}"
+    return None
+
+
 def validate_policy_artifact(
     repo: Path,
     plan: dict,
@@ -275,6 +295,9 @@ def validate_policy_artifact(
     task_changes: list[dict] | None = None,
 ) -> tuple[dict | None, str | None, str]:
     """Validate policy artifact integrity, status, classification freshness, and deterministic rules."""
+    integrity_error = policy_integrity_error(policy, policy_path)
+    if integrity_error:
+        return None, integrity_error, "BLOCKED"
     if policy.get("classification_sha256") is None or policy.get("policy_sha256") != canonical_sha256(
         {k: v for k, v in policy.items() if k != "policy_sha256"}
     ):

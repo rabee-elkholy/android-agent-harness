@@ -121,6 +121,12 @@ def write_file(path: Path, content: str | bytes) -> None:
         path.write_text(content, encoding="utf-8")
 
 
+def write_policy_fixture(path: Path, policy: dict) -> None:
+    """Router fixtures must have coherent hashes now that routing checks integrity early."""
+    policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+    atomic_write_json(path, policy)
+
+
 def setup_ownership(repo: Path, version: str = "1.0.40") -> None:
     from lifecycle import SCHEMA_VERSION, ARCHITECTURE_MAJOR, OWNERSHIP_RELATIVE, EXCLUDE_BEGIN, EXCLUDE_END
     manifest = {
@@ -754,6 +760,91 @@ class DailyWorkflowSelftest(unittest.TestCase):
             self.assertEqual(0, workflow_main(["revise", "--repo", str(self.repo), "--task-id", "noop-revise",
                                                "--risks", "New risk"]))
         self.assertNotEqual(approved["plan_sha256"], read_json(plan_file)["plan_sha256"])
+
+    def _approved_doc_phases(self, task_id):
+        phases = [{"id": "p1", "title": "First", "expected_files": ["one.md"]},
+                  {"id": "p2", "title": "Second", "expected_files": ["two.md"]}]
+        draft(self._draft_ns(task_id, kind="FEATURE", expected_surfaces="DOCS",
+                             expected_files="one.md,two.md", phases=json.dumps(phases)))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                           proof_reference="approve both phases", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "one.md", "First phase\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        return phases
+
+    def test_phase_can_revisit_task_approved_file_without_new_approval(self):
+        task_id = "phase-file-revisit"
+        self._approved_doc_phases(task_id)
+        plan_path = task_dir(self.repo, task_id) / "plan.json"
+        approved = read_json(plan_path)
+        write_file(self.repo / "one.md", "First phase refined in second\n")
+        write_file(self.repo / "two.md", "Second phase\n")
+        result = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+        self.assertEqual("CHECKPOINT_PASS", result["status"])
+        self.assertEqual({"one.md", "two.md"}, {item["path"] for item in result["checkpoint"]["manifest_delta"]})
+        self.assertEqual(approved["plan_sha256"], read_json(plan_path)["plan_sha256"])
+        self.assertEqual(["p1", "p2"], result["completed_phases"])
+
+    def test_phase_file_redistribution_does_not_reset_completed_work(self):
+        import contextlib
+        import io
+        task_id = "phase-redistribution"
+        phases = self._approved_doc_phases(task_id)
+        directory = task_dir(self.repo, task_id)
+        before_plan = read_json(directory / "plan.json")
+        before_state = read_json(directory / "phase-state.json")
+        before_baseline = (directory / "phases/p2/baseline.json").read_bytes()
+        phases[1]["expected_files"].append("one.md")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            result = workflow.main(["revise", "--repo", str(self.repo), "--task-id", task_id,
+                                    "--phases", json.dumps(phases)])
+        self.assertEqual(1, result)
+        self.assertEqual(before_plan, read_json(directory / "plan.json"))
+        self.assertEqual(before_state, read_json(directory / "phase-state.json"))
+        self.assertEqual(before_baseline, (directory / "phases/p2/baseline.json").read_bytes())
+
+    def test_phase_rejects_file_outside_whole_task_scope(self):
+        task_id = "phase-outside-task"
+        self._approved_doc_phases(task_id)
+        write_file(self.repo / "outside.md", "Unapproved\n")
+        with self.assertRaisesRegex(ValidationError, "outside expected_files"):
+            checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+
+    def test_review_budget_command_preserves_policy_and_phase_proof(self):
+        import contextlib
+        import io
+        from review_budget import effective_review_budget
+        from phase_review import check_phase_safety_cap
+        task_id = "budget-decision"
+        self._approved_doc_phases(task_id)
+        directory = task_dir(self.repo, task_id)
+        before = {p: p.read_bytes() for p in directory.rglob("*.json")}
+        from review_budget import record_review_budget
+        for limit, proof in [(11, "Allow 11 calls"), (101, "Allow 101 calls"), (30, " ")]:
+            with self.assertRaises(ValidationError):
+                record_review_budget(argparse.Namespace(repo=str(self.repo), task_id=task_id,
+                    limit=limit, source="conversation", proof_reference=proof))
+        self.assertFalse((directory / "review-budget.json").exists())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, workflow.main(["review-budget", "--repo", str(self.repo), "--task-id", task_id,
+                "--limit", "30", "--source", "conversation", "--proof-reference", "Allow 30 reviewer calls"]))
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        plan = read_json(directory / "plan.json")
+        plan["review_calls_used"] = 14
+        self.assertEqual(30, effective_review_budget(self.repo, plan, {"model_call_budget": 20}))
+        self.assertTrue(check_phase_safety_cap(plan, 2, {"reserved_calls": 6}, repo=self.repo)[0])
+        decision_path = directory / "review-budget.json"
+        original = decision_path.read_bytes()
+        decision = read_json(decision_path)
+        decision["limit"] = 100
+        atomic_write_json(decision_path, decision)
+        with self.assertRaisesRegex(ValidationError, "integrity mismatch"):
+            effective_review_budget(self.repo, plan)
+        decision_path.write_bytes(original)
+        plan["plan_sha256"] = "different-plan"
+        self.assertEqual(20, effective_review_budget(self.repo, plan, {"model_call_budget": 20}))
 
     def test_cancel_in_chat_records_the_developers_words(self) -> None:
         # Real app: the developer said "cancel the task" in chat and was told to run the command in a terminal.
@@ -2884,6 +2975,21 @@ class PersistentDeveloperInstructionsTests(unittest.TestCase):
 class NextActionEngineTests(DailyWorkflowSelftest):
     """Test suite for Phase 7: Evidence-Aware Next-Action Engine and Router (NEXT-001..008, ROUTE-CMD-001..013)."""
 
+    def test_router_stops_on_modified_prior_policy_before_more_gates(self):
+        plan, directory, policy, manifest = self._setup_verifying_task("prior-policy-corrupt")
+        current = read_json(directory / "current-run.json")
+        previous = dict(policy)
+        previous["model_call_budget"] += 10
+        atomic_write_json(directory / "policy-run-previous.json", previous)
+        policy["review_round"] = 2
+        policy["later_round_source"] = {"run_id": "run-previous"}
+        policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+        write_policy_fixture(Path(current["policy"]), policy)
+        action = resolve_next_action(self.repo, "prior-policy-corrupt")
+        self.assertEqual("VERIFICATION_POLICY_INVALID", action["code"])
+        self.assertIn("previous policy integrity mismatch", action["reason"])
+        self.assertEqual("", action["command"])
+
     def _setup_verifying_task(self, task_id: str = "task-next-test", task_kind: str = "FEATURE") -> tuple[dict, Path, dict, dict]:
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { val x = 1 }\n")
         draft(argparse.Namespace(
@@ -2997,7 +3103,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         current = read_json(tdir / "current-run.json")
         run_id = current["run_id"]
         policy["gates"] = ["preflight", "unit_tests"]
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         act = resolve_next_action(self.repo, "task-next-002", plan)
@@ -3012,7 +3118,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         run_id = current["run_id"]
         policy["gates"] = ["preflight", "unit_tests"]
         policy["reviewers"] = ["code_review"]
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "unit_tests", "PASS")
@@ -3033,7 +3139,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         run_id = current["run_id"]
         policy["gates"] = ["preflight", "unit_tests"]
         policy["reviewers"] = ["code_review"]
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "unit_tests", "PASS")
@@ -3053,7 +3159,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["gates"] = ["preflight", "unit_tests", "assemble"]
         policy["reviewers"] = ["code_review"]
         policy["assemble_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "unit_tests", "PASS")
@@ -3074,7 +3180,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["reviewers"] = []
         policy["assemble_required"] = True
         policy["device_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "assemble", "PASS")
@@ -3100,7 +3206,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["reviewers"] = []
         policy["assemble_required"] = True
         policy["device_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "assemble", "PASS")
 
@@ -3136,7 +3242,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["assemble_required"] = False
         policy["device_required"] = False
         policy["surfaces"] = sorted(set(policy.get("surfaces") or []) | {"AUTH"})
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
 
@@ -3158,7 +3264,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["device_required"] = False
         policy["sensitive"] = False
         policy["surfaces"] = ["AUTH", "BILLING", "XML_UI"]
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         self._record_evidence(manifest, run_id, "preflight", "PASS")
 
         act = resolve_next_action(self.repo, "task-next-007b", plan)
@@ -3170,7 +3276,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         # A bare `sensitive` flag without a sensitive surface: approve-sensitive would refuse, so never ask.
         policy["surfaces"] = ["XML_UI"]
         policy["sensitive"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         self.assertNotEqual("SENSITIVE_APPROVAL", resolve_next_action(self.repo, "task-next-007b", plan)["code"])
 
     def test_NEXT_008_every_generated_command_accepted_by_guard(self) -> None:
@@ -3225,7 +3331,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["assemble_required"] = True
         policy["device_required"] = True
         policy["sensitive"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         # Iterate through states and collect commands
         cmds = []
@@ -3285,7 +3391,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["gates"] = ["preflight", "unit_tests", "assemble"]
         policy["reviewers"] = []
         policy["assemble_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         # 1. Preflight
         act1 = resolve_next_action(self.repo, "route-cmd-007", plan)
@@ -3314,7 +3420,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["reviewers"] = []
         policy["assemble_required"] = False
         policy["device_required"] = False
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         act = resolve_next_action(self.repo, "route-cmd-009", plan)
@@ -3329,7 +3435,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         policy["reviewers"] = []
         policy["assemble_required"] = False
         policy["device_required"] = False
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         act = resolve_next_action(self.repo, "route-cmd-010", plan)
@@ -3343,7 +3449,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         current = read_json(tdir / "current-run.json")
         policy.update({"gates": ["preflight"], "reviewers": [], "assemble_required": False,
                        "device_required": False, "surfaces": ["BUSINESS_LOGIC"]})
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         self._record_evidence(manifest, current["run_id"], "preflight", "PASS")
         plan = dict(plan, task_kind="BUG", test_strategy="Policy-selected relevant tests")
         act = resolve_next_action(self.repo, "route-cmd-010b", plan)
@@ -3359,7 +3465,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         atomic_write_json(tdir / "current-run.json", current)
         policy.update({"gates": ["preflight"], "reviewers": ["bug-reviewer-agent"], "assemble_required": False,
                        "device_required": False, "severity": severity, "surfaces": surfaces})
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         self._record_evidence(manifest, current["run_id"], "preflight", "PASS")
         write_file(active_review_package_path(self.repo, current), "# Review Package\n")
         self._record_evidence(manifest, current["run_id"], "reviews", "PASS", review_evidence)
@@ -4722,7 +4828,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         current = read_json(tdir / "current-run.json")
         policy["gates"] = ["preflight"]
         policy["reviewers"] = ["code_review"]
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         store = EvidenceStore(state_root(self.repo))
         store.write(
@@ -4748,7 +4854,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         run_id = current["run_id"]
         policy["gates"] = ["preflight"]
         policy["reviewers"] = ["code_review"]
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         store = EvidenceStore(state_root(self.repo))
         store.write(
@@ -4799,7 +4905,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         run_id = current["run_id"]
         policy["gates"] = ["preflight"]
         policy["reviewers"] = ["code_review", "bug_review"]
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         store = EvidenceStore(state_root(self.repo))
         store.write(
@@ -4922,7 +5028,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         policy["assemble_required"] = False
         policy["device_required"] = False
         policy["sensitive"] = False
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         store = EvidenceStore(state_root(self.repo))
         store.write(
             snapshot=current.get("delivery_snapshot_sha256") or "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -5504,7 +5610,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         policy = read_json(Path(current["policy"]))
         policy["gates"] = ["preflight"]
         policy["reviewers"] = reviewers
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         _, pkg = review_package.build_package(self.repo, task_id)
         pkg_sha = pkg["package_sha256"]
 
@@ -5953,7 +6059,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         atomic_write_json(tdir / "current-run.json", current)
         policy = read_json(Path(current["policy"]))
         policy["severity"] = "LOW"
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         return current, run_id, pkg_sha, tdir
 
     def test_C_D3_record_review_ingests_claude_subagent_transcript_unchanged(self) -> None:
@@ -5993,7 +6099,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
         policy = read_json(Path(current["policy"]))
         policy["severity"] = "HIGH"
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
@@ -6012,7 +6118,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
         policy = read_json(Path(current["policy"]))
         policy["severity"] = "HIGH"
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
@@ -6716,7 +6822,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         policy["gates"] = ["preflight", "assemble"]
         policy["reviewers"] = ["bug-reviewer-agent"]
         policy["assemble_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         # 3. Satisfy deterministic gates (preflight)
         manifest = read_json(Path(current["manifest"]))
@@ -7292,7 +7398,7 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         policy["gates"] = ["preflight"]
         policy["reviewers"] = ["bug-reviewer-agent", "security-reviewer-agent"]
         policy["assemble_required"] = False
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         from review_orchestrator import ledger_file
         ledger_path = ledger_file(tdir, run_id)
         if ledger_path.is_file():
@@ -7465,7 +7571,7 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         policy["gates"] = []
         policy["reviewers"] = ["bug-reviewer-agent"]
         policy["assemble_required"] = False
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         import review_package
         review_package.build_package(self.repo, task_id)
         store = EvidenceStore(state_root(self.repo))

@@ -236,8 +236,8 @@ XML_INCLUDE_PATTERN = re.compile(r'@layout/([a-zA-Z0-9_]+)')
 XML_FRAGMENT_CLASS_PATTERN = re.compile(r'(?:android:name|class)="([a-zA-Z0-9_.]+)"')
 
 GRADLE_INCLUDE_PATTERN = re.compile(r'''include\s*\(?\s*['":]([a-zA-Z0-9_:\-./]+)['"]?\s*\)?''')
-GRADLE_PROJECT_DEP_PATTERN = re.compile(r'''(?:implementation|api|compileOnly|runtimeOnly|testImplementation|androidTestImplementation)\s*\(?\s*project\s*\(?\s*['"](:[a-zA-Z0-9_:\-]+)['"]\s*\)\s*\)?''')
-GRADLE_TYPE_SAFE_DEP_PATTERN = re.compile(r'''(?:implementation|api|compileOnly|runtimeOnly)\s*\(?\s*projects\.([a-zA-Z0-9_.]+)\s*\)?''')
+GRADLE_PROJECT_DEP_PATTERN = re.compile(r'''\bproject\s*\(\s*(?:path\s*[:=]\s*)?['"](:[a-zA-Z0-9_:\-]+)['"]''')
+GRADLE_TYPE_SAFE_DEP_PATTERN = re.compile(r'''\bprojects\.([a-zA-Z0-9_.]+)''')
 
 # Common boilerplate / lifecycle / framework functions to skip in declaration indexing
 IGNORED_FUNCTION_NAMES = {
@@ -915,6 +915,8 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
 
     settings_files = [repo / "settings.gradle.kts", repo / "settings.gradle"]
     found_modules: set[str] = {":app"}
+    declared_modules: set[str] = set()
+    module_dirs: dict[str, str] = {}
 
     for sf in settings_files:
         if sf.is_file():
@@ -930,16 +932,21 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
                         if not mod.startswith(":"):
                             mod = f":{mod}"
                         found_modules.add(mod)
+                        declared_modules.add(mod)
                 for m in GRADLE_INCLUDE_PATTERN.finditer(content):
                     mod = m.group(1).strip()
                     if not mod.startswith(":"):
                         mod = f":{mod}"
                     found_modules.add(mod)
+                    declared_modules.add(mod)
                 for m in re.finditer(r'''include\s*['":]([a-zA-Z0-9_:\-./]+)['"]?''', content):
                     mod = m.group(1).strip()
                     if not mod.startswith(":"):
                         mod = f":{mod}"
                     found_modules.add(mod)
+                    declared_modules.add(mod)
+                for match in re.finditer(r'''project\s*\(\s*["'](:[^"']+)["']\s*\)\s*\.projectDir\s*=\s*file\s*\(\s*["']([^"']+)["']\s*\)''', content):
+                    module_dirs[match.group(1)] = match.group(2)
             except Exception:
                 pass
 
@@ -950,29 +957,43 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
             type=EntityType.MODULE.value,
             module=mod,
             file_path="",
+            metadata={"declared": mod in declared_modules},
         )
 
     for mod in found_modules:
         mod_rel_path = mod.lstrip(":").replace(":", "/")
-        mod_dir = repo / mod_rel_path if mod_rel_path else repo
+        mod_dir = repo / module_dirs.get(mod, mod_rel_path) if mod_rel_path else repo
+        try:
+            mod_dir.resolve().relative_to(repo.resolve())
+        except ValueError:
+            nodes[mod].metadata["unresolved_dependencies"] = True
+            continue
         for bg_name in ("build.gradle.kts", "build.gradle"):
             bg_file = mod_dir / bg_name
             if bg_file.is_file():
                 nodes[mod].file_path = bg_file.relative_to(repo).as_posix()
                 try:
                     text = bg_file.read_text(encoding="utf-8", errors="replace")
+                    resolved_spans = []
                     for m in GRADLE_PROJECT_DEP_PATTERN.finditer(text):
                         target_mod = m.group(1).strip()
-                        if target_mod in found_modules and target_mod != mod:
-                            edges.append(GraphEdge(source=mod, target=target_mod, kind=EdgeKind.DEPENDS_ON.value))
+                        if target_mod in found_modules:
+                            resolved_spans.append(m.span())
+                            if target_mod != mod:
+                                edges.append(GraphEdge(source=mod, target=target_mod, kind=EdgeKind.DEPENDS_ON.value))
 
                     for m in GRADLE_TYPE_SAFE_DEP_PATTERN.finditer(text):
                         raw_target = m.group(1).strip().replace(".", ":")
                         target_mod = f":{raw_target}"
-                        if target_mod in found_modules and target_mod != mod:
-                            edges.append(GraphEdge(source=mod, target=target_mod, kind=EdgeKind.DEPENDS_ON.value))
+                        if target_mod in found_modules:
+                            resolved_spans.append(m.span())
+                            if target_mod != mod:
+                                edges.append(GraphEdge(source=mod, target=target_mod, kind=EdgeKind.DEPENDS_ON.value))
+                    unresolved = any(not any(start <= match.start() < end for start, end in resolved_spans)
+                                     for match in re.finditer(r"\bproject\s*\(|\bprojects\.", text))
+                    nodes[mod].metadata["unresolved_dependencies"] = unresolved or bool(re.search(r"apply\s*(?:\(|\s).*from", text))
                 except Exception:
-                    pass
+                    nodes[mod].metadata["unresolved_dependencies"] = True
 
     return nodes, edges
 

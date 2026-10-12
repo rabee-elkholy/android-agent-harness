@@ -56,6 +56,12 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def write_policy_fixture(path: Path, policy: dict) -> None:
+    """Router fixtures must have coherent hashes now that routing checks integrity early."""
+    policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+    atomic_write_json(path, policy)
+
+
 def _write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -1962,7 +1968,7 @@ class MobileValidationTests(unittest.TestCase):
         policy["reviewers"] = []
         policy["assemble_required"] = True
         policy["device_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
 
         self._record_evidence(manifest, run_id, "preflight", "PASS")
         self._record_evidence(manifest, run_id, "assemble", "PASS")
@@ -2077,7 +2083,7 @@ class DeviceFlowTests(MobileValidationTests):
         policy["reviewers"] = []
         policy["assemble_required"] = False
         policy["device_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         self._record_evidence(manifest, run_id, "preflight", "PASS", producer="preflight_check")
 
         store = EvidenceStore(state_root(self.repo))
@@ -2135,7 +2141,7 @@ class DeviceFlowTests(MobileValidationTests):
         found only when `complete` failed. A sensitive run asks both in the sign-off question."""
         plan, tdir, policy, manifest, current, run_id = self._setup_install_and_launch("dev-flow-001b")
         policy["surfaces"] = sorted(set(policy.get("surfaces") or []) | {"BILLING"})
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         from workflow import resolve_next_action
         act = resolve_next_action(self.repo, "dev-flow-001b", read_json(tdir / "plan.json"))
         self.assertEqual("DEVICE_SIGNOFF_REQUIRED", act["code"])
@@ -2283,7 +2289,7 @@ class DeviceFlowTests(MobileValidationTests):
         current = read_json(tdir / "current-run.json")
         run_id = current["run_id"]
         policy["device_required"] = True
-        atomic_write_json(Path(current["policy"]), policy)
+        write_policy_fixture(Path(current["policy"]), policy)
         from run_device import _handle_skip_validation
         args = argparse.Namespace(
             action="skip-validation", task_id="dev-flow-010",

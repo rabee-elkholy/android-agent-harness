@@ -12,6 +12,10 @@ from _vnext_common import ValidationError, atomic_write_json, bounded_path, read
 
 MAX_EVENTS = 512
 MAX_EVENT_BYTES = 4096
+DECISION_COMMANDS = frozenset({
+    "task-approve", "task-approve-sensitive", "task-cancel", "device-signoff",
+    "device-skip-validation", "device-validate-automatically", "task-review-budget",
+})
 
 
 def _directory(repo, task_id):
@@ -48,8 +52,11 @@ def metrics_report(repo, task_id):
               "developer_work_seconds": "UNAVAILABLE", "operations": {}, "invalid_events": 0,
               "review_rounds": "UNAVAILABLE", "developer_interventions": "UNAVAILABLE",
               "current_blocked_reviewers": [],
+              "environment_failures": "UNAVAILABLE", "other_failed_commands": "UNAVAILABLE",
+              "repeated_command_executions": "UNAVAILABLE", "successful_decision_commands": {},
+              "reported_finding_verdicts": "UNAVAILABLE",
               "history_capped": False,
-              "limitations": "Observed launcher commands only; waits and host reviewer execution are not inferred."}
+              "limitations": "Observed launcher commands only; repeats may be intentional. Decision command counts are not unique human interventions. Finding verdicts are recorded assessments, not independently proven false positives. Waits and host reviewer execution are not inferred."}
     if not directory.exists():
         return result
     plan_path = repo / ".agents/state/tasks" / validate_id(task_id) / "plan.json"
@@ -59,13 +66,24 @@ def metrics_report(repo, task_id):
             if plan.get("task_id") == task_id:
                 result["review_rounds"] = plan.get("review_rounds", 0)
                 result["current_blocked_reviewers"] = plan.get("blocked_reviewers") or []
-    except (OSError, ValidationError):
+                findings_path = plan_path.with_name("finding-validations.json")
+                if findings_path.is_file() and not findings_path.is_symlink() and findings_path.stat().st_size <= 262144:
+                    findings = read_json(findings_path)
+                    if findings.get("task_id") == task_id and plan.get("plan_sha256") and findings.get("plan_sha256") == plan["plan_sha256"]:
+                        latest = {}
+                        for item in findings.get("validations") or []:
+                            if not isinstance(item, dict) or not item.get("finding_id") or item.get("status") not in {"CONFIRMED", "FALSE_POSITIVE", "NEEDS_CONTEXT", "NOT_REPRODUCIBLE"}:
+                                raise ValidationError("invalid finding assessment")
+                            latest[str(item["finding_id"])] = item["status"]
+                        result["reported_finding_verdicts"] = {status: list(latest.values()).count(status) for status in sorted(set(latest.values()))}
+    except (OSError, ValueError, TypeError, AttributeError, ValidationError):
         pass
     import itertools
     paths = list(itertools.islice(directory.iterdir(), MAX_EVENTS + 1))
     result["history_capped"] = len(paths) >= MAX_EVENTS
     total, intervals = 0.0, []
     valid = 0
+    environment_failures = other_failures = 0
     for path in paths[:MAX_EVENTS]:
         try:
             if path.is_symlink() or path.stat().st_size > MAX_EVENT_BYTES:
@@ -78,16 +96,27 @@ def metrics_report(repo, task_id):
             if not all(math.isfinite(x) for x in (duration, start, end)) or duration < 0 or end < start:
                 raise ValidationError("invalid metric timing")
             operation = validate_id(event["operation"])
+            exit_code = event["exit_code"]
+            if type(exit_code) is not int:
+                raise ValidationError("invalid metric exit code")
             row = result["operations"].setdefault(operation, {"attempts": 0, "nonzero_exits": 0, "seconds": 0.0})
             row["attempts"] += 1
             row["nonzero_exits"] += int(event["exit_code"] != 0)
             row["seconds"] += duration
             total += duration
             intervals.append((start, end))
+            environment_failures += int(exit_code == 30)
+            other_failures += int(exit_code not in (0, 30))
+            if operation in DECISION_COMMANDS and exit_code == 0:
+                decisions = result["successful_decision_commands"]
+                decisions[operation] = decisions.get(operation, 0) + 1
             valid += 1
         except (OSError, ValueError, KeyError, TypeError, ValidationError):
             result["invalid_events"] += 1
     if valid:
+        result["environment_failures"] = environment_failures
+        result["other_failed_commands"] = other_failures
+        result["repeated_command_executions"] = sum(max(0, item["attempts"] - 1) for item in result["operations"].values())
         result["observed_execution_seconds"] = round(total, 6)
         intervals.sort()
         left, right = intervals[0]

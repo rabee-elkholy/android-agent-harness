@@ -2799,12 +2799,15 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         (self.repo / ".agents" / "state" / "active-task.json").write_text(json.dumps({"task_id": task_id, "plan_path": str(task_d / "plan.json")}), encoding="utf-8")
         (task_d / "plan.json").write_text(json.dumps({"task_id": task_id, "status": "VERIFYING"}), encoding="utf-8")
         policy_p = task_d / "policy.json"
-        policy_p.write_text(json.dumps({
+        from _vnext_common import canonical_sha256
+        pol = {
             "surfaces": ["AUTH", "BUSINESS_LOGIC", "DATABASE"],
             "severity": "HIGH",
             "reviewers": ["bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent"],
             "gates": ["reviews"],
-        }), encoding="utf-8")
+        }
+        pol["policy_sha256"] = canonical_sha256(pol)
+        policy_p.write_text(json.dumps(pol), encoding="utf-8")
         from delivery_manifest import build_manifest
         frozen = build_manifest(self.repo)
         snapshot = frozen["delivery_snapshot_sha256"]
@@ -2882,12 +2885,14 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         pkg_file_r2.write_text("# Review Package R2", encoding="utf-8")
         (runs_dir_r2 / "brief-security-reviewer-agent.md").write_text("# Brief\n", encoding="utf-8")
         policy_round2 = task_d / "policy_r2.json"
-        policy_round2.write_text(json.dumps({
+        pol2 = {
             "surfaces": ["AUTH"],
             "severity": "HIGH",
             "reviewers": ["security-reviewer-agent"],
             "gates": ["reviews"],
-        }), encoding="utf-8")
+        }
+        pol2["policy_sha256"] = canonical_sha256(pol2)
+        policy_round2.write_text(json.dumps(pol2), encoding="utf-8")
         current_run_file.write_text(json.dumps({
             "task_id": task_id, "run_id": "r2", "policy": str(policy_round2),
             "manifest": str(manifest_p),

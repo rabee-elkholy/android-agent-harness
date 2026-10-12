@@ -13,7 +13,7 @@ TASK_SUBCOMMANDS = frozenset({
     "draft", "revise", "checkpoint-phase", "begin-next-phase", "present-plan", "approve", "approve-sensitive",
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
-    "coverage", "bind-evidence", "metrics",
+    "coverage", "bind-evidence", "metrics", "review-budget",
 })
 
 
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             operation = args[0]
             if len(args) > 1 and args[1] in actions.get(args[0], ()):
                 operation += "-" + args[1]
-            if operation not in {"task-metrics", "task-coverage", "task-status", "journey-list", "journey-validate"}:
+            if operation not in {"task-metrics", "task-coverage", "task-status", "journey-list", "journey-validate", "review-status", "review-profile"}:
                 task_id = ""
                 for index, argument in enumerate(args):
                     if argument == "--task-id" and index + 1 < len(args):

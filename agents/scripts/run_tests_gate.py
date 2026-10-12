@@ -19,6 +19,7 @@ Gradle run fails environmentally, the exit-30 protocol applies unchanged.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import xml.etree.ElementTree as ET
 from _vnext_common import ValidationError
@@ -41,6 +42,11 @@ def report_paths(repo: Path, task: str | list[str]) -> list[Path]:
     parts = [item for item in task.strip().split(":") if item]
     if len(parts) >= 1:
         module = repo.joinpath(*parts[:-1])
+        from _graph_core import parse_gradle_modules
+        nodes, _ = parse_gradle_modules(repo)
+        node = nodes.get(":" + ":".join(parts[:-1]))
+        if node and node.file_path:
+            module = (repo / node.file_path).parent
         exact = module / "build" / "test-results" / parts[-1]
         return sorted(path for path in exact.rglob("*.xml") if path.is_file())
     return sorted(path for path in repo_glob(repo, "**/build/test-results/**/*.xml") if path.is_file() and "androidtest" not in path.as_posix().lower())
@@ -263,38 +269,68 @@ def _unit_test_scope() -> str:
 def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
     """Unit-test tasks for this run.
 
-    Installs with UNIT_TEST_SCOPE = "changed_modules" test every changed module; a change that spans
-    several modules no longer falls back to the default task, which may not run the changed tests.
+    Opted-in installs test changed modules and their transitive consumers.
+    Build configuration and unresolved dependencies broaden selection to declared modules.
     Other installs keep the single-task behaviour of resolve_target_task.
     """
-    single = resolve_target_task(repo, requested_task)
     if requested_task or _unit_test_scope() != "changed_modules":
-        return [single]
+        return [resolve_target_task(repo, requested_task)]
     from baseline_capture import _unit_test_task
     default_task = _unit_test_task()
-    if single != default_task:
-        return [single]
-    try:
-        from _repo_files import changed_paths
-        changed = changed_paths(repo=repo)
-        root_build_names = {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "libs.versions.toml"}
-        if any(p.name in root_build_names or p.parent == repo for p in changed if p.suffix in {".gradle", ".kts", ".toml", ".properties"}):
-            return [default_task]
-        default_module = default_task.rsplit(":", 1)[0] or ":app"
-        task_suffix = default_task.split(":")[-1] if ":" in default_task else "testDebugUnitTest"
-        tasks: list[str] = []
-        for p in changed:
-            rel = p.relative_to(repo).as_posix()
-            if "/src/" not in rel:
-                continue
-            mod_path = rel.split("/src/")[0]
-            mod_name = ":" + mod_path.replace("/", ":") if mod_path and mod_path != "." else ":app"
-            task = default_task if mod_name in (default_module, ":app") else f"{mod_name}:{task_suffix}"
-            if task not in tasks:
-                tasks.append(task)
-        return sorted(tasks) or [default_task]
-    except Exception:
+    from _repo_files import changed_paths
+    from _graph_core import parse_gradle_modules
+    changed = changed_paths(repo=repo)
+    if not changed:
         return [default_task]
+    nodes, edges = parse_gradle_modules(repo)
+    known = {name for name, node in nodes.items() if node.file_path}
+    declared = {name for name, node in nodes.items() if node.metadata.get("declared")}
+    default_module = default_task.rsplit(":", 1)[0] or ":app"
+    task_suffix = default_task.split(":")[-1]
+    selected = set()
+    broad = False
+    for path in changed:
+        rel = path.relative_to(repo).as_posix()
+        if "/src/" in rel:
+            prefix = rel.split("/src/", 1)[0]
+            mapped = {name for name, node in nodes.items() if node.file_path and Path(node.file_path).parent.as_posix() == prefix}
+            selected.update(mapped or {":" + prefix.replace("/", ":") if prefix else default_module})
+        if (path.suffix in {".gradle", ".kts", ".toml", ".properties"} and "/src/" not in rel) or path.name in {"gradlew", "gradlew.bat"}:
+            broad = True
+    # Dynamic/custom build logic cannot justify excluding a declared consumer.
+    for name in ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts"):
+        path = repo / name
+        if path.is_file() and re.search(r"projectDir|includeBuild|apply\s*(?:\(|\s).*from|subprojects|allprojects", path.read_text(encoding="utf-8", errors="replace")):
+            broad = True
+    broad = broad or (repo / "buildSrc").is_dir() or (repo / "build-logic").is_dir()
+    broad = broad or any(node.metadata.get("unresolved_dependencies") for node in nodes.values())
+    if known and selected - known:
+        broad = True
+    if broad:
+        selected = known | declared if known or declared else selected
+        selected.add(default_module)
+    else:
+        pending = list(selected)
+        consumers: dict[str, set[str]] = {}
+        for edge in edges:
+            consumers.setdefault(edge.target, set()).add(edge.source)
+        while pending:
+            for consumer in consumers.get(pending.pop(), ()):
+                if consumer not in selected:
+                    selected.add(consumer)
+                    pending.append(consumer)
+    tasks = set()
+    for module in selected:
+        if module == default_module:
+            tasks.add(default_task)
+            continue
+        node = nodes.get(module)
+        build = (repo / node.file_path).read_text(encoding="utf-8", errors="replace") if node and node.file_path else ""
+        jvm = bool(re.search(r'''kotlin\s*\(\s*["']jvm["']|["'](?:org\.jetbrains\.kotlin\.jvm|java|java-library)["']''', build))
+        android = bool(re.search(r"com\.android\.|org\.jetbrains\.kotlin\.multiplatform", build))
+        suffix = "test" if jvm and not android else task_suffix
+        tasks.add(f"{module}:{suffix}")
+    return sorted(tasks) or [default_task]
 
 
 def _failures_with_freshness(

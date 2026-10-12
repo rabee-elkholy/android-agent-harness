@@ -4,6 +4,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.22] - 2026-10-12
+
+### Phase scope redistribution and reviewer budget authority
+
+- Add a developer-authorized task reviewer budget command shared by phase and final review checks without editing frozen policies or resetting counters. Detect corrupted prior-round policy in the router before more gates, device installation, or completion.
+- Allow semantic phases to revisit files already approved for the whole task. File redistribution alone keeps the original approval, phase progress, and baselines; genuinely expanded task scope still needs approval. Reject no-op revisions before they can reset phase state.
+- Explain risk tiers, selected gates, and reviewers from the central policy, with per-file classification signals and later-round carry reasons.
+- Extend optional local metrics with environment failures, repeated command attempts, observed decision commands, and current-plan finding assessments without inferring human time or model costs.
+- Include transitive consumers in opted-in changed-module unit testing, broaden selection for build changes or unresolved dependencies, and resolve literal remapped module report paths. Preserve explicit tasks and legacy selection.
+
 ## [1.1.21] - 2026-10-11
 
 ### Diff line-ending normalization and sensitive planned files advisory

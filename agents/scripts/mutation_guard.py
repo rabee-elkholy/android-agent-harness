@@ -19,7 +19,7 @@ VERIFICATION_SCRIPTS = {
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
     "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery",
-    "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff",
+    "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base)\s", re.I)

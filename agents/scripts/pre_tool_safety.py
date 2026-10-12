@@ -524,7 +524,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
     briefs = dict(act.get("briefs") or {})
 
     from phase_review import check_phase_safety_cap
-    cap_ok, cap_msg = check_phase_safety_cap(plan, len(dispatchable))
+    cap_ok, cap_msg = check_phase_safety_cap(plan, len(dispatchable), repo=REPO)
     if not cap_ok:
         emit("deny", cap_msg, tool=tool_name, reason_code="REVIEWER_CALL_SAFETY_CAP_REACHED")
         return
@@ -873,7 +873,8 @@ def _handle_subagent(name: str, args: dict) -> None:
             emit("deny", "Review round cap reached; developer decision is required.", tool=name)
             return
         used_calls = int(plan.get("review_calls_used") or 0)
-        safety_cap = int(policy.get("model_call_budget") or 20)
+        from review_budget import effective_review_budget
+        safety_cap = effective_review_budget(REPO, plan, policy)
         if used_calls + len(dispatchable) > safety_cap:
             emit(
                 "deny",
