@@ -11,7 +11,7 @@ version and any mismatch fails closed with remediation instructions.
 
 Usage:
     android-harness init  [--repo PATH] [--lang en|ar] [--kit PATH]
-    android-harness update [--repo PATH] [--kit PATH]
+    android-harness update [--repo PATH] [--kit PATH] [--discard-local-edits]
     android-harness explain [--last N] [--repo PATH] [--kit PATH]
     android-harness verify --task TASK_ID [--repo PATH] [--kit PATH]
     android-harness doctor [--repo PATH] [--json] [--device] [--kit PATH]
@@ -753,9 +753,10 @@ def cmd_update(args: argparse.Namespace) -> int:
                     return wizard_code
             if answers.is_file():
                 print("[*] Applying a compatible vNext engine update to the app checkout...")
-                port_code = run_engine_script(
-                    kit, "lifecycle.py", ["update", "--repo", str(repo), "--kit", str(kit)],
-                )
+                lifecycle_args = ["update", "--repo", str(repo), "--kit", str(kit)]
+                if getattr(args, "discard_local_edits", False):
+                    lifecycle_args.append("--discard-local-edits")
+                port_code = run_engine_script(kit, "lifecycle.py", lifecycle_args)
                 if port_code != 0:
                     print(f"[FAIL] App checkout update failed with exit code {port_code}; success was not recorded.")
                     return port_code
@@ -1564,6 +1565,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Force remote release check.")
     sp.add_argument("--no-refresh", action="store_true", help="Use the already verified pinned kit without network refresh.")
     sp.add_argument("--answers-json", help="Optional new wizard answers collected by chat.")
+    sp.add_argument(
+        "--discard-local-edits",
+        action="store_true",
+        help="Replace locally edited managed files under .agents/ with the release copies; "
+        "the edited copies stay in the pre-update backup. Files outside .agents/ still refuse.",
+    )
     sp.set_defaults(func=cmd_update)
 
     sp = sub.add_parser("uninstall", help="Preview or apply an ownership-safe harness removal.")

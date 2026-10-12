@@ -352,6 +352,7 @@ class HarnessDoctor:
 
         if self.is_raw_kit:
             return
+        self._check_managed_file_integrity(category)
         try:
             from _modules import discover_source_roots
 
@@ -371,6 +372,38 @@ class HarnessDoctor:
                 self.log(category, "Module Source Roots", "WARN", "No */src/main/{java,kotlin} source roots detected.")
         except Exception as exc:
             self.log(category, "Module Source Roots", "WARN", f"Source-root discovery failed: {exc}")
+
+    def _check_managed_file_integrity(self, category: str) -> None:
+        """Managed files changed since the last install/update: the next update would refuse on them."""
+        if not (self.repo / ".harness-setup" / "ownership-v1.json").is_file():
+            return
+        name = "Managed File Integrity"
+        try:
+            from lifecycle import _read_ownership, managed_file_conflicts
+
+            ownership = _read_ownership(self.repo)
+            conflicts = managed_file_conflicts(self.repo, ownership)
+        except Exception as exc:
+            self.log(category, name, "WARN", f"Could not compare managed files with the ownership manifest: {exc}")
+            return
+        if not conflicts:
+            self.log(category, name, "PASS", "Managed harness files match the last install/update record.")
+            return
+        details = conflicts[:10] + ([f"... and {len(conflicts) - 10} more"] if len(conflicts) > 10 else [])
+        if any(rel.startswith(".agents/") for rel in conflicts):
+            details.append(
+                "To discard the .agents/ edits (copies kept in .harness-backup/): "
+                "python harness_cli.py update --repo <app-root> --discard-local-edits"
+            )
+        if any(not rel.startswith(".agents/") for rel in conflicts):
+            details.append("Files outside .agents/ must be restored or moved by hand before updating.")
+        self.log(
+            category,
+            name,
+            "WARN",
+            f"{len(conflicts)} managed file(s) changed since the last install/update; the next update will refuse until they are resolved.",
+            details,
+        )
 
     def check_subagent_roster(self) -> None:
         category = "3. Subagent Roster"

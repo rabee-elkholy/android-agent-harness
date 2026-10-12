@@ -462,6 +462,124 @@ class CriticalSafetyTests(unittest.TestCase):
         finally:
             fixture.tearDown()
 
+    @staticmethod
+    def _managed_integrity(repo: Path):
+        from doctor.engine import HarnessDoctor
+
+        doctor = HarnessDoctor(repo, run_selftest=False)
+        doctor.check_file_structure()
+        return [r for r in doctor.results if r.name == "Managed File Integrity"]
+
+    def test_update_discard_local_edits_restores_engine_files_and_keeps_backup(self):
+        # Real app (Rashaqa): hand edits to phase_review.py and _product.py blocked the update, and the only
+        # offered recovery was uninstall + init; doctor had passed because it never compared hashes.
+        fixture = fixtures.LifecycleTests()
+        fixture.setUp()
+        try:
+            fixture._answers()
+            lifecycle.install(fixture.repo, fixtures.KIT)
+            self.assertEqual(["PASS"], [r.status for r in self._managed_integrity(fixture.repo)])
+            engine = fixture.repo / ".agents/scripts/phase_review.py"
+            product = fixture.repo / ".agents/scripts/_product.py"
+            engine_release = engine.read_bytes()
+            product_release = product.read_text(encoding="utf-8")
+            engine.write_bytes(engine_release + b"\nDEFAULT_SAFETY_CAP = 30\n")
+            product.write_text(product_release.replace("MODEL_CALL_BUDGET = 20\n", "MODEL_CALL_BUDGET = 30\n"), encoding="utf-8")
+            engine_edited = engine.read_bytes()
+            product_edited = product.read_bytes()
+
+            # Doctor now warns before any update is attempted.
+            integrity = self._managed_integrity(fixture.repo)
+            self.assertEqual(["WARN"], [r.status for r in integrity])
+            self.assertIn("2 managed file(s)", integrity[0].message)
+            self.assertIn(".agents/scripts/phase_review.py", integrity[0].details)
+            self.assertIn(".agents/scripts/_product.py", integrity[0].details)
+            self.assertTrue(any("--discard-local-edits" in d for d in integrity[0].details))
+
+            # Without the flag: refused exactly as before, nothing touched, every recovery path named.
+            with self.assertRaises(ValidationError) as refused:
+                lifecycle.update(fixture.repo, fixtures.KIT)
+            message = str(refused.exception)
+            first_line = message.splitlines()[0]
+            self.assertIn("user-modified managed files require clean recovery", first_line)
+            self.assertIn(".agents/scripts/phase_review.py", first_line)
+            self.assertIn(".agents/scripts/_product.py", first_line)
+            self.assertIn("--discard-local-edits", message)
+            self.assertIn("model_call_budget", message)
+            self.assertIn("uninstall --apply", message)
+            self.assertNotIn("never discarded automatically", message)
+            self.assertEqual(engine_edited, engine.read_bytes())
+            self.assertEqual(product_edited, product.read_bytes())
+
+            # With the flag: release copies installed, edited copies kept in the pre-update backup.
+            result = lifecycle.update(fixture.repo, fixtures.KIT, discard_local_edits=True)
+            self.assertEqual("PASS", result["status"])
+            self.assertEqual(
+                {".agents/scripts/phase_review.py", ".agents/scripts/_product.py"},
+                set(result["discarded_local_edits"]),
+            )
+            self.assertEqual((fixtures.KIT / "agents/scripts/phase_review.py").read_bytes(), engine.read_bytes())
+            self.assertIn("MODEL_CALL_BUDGET = 20\n", product.read_text(encoding="utf-8"))
+            backup = Path(result["backup"])
+            self.assertEqual(engine_edited, (backup / ".agents/scripts/phase_review.py").read_bytes())
+            self.assertEqual(product_edited, (backup / ".agents/scripts/_product.py").read_bytes())
+            self.assertEqual(["PASS"], [r.status for r in self._managed_integrity(fixture.repo)])
+
+            # The next update is clean and reports nothing discarded.
+            again = lifecycle.update(fixture.repo, fixtures.KIT)
+            self.assertNotIn("discarded_local_edits", again)
+        finally:
+            fixture.tearDown()
+
+    def test_update_discard_local_edits_never_overwrites_files_outside_agents(self):
+        fixture = fixtures.LifecycleTests()
+        fixture.setUp()
+        try:
+            fixture._answers()
+            installed = lifecycle.install(fixture.repo, fixtures.KIT)
+            outside = sorted(
+                entry["path"] for entry in installed["ownership"]["entries"]
+                if not entry["path"].startswith(".agents/") and entry.get("post_install_sha256")
+            )
+            self.assertTrue(outside, "fixture install must manage at least one adapter outside .agents/")
+            adapter = fixture.repo / outside[0]
+            engine = fixture.repo / ".agents/scripts/phase_review.py"
+            adapter.write_text(adapter.read_text(encoding="utf-8") + "\nApp-owned note.\n", encoding="utf-8")
+            engine.write_bytes(engine.read_bytes() + b"\n# local edit\n")
+            adapter_edited = adapter.read_bytes()
+            engine_edited = engine.read_bytes()
+
+            integrity = self._managed_integrity(fixture.repo)
+            self.assertEqual(["WARN"], [r.status for r in integrity])
+            self.assertTrue(any("outside .agents/" in d for d in integrity[0].details))
+
+            with self.assertRaises(ValidationError) as refused:
+                lifecycle.update(fixture.repo, fixtures.KIT, discard_local_edits=True)
+            message = str(refused.exception)
+            self.assertIn(outside[0], message.splitlines()[0])
+            self.assertIn("never discarded automatically", message)
+            # The flag was already given, so it is not offered again.
+            self.assertNotIn("rerun the same update command with --discard-local-edits", message)
+            # Refusal happens before any change: both edits survive byte for byte.
+            self.assertEqual(adapter_edited, adapter.read_bytes())
+            self.assertEqual(engine_edited, engine.read_bytes())
+        finally:
+            fixture.tearDown()
+
+    def test_doctor_managed_file_integrity_is_skipped_without_ownership_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents" / "rules").mkdir(parents=True)
+            (repo / ".agents" / "rules" / "harness-rules.md").write_text("rules\n", encoding="utf-8")
+            (repo / ".agents" / "VERSION").write_text("1.1.1\n", encoding="utf-8")
+            self.assertEqual([], self._managed_integrity(repo))
+            # A tampered manifest is reported, never raised out of doctor.
+            (repo / ".harness-setup").mkdir()
+            (repo / ".harness-setup" / "ownership-v1.json").write_text(json.dumps({"entries": []}), encoding="utf-8")
+            integrity = self._managed_integrity(repo)
+            self.assertEqual(["WARN"], [r.status for r in integrity])
+            self.assertIn("integrity mismatch", integrity[0].message)
+
     def test_update_preserves_history_and_rejects_active_task(self):
         fixture = fixtures.LifecycleTests()
         fixture.setUp()

@@ -4,6 +4,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.23] - 2026-10-12
+
+### Opt-in discard for locally modified managed files and early drift detection
+
+- Add an explicit developer-authorized flag `harness_cli.py update --discard-local-edits` to discard locally modified files under `.agents/` and replace them with release copies during updates, preserving pre-update modified copies inside `.harness-backup/`. Managed files outside `.agents/` continue to refuse automatically and require manual resolution.
+- Extract a unified read-only conflict detector `managed_file_conflicts` in `lifecycle.py` shared by both `update` and `doctor`, guaranteeing consistent conflict recognition without drift.
+- Add `Managed File Integrity` diagnostic check in `HarnessDoctor` (`doctor --install-check` and full doctor) reporting `WARN` when local edits are detected, warning developers early before update failures occur.
+- Upgrade update refusal messages to detail actionable recovery paths ordered from lightest to heaviest, including exact `--discard-local-edits` and `answers.json` configuration guidance.
+- Add comprehensive safety regression test coverage in `_critical_safety_selftest.py` covering doctor early warning, discard flag execution, backup preservation, and strict protection of adapter files outside `.agents/`.
+
 ## [1.1.22] - 2026-10-12
 
 ### Phase scope redistribution and reviewer budget authority

@@ -235,6 +235,68 @@ def _hash_or_none(path: Path) -> str | None:
     return sha256_file(path) if path.is_file() and not path.is_symlink() else None
 
 
+LEGACY_REFERENCE_PREFIX = ".agents/skills/android-harness/references/"
+DISCARDABLE_PREFIX = ".agents/"
+
+
+def managed_file_conflicts(repo: Path, ownership: dict, answers: dict | None = None) -> list[str]:
+    """Managed paths whose bytes differ from the last install or update record. Read-only.
+
+    Shared by `update` (which refuses on them) and doctor (which warns early), so both agree on
+    what a local edit is. Preserved developer files, retired legacy references, and a `_product.py`
+    that is exactly what the setup answers render are not edits.
+    """
+    conflicts: list[str] = []
+    for entry in ownership.get("entries") or []:
+        rel = str(entry.get("path") or "")
+        if _hash_or_none(repo / rel) == entry.get("post_install_sha256"):
+            continue
+        if any(Path(rel).match(pattern) for pattern in PRESERVE_GLOBS):
+            continue
+        if rel.startswith(LEGACY_REFERENCE_PREFIX):
+            continue
+        if rel == PRODUCT_CONFIG and _product_config_matches_answers(repo, answers or {}):
+            continue
+        conflicts.append(rel)
+    return conflicts
+
+
+def _conflict_refusal_message(conflicts: list[str], *, discard_requested: bool) -> str:
+    """Refusal text naming every conflict and the recovery paths, lightest first.
+
+    The file list stays on the first line so callers matching it with a plain regex keep working.
+    """
+    shown = ", ".join(conflicts[:10]) + (f" (+{len(conflicts) - 10} more)" if len(conflicts) > 10 else "")
+    discardable = [rel for rel in conflicts if rel.startswith(DISCARDABLE_PREFIX)]
+    outside = [rel for rel in conflicts if not rel.startswith(DISCARDABLE_PREFIX)]
+    lines = [f"user-modified managed files require clean recovery: {shown}", "Recovery options, lightest first:"]
+    step = 1
+    if outside:
+        lines.append(
+            f"  {step}. Files outside .agents/ are never discarded automatically; restore or move them by hand, "
+            "then rerun the update: " + ", ".join(outside[:10])
+        )
+        step += 1
+    if discardable and not discard_requested:
+        lines.append(
+            f"  {step}. Discard the {len(discardable)} local edit(s) under .agents/ and install the release copies; "
+            "the edited files are kept in the pre-update backup under .harness-backup/: "
+            "rerun the same update command with --discard-local-edits"
+        )
+        step += 1
+    if PRODUCT_CONFIG in conflicts:
+        lines.append(
+            f"  {step}. {PRODUCT_CONFIG} is regenerated from .harness-setup/answers.json on every update; "
+            "to keep a changed value, set it in answers.json too (for example model_call_budget)"
+        )
+        step += 1
+    lines.append(
+        f"  {step}. Last resort, clean recovery "
+        "(run 'python harness_cli.py uninstall --apply' then 'python harness_cli.py init --answers-json <answers.json>')"
+    )
+    return "\n".join(lines)
+
+
 def _snapshot_files(repo: Path, paths: list[Path]) -> dict[str, str | None]:
     result: dict[str, str | None] = {}
     for path in paths:
@@ -1030,7 +1092,7 @@ def require_update_idle(repo: Path) -> None:
         )
 
 
-def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
+def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_edits: bool = False) -> dict:
     repo = _validate_repo(repo)
     _assert_kit_outside_repo(repo, kit)
     answers = dict(answers or {})
@@ -1045,24 +1107,13 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
         raise ValidationError("legacy in-place migration is unsupported; perform a clean reinstall")
     if _version_tuple(target_version) < _version_tuple(current_version):
         raise ValidationError("downgrade refused: compatible downgrade metadata is unavailable")
-    conflicts = []
-    legacy_ref_prefix = ".agents/skills/android-harness/references/"
-    for entry in ownership.get("entries") or []:
-        rel = str(entry.get("path") or "")
-        path = repo / rel
-        current_hash = _hash_or_none(path)
-        if current_hash != entry.get("post_install_sha256") and not any(Path(rel).match(pattern) for pattern in PRESERVE_GLOBS):
-            if rel.startswith(legacy_ref_prefix):
-                continue
-            if rel == PRODUCT_CONFIG and _product_config_matches_answers(repo, answers):
-                continue
-            conflicts.append(rel)
-    if conflicts:
-        raise ValidationError(
-            "user-modified managed files require clean recovery "
-            "(run 'python harness_cli.py uninstall --apply' then 'python harness_cli.py init --answers-json <answers.json>'): "
-            + ", ".join(conflicts[:10])
-        )
+    conflicts = managed_file_conflicts(repo, ownership, answers)
+    # Only files under .agents/ can be discarded: update replaces that directory wholesale and the
+    # pre-update backup copies it whole. Adapter files outside it may hold the app's own text.
+    blocking = [rel for rel in conflicts if not (discard_local_edits and rel.startswith(DISCARDABLE_PREFIX))]
+    if blocking:
+        raise ValidationError(_conflict_refusal_message(conflicts, discard_requested=discard_local_edits))
+    discarded = list(conflicts)
     loaded_answers = _load_answers(repo)
     if answers:
         loaded_answers.update(answers)
@@ -1186,6 +1237,11 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
         shutil.rmtree(preserve_root, ignore_errors=True)
     if legacy_migrated:
         print("[MIGRATE] Preserved legacy reference customizations in .agents/project-context/legacy-overrides/: " + ", ".join(Path(m).name for m in legacy_migrated))
+    if discarded:
+        # stderr keeps `lifecycle.py update --json` stdout parseable.
+        print(f"[DISCARD] Replaced {len(discarded)} locally edited file(s) with the release copies; the edited copies are kept in {backup}:", file=sys.stderr)
+        for rel in discarded:
+            print(f"  - {rel}", file=sys.stderr)
     result = {
         "status": "PASS",
         "action": "update",
@@ -1197,6 +1253,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None) -> dict:
         "legacy_reference_migrated": legacy_migrated,
         "graph_cache_warmed": graph_cache_warmed,
     }
+    if discarded:
+        result["discarded_local_edits"] = discarded
     if not graph_cache_warmed and graph_cache_warning:
         result["graph_cache_warning"] = graph_cache_warning
     return result
@@ -1406,6 +1464,12 @@ def main(argv: list[str] | None = None) -> int:
         command = sub.add_parser(name)
         command.add_argument("--repo", required=True)
         command.add_argument("--kit", required=True)
+        if name == "update":
+            command.add_argument(
+                "--discard-local-edits",
+                action="store_true",
+                help="Replace locally edited managed files under .agents/ with the release copies (kept in the pre-update backup).",
+            )
     command = sub.add_parser("recover-interrupted-update")
     command.add_argument("--repo", required=True)
     command = sub.add_parser("uninstall")
@@ -1418,7 +1482,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "install":
             result = install(Path(args.repo), Path(args.kit))
         elif args.action == "update":
-            result = update(Path(args.repo), Path(args.kit))
+            result = update(Path(args.repo), Path(args.kit), discard_local_edits=args.discard_local_edits)
         elif args.action == "replace-legacy":
             result = replace_legacy(Path(args.repo), Path(args.kit))
         elif args.action == "recover-interrupted-update":
