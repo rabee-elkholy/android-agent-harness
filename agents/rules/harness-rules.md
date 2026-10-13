@@ -16,6 +16,7 @@ This is the authoritative always-loaded contract. Route detailed Android guidanc
 - **Single-shot Proceed invariant**: Proceed appears only for initial task approval.
 - **Direct follow-up execution**: approved in-scope fixes execute immediately; new plan/Proceed only if behavior, sensitive surface, contract, external write, or blast radius materially expands.
 - One approval covers all stated phases. Validate phase boundaries without pausing for repeat approval.
+- **Host continuation**: use `task continue --task-id <id> --host <actual-host>`. Stop the former writer before `--source-stopped`; include routed `--expect-session`. Follow its brief/next action. Preserve approval, review limits and proof provenance.
 - Context notes are administrative, not delivery work: `python .agents/harness.py context note "<note>"`.
 - Commit, push, release, tracker mutation, app uninstall/data clear, downgrade, purchase, and publication are never implicit.
 

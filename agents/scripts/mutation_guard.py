@@ -19,7 +19,7 @@ VERIFICATION_SCRIPTS = {
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
     "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery",
-    "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget",
+    "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget", "continue",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base)\s", re.I)
@@ -333,6 +333,8 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     try:
         plan = active_plan(root)
         require_mutation(plan)
+        from host_continuation import assert_execution_session
+        assert_execution_session(root, plan.get("task_id"))
     except ValidationError as exc:
         return False, str(exc), "FILE_MUTATION_GUARD"
 
@@ -794,6 +796,17 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, "every command segment is authorized"
     if segments:
         normalized = segments[0]
+    if _workflow_action(normalized, repo) != "continue" and not _is_read_only(normalized, repo):
+        try:
+            plan = active_plan(Path(repo))
+        except ValidationError:
+            plan = None
+        if plan:
+            try:
+                from host_continuation import assert_execution_session
+                assert_execution_session(Path(repo), plan.get("task_id"))
+            except ValidationError as exc:
+                return False, str(exc)
     zoho = _zoho_lifecycle_decision(repo, normalized)
     if zoho is not None:
         return zoho

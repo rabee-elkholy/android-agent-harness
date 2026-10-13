@@ -5,6 +5,10 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {"command": "task continue", "read_only": False,
+     "valid_states": ["APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"],
+     "required_inputs": ["task_id", "host"], "model_facing": True,
+     "description": "Continue an approved task on a receiving host; preserve valid proof and archive interrupted review runs."},
     {'command': 'task coverage',
      'read_only': True,
      'valid_states': ['ANY'],

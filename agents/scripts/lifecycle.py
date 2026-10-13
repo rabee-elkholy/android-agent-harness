@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -292,7 +293,9 @@ def _conflict_refusal_message(conflicts: list[str], *, discard_requested: bool) 
         step += 1
     lines.append(
         f"  {step}. Last resort, clean recovery "
-        "(run 'python harness_cli.py uninstall --apply' then 'python harness_cli.py init --answers-json <answers.json>')"
+        "(run 'python \"<kit-dir>/harness_cli.py\" uninstall --apply --repo \"<app-root>\" --kit \"<kit-dir>\"' "
+        "then 'python \"<kit-dir>/harness_cli.py\" init --repo \"<app-root>\" --kit \"<kit-dir>\" --answers-json \"<answers.json>\"'; "
+        "replace <kit-dir> with the external harness kit directory and <app-root> with the Android project root)"
     )
     return "\n".join(lines)
 
@@ -943,6 +946,9 @@ def recover_interrupted_update(repo: Path) -> dict | None:
                     journal_own_sha = journal.get("ownership_after_sha256")
                     if not journal_own_sha or own_data.get("ownership_sha256") == journal_own_sha:
                         forward_valid = True
+                preserved = journal.get("preserved_active_task")
+                if forward_valid and preserved and canonical_sha256(_state_snapshot(repo)) != preserved.get("state_sha256"):
+                    forward_valid = False
         except Exception:
             forward_valid = False
 
@@ -1066,12 +1072,14 @@ def install(repo: Path, kit: Path) -> dict:
     return result
 
 
-def require_update_idle(repo: Path) -> None:
+def require_update_idle(repo: Path, *, preserve_active_task: str | None = None, source_stopped: bool = False) -> dict | None:
     """Retained terminal pointers are history; uncertain or live tasks block update."""
     root = repo.resolve()
     state = root / ".agents/state"
     pointer = state / "active-task.json"
     if not pointer.exists() and not pointer.is_symlink():
+        if preserve_active_task:
+            raise ValidationError("the requested active task is no longer active; inspect task status before updating")
         return
     active = read_json(pointer)
     task_id = str(active.get("task_id") or "")
@@ -1086,19 +1094,70 @@ def require_update_idle(repo: Path) -> None:
     if plan.get("task_id") != task_id:
         raise ValidationError("active task identity mismatch; update refused")
     if plan.get("status") not in {"CANCELLED", "DELIVERED"}:
+        if preserve_active_task:
+            from host_continuation import _validate_task
+            if task_id != preserve_active_task:
+                raise ValidationError("active task changed; update refused")
+            if not source_stopped:
+                raise ValidationError("active-task update requires --source-stopped after stopping the executor")
+            if path != (state / "tasks" / task_id / "plan.json").resolve():
+                raise ValidationError("active plan does not match its canonical task path")
+            checked, _ = _validate_task(root, task_id)
+            pending = state / "tasks" / task_id / "host-transition.json"
+            if pending.exists() and read_json(pending).get("status") == "PREPARED":
+                raise ValidationError("recover the interrupted host transfer before updating")
+            return checked
         raise ValidationError(
             f"compatible update refused while active task '{task_id}' exists; "
             f"finish or cancel the task before updating (run: python .agents/scripts/workflow.py cancel --repo . --task-id {task_id})"
         )
 
 
-def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_edits: bool = False) -> dict:
+def _state_snapshot(repo: Path) -> dict[str, str]:
+    state = repo / ".agents/state"
+    records = {}
+    for path in state.rglob("*"):
+        if path.is_symlink():
+            raise ValidationError("active-task state contains a symlink; update refused")
+        if path.is_file() and path.name != ".write.lock":
+            records[path.relative_to(state).as_posix()] = sha256_file(path)
+    return records
+
+
+def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_edits: bool = False,
+           preserve_active_task: str | None = None, source_stopped: bool = False) -> dict:
+    """Temporarily reserve execution while a compatible engine update preserves state."""
+    from evidence_store import StateLock
+    from _vnext_common import validate_id
+    repo = _validate_repo(repo)
+    _assert_kit_outside_repo(repo, kit)
+    with ExitStack() as locks:
+        locks.enter_context(StateLock(repo / ".harness-setup/lifecycle", timeout_seconds=0))
+        recover_interrupted_uninstall(repo)
+        recover_interrupted_update(repo)
+        if preserve_active_task:
+            task_id = validate_id(preserve_active_task)
+            if answers:
+                raise ValidationError("active-task update cannot change setup answers")
+            locks.enter_context(StateLock(repo / ".agents/state", timeout_seconds=0))
+            locks.enter_context(StateLock(repo / ".agents/state/tasks" / task_id / "execution", timeout_seconds=0))
+            review = repo / ".agents/state/tasks" / task_id / "phases"
+            for directory in sorted(review.glob("*/review")):
+                locks.enter_context(StateLock(directory, timeout_seconds=0))
+        active = require_update_idle(repo, preserve_active_task=preserve_active_task, source_stopped=source_stopped)
+        return _update_locked(repo, kit, answers, discard_local_edits=discard_local_edits,
+                              active_task=active, state_before=_state_snapshot(repo) if active else None)
+
+
+def _update_locked(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_edits: bool = False,
+                   active_task: dict | None = None, state_before: dict | None = None) -> dict:
     repo = _validate_repo(repo)
     _assert_kit_outside_repo(repo, kit)
     answers = dict(answers or {})
     recover_interrupted_uninstall(repo)
     recover_interrupted_update(repo)
-    require_update_idle(repo)
+    if not active_task:
+        require_update_idle(repo)
     kit, target_version = _validate_kit(kit)
     ownership = _read_ownership(repo)
     git_config_transaction_before = {"core.hooksPath": _git_config_value(repo, "core.hooksPath")}
@@ -1118,6 +1177,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_
     if answers:
         loaded_answers.update(answers)
     answers = loaded_answers
+    if active_task:
+        answers["update_context_mode"] = "preserve"
     with step_progress("1. Creating pre-update snapshot & backup"):
         app_before = _snapshot_app_files(repo)
         before = _snapshot_files(repo, _candidate_adapter_paths(repo))
@@ -1145,6 +1206,11 @@ def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_
             "adapters_before": before,
             "started_at": utc_now(),
         }
+        if active_task:
+            journal["preserved_active_task"] = {"task_id": active_task["task_id"],
+                                                "plan_sha256": active_task["plan_sha256"],
+                                                "state_sha256": canonical_sha256(state_before),
+                                                "source_stopped": True}
         journal_path = repo / ".harness-setup" / "update-journal.json"
         atomic_write_json(journal_path, journal)
 
@@ -1200,6 +1266,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_
                             curr_pol["policy_sha256"] = compute_policy_hash(curr_pol)
                             write_architecture_policy(repo, curr_pol, overwrite=True)
             _set_stage("CONTEXT_RESTORED")
+            if state_before is not None and _state_snapshot(repo) != state_before:
+                raise ValidationError("active-task state was not preserved exactly; rolling back update")
 
         with step_progress("3. Verifying application integrity"):
             allowed_adapters = set(before) | {p.relative_to(repo).as_posix() for p in _candidate_adapter_paths(repo)}
@@ -1214,6 +1282,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_
 
         with step_progress("5. Warming project graph cache"):
             graph_cache_warmed, graph_cache_warning = _warm_project_graph(repo)
+            if state_before is not None and _state_snapshot(repo) != state_before:
+                raise ValidationError("active-task state changed during update; rolling back")
             journal["status"] = "COMPLETED"
             _set_stage("COMPLETED")
             journal["completed_at"] = utc_now()
@@ -1228,6 +1298,7 @@ def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_
         _rollback_adapters(repo, backup, before)
         for key, value in git_config_transaction_before.items():
             _restore_git_config(repo, key, value)
+        atomic_write_json(repo / OWNERSHIP_RELATIVE, ownership)
         journal["status"] = "ROLLED_BACK"
         journal["stage"] = "ROLLED_BACK"
         journal["rolled_back_at"] = utc_now()
@@ -1255,6 +1326,8 @@ def update(repo: Path, kit: Path, answers: dict | None = None, *, discard_local_
     }
     if discarded:
         result["discarded_local_edits"] = discarded
+    if active_task:
+        result["preserved_active_task"] = journal["preserved_active_task"]
     if not graph_cache_warmed and graph_cache_warning:
         result["graph_cache_warning"] = graph_cache_warning
     return result
@@ -1465,6 +1538,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--repo", required=True)
         command.add_argument("--kit", required=True)
         if name == "update":
+            command.add_argument("--preserve-active-task", metavar="TASK_ID", help="Temporarily reserve a stopped approved task and preserve its state exactly.")
+            command.add_argument("--source-stopped", action="store_true", help="Confirm the active executor has stopped writing.")
             command.add_argument(
                 "--discard-local-edits",
                 action="store_true",
@@ -1482,11 +1557,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "install":
             result = install(Path(args.repo), Path(args.kit))
         elif args.action == "update":
-            result = update(Path(args.repo), Path(args.kit), discard_local_edits=args.discard_local_edits)
+            result = update(Path(args.repo), Path(args.kit), discard_local_edits=args.discard_local_edits,
+                            preserve_active_task=args.preserve_active_task, source_stopped=args.source_stopped)
         elif args.action == "replace-legacy":
             result = replace_legacy(Path(args.repo), Path(args.kit))
         elif args.action == "recover-interrupted-update":
-            result = recover_interrupted_update(Path(args.repo)) or {"status": "PASS", "action": "recover-interrupted-update", "recovered": False}
+            from evidence_store import StateLock
+            with StateLock(Path(args.repo) / ".harness-setup/lifecycle", timeout_seconds=0):
+                result = recover_interrupted_update(Path(args.repo)) or {"status": "PASS", "action": "recover-interrupted-update", "recovered": False}
         else:
             result = uninstall(Path(args.repo), apply=args.apply, legacy=args.legacy)
         if args.json:

@@ -4,6 +4,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.24] - 2026-10-13
+
+### Cross-host task continuation and safe active-task updates
+
+- Add repository-local cross-host task continuation with preserved approval, bounded resume briefs, session ownership, recoverable transition receipts, and compare-and-swap takeover.
+- Prefer the actual Codex session or declared native adapter host over the project's preferred review host. Route frozen-host mismatches to continuation rather than an unavailable host tool.
+- Archive interrupted phase reviews and restart unfinished final reviews without resetting recorded findings, spending or protocol limits. Reuse valid deterministic evidence through checked original-attempt references; preserve those references during pruning.
+- Correct Doctor and lifecycle recovery commands to name the external kit launcher and quote paths containing spaces.
+- Raise the maintainer-selected kernel plus Codex adapter character budget to 20,000. Document that it bounds instruction growth rather than model context capacity; retain explicit instructions instead of compressing them to satisfy the former threshold.
+- Add explicit active-task-preserving updates that temporarily reserve execution, require a stopped source, verify state byte-for-byte, and retain rollback backups without cancelling the task or renewing its evidence.
+- Keep terminal task routing readable from another host, reject malformed host inputs cleanly, and reject verification run/manifest identity mismatches before evidence reuse.
+
 ## [1.1.23] - 2026-10-12
 
 ### Opt-in discard for locally modified managed files and early drift detection

@@ -1265,10 +1265,11 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
     return res
 
 
-def invalidate_phase_review(repo: Path, task_id: str, phase_id: str) -> None:
+def invalidate_phase_review(repo: Path, task_id: str, phase_id: str, *, lock: bool = True) -> None:
     tdir = task_dir(repo, task_id)
     rdir = phase_review_dir(tdir, phase_id)
-    with StateLock(rdir):
+    from contextlib import nullcontext
+    with StateLock(rdir) if lock else nullcontext():
         prun_f = phase_run_file(tdir, phase_id)
         if prun_f.is_file():
             run = read_json(prun_f)
@@ -1381,6 +1382,8 @@ def _main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
+    from host_continuation import assert_execution_session
+    assert_execution_session(repo, args.task_id)
     if args.subcommand == "package":
         pkg_path, meta = build_phase_package(repo, args.task_id, args.phase_id, host=args.host)
         print(f"PHASE_REVIEW_PACKAGE={pkg_path}")

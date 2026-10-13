@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
 from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed, join_continuations  # noqa: E402
-from _vnext_common import active_review_package_path, read_json, sha256_file, state_root, validate_id  # noqa: E402
+from _vnext_common import ValidationError, active_review_package_path, read_json, sha256_file, state_root, validate_id  # noqa: E402
 
 
 from policy_vocab import (
@@ -677,6 +677,17 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
 
 
 def _handle_subagent(name: str, args: dict) -> None:
+    try:
+        plan = active_plan(REPO)
+    except ValidationError:
+        plan = None
+    try:
+        from host_continuation import assert_execution_session
+        if plan:
+            assert_execution_session(REPO, plan.get("task_id"))
+    except ValidationError as exc:
+        emit("deny", str(exc), tool=name, reason_code="HOST_SESSION_MISMATCH")
+        return
     # Zero-polling invariant: block busy-waiting loops
     if name == "manage_task":
         act = str(args.get("Action") or args.get("action") or "").strip().lower()
@@ -1768,6 +1779,20 @@ def _flag_out_of_scope_read(name: str, args: dict) -> None:
 
 
 def main() -> None:
+    # The installed native adapter identifies this hook process. Its current
+    # host takes precedence over the project's preferred host and stale callers.
+    previous = os.environ.get("HARNESS_HOST")
+    os.environ["HARNESS_HOST"] = os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() or "antigravity"
+    try:
+        _main()
+    finally:
+        if previous is None:
+            os.environ.pop("HARNESS_HOST", None)
+        else:
+            os.environ["HARNESS_HOST"] = previous
+
+
+def _main() -> None:
     try:
         raw = sys.stdin.read()
         if len(raw.encode("utf-8", errors="replace")) > MAX_STDIN_BYTES:

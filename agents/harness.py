@@ -13,7 +13,7 @@ TASK_SUBCOMMANDS = frozenset({
     "draft", "revise", "checkpoint-phase", "begin-next-phase", "present-plan", "approve", "approve-sensitive",
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
-    "coverage", "bind-evidence", "metrics", "review-budget",
+    "coverage", "bind-evidence", "metrics", "review-budget", "continue",
 })
 
 
@@ -22,11 +22,32 @@ def _run(script: str, args: list[str]) -> int:
     if not target.is_file():
         print(f"[ERROR] Installed harness script is missing: {target}", file=sys.stderr)
         return 2
-    proc = subprocess.run(
-        [sys.executable, "-u", str(target), *args],
-        cwd=str(REPO_ROOT),
-        check=False,
-    )
+    from contextlib import nullcontext
+    lease = nullcontext()
+    sys.path.insert(0, str(SCRIPTS))
+    from _vnext_common import ValidationError, read_json
+    from host_continuation import assert_execution_session
+    from evidence_store import StateLock
+    read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py"}
+    read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
+    if not read_only and not {"--help", "-h"} & set(args):
+        active = AGENTS_ROOT / "state/active-task.json"
+        if active.exists():
+            task_id = str(read_json(active).get("task_id") or "")
+            try:
+                assert_execution_session(REPO_ROOT, task_id)
+                session = AGENTS_ROOT / "state/tasks" / task_id / "host-session.json"
+                if session.exists():
+                    lease = StateLock(session.parent / "execution", timeout_seconds=0)
+            except ValidationError as exc:
+                print(f"[FAIL] {exc}", file=sys.stderr)
+                return 1
+    try:
+        with lease:
+            proc = subprocess.run([sys.executable, "-u", str(target), *args], cwd=str(REPO_ROOT), check=False)
+    except ValidationError as exc:
+        print(f"[FAIL] {exc}", file=sys.stderr)
+        return 1
     return proc.returncode
 
 

@@ -241,7 +241,10 @@ class ChatInstallationDocsTests(unittest.TestCase):
     def test_always_loaded_codex_prompt_is_bounded(self) -> None:
         kernel = (KIT / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
         adapter = (KIT / "agents/tool-adapters/AGENTS.md.template").read_text(encoding="utf-8")
-        self.assertLessEqual(len(kernel) + len(adapter), 12_000)
+        # Maintainer-selected character budget for instruction growth, not a
+        # tokenizer/context-window limit or an empirically established optimum.
+        # See docs/adr/009-instruction-size-budget.md for scope and rationale.
+        self.assertLessEqual(len(kernel) + len(adapter), 20_000)
 
     def test_agent_instructions_are_english_only(self) -> None:
         # The model answers in the chat's language; Arabic example phrases in the rules only added noise.
@@ -320,7 +323,12 @@ class ChatInstallationDocsTests(unittest.TestCase):
     def test_lifecycle_update_clean_recovery_guidance(self) -> None:
         lifecycle_script = (KIT / "agents" / "scripts" / "lifecycle.py").read_text(encoding="utf-8")
         self.assertIn("user-modified managed files require clean recovery", lifecycle_script)
-        self.assertIn("run 'python harness_cli.py uninstall --apply' then 'python harness_cli.py init --answers-json <answers.json>'", lifecycle_script)
+        # Recovery is run from the client root; the launcher lives in the external kit.
+        import lifecycle
+        guidance = lifecycle._conflict_refusal_message([".agents/scripts/phase_review.py"], discard_requested=False)
+        self.assertIn('<kit-dir>/harness_cli.py" uninstall --apply', guidance)
+        self.assertIn('<kit-dir>/harness_cli.py" init --repo "<app-root>"', guidance)
+        self.assertIn('--answers-json "<answers.json>"', guidance)
 
     def test_install_or_update_prompt_pins_and_unpinned_header_detection(self) -> None:
         prompt_text = _chat_installer_text()

@@ -733,10 +733,14 @@ def cmd_update(args: argparse.Namespace) -> int:
         answers_arg = getattr(args, "answers_json", None)
         temp_answers = Path(answers_arg).absolute() if answers_arg else None
         old_answers = answers.read_bytes() if answers.is_file() else None
+        if getattr(args, "preserve_active_task", None) and temp_answers:
+            print("[FAIL] Active-task update cannot change setup answers.")
+            return 1
         sys.path.insert(0, str(_script_root(kit)))
         from lifecycle import require_update_idle
         try:
-            require_update_idle(repo)
+            require_update_idle(repo, preserve_active_task=getattr(args, "preserve_active_task", None),
+                                source_stopped=getattr(args, "source_stopped", False))
         except RuntimeError as exc:
             print(f"[FAIL] {exc}")
             return 1
@@ -754,6 +758,10 @@ def cmd_update(args: argparse.Namespace) -> int:
             if answers.is_file():
                 print("[*] Applying a compatible vNext engine update to the app checkout...")
                 lifecycle_args = ["update", "--repo", str(repo), "--kit", str(kit)]
+                if getattr(args, "preserve_active_task", None):
+                    lifecycle_args.extend(["--preserve-active-task", args.preserve_active_task])
+                    if getattr(args, "source_stopped", False):
+                        lifecycle_args.append("--source-stopped")
                 if getattr(args, "discard_local_edits", False):
                     lifecycle_args.append("--discard-local-edits")
                 port_code = run_engine_script(kit, "lifecycle.py", lifecycle_args)
@@ -1105,6 +1113,7 @@ def cmd_phase_review(args: argparse.Namespace) -> int:
 
 
 FULL_SELFTEST_SUITES = (
+    "_host_continuation_selftest.py",
     "_vnext_selftest.py",
     "_hook_selftest.py",
     "_security_selftest.py",
@@ -1133,6 +1142,7 @@ FULL_SELFTEST_SUITES = (
 )
 
 QUICK_SELFTEST_SUITES = (
+    "_host_continuation_selftest.py",
     "_workflow_insight_selftest.py",
     "_hook_selftest.py",
     "_security_selftest.py",
@@ -1188,6 +1198,10 @@ def _selftest_env() -> dict[str, str]:
     """Suite environment. Update checks never touch the network in suites. HARNESS_SELFTEST_TMP points
     temporary fixtures at a dedicated directory (for example one excluded from antivirus scanning)."""
     env = dict(os.environ)
+    # Fixtures choose their own hosts; the maintainer's Codex session is not
+    # the executor of each simulated client task.
+    env.pop("CODEX_THREAD_ID", None)
+    env.pop("HARNESS_HOST", None)
     env["HARNESS_UPDATE_CHECK"] = "off"
     root = env.get("HARNESS_SELFTEST_TMP", "").strip()
     if root:
@@ -1565,6 +1579,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Force remote release check.")
     sp.add_argument("--no-refresh", action="store_true", help="Use the already verified pinned kit without network refresh.")
     sp.add_argument("--answers-json", help="Optional new wizard answers collected by chat.")
+    sp.add_argument("--preserve-active-task", metavar="TASK_ID", help="Temporarily reserve a stopped approved task and preserve its state exactly.")
+    sp.add_argument("--source-stopped", action="store_true", help="Confirm the active executor has stopped writing before update.")
     sp.add_argument(
         "--discard-local-edits",
         action="store_true",

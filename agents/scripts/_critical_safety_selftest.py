@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -469,6 +470,46 @@ class CriticalSafetyTests(unittest.TestCase):
         doctor = HarnessDoctor(repo, run_selftest=False)
         doctor.check_file_structure()
         return [r for r in doctor.results if r.name == "Managed File Integrity"]
+
+    def test_doctor_recovery_commands_use_the_external_kit_from_an_app_root(self):
+        from _vnext_common import canonical_sha256
+
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "Android Project"
+            managed = repo / ".agents/scripts/phase_review.py"
+            managed.parent.mkdir(parents=True)
+            managed.write_bytes(b"# local edit\n")
+            ownership = {
+                "architecture_major": 1,
+                "entries": [{
+                    "path": ".agents/scripts/phase_review.py",
+                    "post_install_sha256": sha256_bytes(b"# release copy\n"),
+                }],
+            }
+            ownership["ownership_sha256"] = canonical_sha256(ownership)
+            setup = repo / ".harness-setup"
+            setup.mkdir()
+            (setup / "ownership-v1.json").write_text(json.dumps(ownership), encoding="utf-8")
+
+            integrity = self._managed_integrity(repo)
+            self.assertEqual(["WARN"], [r.status for r in integrity])
+            instructions = next(d for d in integrity[0].details if "--discard-local-edits" in d)
+            refusal = lifecycle._conflict_refusal_message([".agents/scripts/phase_review.py"], discard_requested=False)
+            commands = [instructions[instructions.index("python "):]]
+            commands.extend(part for part in refusal.split("'") if part.startswith("python "))
+            self.assertEqual(3, len(commands))
+            for command in commands:
+                with self.subTest(command=command):
+                    rendered = command.replace("<kit-dir>", str(fixtures.KIT)).replace("<app-root>", str(repo))
+                    argv = shlex.split(rendered)
+                    launcher = Path(argv[1])
+                    self.assertTrue(launcher.is_absolute(), "recovery must not resolve its launcher against the app root")
+                    self.assertTrue(launcher.is_file(), "the suggested launcher must exist in the external kit")
+                    self.assertEqual(fixtures.KIT / "harness_cli.py", launcher)
+                    self.assertEqual(str(repo), argv[argv.index("--repo") + 1])
+                    self.assertEqual(str(fixtures.KIT), argv[argv.index("--kit") + 1])
+                    if argv[2] == "update":
+                        self.assertIn("--discard-local-edits", argv)
 
     def test_update_discard_local_edits_restores_engine_files_and_keeps_backup(self):
         # Real app (Rashaqa): hand edits to phase_review.py and _product.py blocked the update, and the only

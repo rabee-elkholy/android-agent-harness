@@ -392,8 +392,9 @@ class HarnessDoctor:
         details = conflicts[:10] + ([f"... and {len(conflicts) - 10} more"] if len(conflicts) > 10 else [])
         if any(rel.startswith(".agents/") for rel in conflicts):
             details.append(
-                "To discard the .agents/ edits (copies kept in .harness-backup/): "
-                "python harness_cli.py update --repo <app-root> --discard-local-edits"
+                "To discard the .agents/ edits (copies kept in .harness-backup/), replace <kit-dir> with the external "
+                "harness kit directory and <app-root> with the Android project root: "
+                'python "<kit-dir>/harness_cli.py" update --repo "<app-root>" --kit "<kit-dir>" --discard-local-edits'
             )
         if any(not rel.startswith(".agents/") for rel in conflicts):
             details.append("Files outside .agents/ must be restored or moved by hand before updating.")

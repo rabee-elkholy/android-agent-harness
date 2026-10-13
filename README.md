@@ -113,6 +113,15 @@ one task approval
 - **Proportional review**: Small or trivial phases skip AI review; substantial deltas (e.g. >= 180 changed lines) or elevated risks trigger 1–2 policy-routed specialists.
 - **Final integration review**: Intermediate phase reviews do not replace the final integration review across the completed task.
 
+### Continuing across AI hosts
+
+An approved task can continue in another supported AI host using the same checkout.
+Stop the former executor, then let the receiving agent run `task continue --host
+<actual-host> --source-stopped`. The task keeps its approval and progress; interrupted
+review runs are archived and restarted through the receiving host's real protocol,
+while valid deterministic proof is retained with its original provenance. See
+[cross-host continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md) for commands and enforcement limits.
+
 ### Urgent Task Interruption & Worktree Handoff
 
 When an urgent hotfix or bug interrupts an in-progress task (Task A):
@@ -144,7 +153,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.23/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.24/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -167,7 +176,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.23 --single-branch \
+git clone --depth 1 --branch v1.1.24 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \

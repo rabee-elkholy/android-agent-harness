@@ -239,6 +239,7 @@ class EvidenceStore:
         evidence: dict,
         lock: bool = True,
         allow_pass_retry: bool = False,
+        reused_from: dict | None = None,
     ) -> Path:
         name = validate_id(name, "artifact name")
         producer = validate_id(producer, "producer")
@@ -284,6 +285,9 @@ class EvidenceStore:
                 "status": status,
                 "evidence": redact(evidence),
             }
+            if reused_from is not None:
+                record["reused_from"] = reused_from
+                self._validate_reuse(record)
             record["artifact_sha256"] = canonical_sha256(record)
             target.parent.mkdir(parents=True, exist_ok=True)
             fd, temp_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=str(target.parent))
@@ -309,13 +313,63 @@ class EvidenceStore:
     def read(self, snapshot: str, run_id: str, name: str) -> dict:
         name = validate_id(name, "artifact name")
         latest, _ = self._read_attempt_chain(snapshot, run_id, name)
+        self._validate_reuse(latest)
         return latest
+
+    def _validate_reuse(self, record: dict, depth: int = 0) -> None:
+        origin = record.get("reused_from")
+        if origin is None:
+            return
+        if depth >= 12 or not isinstance(origin, dict) or record.get("artifact") not in {
+            "preflight", "unit_tests", "localization", "room", "red_evidence",
+        }:
+            raise ValidationError("invalid evidence reuse provenance")
+        source_run = validate_id(str(origin.get("run_id") or ""), "source run id")
+        if source_run == record.get("run_id"):
+            raise ValidationError("cyclic evidence reuse")
+        source, _ = self._read_attempt_chain(record["delivery_snapshot_sha256"], source_run, record["artifact"])
+        self._validate_reuse(source, depth + 1)
+        if (source.get("artifact_sha256") != origin.get("artifact_sha256")
+                or source.get("status") != "PASS" or record.get("status") != "PASS"
+                or any(source.get(key) != record.get(key) for key in (
+                    "producer", "harness_version", "delivery_snapshot_sha256", "change_set_sha256", "evidence"))):
+            raise ValidationError("reused evidence no longer matches its original successful attempt")
+
+    def reuse(self, *, snapshot: str, source_run_id: str, run_id: str, name: str, lock: bool = True) -> Path:
+        """Reference a validated deterministic PASS; never manufacture fresh execution."""
+        source = self.read(snapshot, source_run_id, name)
+        return self.write(snapshot=snapshot, run_id=run_id, name=name, producer=source["producer"],
+                          harness_version=source["harness_version"], change_set=source["change_set_sha256"],
+                          status=source["status"], evidence=source["evidence"], lock=lock,
+                          reused_from={"run_id": source_run_id, "artifact_sha256": source["artifact_sha256"]})
 
     def prune(self, *, keep: int = 50, protected: set[tuple[str, str]] | None = None) -> list[Path]:
         """Remove only complete, unprotected old run directories."""
-        protected = protected or set()
+        protected = set(protected or set())
         run_dirs = [path for snap in self.runs_root.glob("*") if snap.is_dir() for path in snap.glob("*") if path.is_dir()]
         run_dirs.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        # A retained reuse record still depends on its original attempt chain.
+        # Follow origins transitively before pruning, never delete their proof.
+        pending = [*run_dirs[:max(0, keep)], *(self.run_dir(*key) for key in protected),
+                   *(path for path in run_dirs if (path / ".active").exists())]
+        visited = set()
+        while pending:
+            directory = pending.pop()
+            if directory in visited:
+                continue
+            visited.add(directory)
+            if not directory.exists():
+                raise ValidationError("retained evidence source is missing")
+            for path in directory.rglob("*.json"):
+                record = read_json(path)
+                origin = record.get("reused_from") if isinstance(record, dict) else None
+                if origin is not None:
+                    name = str(record.get("artifact") or "")
+                    self.read(directory.parent.name, directory.name, name)
+                    key = (directory.parent.name, validate_id(str(origin.get("run_id") or "")))
+                    if key not in protected:
+                        protected.add(key)
+                        pending.append(self.run_dir(*key))
         removed: list[Path] = []
         for run_dir in run_dirs[max(0, keep):]:
             key = (run_dir.parent.name, run_dir.name)

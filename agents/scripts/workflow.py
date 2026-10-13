@@ -3162,7 +3162,20 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
     state = str(plan.get("status") or "").upper()
     identity = f'--repo . --task-id {task_id}'
     run_host = resolve_review_host(repo, host)
-    if host is None:
+    from host_continuation import CONTINUABLE_STATES, load_session
+    session = load_session(repo, task_id)
+    actor_id = os.environ.get("CODEX_THREAD_ID", "").strip() if run_host == "codex" else ""
+    if state in CONTINUABLE_STATES and session and (session["host"] != run_host or (actor_id and session.get("actor_id") and actor_id != session["actor_id"])):
+        return {"code": "CONTINUE_ON_CURRENT_HOST", "kind": "HARNESS_COMMAND", "blocking": True,
+                "command": f"python .agents/harness.py task continue {identity} --host {run_host} --source-stopped --expect-session {session['session_id']}",
+                "reason": "Stop the former executor, then continue the same approved task on this host.",
+                "inputs": {"task_id": task_id, "host": run_host}, "expected": {"success_statuses": ["CONTINUED"]}}
+    from host_continuation import review_host_mismatch_action
+    from review_sources import detected_current_host
+    mismatch = review_host_mismatch_action(repo, task_id, plan, run_host, session) if (host or session or detected_current_host()) else None
+    if mismatch:
+        return mismatch
+    if host is None and session is None and not os.environ.get("HARNESS_HOST") and not os.environ.get("HARNESS_HOOK_HOST") and not os.environ.get("CODEX_THREAD_ID"):
         from phase_review import phase_run_file
         for phase in reversed(plan.get("phases") or []):
             run_file = phase_run_file(task_dir(repo, task_id), str(phase.get("id") or ""))
@@ -5056,6 +5069,12 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     common.add_argument("--task-id", required=True)
+    from host_continuation import continue_task
+    command = sub.add_parser("continue", parents=[common])
+    command.add_argument("--host", required=True, help="Receiving host; never rewrites the project's preferred host")
+    command.add_argument("--source-stopped", action="store_true", help="Confirm the former executor has stopped writing")
+    command.add_argument("--expect-session", help="Compare-and-swap against the previously observed host session ID")
+    command.set_defaults(handler=continue_task)
     sub.add_parser("coverage", parents=[common]).set_defaults(handler=acceptance_coverage)
     sub.add_parser("metrics", parents=[common]).set_defaults(handler=local_task_metrics)
     binding = sub.add_parser("bind-evidence", parents=[common])
@@ -5636,7 +5655,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        result = args.handler(args)
+        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale"}:
+            from host_continuation import assert_execution_session
+            assert_execution_session(Path(args.repo).resolve(), args.task_id)
+        if args.action == "continue" and args.json:
+            import contextlib
+            with contextlib.redirect_stdout(sys.stderr):
+                result = args.handler(args)
+        else:
+            result = args.handler(args)
+        if args.action == "approve" and result.get("status") == "IMPLEMENTING":
+            from review_sources import detected_current_host
+            from host_continuation import continue_task, load_session
+            current_host = detected_current_host()
+            repo = Path(args.repo).resolve()
+            if current_host and load_session(repo, args.task_id) is None:
+                import contextlib
+                with contextlib.redirect_stdout(sys.stderr):
+                    continue_task(argparse.Namespace(repo=str(repo), task_id=args.task_id, host=current_host,
+                                                     source_stopped=False, expect_session=None))
     except (ValidationError, OSError) as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
@@ -5663,6 +5700,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"RECONCILED={result.get('task_id')} -> DELIVERED")
             else:
                 print(f"TASK_STATUS={result.get('status', 'READY')}")
+    elif args.action == "continue" and not args.json:
+        print("TASK_STATUS=CONTINUED")
+        print(f"HOST_EXECUTOR={result['host']} SESSION={result['session_id']} ENFORCEMENT={result['enforcement_tier']}")
+        print("RESUME_BRIEF=" + json.dumps(result["brief"], ensure_ascii=False))
+        upcoming = result["next_action"]
+        print(f"NEXT_ACTION={upcoming.get('code')}: {upcoming.get('command') or ''}")
+        print(f"NEXT_REASON={upcoming.get('reason') or ''}")
+        if upcoming.get("inputs"):
+            print("NEXT_ACTION_INPUTS=" + json.dumps(upcoming["inputs"], ensure_ascii=False))
     elif args.json:
         if args.action in ("draft", "revise"):
             # A live run passed --json to draft and revise and got none of this, so the agent wrote the

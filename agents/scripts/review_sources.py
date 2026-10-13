@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Protocol
 
+from _vnext_common import ValidationError
+
 
 class TrustedReviewSource(Protocol):
     def resolve(self, execution_id: str) -> Path | None:
@@ -32,14 +34,37 @@ def primary_host_from_tools(tools: list[str] | tuple[str, ...] | str | None) -> 
     return selected[0] if len(selected) == 1 and selected[0] in supported else "generic"
 
 
+def detected_current_host() -> str | None:
+    """Declared adapter identity, or an actual process-local Codex identity."""
+    for value in (os.environ.get("HARNESS_HOST"), os.environ.get("HARNESS_HOOK_HOST")):
+        if value and value.strip():
+            value = value.strip().lower()
+            if not re.fullmatch(r"[a-z][a-z0-9_-]*", value):
+                raise ValidationError(f"invalid review host '{value}'")
+            return value
+    return "codex" if os.environ.get("CODEX_THREAD_ID", "").strip() else None
+
+
 def resolve_review_host(repo: Path, explicit: str | None = None) -> str:
     """Resolve a frozen review host without executing installed configuration code."""
-    for value in (explicit, os.environ.get("HARNESS_HOST")):
+    for value in (explicit,):
         if value and str(value).strip():
             host = str(value).strip().lower()
             if not re.fullmatch(r"[a-z][a-z0-9_-]*", host):
-                raise ValueError(f"invalid review host '{value}'")
+                raise ValidationError(f"invalid review host '{value}'")
             return host
+    detected = detected_current_host()
+    if detected:
+        return detected
+    from _vnext_common import state_root
+    active = state_root(repo) / "active-task.json"
+    if active.exists():
+        from _vnext_common import read_json, validate_id
+        task_id = validate_id(str(read_json(active).get("task_id") or ""))
+        from host_continuation import load_session
+        session = load_session(repo, task_id)
+        if session:
+            return session["host"]
     product_file = repo / ".agents" / "scripts" / "_product.py"
     if product_file.is_file():
         try:
