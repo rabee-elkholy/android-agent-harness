@@ -4,6 +4,18 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.25] - 2026-10-14
+
+### Verification evidence and discovery hardening
+
+- Bound graph search grants to exact non-source files or Kotlin/Java packages, including phase review; canonicalize paths and reject traversal, stale receipts and ancestor scope widening.
+- Reject direct Gradle/ADB execution even when a command mentions a harness wrapper. Route installed engine source inspection through bounded, read-only Doctor excerpts with an explicit diagnostic reason and reference.
+- Preserve fresh new unit-test failures before one forced diagnostic retry. Failed-then-passed remains blocking suspected-flaky evidence; same-run reruns and reused evidence cannot erase it.
+- Exclude explicitly applied Android Asset Pack modules from inferred changed-module unit-test tasks. Keep unknown plugin logic conservative and preserve explicit task selection.
+- Verify installed APK checksums before and after bounded startup observation, bind foreground package and Android user, and support an optional exact visible resource assertion. Startup alone does not replace the mobile walkthrough.
+- Show advisory phase, final-review and correction spending estimates before task approval while preserving the shared reviewer-call limit selected during setup and existing explicit task spending decisions.
+- Batch advisory scope-denial classification to avoid repeated repository inventories; add regression coverage for module selection, malformed UI data, source/artifact drift, evidence history and public routing.
+
 ## [1.1.24] - 2026-10-13
 
 ### Cross-host task continuation and safe active-task updates

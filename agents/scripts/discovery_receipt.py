@@ -17,6 +17,34 @@ from typing import Any
 DISCOVERY_CACHE_SUBDIR = Path(".agents") / "cache" / "discovery"
 
 
+def relative_search_target(repo: Path, target: str | Path) -> str | None:
+    """Canonical repo-local target, including traversal and symlink resolution."""
+    try:
+        root = repo.resolve()
+        path = Path(str(target).replace('\\', '/').strip())
+        resolved = (path if path.is_absolute() else root / path).resolve()
+        relative = resolved.relative_to(root).as_posix()
+        return relative.lower() if relative != '.' else None
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def source_search_root(path: str) -> str:
+    """A source file may grant its package, never a module or Android source-set root.
+
+    Manifests, build files and resources grant the exact file only. In particular,
+    AndroidManifest.xml must not turn app/src/main into a recursive search grant.
+    """
+    parts = Path(str(path).replace("\\", "/")).parts
+    if not parts or Path(parts[-1]).suffix.lower() not in {".kt", ".java"}:
+        return ""
+    for index, part in enumerate(parts):
+        if part in {"java", "kotlin"} and index >= 2 and parts[index - 2] == "src":
+            if len(parts) > index + 2:
+                return "/".join(parts[:-1])
+    return ""
+
+
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -42,17 +70,9 @@ def compute_allowed_search_roots(
         if not norm:
             continue
         roots.add(norm)
-        p = Path(norm)
-        parent = p.parent.as_posix()
-        if parent and parent != ".":
+        parent = source_search_root(norm)
+        if parent:
             roots.add(parent)
-            grandparent = Path(parent).parent.as_posix()
-            # If parent is something like 'com/example/feature/profile', grandparent is also useful
-            if grandparent and grandparent != ".":
-                # Only add if it's within feature / src structure
-                parts = grandparent.split("/")
-                if any(part in {"feature", "features", "ui", "domain", "data", "presentation"} for part in parts):
-                    roots.add(grandparent)
 
     if resolved_modules and include_module_roots:
         for mod in resolved_modules:
@@ -170,22 +190,15 @@ def is_path_in_discovery_scope(repo: Path, target_path: str | Path, receipt: dic
     """Checks if a search target path or directory falls within the receipt's discovered scope."""
     if not receipt:
         return False
-    repo_root = repo.resolve()
     target_str = str(target_path).replace("\\", "/").strip().rstrip("/")
     if not target_str or target_str in {".", "./"}:
         return False
 
-    try:
-        p = Path(target_str)
-        if p.is_absolute():
-            rel = p.resolve().relative_to(repo_root).as_posix().lower()
-        else:
-            rel = target_str.lstrip("./").lower()
-    except Exception:
-        rel = target_str.lstrip("./").lower()
-
-    allowed_roots = [str(r).lower().rstrip("/") for r in receipt.get("allowed_search_roots") or []]
-    resolved_paths = [str(rp).lower() for rp in receipt.get("resolved_paths") or []]
+    rel = relative_search_target(repo, target_str)
+    if rel is None:
+        return False
+    allowed_roots = [relative_search_target(repo, r) for r in receipt.get('allowed_search_roots') or []]
+    resolved_paths = [relative_search_target(repo, p) for p in receipt.get('resolved_paths') or []]
 
     # Exact match on resolved path
     if rel in resolved_paths:
@@ -196,9 +209,6 @@ def is_path_in_discovery_scope(repo: Path, target_path: str | Path, receipt: dic
         if not root:
             continue
         if rel == root or rel.startswith(root + "/"):
-            return True
-        # Or root is inside target if target is a specific enclosing package
-        if root.startswith(rel + "/") and len(rel.split("/")) >= 4:
             return True
 
     return False

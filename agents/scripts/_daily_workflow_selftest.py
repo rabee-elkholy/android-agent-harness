@@ -846,6 +846,23 @@ class DailyWorkflowSelftest(unittest.TestCase):
         plan["plan_sha256"] = "different-plan"
         self.assertEqual(20, effective_review_budget(self.repo, plan, {"model_call_budget": 20}))
 
+    def test_draft_discloses_setup_budget_and_estimate_before_approval(self):
+        from review_budget import effective_review_budget
+        phases = [{"id": f"p{i}", "title": f"Feature stage {i}", "description": "Implement the planned behavior"}
+                  for i in range(6)]
+        with mock.patch.object(_product, "MODEL_CALL_BUDGET", 12, create=True):
+            plan = draft(self._draft_ns("budget-forecast", kind="FEATURE", phases=json.dumps(phases)))
+            forecast = plan["review_budget_forecast"]
+            self.assertEqual(12, forecast["configured_limit"])
+            self.assertEqual(12, forecast["phase_calls_estimate"])
+            self.assertGreater(forecast["estimated_total_with_reserve"], 12)
+            directory = task_dir(self.repo, "budget-forecast")
+            self.assertIn("shared task cap 12 from setup", (directory / "plan.md").read_text(encoding="utf-8"))
+            self.assertIn("shared task cap 12 from setup", workflow.approval_brief(plan))
+            self.assertEqual("AWAITING_DEVELOPER_APPROVAL", plan["status"])
+            self.assertEqual(12, effective_review_budget(self.repo, plan))
+            self.assertFalse((directory / "review-budget.json").exists())
+
     def test_cancel_in_chat_records_the_developers_words(self) -> None:
         # Real app: the developer said "cancel the task" in chat and was told to run the command in a terminal.
         draft(self._draft_ns("chat-cancel"))
@@ -8135,6 +8152,22 @@ class GitDeliveryTests(ReviewOrchestrationTests):
 
 class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
     """Regression suite for DEFECT-ROUTER-01 and DEFECT-RESUME-01."""
+
+    def test_diagnostic_failure_followed_by_clean_rerun_routes_to_investigation(self):
+        task_id = 'router-diagnostic-retry'
+        plan, directory = self._setup_verifying_task_ready_for_complete(task_id, expected_surfaces='BUSINESS_LOGIC')
+        current = read_json(directory / 'current-run.json')
+        manifest = read_json(Path(current['manifest']))
+        store = EvidenceStore(state_root(self.repo))
+        common = dict(snapshot=manifest['delivery_snapshot_sha256'], run_id=current['run_id'],
+            name='unit_tests', producer='run_tests_gate', harness_version=(KIT / 'agents/VERSION').read_text().strip(),
+            change_set=manifest['change_set_sha256'], allow_pass_retry=True)
+        store.write(**common, status='FAIL', evidence={'attempts': [{'new_regressions': ['A#a']}], 'detail': 'SUSPECTED_FLAKY'})
+        store.write(**common, status='PASS', evidence={'executed': 1})
+        action = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual('RESUME_IMPLEMENTATION', action['code'])
+        self.assertIn('task resume', action['command'])
+        self.assertIn('suspected flaky', action['reason'])
 
     def _setup_verifying_task_ready_for_complete(
         self, task_id: str, change_after_begin: str | None = None, expected_surfaces: str = "COMPOSE_UI",

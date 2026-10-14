@@ -468,15 +468,23 @@ def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[
     needed up to three approvals.
     """
     missing = {item.split(":", 1)[1] for item in drift if item.startswith("surface:")}
-    for rel in plan.get("expected_files") or []:
+    groups: dict[bool, list[str]] = {True: [], False: []}
+    for rel in (plan.get("expected_files") or []) if missing else []:
         rel = str(rel).replace("\\", "/").strip("/")
         if not rel or rel == target or rel in set(plan.get("external_writes") or []) or not (root / rel).is_file():
             continue
+        groups[_is_tracked(root, rel)].append(rel)
+    # This is an advisory hint after an authoritative denial. Reclassifying each
+    # planned file separately repeated the entire Git/source inventory and could
+    # exceed the native hook deadline. Keep tracked sensitivity handling separate.
+    for tracked, paths in groups.items():
+        if not paths:
+            continue
         try:
-            surfaces = classify(root, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False).get("surfaces") or []
+            surfaces = classify(root, task_changes=[{"path": rel} for rel in paths], candidate_paths=paths, progress=False).get("surfaces") or []
         except Exception:
             continue
-        if _is_tracked(root, rel):
+        if tracked:
             surfaces = [s for s in surfaces if s not in PRE_EXISTING_CONTENT_SURFACES]
         missing |= {item.split(":", 1)[1] for item in check_material_drift(plan, surfaces) if item.startswith("surface:")}
     files = set(plan.get("expected_files") or []) | {item.split(":", 1)[1] for item in drift if item.startswith("file:")}
@@ -796,6 +804,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, "every command segment is authorized"
     if segments:
         normalized = segments[0]
+    raw_entry, _ = _entry(normalized, repo)
+    if raw_entry in {"adb", "gradlew", "gradlew.bat", "gradle"}:
+        return False, "Direct Gradle/ADB execution is blocked; use the harness build or device commands."
     if _workflow_action(normalized, repo) != "continue" and not _is_read_only(normalized, repo):
         try:
             plan = active_plan(Path(repo))

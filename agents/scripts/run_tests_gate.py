@@ -266,6 +266,26 @@ def _unit_test_scope() -> str:
         return "legacy"
 
 
+def _asset_pack_without_test_plugin(build: str, catalog_ids: dict[str, str]) -> bool:
+    """Exclude only an explicitly applied asset-pack plugin with no unknown plugin logic.
+
+    Unknown/convention plugins keep the conservative selection. A plugin mentioned
+    in a comment or declared with apply false cannot exclude a module's tests.
+    """
+    from wizard.discovery import _resolve_catalog_aliases
+    # Preserve quoted literals while removing comments, including URLs in strings.
+    clean = re.sub(r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|//[^\n]*|/\*.*?\*/''',
+                   lambda match: match.group(1) or " ", build, flags=re.S)
+    clean = _resolve_catalog_aliases(clean, catalog_ids)
+    literal_plugin = re.compile(r'''\bid\s*(?:\(\s*)?["']([^"']+)["']|\bapply\s+plugin\s*:\s*["']([^"']+)["']''')
+    plugins = {match.group(1) or match.group(2) for match in literal_plugin.finditer(clean)}
+    # A dynamic id/apply call can supply tests even though its plugin name is not
+    # statically visible. Remove only recognized literals, then keep all unknown
+    # plugin logic conservative, including multiline apply and apply false.
+    remaining = literal_plugin.sub(" ", clean)
+    return plugins == {"com.android.asset-pack"} and not re.search(r'\b(?:id|apply|alias|kotlin)\b', remaining)
+
+
 def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
     """Unit-test tasks for this run.
 
@@ -319,6 +339,8 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
                 if consumer not in selected:
                     selected.add(consumer)
                     pending.append(consumer)
+    from wizard.discovery import _catalog_plugin_ids
+    catalog_ids = _catalog_plugin_ids(repo)
     tasks = set()
     for module in selected:
         if module == default_module:
@@ -326,6 +348,8 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
             continue
         node = nodes.get(module)
         build = (repo / node.file_path).read_text(encoding="utf-8", errors="replace") if node and node.file_path else ""
+        if _asset_pack_without_test_plugin(build, catalog_ids):
+            continue
         jvm = bool(re.search(r'''kotlin\s*\(\s*["']jvm["']|["'](?:org\.jetbrains\.kotlin\.jvm|java|java-library)["']''', build))
         android = bool(re.search(r"com\.android\.|org\.jetbrains\.kotlin\.multiplatform", build))
         suffix = "test" if jvm and not android else task_suffix
@@ -709,6 +733,76 @@ def _record_unrelated(failed: list[dict], code: int, outcome: dict, reports_befo
     return 1 if refusals else 0
 
 
+def execution_identity(repo: Path) -> dict:
+    """Bind diagnostic attempts to one tree, change set and external input set."""
+    from delivery_manifest import build_manifest
+    try:
+        manifest = build_manifest(repo)
+        return {key: manifest[key] for key in (
+            'delivery_snapshot_sha256', 'change_set_sha256', 'external_inputs_sha256')}
+    except Exception:
+        return {}
+
+
+def run_test_tasks(tasks: list[str], extra: list[str]) -> tuple[int, dict]:
+    from run_gradle_task import run_gradle
+    code, attributable, outcome = 0, True, {}
+    for task in tasks:
+        item_outcome: dict = {}
+        with step_progress(f'Running unit tests: {task}'):
+            item_code = run_gradle([task, *extra], outcome=item_outcome)
+        if item_code == EXIT_ENV:
+            return item_code, item_outcome
+        if item_code:
+            code = code or item_code
+            attributable = attributable and bool(item_outcome.get('test_failure_only'))
+            outcome.update(item_outcome)
+    if code:
+        outcome['test_failure_only'] = attributable
+    return code, outcome
+
+
+def diagnose_new_failures(repo, tasks, detail, data, identity, baseline, task_start, head):
+    """One fresh diagnostic retry. A recovered test is suspected flaky, never a clean PASS."""
+    first = dict(data)
+    first['failure_fingerprints'] = [
+        {'test_name': item['test_name'], 'fingerprint': item['fingerprint']}
+        for item in collect_task_failures(repo, tasks)]
+    attempts = [first]
+    common = {'schema_version': 2, 'producer': 'run_tests_gate', 'git_sha': head}
+    # Persist before Gradle can replace the XML reports or the process can be interrupted.
+    write_gate_result('unit_tests', {**common, **identity, **data, 'detail': detail, 'attempts': attempts})
+    if not identity or execution_identity(repo) != identity:
+        return False, 'Test execution inputs changed or are unavailable; diagnostic retry was not run', {
+            **data, 'status': 'FAIL', 'exit_code': 1, 'attempts': attempts, 'suspected_flaky': []}
+
+    reports_before = report_signatures(repo, tasks)
+    live_print('[*] Retrying the selected unit-test tasks once for diagnosis; the first failure remains blocking.')
+    retry_code, retry_outcome = run_test_tasks(tasks, ['--rerun-tasks', '--no-build-cache'])
+    _ok, retry_detail, retry_data = evaluate_unit_test_execution(
+        repo, tasks, retry_code, reports_before, retry_outcome, baseline, task_start, capture_cases=True)
+    retry_data['failure_fingerprints'] = [
+        {'test_name': item['test_name'], 'fingerprint': item['fingerprint']}
+        for item in collect_task_failures(repo, tasks)
+        if retry_data.get('test_outcomes', {}).get(item['test_name']) == 'FAIL']
+    attempts.append(dict(retry_data, detail=retry_detail))
+    if execution_identity(repo) != identity:
+        return False, 'Test execution inputs changed during the diagnostic retry; rerun verification', {
+            **data, 'status': 'FAIL', 'exit_code': 1, 'attempts': attempts, 'suspected_flaky': []}
+    recovered = sorted(name for name in data['new_regressions']
+                       if retry_data.get('test_outcomes', {}).get(name) == 'PASS')
+    if retry_code == EXIT_ENV:
+        return False, 'Diagnostic retry failed environmentally; the first failure is preserved', {
+            **data, 'status': 'ENV', 'exit_code': EXIT_ENV, 'env_class': 'ENV',
+            'attempts': attempts, 'suspected_flaky': []}
+    # Preserve original coverage and all failures, including any newly failing retry case.
+    failures = sorted(set(data['new_regressions']) | set(retry_data.get('new_regressions', [])))
+    suffix = ('; SUSPECTED_FLAKY: ' + ', '.join(recovered[:5]) +
+              ' failed then passed; investigate before delivery') if recovered else '; diagnostic retry did not prove recovery'
+    return False, detail + suffix, {**data, 'status': 'FAIL', 'exit_code': 1,
+        'new_regressions': failures, 'suspected_flaky': recovered, 'attempts': attempts}
+
+
 def main(argv=None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Baseline-aware unit-test delivery gate")
@@ -729,8 +823,6 @@ def main(argv=None) -> int:
         live_print("[FAIL] --record-unrelated needs --proof-reference with the developer's confirmation.", err=True)
         return 1
 
-    from run_gradle_task import run_gradle
-
     from mutation_guard import active_plan
     try:
         coverage_plan = active_plan(REPO) or {}
@@ -743,26 +835,9 @@ def main(argv=None) -> int:
     task_label = " ".join(tasks)
     live_print(f"[*] Unit-test gate: {task_label}")
     reports_before = report_signatures(REPO, task)
-    outcome: dict = {}
-    code = 0
-    if len(tasks) == 1:
-        with step_progress(f"Running unit tests: {task_label}"):
-            code = run_gradle([*tasks, *extra_gradle], outcome=outcome)
-    else:
-        # One Gradle run per module keeps failure attribution per task and runs every module's tests.
-        attributable = True
-        for item in tasks:
-            item_outcome: dict = {}
-            with step_progress(f"Running unit tests: {item}"):
-                item_code = run_gradle([item, *extra_gradle], outcome=item_outcome)
-            if item_code == EXIT_ENV:
-                code = item_code
-                break
-            if item_code != 0:
-                code = code or item_code
-                attributable = attributable and bool(item_outcome.get("test_failure_only"))
-        if code != 0 and code != EXIT_ENV:
-            outcome["test_failure_only"] = attributable
+    diagnostic_mode = not (args.capture_red or args.record_start or args.record_unrelated)
+    identity = execution_identity(REPO) if diagnostic_mode else {}
+    code, outcome = run_test_tasks(tasks, extra_gradle)
     if code == EXIT_ENV:
         write_gate_result("unit_tests", {
             "schema_version": 2,
@@ -947,6 +1022,7 @@ def main(argv=None) -> int:
             live_print(f"[FAIL] Could not record RED evidence: {exc}", err=True)
             return 1
 
+    task_start = load_task_start_failures(REPO)
     ok, detail, data = evaluate_unit_test_execution(
         repo=REPO,
         task=task,
@@ -954,9 +1030,16 @@ def main(argv=None) -> int:
         reports_before=reports_before,
         outcome=outcome,
         baseline=baseline,
-        task_start=load_task_start_failures(REPO),
+        task_start=task_start,
         capture_cases=capture_cases,
     )
+    if data.get('new_regressions') and code != 0 and outcome.get('test_failure_only'):
+        ok, detail, data = diagnose_new_failures(
+            REPO, tasks, detail, data, identity, baseline, task_start, head)
+        live_print(('[ENV-FAILURE] ' if data.get('status') == 'ENV' else '[FAIL] ') + detail, err=True)
+    if identity and not data.get('attempts') and execution_identity(REPO) != identity:
+        ok, detail = False, 'Test execution inputs changed during the run; rerun verification'
+        data = {**data, 'status': 'FAIL', 'exit_code': 1}
     for text, is_error in verdict_lines(
         ok, detail, code, data.get("new_regressions", []), data.get("task_start_ignored")
     ):
@@ -969,7 +1052,7 @@ def main(argv=None) -> int:
         "detail": detail,
         **data,
     })
-    return 0 if ok else (code if code != 0 else 1)
+    return 0 if ok else int(data.get('exit_code') or code or 1)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -184,6 +185,30 @@ def _blocked(status: str, reasons: list[str], checks: list[dict]) -> dict:
     return {"schema_version": 1, "status": status, "blocked_by": reasons, "checks": checks}
 
 
+def unit_test_retry_error(store: EvidenceStore, snapshot: str, run_id: str, record: dict) -> str | None:
+    """Shared retry semantics for delivery verification and next-action routing."""
+    try:
+        origin = record.get('reused_from')
+        if origin:
+            source = store.read(snapshot, origin['run_id'], 'unit_tests')
+            error = unit_test_retry_error(store, snapshot, origin['run_id'], source)
+            if error:
+                return 'unit_tests reuses invalid source evidence: ' + error
+        history = store.read_attempts(snapshot, run_id, 'unit_tests') if record.get('attempt', 1) > 1 else [record]
+    except ValidationError as exc:
+        return str(exc)
+    for historical in history:
+        prior = historical.get('evidence') or {}
+        if not isinstance(prior, dict):
+            return 'unit_tests has malformed historical evidence'
+        attempts = prior.get('attempts', [])
+        if not isinstance(attempts, list) or len(attempts) > 2 or any(not isinstance(item, dict) for item in attempts):
+            return 'unit_tests has malformed diagnostic attempts'
+        if prior.get('suspected_flaky') or any(item.get('new_regressions') for item in attempts):
+            return 'unit_tests contains an unresolved first-attempt regression or suspected flaky test; prepare a new verification run after investigation'
+    return None
+
+
 def _validate_artifact(
     store: EvidenceStore,
     snapshot: str,
@@ -208,6 +233,24 @@ def _validate_artifact(
         return None, f"ENV:{name} is blocked by the environment"
     if str(record.get("status") or "") != "PASS":
         return None, f"{name} status is {record.get('status')}, not PASS"
+    evidence = record.get('evidence') or {}
+    if not isinstance(evidence, dict):
+        return None, f'{name} has malformed evidence'
+    if name == 'unit_tests':
+        retry_error = unit_test_retry_error(store, snapshot, run_id, record)
+        if retry_error:
+            return None, retry_error
+    if name == 'device_launch' and 'startup_probe' in evidence:
+        probe = evidence['startup_probe']
+        if not isinstance(probe, dict) or type(probe.get('schema_version')) is not int or probe['schema_version'] != 1 or any(
+            probe.get(key) != 'PASS' for key in ('status', 'foreground', 'installed_artifact')
+        ) or probe.get('hierarchy') not in ('OBSERVED', 'UNAVAILABLE') or probe.get('screen_assertion') not in ('PASS', 'NOT_REQUESTED'):
+            return None, 'device_launch has invalid or unsuccessful startup evidence'
+        selector_hash = probe.get('expected_resource_id_sha256')
+        if (selector_hash is not None or probe['screen_assertion'] == 'PASS') and (
+            not isinstance(selector_hash, str) or not re.fullmatch('[0-9a-f]{64}', selector_hash)
+            or probe['screen_assertion'] != 'PASS' or probe['hierarchy'] != 'OBSERVED'):
+            return None, 'device_launch did not prove its expected startup element'
     return record, None
 
 

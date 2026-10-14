@@ -78,6 +78,68 @@ def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
 
 
 class GraphDiscoverySelftest(unittest.TestCase):
+    def test_manifest_does_not_grant_source_tree_search_during_phase_review(self):
+        task = self.repo / '.agents/state/tasks/phase-task'
+        task.mkdir(parents=True, exist_ok=True)
+        plan = {'task_id': 'phase-task', 'status': 'IMPLEMENTING', 'expected_files': [
+            'app/src/main/AndroidManifest.xml',
+            'app/src/main/kotlin/com/example/profile/ProfileViewModel.kt',
+        ]}
+        atomic_write_json(task / 'plan.json', plan)
+        atomic_write_json(task.parents[1] / 'active-task.json', {
+            'task_id': 'phase-task', 'plan_path': str(task / 'plan.json')})
+        for tool, args in (
+            ('grep_search', {'SearchPath': 'app/src/main', 'Query': 'ProfileViewModel'}),
+            ('find_by_name', {'SearchDirectory': 'app/src/main', 'Pattern': '*Profile*'}),
+            ('list_dir', {'DirectoryPath': 'app/src/main'}),
+            ('grep_search', {'SearchPath': 'app/src/main/kotlin/com/example/payments', 'Query': 'charge'}),
+        ):
+            with self.subTest(tool=tool, args=args):
+                result = self._invoke_safety(tool, args)
+                self.assertEqual('deny', result['decision'], result)
+                self.assertEqual('DISCOVERY_SCOPE_EXPANSION_REQUIRED', result['reason_code'])
+        for target in ('app/src/main/AndroidManifest.xml', 'app/src/main/kotlin/com/example/profile'):
+            result = self._invoke_safety('grep_search', {'SearchPath': target, 'Query': 'Profile'})
+            self.assertEqual('allow', result['decision'], result)
+
+    def test_graph_manifest_and_file_anchor_cannot_grant_ancestor_search(self):
+        receipt = create_discovery_receipt(
+            DISCOVERY_D1_TARGETED_GRAPH, 'file', 'app/src/main/AndroidManifest.xml', 'fp',
+            [':app'], ['app/src/main/AndroidManifest.xml'], [])
+        self.assertTrue(is_path_in_discovery_scope(self.repo, 'app/src/main/AndroidManifest.xml', receipt))
+        self.assertFalse(is_path_in_discovery_scope(self.repo, 'app/src/main', receipt))
+        self.assertFalse(is_path_in_discovery_scope(self.repo, 'app/src/main/kotlin/com/example/payments', receipt))
+        receipt['allowed_search_roots'] = ['app/src/main/kotlin/com/example/profile']
+        self.assertFalse(is_path_in_discovery_scope(self.repo, 'app/src/main/kotlin/com/example', receipt))
+
+    def test_empty_legacy_plan_cannot_reuse_a_stale_graph_expansion(self):
+        task = self.repo / '.agents/state/tasks/legacy'
+        task.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(task / 'plan.json', {'task_id': 'legacy', 'status': 'IMPLEMENTING'})
+        atomic_write_json(task.parents[1] / 'active-task.json', {'task_id': 'legacy', 'plan_path': str(task / 'plan.json')})
+        path = 'app/src/main/kotlin/com/example/profile/ProfileViewModel.kt'
+        save_discovery_receipt(self.repo, create_discovery_receipt(
+            DISCOVERY_D1_TARGETED_GRAPH, 'file', path, 'old-graph', [':app'], [path], []))
+        graph = self.repo / '.agents/cache/project_graph.json.fingerprint'
+        graph.write_text('new-graph', encoding='utf-8')
+        result = self._invoke_safety('grep_search', {'SearchPath': path, 'Query': 'refresh'})
+        self.assertEqual('deny', result['decision'], result)
+
+    def test_relative_traversal_cannot_escape_package_search_scope(self):
+        task = self.repo / '.agents/state/tasks/traversal'
+        task.mkdir(parents=True, exist_ok=True)
+        source = 'app/src/main/kotlin/com/example/profile/ProfileViewModel.kt'
+        atomic_write_json(task / 'plan.json', {'task_id': 'traversal', 'status': 'IMPLEMENTING', 'expected_files': [source]})
+        atomic_write_json(task.parents[1] / 'active-task.json', {'task_id': 'traversal', 'plan_path': str(task / 'plan.json')})
+        escaped = 'app/src/main/kotlin/com/example/profile/../payments'
+        result = self._invoke_safety('grep_search', {'SearchPath': escaped, 'Query': 'charge'})
+        self.assertEqual('deny', result['decision'], result)
+        receipt = create_discovery_receipt(DISCOVERY_D1_TARGETED_GRAPH, 'file', source, 'fp', [':app'], [source], [])
+        self.assertFalse(is_path_in_discovery_scope(self.repo, escaped, receipt))
+        in_package = 'app/src/main/kotlin/com/example/profile/../profile/ProfileViewModel.kt'
+        self.assertTrue(is_path_in_discovery_scope(self.repo, in_package, receipt))
+
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="graph_disc_test_")
         self.repo = Path(self.temp_dir.name).resolve()

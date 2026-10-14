@@ -19,6 +19,40 @@ from task_metrics import metrics_report, record_operation
 
 
 class WorkflowInsightTests(unittest.TestCase):
+    def test_review_forecast_discloses_shared_setup_limit_without_changing_authority(self):
+        from review_budget import forecast_review_calls, effective_review_budget
+        from plan_document import render_plan_document
+        from workflow import approval_brief, plan_summary
+        plan = {"task_id": "task", "task_kind": "FEATURE", "phases": [{"id": f"p{i}"} for i in range(6)]}
+        policy = {"model_call_budget": 20, "reviewers": [f"reviewer-{i}" for i in range(7)]}
+        before = json.dumps(plan, sort_keys=True)
+        forecast = forecast_review_calls(plan, policy)
+        self.assertEqual(before, json.dumps(plan, sort_keys=True))
+        self.assertEqual(20, forecast["configured_limit"])
+        self.assertEqual(12, forecast["phase_calls_estimate"])
+        self.assertEqual(7, forecast["final_calls_estimate"])
+        self.assertEqual(7, forecast["correction_reserve"])
+        self.assertEqual(26, forecast["estimated_total_with_reserve"])
+        self.assertEqual("HEADROOM_LIMITED", forecast["status"])
+        with patch.object(_product, "MODEL_CALL_BUDGET", 12, create=True):
+            self.assertEqual(12, forecast_review_calls(plan, {**policy, "model_call_budget": 12})["configured_limit"])
+            self.assertEqual(12, effective_review_budget(None, plan))
+        plan["review_budget_forecast"] = forecast
+        self.assertEqual(20, effective_review_budget(None, plan, policy))
+        for text in (render_plan_document(Path.cwd(), plan, policy=policy), approval_brief(plan), plan_summary(plan)):
+            self.assertIn("20", text)
+            self.assertIn("26", text)
+            self.assertIn("shared", text.lower())
+
+    def test_review_forecast_keeps_documentation_and_disabled_phase_reviews_cheap(self):
+        from review_budget import forecast_review_calls
+        plan = {"phases": [{"id": "p1", "expected_files": ["docs/guide.md"]}, {"id": "p2"}]}
+        policy = {"model_call_budget": 30, "reviewers": ["bug-reviewer-agent"]}
+        self.assertEqual(2, forecast_review_calls(plan, policy)["phase_calls_estimate"])
+        plan["scoped_phase_review_enabled"] = False
+        self.assertEqual(0, forecast_review_calls(plan, policy)["phase_calls_estimate"])
+        self.assertEqual("WITHIN_LIMIT", forecast_review_calls(plan, policy)["status"])
+
     def test_metrics_distinguish_environment_failures_and_repeated_commands(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
@@ -165,6 +199,53 @@ class WorkflowInsightTests(unittest.TestCase):
                     patch("baseline_capture._unit_test_task", return_value=":mobile:test"), \
                     patch.object(_repo_files, "changed_paths", return_value=[repo / "gradle.properties"]):
                 self.assertEqual([":core:test", ":mobile:test"], run_tests_gate.resolve_target_tasks(repo, None))
+
+    def test_asset_packs_do_not_receive_invented_unit_test_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._project(repo)
+            with (repo / "settings.gradle.kts").open("a") as handle:
+                handle.write('include(":foods_db_pack")\n')
+            pack = repo / "foods_db_pack"
+            pack.mkdir()
+            (repo / "gradle").mkdir()
+            (repo / "gradle/libs.versions.toml").write_text(
+                '[plugins]\nasset-pack = { id = "com.android.asset-pack", version = "8.14" }\n')
+            builds = [
+                'plugins { id "com.android.asset-pack" }\n',
+                'plugins { id("com.android.asset-pack") }\n',
+                "apply plugin: 'com.android.asset-pack'\n",
+                'plugins { alias(libs.plugins.asset.pack) }\n',
+            ]
+            for build in builds:
+                with self.subTest(build=build):
+                    (pack / "build.gradle").write_text(build)
+                    with patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True), \
+                            patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"), \
+                            patch.object(_repo_files, "changed_paths", return_value=[repo / "gradle.properties"]):
+                        self.assertEqual([f":{m}:testDebugUnitTest" for m in ("app", "base", "feature", "unrelated")],
+                                         run_tests_gate.resolve_target_tasks(repo, None))
+                        self.assertEqual([":foods_db_pack:customCheck"],
+                                         run_tests_gate.resolve_target_tasks(repo, ":foods_db_pack:customCheck"))
+
+    def test_asset_pack_mentions_do_not_suppress_unknown_or_real_test_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self._project(repo)
+            for build in [
+                '// plugins { id("com.android.asset-pack") }\nplugins { kotlin("jvm") }',
+                'plugins { id("com.android.asset-pack") apply false; id("com.example.convention") }',
+                'plugins { id("com.android.asset-pack"); id("java-library") }',
+                'plugins { id("com.android.asset-pack"); alias(libs.plugins.unknown) }',
+                'plugins { id("com.android.asset-pack"); id(customTestPlugin) }',
+                'plugins { id("com.android.asset-pack") }\napply(\nfrom = "custom-tests.gradle.kts"\n)',
+            ]:
+                with self.subTest(build=build):
+                    (repo / "base/build.gradle.kts").write_text(build)
+                    with patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True), \
+                            patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"), \
+                            patch.object(_repo_files, "changed_paths", return_value=[repo / "gradle.properties"]):
+                        self.assertTrue(any(task.startswith(":base:") for task in run_tests_gate.resolve_target_tasks(repo, None)))
 
 
 if __name__ == "__main__":

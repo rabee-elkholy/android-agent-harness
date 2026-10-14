@@ -163,7 +163,7 @@ def _element_to_node(elem: ET.Element) -> UINode:
 
 
 def parse_ui_hierarchy(xml_content: str) -> list[UINode]:
-    if not xml_content or not xml_content.strip():
+    if not xml_content or len(xml_content) > 2 * 1024 * 1024 or not xml_content.strip():
         return []
     try:
         idx = xml_content.find("<hierarchy")
@@ -178,8 +178,13 @@ def parse_ui_hierarchy(xml_content: str) -> list[UINode]:
                 return []
             xml_clean = xml_clean[:end]
         root = ET.fromstring(xml_clean)
+        if root.tag != 'hierarchy':
+            return []
+        for index, element in enumerate(root.iter()):
+            if index > 20000 or (element is not root and element.tag != 'node'):
+                return []
         return [_element_to_node(child) for child in root]
-    except ET.ParseError:
+    except (ET.ParseError, ValueError, RecursionError):
         return []
 
 

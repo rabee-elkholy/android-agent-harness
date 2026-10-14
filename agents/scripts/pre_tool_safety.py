@@ -240,7 +240,6 @@ def _cancel_pending_message(task_id: str) -> str:
 
 
 RAW_GRADLE = re.compile(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", re.I)
-ALLOWED_GRADLE_WRAPPER = re.compile(r"(?:run_gradle_task|run_tests_gate)\.py\b", re.I)
 IMMUTABLE_ADAPTER_FILES = frozenset({
     "agents.md", "gemini.md", "claude.md", "copilot-instructions.md",
     ".cursorrules", ".windsurfrules", "continue-android-harness.md",
@@ -426,6 +425,14 @@ def _handle_command(command: str) -> None:
     # the joined line. PowerShell and cmd have no such continuation: other hosts keep every line.
     if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude":
         command = join_continuations(command)
+    from mutation_guard import _split_segments, _tokens
+    read_commands = {"cat", "type", "more", "head", "tail", "sed", "rg", "grep", "get-content", "gc", "select-string", "sls"}
+    for segment in _split_segments(command) or []:
+        tokens = _tokens(segment)
+        if tokens and tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe") in read_commands:
+            if any(_installed_engine_target(token, recursive=True) for token in tokens[1:]):
+                _deny_engine_read("run_command", command)
+                return
     active_tid = ""
     try:
         p = active_plan(REPO)
@@ -453,7 +460,7 @@ def _handle_command(command: str) -> None:
             hint = f" {DENY_HINTS[code]}" if code in DENY_HINTS else ""
             emit("deny", f"Denied by local safety boundary: {code}.{hint}", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)
             return
-    if RAW_GRADLE.search(command) and not ALLOWED_GRADLE_WRAPPER.search(command):
+    if RAW_GRADLE.search(command):
         emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)
         return
     # Bridges for other hosts set HARNESS_HOOK_HOST; Antigravity calls the engine directly.
@@ -1303,6 +1310,7 @@ def _is_targeted_search(name: str, args: dict) -> bool:
 
 
 def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
+    from discovery_receipt import source_search_root
     roots: set[str] = set()
     files: set[str] = set()
 
@@ -1311,9 +1319,8 @@ def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
         if not norm:
             continue
         files.add(norm.lower())
-        p = Path(norm)
-        parent = p.parent.as_posix().lower()
-        if parent and parent != ".":
+        parent = source_search_root(norm).lower()
+        if parent:
             roots.add(parent)
 
     prov = plan.get("discovery_provenance") or {}
@@ -1325,12 +1332,12 @@ def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
         norm_p = str(p).replace("\\", "/").strip().lstrip("/").lower()
         if norm_p:
             files.add(norm_p)
-            parent = Path(norm_p).parent.as_posix().lower()
-            if parent and parent != ".":
+            parent = source_search_root(norm_p).lower()
+            if parent:
                 roots.add(parent)
 
     try:
-        from discovery_receipt import load_latest_discovery_receipt, load_discovery_receipt
+        from discovery_receipt import load_latest_discovery_receipt, load_discovery_receipt, check_discovery_freshness
         rec_id = str(prov.get("discovery_id") or "")
         receipts_to_check = []
         if rec_id:
@@ -1342,6 +1349,8 @@ def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
             receipts_to_check.append(latest)
 
         for rec in receipts_to_check:
+            if not check_discovery_freshness(repo, rec)[0]:
+                continue
             for r in rec.get("allowed_search_roots") or []:
                 norm_r = str(r).replace("\\", "/").strip().lstrip("/").lower().rstrip("/")
                 if norm_r:
@@ -1350,8 +1359,8 @@ def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
                 norm_p = str(p).replace("\\", "/").strip().lstrip("/").lower()
                 if norm_p:
                     files.add(norm_p)
-                    parent = Path(norm_p).parent.as_posix().lower()
-                    if parent and parent != ".":
+                    parent = source_search_root(norm_p).lower()
+                    if parent:
                         roots.add(parent)
             for er in rec.get("expanded_roots") or []:
                 norm_er = str(er).replace("\\", "/").strip().lstrip("/").lower().rstrip("/")
@@ -1364,8 +1373,8 @@ def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
     arch_scope = str(arch.get("target_scope") or "").replace("\\", "/").strip().lstrip("/")
     if arch_scope:
         files.add(arch_scope.lower())
-        parent = Path(arch_scope).parent.as_posix().lower()
-        if parent and parent != ".":
+        parent = source_search_root(arch_scope).lower()
+        if parent:
             roots.add(parent)
 
     return roots, files
@@ -1375,14 +1384,10 @@ def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
     target_str = str(target_path or "").replace("\\", "/").strip().rstrip("/")
     if not target_str or target_str in {".", "./"}:
         return False
-    try:
-        p = Path(target_str)
-        if p.is_absolute():
-            rel = p.resolve().relative_to(repo.resolve()).as_posix().lower()
-        else:
-            rel = target_str.lstrip("./").lower()
-    except Exception:
-        rel = target_str.lstrip("./").lower()
+    from discovery_receipt import relative_search_target
+    rel = relative_search_target(repo, target_str)
+    if rel is None:
+        return False
 
     try:
         from discovery_router import _is_exact_non_architectural_file
@@ -1394,9 +1399,9 @@ def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
     roots, files = _get_active_task_scope(repo, plan)
     if not roots and not files:
         try:
-            from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope
+            from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
             rec = load_latest_discovery_receipt(repo)
-            if rec and is_path_in_discovery_scope(repo, target_str, rec):
+            if rec and check_discovery_freshness(repo, rec)[0] and is_path_in_discovery_scope(repo, target_str, rec):
                 return True
         except Exception:
             pass
@@ -1435,15 +1440,8 @@ def _is_path_in_verifying_scope(repo: Path, target_path: str, plan: dict) -> tup
     if not target_str or target_str in {".", "./"}:
         return False, "ROOT_SEARCH_FORBIDDEN"
 
-    repo_root = repo.resolve()
-    try:
-        p = Path(target_str)
-        if p.is_absolute():
-            rel = p.resolve().relative_to(repo_root).as_posix().lower()
-        else:
-            rel = target_str.lstrip("./").lower()
-    except Exception:
-        rel = target_str.lstrip("./").lower()
+    from discovery_receipt import relative_search_target
+    rel = relative_search_target(repo, target_str)
 
     if not rel or rel in {".", "./"}:
         return False, "ROOT_SEARCH_FORBIDDEN"
@@ -1473,8 +1471,9 @@ def _is_path_in_verifying_scope(repo: Path, target_path: str, plan: dict) -> tup
     direct_callers = {str(f).replace("\\", "/").lower().lstrip("./") for f in review_scope.get("direct_callers") or []}
 
     for dc in direct_callers:
-        parent = Path(dc).parent.as_posix().lower()
-        if parent and parent != ".":
+        from discovery_receipt import source_search_root
+        parent = source_search_root(dc).lower()
+        if parent:
             allowed_roots.add(parent)
 
     if not changed_files and not allowed_roots and not direct_callers:
@@ -1778,6 +1777,41 @@ def _flag_out_of_scope_read(name: str, args: dict) -> None:
         return
 
 
+def _installed_engine_target(raw: str, *, recursive: bool = False) -> bool:
+    """Managed implementation only; rules, plans, evidence and application source remain readable."""
+    try:
+        path = Path(str(raw).strip().replace("\\", "/"))
+        path = path if path.is_absolute() else REPO / path
+        # Check both lexical and canonical paths: a symlink cannot hide managed
+        # implementation, or expose it through an application-looking alias.
+        candidates = (Path(os.path.abspath(path)), path.resolve())
+        for candidate in candidates:
+            try:
+                relative = candidate.relative_to((REPO / ".agents").resolve())
+            except ValueError:
+                continue
+            if not relative.parts:
+                return recursive
+            first = relative.parts[0].lower()
+            if first in {"scripts", "mcp"} or relative.as_posix().lower() == "harness.py":
+                return True
+            if recursive and any(mark in first for mark in "*?["):
+                return True
+        return False
+    except (ValueError, OSError):
+        return False
+
+
+def _deny_engine_read(tool: str, command: str = "") -> None:
+    emit("deny", "HARNESS_IMPLEMENTATION_BOUNDARY: use documented commands and their diagnostics first. "
+         "For an unexpected command failure, contract violation, Doctor issue or explicit developer request, "
+         "use python .agents/harness.py doctor --inspect-file scripts/<exact-file>.py "
+         "--inspection-reason <reason> --reference <concrete-output-or-request> "
+         "--inspect-start-line <line> --inspect-lines <1-200>. "
+         "Inspect only the relevant excerpt; do not browse dependencies recursively or patch the installed engine.",
+         tool=tool, command=command, reason_code="HARNESS_IMPLEMENTATION_BOUNDARY")
+
+
 def main() -> None:
     # The installed native adapter identifies this hook process. Its current
     # host takes precedence over the project's preferred host and stale callers.
@@ -1809,6 +1843,13 @@ def _main() -> None:
             import discovery_receipt
             discovery_receipt.RECEIPT_NOT_BEFORE = started
         name, args = _tool_name_and_args(payload)
+        if name in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
+            target = str(args.get("AbsolutePath") or args.get("absolutePath") or args.get("SearchPath")
+                         or args.get("searchPath") or args.get("SearchDirectory") or args.get("searchDirectory")
+                         or args.get("DirectoryPath") or args.get("directoryPath") or _target(args) or "")
+            if _installed_engine_target(target, recursive=name in SEARCH_TOOLS | {"list_dir"}):
+                _deny_engine_read(name)
+                return
         if name in WRITE_TOOLS:
             targets = _extract_all_targets(args)
             if not targets:

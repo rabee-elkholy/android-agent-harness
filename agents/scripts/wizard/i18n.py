@@ -186,7 +186,7 @@ T = {
         "i22_manual": "Interactive Manual Smoke Test — App is launched on device; you follow simple steps and confirm (Recommended)",
         "i22_off": "No device verification — assemble only (I test manually outside the harness)",
         "review_call_budget": (
-            "Maximum reviewer calls allowed for one task before developer intervention?"
+            "Maximum reviewer calls shared by all phases and final review of one task before developer intervention?"
         ),
         "review_call_budget_20": (
             "20 — Review-heavy / large critical work (Recommended)"

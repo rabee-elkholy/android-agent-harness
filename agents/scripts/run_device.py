@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import math
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,7 +44,7 @@ from _repo_files import REPO, adb_serial_is_emulator, first_adb_serial, matching
 from _variants import apk_relative, resolve_or_raise  # noqa: E402
 from artifact_set import build_artifact_set, verify_artifact_set  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
-from _vnext_common import HarnessError, canonical_sha256, read_json, sha256_bytes  # noqa: E402
+from _vnext_common import HarnessError, ValidationError, canonical_sha256, read_json, sha256_bytes  # noqa: E402
 from _verification_recipes import (  # noqa: E402
     VERIFICATION_RECIPES,
     generate_bounded_walkthrough,
@@ -72,6 +75,7 @@ def record_device(
     application_id: str = "",
     target_user: str = "",
     preexisting_package: bool | None = None,
+    startup_probe: dict | None = None,
 ) -> None:
     payload = {
         "schema_version": 2,
@@ -93,6 +97,8 @@ def record_device(
         payload["target_user"] = target_user
     if preexisting_package is not None:
         payload["preexisting_package"] = preexisting_package
+    if startup_probe is not None:
+        payload['startup_probe'] = startup_probe
     name = "device_install" if action == "install" else "device_launch" if action == "start" else "device"
     write_gate_result(name, payload)
     write_gate_result("device", payload)
@@ -164,6 +170,76 @@ def resolve_target_user(serial: str, requested: str | None) -> str:
     if not value.isascii() or not value.isdecimal():
         raise HarnessError("target user must resolve to one numeric Android user id")
     return str(int(value))
+
+
+def probe_startup(transport, expected_resource_id: str | None, timeout: float) -> dict:
+    """Observe startup without UI actions or raw hierarchy/log persistence.
+
+    Foreground + installed APK identity is mandatory. A hierarchy alone makes no
+    visual claim; only a supplied exact resource ID can establish a screen assertion.
+    """
+    from _adb_core import parse_ui_hierarchy, find_nodes
+    from journey_runner import ForegroundMismatch
+    result = {'schema_version': 1, 'status': 'ENV', 'foreground': 'UNAVAILABLE',
+              'hierarchy': 'UNAVAILABLE', 'screen_assertion': 'NOT_REQUESTED',
+              'detail': 'Startup device or installed artifact evidence is unavailable'}
+    if expected_resource_id:
+        result['expected_resource_id_sha256'] = sha256_bytes(expected_resource_id.encode('utf-8'))
+        result['screen_assertion'] = 'UNAVAILABLE'
+    deadline = time.monotonic() + timeout
+    transport.deadline = min(transport.deadline, deadline)
+    try:
+        while True:
+            try:
+                transport.check_identity()
+            except ForegroundMismatch:
+                if time.monotonic() >= deadline:
+                    result.update(status='FAIL', foreground='FAIL', detail='Target application/user did not reach the foreground')
+                    return result
+                time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+                continue
+            result['foreground'] = 'PASS'
+            result['installed_artifact'] = 'PASS'
+            try:
+                raw = transport.call(['exec-out', 'uiautomator', 'dump', '/dev/tty'], min(3, max(0.01, deadline - time.monotonic())))
+                nodes = parse_ui_hierarchy(raw)
+            except (OSError, TimeoutError, subprocess.TimeoutExpired):
+                nodes = []
+            # A disconnect, foreground switch or user switch during the dump cannot pass.
+            transport.check_identity()
+            result['hierarchy'] = 'OBSERVED' if nodes else 'UNAVAILABLE'
+            if not expected_resource_id:
+                transport.verify_installed_artifact()
+                result.update(status='PASS', detail='Installed APK and foreground verified; screen content still needs the walkthrough')
+                return result
+            if not nodes:
+                result['detail'] = 'Expected startup element cannot be checked because the UI hierarchy is unavailable'
+                return result
+            matches = [node for node in find_nodes(nodes, resource_id=expected_resource_id, exact=True)
+                       if node.resource_id == expected_resource_id and node.package == transport.package
+                       and node.width > 0 and node.height > 0]
+            if len(matches) == 1:
+                transport.verify_installed_artifact()
+                result.update(status='PASS', screen_assertion='PASS', detail='Expected startup element observed in the verified application')
+                return result
+            if len(matches) > 1 or time.monotonic() >= deadline:
+                result.update(status='FAIL', screen_assertion='FAIL', detail='Expected startup element is missing, invisible or ambiguous')
+                return result
+            time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+    except (OSError, TimeoutError, subprocess.TimeoutExpired, ValidationError):
+        return result
+
+
+def check_startup(serial, application_id, target_user, artifact_set, expected_resource_id, timeout):
+    from journey_runner import AdbTransport
+    hashes = [item.get('sha256') for item in (artifact_set or {}).get('members', [])]
+    if not hashes or any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value) for value in hashes):
+        return {'schema_version': 1, 'status': 'ENV', 'detail': 'Assembled APK member checksums are unavailable'}
+    try:
+        transport = AdbTransport(serial, application_id, hashes, target_user=target_user)
+    except ValidationError:
+        return {'schema_version': 1, 'status': 'ENV', 'detail': 'Selected startup device/user identity is invalid'}
+    return probe_startup(transport, expected_resource_id, timeout)
 
 
 def _read_harness_version(repo: Path) -> str:
@@ -683,6 +759,8 @@ def main() -> int:
     parser.add_argument("--activity", default=DEFAULT_ACTIVITY, help="Launch activity")
     parser.add_argument("--package", default=APPLICATION_ID, help="Package name to uninstall")
     parser.add_argument("--user", default=None, help="Target user ID for multi-user / work profile devices (e.g. 0)")
+    parser.add_argument('--expect-resource-id', default=None, help='Exact visible startup resource ID to assert; no visual PASS is claimed without it')
+    parser.add_argument('--startup-timeout', type=float, default=15, help='Startup observation budget in seconds (1..30; default: 15)')
     parser.add_argument("--force", action="store_true", help="Bypass APK freshness check (emergency manual use only)")
     parser.add_argument("--grant-runtime-permissions", action="store_true", help="Explicitly grant requested runtime permissions during install")
     parser.add_argument(
@@ -697,6 +775,13 @@ def main() -> int:
     parser.add_argument("--source", choices=["developer_terminal", "host_native", "conversation"], default=None, help="Authority source for signoff")
     parser.add_argument("--approval-token", default=None, help="Trusted approval token from developer prompt")
     args = parser.parse_args()
+    if not math.isfinite(args.startup_timeout) or not 1 <= args.startup_timeout <= 30:
+        parser.error('--startup-timeout must be between 1 and 30 seconds')
+    if args.expect_resource_id and (len(args.expect_resource_id) > 300 or not re.fullmatch(
+        r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+:id/[A-Za-z_][A-Za-z0-9_]*', args.expect_resource_id)):
+        parser.error('--expect-resource-id must be one fully qualified Android resource ID')
+    if args.expect_resource_id and args.action not in ('start', 'install-start'):
+        parser.error('--expect-resource-id requires start or install-start')
 
     if args.action in ("install", "start", "install-start") and not args.force and _device_verification_disabled():
         live_print(
@@ -907,7 +992,30 @@ def main() -> int:
             record_device("start", "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason, artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha, application_id=actual_application_id, target_user=target_user)
             emit_env_failure(verdict, "run_device.py", serial=serial)
             return exit_for(verdict)
-        record_device("start", "EMERGENCY_UNVERIFIED" if args.force else "PASS", 0, serial, artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha, application_id=actual_application_id, target_user=target_user)
+        with step_progress('Checking installed APK, foreground and startup UI'):
+            startup = check_startup(serial, actual_application_id, target_user, artifact_set,
+                                    args.expect_resource_id, args.startup_timeout)
+        if startup.get('status') == 'PASS':
+            try:
+                verify_artifact_set(REPO, artifact_set)
+                if not args.force:
+                    after_startup = build_manifest(REPO)
+                    if any(after_startup.get(key) != current_manifest.get(key) for key in (
+                        'delivery_snapshot_sha256', 'change_set_sha256', 'external_inputs_sha256')):
+                        raise HarnessError('delivery inputs changed during startup')
+            except (HarnessError, OSError):
+                startup = {**startup, 'status': 'ENV', 'detail': 'Assemble inputs or APK artifacts changed during startup'}
+        status = str(startup.get('status') or 'ENV')
+        exit_code = 0 if status == 'PASS' else 1 if status == 'FAIL' else EXIT_ENV
+        record_device('start', 'EMERGENCY_UNVERIFIED' if args.force and status == 'PASS' else status, exit_code, serial,
+                      env_class=CLASS_ENV if exit_code == EXIT_ENV else '',
+                      detail=startup['detail'], artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha,
+                      application_id=actual_application_id, target_user=target_user, startup_probe=startup)
+        live_print(('[+] ' if exit_code == 0 else '[FAIL] ') + startup['detail'], err=exit_code != 0)
+        if exit_code:
+            if exit_code == EXIT_ENV:
+                emit_env_failure(FailureVerdict(CLASS_ENV, startup['detail']), 'run_device.py', serial=serial)
+            return exit_code
         live_print(f"[+] Launched {target_activity}")
         try:
             state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"

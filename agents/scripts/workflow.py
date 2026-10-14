@@ -1087,6 +1087,8 @@ def _build_and_save_plan(
             approach=getattr(args, "approach", None) or "",
             verification_contract=verification_contract,
         )
+        from review_budget import forecast_review_calls
+        plan["review_budget_forecast"] = forecast_review_calls(plan, preliminary_policy)
         plan["task_baseline"] = old_baseline
         plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
         if cached_ctx and cached_ctx.get("context_id"):
@@ -1183,6 +1185,8 @@ def _build_and_save_plan(
         approach=getattr(args, "approach", None) or "",
         verification_contract=verification_contract,
     )
+    from review_budget import forecast_review_calls
+    plan["review_budget_forecast"] = forecast_review_calls(plan, preliminary_policy)
     if cached_ctx and cached_ctx.get("context_id"):
         plan["task_context_id"] = cached_ctx["context_id"]
     elif task_context_id:
@@ -3781,6 +3785,10 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         def has_pass_evidence(name: str) -> bool:
             try:
                 rec = store.read(snapshot, run_id, name)
+                if name == 'unit_tests':
+                    from final_verifier import unit_test_retry_error
+                    if unit_test_retry_error(store, snapshot, run_id, rec):
+                        return False
                 return rec.get("status") == "PASS" and rec.get("change_set_sha256") == change_set
             except Exception:
                 return False
@@ -3811,9 +3819,16 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 rec = store.read(snapshot, run_id, name)
             except Exception:
                 return None
-            if rec.get("status") != "FAIL" or rec.get("change_set_sha256") != change_set:
+            if rec.get("change_set_sha256") != change_set:
                 return None
             detail = str((rec.get("evidence") or {}).get("detail") or "see gate output")
+            if rec.get('status') != 'FAIL':
+                if name != 'unit_tests' or rec.get('status') != 'PASS':
+                    return None
+                from final_verifier import unit_test_retry_error
+                detail = unit_test_retry_error(store, snapshot, run_id, rec)
+                if not detail:
+                    return None
             reason = f"The {name} gate failed on the frozen change set: {detail}. Resume implementation, fix it within the approved scope, then prepare verification again."
             outside = _regressions_outside_plan(plan, manifest, (rec.get("evidence") or {}).get("new_regressions"))
             if outside:
@@ -5233,6 +5248,9 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
     ]
     if "verification_contract" in authority:
         lines.append(f"Acceptance criteria and selected journeys: {displayed(authority['verification_contract'])}")
+    if plan.get("review_budget_forecast"):
+        from review_budget import forecast_summary
+        lines.append(forecast_summary(plan["review_budget_forecast"]))
     if authority.get("supersedes_plan_sha256"):
         lines.append(f"Supersedes plan hash: {str(authority['supersedes_plan_sha256'])[:12]}")
     if authority.get("zoho_link"):
@@ -5408,6 +5426,9 @@ def approval_brief(plan: dict, sensitive_advisory: str | None = None) -> str:
         lines.append("Phases: " + "; ".join(
             f"{index}. {redact(phase.get('title') or phase.get('description') or phase.get('id'))}"
             for index, phase in enumerate(phases, 1)))
+    if plan.get("review_budget_forecast"):
+        from review_budget import forecast_summary
+        lines.append(forecast_summary(plan["review_budget_forecast"]))
     if names:
         shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
         lines.append(f"Files ({len(names)}): {shown}")

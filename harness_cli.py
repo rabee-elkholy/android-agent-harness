@@ -918,6 +918,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         cli_args.append("--device")
     if getattr(args, "install_check", False):
         cli_args.append("--install-check")
+    for name in ("inspect_file", "inspection_reason", "reference", "inspect_start_line", "inspect_lines"):
+        value = getattr(args, name, None)
+        if value is not None:
+            cli_args.extend(["--" + name.replace("_", "-"), str(value)])
     env_marker = os.environ.get("_IN_HOOK_SELFTEST")
     if env_marker != "1":
         os.environ["_IN_HOOK_SELFTEST"] = "0"
@@ -1606,6 +1610,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true", help="Machine-readable JSON report.")
     sp.add_argument("--device", action="store_true", help="Include ADB device diagnostics.")
     sp.add_argument("--install-check", action="store_true", help="Fast post-install structural validation.")
+    sp.add_argument("--inspect-file", help="Inspect one exact engine Python file for a documented diagnostic exception.")
+    sp.add_argument("--inspection-reason", choices=("unexpected_failure", "contract_violation", "doctor_issue", "developer_request"))
+    sp.add_argument("--reference", help="Concrete diagnostic output or developer request.")
+    sp.add_argument("--inspect-start-line", type=int)
+    sp.add_argument("--inspect-lines", type=int)
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.set_defaults(func=cmd_doctor)
 

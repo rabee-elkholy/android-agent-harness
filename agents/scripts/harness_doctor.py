@@ -91,9 +91,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", action="store_true", help="Include connected ADB device diagnostics")
     parser.add_argument("--no-selftest", action="store_true", help="Skip re-running full hook selftest suite")
     parser.add_argument("--install-check", action="store_true", help="Run a fast post-install structural check")
+    parser.add_argument("--inspect-file", help="Inspect one exact engine Python file relative to the engine root")
+    parser.add_argument("--inspection-reason", choices=("unexpected_failure", "contract_violation", "doctor_issue", "developer_request"))
+    parser.add_argument("--reference", help="Concrete failed-command/Doctor output or developer request for inspection")
+    parser.add_argument("--inspect-start-line", type=int, default=1)
+    parser.add_argument("--inspect-lines", type=int, default=120, help="Source excerpt length (1-200 lines)")
     args = parser.parse_args(argv)
 
     repo_path = Path(args.repo).resolve()
+    if args.inspect_file:
+        if not args.inspection_reason or not str(args.reference or "").strip():
+            parser.error("engine inspection needs --inspection-reason and --reference; ordinary gate FAIL is not permission to browse the engine")
+        if not 1 <= args.inspect_lines <= 200 or args.inspect_start_line < 1:
+            parser.error("engine inspection requires a positive start line and 1-200 lines")
+        engine = HarnessDoctor(repo_path, run_selftest=False).agents_dir.resolve()
+        try:
+            raw = Path(args.inspect_file.replace("\\", "/"))
+            target = (engine / raw).resolve()
+            relative = target.relative_to(engine)
+            if raw.is_absolute() or target.suffix != ".py" or not target.is_file() or not (
+                    relative.parts[0] in {"scripts", "mcp"} or relative.as_posix() == "harness.py"):
+                raise ValueError("expected one engine-relative Python source file")
+            if target.stat().st_size > 512 * 1024:
+                raise ValueError("engine source exceeds the 512 KiB inspection limit")
+            lines = target.read_text(encoding="utf-8").splitlines()
+            start = args.inspect_start_line - 1
+            if start >= len(lines):
+                raise ValueError("start line exceeds source length")
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({"status": "DIAGNOSTIC_ONLY", "file": relative.as_posix(),
+            "inspection_reason": args.inspection_reason, "total_lines": len(lines),
+            "lines": [f"{index + 1}: {line}" for index, line in enumerate(lines[start:start + args.inspect_lines], start)]}))
+        return 0
+    if args.inspection_reason or args.reference or args.inspect_start_line != 1 or args.inspect_lines != 120:
+        parser.error("inspection arguments require --inspect-file")
     live_stream = not args.json
     doctor = HarnessDoctor(repo_path, check_device=args.device, run_selftest=not args.no_selftest, live_stream=live_stream)
     results = doctor.run_install_check() if args.install_check else doctor.run_all()

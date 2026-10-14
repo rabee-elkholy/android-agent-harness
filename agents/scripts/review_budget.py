@@ -4,6 +4,42 @@ from __future__ import annotations
 from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, state_root, utc_now, validate_id
 
 
+def forecast_review_calls(plan, policy):
+    """Advisory planning estimate; never changes the setup limit or selects reviewers."""
+    from review_policy import _configured_model_call_budget
+    from phase_review import is_documentation_path
+    limit = int(policy.get("model_call_budget") or _configured_model_call_budget())
+    phases = plan.get("phases") or []
+    enabled = plan.get("scoped_phase_review_enabled")
+    phase_estimates = []
+    for phase in phases:
+        paths = phase.get("expected_files") or []
+        docs_only = bool(paths) and all(is_documentation_path(path) for path in paths)
+        calls = 2 if enabled is not False and (len(phases) > 1 or enabled is True) and not docs_only else 0
+        phase_estimates.append({"phase_id": phase["id"], "calls": calls})
+    phase_calls = sum(item["calls"] for item in phase_estimates)
+    final_calls = len(set(policy.get("reviewers") or []))
+    reserve = max(final_calls, 2 if phase_calls else 0)
+    first_pass = phase_calls + final_calls
+    total = first_pass + reserve
+    return {"schema_version": 1, "scope": "SHARED_TASK", "configured_limit": limit,
+            "phase_estimates": phase_estimates, "phase_calls_estimate": phase_calls,
+            "final_calls_estimate": final_calls, "correction_reserve": reserve,
+            "estimated_first_pass": first_pass, "estimated_total_with_reserve": total,
+            "status": "INSUFFICIENT_FIRST_PASS" if first_pass > limit else "HEADROOM_LIMITED" if total > limit else "WITHIN_LIMIT"}
+
+
+def forecast_summary(forecast):
+    summary = (f"Reviewer calls: shared task cap {forecast['configured_limit']} from setup; "
+            f"phase estimate {forecast['phase_calls_estimate']} + final estimate {forecast['final_calls_estimate']} "
+            f"+ correction reserve {forecast['correction_reserve']} = {forecast['estimated_total_with_reserve']} "
+            f"({forecast['status']}). Advisory; the setup limit is unchanged.")
+    if forecast['status'] != 'WITHIN_LIMIT':
+        summary += (" Discuss insufficient headroom before implementation; any increase needs an explicit developer "
+                    "spending decision through task review-budget. Plan approval alone does not raise the limit.")
+    return summary
+
+
 def effective_review_budget(repo, plan, policy=None):
     from review_policy import _configured_model_call_budget
     default = int((policy or {}).get("model_call_budget") or plan.get("max_review_calls")

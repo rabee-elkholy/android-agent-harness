@@ -193,13 +193,15 @@ class EvidenceStore:
             raise ValidationError(f"artifact identity mismatch: {name}")
         return record
 
-    def _read_attempt_chain(self, snapshot: str, run_id: str, name: str) -> tuple[dict, int]:
+    def _read_attempt_chain(self, snapshot: str, run_id: str, name: str, *, records: list | None = None) -> tuple[dict, int]:
         run_dir = self.run_dir(snapshot, run_id)
         primary = bounded_path(run_dir, f"{name}.json")
         first = self._read_record(primary, snapshot=snapshot, run_id=run_id, name=name)
         first_attempt = first.get("attempt", 1)
         if first_attempt != 1 or first.get("previous_artifact_sha256") not in (None, ""):
             raise ValidationError(f"artifact attempt chain mismatch: {name}")
+        if records is not None:
+            records.append(first)
 
         latest = first
         attempt = 1
@@ -224,6 +226,8 @@ class EvidenceStore:
             ):
                 raise ValidationError(f"artifact attempt chain mismatch: {name}")
             latest = record
+            if records is not None:
+                records.append(record)
         return latest, attempt
 
     def write(
@@ -315,6 +319,14 @@ class EvidenceStore:
         latest, _ = self._read_attempt_chain(snapshot, run_id, name)
         self._validate_reuse(latest)
         return latest
+
+    def read_attempts(self, snapshot: str, run_id: str, name: str) -> list[dict]:
+        """Read the same validated immutable chain without discarding earlier attempts."""
+        name = validate_id(name, 'artifact name')
+        records: list[dict] = []
+        latest, _ = self._read_attempt_chain(snapshot, run_id, name, records=records)
+        self._validate_reuse(latest)
+        return records
 
     def _validate_reuse(self, record: dict, depth: int = 0) -> None:
         origin = record.get("reused_from")

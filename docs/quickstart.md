@@ -13,7 +13,7 @@
 Open the Android project root in your coding agent (select **Google Antigravity** during setup) and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.24/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.25/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent interviews you in chat, preserves references, shows an explicit plan, provisions the pinned kit into `~/.android-harness/kit` (or `%USERPROFILE%\.android-harness\kit` on Windows), and runs Doctor verification (`doctor --install-check`).
@@ -51,7 +51,7 @@ The setup wizard can be rerun before installation. Clean install is the supporte
    python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity
    ```
 5. **Parallel Reviewers**: Routed specialist subagents run concurrently via Antigravity `invoke_subagent` following Review Protocol V2. Structured results are recorded via `review complete` and aggregated via `review finalize`.
-6. **Assemble & Device**: After reviews pass cleanly, the agent builds the debug APK (`assemble`) and deploys to a physical device (`device install-start`).
+6. **Assemble & Device**: After reviews pass cleanly, the agent builds the debug APK (`assemble`) and deploys to a physical device (`device install-start`). Startup checks verify the installed APK and foreground app/user; an optional `--expect-resource-id` asserts a known visible element. The walkthrough remains required. See [verification hardening](verification-hardening.md).
 7. **Delivery**: When the lifecycle state is unclear, `python .agents/harness.py task status --repo . --task-id <id> --next` prints the authoritative next action. The agent never performs automatic git commits or pushes.
 
 ## Canonical Large-Task & Phased Execution

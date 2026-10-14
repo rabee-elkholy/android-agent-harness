@@ -19,6 +19,10 @@ MAX_STEPS = 40
 MAX_SECONDS = 120
 
 
+class ForegroundMismatch(OSError):
+    """The selected application/user has not reached the foreground."""
+
+
 def validate_journey(value):
     from verification_contract import strict_keys, text
     fields = {"schema_version", "id", "version", "purpose", "criteria", "module", "variant",
@@ -142,17 +146,23 @@ def execute_journey(value, transport):
 
 
 class AdbTransport:
-    def __init__(self, serial, package, expected_apk_hashes):
+    def __init__(self, serial, package, expected_apk_hashes, *, target_user='0'):
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", serial):
             raise ValidationError("invalid selected device serial")
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+', package):
+            raise ValidationError('invalid selected application id')
         self.serial, self.package = serial, package
+        if not str(target_user).isascii() or not str(target_user).isdecimal():
+            raise ValidationError('invalid selected Android user')
+        self.target_user = str(int(target_user))
+        self.current_user = None
         self.expected_apk_hashes = sorted(expected_apk_hashes)
         self.deadline = time.monotonic() + MAX_SECONDS
         self.observed = None
         self.step_deadline = None
 
     def verify_installed_artifact(self):
-        paths = self.call(["shell", "pm", "path", "--user", "0", self.package], 5).splitlines()
+        paths = self.call(["shell", "pm", "path", "--user", self.target_user, self.package], 5).splitlines()
         if not paths or len(paths) > 32:
             raise OSError("installed artifact unavailable")
         hashes = []
@@ -184,15 +194,19 @@ class AdbTransport:
         # Read user and foreground together instead of three separate ADB launches.
         probe = self.call(["shell", "am get-current-user && dumpsys activity activities"])
         lines = probe.splitlines()
-        if not lines or lines[0].strip() != "0":
-            raise OSError("journey supports the verified primary Android user only")
+        current_user = lines[0].strip() if lines else ''
+        if not current_user.isascii() or not current_user.isdecimal() or (
+            self.target_user == '0' and current_user != '0'
+        ) or (self.current_user is not None and current_user != self.current_user):
+            raise OSError("current Android user changed or is unsupported")
+        self.current_user = current_user
         focus = "\n".join(lines[1:])
         focused = [line for line in focus.splitlines() if re.search("topResumedActivity", line, re.I)]
         if not focused:
             focused = [line for line in focus.splitlines() if "ResumedActivity" in line]
         if not focused or any(not re.search(r"\b" + re.escape(self.package) + r"/", line)
-                              or not re.search(r"\bu0\b", line) for line in focused):
-            raise OSError("target application is not foreground")
+                              or not re.search(r"\bu" + re.escape(self.target_user) + r"\b", line) for line in focused):
+            raise ForegroundMismatch("target application is not foreground")
         # UI hierarchy operations use the selected serial; never switch devices or reconnect.
         if self.observed is None:
             self.verify_installed_artifact()

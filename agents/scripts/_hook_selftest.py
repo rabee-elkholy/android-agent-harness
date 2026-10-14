@@ -144,6 +144,30 @@ class HookTests(unittest.TestCase):
         res = self.call("run_command", {"CommandLine": "Get-Item app | Remove-Item -Recurse"})
         self.assertEqual("deny", res["decision"])
 
+    def test_installed_engine_reads_use_bounded_public_diagnostics(self):
+        self.activate("IMPLEMENTING", task_kind="FEATURE")
+        for path in (".agents/scripts/run_tests_gate.py", ".agents/harness.py",
+                     "app/../.agents/scripts/pre_tool_safety.py"):
+            result = self.call("view_file", {"AbsolutePath": str(self.repo / path)})
+            self.assertEqual("deny", result["decision"], path)
+            self.assertEqual("HARNESS_IMPLEMENTATION_BOUNDARY", result["reason_code"])
+            self.assertIn("doctor --inspect-file", result["reason"])
+        for path in (".agents/state/tasks/task-one/plan.json", ".agents/rules/harness-rules.md",
+                     "app/src/main/kotlin/com/example/MainActivity.kt"):
+            self.assertEqual("allow", self.call("view_file", {"AbsolutePath": str(self.repo / path)})["decision"])
+        for command in ("Get-Content .agents/scripts/run_tests_gate.py", "cat .agents/scripts/run_tests_gate.py",
+                        "git status; Get-Content .agents/scripts/run_tests_gate.py", "rg helper .agents",
+                        "Get-Content .agents/*/pre_tool_safety.py"):
+            self.assertEqual("deny", self.call("run_command", {"CommandLine": command})["decision"], command)
+        for name, args in (("grep_search", {"SearchPath": str(self.repo / ".agents/scripts")}),
+                           ("find_by_name", {"SearchDirectory": str(self.repo / ".agents")}),
+                           ("list_dir", {"DirectoryPath": str(self.repo / ".agents/scripts")})):
+            result = self.call(name, args)
+            self.assertEqual("HARNESS_IMPLEMENTATION_BOUNDARY", result["reason_code"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine":
+            'python .agents/harness.py doctor --inspect-file scripts/run_tests_gate.py '
+            '--inspection-reason unexpected_failure --reference "missing task diagnostic"'})["decision"])
+
     def test_read_only_git_branch_is_not_a_mutation(self):
         # Real app: `git branch --show-current` was refused as git_mutation after a branch switch.
         for command in ("git branch --show-current", "git branch", "git branch -a", "git branch -vv",
@@ -989,6 +1013,7 @@ class HookTests(unittest.TestCase):
                         pre_tools.add(tool.strip())
         self.assertIn("multi_replace_file_content", pre_tools)
         self.assertIn("list_dir", pre_tools)
+        self.assertIn("view_file", pre_tools)
         post_tools = set()
         for feature in hooks_json.values():
             if isinstance(feature, dict):

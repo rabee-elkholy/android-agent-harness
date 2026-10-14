@@ -295,6 +295,17 @@ class SecurityTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual("deny", self.engine(command)["decision"])
 
+    def test_wrapper_name_in_arguments_cannot_allow_raw_tools(self):
+        for command in (
+            './gradlew tasks run_tests_gate.py',
+            './gradlew tasks; python .agents/scripts/run_tests_gate.py',
+            '"C:/Program Files/Gradle/gradle.bat" tasks',
+            '& "C:/Program Files/Android/adb.exe" devices',
+            'adb devices', 'adb shell dumpsys activity',
+        ):
+            with self.subTest(command=command):
+                self.assertEqual('deny', self.engine(command)['decision'], command)
+
     def test_subagent_role_flexible_matching(self):
         policy = {"reviewers": ["code-review-specialist"], "max_review_rounds": 3, "model_call_budget": 5}
         policy_file = self.repo / "policy.json"

@@ -32,6 +32,70 @@ from _vnext_common import HarnessError, ValidationError, read_json, sha256_bytes
 
 
 class CriticalSafetyTests(unittest.TestCase):
+    def test_engine_inspection_is_exact_bounded_and_read_only(self):
+        import harness_doctor
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            scripts = repo / ".agents/scripts"
+            scripts.mkdir(parents=True)
+            source = scripts / "engine.py"
+            source.write_text("\n".join(f"# line {index}" for index in range(300)), encoding="utf-8")
+            before = source.read_bytes()
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = harness_doctor.main(["--repo", str(repo), "--inspect-file", "scripts/engine.py",
+                    "--inspection-reason", "unexpected_failure", "--reference", "documented command failed",
+                    "--inspect-start-line", "20", "--inspect-lines", "2"])
+            self.assertEqual(0, code)
+            data = json.loads(output.getvalue())
+            self.assertEqual(["20: # line 19", "21: # line 20"], data["lines"])
+            self.assertEqual(before, source.read_bytes())
+            self.assertFalse((repo / ".agents/state").exists())
+            for path in ("../outside.py", "scripts", "scripts/*.py"):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    harness_doctor.main(["--repo", str(repo), "--inspect-file", path,
+                        "--inspection-reason", "developer_request", "--reference", "inspect exact source"])
+            base = ["--repo", str(repo), "--inspect-file", "scripts/engine.py"]
+            for extra in ([], ["--inspection-reason", "developer_request"],
+                          ["--inspection-reason", "unexpected_failure", "--reference", " "]):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    harness_doctor.main(base + extra)
+            reason = ["--inspection-reason", "developer_request", "--reference", "exact source inspection"]
+            for extra in (["--inspect-lines", "201"], ["--inspect-lines", "0"],
+                          ["--inspect-start-line", "0"], ["--inspect-start-line", "301"]):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    harness_doctor.main(base + reason + extra)
+
+    def test_scope_denial_hints_do_not_rescan_the_plan_for_file_only_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "Source.kt").write_text("class Source")
+            classify = mock.Mock(return_value={"surfaces": ["BUSINESS_LOGIC"]})
+            plan = {"task_id": "task", "expected_files": ["Source.kt"], "expected_modules": [":app"]}
+            hint = mutation_guard._all_missing_surfaces_hint(
+                repo, plan, "pack/build.gradle", ["file:pack/build.gradle", "module::pack"],
+                classify, mock.Mock(return_value=[]))
+            classify.assert_not_called()
+            self.assertIn("pack/build.gradle", hint)
+
+    def test_surface_denial_hints_batch_classification_and_preserve_sensitive_new_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            files = [f"Source{index}.kt" for index in range(40)]
+            for name in files:
+                (repo / name).write_text("class Source")
+            plan = {"task_id": "task", "expected_files": files, "expected_surfaces": ["BUSINESS_LOGIC"]}
+            classifier = mock.Mock(return_value={"surfaces": ["AUTH", "COMPOSE_UI"]})
+            def drift(_plan, surfaces):
+                return ["surface:" + surface for surface in surfaces if surface not in plan["expected_surfaces"]]
+            with mock.patch.object(mutation_guard, "_is_tracked", side_effect=lambda _root, path: path in files[:20]):
+                hint = mutation_guard._all_missing_surfaces_hint(
+                    repo, plan, "Other.kt", ["surface:XML_UI"], classifier, drift)
+            self.assertLessEqual(classifier.call_count, 2)
+            self.assertIn("AUTH", hint)
+            self.assertIn("COMPOSE_UI", hint)
+            self.assertIn("XML_UI", hint)
+
     def test_windows_unix_wrapper_prefers_git_shell_over_wsl_alias(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -713,12 +777,20 @@ class CriticalSafetyTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(run_device, "APPLICATION_ID", "com.example"))
             stack.enter_context(mock.patch.object(run_device, "read_gate_result", side_effect=lambda name: install if name == "device_install" else assemble))
             record = stack.enter_context(mock.patch.object(run_device, "record_device"))
+            startup = stack.enter_context(mock.patch.object(run_device, 'check_startup',
+                return_value={'schema_version': 1, 'status': 'PASS', 'detail': 'Foreground verified'}))
             adb = stack.enter_context(mock.patch.object(run_device, "run_adb", return_value=(0, "Success")))
             stack.enter_context(mock.patch.object(sys, "argv", ["run_device.py", "start", "--user", "10"]))
             self.assertEqual(0, run_device.main())
             self.assertIn("com.example.debug/com.example.MainActivity", adb.call_args.args[1])
             self.assertEqual(["--user", "10"], adb.call_args.args[1][3:5])
             self.assertEqual("com.example.debug", record.call_args.kwargs["application_id"])
+            self.assertEqual(('device', 'com.example.debug', '10', artifact), startup.call_args.args[:4])
+            self.assertEqual('PASS', record.call_args.kwargs['startup_probe']['status'])
+            startup.return_value = {'schema_version': 1, 'status': 'FAIL', 'detail': 'Expected element missing'}
+            self.assertEqual(1, run_device.main())
+            self.assertEqual('FAIL', record.call_args.args[1])
+            startup.return_value = {'schema_version': 1, 'status': 'PASS', 'detail': 'Foreground verified'}
             for key, bad in (("status", "EMERGENCY_UNVERIFIED"), ("serial_sha256", "other"), ("target_user", "0"), ("application_id", "com.other"), ("change_set_sha256", "stale")):
                 saved = install[key]
                 install[key] = bad
@@ -1062,6 +1134,229 @@ class CriticalSafetyTests(unittest.TestCase):
             lock.path.write_text(json.dumps(stale_payload))
             self.assertTrue(lock._try_remove_stale_lock(stale_payload))
             self.assertFalse(lock.path.exists())
+
+
+class RetryEvidenceTests(unittest.TestCase):
+    def test_clean_rerun_in_same_run_cannot_erase_diagnostic_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = evidence_store.EvidenceStore(Path(directory))
+            common = dict(snapshot='a' * 64, run_id='run', name='unit_tests', producer='run_tests_gate',
+                          harness_version='v', change_set='c')
+            store.write(**common, status='FAIL', evidence={'attempts': [{'new_regressions': ['A#a']}]})
+            store.write(**common, status='PASS', evidence={'executed': 1})
+            record, error = final_verifier._validate_artifact(store, 'a' * 64, 'c', 'run', 'unit_tests', 'v')
+            self.assertIsNotNone(error)
+            store.reuse(snapshot='a' * 64, source_run_id='run', run_id='reuse-run', name='unit_tests')
+            self.assertIsNotNone(final_verifier._validate_artifact(store, 'a' * 64, 'c', 'reuse-run', 'unit_tests', 'v')[1])
+            store.write(**{**common, 'run_id': 'new-run'}, status='PASS', evidence={'executed': 1})
+            self.assertIsNone(final_verifier._validate_artifact(store, 'a' * 64, 'c', 'new-run', 'unit_tests', 'v')[1])
+
+    def exercise(self, retry='pass', identities=None):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            repo = Path(directory)
+            folder = repo / 'app/build/test-results/testDebugUnitTest'
+            folder.mkdir(parents=True)
+            report = folder / 'TEST-A.xml'
+            if retry == 'initial-stale':
+                report.write_text('<testsuite tests="1" failures="1"><testcase classname="A" name="a"><failure/></testcase></testsuite>', encoding='utf-8')
+            calls, records = [], []
+            def gradle(args, outcome):
+                calls.append(args)
+                if retry == 'initial-stale':
+                    return 0
+                if len(calls) == 2 and retry == 'env':
+                    return 30
+                if len(calls) == 2 and retry == 'stale':
+                    return 0
+                failed = (len(calls) == 1 and retry != 'initial-pass') or retry == 'fail'
+                report.write_text('<testsuite tests="1" failures="' + str(int(failed)) + '">'
+                    '<testcase classname="A" name="a">' + ('<failure message="private failure"/>' if failed else '')
+                    + '</testcase></testsuite>', encoding='utf-8')
+                stat = report.stat()
+                os.utime(report, ns=(stat.st_atime_ns, stat.st_mtime_ns + len(calls) * 10000000))
+                outcome['test_failure_only'] = failed
+                return int(failed)
+            stack.enter_context(mock.patch.object(run_tests_gate, 'REPO', repo))
+            stack.enter_context(mock.patch.object(run_tests_gate, 'execution_identity', create=True,
+                side_effect=identities if identities else None, return_value={'delivery_snapshot_sha256': 'a' * 64,
+                'change_set_sha256': 'b' * 64, 'external_inputs_sha256': 'c' * 64}))
+            stack.enter_context(mock.patch.object(run_tests_gate, 'load_baseline', return_value={'unit_tests': []}))
+            stack.enter_context(mock.patch.object(run_tests_gate, 'current_head_sha', return_value=''))
+            stack.enter_context(mock.patch.object(run_tests_gate, 'write_gate_result', side_effect=lambda name, data: records.append(data.copy())))
+            stack.enter_context(mock.patch.object(run_gradle_task, 'run_gradle', side_effect=gradle))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            code = run_tests_gate.main([':app:testDebugUnitTest'])
+            if retry == 'pass' and identities is None:
+                self.assertIn('SUSPECTED_FLAKY', sys.stderr.getvalue())
+            return code, calls, records
+
+    def test_failure_then_pass_is_suspected_flaky_and_still_blocks(self):
+        code, calls, records = self.exercise()
+        self.assertNotEqual(0, code)
+        self.assertEqual(2, len(calls))
+        self.assertIn('--rerun-tasks', calls[1])
+        self.assertEqual('FAIL', records[0]['status'])
+        self.assertEqual(['A#a'], records[-1]['suspected_flaky'])
+        self.assertEqual(2, len(records[-1]['attempts']))
+        self.assertNotIn('private failure', json.dumps(records))
+
+    def test_green_run_passes_only_when_inputs_stay_unchanged(self):
+        code, calls, records = self.exercise('initial-pass')
+        self.assertEqual(0, code)
+        self.assertEqual(1, len(calls))
+        code, calls, records = self.exercise('initial-pass', [{'delivery_snapshot_sha256': 'a'}, {'delivery_snapshot_sha256': 'b'}])
+        self.assertNotEqual(0, code)
+        self.assertEqual(1, len(calls))
+        self.assertIn('changed', records[-1]['detail'])
+
+    def test_success_with_old_failed_xml_does_not_trigger_a_diagnostic_retry(self):
+        code, calls, records = self.exercise('initial-stale')
+        self.assertNotEqual(0, code)
+        self.assertEqual(1, len(calls))
+
+    def test_persistent_failure_retries_only_once(self):
+        code, calls, records = self.exercise('fail')
+        self.assertNotEqual(0, code)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(['A#a'], records[-1]['new_regressions'])
+        self.assertEqual([], records[-1]['suspected_flaky'])
+
+    def test_stale_retry_does_not_prove_recovery(self):
+        code, calls, records = self.exercise('stale')
+        self.assertNotEqual(0, code)
+        self.assertEqual(2, len(calls))
+        self.assertEqual([], records[-1]['suspected_flaky'])
+        self.assertEqual(['A#a'], records[-1]['new_regressions'])
+
+    def test_environment_retry_preserves_first_failure(self):
+        code, calls, records = self.exercise('env')
+        self.assertEqual(30, code)
+        self.assertEqual('ENV', records[-1]['status'])
+        self.assertEqual(['A#a'], records[-1]['attempts'][0]['new_regressions'])
+
+    def test_source_change_blocks_retry(self):
+        code, calls, records = self.exercise(identities=[{'delivery_snapshot_sha256': 'a'}, {'delivery_snapshot_sha256': 'b'}])
+        self.assertNotEqual(0, code)
+        self.assertEqual(1, len(calls))
+        self.assertIn('changed', records[-1]['detail'])
+
+
+class StartupEvidenceTests(unittest.TestCase):
+    def test_malformed_or_excessively_deep_ui_cannot_create_screen_proof(self):
+        from _adb_core import parse_ui_hierarchy
+        for xml in (
+            '<unexpected><node package="com.example" resource-id="com.example:id/home" bounds="[0,0][100,100]"/></unexpected>',
+            '<hierarchy>' + '<node>' * 1500 + '</node>' * 1500 + '</hierarchy>',
+            '<hierarchy><node text="' + 'x' * (2 * 1024 * 1024) + '"/></hierarchy>',
+        ):
+            self.assertEqual([], parse_ui_hierarchy(xml))
+
+    def transport(self, xml=None, probe=None):
+        from journey_runner import AdbTransport
+        transport = AdbTransport('device', 'com.example', ['a' * 64])
+        transport.verify_installed_artifact = mock.Mock()
+        def call(args, timeout=3):
+            if args[:2] == ['shell', 'am get-current-user && dumpsys activity activities']:
+                return probe or '0\ntopResumedActivity u0 com.example/.Main'
+            if args[0] == 'exec-out':
+                return xml if xml is not None else '<hierarchy><node package="com.example" resource-id="com.example:id/home" bounds="[0,0][100,100]" enabled="true"/></hierarchy>'
+            return '35'
+        transport.call = call
+        return transport
+
+    def test_startup_expected_element_requires_actual_matching_ui(self):
+        transport = self.transport()
+        result = run_device.probe_startup(transport, 'com.example:id/home', 1)
+        self.assertEqual('PASS', result['status'])
+        self.assertEqual('PASS', result['screen_assertion'])
+        self.assertGreaterEqual(transport.verify_installed_artifact.call_count, 2)
+        result = run_device.probe_startup(self.transport(), 'com.example:id/missing', 0.1)
+        self.assertEqual('FAIL', result['status'])
+
+    def test_startup_does_not_accept_another_package_or_invisible_element(self):
+        for xml in (
+            '<hierarchy><node package="com.other" resource-id="com.example:id/home" bounds="[0,0][100,100]"/></hierarchy>',
+            '<hierarchy><node package="com.example" resource-id="com.example:id/home" bounds="[0,0][0,0]"/></hierarchy>',
+        ):
+            self.assertEqual('FAIL', run_device.probe_startup(self.transport(xml), 'com.example:id/home', 0.1)['status'])
+
+    def test_startup_missing_hierarchy_is_limited_without_visual_claim(self):
+        result = run_device.probe_startup(self.transport('not XML private user text'), None, 1)
+        self.assertEqual('PASS', result['status'])
+        self.assertEqual('UNAVAILABLE', result['hierarchy'])
+        self.assertEqual('NOT_REQUESTED', result['screen_assertion'])
+        self.assertNotIn('private user text', json.dumps(result))
+        self.assertEqual('ENV', run_device.probe_startup(self.transport('bad'), 'com.example:id/home', 1)['status'])
+
+    def test_startup_foreground_and_installed_apk_must_match(self):
+        transport = self.transport(probe='0\ntopResumedActivity u0 com.other/.Main')
+        self.assertNotEqual('PASS', run_device.probe_startup(transport, None, 0.1)['status'])
+        transport = self.transport()
+        transport.verify_installed_artifact.side_effect = OSError('private installed path')
+        result = run_device.probe_startup(transport, None, 1)
+        self.assertEqual('ENV', result['status'])
+        self.assertNotIn('private installed path', json.dumps(result))
+
+    def test_installed_apk_change_after_hierarchy_cannot_pass(self):
+        transport = self.transport()
+        transport.verify_installed_artifact.side_effect = [None, OSError('APK replaced')]
+        self.assertEqual('ENV', run_device.probe_startup(transport, 'com.example:id/home', 1)['status'])
+
+    def test_startup_supports_work_profile_but_never_switches_selected_user(self):
+        from journey_runner import AdbTransport
+        transport = AdbTransport('device', 'com.example', ['a' * 64], target_user='10')
+        commands = []
+        def call(args, timeout=3):
+            commands.append(args)
+            if args[:3] == ['shell', 'pm', 'path']:
+                return 'package:/data/app/example/base.apk'
+            if args[:2] == ['shell', 'sha256sum']:
+                return 'a' * 64 + '  /data/app/example/base.apk'
+            if args[0] == 'exec-out':
+                return '<hierarchy><node package="com.example" resource-id="com.example:id/home" bounds="[0,0][100,100]"/></hierarchy>'
+            if args[:2] == ['shell', 'am get-current-user && dumpsys activity activities']:
+                return '0\ntopResumedActivity u10 com.example/.Main'
+            return '35'
+        transport.call = call
+        self.assertEqual('PASS', run_device.probe_startup(transport, 'com.example:id/home', 1)['status'])
+        self.assertIn(['shell', 'pm', 'path', '--user', '10', 'com.example'], commands)
+        transport.call = lambda *args: '0\ntopResumedActivity u0 com.example/.Main'
+        self.assertNotEqual('PASS', run_device.probe_startup(transport, None, 0.1)['status'])
+
+    def test_startup_disconnect_after_dump_cannot_pass(self):
+        transport = self.transport()
+        original = transport.check_identity
+        transport.check_identity = mock.Mock(side_effect=[original(), OSError('device lost')])
+        self.assertEqual('ENV', run_device.probe_startup(transport, None, 1)['status'])
+
+    def test_final_verifier_rejects_failed_startup_even_if_outer_record_says_pass(self):
+        record = {'change_set_sha256': 'c', 'producer': 'run_device', 'schema_version': 1,
+                  'harness_version': 'v', 'status': 'PASS', 'evidence': {'startup_probe': {'schema_version': 1, 'status': 'FAIL'}}}
+        store = mock.Mock()
+        store.read.return_value = record
+        self.assertIsNotNone(final_verifier._validate_artifact(store, 's', 'c', 'r', 'device_launch', 'v')[1])
+
+    def test_final_verifier_accepts_valid_startup_without_requiring_visual_assertion(self):
+        store = mock.Mock()
+        for selector in (None, 'com.example:id/home'):
+            evidence = run_device.probe_startup(self.transport(), selector, 1)
+            store.read.return_value = {'change_set_sha256': 'c', 'producer': 'run_device', 'schema_version': 1,
+                'harness_version': 'v', 'status': 'PASS', 'evidence': {'startup_probe': evidence}}
+            self.assertIsNone(final_verifier._validate_artifact(store, 's', 'c', 'r', 'device_launch', 'v')[1])
+
+    def test_new_evidence_fields_fail_closed_when_malformed_or_contradictory(self):
+        store = mock.Mock()
+        for name, evidence in (
+            ('unit_tests', {'attempts': None}),
+            ('unit_tests', {'suspected_flaky': ['A#a']}),
+            ('device_launch', {'startup_probe': {'schema_version': True, 'status': 'PASS', 'foreground': 'PASS',
+                'installed_artifact': 'PASS', 'hierarchy': 'OBSERVED', 'screen_assertion': 'PASS'}}),
+        ):
+            store.read.return_value = {'change_set_sha256': 'c', 'producer': 'run_device' if name == 'device_launch' else 'run_tests_gate',
+                'schema_version': 1, 'harness_version': 'v', 'status': 'PASS', 'evidence': evidence}
+            with self.subTest(name=name, evidence=evidence):
+                self.assertIsNotNone(final_verifier._validate_artifact(store, 's', 'c', 'r', name, 'v')[1])
 
 
 if __name__ == "__main__":
