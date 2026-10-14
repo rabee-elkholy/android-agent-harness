@@ -459,8 +459,10 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
     if plan.get("status") != "VERIFYING":
         raise ValidationError("review ingestion requires a VERIFYING plan")
     round_number = int(plan.get("review_rounds") or 0) + 1
-    if round_number > int(policy.get("max_review_rounds") or 3):
-        raise ValidationError("review round cap reached; developer decision is required")
+    from review_budget import review_round_cap_action
+    round_block = review_round_cap_action(repo, plan, policy)
+    if round_block:
+        raise ValidationError(round_block["reason"])
     package = active_review_package_path(repo, current)
     if not package.is_file():
         raise ValidationError("immutable review package is missing")

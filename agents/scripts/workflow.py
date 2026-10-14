@@ -1805,6 +1805,11 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
     else:
         policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
+    if policy.get("reviewers"):
+        from review_budget import review_round_cap_action
+        round_block = review_round_cap_action(repo, plan, policy)
+        if round_block:
+            raise ValidationError(round_block["reason"])
     actual_task_paths = changed_file_paths(manifest)
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths, repo=repo)
     # The final verifier refuses a mandatory skill the approved plan did not name; a companion
@@ -3231,6 +3236,13 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
 
     if state == "IMPLEMENTING":
         tdir = task_dir(repo, task_id)
+        if plan.get("review_rounds"):
+            from review_budget import review_round_cap_action
+            previous = tdir / "current-run.json"
+            previous_policy = read_json(Path(read_json(previous)["policy"])) if previous.is_file() else {}
+            round_block = review_round_cap_action(repo, plan, previous_policy)
+            if round_block:
+                return round_block
         budget_block = plan.get("review_budget_blocked") or {}
         if budget_block.get("plan_sha256") == plan.get("plan_sha256") and budget_block:
             from review_budget import effective_review_budget
@@ -3799,6 +3811,12 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                 return rec.get("status") == "SKIPPED" and rec.get("change_set_sha256") == change_set
             except Exception:
                 return False
+
+        if policy.get("reviewers") and not has_pass_evidence("reviews"):
+            from review_budget import review_round_cap_action
+            round_block = review_round_cap_action(repo, plan, policy)
+            if round_block:
+                return round_block
 
         # The final verifier requires a run-bound sensitive approval whenever the run's surfaces include a
         # sensitive one. The router asked only when `policy.sensitive` was set, so a real task was sent to
@@ -4774,6 +4792,12 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         }
 
     if state == "BLOCKED":
+        from review_budget import review_round_cap_action
+        current_file = task_dir(repo, task_id) / "current-run.json"
+        last_policy = read_json(Path(read_json(current_file)["policy"])) if current_file.is_file() else {}
+        round_block = review_round_cap_action(repo, plan, last_policy)
+        if round_block:
+            return round_block
         return {
             "code": "RESUME_IMPLEMENTATION",
             "kind": "HARNESS_COMMAND",
@@ -5125,7 +5149,8 @@ def build_parser() -> argparse.ArgumentParser:
     command.set_defaults(handler=record_sensitive_approval)
     from review_budget import record_review_budget
     command = sub.add_parser("review-budget", parents=[common])
-    command.add_argument("--limit", type=int, required=True)
+    command.add_argument("--limit", type=int, help="Developer-approved reviewer call limit (12-100)")
+    command.add_argument("--round-limit", type=int, help="Developer-approved final review round limit (3-100)")
     command.add_argument("--source", choices=("conversation", "developer_terminal"), required=True)
     command.add_argument("--proof-reference", required=True)
     command.set_defaults(handler=record_review_budget)

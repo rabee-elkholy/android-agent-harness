@@ -667,6 +667,31 @@ class HookTests(unittest.TestCase):
         self.assertEqual("deny", self.call("invoke_subagent", missing)["decision"])
         self.assertEqual("deny", self.call("invoke_subagent", escalated)["decision"])
 
+    def test_native_round_cap_requires_its_own_approved_limit(self):
+        from _vnext_common import canonical_sha256
+        self.activate("VERIFYING", task_kind="BUG")
+        task = self.state / "tasks/task-one"
+        plan_file = task / "plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan.update(review_rounds=3, review_calls_used=43, plan_sha256="plan-hash")
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+        policy = task / "policy.json"
+        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "review_round": 4,
+            "max_review_rounds": 3, "model_call_budget": 70}), encoding="utf-8")
+        self.prepare_reviewer_run(task, policy)
+        args = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
+        blocked = self.call("invoke_subagent", args)
+        self.assertEqual("deny", blocked["decision"])
+        self.assertEqual("REVIEW_ROUND_CAP_REACHED", blocked.get("reason_code"))
+        self.assertIn("--round-limit <approved limit>", blocked["reason"])
+        record = {"schema_version": 2, "task_id": "task-one", "plan_sha256": "plan-hash",
+            "repository": plan.get("repository"), "limit": 70, "round_limit": 4, "source": "conversation",
+            "enforcement_tier": "RULE_ENFORCED", "proof_reference_sha256": "a" * 64}
+        record["decision_sha256"] = canonical_sha256(record)
+        (task / "review-budget.json").write_text(json.dumps(record), encoding="utf-8")
+        self.assertEqual("allow", self.call("invoke_subagent", args)["decision"])
+        self.assertEqual(plan, json.loads(plan_file.read_text(encoding="utf-8")))
+
     def test_reviewer_receipt_write_failure_denies_dispatch(self):
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"

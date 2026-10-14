@@ -32,6 +32,34 @@ from _vnext_common import HarnessError, ValidationError, read_json, sha256_bytes
 
 
 class CriticalSafetyTests(unittest.TestCase):
+    def test_review_round_extension_requires_a_current_valid_round_decision(self):
+        from review_budget import effective_review_budget, effective_review_round_limit
+        from _vnext_common import atomic_write_json, canonical_sha256
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = repo / ".agents/state/tasks/task/review-budget.json"
+            plan = {"task_id": "task", "plan_sha256": "plan", "repository": {"branch": "main"}}
+            legacy = {"schema_version": 1, "task_id": "task", "plan_sha256": "plan",
+                "repository": plan["repository"], "limit": 70, "source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED", "proof_reference_sha256": "a" * 64}
+            def save(record):
+                record = dict(record)
+                record["decision_sha256"] = canonical_sha256(record)
+                atomic_write_json(path, record)
+            save(legacy)
+            self.assertEqual(70, effective_review_budget(repo, plan))
+            self.assertEqual(3, effective_review_round_limit(repo, plan))
+            save({**legacy, "round_limit": 100})
+            self.assertEqual(3, effective_review_round_limit(repo, plan), "Schema-1 call approval never grants rounds")
+            approved = {**legacy, "schema_version": 2, "round_limit": 4}
+            save(approved)
+            self.assertEqual(4, effective_review_round_limit(repo, plan))
+            self.assertEqual(3, effective_review_round_limit(repo, {**plan, "plan_sha256": "revised"}))
+            for value in (True, 0, 101, "4"):
+                save({**approved, "round_limit": value})
+                with self.subTest(value=value), self.assertRaises(ValidationError):
+                    effective_review_round_limit(repo, plan)
+
     def test_engine_inspection_is_exact_bounded_and_read_only(self):
         import harness_doctor
         with tempfile.TemporaryDirectory() as directory:

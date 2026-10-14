@@ -4,6 +4,15 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.26] - 2026-10-14
+
+### Developer-approved review round extensions
+
+- Route exhausted final-review rounds to an explicit developer decision before preparing or dispatching another round. Extend task rounds through `review-budget --round-limit` without resetting consumption, skipping reviewers or editing installed engine code.
+- Preserve reviewer-call limits, setup answers, frozen policies, findings and legacy call-budget approvals. Approve call and round limits independently or together, with serialized task decisions and retained history.
+- Apply the same round authority in preparation, native hooks, V1/V2 review recording and delivery verification. Resume the same fresh task/run after approval and allow completed third-round PASS evidence to continue delivery.
+- Add regression coverage for cap exhaustion, approved fourth-round dispatch and finalization, idempotent accounting, malformed decisions, stale approval identity and native hook enforcement.
+
 ## [1.1.25] - 2026-10-14
 
 ### Verification evidence and discovery hardening

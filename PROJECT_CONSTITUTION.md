@@ -206,6 +206,8 @@ Do not create a cross-provider model-routing subsystem.
 
 ### 3.8 Review proof cannot be self-certified
 
+Reviewer call spending and final-review rounds are separate task limits. The default final-round cap is three. The developer may explicitly extend either limit through the task-local `review-budget` decision; extending calls alone never extends rounds. Preserve frozen policies, counters, existing findings, reviewer requirements and setup defaults. Cap exhaustion must route to a real developer decision before consuming another round, never to engine edits, disabled hooks or skipped reviews. See ADR-011.
+
 For Review V2 and scoped Phase Review V2:
 
 - the lead implementation agent cannot manufacture reviewer PASS;

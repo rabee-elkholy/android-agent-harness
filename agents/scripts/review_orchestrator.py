@@ -225,6 +225,10 @@ def record_dispatch_batch(
             raise ValidationError(f"reviewer '{r}' is not in policy required reviewers: {required_reviewers}")
 
     with StateLock(state_root(repo)):
+        from review_budget import review_round_cap_action
+        round_block = review_round_cap_action(repo, read_json(directory / "plan.json"), policy)
+        if round_block:
+            raise ValidationError(round_block["reason"])
         ledger = init_ledger(
             directory,
             task_id,
@@ -721,6 +725,11 @@ def _finalize_review_execution_locked(
             return existing_rec.get("evidence", {})
         except ValidationError:
             pass
+
+    from review_budget import review_round_cap_action
+    round_block = review_round_cap_action(repo, plan, policy)
+    if round_block:
+        raise ValidationError(round_block["reason"])
 
     for r in required_reviewers:
         st = ledger.get("reviewers", {}).get(r, {}).get("state")

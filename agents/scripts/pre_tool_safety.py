@@ -887,8 +887,10 @@ def _handle_subagent(name: str, args: dict) -> None:
             return
 
         # Check safety cap / round cap
-        if int(plan.get("review_rounds") or 0) >= int(policy.get("max_review_rounds") or 3):
-            emit("deny", "Review round cap reached; developer decision is required.", tool=name)
+        from review_budget import review_round_cap_action
+        round_block = review_round_cap_action(REPO, plan, policy)
+        if round_block:
+            emit("deny", round_block["reason"], tool=name, reason_code=round_block["code"])
             return
         used_calls = int(plan.get("review_calls_used") or 0)
         from review_budget import effective_review_budget

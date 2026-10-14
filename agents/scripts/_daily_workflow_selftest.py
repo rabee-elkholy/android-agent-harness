@@ -5594,7 +5594,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.mock_transcripts[execution_id] = t_file
         return t_file
 
-    def _setup_v2_task(self, task_id: str, reviewers: list[str] | None = None) -> tuple[dict, str, str, Path]:
+    def _setup_v2_task(self, task_id: str, reviewers: list[str] | None = None, review_round: int | None = None) -> tuple[dict, str, str, Path]:
         if reviewers is None:
             reviewers = ["bug-reviewer-agent"]
         draft(argparse.Namespace(
@@ -5627,6 +5627,10 @@ class ReviewOrchestrationTests(unittest.TestCase):
         policy = read_json(Path(current["policy"]))
         policy["gates"] = ["preflight"]
         policy["reviewers"] = reviewers
+        if review_round is not None:
+            write_policy_fixture(tdir / "policy-run-prior.json", policy)
+            policy["review_round"] = review_round
+            policy["later_round_source"] = {"run_id": "run-prior"}
         write_policy_fixture(Path(current["policy"]), policy)
         _, pkg = review_package.build_package(self.repo, task_id)
         pkg_sha = pkg["package_sha256"]
@@ -5799,6 +5803,102 @@ class ReviewOrchestrationTests(unittest.TestCase):
         )
         self.assertIsNone(error, error)
         self.assertEqual("PASS", status)
+
+    def test_round_cap_routes_to_developer_even_with_more_call_budget(self) -> None:
+        from review_budget import record_review_budget
+        task_id = "exhausted-review-rounds"
+        current, _, _, tdir = self._setup_v2_task(task_id, review_round=4)
+        plan = read_json(tdir / "plan.json")
+        plan["review_rounds"] = 3
+        plan["review_calls_used"] = 43
+        workflow.save_plan(tdir / "plan.json", plan)
+        record_review_budget(argparse.Namespace(repo=str(self.repo), task_id=task_id, limit=70,
+            source="conversation", proof_reference="Approved reviewer call spending limit of 70"))
+        before = (tdir / "plan.json").read_bytes()
+        action = resolve_next_action(self.repo, task_id, plan, host="antigravity")
+        self.assertEqual("REVIEW_ROUND_CAP_REACHED", action["code"])
+        self.assertEqual("DEVELOPER_ACTION", action["kind"])
+        self.assertEqual("", action["command"])
+        self.assertIn("--round-limit <approved limit>", action["reason"])
+        self.assertIn("--limit changes calls only", action["reason"])
+        self.assertNotIn("--override-reviews", action["reason"])
+        self.assertEqual(before, (tdir / "plan.json").read_bytes())
+        plan["status"] = "BLOCKED"
+        self.assertEqual("REVIEW_ROUND_CAP_REACHED", resolve_next_action(self.repo, task_id, plan, host="antigravity")["code"])
+        # Approving only rounds preserves the 70-call decision, policy and counters, and unblocks the same run.
+        policy_before = Path(current["policy"]).read_bytes()
+        with mock.patch("sys.stdout"):
+            self.assertEqual(0, workflow.main(["review-budget", "--repo", str(self.repo), "--task-id", task_id,
+                "--round-limit", "4", "--source", "conversation",
+                "--proof-reference", "Approve one additional final review round: limit 4"]))
+        self.assertEqual(before, (tdir / "plan.json").read_bytes())
+        self.assertEqual(policy_before, Path(current["policy"]).read_bytes())
+        from review_budget import effective_review_budget, effective_review_round_limit
+        self.assertEqual(70, effective_review_budget(self.repo, plan))
+        self.assertEqual(4, effective_review_round_limit(self.repo, plan))
+        plan["status"] = "VERIFYING"
+        self.assertEqual("DISPATCH_REVIEWERS", resolve_next_action(self.repo, task_id, plan, host="antigravity")["code"])
+        record_review_budget(argparse.Namespace(repo=str(self.repo), task_id=task_id, limit=80,
+            source="conversation", proof_reference="Increase calls to 80; keep the approved round limit"))
+        self.assertEqual(4, effective_review_round_limit(self.repo, plan))
+        self.assertEqual(80, effective_review_budget(self.repo, plan))
+        self.assertEqual(2, len(list((tdir / "review-budget-history").glob("*.json"))))
+        from review_orchestrator import record_dispatch, complete_review, finalize_review_execution
+        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        result = json.dumps({"schema_version": 2, "task_id": task_id, "run_id": current["run_id"],
+            "reviewer": "bug-reviewer-agent", "review_package_sha256": sha256_file(active_review_package_path(self.repo, current)),
+            "verdict": "PASS", "findings": []})
+        self._create_mock_transcript("approved-fourth-round", result)
+        complete_review(self.repo, task_id, "bug-reviewer-agent", "approved-fourth-round")
+        finalized = read_json(tdir / "plan.json")
+        self.assertEqual(4, finalized["review_rounds"])
+        self.assertEqual(44, finalized["review_calls_used"])
+        finalize_review_execution(self.repo, task_id)
+        self.assertEqual(finalized, read_json(tdir / "plan.json"), "Finalization retries must not charge again")
+        for value in (2, 3, 101, True):
+            with self.subTest(round_limit=value), self.assertRaises(ValidationError):
+                record_review_budget(argparse.Namespace(repo=str(self.repo), task_id=task_id, round_limit=value,
+                    source="conversation", proof_reference="Invalid round limit must not be recorded"))
+        saved = read_json(tdir / "review-budget.json")
+        saved["round_limit"] = 100
+        atomic_write_json(tdir / "review-budget.json", saved)
+        with self.assertRaisesRegex(ValidationError, "integrity mismatch"):
+            effective_review_round_limit(self.repo, plan)
+
+    def test_prepare_refuses_fourth_round_without_publishing_another_run(self) -> None:
+        task_id = "no-fourth-review-run"
+        current, run_id, _, tdir = self._setup_v2_task(task_id)
+        EvidenceStore(state_root(self.repo)).write(
+            snapshot=current["delivery_snapshot_sha256"], run_id=run_id, name="reviews",
+            producer="review_orchestrator", harness_version="1.1.25",
+            change_set=current["change_set_sha256"], status="FAIL",
+            evidence={"reports": [], "blocking_findings": [{"reviewer": "bug-reviewer-agent"}]},
+        )
+        plan = read_json(tdir / "plan.json")
+        plan["review_rounds"] = 3
+        plan["blocked_reviewers"] = ["bug-reviewer-agent"]
+        workflow.save_plan(tdir / "plan.json", plan)
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        before = {p.name: p.read_bytes() for p in tdir.glob("*.json")}
+        with self.assertRaisesRegex(ValidationError, "REVIEW_ROUND_CAP_REACHED"):
+            prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertEqual(before, {p.name: p.read_bytes() for p in tdir.glob("*.json")})
+
+    def test_completed_third_round_pass_can_continue_delivery(self) -> None:
+        task_id = "third-review-round-pass"
+        current, run_id, _, tdir = self._setup_v2_task(task_id, review_round=3)
+        plan = read_json(tdir / "plan.json")
+        plan["review_rounds"] = 3
+        workflow.save_plan(tdir / "plan.json", plan)
+        EvidenceStore(state_root(self.repo)).write(
+            snapshot=current["delivery_snapshot_sha256"], run_id=run_id, name="reviews",
+            producer="review_orchestrator", harness_version="1.1.25",
+            change_set=current["change_set_sha256"], status="PASS",
+            evidence={"reports": [], "blocking_findings": [], "round": 3},
+        )
+        action = resolve_next_action(self.repo, task_id, plan, host="antigravity")
+        self.assertNotEqual("REVIEW_ROUND_CAP_REACHED", action["code"])
+        self.assertNotEqual("DISPATCH_REVIEWERS", action["code"])
 
     def test_prepare_retry_retains_previous_review_round_after_plan_save_failure(self) -> None:
         task_id = "prepare-publish-failure"

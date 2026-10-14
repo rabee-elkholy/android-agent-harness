@@ -1,7 +1,8 @@
 # Search scope, diagnostic retries, and startup observations
 
 These checks extend the existing hook engine, test gate and device flow. They do not
-add task states, reviewer dispatch steps, approval prompts or runtime dependencies.
+add task states, reviewer dispatch steps or runtime dependencies. Exhausted review
+limits use an explicit developer spending decision.
 
 ## Search scope
 
@@ -67,6 +68,25 @@ still required for any increase. Existing active tasks keep their approvals and
 budgets. Scope-denial hints batch planned-file classification instead of repeating
 repository inventories once per file; file/module-only denial skips that advisory
 surface scan.
+
+Final review has a separate default limit of three rounds. Increasing call spending
+does not extend rounds. The router, preparation, native hooks, both review protocols
+and final verifier use the same task-local round decision. At exhaustion, the host
+asks the developer for an explicit round limit before continuing:
+
+```sh
+python .agents/harness.py task review-budget --task-id <id> --round-limit 4 --source conversation --proof-reference "Developer approved a fourth round"
+```
+
+`--limit` changes calls only; `--round-limit` changes rounds only. Both may be
+supplied in one approved decision. Round limits accept 3 through 100 and must exceed
+already completed rounds. The other limit is retained, decisions are serialized
+and historized, and existing schema-1 call decisions remain compatible. Decisions
+are bound to the approved plan/repository and remain rule-enforced declarations of
+human approval. No default, setup answer, frozen policy, counter, finding or review
+proof is rewritten. A valid completed third-round PASS still proceeds to delivery.
+Never ask the developer to edit installed engine code or bypass reviews to avoid
+either cap. A new source change after a completed round still needs fresh evidence.
 
 ## One diagnostic unit-test retry
 

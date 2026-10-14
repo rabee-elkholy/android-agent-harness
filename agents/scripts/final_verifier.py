@@ -349,6 +349,9 @@ def validate_policy_artifact(
         return None, "material UNKNOWN surface requires developer decision", "USER_DECISION_REQUIRED"
     if policy.get("status") != "PASS":
         return None, "policy or mandatory skill routing did not pass", "BLOCKED"
+    from review_budget import effective_review_round_limit
+    if int(policy.get("review_round") or 1) > effective_review_round_limit(repo, plan, policy):
+        return None, "review round exceeds the developer-approved task round limit", "USER_DECISION_REQUIRED"
     current_classification = classify(repo, task_id=plan.get("task_id"), task_changes=task_changes)
     if current_classification.get("classification_sha256") != policy.get("classification_sha256"):
         return None, "current classification does not match the run policy", "STALE"
