@@ -4,6 +4,16 @@ All notable changes to the **Android Agent Harness** will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [1.1.27] - 2026-10-15
+
+### Verification recovery after preserving engine updates
+
+- Freeze the installed engine version in new verification runs and recognize legacy runs preserved across an engine update. Route those runs to the supported same-task resume and verification preparation flow before consuming more gates or reviewers.
+- Refuse stale-engine preflight and device operations before execution. Preserve old immutable evidence, approval, review provenance, counters and independently approved call/round limits instead of retrying a different producer version in an old attempt chain.
+- Keep cross-host continuation from restarting reviewer executions or reusing old gates when an engine update has made verification stale.
+- Preserve standalone preflight diagnostics when no task is active, while rejecting malformed or dangling task pointers.
+- Cover fresh verification recovery, legacy update timestamps, invalid engine identity, direct command refusal and preservation of a 5-round/70-call decision after 4 rounds and 50 calls.
+
 ## [1.1.26] - 2026-10-14
 
 ### Developer-approved review round extensions

@@ -47,6 +47,21 @@ class SecurityTests(unittest.TestCase):
         shutil.rmtree(self.repo / "agents/state/tasks", ignore_errors=True)
         (self.repo / "agents/state/active-task.json").unlink(missing_ok=True)
 
+    def test_optional_active_plan_does_not_hide_a_corrupted_pointer(self):
+        from mutation_guard import active_plan
+        from _vnext_common import ValidationError
+        self._reset_active_task()
+        self.assertEqual({}, active_plan(self.repo, allow_missing=True))
+        with self.assertRaises(ValidationError):
+            active_plan(self.repo)
+        pointer = self.repo / "agents/state/active-task.json"
+        pointer.write_text("invalid json", encoding="utf-8")
+        with self.assertRaises(ValidationError):
+            active_plan(self.repo, allow_missing=True)
+        pointer.write_text(json.dumps({"task_id": "missing", "plan_path": "agents/state/tasks/missing/plan.json"}), encoding="utf-8")
+        with self.assertRaises(ValidationError):
+            active_plan(self.repo, allow_missing=True)
+
     def engine(self, command: str) -> dict:
         proc = subprocess.run(
             [sys.executable, str(ENGINE)], input=json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": command}}}),

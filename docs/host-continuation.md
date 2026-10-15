@@ -85,3 +85,14 @@ pending; repeat the same update command to recover before continuing. Keep the
 pre-update backup. Ordinary updates still refuse live tasks without this explicit
 option. After updating, query task status and use the normal continuation command
 if changing hosts. See [ADR-010](adr/010-active-task-preserving-update.md).
+
+Verification runs freeze the installed engine version. After a preserving engine
+update, a run created under the previous version routes to `VERIFICATION_STALE`.
+Use `task resume`, then `task prepare-verification` on the same task. The new run
+must execute its required gates with the current engine; the old immutable proof,
+approval, reviewer-call consumption and round decisions remain intact. Later-round
+review coverage follows the central policy and existing provenance checks. An
+update itself never certifies old proof or grants another review round. Legacy
+runs without a version use the completed preserving-update journal to detect
+that their verification predates the replacement. Preflight and device commands
+refuse that stale engine identity before executing checks or deployment.

@@ -59,6 +59,22 @@ def main(argv: list[str] | None = None) -> int:
     selected_gates = {"preflight", "localization", "room"}
     task_changes: list | None = None
     task_id = ""
+    if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
+        # Engine updates preserve old proof, but cannot append a new producer
+        # version to its immutable attempt chain. Fail before running checks.
+        try:
+            plan = active_plan(repo_target, allow_missing=True) or {}
+            if plan.get("status") == "VERIFYING":
+                from workflow import verification_engine_freshness
+                active_id = str(plan.get("task_id") or "")
+                current = read_json(task_dir(repo_target, active_id) / "current-run.json")
+                engine = verification_engine_freshness(repo_target, active_id, current)
+                if not engine["fresh"]:
+                    raise ValidationError(engine["reason"])
+        except (OSError, ValueError, ValidationError) as exc:
+            live_print(f"[FAIL] {exc}", err=True)
+            live_print("Run task status --next and follow its recovery action before preflight.", err=True)
+            return 30
     if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
         try:
             if task_id_arg:

@@ -1912,6 +1912,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     current = {
         "task_id": args.task_id,
         "run_id": run_id,
+        "harness_version": installed_harness_version(repo),
         "manifest": str(manifest_path),
         "repository": manifest.get("repository"),
         "policy": str(policy_path),
@@ -2306,6 +2307,47 @@ def cmd_reconcile_delivery(args: argparse.Namespace) -> dict:
     return {"status": "PASS", "task_id": tid, "task_state": plan.get("status")}
 
 
+def installed_harness_version(repo: Path) -> str:
+    root = repo / ".agents" if (repo / ".agents").is_dir() else repo / "agents"
+    path = root / "VERSION"
+    version = path.read_text(encoding="utf-8").strip() if path.is_file() else "1.0.0"
+    if not version:
+        raise ValidationError("installed harness version is empty")
+    return version
+
+
+def verification_engine_freshness(repo: Path, task_id: str, current: dict) -> dict:
+    """Reject a preserved verification run after its evidence producer changes.
+
+    Older runs did not freeze an engine version. The completed preserving-update
+    journal establishes that those runs predate an engine replacement. Never
+    rewrite their proof or infer that an engine update refreshed it.
+    """
+    try:
+        live_version = installed_harness_version(repo)
+        frozen_version = current.get("harness_version")
+        if frozen_version is None:
+            journal_path = repo / ".harness-setup/update-journal.json"
+            if journal_path.is_file():
+                journal = read_json(journal_path)
+                preserved = journal.get("preserved_active_task") or {}
+                if (journal.get("status") == "COMPLETED" and preserved.get("task_id") == task_id
+                        and journal.get("from_version") != journal.get("to_version")):
+                    from datetime import datetime
+                    created = datetime.fromisoformat(str(current.get("created_at") or "").replace("Z", "+00:00"))
+                    started = datetime.fromisoformat(str(journal.get("started_at") or "").replace("Z", "+00:00"))
+                    if created <= started:
+                        frozen_version = journal.get("from_version") or "unknown"
+        if frozen_version is not None and frozen_version != live_version:
+            return {"fresh": False, "reason_code": "HARNESS_VERSION_CHANGED",
+                    "reason": f"STALE: verification was frozen under harness {frozen_version}, installed {live_version}. "
+                              "Resume the same task and prepare verification again; retain prior evidence and review counters."}
+    except (OSError, ValueError, TypeError, AttributeError, ValidationError) as exc:
+        return {"fresh": False, "reason_code": "HARNESS_VERSION_UNAVAILABLE",
+                "reason": f"Cannot establish verification engine identity: {exc}"}
+    return {"fresh": True, "reason_code": "FRESH"}
+
+
 def verification_freshness(repo: Path, task_id: str, current_run: dict | None = None, *, allow_completed: bool = False) -> dict:
     """Non-mutating verification freshness resolver comparing live repository state with frozen run."""
     try:
@@ -2340,6 +2382,10 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
             "reason_code": "TASK_MISMATCH",
             "reason": f"current-run task mismatch: expected '{task_id}', found '{current.get('task_id')}'",
         }
+
+    engine = verification_engine_freshness(repo, task_id, current)
+    if not engine["fresh"]:
+        return engine
 
     manifest = build_manifest(repo)
     frozen_repo = current.get("repository")

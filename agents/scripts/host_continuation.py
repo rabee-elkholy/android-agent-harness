@@ -232,6 +232,8 @@ def _final_context(repo, task_id, plan):
                                task_base_head=plan.get("task_base_head") or (plan.get("repository") or {}).get("head"))
     fresh = all(live.get(key) == manifest.get(key) for key in (
         "delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256"))
+    from workflow import verification_engine_freshness
+    fresh = fresh and verification_engine_freshness(repo, task_id, run)["fresh"]
     store = EvidenceStore(state_root(repo))
     artifact = store.run_dir(run["delivery_snapshot_sha256"], run["run_id"]) / "reviews.json"
     reviews = store.read(run["delivery_snapshot_sha256"], run["run_id"], "reviews") if artifact.exists() else None

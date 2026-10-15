@@ -369,6 +369,11 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
         try:
             from _vnext_common import read_json
             current_run = read_json(current_path)
+            from workflow import verification_engine_freshness
+            engine = verification_engine_freshness(REPO, task_id, current_run)
+            if not engine["fresh"]:
+                live_print(f"[FAIL] {engine['reason']}", err=True)
+                return EXIT_ENV
             current_task_id = str(current_run.get("task_id") or "")
             if not current_task_id or current_task_id != task_id:
                 live_print(

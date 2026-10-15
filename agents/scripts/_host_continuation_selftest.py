@@ -409,6 +409,21 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
         self.assertEqual(0, code)
         self.assertEqual("IMPLEMENTING", read_json(directory / "plan.json")["status"])
 
+    def test_engine_update_cannot_restart_host_reviews_or_reuse_old_gates(self):
+        task_id, old = self.final_task()
+        directory = workflow.task_dir(self.repo, task_id)
+        original = (directory / "current-run.json").read_bytes()
+        plan = (directory / "plan.json").read_bytes()
+        write_file(self.repo / ".agents/VERSION", "9.9.9\n")
+        code, result = self.cli(task_id, "antigravity", "--source-stopped")
+        self.assertEqual(0, code, result)
+        self.assertEqual([], result["reused_artifacts"])
+        self.assertEqual([], result["restarted_reviews"])
+        self.assertEqual("VERIFICATION_STALE", result["next_action"]["code"])
+        self.assertIn("HARNESS_VERSION_CHANGED", result["next_action"]["reason"])
+        self.assertEqual(original, (directory / "current-run.json").read_bytes())
+        self.assertEqual(plan, (directory / "plan.json").read_bytes())
+
     def test_wrong_run_snapshot_cannot_transfer_foreign_gate_evidence(self):
         task_id, run = self.final_task()
         directory = workflow.task_dir(self.repo, task_id)

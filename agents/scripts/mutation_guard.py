@@ -268,7 +268,8 @@ def _state_root(repo: Path | str) -> Path:
     return installed if installed.parent.is_dir() else repo_path / "agents" / "state"
 
 
-def active_plan(repo: Path | str) -> dict:
+def active_plan(repo: Path | str, *, allow_missing: bool = False) -> dict:
+    """Resolve a live task; optional diagnostics tolerate absence, never a broken pointer."""
     repo_path = Path(repo)
     state = _state_root(repo_path)
     active_file = state / "active-task.json"
@@ -325,6 +326,8 @@ def active_plan(repo: Path | str) -> dict:
                 "Specify the active task via 'workflow.py recover-active --task-id <id>' or cancel obsolete tasks."
             )
 
+    if allow_missing and not active_file.exists() and not active_file.is_symlink():
+        return {}
     raise ValidationError(f"cannot read JSON artifact {active_file}: No active task found")
 
 

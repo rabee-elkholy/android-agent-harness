@@ -7862,6 +7862,112 @@ class DocumentationConsistencyTests(unittest.TestCase):
 class StaleRunVerificationTests(ReviewOrchestrationTests):
     """STALE-NEXT-001 through 008 and STALE-FINAL-001: Verification freshness and stale-run router gates."""
 
+    def test_engine_update_routes_to_fresh_verification_without_rewriting_proof(self) -> None:
+        task_id = "engine-update-stale"
+        current, _, _, directory = self._setup_v2_task(task_id)
+        plan_before = (directory / "plan.json").read_bytes()
+        run_before = (directory / "current-run.json").read_bytes()
+        proof = EvidenceStore(state_root(self.repo)).run_dir(current["delivery_snapshot_sha256"], current["run_id"]) / "preflight.json"
+        proof_before = proof.read_bytes()
+        write_file(self.repo / ".agents/VERSION", "9.9.9\n")
+        action = resolve_next_action(self.repo, task_id, host="antigravity")
+        self.assertEqual("VERIFICATION_STALE", action["code"])
+        self.assertIn("HARNESS_VERSION_CHANGED", action["reason"])
+        self.assertIn("task resume", action["command"])
+        self.assertEqual(plan_before, (directory / "plan.json").read_bytes())
+        self.assertEqual(run_before, (directory / "current-run.json").read_bytes())
+        self.assertEqual(proof_before, proof.read_bytes())
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        fresh = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertNotEqual(current["run_id"], fresh["run_id"])
+        self.assertEqual("9.9.9", fresh["harness_version"])
+        self.assertTrue(workflow.verification_freshness(self.repo, task_id)["fresh"])
+        self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, host="antigravity")["code"])
+        self.assertEqual(proof_before, proof.read_bytes())
+
+    def test_legacy_run_surviving_active_update_is_stale_until_refrozen(self) -> None:
+        task_id = "legacy-engine-update"
+        current, _, _, directory = self._setup_v2_task(task_id)
+        current.pop("harness_version", None)
+        current["created_at"] = "2026-10-14T16:40:02Z"
+        atomic_write_json(directory / "current-run.json", current)
+        write_file(self.repo / ".agents/VERSION", "1.1.26\n")
+        atomic_write_json(self.repo / ".harness-setup/update-journal.json", {
+            "status": "COMPLETED", "from_version": "1.1.24", "to_version": "1.1.26",
+            "started_at": "2026-10-14T18:17:37Z",
+            "preserved_active_task": {"task_id": task_id},
+        })
+        action = resolve_next_action(self.repo, task_id, host="antigravity")
+        self.assertEqual("VERIFICATION_STALE", action["code"])
+        self.assertIn("HARNESS_VERSION_CHANGED", action["reason"])
+        # A legacy run prepared after that update belongs to the updated engine.
+        current["created_at"] = "2026-10-14T19:00:00Z"
+        atomic_write_json(directory / "current-run.json", current)
+        self.assertTrue(workflow.verification_freshness(self.repo, task_id)["fresh"])
+
+    def test_engine_update_blocks_direct_preflight_and_device_before_work(self) -> None:
+        import preflight_check
+        import run_device
+        task_id = "engine-update-direct"
+        _, _, _, directory = self._setup_v2_task(task_id)
+        write_file(self.repo / ".agents/VERSION", "9.9.9\n")
+        with mock.patch.object(preflight_check, "REPO", self.repo), \
+             mock.patch.object(preflight_check, "run_step") as checks, \
+             mock.patch.object(preflight_check, "write_gate_result") as writes:
+            self.assertEqual(30, preflight_check.main([]))
+            checks.assert_not_called()
+            writes.assert_not_called()
+        with mock.patch.object(run_device, "REPO", self.repo), \
+             mock.patch.object(run_device, "_gate_passed") as gates:
+            code = run_device._check_device_prerequisites(argparse.Namespace(action="install-start", force=False))
+            self.assertEqual(run_device.EXIT_ENV, code)
+            gates.assert_not_called()
+
+    def test_engine_refreeze_preserves_approved_limits_and_consumption(self) -> None:
+        from review_budget import record_review_budget, effective_review_budget, effective_review_round_limit
+        task_id = "engine-update-budget"
+        current, run_id, _, directory = self._setup_v2_task(task_id)
+        policy = read_json(Path(current["policy"]))
+        plan = read_json(directory / "plan.json")
+        plan.update(review_rounds=4, review_calls_used=50, blocked_reviewers=["bug-reviewer-agent"])
+        workflow.save_plan(directory / "plan.json", plan)
+        record_review_budget(argparse.Namespace(repo=str(self.repo), task_id=task_id, limit=70, round_limit=5,
+            source="conversation", proof_reference="Approve 5 final rounds and 70 reviewer calls"))
+        budget_before = (directory / "review-budget.json").read_bytes()
+        store = EvidenceStore(state_root(self.repo))
+        proof = store.write(snapshot=current["delivery_snapshot_sha256"], run_id=run_id, name="reviews",
+            producer="review_orchestrator", harness_version="1.0.0", change_set=current["change_set_sha256"],
+            status="PASS", evidence={"reports": [{"reviewer": r, "verdict": "PASS"} for r in policy["reviewers"]]})
+        proof_before = proof.read_bytes()
+        write_file(self.repo / ".agents/VERSION", "9.9.9\n")
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        fresh = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        after = read_json(directory / "plan.json")
+        new_policy = read_json(Path(fresh["policy"]))
+        self.assertEqual(4, after["review_rounds"])
+        self.assertEqual(50, after["review_calls_used"])
+        self.assertEqual(plan["approval"], after["approval"])
+        self.assertEqual(plan["plan_sha256"], after["plan_sha256"])
+        self.assertEqual(5, effective_review_round_limit(self.repo, after, new_policy))
+        self.assertEqual(70, effective_review_budget(self.repo, after, new_policy))
+        self.assertEqual(budget_before, (directory / "review-budget.json").read_bytes())
+        self.assertEqual(proof_before, proof.read_bytes())
+        self.assertEqual(run_id, new_policy["later_round_source"]["run_id"])
+
+    def test_legacy_engine_identity_failure_is_closed_and_unrelated_journal_is_ignored(self) -> None:
+        task_id = "legacy-engine-identity"
+        current, _, _, directory = self._setup_v2_task(task_id)
+        current.pop("harness_version", None)
+        journal = self.repo / ".harness-setup/update-journal.json"
+        atomic_write_json(journal, {"status": "COMPLETED", "from_version": "old", "to_version": "new",
+            "preserved_active_task": {"task_id": task_id}, "started_at": "invalid"})
+        self.assertEqual("HARNESS_VERSION_UNAVAILABLE", workflow.verification_engine_freshness(self.repo, task_id, current)["reason_code"])
+        atomic_write_json(journal, {"status": "COMPLETED", "from_version": "old", "to_version": "new",
+            "preserved_active_task": {"task_id": "another-task"}, "started_at": "invalid"})
+        self.assertTrue(workflow.verification_engine_freshness(self.repo, task_id, current)["fresh"])
+        write_file(self.repo / ".agents/VERSION", "\n")
+        self.assertEqual("HARNESS_VERSION_UNAVAILABLE", workflow.verification_engine_freshness(self.repo, task_id, current)["reason_code"])
+
     def test_STALE_NEXT_001_edit_after_freeze_returns_verification_stale_before_preflight(self) -> None:
         """STALE-NEXT-001: Edit after freeze returns VERIFICATION_STALE before preflight."""
         task_id = "test-stale-001"
