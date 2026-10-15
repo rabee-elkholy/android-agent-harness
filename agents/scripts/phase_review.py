@@ -632,7 +632,8 @@ def derive_final_review_reserve(repo: Path, plan: dict[str, Any], phase_policy: 
 
 
 def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: dict[str, Any] | None = None, *, repo: Path | None = None) -> tuple[bool, str]:
-    used = int(plan.get("review_calls_used") or 0)
+    from review_budget import effective_review_calls_used
+    used = effective_review_calls_used(repo, plan)
     from review_budget import effective_review_budget
     cap = effective_review_budget(repo, plan)
     expected_final = (reserve or {}).get("reviewers") or plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
@@ -814,7 +815,7 @@ def record_phase_dispatch_batch(
     reviewers: list[str],
     host: str | None = None,
 ) -> dict[str, Any]:
-    with StateLock(phase_review_dir(task_dir(repo, task_id), phase_id)):
+    with StateLock(state_root(repo)), StateLock(phase_review_dir(task_dir(repo, task_id), phase_id)):
         return _record_phase_dispatch_batch_locked(repo, task_id, phase_id, reviewers, host)
 
 
@@ -876,7 +877,8 @@ def _record_phase_dispatch_batch_locked(
 
     plan_f = tdir / "plan.json"
     plan = read_json(plan_f) if plan_f.is_file() else {}
-    used_calls = int(plan.get("review_calls_used") or 0)
+    from review_budget import settle_final_review_calls
+    used_calls = settle_final_review_calls(repo, plan)
     from review_budget import effective_review_budget
     safety_cap = effective_review_budget(repo, plan)
     expected_final = plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]

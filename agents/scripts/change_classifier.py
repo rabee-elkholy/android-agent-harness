@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -610,9 +611,11 @@ def classify(
     *,
     progress: bool = True,
     candidate_paths: list[str] | None = None,
+    review_comparison: dict[str, tuple[str, str]] | None = None,
 ) -> dict:
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
+    comparison_changed_lines = 0
     all_changes = changed_files(root, include_untracked=True)
     task_base_ref = "HEAD"
     task_baseline: dict | None = None
@@ -693,9 +696,29 @@ def classify(
             continue
         lower = rel.lower()
         suffix = Path(lower).suffix
-        diff_text, context_text = _diff_content(root, changed, task_base_ref)
+        comparison = (review_comparison or {}).get(rel)
+        if comparison is None:
+            diff_text, context_text = _diff_content(root, changed, task_base_ref)
+        else:
+            old_text, new_text = comparison
+            old_lines, new_lines = old_text.splitlines(), new_text.splitlines()
+            edits, old_numbers, new_numbers = [], [], []
+            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines).get_opcodes():
+                if tag == "equal":
+                    continue
+                edits.extend("-" + line for line in old_lines[i1:i2])
+                edits.extend("+" + line for line in new_lines[j1:j2])
+                comparison_changed_lines += i2 - i1 + j2 - j1
+                old_numbers.extend(range(i1 + 1, max(i1 + 2, i2 + 1)))
+                new_numbers.extend(range(j1 + 1, max(j1 + 2, j2 + 1)))
+            diff_text = "\n".join(edits)
+            context_text = ""
+            context_resolver = _enclosing_structural_context if suffix in (".kt", ".java") else _enclosing_xml_context if suffix == ".xml" else None
+            if context_resolver:
+                context_text = context_resolver(old_text, old_numbers) + "\n" + context_resolver(new_text, new_numbers)
         before_rel = changed.old_rel_posix or rel
-        full_text = (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel, task_base_ref)
+        full_text = ("\n".join(comparison) if comparison is not None else
+                     (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel, task_base_ref))
         test_path = "/test/" in f"/{lower}" or "/androidtest/" in f"/{lower}" or lower.endswith(("test.kt", "test.java"))
         if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
@@ -804,6 +827,8 @@ def classify(
             if not test_path and not values_resource:
                 if pattern.search(diff_text):
                     _add(found, surface, rel, reason)
+                elif comparison is not None and surface in (CRITICAL_SURFACES | {"COROUTINES", "ROOM_SCHEMA", "DEVICE_API"}) and pattern.search(context_text):
+                    _add(found, surface, rel, "REVIEWED_DELTA_STRUCTURAL_CONTEXT")
                 elif context_text and pattern.search(context_text):
                     _add(found, surface, rel, f"{reason}_CONTEXT")
 
@@ -852,7 +877,7 @@ def classify(
         "confidence": confidence,
         "details": details,
         "changed_files": len(relevant_changes),
-        "changed_lines": _changed_line_count(root, relevant_changes, task_base_ref),
+        "changed_lines": comparison_changed_lines if review_comparison is not None else _changed_line_count(root, relevant_changes, task_base_ref),
         "has_delete_or_rename": any(item.status in {"D", "R"} for item in relevant_changes),
     }
     result["classification_sha256"] = canonical_sha256(result)

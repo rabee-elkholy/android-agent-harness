@@ -303,8 +303,8 @@ def continue_task(args):
             if final_findings:
                 plan["status"] = "BLOCKED"
                 plan["blocked_reviewers"] = sorted(set(plan.get("blocked_reviewers") or []) | set(final_findings))
-                charged, _ = _interrupted_final_dispatches(directory, final["run"])
-                plan["review_calls_used"] = int(plan.get("review_calls_used") or 0) + charged
+                from review_budget import settle_final_review_calls
+                settle_final_review_calls(repo, plan)
                 save_plan(directory / "plan.json", plan)
             if phase_findings:
                 from phase_review import PHASE_REVIEW_BLOCKED, set_phase_substate
@@ -359,11 +359,12 @@ def _restart_final(repo, task_id, plan, final, host, session_id):
     directory, old = _directory(repo, task_id), final["run"]
     if int(old.get("host_restart_count") or 0) >= 3:
         raise ValidationError("host review restart limit reached")
-    charged, ledger = _interrupted_final_dispatches(directory, old)
+    _, ledger = _interrupted_final_dispatches(directory, old)
     if ledger:
         if any(entry.get("state") == "FAILED_PROTOCOL" for entry in ledger["reviewers"].values()):
             raise ValidationError("REVIEW_PROTOCOL_BLOCKED: changing host cannot reset an exhausted protocol retry counter")
-    used = int(plan.get("review_calls_used") or 0) + charged
+    from review_budget import settle_final_review_calls
+    used = settle_final_review_calls(repo, plan)
     if used + len(final["policy"].get("reviewers") or []) > effective_review_budget(repo, plan, final["policy"]):
         raise ValidationError("REVIEW_BUDGET_EXHAUSTED: host transfer cannot reset reviewer spending; use task review-budget")
     new_run = "run-" + uuid.uuid4().hex

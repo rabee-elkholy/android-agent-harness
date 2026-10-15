@@ -208,6 +208,8 @@ Do not create a cross-provider model-routing subsystem.
 
 Reviewer call spending and final-review rounds are separate task limits. The default final-round cap is three. The developer may explicitly extend either limit through the task-local `review-budget` decision; extending calls alone never extends rounds. Preserve frozen policies, counters, existing findings, reviewer requirements and setup defaults. Cap exhaustion must route to a real developer decision before consuming another round, never to engine edits, disabled hooks or skipped reviews. See ADR-011.
 
+The first final integration review uses the complete policy-selected roster. Follow-up rounds route the actual post-review delta to directly affected specialists and unresolved finding owners, retaining bound unaffected PASS coverage. A migration's initial breadth alone must not recall every specialist for a small correction. Unavailable or untrustworthy comparison inputs remain conservative; new uncovered responsibilities still require review. See ADR-012.
+
 For Review V2 and scoped Phase Review V2:
 
 - the lead implementation agent cannot manufacture reviewer PASS;

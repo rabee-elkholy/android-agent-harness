@@ -165,6 +165,7 @@ def _porcelain_changes(
     raw = git(repo, "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all")
     chunks = raw.split(b"\0")
     entries: list[ChangeEntry] = []
+    pending: list[tuple] = []
     trust_executable_bit: bool | None = None
     index = 0
     while index < len(chunks):
@@ -212,13 +213,32 @@ def _porcelain_changes(
         old_rel = _normal_rel(old_rel) if old_rel else None
         if not (is_delivery_relevant(rel) or (old_rel and is_delivery_relevant(old_rel))):
             continue
+        pending.append((status, rel, old_rel, head_mode, index_mode, worktree_mode, xy))
+
+    # Hash ordinary changed files in one read-only Git invocation. Preserve clean
+    # filters/EOL attributes and the existing per-file/symlink fallback.
+    candidates = sorted({rel for status, rel, *_ in pending if status != "D"
+                         and (repo / rel).is_file() and not (repo / rel).is_symlink()
+                         and not any(ord(char) < 32 and char not in "\t\r\n" for char in rel)})
+    if len(candidates) > 1:
+        try:
+            data = ("\n".join(json.dumps(rel, ensure_ascii=False) for rel in candidates) + "\n").encode("utf-8", errors="surrogateescape")
+            hashes = git(repo, "hash-object", "--stdin-paths", input_bytes=data).decode("ascii").splitlines()
+            width = hashlib.new(algorithm).digest_size * 2
+            if len(hashes) == len(candidates) and all(len(oid) == width and all(c in "0123456789abcdef" for c in oid) for oid in hashes):
+                content_cache.update(zip(candidates, hashes))
+        except (HarnessError, UnicodeError, OSError):
+            pass
+
+    for status, rel, old_rel, head_mode, index_mode, worktree_mode, xy in pending:
+        divergent_mode = None
         path = repo / rel
         if status == "D" or (not path.exists() and not path.is_symlink()):
             base_oid = index_entries.get(rel, "unknown")
             identity = f"tombstone:git:{base_oid}"
             git_mode = head_mode if head_mode != "000000" else index_modes.get(rel, "000000")
         else:
-            oid = _working_tree_oid(repo, rel, path, algorithm)
+            oid = content_cache.get(rel) or _working_tree_oid(repo, rel, path, algorithm)
             if xy[:1] != "." and index_mode != "000000":
                 git_mode = index_mode
             elif worktree_mode != "000000":
@@ -585,8 +605,10 @@ def build_task_manifest(
     baseline: dict | list | str | None = None,
     expected_files: list[str] | set[str] | None = None,
     task_base_head: str | None = None,
+    *,
+    live_manifest: dict | None = None,
 ) -> dict:
-    manifest = build_manifest(repo)
+    manifest = dict(live_manifest) if live_manifest is not None else build_manifest(repo)
     task_id: str | None = None
     if isinstance(baseline, str):
         task_id = baseline

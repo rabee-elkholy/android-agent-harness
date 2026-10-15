@@ -26,7 +26,7 @@ Lifecycle (PLAN → BUILD → VERIFY → SHIP → DONE):
 PLAN (discovery, draft) -> BUILD (implementing) -> VERIFY (gates, reviews, assemble, device) -> SHIP (ready seal, commit, reconcile)
 ```
 
-Use `.agents/harness.py task`/`workflow.py` for state; query `python .agents/harness.py task status --task-id <id> --next` after every stage. Never fabricate approval/evidence. Sensitive final delivery needs second explicit approval of the frozen snapshot.
+Use `.agents/harness.py task`/`workflow.py` for state. Follow the NEXT_ACTION/NEXT_REASON printed by completed commands; query `python .agents/harness.py task status --task-id <id> --next --brief --json` when the next action/payload is missing. Do not repeat status after a complete routed result or poll background work. Never fabricate approval/evidence. Sensitive final delivery needs second explicit approval of the frozen snapshot.
 
 ## 2. Discovery and harness boundary
 
@@ -70,6 +70,7 @@ python .agents/scripts/review_policy.py --repo . --json
 - Final assemble/device requires all routed reviews PASS with zero blocking findings.
 - Review dispatch is automatic after deterministic gates. Use independent reviewer output; self-certification is forbidden for HIGH/CRITICAL or sensitive work. Reviewer failure/timeout/quota is `ENV_BLOCKED`, never PASS. Final review defaults to three rounds. At `REVIEW_ROUND_CAP_REACHED`, ask the developer for an explicit round limit and record it with `task review-budget --task-id <id> --round-limit <approved limit> --source conversation --proof-reference "<answer>"`; then continue the same task/run. Only this task decision extends rounds; never disable hooks, edit installed code, reset counters or skip reviewers. `--limit` changes call spending only; `--round-limit` changes rounds only, and both can be approved together.
   - The setup reviewer-call cap is shared by all phases and final review of one task. Show the advisory phase/final/correction estimate with the initial plan and discuss insufficient headroom before implementation. The estimate never changes the configured cap, reviewer policy or counters. Only an explicit developer spending decision through `task review-budget` changes a task's limit.
+  - Run the complete central-policy roster for the first final integration review. Later rounds review the actual edits since the bound reviewed run: directly affected specialists, unresolved finding owners and newly uncovered responsibilities. Keep unaffected PASS evidence through validated carries. Never recall the full roster merely because the original task was architectural or touched billing. Follow the deterministic policy; missing trustworthy delta inputs require conservative routing. Dispatched calls remain spent if implementation resumes; corrections in the same execution do not consume another call.
 - TDD is required for regressions/deterministic behavior with a seam, not docs/resources. Zero tests cannot satisfy a required test gate.
 - A fresh new unit-test failure gets one forced diagnostic retry on unchanged inputs. Both attempts are preserved. Failed-then-passed is `SUSPECTED_FLAKY` and still blocks delivery; never retry until green or add it to the baseline automatically. RED/start/unrelated captures do not retry.
 - Resume from VERIFYING/BLOCKED with `workflow.py resume` before fixes; do not create a replacement task.
@@ -92,6 +93,7 @@ python .agents/scripts/review_policy.py --repo . --json
 ## 7. Delivery and external systems
 
 - Required criteria need bound proof (`task coverage/bind-evidence`). After install, approved full walkthroughs offer PASS/FAIL or Run Automatically. Automatic PASS replaces repetition, never sensitive approval; partial replays need sign-off. Metrics: opt-in.
+- For UI/navigation plans, proactively offer phone E2E setup and explain current eligibility. An explicit phone E2E request is never satisfied by Unit Tests or AI reviewers. Follow `.agents/workflows/phone-e2e.md`: prepare an executable contract through supported revision/approval when missing, then run only approved device journeys. Offer Prepare phone E2E alongside manual sign-off on legacy walkthroughs; this choice grants no PASS or sensitive approval. Never invent selectors, silently enable automation, or remove manual-only checks.
 
 - READY_FOR_DELIVERY means local evidence is complete; Git and release actions remain developer-owned.
 - Unrelated prior task changes block new tasks unless explicitly overridden.

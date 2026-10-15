@@ -32,7 +32,7 @@ class SecurityTests(unittest.TestCase):
         (self.repo / "agents" / "VERSION").write_text(f"{version_str}\n", encoding="utf-8")
         state = self.repo / "agents/state/tasks/t"
         state.mkdir(parents=True)
-        plan = {"plan_id": "p", "status": "IMPLEMENTING", "execution_nonce": "n", "approval": {"single_use_nonce": "n"}}
+        plan = {"plan_id": "p", "task_id": "t", "status": "IMPLEMENTING", "execution_nonce": "n", "approval": {"single_use_nonce": "n"}}
         (state / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         (state.parents[1] / "active-task.json").write_text(json.dumps({"plan_path": str(state / "plan.json"), "task_id": "t"}), encoding="utf-8")
         self.env = os.environ.copy()
@@ -2405,8 +2405,8 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         }), encoding="utf-8")
         run_id = "r1"
         snapshot = "a" * 64
-        manifest = task_dir / "manifest.json"
-        manifest.write_text(json.dumps({"delivery_snapshot_sha256": snapshot}), encoding="utf-8")
+        manifest = task_dir / "manifest-r1.json"
+        manifest.write_text(json.dumps({"delivery_snapshot_sha256": snapshot, "change_set_sha256": "cs"}), encoding="utf-8")
         package = state_dir / "runs" / snapshot / run_id / "review-package.md"
         package.parent.mkdir(parents=True, exist_ok=True)
         package.write_text("# Bound review package\n", encoding="utf-8")

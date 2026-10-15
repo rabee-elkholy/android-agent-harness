@@ -159,7 +159,7 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "valid_states": ["ANY"],
         "required_inputs": [],
         "model_facing": True,
-        "description": "Inspect active or specified task status and query next recommended action.",
+        "description": "Inspect active or specified task status and query next recommended action; --next --brief --json omits the repeated full plan.",
     },
     {
         "command": "task checkpoint-phase",

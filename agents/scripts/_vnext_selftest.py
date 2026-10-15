@@ -264,7 +264,9 @@ class ChatInstallationDocsTests(unittest.TestCase):
         from workflow import APPROVAL_QUESTION_GUIDE
 
         gemini = (KIT / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
-        self.assertLessEqual(len(gemini), 23_000, "GEMINI.md grows unbounded; move detail into router output")
+        # Maintainer-selected growth budget, not a host limit or measured optimum.
+        # ADR-009 documents the 28,000-character ceiling and its headroom rationale.
+        self.assertLessEqual(len(gemini), 28_000, "GEMINI.md exceeds its local growth budget; review clarity and duplication (ADR-009)")
         self.assertNotIn("APPROVAL_CALLOUTS", APPROVAL_QUESTION_GUIDE)
         self.assertNotIn("/goal", gemini)
         self.assertNotIn("/grill-me", gemini)

@@ -230,7 +230,7 @@ def canonical_risk_tier(tier_or_lane: str, surfaces: set[str] | None = None) -> 
     return "T2_FEATURE"
 
 
-def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE", plan: dict | None = None) -> dict:
+def decide(classification: dict, skills_root: Path, *, project_kind: str = "application", task_kind: str = "FEATURE", plan: dict | None = None, review_scope: str = "FULL") -> dict:
     surfaces = set(classification.get("surfaces") or [])
     if not surfaces and plan:
         surfaces = set(plan.get("expected_surfaces") or plan.get("surfaces") or [])
@@ -255,6 +255,8 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     micro = _micro_eligible(classification, plan=plan, task_kind=task_kind)
     planning_depth = str(classification.get("planning_depth") or (plan or {}).get("planning_depth") or "BOUNDED").upper()
     arch_intent = str((plan or {}).get("architecture_intent") or "").upper()
+    if review_scope == "FIX_DELTA":
+        planning_depth, arch_intent = "BOUNDED", "EXISTING_CHANGE"
     changed_modules = (plan or {}).get("changed_modules") or []
     changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
 
@@ -300,8 +302,11 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
             reviewers.add(name)
             reviewer_reasons.setdefault(name, set()).add(reason)
     for surface in surfaces:
-        require_reviewers(ROUTING.get(surface, set()), surface)
-    if risk_tier == "T5_CRITICAL":
+        selected = ROUTING.get(surface, set())
+        if review_scope == "FIX_DELTA" and surface in {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}:
+            selected = {"bug-reviewer-agent", "security-reviewer-agent", "regression-impact-reviewer-agent"}
+        require_reviewers(selected, surface)
+    if risk_tier == "T5_CRITICAL" and review_scope != "FIX_DELTA":
         reviewers = set(FIVE_REVIEWERS)
         require_reviewers(FIVE_REVIEWERS, "T5_CRITICAL")
     if "TEST_ONLY" in surfaces:
@@ -449,9 +454,9 @@ def decide_later_round(
     owners = set(finding_owners) & previous_required
     promoted = current_required - previous_required - still_carried
     rerun = owners | promoted
-    if rerun or previous_required:
+    if owners - {"test-quality-reviewer-agent"} or fix_delta is None and (rerun or previous_required):
         rerun.add("regression-impact-reviewer-agent")
-    if "TEST_ONLY" in set(result.get("surfaces") or []):
+    if fix_delta is None and "TEST_ONLY" in set(result.get("surfaces") or []):
         rerun.add("test-quality-reviewer-agent")
     # A role remains required only if it is still applicable, was a finding
     # owner, or is Regression/Test Quality mandated for the fix delta.
@@ -463,7 +468,7 @@ def decide_later_round(
     # invalidates prior required reviewer PASS coverage.
     prod_surfaces = set(result.get("surfaces") or []) - {"TEST_ONLY", "DOCS"}
     current_cs = current_change_set or classification.get("change_set_sha256")
-    if current_cs and current_cs != source_change_set and prod_surfaces:
+    if current_cs and current_cs != source_change_set and (prod_surfaces or fix_delta is not None):
         if fix_delta is None:
             carried = []
             rerun = set(current_required)
@@ -478,6 +483,7 @@ def decide_later_round(
             result["fix_delta"] = {
                 "files": sorted(str(item) for item in fix_delta.get("files") or []),
                 "reviewers": sorted(str(item) for item in fix_delta.get("reviewers") or []),
+                **({"comparison": fix_delta["comparison"]} if fix_delta.get("comparison") else {}),
             }
 
     result["reviewers"] = sorted(rerun)
@@ -520,6 +526,12 @@ def decide_later_round(
                      ({"FINDING_OWNER"} if name in owners else set())) for name in sorted(rerun)
     }
     result["explanation"]["carried_reviewers"] = sorted(by_reviewer)
+    result["explanation"]["review_scope"] = "FOLLOWUP_DELTA" if fix_delta is not None else "CONSERVATIVE_FALLBACK"
+    result["explanation"]["followup_basis"] = (
+        "Rerun directly affected specialists, unresolved finding owners and uncovered responsibilities; retain bound unaffected PASS coverage."
+        if fix_delta is not None else
+        "A trustworthy fix delta is unavailable; previous coverage cannot be narrowed safely."
+    )
     if rerun or by_reviewer:
         result["explanation"]["review_exemption"] = None
     result["policy_sha256"] = canonical_sha256({key: value for key, value in result.items() if key != "policy_sha256"})

@@ -2,6 +2,10 @@
 
 Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
 
+- Phone E2E: `.agents/workflows/phone-e2e.md`; unit tests cannot substitute.
+- Use routed follow-up reviewers/carries. Follow NEXT_ACTION; if missing, `task status --task-id <id> --next --brief --json`. Never poll.
+- Never advise disabling hooks, hardcoding caps or declaring UI PASS from unit tests.
+
 - Python: `{{PY}}`
 - Assemble: `{{PY}} .agents/harness.py assemble`
 - Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.

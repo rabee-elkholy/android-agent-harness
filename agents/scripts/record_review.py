@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now, atomic_write_json  # noqa: E402
 from _vnext_common import active_review_package_path as _vnext_active_package_path  # noqa: E402
-from evidence_store import EvidenceStore  # noqa: E402
+from evidence_store import EvidenceStore, StateLock  # noqa: E402
 from workflow import SENSITIVE_SURFACES, assert_active_run_fresh, state_root, task_dir  # noqa: E402
 from review_sources import find_claude_subagent_transcript, is_claude_transcript, read_claude_subagent_transcript  # noqa: E402
 
@@ -451,6 +451,11 @@ def response_text_to_report(repo: Path, task_id: str, reviewer: str, text: str) 
 
 
 def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
+    with StateLock(state_root(repo)):
+        return _ingest_locked(repo, task_id, reports)
+
+
+def _ingest_locked(repo: Path, task_id: str, reports: list[Path]) -> Path:
     directory = task_dir(repo, task_id)
     plan = read_json(directory / "plan.json")
     current = read_json(directory / "current-run.json")
@@ -516,15 +521,15 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
     missing = required - seen
     if missing:
         raise ValidationError("missing required reviewer reports: " + ", ".join(sorted(missing)))
-    used_calls = int(plan.get("review_calls_used") or 0)
-    from review_budget import effective_review_budget
+    from review_budget import effective_review_budget, settle_final_review_calls
+    used_calls = settle_final_review_calls(repo, plan, run=current, reviewers=sorted(seen))
     budget = effective_review_budget(repo, plan, policy)
-    if used_calls + len(seen) > budget:
+    if used_calls > budget:
         from workflow import build_budget_exhausted_remediation
         msg = build_budget_exhausted_remediation(
             policy=policy,
             calls_used=used_calls,
-            requested=len(seen),
+            requested=0,
             budget=budget,
         )
         raise ValidationError(msg)
@@ -546,6 +551,8 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
         "subagent_execution" if "subagent_execution" in provenances
         else next(iter(provenances), "unspecified")
     )
+    from plan_authority import save_plan
+    save_plan(directory / "plan.json", plan)
     evidence_path = EvidenceStore(state_root(repo)).write(
         snapshot=manifest["delivery_snapshot_sha256"],
         run_id=current["run_id"],
@@ -553,6 +560,7 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
         producer="review_orchestrator",
         harness_version=harness_version,
         change_set=manifest["change_set_sha256"],
+        lock=False,
         status=status,
         evidence={
             "package_sha256": package_sha,
@@ -567,10 +575,12 @@ def ingest(repo: Path, task_id: str, reports: list[Path]) -> Path:
         },
     )
     plan["review_rounds"] = round_number
-    plan["review_calls_used"] = used_calls + len(seen)
+    plan["review_calls_used"] = used_calls
     if blocking:
         plan["status"] = "BLOCKED"
         plan["blocked_reviewers"] = sorted({str(item.get("reviewer") or "") for item in blocking})
+    else:
+        plan.pop("blocked_reviewers", None)
     from plan_authority import save_plan
     save_plan(directory / "plan.json", plan)
     return evidence_path

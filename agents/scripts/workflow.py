@@ -1091,6 +1091,9 @@ def _build_and_save_plan(
         plan["review_budget_forecast"] = forecast_review_calls(plan, preliminary_policy)
         plan["task_baseline"] = old_baseline
         plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
+        for key in ("review_calls_used", "review_rounds", "final_review_call_charges"):
+            if key in (old_plan or {}):
+                plan[key] = old_plan[key]
         if cached_ctx and cached_ctx.get("context_id"):
             plan["task_context_id"] = cached_ctx["context_id"]
         elif task_context_id:
@@ -1377,6 +1380,8 @@ def revise(args: argparse.Namespace) -> dict:
     old_status = str(old_plan.get("status") or "")
     if old_status not in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
         raise ValidationError(f"cannot revise task '{task_id}': task status is {old_status}, only active non-terminal tasks can be revised")
+    from review_budget import settle_final_review_calls
+    settle_final_review_calls(repo, old_plan)
 
     directory = task_dir(repo, task_id)
 
@@ -1684,6 +1689,8 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("verification preparation requires an IMPLEMENTING plan")
+    from review_budget import settle_final_review_calls
+    settle_final_review_calls(repo, plan)
     phases = plan.get("phases") or []
     if phases:
         directory = task_dir(repo, args.task_id)
@@ -1926,6 +1933,13 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         "review_scope": review_scope,
         "created_at": utc_now(),
     }
+    from review_fix_delta import capture_review_inputs
+    try:
+        capture_review_inputs(repo, directory, run_id, manifest, plan)
+    except (OSError, ValueError, ValidationError):
+        # This optional cache cannot authorize PASS. Missing or unusable inputs
+        # force conservative follow-up classification instead of blocking intake.
+        pass
     atomic_write_json(directory / "current-run.json", current)
     # Commit the lifecycle transition last. If any frozen run artifact cannot
     # be written, the task remains IMPLEMENTING and prepare-verification is
@@ -2110,6 +2124,11 @@ def recover_stale(args: argparse.Namespace) -> dict:
 
 
 def resume(args: argparse.Namespace) -> dict:
+    with StateLock(state_root(Path(args.repo).resolve())):
+        return _resume_locked(args)
+
+
+def _resume_locked(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     assert_single_live_task(repo, allowed_task_id=args.task_id)
     _clear_cancel_request(repo)
@@ -2158,6 +2177,8 @@ def resume(args: argparse.Namespace) -> dict:
         raise ValidationError("only a verifying or blocked task can resume implementation")
     if not plan.get("approval") or plan.get("execution_nonce") != plan["approval"].get("single_use_nonce"):
         raise ValidationError("the approved execution identity is no longer valid")
+    from review_budget import settle_final_review_calls
+    settle_final_review_calls(repo, plan)
     plan["status"] = "IMPLEMENTING"
     plan["resumed_at"] = utc_now()
     save_plan(_plan_path(repo, args.task_id), plan)
@@ -2433,7 +2454,7 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
     task_cs = current.get("task_change_set_sha256")
     if task_cs:
         try:
-            task_manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"))
+            task_manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"), live_manifest=manifest)
             live_task_cs = task_manifest.get("task_change_set_sha256")
             if live_task_cs and task_cs != live_task_cs:
                 return {
@@ -3293,7 +3314,8 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         if budget_block.get("plan_sha256") == plan.get("plan_sha256") and budget_block:
             from review_budget import effective_review_budget
             budget = effective_review_budget(repo, plan)
-            used = int(plan.get("review_calls_used") or 0)
+            from review_budget import effective_review_calls_used
+            used = effective_review_calls_used(repo, plan)
             requested = int(budget_block.get("requested") or 0)
             if used + requested > budget:
                 return {"code": "REVIEW_BUDGET_EXHAUSTED", "kind": "DEVELOPER_ACTION", "command": "", "blocking": True,
@@ -4504,6 +4526,16 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                         )
                     response_choices = []
                     accepted_responses = ["PASS", "FAIL"]
+                    from verification_contract import phone_e2e_setup
+                    automation_setup = phone_e2e_setup(plan, device_required=True) if not validation_choice else None
+                    if automation_setup:
+                        accepted_responses.append("PREPARE_E2E")
+                        signoff_reason += " Offer Prepare phone E2E alongside manual PASS/FAIL. " + automation_setup["instructions"]
+                        response_choices = [
+                            {"id": "PASS", "label": "Works - approve the changes" if sensitive_pending else "PASS - I tested manually"},
+                            {"id": "FAIL", "label": "FAIL - Manual validation failed"},
+                            {"id": "PREPARE_E2E", "label": "Prepare phone E2E"},
+                        ]
                     if validation_choice:
                         journey_criteria = sorted({c for j in plan["verification_contract"]["journeys"] for c in j["criteria"]})
                         criterion_args = " ".join(f"--criterion-id {c}" for c in journey_criteria)
@@ -4538,6 +4570,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                         },
                         "instructions": "Present the complete mobile verification walkthrough and await the developer's selected response. Do not run automatic validation before selection.",
                         "accepted_responses": accepted_responses,
+                        **({"choices": response_choices, "automation_setup": automation_setup} if automation_setup else {}),
                         **({"choices": response_choices, "walkthrough": plan["verification_contract"]["journeys"]} if validation_choice else {}),
                         "expected": {"success_statuses": ["PASS"]},
                     }
@@ -5009,6 +5042,9 @@ def status(args: argparse.Namespace) -> dict:
         last = ("task_state", "next_actions", "next_action")
         compact = {key: _compact_for_host(plan[key]) for key in last}
         plan = {**{k: v for k, v in plan.items() if k not in last}, **compact}
+    if bool(getattr(args, "brief", False)):
+        keys = ("task_id", "status", "plan_sha256", "review_rounds", "review_calls_used", "verification_run_id", "next_action")
+        plan = {key: plan[key] for key in keys if key in plan}
     return plan
 
 
@@ -5084,7 +5120,7 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
     command.add_argument("--architecture-target-family", default=None, help="Target architecture family ID")
     command.add_argument("--expected-files", help="Comma-separated expected target files")
     command.add_argument("--phases", help="Optional JSON string or file path defining task phases")
-    command.add_argument("--verification-contract", help="Repository-relative JSON file with optional approved criteria and journeys")
+    command.add_argument("--verification-contract", help="Repository-relative JSON file or inline JSON with optional approved criteria and journeys")
     command.add_argument("--task-context-id", default=None, help="Explicit Task Context ID for collision-safe scope binding")
     command.add_argument("--force", action="store_true", help="Bypass active task collision barriers")
     command.add_argument("--zoho-item-id", default=None, help="Linked Zoho Sprints item ID")
@@ -5239,6 +5275,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     status_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
     status_cmd.add_argument("--next", action="store_true", help="Include the safest next lifecycle command without executing it")
+    status_cmd.add_argument("--brief", action="store_true", help="Show lifecycle identity, spending and the exact next action without repeating the full plan")
     status_cmd.add_argument("--host", default=None, help="Host running this task; binds routed review commands")
     status_cmd.set_defaults(handler=status)
     command = sub.add_parser("recover-stale")
@@ -5319,6 +5356,10 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
     ]
     if "verification_contract" in authority:
         lines.append(f"Acceptance criteria and selected journeys: {displayed(authority['verification_contract'])}")
+    from verification_contract import phone_e2e_setup
+    e2e_setup = phone_e2e_setup(plan)
+    if e2e_setup:
+        lines.append("Phone E2E: " + e2e_setup["summary"])
     if plan.get("review_budget_forecast"):
         from review_budget import forecast_summary
         lines.append(forecast_summary(plan["review_budget_forecast"]))
@@ -5519,6 +5560,10 @@ def approval_brief(plan: dict, sensitive_advisory: str | None = None) -> str:
     device = str(authority.get("device_strategy") or "").strip()
     if device:
         lines.append(f"Phone checks: {redact(device)}")
+    from verification_contract import phone_e2e_setup
+    e2e_setup = phone_e2e_setup(plan)
+    if e2e_setup:
+        lines.append("Phone E2E: " + e2e_setup["summary"])
     if "verification_contract" in authority:
         contract = authority["verification_contract"]
         lines.append("Acceptance criteria: " + "; ".join(

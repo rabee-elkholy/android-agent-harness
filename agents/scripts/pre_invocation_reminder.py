@@ -75,7 +75,7 @@ def _compact_message() -> str:
     if status == "IMPLEMENTING":
         return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion. For unrelated work, cancel active task first."
     if status == "VERIFYING":
-        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. verify. Run workflow.py resume for fixes; do not stall on follow-ups. For unrelated work, cancel active task first."
+        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. mobile walkthrough -> 6. verify. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. For unrelated work, cancel active task first."
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
         blocked_str = f" ({', '.join(blocked)})" if blocked else ""

@@ -4,6 +4,131 @@ from __future__ import annotations
 from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, state_root, utc_now, validate_id
 
 
+def settle_final_review_calls(repo, plan, *, run=None, reviewers=()):
+    """Charge durable final dispatches once, including abandoned legacy runs.
+
+    Only the caller's plan is changed. Persist it with the existing plan/state lock;
+    receipts, ledgers and immutable evidence remain untouched. Phase dispatches
+    already charge at dispatch and retain their existing accounting.
+    """
+    from evidence_store import EvidenceStore
+    from review_orchestrator import load_ledger, ALL_REVIEW_STATES
+    directory = state_root(repo) / "tasks" / validate_id(plan["task_id"])
+    if directory.is_symlink() or not directory.resolve().is_relative_to(state_root(repo).resolve()):
+        raise ValidationError("reviewer spending directory escapes task state")
+
+    def checked_json(path):
+        if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()):
+            raise ValidationError("reviewer spending artifact escapes task state")
+        return read_json(path)
+    original = plan.get("final_review_call_charges", {})
+    if not isinstance(original, dict):
+        raise ValidationError("invalid final reviewer spending record")
+    charges = {}
+    for identity, roles in original.items():
+        validate_id(identity)
+        if not isinstance(roles, list) or any(not isinstance(role, str) for role in roles) or len(set(roles)) != len(roles):
+            raise ValidationError("invalid final reviewer spending roles")
+        charges[identity] = {validate_id(role) for role in roles}
+    observed = {}
+    roots = directory / "review-execution"
+    for ledger_path in sorted(roots.glob("*/ledger.json")):
+        identity = validate_id(ledger_path.parent.name)
+        if (ledger_path.is_symlink() or not ledger_path.resolve().is_relative_to(directory.resolve())
+                or ledger_path.resolve().parent.parent != roots.resolve()):
+            raise ValidationError("final review ledger escapes task state")
+        ledger = load_ledger(directory, identity)
+        manifest = checked_json(directory / ("manifest-" + identity + ".json"))
+        if (ledger.get("task_id") != plan["task_id"] or ledger.get("run_id") != identity
+                or any(ledger.get(key) != manifest.get(key) for key in ("delivery_snapshot_sha256", "change_set_sha256"))):
+            raise ValidationError("final reviewer spending identity mismatch")
+        roles = set()
+        entries = ledger.get("reviewers")
+        if not isinstance(entries, dict):
+            raise ValidationError("invalid final reviewer spending ledger")
+        for role, entry in entries.items():
+            validate_id(role)
+            if not isinstance(entry, dict) or entry.get("state") not in ALL_REVIEW_STATES:
+                raise ValidationError("invalid final reviewer spending state")
+            if entry["state"] != "NOT_DISPATCHED":
+                roles.add(role)
+        # Receipts survive an interruption between receipt and ledger publication.
+        for receipt_path in sorted((ledger_path.parent / "dispatch").glob("*.json")):
+            receipt = checked_json(receipt_path)
+            role = validate_id(receipt_path.stem)
+            if (receipt_path.is_symlink() or receipt_path.resolve().parent != (ledger_path.parent / "dispatch").resolve()
+                    or receipt.get("task_id") != plan["task_id"] or receipt.get("run_id") != identity
+                    or receipt.get("reviewer") != role or role not in entries
+                    or any(receipt.get(key) != ledger.get(key) for key in ("delivery_snapshot_sha256", "change_set_sha256"))
+                    or receipt.get("receipt_sha256") != canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})):
+                raise ValidationError("invalid final reviewer spending receipt")
+            roles.add(role)
+        observed[identity] = roles
+    legacy = directory / "reviewer-dispatches"
+    for receipt_path in sorted([*legacy.glob("*.json"), *legacy.glob("*/*.json")]):
+        receipt = checked_json(receipt_path)
+        identity, role = validate_id(receipt.get("run_id", "")), validate_id(receipt_path.stem)
+        if (receipt_path.is_symlink() or not receipt_path.resolve().is_relative_to(legacy.resolve())
+                or receipt.get("task_id") != plan["task_id"] or receipt.get("reviewer") != role
+                or receipt.get("receipt_sha256") != canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})):
+            raise ValidationError("invalid legacy final reviewer spending receipt")
+        observed.setdefault(identity, set()).add(role)
+    for report_path in sorted((directory / "staged-reviews").glob("*/*.json")):
+        identity, role = validate_id(report_path.parent.name), validate_id(report_path.stem)
+        if report_path.is_symlink() or not report_path.resolve().is_relative_to((directory / "staged-reviews").resolve()):
+            raise ValidationError("staged final review escapes task state")
+        observed.setdefault(identity, set()).add(role)
+    if run is not None:
+        identity = validate_id(run["run_id"])
+        if run.get("task_id") != plan["task_id"]:
+            raise ValidationError("final reviewer spending task mismatch")
+        observed.setdefault(identity, set()).update(validate_id(role) for role in reviewers)
+    for identity, roles in observed.items():
+        if identity not in charges:
+            # Old finalized rounds and old host transfers already incremented the
+            # legacy counter. Seed their identities rather than charging twice.
+            manifest = checked_json(directory / ("manifest-" + identity + ".json"))
+            evidence_file = EvidenceStore(state_root(repo)).run_dir(manifest["delivery_snapshot_sha256"], identity) / "reviews.json"
+            archived = directory / "host-history" / (identity + ".json")
+            if evidence_file.exists():
+                if evidence_file.is_symlink() or not evidence_file.resolve().is_relative_to(state_root(repo).resolve()):
+                    raise ValidationError("reviewer spending evidence escapes state")
+                record = EvidenceStore(state_root(repo)).read(manifest["delivery_snapshot_sha256"], identity, "reviews")
+                if record.get("change_set_sha256") != manifest["change_set_sha256"]:
+                    raise ValidationError("final reviewer spending evidence identity mismatch")
+                charges[identity] = {validate_id(role) for role in record.get("evidence", {}).get("reviewers") or []}
+            elif archived.exists():
+                old = checked_json(archived)
+                if (old.get("task_id") != plan["task_id"] or old.get("run_id") != identity
+                        or any(old.get(key) != manifest.get(key) for key in ("delivery_snapshot_sha256", "change_set_sha256"))):
+                    raise ValidationError("final reviewer spending archive identity mismatch")
+                # A failed transfer can leave its archive behind after restoring
+                # the old counter. Only a committed transition proves payment.
+                for transition_path in sorted((directory / "host-transition-history").glob("*/COMPLETED.json")):
+                    transition = checked_json(transition_path)
+                    if (transition.get("task_id") == plan["task_id"] and transition.get("status") == "COMPLETED"
+                            and ((transition.get("before") or {}).get("current-run.json") or {}).get("run_id") == identity
+                            and transition.get("transition_sha256") == canonical_sha256({k: v for k, v in transition.items() if k != "transition_sha256"})):
+                        charges[identity] = set(roles)
+                        break
+    used = plan.get("review_calls_used", 0)
+    if type(used) is not int or used < 0:
+        raise ValidationError("invalid reviewer call counter")
+    for identity, roles in observed.items():
+        previous = charges.setdefault(identity, set())
+        used += len(roles - previous)
+        previous.update(roles)
+    if charges:
+        plan["final_review_call_charges"] = {identity: sorted(roles) for identity, roles in sorted(charges.items())}
+        plan["review_calls_used"] = used
+    return used
+
+
+def effective_review_calls_used(repo, plan):
+    """Read-only projection; routing cannot overlook legacy interrupted calls."""
+    return settle_final_review_calls(repo, dict(plan)) if repo is not None and plan.get("task_id") else int(plan.get("review_calls_used") or 0)
+
+
 def forecast_review_calls(plan, policy):
     """Advisory planning estimate; never changes the setup limit or selects reviewers."""
     from review_policy import _configured_model_call_budget

@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.28] - 2026-10-15
+
+### Focused follow-up review, faster routing and audit recovery
+
+- Keep the first final review complete and route later edits from verified reviewed text, with structural/dependency context, strongly related specialists, unresolved finding owners and validated unaffected PASS carries. Do not inherit the original migration's entire roster for a small correction; show the new patch in follow-up packages.
+- Charge final reviewer calls at dispatch and reconcile interrupted legacy runs without rewriting evidence. Preserve consumed calls and rounds across resume, revision and host transfer, and prevent double charging at completion.
+- Batch read-only Git hashing while preserving filters, EOL attributes, modes and symlinks; reuse one live manifest within freshness checks. Add brief next-action status output and guidance that avoids redundant status queries and polling.
+- Proactively offer phone E2E setup for UI tasks and manual-only walkthroughs. Provide an installed preparation workflow and bounded inline contract revision, preserving approval boundaries and preventing unit tests or AI reviews from substituting for a phone-E2E request.
+- Permit exact read-only device status through the hook and host-session boundary while retaining install/replay guards. Preserve Unicode Task Context JSON on Windows CP1252 streams and support human-readable UTF-8 output.
+- Raise the local Antigravity instruction growth budget from 23,000 to 28,000 characters with documented headroom; distinguish it from host limits and measured performance claims. Keep concise instructions and the separate Codex budget.
+
 All notable changes to the **Android Agent Harness** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

@@ -451,6 +451,51 @@ class PublicWorkflowContracts(unittest.TestCase):
             self.store.read(self.current["delivery_snapshot_sha256"], self.current["run_id"], "device_signoff")
         self.call("complete")
 
+    def test_legacy_device_walkthrough_offers_setup_without_claiming_automatic_eligibility(self):
+        self.start(opt_in=False)
+        from _vnext_common import read_json, atomic_write_json
+        from workflow import resolve_next_action
+        policy_file = Path(self.current["policy"])
+        policy = read_json(policy_file)
+        policy.update(device_required=True, assemble_required=True)
+        policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+        atomic_write_json(policy_file, policy)
+        self.install_choice_fixture()
+        before = (self.repo / ".agents/state/tasks/feature/plan.json").read_bytes()
+        action = resolve_next_action(self.repo, "feature")
+        self.assertEqual("DEVICE_SIGNOFF_REQUIRED", action["code"])
+        self.assertIn("PREPARE_E2E", action["accepted_responses"])
+        self.assertNotIn("AUTOMATIC", action["accepted_responses"])
+        self.assertIn("--verification-contract", action["automation_setup"]["revise_command"])
+        self.assertIn("Unit tests", action["automation_setup"]["instructions"])
+        self.assertEqual(before, (self.repo / ".agents/state/tasks/feature/plan.json").read_bytes())
+
+    def test_ui_approval_material_proactively_proposes_phone_e2e(self):
+        self.start(opt_in=False)
+        from workflow import plan_summary, approval_brief
+        plan = {**self.plan, "expected_surfaces": ["COMPOSE_UI"]}
+        for rendered in (plan_summary(plan), approval_brief(plan)):
+            self.assertIn("Phone E2E", rendered)
+            self.assertIn("executable", rendered)
+
+    def test_inline_contract_revision_needs_no_unapproved_file_and_keeps_spending(self):
+        self.start(opt_in=False)
+        from _vnext_common import read_json, atomic_write_json
+        import workflow
+        plan_file = self.repo / ".agents/state/tasks/feature/plan.json"
+        plan = read_json(plan_file)
+        plan.update(review_calls_used=9, review_rounds=2,
+                    final_review_call_charges={"run-previous": ["bug-reviewer-agent"]})
+        atomic_write_json(plan_file, plan)
+        self.call("revise", "--verification-contract", json.dumps(contract("journey") | {"journeys": [journey()]}))
+        revised = read_json(plan_file)
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", revised["status"])
+        self.assertNotEqual(plan["plan_sha256"], revised["plan_sha256"])
+        for key in ("review_calls_used", "review_rounds", "final_review_call_charges"):
+            self.assertEqual(plan[key], revised[key])
+        self.assertTrue(revised["verification_contract"]["journeys"])
+        self.assertFalse((self.repo / "harness-verification").exists())
+
     def test_public_choice_manual_pass_completes_without_running_journey(self):
         self.start(choice=True)
         self.install_choice_fixture()

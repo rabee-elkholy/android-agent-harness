@@ -18,6 +18,15 @@ This is a local regression budget for instruction growth. It is not a token
 count, host context-window limit, performance guarantee, or empirical optimum.
 It does not measure the complete prompt supplied by any host.
 
+For Antigravity, count `agents/tool-adapters/GEMINI.md.template` separately with
+a ceiling of 28,000 Unicode characters. Commit `1b95e9c` introduced its former
+23,000-character check without a documented benchmark or threshold derivation.
+On 2026-10-15 the maintainer authorized a justified increase: 28,000 is about
+22% above the former ceiling and leaves about 5,000 characters above the current
+compact adapter for useful instruction changes. It remains a deliberately chosen
+maintenance budget, not an Antigravity restriction or a measured performance
+optimum. The Codex combined budget above remains unchanged.
+
 Keep useful instructions explicit. Load detailed domain guidance through routed
 skills, and review duplication and clarity before expanding always-loaded text.
 Do not pad instructions to fill the budget or remove meaningful requirements

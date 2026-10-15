@@ -78,6 +78,31 @@ def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
 
 
 class GraphDiscoverySelftest(unittest.TestCase):
+    def test_task_context_json_preserves_arabic_on_cp1252(self):
+        relative = "app/src/main/kotlin/com/example/profile/\u0634\u0627\u0634\u0629.kt"
+        (self.repo / relative).write_text("package com.example.profile\nclass ArabicScreen\n", encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(KIT / "agents/scripts/task_context.py"), "--repo", str(self.repo),
+             "--file", relative, "--json"], capture_output=True,
+            env={**self.env, "PYTHONIOENCODING": "cp1252"}, check=False)
+        self.assertEqual(0, proc.returncode, proc.stderr.decode("utf-8", errors="replace"))
+        result = json.loads(proc.stdout.decode("ascii"))
+        self.assertEqual(relative, result["target"]["path"])
+
+    def test_native_hook_allows_only_read_only_device_status_during_implementation(self):
+        task = self.repo / ".agents/state/tasks/device-status"
+        task.mkdir(parents=True)
+        atomic_write_json(task / "plan.json", {"task_id": "device-status", "status": "IMPLEMENTING"})
+        atomic_write_json(task.parents[1] / "active-task.json", {
+            "task_id": "device-status", "plan_path": str(task / "plan.json")})
+        for command in ("python .agents/harness.py device status", "python .agents/scripts/run_device.py status"):
+            with self.subTest(command=command):
+                result = self._invoke_safety("run_command", {"CommandLine": command})
+                self.assertEqual("allow", result["decision"], result)
+        for action in ("install-start", "start", "uninstall", "validate-automatically", "status --allow-downgrade"):
+            result = self._invoke_safety("run_command", {"CommandLine": "python .agents/harness.py device " + action})
+            self.assertEqual("deny", result["decision"], result)
+
     def test_manifest_does_not_grant_source_tree_search_during_phase_review(self):
         task = self.repo / '.agents/state/tasks/phase-task'
         task.mkdir(parents=True, exist_ok=True)

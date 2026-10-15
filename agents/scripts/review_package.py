@@ -141,14 +141,24 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     changes = manifest.get("task_changes") if "task_changes" in manifest else (manifest.get("changes") or [])
     paths = sorted({str(item.get("path") or "") for item in changes if item.get("path")} | {str(item.get("old_path") or "") for item in changes if item.get("old_path")})
     secret_paths = {rel for rel in paths if any(marker in rel.lower() for marker in SECRET_PATH_MARKERS)}
-    diff = build_task_diff(repo, task_id, manifest)
+    from review_fix_delta import build_fix_diff
+    delta_diff = build_fix_diff(repo, directory, manifest, plan, policy)
+    diff = delta_diff if delta_diff is not None else build_task_diff(repo, task_id, manifest)
+    delta_paths = set((policy.get("fix_delta") or {}).get("files") or []) if delta_diff is not None else None
     extras: list[str] = []
+    if delta_paths is not None:
+        source_run = (policy.get("later_round_source") or {}).get("run_id")
+        extras.append(f"\n## Changes since reviewed run {source_run}\nThis follow-up diff covers only the new edits. "
+                      "Prior PASS coverage is retained through the bound carried_reviews references. "
+                      "Recheck assigned unresolved findings and directly affected contracts; use the prior package for integration context.\n")
     for rel in sorted(secret_paths):
         extras.append(f"\n## REDACTED FILE {rel}\n[Content redacted because the path may contain secrets.]\n")
     for item in changes:
         if item.get("status") not in ("A", "R"):
             continue
         rel = str(item.get("path") or "")
+        if delta_paths is not None and rel not in delta_paths:
+            continue
         path = repo / rel
         if rel in secret_paths:
             continue

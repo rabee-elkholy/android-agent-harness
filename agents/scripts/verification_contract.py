@@ -15,6 +15,39 @@ MAX_JOURNEYS = 8
 METHODS = {"test", "manual", "journey", "review"}
 
 
+def phone_e2e_setup(plan, *, device_required=False):
+    """Non-authoritative guidance; never opts a legacy task into device effects."""
+    contract = plan.get("verification_contract") or {}
+    if contract.get("device_validation") == "manual_or_automatic":
+        return None
+    ui = {"COMPOSE_UI", "XML_UI", "RESOURCE_UI", "NAVIGATION"}
+    if not device_required and not (ui & set(plan.get("expected_surfaces") or [])) and not contract.get("journeys"):
+        return None
+    import _product
+    if str(getattr(_product, "DEVICE_VERIFICATION_MODE", "") or "").lower() == "disabled":
+        return None
+    task_id = str(plan.get("task_id") or "<task_id>")
+    return {
+        "status": "SETUP_REQUIRED",
+        "summary": "Offer phone E2E setup: prepare an approved executable journey contract; automatic execution is not enabled for this walkthrough.",
+        "revise_command": f"python .agents/harness.py task revise --task-id {task_id} --verification-contract <json-file-or-inline-json>",
+        "instructions": (
+            "If the developer requests phone E2E or chooses Prepare phone E2E, prepare concrete device journeys with safe "
+            "preconditions, available resource/text/content-description selectors and observable assertions. Draft "
+            "the contract in chat and pass inline JSON to revision when no approved definition file exists; do not "
+            "write a new out-of-scope config just to obtain approval. Unit tests "
+            "and AI reviews do not execute the phone UI and cannot substitute for this request. If VERIFYING/BLOCKED, "
+            "resume the same task before approved source edits; preserve counters and evidence. Use task revise with "
+            "--verification-contract and present the changed contract for explicit approval; do not edit plan/evidence "
+            "manually. Use manual_or_automatic only for a complete executable walkthrough. Partial journeys or "
+            "human-only checks keep manual sign-off. Explain selector, device or environment limitations concretely. "
+            "Run Automatically is offered only after approved setup and successful current-run install/start. "
+            "Never treat a setup choice as PASS, sensitive approval, permission to skip gates, or permission to launch "
+            "an unapproved device replay. Follow .agents/workflows/phone-e2e.md for setup and bounded journey actions."
+        ),
+    }
+
+
 def validate_criterion_results(value):
     if not isinstance(value, dict) or len(value) > MAX_CRITERIA:
         raise ValidationError("criterion_results must be a bounded mapping")
@@ -36,6 +69,13 @@ def text(value, label: str, limit: int = 2000) -> str:
 
 
 def load_definition(repo: Path, relative: str) -> dict:
+    if relative.lstrip().startswith("{"):
+        if len(relative.encode("utf-8")) > MAX_CONTRACT_BYTES:
+            raise ValidationError("inline definition is too large")
+        try:
+            return json.loads(relative)
+        except (ValueError, RecursionError) as exc:
+            raise ValidationError("invalid inline JSON definition") from exc
     path = bounded_path(repo, relative)
     if path.is_symlink() or not path.is_file() or path.suffix != ".json" or path.stat().st_size > MAX_CONTRACT_BYTES:
         raise ValidationError("definition must be a bounded regular JSON file")

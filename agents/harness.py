@@ -29,6 +29,7 @@ def _run(script: str, args: list[str]) -> int:
     from host_continuation import assert_execution_session
     from evidence_store import StateLock
     read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py"}
+    read_only = read_only or (script == "run_device.py" and args == ["status"])
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
     if not read_only and not {"--help", "-h"} & set(args):
         active = AGENTS_ROOT / "state/active-task.json"
@@ -84,7 +85,7 @@ def _print_next_step() -> None:
         return
     command = str(action.get("command") or "")
     if code.startswith("DISPATCH_") or code.startswith("RETRY_"):
-        command = f"python .agents/harness.py task status --task-id {task_id} --next --json (for the exact payload)"
+        command = f"python .agents/harness.py task status --task-id {task_id} --next --brief --json (for the exact payload)"
     print(f"NEXT_ACTION={code}: {command or '(no command: ' + str(action.get('kind') or 'action') + ')'}", flush=True)
     if action.get("reason"):
         print(f"NEXT_REASON={action['reason']}", flush=True)

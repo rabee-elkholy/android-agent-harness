@@ -892,7 +892,8 @@ def _handle_subagent(name: str, args: dict) -> None:
         if round_block:
             emit("deny", round_block["reason"], tool=name, reason_code=round_block["code"])
             return
-        used_calls = int(plan.get("review_calls_used") or 0)
+        from review_budget import effective_review_calls_used
+        used_calls = effective_review_calls_used(REPO, plan)
         from review_budget import effective_review_budget
         safety_cap = effective_review_budget(REPO, plan, policy)
         if used_calls + len(dispatchable) > safety_cap:

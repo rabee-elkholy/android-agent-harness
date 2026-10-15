@@ -185,6 +185,8 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
     if name == "compileall":
         return True
+    if name == "run_device" and args == ["status"]:
+        return True
     if name in INSPECTION_SCRIPTS:
         if name == "task_context":
             targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
@@ -193,6 +195,8 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
     if name in {"harness_cli", "android-harness"}:
+        if args == ["device", "status"]:
+            return True
         if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"]):
             return True
         if args[:1] == ["task-context"]:

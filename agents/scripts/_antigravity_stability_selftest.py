@@ -158,15 +158,16 @@ class TestV2Accounting(unittest.TestCase):
             }
             (tdir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
             (tdir / "current-run.json").write_text(json.dumps({
+                "task_id": "task-1",
                 "run_id": "run-1",
                 "delivery_snapshot_sha256": "a" * 64,
-                "manifest": str(tdir / "manifest.json"),
+                "manifest": str(tdir / "manifest-run-1.json"),
                 "policy": str(tdir / "policy.json"),
                 "review_package": str(tdir / "review-package.md"),
                 "review_protocol_version": 2,
                 "review_host": "antigravity",
             }), encoding="utf-8")
-            (tdir / "manifest.json").write_text(json.dumps({
+            (tdir / "manifest-run-1.json").write_text(json.dumps({
                 "delivery_snapshot_sha256": "a" * 64,
                 "change_set_sha256": "b" * 64,
             }), encoding="utf-8")
@@ -702,7 +703,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
 
         self.snapshot = "a" * 64
         self.change_set = "b" * 64
-        self.manifest_f = self.task_d / "manifest.json"
+        self.manifest_f = self.task_d / "manifest-r1.json"
         self.manifest_f.write_text(json.dumps({
             "delivery_snapshot_sha256": self.snapshot,
             "change_set_sha256": self.change_set,

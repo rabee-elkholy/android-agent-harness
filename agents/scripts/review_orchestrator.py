@@ -225,8 +225,9 @@ def record_dispatch_batch(
             raise ValidationError(f"reviewer '{r}' is not in policy required reviewers: {required_reviewers}")
 
     with StateLock(state_root(repo)):
-        from review_budget import review_round_cap_action
-        round_block = review_round_cap_action(repo, read_json(directory / "plan.json"), policy)
+        from review_budget import review_round_cap_action, settle_final_review_calls, effective_review_budget
+        plan = read_json(directory / "plan.json")
+        round_block = review_round_cap_action(repo, plan, policy)
         if round_block:
             raise ValidationError(round_block["reason"])
         ledger = init_ledger(
@@ -247,6 +248,10 @@ def record_dispatch_batch(
             raise ValidationError(
                 f"dispatch batch must exactly match dispatchable reviewers {sorted(dispatchable)}, got {sorted(requested)}"
             )
+
+        used = settle_final_review_calls(repo, plan)
+        if used + len(requested) > effective_review_budget(repo, plan, policy):
+            raise ValidationError("REVIEW_BUDGET_EXHAUSTED: final dispatch exceeds the task reviewer-call limit; use task review-budget")
 
         for r in reviewers:
             rev_entry = ledger.get("reviewers", {}).get(r)
@@ -310,6 +315,9 @@ def record_dispatch_batch(
             receipts[r] = receipt
 
         save_ledger(directory, run_id, ledger)
+        settle_final_review_calls(repo, plan)
+        from plan_authority import save_plan
+        save_plan(directory / "plan.json", plan)
         return receipts
 
 
@@ -787,6 +795,14 @@ def _finalize_review_execution_locked(
     version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
     harness_ver = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
 
+    from review_budget import settle_final_review_calls
+    from plan_authority import save_plan
+    settle_final_review_calls(repo, plan, run=current, reviewers=required_reviewers)
+    save_plan(directory / "plan.json", plan)
+    from review_budget import effective_review_budget
+    if plan.get("review_calls_used", 0) > effective_review_budget(repo, plan, policy):
+        raise ValidationError("REVIEW_BUDGET_EXHAUSTED: recorded dispatch spending exceeds the task limit; use task review-budget")
+
     store.write(
         snapshot=manifest["delivery_snapshot_sha256"],
         run_id=run_id,
@@ -804,13 +820,12 @@ def _finalize_review_execution_locked(
     save_ledger(directory, run_id, ledger)
 
     if plan is not None:
-        prev_rounds = int(plan.get("review_rounds") or 0)
-        prev_calls = int(plan.get("review_calls_used") or 0)
         plan["review_rounds"] = round_number
-        plan["review_calls_used"] = prev_calls + len(required_reviewers)
         if blocking:
             plan["status"] = "BLOCKED"
             plan["blocked_reviewers"] = sorted({str(item.get("reviewer") or "") for item in blocking})
+        else:
+            plan.pop("blocked_reviewers", None)
         from plan_authority import save_plan
         save_plan(directory / "plan.json", plan)
 

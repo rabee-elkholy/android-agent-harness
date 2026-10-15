@@ -2,6 +2,16 @@
 
 These features are optional. Existing tasks and installations retain their established behavior. They use the same router, risk policy, approval hash, and append-only evidence store as the rest of the harness.
 
+UI/navigation planning now proactively offers phone E2E preparation. A manual-only
+task offers **Prepare phone E2E** alongside manual PASS/FAIL after installation;
+this is a setup choice, not test success or sensitive approval. Follow the installed
+`.agents/workflows/phone-e2e.md` to prepare selectors, safe effects and assertions.
+An explicit request to test on the phone must not be replaced by JVM tests or AI reviews.
+`--verification-contract` accepts an existing repository-relative JSON file or
+bounded inline JSON, so approval does not require first writing an out-of-scope
+configuration file. Revision preserves consumed review calls/rounds; a new plan
+hash requires approval and its own explicit limit extension where applicable.
+
 ## Acceptance criteria
 
 Keep reusable definitions in project-owned JSON, for example `harness-verification/refresh.json`. The installer does not own this directory; updates and uninstall preserve it. The approved plan embeds the definition, so editing a reusable file does not silently change a live task. Apply a changed definition through the existing plan revision and approval flow.

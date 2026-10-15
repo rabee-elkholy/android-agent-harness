@@ -103,7 +103,7 @@ class HookTests(unittest.TestCase):
     def prepare_reviewer_run(self, task: Path, policy: Path, *, create_package: bool = True) -> Path:
         run_id = "run-one"
         snapshot = "a" * 64
-        manifest = task / "manifest.json"
+        manifest = task / "manifest-run-one.json"
         manifest.write_text(json.dumps({"delivery_snapshot_sha256": snapshot, "change_set_sha256": snapshot}), encoding="utf-8")
         (task / "current-run.json").write_text(
             json.dumps({"policy": str(policy), "run_id": run_id, "manifest": str(manifest)}),
@@ -994,6 +994,12 @@ class HookTests(unittest.TestCase):
         self.assertTrue(post_script.is_file(), "post_tool_reconcile.py must exist")
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"
+        # This dispatch fixture needs a complete task identity. Other legacy
+        # fixtures deliberately exercise missing-id fallback instructions.
+        plan_file = task / "plan.json"
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        plan["task_id"] = "task-one"
+        plan_file.write_text(json.dumps(plan), encoding="utf-8")
         policy = task / "policy.json"
         policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)

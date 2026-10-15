@@ -33,3 +33,9 @@ continuation path. The extension grants spending authority only: it cannot waive
 reviewers, accept findings, fabricate proof or bypass sensitive-surface policy.
 The developer approval provenance is rule-enforced, not a cryptographic human signal.
 This supersedes the unconditional three-round ceiling described in ADR-006.
+
+Final dispatches consume their call spending when recorded, including interrupted
+executions. Task-local per-run role charges prevent double charging at finalization,
+resume, revision or host transfer. Legacy outstanding dispatches are reconciled
+from durable ledgers/receipts without rewriting review evidence. Revising a plan
+retains consumed calls/rounds; it does not inherit a prior plan hash's limit grant.

@@ -145,6 +145,25 @@ def setup_ownership(repo: Path, version: str = "1.0.40") -> None:
 
 
 class DailyWorkflowSelftest(unittest.TestCase):
+    def test_manifest_batches_changed_file_hashes_without_losing_git_attributes(self):
+        import delivery_manifest
+        write_file(self.repo / ".gitattributes", "*.kt text eol=lf\n")
+        paths = []
+        for index in range(18):
+            relative = f"app/src/main/kotlin/com/example/Batch {index}.kt"
+            write_file(self.repo / relative, f"package com.example\r\nclass Batch{index}\r\n")
+            paths.append(relative)
+        original = delivery_manifest.git
+        with mock.patch.object(delivery_manifest, "git", wraps=original) as invoked:
+            manifest = delivery_manifest.build_manifest(self.repo)
+        hashes = [call for call in invoked.call_args_list if call.args[1:2] == ("hash-object",)]
+        self.assertLessEqual(len(hashes), 3, "one Git child per changed file makes every status/hook unnecessarily slow")
+        identities = {item["path"]: item["content_identity"] for item in manifest["files"]}
+        for relative in paths:
+            expected = original(self.repo, "hash-object", "--path", relative, "--stdin",
+                                input_bytes=(self.repo / relative).read_bytes()).decode().strip()
+            self.assertEqual("git:" + expected, identities[relative])
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="daily_wf_test_")
         self.repo = Path(self.temp.name).resolve()
@@ -5594,7 +5613,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.mock_transcripts[execution_id] = t_file
         return t_file
 
-    def _setup_v2_task(self, task_id: str, reviewers: list[str] | None = None, review_round: int | None = None) -> tuple[dict, str, str, Path]:
+    def _setup_v2_task(self, task_id: str, reviewers: list[str] | None = None, review_round: int | None = None, content: str | None = None) -> tuple[dict, str, str, Path]:
         if reviewers is None:
             reviewers = ["bug-reviewer-agent"]
         draft(argparse.Namespace(
@@ -5603,7 +5622,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
             outcome="V2 review orchestration task",
             kind="BUG",
             planning_depth="BOUNDED",
-            expected_surfaces="BUSINESS_LOGIC",
+            expected_surfaces="BILLING,BUSINESS_LOGIC,COMPOSE_UI" if content else "BUSINESS_LOGIC",
             expected_modules=":app",
             architecture_intent="EXISTING_CHANGE",
             architecture_target_scope="app/src/main/kotlin/com/example/MainActivity.kt",
@@ -5619,7 +5638,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
             proof_reference="approval",
             enforcement_tier="RULE_ENFORCED",
         ))
-        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n\nclass MainActivity { fun run() = 1 }\n")
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", content or "package com.example\n\nclass MainActivity { fun run() = 1 }\n")
         prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         tdir = task_dir(self.repo, task_id)
         current = read_json(tdir / "current-run.json")
@@ -5940,6 +5959,165 @@ class ReviewOrchestrationTests(unittest.TestCase):
         ledger = load_ledger(tdir, run_id)
         self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
 
+    def test_caption_fix_in_previously_reviewed_billing_file_does_not_repeat_full_roster(self):
+        import workflow
+        from review_orchestrator import record_dispatch_batch, complete_review
+        from review_policy import FIVE_REVIEWERS
+        content = ("package com.example\nimport androidx.compose.runtime.Composable\n"
+                   "import com.android.billingclient.api.BillingClient\n"
+                   "@Composable internal fun Caption() { Text(\"Start\") }\n"
+                   + "// Previously reviewed unchanged context\n" * 30 +
+                   "internal fun pay(client: BillingClient) {\n    client.launchBillingFlow(activity, params)\n}\n")
+        task_id = "caption-fix-review"
+        current, run_id, pkg_sha, directory = self._setup_v2_task(task_id, sorted(FIVE_REVIEWERS), content=content)
+        record_dispatch_batch(self.repo, task_id, sorted(FIVE_REVIEWERS))
+        for index, reviewer in enumerate(sorted(FIVE_REVIEWERS)):
+            execution = f"caption-review-{index}"
+            self._create_mock_transcript(execution, json.dumps({
+                "schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": reviewer,
+                "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}))
+            complete_review(self.repo, task_id, reviewer, execution)
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", content.replace('"Start"', '"Start!"'))
+        current = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        policy = read_json(Path(current["policy"]))
+        self.assertNotIn("security-reviewer-agent", policy["reviewers"])
+        self.assertNotIn("perf-anr-guardian-agent", policy["reviewers"])
+        self.assertNotIn("convention-reviewer-agent", policy["reviewers"])
+        self.assertLessEqual(len(policy["reviewers"]), 2)
+        self.assertIn("security-reviewer-agent", {item["reviewer"] for item in policy["carried_reviews"]})
+        from final_verifier import validate_policy_artifact
+        manifest = read_json(Path(current["manifest"]))
+        _, error, verdict = validate_policy_artifact(
+            self.repo, read_json(directory / "plan.json"), policy, state_root(self.repo), Path(current["policy"]),
+            current_change_set=manifest["change_set_sha256"], task_changes=manifest.get("task_changes"))
+        self.assertEqual("PASS", verdict, error)
+        package_file, package_metadata = review_package.build_package(self.repo, task_id)
+        package = package_file.read_text(encoding="utf-8")
+        self.assertIn("Changes since reviewed run", package)
+        self.assertNotIn("client.launchBillingFlow(activity, params)", package)
+        # A later edit inside billing logic must reactivate Security even when
+        # only the enclosing function signature names BillingClient.
+        if policy["reviewers"]:
+            record_dispatch_batch(self.repo, task_id, policy["reviewers"])
+            for index, reviewer in enumerate(policy["reviewers"]):
+                execution = f"caption-followup-{index}"
+                self._create_mock_transcript(execution, json.dumps({
+                    "schema_version": 2, "task_id": task_id, "run_id": current["run_id"], "reviewer": reviewer,
+                    "review_package_sha256": package_metadata["package_sha256"], "verdict": "PASS", "findings": []}))
+                complete_review(self.repo, task_id, reviewer, execution)
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt",
+                   content.replace('"Start"', '"Start!"').replace("activity, params", "activity, otherParams"))
+        third = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        third_policy = read_json(Path(third["policy"]))
+        self.assertIn("security-reviewer-agent", third_policy["reviewers"])
+        self.assertNotIn("perf-anr-guardian-agent", third_policy["reviewers"])
+        self.assertNotIn("convention-reviewer-agent", third_policy["reviewers"])
+        from review_fix_delta import _input_path
+        cached = _input_path(self.repo, task_id, third_policy["later_round_source"]["run_id"])
+        cache = read_json(cached)
+        cache["files"]["app/src/main/kotlin/com/example/MainActivity.kt"] += "\n// forged previous source\n"
+        atomic_write_json(cached, cache)
+        third_manifest = read_json(Path(third["manifest"]))
+        self.assertIsNotNone(validate_policy_artifact(
+            self.repo, read_json(directory / "plan.json"), third_policy, state_root(self.repo), Path(third["policy"]),
+            current_change_set=third_manifest["change_set_sha256"], task_changes=third_manifest.get("task_changes"))[1])
+        # A forged old manifest must not relabel the current tree as already
+        # reviewed, even when its own inventory/snapshot hashes are coherent.
+        previous_id = third_policy["later_round_source"]["run_id"]
+        atomic_write_json(directory / ("manifest-" + previous_id + ".json"), third_manifest)
+        from review_fix_delta import compute_fix_delta
+        delta = compute_fix_delta(self.repo, directory, previous_id, third_manifest,
+                                  read_json(directory / "plan.json"), Path(__file__).resolve().parents[1] / "skills", "application")
+        self.assertIsNone(delta)
+
+    def test_brief_status_retains_the_exact_next_action_without_repeating_the_plan(self):
+        import workflow
+        import io
+        task_id = "brief-status"
+        _, _, _, directory = self._setup_v2_task(task_id)
+        full = workflow.status(argparse.Namespace(repo=str(self.repo), task_id=task_id, next=True))
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = workflow.main(["status", "--repo", str(self.repo), "--task-id", task_id, "--next", "--brief", "--json"])
+        self.assertEqual(0, code)
+        brief = json.loads(output.getvalue())
+        self.assertEqual(full["next_action"], brief["next_action"])
+        self.assertEqual(full["plan_sha256"], brief["plan_sha256"])
+        self.assertNotIn("expected_files", brief)
+        self.assertNotIn("next_actions", brief)
+        self.assertLess(len(json.dumps(brief)), len(json.dumps(full)))
+
+    def test_interrupted_final_dispatch_is_charged_before_resume_and_not_twice(self):
+        from review_orchestrator import record_dispatch_batch, load_ledger
+        task_id = "interrupted-spending"
+        current, run_id, _, directory = self._setup_v2_task(task_id)
+        before = read_json(directory / "plan.json")
+        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"])
+        dispatched = read_json(directory / "plan.json")
+        self.assertEqual(int(before.get("review_calls_used") or 0) + 1, dispatched["review_calls_used"])
+        ledger_bytes = (directory / "review-execution" / run_id / "ledger.json").read_bytes()
+        import workflow
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        after = read_json(directory / "plan.json")
+        self.assertEqual(dispatched["review_calls_used"], after["review_calls_used"])
+        self.assertEqual(before["approval"], after["approval"])
+        self.assertEqual(before.get("review_rounds", 0), after.get("review_rounds", 0))
+        self.assertEqual(ledger_bytes, (directory / "review-execution" / run_id / "ledger.json").read_bytes())
+        self.assertEqual("DISPATCHED", load_ledger(directory, run_id)["reviewers"]["bug-reviewer-agent"]["state"])
+
+    def test_legacy_orphan_final_dispatch_is_reconciled_without_rewriting_evidence(self):
+        from review_orchestrator import init_ledger, save_ledger
+        import workflow
+        task_id = "legacy-orphan-spending"
+        current, run_id, _, directory = self._setup_v2_task(task_id)
+        ledger = init_ledger(directory, task_id, run_id, current["delivery_snapshot_sha256"],
+                             current["change_set_sha256"], "", ["bug-reviewer-agent"])
+        ledger["reviewers"]["bug-reviewer-agent"].update(state="DISPATCHED", dispatch_count=1)
+        save_ledger(directory, run_id, ledger)
+        ledger_path = directory / "review-execution" / run_id / "ledger.json"
+        original = ledger_path.read_bytes()
+        before = read_json(directory / "plan.json")
+        # Legacy failed transfers can leave an archive without committing its
+        # counter update. An archive alone must not make this call free.
+        atomic_write_json(directory / "host-history" / (run_id + ".json"), current)
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        after = read_json(directory / "plan.json")
+        self.assertEqual(int(before.get("review_calls_used") or 0) + 1, after["review_calls_used"])
+        self.assertEqual(original, ledger_path.read_bytes())
+        # Returning to verification cannot charge the old execution again.
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertEqual(after["review_calls_used"], read_json(directory / "plan.json")["review_calls_used"])
+
+    def test_final_dispatch_cannot_spend_past_budget_through_direct_cli(self):
+        from review_orchestrator import record_dispatch_batch, load_ledger
+        task_id = "dispatch-spending-cap"
+        current, run_id, _, directory = self._setup_v2_task(task_id)
+        plan = read_json(directory / "plan.json")
+        plan["review_calls_used"] = 100
+        save_plan(directory / "plan.json", plan)
+        with self.assertRaisesRegex(ValidationError, "REVIEW_BUDGET_EXHAUSTED"):
+            record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"])
+        self.assertEqual("NOT_DISPATCHED", load_ledger(directory, run_id)["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertFalse((directory / "review-execution" / run_id / "dispatch/bug-reviewer-agent.json").exists())
+
+    def test_corrupt_orphan_ledger_blocks_resume_without_changing_plan(self):
+        from review_orchestrator import init_ledger
+        import workflow
+        task_id = "corrupt-spending"
+        current, run_id, _, directory = self._setup_v2_task(task_id)
+        init_ledger(directory, task_id, run_id, current["delivery_snapshot_sha256"],
+                    current["change_set_sha256"], "", ["bug-reviewer-agent"])
+        ledger_path = directory / "review-execution" / run_id / "ledger.json"
+        ledger = read_json(ledger_path)
+        ledger["reviewers"]["bug-reviewer-agent"]["state"] = "DISPATCHED"
+        atomic_write_json(ledger_path, ledger)
+        before = (directory / "plan.json").read_bytes()
+        with self.assertRaisesRegex(ValidationError, "ledger sha mismatch"):
+            workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual(before, (directory / "plan.json").read_bytes())
+
     def test_REVIEW_ORCH_002_missing_dispatch_cannot_be_synthesized_during_v2_ingest(self) -> None:
         from record_review import verify_independent_reviewer_execution
         task_id = "test-orch-002"
@@ -6069,6 +6247,15 @@ class ReviewOrchestrationTests(unittest.TestCase):
         store = EvidenceStore(state_root(self.repo))
         evidence = store.read(current["delivery_snapshot_sha256"], run_id, "reviews")
         self.assertEqual("PASS", evidence.get("status"))
+        self.assertEqual(1, read_json(tdir / "plan.json")["review_calls_used"])
+        # A pre-upgrade finalized round already paid for its calls.
+        legacy_plan = read_json(tdir / "plan.json")
+        legacy_plan.pop("final_review_call_charges")
+        save_plan(tdir / "plan.json", legacy_plan)
+        import workflow
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        self.assertEqual(1, read_json(tdir / "plan.json")["review_calls_used"])
+        self.assertEqual(evidence, store.read(current["delivery_snapshot_sha256"], run_id, "reviews"))
 
     def test_REVIEW_ORCH_013_duplicate_completion_is_idempotent(self) -> None:
         from review_orchestrator import record_dispatch, complete_review
@@ -6084,6 +6271,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         res1 = complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-013")
         res2 = complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-013")
         self.assertEqual(res1["verdict"], res2["verdict"])
+        self.assertEqual(1, read_json(tdir / "plan.json")["review_calls_used"])
 
     def test_REVIEW_ORCH_014_different_result_for_same_completed_execution_is_rejected(self) -> None:
         from review_orchestrator import record_dispatch, complete_review
@@ -8613,19 +8801,26 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         other = "app/src/main/kotlin/com/example/Other.kt"
         write_file(self.repo / login, "package com.example\nclass Login { fun fixed() = 1 }\n")
         write_file(self.repo / other, "package com.example\nclass Other\n")
-        reviewed = {"task_changes": [{"path": login, "content_identity": "git:a", "status": "M"},
-                                     {"path": other, "content_identity": "git:b", "status": "A"}]}
+        reviewed = build_manifest(self.repo)
         atomic_write_json(tdir / "manifest-run-old.json", reviewed)
-        current = {"task_changes": [{"path": login, "content_identity": "git:c", "status": "M"},
-                                    {"path": other, "content_identity": "git:b", "status": "A"}]}
         plan = read_json(tdir / "plan.json")
+        # Isolated delta-helper fixture: a manifest alone is no longer proof
+        # that this tree was reviewed. Public review/carry tests use dispatch.
+        self.assertIsNone(_fix_delta(self.repo, task_id, "run-old", reviewed, plan))
+        EvidenceStore(state_root(self.repo)).write(
+            snapshot=reviewed["delivery_snapshot_sha256"], run_id="run-old", name="reviews",
+            producer="delta-unit-fixture", harness_version="1.0.0",
+            change_set=reviewed["change_set_sha256"], status="BLOCKED", evidence={})
+        write_file(self.repo / login, "package com.example\nclass Login { fun fixed() = 2 }\n")
+        current = build_manifest(self.repo)
         delta = _fix_delta(self.repo, task_id, "run-old", current, plan)
         self.assertIsNotNone(delta, "a computable delta must never fall back silently")
         self.assertEqual([login], delta["files"])
         self.assertTrue(delta["reviewers"], "the changed Kotlin file routes reviewers")
         self.assertIsNone(_fix_delta(self.repo, task_id, "run-missing", current, plan), "unknown: everyone reruns")
         self.assertEqual({"files": [], "reviewers": []}, _fix_delta(self.repo, task_id, "run-old", reviewed, plan))
-        deleted = {"task_changes": [{"path": other, "content_identity": "git:b", "status": "A"}]}
+        (self.repo / login).unlink()
+        deleted = build_manifest(self.repo)
         self.assertEqual({"files": [login], "reviewers": ["regression-impact-reviewer-agent"]},
                          _fix_delta(self.repo, task_id, "run-old", deleted, plan))
 

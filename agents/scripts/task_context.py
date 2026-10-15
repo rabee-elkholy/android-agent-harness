@@ -843,8 +843,11 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
     )
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        # ASCII JSON preserves every Unicode code point on legacy Windows pipes.
+        print(json.dumps(result, ensure_ascii=True, indent=2))
     else:
+        from _live_process import enable_line_buffered_stdio
+        enable_line_buffered_stdio()
         print(f"[{result['status']}] {result.get('query', '')}")
         target_info = result.get("target") or {}
         if target_info:

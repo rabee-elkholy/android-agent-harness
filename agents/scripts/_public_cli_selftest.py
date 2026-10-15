@@ -2040,7 +2040,7 @@ class NextStepAfterCommandSelftest(unittest.TestCase):
         self.assertNotIn("NEXT_ACTION", run(["review", "status", "--task", "t1", "--json"])[1], "JSON output stays pure")
         self.assertNotIn("NEXT_ACTION", run(["graph", "--find", "X"])[1], "not a delivery step")
         action.update(code="DISPATCH_REVIEWERS", command="")
-        self.assertIn("task status --task-id t1 --next --json (for the exact payload)", run(["review", "finalize", "--task", "t1"])[1])
+        self.assertIn("task status --task-id t1 --next --brief --json (for the exact payload)", run(["review", "finalize", "--task", "t1"])[1])
         self.assertNotIn("NEXT_ACTION", run(["verify", "--task-id", "t1"])[1], "verify prints a JSON report")
         # Real app: after these lifecycle steps the agent still queried status.
         for step in ("approve-sensitive", "complete", "prepare-verification", "resume"):
