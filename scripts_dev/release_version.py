@@ -277,7 +277,16 @@ def verify_packaging() -> bool:
             ".git", ".agents", ".harness-*", "dist", "build", "*.egg-info",
             "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
         ))
-        built = run_cmd([sys.executable, "-m", "build"], cwd=root, check=False)
+        build_cmd = [sys.executable, "-m", "build"]
+        try:
+            import setuptools  # noqa: F401
+            import wheel  # noqa: F401
+            build_cmd.append("--no-isolation")
+        except ImportError:
+            pass
+        built = run_cmd(build_cmd, cwd=root, check=False)
+        if built.returncode != 0 and "--no-isolation" in build_cmd:
+            built = run_cmd([sys.executable, "-m", "build"], cwd=root, check=False)
         if built.returncode != 0:
             print(f"[FAIL] Package build failed: {built.stderr}")
             return False

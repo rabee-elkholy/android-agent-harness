@@ -59,10 +59,11 @@ NEXT_STEP_COMMANDS = frozenset({"preflight", "test", "assemble", "device", "revi
 NEXT_STEP_TASK_ACTIONS = frozenset({"prepare-verification", "approve-sensitive", "complete", "resume"})
 
 
-def _print_next_step() -> None:
+def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) -> None:
     """Print the active task's next action as NEXT_ACTION= / NEXT_REASON= (best effort, never fails)."""
     import contextlib
     import io
+    import json
 
     try:
         sys.path.insert(0, str(SCRIPTS))
@@ -72,10 +73,29 @@ def _print_next_step() -> None:
         task_id = str(plan.get("task_id") or "")
         if not task_id or str(plan.get("status") or "") in ("", "DELIVERED", "CANCELLED"):
             return
-        from workflow import resolve_next_action
+        from workflow import _compact_for_host, resolve_next_action
 
+        is_verify_gate_step = bool(
+            step_args
+            and (
+                step_args[0] in ("preflight", "test")
+                or (len(step_args) > 1 and step_args[0] == "task" and step_args[1] == "prepare-verification")
+            )
+        )
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             action = resolve_next_action(REPO_ROOT, task_id, plan)
+            if (
+                exit_code == 0
+                and is_verify_gate_step
+                and isinstance(action, dict)
+                and action.get("code") == "BUILD_REVIEW_PACKAGE"
+            ):
+                try:
+                    from review_package import build_package
+                    build_package(REPO_ROOT, task_id)
+                    action = resolve_next_action(REPO_ROOT, task_id, plan)
+                except Exception:
+                    pass
     except Exception:
         return
     if not isinstance(action, dict):
@@ -85,10 +105,19 @@ def _print_next_step() -> None:
         return
     command = str(action.get("command") or "")
     if code.startswith("DISPATCH_") or code.startswith("RETRY_"):
-        command = f"python .agents/harness.py task status --task-id {task_id} --next --brief --json (for the exact payload)"
+        if code in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and action.get("inputs"):
+            command = "follow NEXT_ACTION_INPUTS below"
+        else:
+            command = f"python .agents/harness.py task status --task-id {task_id} --next --brief --json (for the exact payload)"
     print(f"NEXT_ACTION={code}: {command or '(no command: ' + str(action.get('kind') or 'action') + ')'}", flush=True)
     if action.get("reason"):
         print(f"NEXT_REASON={action['reason']}", flush=True)
+    if code in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and action.get("inputs"):
+        try:
+            compact_inputs = _compact_for_host(action["inputs"])
+        except Exception:
+            compact_inputs = action["inputs"]
+        print("NEXT_ACTION_INPUTS=" + json.dumps(compact_inputs, ensure_ascii=False), flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -132,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     # still queried status for the next step; those lifecycle steps print it too.
     step = step or (len(args) > 1 and args[0] == "task" and args[1] in NEXT_STEP_TASK_ACTIONS)
     if step and not {"--json", "-h", "--help"} & set(args):
-        _print_next_step()
+        _print_next_step(step_args=args, exit_code=code)
     return code
 
 

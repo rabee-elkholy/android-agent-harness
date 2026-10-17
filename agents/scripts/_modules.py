@@ -1,10 +1,14 @@
 """Multi-module and KMP source-set discovery shared by lints, audits, classifiers, and the doctor."""
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
-SKIP_PARTS = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "node_modules", "__pycache__"}
+SKIP_PARTS = {
+    ".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup",
+    "node_modules", "__pycache__", "Pods", "DerivedData", ".kotlin",
+}
 
 _SRC_MARKERS = ("java", "kotlin")
 _SOURCE_SET_DIRS = (
@@ -119,15 +123,58 @@ def _is_skipped(path: Path) -> bool:
 def discover_source_roots(repo: Path) -> list[Path]:
     """All module source roots shaped like <module>/src/{main,androidMain,commonMain,iosMain,...}/{java,kotlin}.
 
-    Recursive globs cover nested modules (:core:data) and KMP source sets.
+    Uses a single pruned os.walk covering nested modules (:core:data) and KMP source sets without descending
+    into package directories under src/ or build/output trees.
     """
     roots: dict[str, Path] = {}
-    for src_dir in _SOURCE_SET_DIRS:
-        for marker in _SRC_MARKERS:
-            for candidate in repo.glob(f"**/src/{src_dir}/{marker}"):
-                if candidate.is_dir() and not _is_skipped(candidate):
-                    roots[str(candidate)] = candidate
+    for root, dirs, _ in os.walk(repo, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in SKIP_PARTS]
+        if "src" in dirs:
+            src_root = Path(root) / "src"
+            for src_dir in _SOURCE_SET_DIRS:
+                ss_path = src_root / src_dir
+                if ss_path.is_dir():
+                    for marker in _SRC_MARKERS:
+                        candidate = ss_path / marker
+                        if candidate.is_dir() and not _is_skipped(candidate):
+                            roots[str(candidate)] = candidate
+            dirs.remove("src")
     return [roots[k] for k in sorted(roots)]
+
+
+def discover_res_dirs(repo: Path, primary_res: Path | None = None) -> list[Path]:
+    """Discover all module res/ and composeResources/ directories without walking build/ or package trees."""
+    res_dirs: list[Path] = []
+    seen: set[Path] = set()
+    if primary_res is not None and primary_res.is_dir():
+        res_dirs.append(primary_res)
+        seen.add(primary_res)
+    for root, dirs, _ in os.walk(repo, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_PARTS)
+        root_path = Path(root)
+        for top_res in ("res", "composeResources"):
+            if top_res in dirs:
+                cr = root_path / top_res
+                if cr.is_dir() and cr not in seen and not _is_skipped(cr):
+                    res_dirs.append(cr)
+                    seen.add(cr)
+                dirs.remove(top_res)
+        if "src" in dirs:
+            src_root = root_path / "src"
+            try:
+                source_sets = sorted(p for p in src_root.iterdir() if p.is_dir() and p.name not in SKIP_PARTS)
+            except OSError:
+                source_sets = []
+            for ss in source_sets:
+                for res_name in ("res", "composeResources"):
+                    cand = ss / res_name
+                    if cand.is_dir() and cand not in seen and not _is_skipped(cand):
+                        res_dirs.append(cand)
+                        seen.add(cand)
+            dirs.remove("src")
+    if not res_dirs and primary_res is not None:
+        return [primary_res]
+    return res_dirs
 
 
 def module_name_of(source_root: Path, repo: Path) -> str:
@@ -173,6 +220,33 @@ def _extract_kmp_declarations(source_dir: Path, pattern: re.Pattern[str]) -> set
     return names
 
 
+def _discover_kmp_common_modules(repo: Path) -> list[Path]:
+    """Discover module directories containing src/commonMain without walking inside src/ or skipped folders."""
+    modules: list[Path] = []
+    for root, dirs, _ in os.walk(repo, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_PARTS)
+        if "src" in dirs:
+            root_path = Path(root)
+            if (root_path / "src" / "commonMain").is_dir():
+                modules.append(root_path)
+            dirs.remove("src")
+    return modules
+
+
+def has_kmp_common_main(repo: Path) -> bool:
+    """Fast O(1)/bounded check for any non-skipped src/commonMain directory in repo."""
+    for quick in ("src/commonMain", "composeApp/src/commonMain", "shared/src/commonMain"):
+        if (repo / quick).is_dir():
+            return True
+    for root, dirs, _ in os.walk(repo, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in SKIP_PARTS]
+        if "src" in dirs:
+            if (Path(root) / "src" / "commonMain").is_dir():
+                return True
+            dirs.remove("src")
+    return False
+
+
 def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | None = None) -> tuple[bool, str]:
     """Deterministically verify expect/actual pairing in modified KMP modules.
 
@@ -192,9 +266,8 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
                 if (mod_dir / "src" / "commonMain").is_dir():
                     candidate_module_dirs.add(mod_dir)
     else:
-        for common_dir in repo.glob("**/src/commonMain"):
-            if common_dir.is_dir() and not _is_skipped(common_dir):
-                candidate_module_dirs.add(common_dir.parent.parent)
+        for mod_dir in _discover_kmp_common_modules(repo):
+            candidate_module_dirs.add(mod_dir)
 
     if not candidate_module_dirs:
         return True, "no KMP commonMain changes require expect/actual check"

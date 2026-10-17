@@ -215,10 +215,12 @@ def strip_comments_and_strings(text: str) -> str:
 PACKAGE_PATTERN = re.compile(r"^\s*package\s+([a-zA-Z0-9_.]+)", re.MULTILINE)
 IMPORT_PATTERN = re.compile(r"^\s*import\s+(?:static\s+)?([a-zA-Z0-9_.*]+)", re.MULTILINE)
 DECLARATION_PATTERN = re.compile(
-    r"\b(?:class|interface|enum\s+class|sealed\s+class|sealed\s+interface|data\s+class|record)\s+([a-zA-Z0-9_]+)\b"
+    r"\b(?:class|interface|enum\s+class|sealed\s+class|sealed\s+interface|data\s+class|value\s+class|annotation\s+class|record)\s+([a-zA-Z0-9_]+)\b"
 )
 NAMED_OBJECT_PATTERN = re.compile(r"\bobject\s+([a-zA-Z0-9_]+)\b")
-COMPOSABLE_FUNC_PATTERN = re.compile(r"@Composable\s+(?:(?:public|private|internal)\s+)?fun\s+([a-zA-Z0-9_]+)\s*\(")
+COMPOSABLE_FUNC_PATTERN = re.compile(
+    r"@Composable\s+(?:@[a-zA-Z0-9_.]+\s*(?:\([^)]*\)\s*)?)*(?:(?:public|private|internal|protected|expect|actual|inline|open|override)\s+)*fun\s+(?:<[^>\r\n]+>\s+)?(?:[a-zA-Z0-9_.<>?]+\.)?([a-zA-Z0-9_]+)\s*\("
+)
 FUNCTION_PATTERN = re.compile(r"\b(?:fun|suspend\s+fun)\s+([a-zA-Z0-9_]+)\s*\(")
 # Keep Java member discovery line-oriented. The previous expression had two
 # adjacent, overlapping whitespace repetitions and could backtrack
@@ -253,6 +255,7 @@ class DependencyGraph:
     def __init__(self):
         self.nodes: dict[str, GraphNode] = {}
         self.edges: list[GraphEdge] = []
+        self._edge_keys: set[tuple[str, str, str]] = set()
         self._adj: dict[str, set[str]] = {}
         self._rev_adj: dict[str, set[str]] = {}
 
@@ -273,6 +276,10 @@ class DependencyGraph:
     def add_edge(self, source: str, target: str, kind: str = EdgeKind.DEPENDS_ON.value, metadata: dict | None = None) -> None:
         if source == target:
             return
+        edge_key = (source, target, kind)
+        if edge_key in self._edge_keys:
+            return
+        self._edge_keys.add(edge_key)
         edge = GraphEdge(source=source, target=target, kind=kind, metadata=metadata or {})
         self.edges.append(edge)
         if source not in self._adj:
@@ -293,6 +300,7 @@ class DependencyGraph:
             if s in self._adj:
                 self._adj[s].discard(node_id)
         self.edges = [e for e in self.edges if e.source != node_id and e.target != node_id]
+        self._edge_keys = {(e.source, e.target, e.kind) for e in self.edges}
 
     def get_targets(self, node_id: str) -> set[str]:
         return self._adj.get(node_id, set())
@@ -565,11 +573,12 @@ class DependencyGraph:
         if not target_nodes:
             return "[Empty Architecture Slice]"
 
+        from _modules import is_kmp_or_android_test_path
         screens = [n for n in target_nodes if n.type in (EntityType.SCREEN.value, EntityType.XML_LAYOUT.value)]
         view_models = [n for n in target_nodes if n.type == EntityType.VIEW_MODEL.value]
         domain = [n for n in target_nodes if n.type == EntityType.USE_CASE.value or (n.file_path and "/domain/" in n.file_path)]
         data = [n for n in target_nodes if n.type in (EntityType.REPOSITORY.value, EntityType.DATA_SOURCE.value) or (n.file_path and "/data/" in n.file_path)]
-        tests = [n for n in target_nodes if n.type == EntityType.TEST.value or (n.file_path and ("src/test" in n.file_path or "src/androidTest" in n.file_path))]
+        tests = [n for n in target_nodes if n.type == EntityType.TEST.value or (n.file_path and is_kmp_or_android_test_path(n.file_path))]
 
         lines = [
             f"=== Feature Architecture Slice ({len(target_nodes)} components) ===",
@@ -874,10 +883,11 @@ class DependencyGraph:
 
 def classify_entity_type(name: str, file_path: str, declarations: list[str], text: str) -> EntityType:
     """Universal classification for Android components across legacy & modern paradigms."""
-    lower_path = file_path.lower()
+    from _modules import is_kmp_or_android_test_path
+
     lower_name = name.lower()
 
-    if "/test/" in lower_path or "/androidtest/" in lower_path or lower_name.endswith("test") or lower_name.endswith("tests"):
+    if is_kmp_or_android_test_path(file_path) or lower_name.endswith("test") or lower_name.endswith("tests"):
         return EntityType.TEST
 
     if lower_name.endswith("screen") or "@composable" in text.lower() or "activity" in lower_name or "fragment" in lower_name or "dialog" in lower_name:
@@ -914,7 +924,7 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
     edges: list[GraphEdge] = []
 
     settings_files = [repo / "settings.gradle.kts", repo / "settings.gradle"]
-    found_modules: set[str] = {":app"}
+    found_modules: set[str] = set()
     declared_modules: set[str] = set()
     module_dirs: dict[str, str] = {}
 
@@ -949,6 +959,14 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
                     module_dirs[match.group(1)] = match.group(2)
             except Exception:
                 pass
+
+    if not found_modules:
+        if (repo / "composeApp").is_dir() and not (repo / "app").is_dir():
+            found_modules.add(":composeApp")
+        else:
+            found_modules.add(":app")
+    elif (repo / "app").is_dir():
+        found_modules.add(":app")
 
     for mod in sorted(found_modules):
         nodes[mod] = GraphNode(
@@ -1385,7 +1403,8 @@ class GraphEngine:
         extensions = {".kt", ".java", ".gradle", ".kts"}
         current_files: dict[str, Path] = {}
 
-        ignored_dir_names = {".git", "build", ".gradle", ".agents", ".harness-backup", "node_modules", ".idea"}
+        from _modules import SKIP_PARTS
+        ignored_dir_names = set(SKIP_PARTS) | {".agents", ".harness-backup", "node_modules", ".idea"}
         for root, dirs, files in os.walk(self.repo):
             dirs[:] = [d for d in dirs if d not in ignored_dir_names]
             for f in files:
@@ -1468,15 +1487,22 @@ class GraphEngine:
         dirty_files = set(added + modified)
         files_parsed = 0
         if dirty_files or not self.graph.nodes:
-            mod_nodes, mod_edges = parse_gradle_modules(self.repo)
-            for m_node in mod_nodes.values():
-                self.graph.add_node(m_node)
-            for m_edge in mod_edges:
-                self.graph.add_edge(m_edge.source, m_edge.target, kind=m_edge.kind)
+            had_existing_nodes = bool(self.graph.nodes)
+            has_module_nodes = any(n.type == EntityType.MODULE.value for n in self.graph.nodes.values())
+            gradle_dirty = any(rel.endswith((".gradle", ".kts")) for rel in (dirty_files | set(deleted)))
+            if not has_module_nodes or gradle_dirty or not had_existing_nodes:
+                if has_module_nodes and gradle_dirty:
+                    for nid in [n.id for n in self.graph.nodes.values() if n.type == EntityType.MODULE.value]:
+                        self.graph.remove_node(nid)
+                mod_nodes, mod_edges = parse_gradle_modules(self.repo)
+                for m_node in mod_nodes.values():
+                    self.graph.add_node(m_node)
+                for m_edge in mod_edges:
+                    self.graph.add_edge(m_edge.source, m_edge.target, kind=m_edge.kind)
 
             xml_connections: list[tuple[GraphNode, list[str]]] = []
 
-            for rel in (dirty_files if self.graph.nodes else current_files.keys()):
+            for rel in (dirty_files if had_existing_nodes else current_files.keys()):
                 files_parsed += 1
                 p = current_files[rel]
                 existing_nodes = list(self.file_to_node_ids.get(rel, []))
@@ -1564,9 +1590,10 @@ class GraphEngine:
             old_path = node.file_path
             found_path: Path | None = None
 
+            from _modules import SKIP_PARTS
             target_filename = Path(old_path).name
             for cand in self.repo.glob(f"**/{target_filename}"):
-                if cand.is_file() and not any(part in (".git", "build", ".gradle") for part in cand.parts):
+                if cand.is_file() and not (set(cand.parts) & SKIP_PARTS):
                     found_path = cand
                     break
 
@@ -1623,18 +1650,20 @@ def extract_locale_from_dir(dir_name: str) -> str:
 
 
 def find_string_resources(repo: Path, query: str) -> list[dict[str, Any]]:
-    """Scans all res/values*/strings*.xml in repo and matches against query (value or key)."""
+    """Scans all res/values*/strings*.xml and composeResources/values*/strings*.xml in repo and matches against query (value or key)."""
+    from _modules import SKIP_PARTS
+
     q_raw = query.strip()
     q_norm = normalize_arabic(q_raw)
     q_lower = q_raw.lower()
 
     matches: list[dict[str, Any]] = []
-    ignored_dir_names = {".git", "build", ".gradle", ".agents", ".harness-backup", "node_modules", ".idea", ".gemini", "cache"}
+    ignored_dir_names = set(SKIP_PARTS) | {".agents", ".harness-backup", "node_modules", ".idea", ".gemini", "cache"}
 
     for root, dirs, files in os.walk(repo):
         dirs[:] = [d for d in dirs if d not in ignored_dir_names]
         rel_root = Path(root)
-        if "res" in rel_root.parts and rel_root.name.startswith("values"):
+        if ("res" in rel_root.parts or "composeResources" in rel_root.parts) and rel_root.name.startswith("values"):
             locale = extract_locale_from_dir(rel_root.name)
             for f in files:
                 if f.endswith(".xml") and ("string" in f.lower() or f == "donottranslate.xml"):
@@ -1688,7 +1717,9 @@ def find_string_usages(
     nodes: dict[str, GraphNode] | None = None,
     max_usages: int = 10,
 ) -> list[dict[str, Any]]:
-    """Finds code components (Screens, ViewModels, Layouts) referencing R.string.<key> or @string/<key>."""
+    """Finds code components (Screens, ViewModels, Layouts) referencing R.string.<key>, Res.string.<key>, or @string/<key>."""
+    from _modules import SKIP_PARTS
+
     usages: list[dict[str, Any]] = []
 
     file_to_node: dict[str, GraphNode] = {}
@@ -1699,18 +1730,18 @@ def find_string_usages(
                 file_to_node[norm_fp] = node
 
     usage_pat = re.compile(
-        rf"(?:R\.string\.{re.escape(key)}\b|@string/{re.escape(key)}\b)",
+        rf"(?:(?:R|Res)\.string\.{re.escape(key)}\b|@string/{re.escape(key)}\b)",
         re.IGNORECASE,
     )
 
-    ignored_dirs = {".git", "build", ".gradle", ".agents", ".harness-backup", "node_modules", ".idea", ".gemini", "cache"}
+    ignored_dirs = set(SKIP_PARTS) | {".agents", ".harness-backup", "node_modules", ".idea", ".gemini", "cache"}
     valid_exts = {".kt", ".java", ".xml"}
 
     for root, dirs, files in os.walk(repo):
         dirs[:] = [d for d in dirs if d not in ignored_dirs]
         rel_root = Path(root)
 
-        if "res" in rel_root.parts and rel_root.name.startswith("values"):
+        if ("res" in rel_root.parts or "composeResources" in rel_root.parts) and rel_root.name.startswith("values"):
             continue
 
         for f in files:

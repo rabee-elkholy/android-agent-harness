@@ -137,13 +137,19 @@ def requires_state_previews(filename: str) -> bool:
 
 
 def is_stateful_container_only(text: str) -> bool:
-    funcs = list(re.finditer(r"@Composable\s*(?:(?:inline|private|public|internal)\s+)*fun\s+(\w+)\s*\((.*?)\)", text, re.DOTALL))
+    funcs = list(
+        re.finditer(
+            r"@Composable(?:\s+@[A-Za-z0-9_.]+(?:\([^)]*\))?)*\s*(?:(?:inline|private|public|internal|actual)\s+)*fun\s+(?:<[^>]+>\s*)?(\w+)\s*\((.*?)\)",
+            text,
+            re.DOTALL,
+        )
+    )
     if not funcs:
         return False
     for m in funcs:
         fn_name = m.group(1)
         params = m.group(2).lower()
-        if "viewmodel" not in params and "hiltviewmodel" not in params:
+        if "viewmodel" not in params and "hiltviewmodel" not in params and "screenmodel" not in params:
             return False
         if fn_name.endswith(("Content", "Stateless", "Preview", "Item", "Row", "Card", "Header", "Footer")):
             return False
@@ -440,11 +446,26 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
             "msg": "Fragment / Activity class is missing '@AndroidEntryPoint' for Hilt dependency injection.",
         })
 
-    if not is_test and has_compose_function_in_diff and is_preview_surface(file_path.name, text):
+    posix_lower = f"/{posix.lower()}"
+    is_ios_source_set = bool(re.search(r"/src/ios[^/]*/", posix_lower))
+    is_common_main = "/src/commonmain/" in posix_lower
+    has_non_expect_composable = bool(
+        re.search(
+            r"@Composable(?:\s+@[A-Za-z0-9_.]+(?:\([^)]*\))?)*\s+(?!(?:(?:public|internal|private|protected|inline)\s+)*expect\b)(?:(?:public|internal|private|protected|inline|actual|open|override)\s+)*fun\b",
+            text,
+        )
+    )
+    if (
+        not is_test
+        and not is_ios_source_set
+        and has_compose_function_in_diff
+        and has_non_expect_composable
+        and is_preview_surface(file_path.name, text)
+    ):
         if not is_stateful_container_only(text):
             has_rtl = any(loc in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
             has_ltr = any(loc not in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
-            needs_bidirectional = has_rtl and has_ltr
+            needs_bidirectional = has_rtl and has_ltr and not is_common_main
             extra = " plus Loading/Empty/Error." if requires_state_previews(file_path.name) else "."
             if needs_bidirectional:
                 if not PREVIEW_AR.search(text) or not PREVIEW_EN.search(text):
@@ -579,7 +600,8 @@ def main() -> int:
                 roots = [REPO / "app" / "src" / "main"]
             if not roots[0].is_dir():
                 roots = [REPO]
-        skip = {".git", "build", ".gradle", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
+        from _modules import SKIP_PARTS
+        skip = set(SKIP_PARTS)
         target_files = [
             p
             for root in roots
@@ -591,13 +613,15 @@ def main() -> int:
             p for root in roots for p in repo_glob(root, "**/*.java") if not any(x in p.parts for x in skip)
         ]
         java_lines_map = {p: None for p in java_files}
+        changed = changed_paths()
     else:
-        target_files = [p for p in changed_paths() if p.suffix == ".kt"]
+        changed = changed_paths()
+        target_files = [p for p in changed if p.suffix == ".kt"]
         modified_lines_map = get_modified_lines_map(REPO, target_files)
-        java_files = [p for p in changed_paths() if p.suffix == ".java"]
+        java_files = [p for p in changed if p.suffix == ".java"]
         java_lines_map = get_modified_lines_map(REPO, java_files) if java_files else {}
 
-    build_files = [p for p in changed_paths() if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")]
+    build_files = [p for p in changed if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")]
 
     if not target_files and not build_files and not java_files:
         git_head_proc = subprocess.run(

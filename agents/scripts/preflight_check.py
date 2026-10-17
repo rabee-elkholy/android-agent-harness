@@ -197,11 +197,8 @@ def main(argv: list[str] | None = None) -> int:
                 exported_ok, exported_msg = False, f"EXPORTED_COMPONENT_CHECK_ERROR: {exc}"
         sublog(f"[{'OK' if exported_ok else 'FAIL'}] {exported_msg}")
 
-    from _modules import SKIP_PARTS, check_kmp_expect_actual_pairs
-    has_kmp_common = any(
-        d.is_dir() and not (set(d.parts) & SKIP_PARTS)
-        for d in repo_target.glob("**/src/commonMain")
-    )
+    from _modules import check_kmp_expect_actual_pairs, has_kmp_common_main
+    has_kmp_common = has_kmp_common_main(repo_target)
     expect_ok = True
     if has_kmp_common:
         with step_progress("7. KMP expect/actual pairing"):

@@ -590,9 +590,10 @@ def resolve_task_context(
     dependencies = [engine.graph.nodes[item] for item in dependency_ids if item in engine.graph.nodes and item not in target_ids]
     dependents = [engine.graph.nodes[item] for item in dependent_ids if item in engine.graph.nodes and item not in target_ids]
     # Bounded test discovery
+    from _modules import is_kmp_or_android_test_path, is_test_source_set_name
     all_test_nodes = [
         node for node in engine.graph.nodes.values()
-        if _source_set(node.file_path).lower().startswith(("test", "androidtest"))
+        if is_test_source_set_name(_source_set(node.file_path)) or (node.file_path and is_kmp_or_android_test_path(node.file_path))
     ]
     target_names = {node.name for node in target_nodes}
     target_stems = {Path(node.file_path).stem for node in target_nodes}

@@ -2050,6 +2050,51 @@ class NextStepAfterCommandSelftest(unittest.TestCase):
         plan["status"] = "DELIVERED"
         self.assertNotIn("NEXT_ACTION", run(["assemble"])[1])
 
+    def test_preflight_and_test_auto_build_review_package_and_emit_dispatch_inputs(self) -> None:
+        import contextlib
+        import io
+        from unittest import mock
+
+        entry = self._entry()
+        plan = {"task_id": "t1", "status": "VERIFYING"}
+        actions = [
+            {
+                "code": "BUILD_REVIEW_PACKAGE",
+                "kind": "HARNESS_COMMAND",
+                "command": "python .agents/harness.py review package",
+                "reason": "Build review package.",
+            },
+            {
+                "code": "DISPATCH_REVIEWERS",
+                "kind": "SUBAGENT_DISPATCH",
+                "command": "",
+                "reason": "Dispatch reviewers.",
+                "inputs": {
+                    "dispatch_reviewers": ["bug-reviewer-agent"],
+                    "briefs": {"bug-reviewer-agent": ".agents/state/tasks/t1/briefs/bug-reviewer-agent.md"},
+                },
+            },
+        ]
+        built_packages = []
+
+        def fake_build_package(repo, task_id=None):
+            built_packages.append(task_id)
+            return entry.REPO_ROOT / "review-package.md", "# Package"
+
+        out = io.StringIO()
+        with mock.patch.object(entry, "_run", return_value=0), \
+             mock.patch("mutation_guard.active_plan", return_value=plan), \
+             mock.patch("workflow.resolve_next_action", side_effect=actions), \
+             mock.patch("review_package.build_package", side_effect=fake_build_package), \
+             contextlib.redirect_stdout(out):
+            code = entry.main(["test"])
+        text = out.getvalue()
+        self.assertEqual(0, code)
+        self.assertEqual(["t1"], built_packages)
+        self.assertIn("NEXT_ACTION=DISPATCH_REVIEWERS: follow NEXT_ACTION_INPUTS below", text)
+        self.assertIn("NEXT_ACTION_INPUTS=", text)
+        self.assertIn('"bug-reviewer-agent"', text)
+
 
 class TaskFlagAliasSelftest(unittest.TestCase):
     """Router commands mix --task and --task-id; every review CLI must accept both."""

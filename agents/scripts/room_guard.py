@@ -236,22 +236,33 @@ def find_candidate_migration_files(db_path: Path, changed_src: list[Path], repo:
             break
         module_dir = module_dir.parent
     scan_root = module_dir if module_dir.is_dir() else root
-    skip_parts = {".git", "build", ".gradle", ".idea", ".agents", ".harness-backup", ".harness-setup", "__pycache__"}
-    for pattern in ("*Migration*.kt", "*DatabaseModule*.kt", "*DbModule*.kt", "*AppModule*.kt", "*Module*.kt", "*Provider*.kt"):
-
-        for p in scan_root.glob(f"**/{pattern}"):
-            if not (set(p.parts) & skip_parts) and p not in seen and p.is_file():
+    from _modules import SKIP_PARTS
+    import os
+    skip_parts = set(SKIP_PARTS)
+    name_markers = ("Migration", "DatabaseModule", "DbModule", "AppModule", "Module", "Provider")
+    other_sources: list[Path] = []
+    for cur_root, dirs, files in os.walk(scan_root, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in skip_parts)
+        cur_path = Path(cur_root)
+        for fname in sorted(files):
+            if not fname.endswith((".kt", ".java")):
+                continue
+            p = cur_path / fname
+            if p in seen or (set(p.parts) & skip_parts):
+                continue
+            if fname.endswith(".kt") and any(m in fname for m in name_markers):
                 candidates.append(p)
                 seen.add(p)
-    for p in list(repo_glob(scan_root, "**/*.kt")) + list(repo_glob(scan_root, "**/*.java")):
-        if not (set(p.parts) & skip_parts) and p not in seen and p.is_file():
-            try:
-                head = p.read_text(encoding="utf-8", errors="replace")[:4000]
-                if "addMigrations" in head or "Migration(" in head:
-                    candidates.append(p)
-                    seen.add(p)
-            except Exception:
-                pass
+            else:
+                other_sources.append(p)
+    for p in other_sources:
+        try:
+            head = p.read_text(encoding="utf-8", errors="replace")[:4000]
+            if "addMigrations" in head or "Migration(" in head:
+                candidates.append(p)
+                seen.add(p)
+        except Exception:
+            pass
     return candidates
 
 

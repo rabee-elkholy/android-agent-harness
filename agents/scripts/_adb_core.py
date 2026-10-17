@@ -282,30 +282,35 @@ def _clean_string_value(raw: str) -> str:
 
 
 def index_string_resources(repo: Path) -> dict[str, dict[str, str]]:
-    """Index string resources from res/values*/strings.xml mapped by locale."""
+    """Index string resources from res/values*/strings.xml and composeResources/values*/strings.xml mapped by locale."""
+    from _modules import discover_res_dirs
+
     res_map: dict[str, dict[str, str]] = {"default": {}}
-    for res_dir in repo_glob(repo, "**/res/values*"):
-        if not res_dir.is_dir():
+    for res_root in discover_res_dirs(repo):
+        if not res_root.is_dir():
             continue
-        folder_name = res_dir.name.lower()
-        if folder_name == "values":
-            loc_key = "default"
-        elif folder_name.startswith("values-"):
-            loc_key = folder_name.replace("values-", "").split("-")[0]
-        else:
-            continue
-        str_file = res_dir / "strings.xml"
-        if not str_file.is_file():
-            continue
-        try:
-            content = str_file.read_text(encoding="utf-8", errors="ignore")
-            for key, raw in _STRING_TAG_RE.findall(content):
-                value = _clean_string_value(raw)
-                if not value:
-                    continue
-                res_map.setdefault(loc_key, {})[key] = value
-        except Exception:
-            continue
+        for res_dir in sorted(res_root.glob("values*")):
+            if not res_dir.is_dir():
+                continue
+            folder_name = res_dir.name.lower()
+            if folder_name == "values":
+                loc_key = "default"
+            elif folder_name.startswith("values-"):
+                loc_key = folder_name.replace("values-", "").split("-")[0]
+            else:
+                continue
+            str_file = res_dir / "strings.xml"
+            if not str_file.is_file():
+                continue
+            try:
+                content = str_file.read_text(encoding="utf-8", errors="ignore")
+                for key, raw in _STRING_TAG_RE.findall(content):
+                    value = _clean_string_value(raw)
+                    if not value:
+                        continue
+                    res_map.setdefault(loc_key, {})[key] = value
+            except Exception:
+                continue
     return res_map
 
 

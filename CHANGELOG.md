@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.30] - 2026-10-17
+
+### Graph engine accuracy, pruned source discovery, and faster verification handoff
+
+- Deduplicate graph edges in `DependencyGraph` across incremental `GraphEngine.sync()` runs and `remove_node()`, and re-parse Gradle module declarations only when module nodes are absent or `.gradle`/`.kts` files change.
+- Support Kotlin `value class`, `annotation class`, and `@Composable` functions with intermediate annotations (`@OptIn(...)`), KMP modifiers (`expect` / `actual`), and generics in `_graph_core.py`, and avoid injecting a phantom `:app` module node when `settings.gradle(.kts)` declares `:composeApp` / `:shared` without an `app/` directory.
+- Unify test-path classification on `is_kmp_or_android_test_path` and `is_test_source_set_name` across `_graph_core`, `project_context`, `perf_guard`, `task_context`, `run_tests_gate`, `mutation_guard`, and `workflow`, preventing production classes under `com.test.*` packages from being misclassified as test sources while recognizing all KMP test source sets (`commonTest`, `iosTest`, `androidUnitTest`, `androidHostTest`).
+- Replace repeated full-repository recursive globs in `discover_source_roots`, `preflight_check`, `check_strings`, `_adb_core`, `room_guard`, and `workflow` with single-pass pruned directory walks that skip `Pods`, `DerivedData`, `.kotlin`, `build`, and `.gradle` and stop descending at module `src/` boundaries.
+- Extend UI string dereferencing (`graph --string`), `_adb_core`, and `check_strings` to index Compose Multiplatform `composeResources/values*/strings.xml` and `Res.string.<key>` usages alongside `R.string.<key>`, and adapt `fast_kt_lint` `@Preview` checks for KMP `commonMain`, `iosMain`, and `expect` declarations.
+- Automatically build the review package and emit host-compacted `NEXT_ACTION_INPUTS` immediately when `preflight`, `test`, or `task prepare-verification` transitions to `BUILD_REVIEW_PACKAGE` -> `DISPATCH_REVIEWERS`, saving two full agent turns on every task.
+
 ## [1.1.29] - 2026-10-17
 
 ### Scoped KMM (Android + iOS) with Compose Multiplatform support

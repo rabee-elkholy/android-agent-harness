@@ -41,8 +41,10 @@ def scan_file(file_path: Path) -> list[dict]:
 
         # 1. runBlocking check
         if "runBlocking" in stripped and not stripped.startswith("//") and not stripped.startswith("/*"):
-            # Exclude test files
-            if "src/test" not in str(file_path).replace("\\", "/") and "src/androidTest" not in str(file_path).replace("\\", "/"):
+            # Exclude test files (Android & KMP test source sets)
+            from _modules import is_kmp_or_android_test_path
+            norm_fp = str(file_path).replace("\\", "/")
+            if not is_kmp_or_android_test_path(norm_fp) and "src/test" not in norm_fp and "src/androidTest" not in norm_fp:
                 findings.append({
                     "file": str(file_path),
                     "line": idx,

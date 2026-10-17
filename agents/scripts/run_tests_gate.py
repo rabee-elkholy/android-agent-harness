@@ -923,16 +923,10 @@ def main(argv=None) -> int:
             task_manifest = build_task_manifest(REPO, baseline, expected_files=plan.get("expected_files"))
             pre_red_changes = task_manifest.get("task_changes") or []
 
+            from _modules import is_kmp_or_android_test_path
+
             def is_test_repro_path(p: str) -> bool:
-                norm_p = p.replace("\\", "/").lower().strip("/")
-                pl = f"/{norm_p}"
-                if "/src/test/" in pl or "/src/androidtest/" in pl:
-                    return True
-                if pl.endswith("test.kt") or pl.endswith("test.java") or pl.endswith("tests.kt") or pl.endswith("tests.java"):
-                    return True
-                if "/test/" in pl or "/androidtest/" in pl:
-                    return True
-                return False
+                return is_kmp_or_android_test_path(p)
 
             def _change_p(item: Any) -> str:
                 return str(item.get("path", "") if isinstance(item, dict) else item or "")

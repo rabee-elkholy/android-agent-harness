@@ -26,6 +26,7 @@ ADVISORY_SCHEMA_VERSION = 1
 SKIP_PARTS = {
     ".git", ".gradle", "build", ".harness-backup", ".harness-recovery",
     "node_modules", "__pycache__", ".idea", ".agents", "dist", "out",
+    "Pods", "DerivedData", ".kotlin",
 }
 
 TEST_AND_SAMPLE_PARTS = {
@@ -83,14 +84,11 @@ def classify_source_path(rel_path: str) -> str:
     norm = rel_path.replace("\\", "/").lower()
     parts_list = [p for p in norm.split("/") if p]
     parts = set(parts_list)
-    for idx, part in enumerate(parts_list):
-        if part == "src" and idx + 1 < len(parts_list) and is_test_source_set_name(parts_list[idx + 1]):
-            return "TEST_SOURCE"
-    # Match Gradle test source sets: src/test/, src/testDebug/, src/androidTest/, src/commonTest/, etc.
-    if (
-        parts & {"test", "testfixtures", "sharedtest", "androidtest", "instrumentationtest", "commontest", "iostest", "androidunittest", "androidhosttest"}
-        or re.search(r"/src/(?:test|androidtest|testfixtures|sharedtest|instrumentationtest|commontest|iostest|androidunittest|androidhosttest)[^/]*/", f"/{norm}")
-    ):
+    if "src" in parts_list:
+        for idx, part in enumerate(parts_list):
+            if part == "src" and idx + 1 < len(parts_list) and is_test_source_set_name(parts_list[idx + 1]):
+                return "TEST_SOURCE"
+    elif parts & {"test", "tests", "testfixtures", "sharedtest", "androidtest", "instrumentationtest", "commontest", "iostest", "androidunittest", "androidhosttest"}:
         return "TEST_SOURCE"
     if parts & {"sample", "samples", "demo", "fixtures"} or re.search(r"/(?:sample|samples|demo|fixtures)(?:/|$)", f"/{norm}"):
         return "SAMPLE_SOURCE"

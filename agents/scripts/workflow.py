@@ -69,25 +69,27 @@ KNOWN_SURFACES = {
 
 def _surfaces_from_paths(files: list[str]) -> list[str]:
     """Surfaces a file path suggests, for files the classifier cannot read (new files)."""
+    from _modules import is_kmp_or_android_test_path
+
     inferred_surfaces: set[str] = set()
     for p in files:
         p_lower = p.lower()
         if is_documentation_path(p_lower):
             inferred_surfaces.add("DOCS")
         elif p_lower.endswith((".kt", ".java")):
-            if "/test/" in p_lower or p_lower.endswith(("test.kt", "test.java")):
+            if is_kmp_or_android_test_path(p):
                 inferred_surfaces.add("TEST_ONLY")
             elif any(w in p_lower for w in ("screen", "activity", "fragment", "composable")):
                 inferred_surfaces.update(["BUSINESS_LOGIC", "COMPOSE_UI"])
             else:
                 inferred_surfaces.add("BUSINESS_LOGIC")
-        elif "/res/values" in p_lower and p_lower.endswith(".xml"):
+        elif ("/res/values" in p_lower or "/composeresources/values" in p_lower) and p_lower.endswith(".xml"):
             inferred_surfaces.add("LOCALIZATION" if "strings" in p_lower else "RESOURCE_UI")
         elif "/res/layout" in p_lower and p_lower.endswith(".xml"):
             inferred_surfaces.add("XML_UI")
         elif "/res/navigation" in p_lower and p_lower.endswith(".xml"):
             inferred_surfaces.add("NAVIGATION")
-        elif "/res/" in p_lower:
+        elif "/res/" in p_lower or "/composeresources/" in p_lower:
             inferred_surfaces.add("RESOURCE_UI")
         elif p_lower.endswith((".gradle", ".gradle.kts")):
             inferred_surfaces.add("BUILD_CONFIG")
@@ -932,10 +934,11 @@ def _build_and_save_plan(
     inferred_target_scope = str(getattr(args, "architecture_target_scope", "") or "").strip()
     if not inferred_target_scope and arch_intent != "MIGRATION":
         if norm_expected_files:
+            from _modules import is_kmp_or_android_test_path
             impl_candidates = [
                 p for p in norm_expected_files
                 if not is_documentation_path(p)
-                and not ("/test/" in p.lower() or p.lower().endswith(("test.kt", "test.java")))
+                and not is_kmp_or_android_test_path(p)
             ]
             eval_files = impl_candidates or norm_expected_files
             if len(eval_files) == 1:
@@ -2628,10 +2631,16 @@ def resolve_module_gradle_task(repo: Path, module: str, task_type: str = "compil
     has_common_main = (mod_dir / "src" / "commonMain").is_dir()
     is_kmp = kmp_info["has_kmp_plugin"] or has_common_main or has_android_main
 
-    # Kotlin detection
+    # Kotlin detection (pruned walk so mod_dir/build is never scanned)
+    from _modules import SKIP_PARTS
     has_kotlin = False
     if mod_dir.is_dir():
-        has_kotlin = any(mod_dir.glob("**/*.kt"))
+        scan_target = mod_dir / "src" if (mod_dir / "src").is_dir() else mod_dir
+        for _root, dirs, files in os.walk(scan_target, followlinks=False):
+            dirs[:] = [d for d in dirs if d not in SKIP_PARTS]
+            if any(f.endswith(".kt") for f in files):
+                has_kotlin = True
+                break
     if not has_kotlin and phase_changes:
         for c in phase_changes:
             raw_p = c.get("path") if isinstance(c, dict) else str(c or "")

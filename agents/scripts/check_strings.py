@@ -29,16 +29,10 @@ except Exception:
     ANDROID_SRC = ("app", "src", "main")
     SUPPORTED_LOCALES = ["en", "ar"]
 
-RES_DIRS: list[Path] = []
-primary_res = REPO.joinpath(*ANDROID_SRC) / "res"
-if primary_res.is_dir():
-    RES_DIRS.append(primary_res)
-for candidate in list(repo_glob(REPO, "**/src/*/res")) + list(repo_glob(REPO, "**/composeResources")):
-    if candidate.is_dir() and candidate not in RES_DIRS and "/build/" not in candidate.as_posix():
-        RES_DIRS.append(candidate)
+from _modules import discover_res_dirs  # noqa: E402
 
-if not RES_DIRS:
-    RES_DIRS = [primary_res]
+primary_res = REPO.joinpath(*ANDROID_SRC) / "res"
+RES_DIRS: list[Path] = discover_res_dirs(REPO, primary_res=primary_res)
 
 PLACEHOLDER_RE = re.compile(
     r"(?<!\d)%(?:(\d+)\$)?([+\-# 0,(<]*\d*(?:\.\d+)?[tT]?[sSdDfFgGxXbBcCeEoaAn%])(?![a-zA-Z0-9])|\{([a-zA-Z0-9_]+)\}"
@@ -73,7 +67,7 @@ RESOURCE_CALL = re.compile(
     r"\b(?:stringResource|pluralStringResource|getString|getText|getQuantityString)\s*\([^)]*\)"
 )
 RESOURCE_OK = re.compile(
-    r"\b(?:stringResource|pluralStringResource|getString|getText|getQuantityString|R\.string)\b"
+    r"\b(?:stringResource|pluralStringResource|getString|getText|getQuantityString|(?:R|Res)\.string)\b"
 )
 SKIP_KT_LINE = re.compile(
     r"@Preview\b|\bLog\.|\bTimber\.|\bprintln\s*\(|\bBuildConfig\b|https?://|\bcontentType\b"

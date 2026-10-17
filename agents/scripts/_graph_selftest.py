@@ -660,6 +660,115 @@ import argparse
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+    # -----------------------------------------------------------------
+    # Test 13: KMM Graph Parsing, Edge Deduplication & Test Source Sets
+    # -----------------------------------------------------------------
+    print("\n[*] Test 13: KMM Graph Parsing, Edge Deduplication & Test Source Sets")
+    kmm_dir = Path(tempfile.mkdtemp(prefix="graph_kmm_test_"))
+    try:
+        (kmm_dir / "settings.gradle.kts").write_text(
+            'rootProject.name = "KmmApp"\ninclude(":composeApp", ":shared")\n',
+            encoding="utf-8",
+        )
+        (kmm_dir / "composeApp").mkdir(parents=True, exist_ok=True)
+        (kmm_dir / "composeApp" / "build.gradle.kts").write_text(
+            'kotlin {\n    sourceSets {\n        commonMain.dependencies {\n            implementation(projects.shared)\n        }\n    }\n}\n',
+            encoding="utf-8",
+        )
+        (kmm_dir / "shared").mkdir(parents=True, exist_ok=True)
+        (kmm_dir / "shared" / "build.gradle.kts").write_text("// shared module\n", encoding="utf-8")
+
+        kmm_mods, kmm_mod_edges = parse_gradle_modules(kmm_dir)
+        assert_eq(":composeApp" in kmm_mods and ":shared" in kmm_mods, True, "Discovered KMM :composeApp and :shared modules")
+        assert_eq(":app" not in kmm_mods, True, "No phantom :app module when settings.gradle.kts declares :composeApp/:shared")
+
+        common_main = kmm_dir / "composeApp" / "src" / "commonMain" / "kotlin" / "com" / "test" / "ui"
+        common_main.mkdir(parents=True, exist_ok=True)
+        (common_main / "HomeScreen.kt").write_text(
+            'package com.test.ui\n\n'
+            'import androidx.compose.runtime.Composable\n\n'
+            '@JvmInline\n'
+            'value class UserId(val id: String)\n\n'
+            'annotation class FeatureFlag\n\n'
+            '@OptIn(ExperimentalMaterial3Api::class)\n'
+            '@Composable\n'
+            'expect fun <T> HomeScreen(state: T)\n',
+            encoding="utf-8",
+        )
+
+        common_test = kmm_dir / "shared" / "src" / "commonTest" / "kotlin" / "com" / "test"
+        common_test.mkdir(parents=True, exist_ok=True)
+        (common_test / "HomeHelperSpec.kt").write_text(
+            'package com.test\n\nclass HomeHelperSpec\n',
+            encoding="utf-8",
+        )
+
+        kmm_engine = GraphEngine(kmm_dir)
+        kmm_engine.sync()
+        edge_count_1 = len(kmm_engine.graph.edges)
+        kmm_engine.sync()
+        edge_count_2 = len(kmm_engine.graph.edges)
+        assert_eq(edge_count_1, edge_count_2, "Repeated sync() does not duplicate graph edges")
+
+        home_node = kmm_engine.graph.nodes.get("com.test.ui.HomeScreen")
+        assert_eq(home_node is not None, True, "Parsed @OptIn + @Composable expect fun HomeScreen")
+        if home_node:
+            assert_eq(home_node.type, EntityType.SCREEN.value, "HomeScreen in com.test.ui (commonMain) is SCREEN, not TEST")
+
+        value_node = kmm_engine.graph.nodes.get("com.test.ui.UserId")
+        assert_eq(value_node is not None, True, "Parsed value class UserId")
+
+        ann_node = kmm_engine.graph.nodes.get("com.test.ui.FeatureFlag")
+        assert_eq(ann_node is not None, True, "Parsed annotation class FeatureFlag")
+
+        spec_node = kmm_engine.graph.nodes.get("com.test.HomeHelperSpec")
+        assert_eq(spec_node is not None, True, "Parsed HomeHelperSpec in commonTest")
+        if spec_node:
+            assert_eq(spec_node.type, EntityType.TEST.value, "File in src/commonTest classified as EntityType.TEST")
+
+        # KMM composeResources & Res.string dereferencing + fast_kt_lint commonMain @Preview
+        cmp_res_ar = kmm_dir / "composeApp" / "src" / "commonMain" / "composeResources" / "values-ar"
+        cmp_res_ar.mkdir(parents=True, exist_ok=True)
+        (cmp_res_ar / "strings.xml").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<resources>\n'
+            '    <string name="kmm_welcome_title">مرحبا بك في التطبيق</string>\n'
+            '</resources>\n',
+            encoding="utf-8",
+        )
+        (common_main / "WelcomeScreen.kt").write_text(
+            'package com.test.ui\n\n'
+            'import org.jetbrains.compose.resources.stringResource\n'
+            'import org.jetbrains.compose.ui.tooling.preview.Preview\n'
+            'import androidx.compose.runtime.Composable\n\n'
+            '@Composable\n'
+            'fun WelcomeScreen() {\n'
+            '    val title = stringResource(Res.string.kmm_welcome_title)\n'
+            '}\n\n'
+            '@Preview\n'
+            '@Composable\n'
+            'private fun WelcomeScreenPreview() {\n'
+            '    WelcomeScreen()\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        kmm_str_matches = find_string_resources(kmm_dir, "مرحبا بك في التطبيق")
+        assert_eq(len(kmm_str_matches) >= 1 and kmm_str_matches[0]["key"] == "kmm_welcome_title", True, "Found string in KMM composeResources/values-ar")
+        kmm_usages = find_string_usages(kmm_dir, "kmm_welcome_title")
+        assert_eq(any("WelcomeScreen.kt" in u["file_path"] for u in kmm_usages), True, "Found Res.string usage in WelcomeScreen.kt")
+
+        from _modules import discover_res_dirs
+        discovered_res = discover_res_dirs(kmm_dir)
+        assert_eq(any("composeResources" in p.as_posix() for p in discovered_res), True, "discover_res_dirs found composeResources")
+
+        from fast_kt_lint import lint_file
+        lint_expect_issues = lint_file(common_main / "HomeScreen.kt")
+        assert_eq(any(i["type"] == "MISSING_COMPOSE_PREVIEW" for i in lint_expect_issues), False, "expect @Composable fun in commonMain does not require @Preview")
+        lint_welcome_issues = lint_file(common_main / "WelcomeScreen.kt")
+        assert_eq(any(i["type"] == "MISSING_COMPOSE_PREVIEW" for i in lint_welcome_issues), False, "Parameterless @Preview in commonMain satisfies preview lint")
+    finally:
+        shutil.rmtree(kmm_dir, ignore_errors=True)
+
     print("\n==================================================")
     print(f"Selftest Results: {passed} passed, {failed} failed")
     print("==================================================")

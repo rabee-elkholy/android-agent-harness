@@ -432,9 +432,7 @@ def _is_production_code(rel_posix: str) -> bool:
     lower = f"/{rel_posix.lower()}"
     if not lower.endswith((".kt", ".java")):
         return False
-    if is_kmp_or_android_test_path(rel_posix):
-        return False
-    return not (any(marker in lower for marker in TEST_PATH_MARKERS) or lower.endswith(("test.kt", "tests.kt", "test.java")))
+    return not is_kmp_or_android_test_path(rel_posix)
 
 
 def _red_evidence_denial(root: Path, plan: dict, targets: list[str]) -> str:
