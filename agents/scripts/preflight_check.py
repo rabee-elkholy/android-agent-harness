@@ -197,14 +197,20 @@ def main(argv: list[str] | None = None) -> int:
                 exported_ok, exported_msg = False, f"EXPORTED_COMPONENT_CHECK_ERROR: {exc}"
         sublog(f"[{'OK' if exported_ok else 'FAIL'}] {exported_msg}")
 
-    with step_progress("7. KMP expect/actual pairing"):
-        try:
-            from _modules import check_kmp_expect_actual_pairs
-            kmp_paths = task_change_paths if task_change_paths is not None else modified
-            expect_ok, expect_msg = check_kmp_expect_actual_pairs(repo_target, kmp_paths)
-        except Exception as exc:
-            expect_ok, expect_msg = False, f"KMP_EXPECT_ACTUAL_CHECK_ERROR: {exc}"
-        sublog(f"[{'OK' if expect_ok else 'FAIL'}] {expect_msg}")
+    from _modules import SKIP_PARTS, check_kmp_expect_actual_pairs
+    has_kmp_common = any(
+        d.is_dir() and not (set(d.parts) & SKIP_PARTS)
+        for d in repo_target.glob("**/src/commonMain")
+    )
+    expect_ok = True
+    if has_kmp_common:
+        with step_progress("7. KMP expect/actual pairing"):
+            try:
+                kmp_paths = task_change_paths if task_change_paths is not None else modified
+                expect_ok, expect_msg = check_kmp_expect_actual_pairs(repo_target, kmp_paths)
+            except Exception as exc:
+                expect_ok, expect_msg = False, f"KMP_EXPECT_ACTUAL_CHECK_ERROR: {exc}"
+            sublog(f"[{'OK' if expect_ok else 'FAIL'}] {expect_msg}")
 
     live_print("\n==================================================")
     overall_pass = (
@@ -217,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         and exported_ok
         and expect_ok
     )
-    checks = (
+    checks_list = [
         ("hook selftest", hook_code == 0),
         ("string parity", str_code == 0),
         ("Room migrations", db_ok),
@@ -225,8 +231,10 @@ def main(argv: list[str] | None = None) -> int:
         ("plan authority", risk_ok),
         ("architecture drift", arch_ok),
         ("exported components", exported_ok),
-        ("KMP expect/actual", expect_ok),
-    )
+    ]
+    if has_kmp_common:
+        checks_list.append(("KMP expect/actual", expect_ok))
+    checks = tuple(checks_list)
     failed_checks = [name for name, ok in checks if not ok]
     common = {
         "schema_version": 2,

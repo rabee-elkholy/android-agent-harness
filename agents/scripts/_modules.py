@@ -42,12 +42,15 @@ def is_kmp_or_android_test_path(rel_path: str) -> bool:
         return False
     lower = norm.lower()
     parts = lower.split("/")
-    for idx, part in enumerate(parts):
-        if part == "src" and idx + 1 < len(parts):
-            if is_test_source_set_name(parts[idx + 1]):
+    if "src" in parts:
+        for idx, part in enumerate(parts):
+            if part == "src" and idx + 1 < len(parts):
+                if is_test_source_set_name(parts[idx + 1]):
+                    return True
+    else:
+        for part in parts[:-1]:
+            if part in {"test", "tests", "androidtest", "testfixtures", "sharedtest", "instrumentationtest", "commontest", "iostest", "androidunittest", "androidhosttest"}:
                 return True
-        if part in {"test", "androidtest", "testfixtures", "sharedtest", "instrumentationtest", "commontest", "iostest", "androidunittest", "androidhosttest"}:
-            return True
     if lower.endswith(("test.kt", "test.java", "tests.kt", "tests.java")):
         return True
     return False
