@@ -2616,8 +2616,17 @@ def resolve_module_gradle_task(repo: Path, module: str, task_type: str = "compil
             except Exception:
                 pass
 
+    from _modules import detect_kmp_build_script
+    try:
+        from wizard.discovery import _catalog_plugin_ids, _resolve_catalog_aliases
+        resolved_build = _resolve_catalog_aliases(build_content, _catalog_plugin_ids(repo))
+    except Exception:
+        resolved_build = build_content
+
+    kmp_info = detect_kmp_build_script(build_content, resolved_build)
     has_android_main = (mod_dir / "src" / "androidMain").is_dir()
-    is_kmp = "multiplatform" in build_content or (mod_dir / "src" / "commonMain").is_dir() or has_android_main
+    has_common_main = (mod_dir / "src" / "commonMain").is_dir()
+    is_kmp = kmp_info["has_kmp_plugin"] or has_common_main or has_android_main
 
     # Kotlin detection
     has_kotlin = False
@@ -2632,11 +2641,19 @@ def resolve_module_gradle_task(repo: Path, module: str, task_type: str = "compil
                 break
 
     if is_kmp:
-        if has_android_main:
+        if kmp_info["has_agp_kmp_library"]:
+            if task_type == "compile":
+                return f"{mod_clean}:compileAndroidMain"
+            return f"{mod_clean}:testAndroidHostTest"
+        if has_android_main or kmp_info["has_android_target"]:
             if task_type == "compile":
                 return f"{mod_clean}:compileKotlinAndroid"
             else:
-                return f"{mod_clean}:testDebugUnitTest"
+                return f"{mod_clean}:test{var_pascal}UnitTest"
+        if kmp_info["has_jvm_target"]:
+            if task_type == "compile":
+                return f"{mod_clean}:compileKotlinJvm"
+            return f"{mod_clean}:jvmTest"
         raise ValidationError(f"[CONFIG_ERROR] KMP module '{module}' task resolution requires configured Android target")
 
     if task_type == "compile":

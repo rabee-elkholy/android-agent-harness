@@ -33,11 +33,12 @@ ROOT_EXCLUDED = {".git", ".agents", ".harness-setup", ".harness-backup", ".harne
 NESTED_EXCLUDED = {".gradle", ".idea", "build", "out", "node_modules", "__pycache__"}
 SOURCE_SUFFIXES = {
     ".kt", ".java", ".kts", ".gradle", ".groovy", ".toml", ".xml", ".json",
-    ".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".pro", ".rules",
-    ".proto", ".sq", ".sqm", ".sql", ".graphql", ".graphqls", ".gql",
+    ".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".m", ".mm", ".swift", ".def",
+    ".pro", ".rules", ".proto", ".sq", ".sqm", ".sql", ".graphql", ".graphqls", ".gql",
     ".yaml", ".yml", ".sh", ".py", ".ps1", ".bat", ".cmd", ".bzl",
     ".bazel", ".mk", ".bp", ".cmake", ".rs", ".s", ".asm", ".lockfile",
-    ".properties", ".jar", ".aar", ".so", ".bin", ".png", ".jpg", ".jpeg", ".webp",
+    ".properties", ".plist", ".entitlements", ".xcprivacy", ".xcconfig", ".pbxproj", ".xcscheme",
+    ".jar", ".aar", ".so", ".bin", ".png", ".jpg", ".jpeg", ".webp",
     ".gif", ".svg", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4",
     ".md", ".rst", ".adoc",
 }
@@ -47,6 +48,7 @@ ROOT_BUILD_FILES = {
     "build.gradle", "build.gradle.kts", "gradle.properties", "gradle.lockfile",
     "cmakelists.txt", "android.mk", "android.bp", "build", "build.bazel",
     "workspace", "workspace.bazel", "module.bazel",
+    "podfile", "podfile.lock", "package.resolved",
 }
 EXTERNAL_CANDIDATES = {
     "local.properties",
@@ -88,7 +90,7 @@ def is_delivery_relevant(relative: str) -> bool:
     if lowered.endswith(("gradle-wrapper.jar", "gradle-wrapper.properties")):
         return True
     if "/src/" in f"/{lowered}" and any(
-        marker in f"/{lowered}/" for marker in ("/res/", "/assets/", "/resources/", "/jnilibs/", "/cpp/")
+        marker in f"/{lowered}/" for marker in ("/res/", "/composeresources/", "/assets/", "/resources/", "/jnilibs/", "/cpp/")
     ):
         return True
     if name.endswith(SOURCE_SUFFIX_TUPLE):

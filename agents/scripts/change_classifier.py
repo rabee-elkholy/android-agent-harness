@@ -719,7 +719,9 @@ def classify(
         before_rel = changed.old_rel_posix or rel
         full_text = ("\n".join(comparison) if comparison is not None else
                      (_read_text(changed.path) if changed.exists else "") + "\n" + _head_text(root, before_rel, task_base_ref))
-        test_path = "/test/" in f"/{lower}" or "/androidtest/" in f"/{lower}" or lower.endswith(("test.kt", "test.java"))
+        from _modules import is_kmp_or_android_test_path
+
+        test_path = is_kmp_or_android_test_path(rel)
         if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
         elif "/src/" in f"/{lower}" and "/assets/" in f"/{lower}/":
@@ -727,13 +729,13 @@ def classify(
                 _add(found, "RESOURCE_UI", rel, "ANDROID_RUNTIME_ASSET")
         elif is_documentation_path(rel):
             _add(found, "DOCS", rel, "DOCUMENTATION_PATH")
-        elif "/src/" in f"/{lower}" and "/res/" not in f"/{lower}/" and suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
+        elif "/src/" in f"/{lower}" and "/res/" not in f"/{lower}/" and "/composeresources/" not in f"/{lower}/" and suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
             _add(found, "RESOURCE_UI", rel, "SOURCE_SET_MEDIA")
         if ROOM_EXPORTED_SCHEMA_RE.search(lower) and "/src/" not in f"/{lower}":
             _add(found, "ROOM_SCHEMA", rel, "ROOM_EXPORTED_SCHEMA")
         if suffix in (".jar", ".aar") and "/src/" not in f"/{lower}":
             _add(found, "BUILD_CONFIG", rel, "DEPENDENCY_BINARY")
-        if "/res/values" in f"/{lower}" and suffix == ".xml":
+        if ("/res/values" in f"/{lower}" or "/composeresources/values" in f"/{lower}") and suffix == ".xml":
             if Path(lower).name in ("strings.xml", "plurals.xml", "arrays.xml"):
                 _add(found, "LOCALIZATION", rel, "LOCALIZED_RESOURCE")
             else:
@@ -742,11 +744,15 @@ def classify(
             _add(found, "XML_UI", rel, "LAYOUT_RESOURCE")
         if "/res/navigation" in f"/{lower}" and suffix == ".xml":
             _add(found, "NAVIGATION", rel, "NAVIGATION_GRAPH")
-        if "/res/" in f"/{lower}" and suffix not in (".md", ".txt"):
+        if ("/res/" in f"/{lower}" or "/composeresources/" in f"/{lower}") and suffix not in (".md", ".txt"):
             # res/raw holds arbitrary runtime data, like src/*/assets: only visual media is UI.
-            if "/res/raw/" not in f"/{lower}" or suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
+            if ("/res/raw/" not in f"/{lower}" and "/composeresources/files/" not in f"/{lower}") or suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
                 _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
-        if suffix in (".kt", ".kts") and ("@composable" in full_text.lower() or "androidx.compose" in full_text.lower()):
+        if suffix in (".kt", ".kts") and (
+            "@composable" in full_text.lower()
+            or "androidx.compose" in full_text.lower()
+            or "org.jetbrains.compose" in full_text.lower()
+        ):
             if _is_visual_only_compose(diff_text):
                 _add(found, "COMPOSE_UI", rel, "COMPOSE_VISUAL_ONLY")
             else:
@@ -768,8 +774,17 @@ def classify(
                     _add(found, "ROOM_SCHEMA", rel, "ROOM_ENTITY_OR_EMBEDDED_TYPE")
             except Exception:
                 pass
-        if suffix in (".gradle", ".kts", ".toml", ".properties") or Path(lower).name in ("gradlew", "gradlew.bat"):
+        if (
+            suffix in (".gradle", ".kts", ".toml", ".properties", ".xcconfig", ".pbxproj", ".xcscheme")
+            or Path(lower).name in ("gradlew", "gradlew.bat", "podfile", "podfile.lock", "package.resolved")
+        ):
             _add(found, "BUILD_CONFIG", rel, "BUILD_FILE")
+        if suffix in (".plist", ".entitlements", ".xcprivacy"):
+            if re.search(r"UsageDescription|aps-environment|keychain-access-groups|associated-domains|background-modes", diff_text, re.I):
+                _add(found, "MANIFEST_PERMISSION", rel, "IOS_PERMISSION_OR_ENTITLEMENT_CHANGE")
+            _add(found, "BUILD_CONFIG", rel, "IOS_CONFIG_CHANGE")
+        if suffix == ".swift" and not test_path:
+            _add(found, "BUSINESS_LOGIC", rel, "IOS_ENTRY_SOURCE_CHANGE")
         if "androidmanifest.xml" in lower:
             manifest_has_perm = bool(
                 re.search(r"uses-permission|android\.permission\.|android:exported|provider|intent-filter", diff_text, re.I)
@@ -786,7 +801,7 @@ def classify(
                 _add(found, "BUILD_CONFIG", rel, "MANIFEST_CHANGE")
             if not manifest_has_perm and not manifest_has_comp:
                 _add(found, "BUILD_CONFIG", rel, "MANIFEST_CHANGE")
-        if suffix in (".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".so"):
+        if suffix in (".aidl", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".m", ".mm", ".def", ".so"):
             _add(found, "NATIVE_CODE", rel, "NATIVE_OR_AIDL_CHANGE")
         if test_path:
             _add(found, "TEST_ONLY", rel, "TEST_CHANGE")
@@ -821,7 +836,7 @@ def classify(
             _add(found, "BUILD_CONFIG", rel, "BASELINE_PROFILE")
         # res/values*.xml holds user-facing copy and constants; words like "login" or
         # "subscribe" there are text, not billing/auth/device code.
-        values_resource = "/res/values" in f"/{lower}" and suffix == ".xml"
+        values_resource = ("/res/values" in f"/{lower}" or "/composeresources/values" in f"/{lower}") and suffix == ".xml"
         for surface, pattern, reason in PATTERNS:
 
             if not test_path and not values_resource:

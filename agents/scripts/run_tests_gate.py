@@ -229,6 +229,27 @@ def split_task_start_failures(failed: list[dict], task_start: dict | None) -> tu
     return remaining, predating
 
 
+def _kmp_or_module_test_suffix(repo: Path, module: str, build: str, catalog_ids: dict[str, str], default_suffix: str) -> str:
+    from _modules import detect_kmp_build_script
+    from wizard.discovery import _resolve_catalog_aliases
+
+    resolved = _resolve_catalog_aliases(build, catalog_ids)
+    kmp_info = detect_kmp_build_script(build, resolved)
+    if kmp_info["has_agp_kmp_library"]:
+        return "testAndroidHostTest"
+    if kmp_info["has_kmp_plugin"]:
+        mod_rel = module.lstrip(":").replace(":", "/")
+        mod_dir = repo / mod_rel if mod_rel else repo
+        if kmp_info["has_android_target"] or (mod_dir / "src" / "androidMain").is_dir():
+            return default_suffix
+        if kmp_info["has_jvm_target"]:
+            return "jvmTest"
+        return default_suffix
+    jvm = bool(re.search(r'''kotlin\s*\(\s*["']jvm["']|["'](?:org\.jetbrains\.kotlin\.jvm|java|java-library)["']''', resolved))
+    android = bool(re.search(r"com\.android\.|org\.jetbrains\.kotlin\.multiplatform", resolved))
+    return "test" if jvm and not android else default_suffix
+
+
 def resolve_target_task(repo: Path, requested_task: str | None) -> str:
     if requested_task:
         return requested_task
@@ -252,6 +273,15 @@ def resolve_target_task(repo: Path, requested_task: str | None) -> str:
         if len(mods) == 1 and ":app" not in mods:
             single_mod = list(mods)[0]
             task_suffix = default_task.split(":")[-1] if ":" in default_task else "testDebugUnitTest"
+            mod_rel = single_mod.lstrip(":").replace(":", "/")
+            mod_dir = repo / mod_rel
+            build_text = ""
+            for bf in (mod_dir / "build.gradle.kts", mod_dir / "build.gradle"):
+                if bf.is_file():
+                    build_text += bf.read_text(encoding="utf-8", errors="replace")
+            if build_text:
+                from wizard.discovery import _catalog_plugin_ids
+                task_suffix = _kmp_or_module_test_suffix(repo, single_mod, build_text, _catalog_plugin_ids(repo), task_suffix)
             return f"{single_mod}:{task_suffix}"
     except Exception:
         pass
@@ -350,9 +380,7 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
         build = (repo / node.file_path).read_text(encoding="utf-8", errors="replace") if node and node.file_path else ""
         if _asset_pack_without_test_plugin(build, catalog_ids):
             continue
-        jvm = bool(re.search(r'''kotlin\s*\(\s*["']jvm["']|["'](?:org\.jetbrains\.kotlin\.jvm|java|java-library)["']''', build))
-        android = bool(re.search(r"com\.android\.|org\.jetbrains\.kotlin\.multiplatform", build))
-        suffix = "test" if jvm and not android else task_suffix
+        suffix = _kmp_or_module_test_suffix(repo, module, build, catalog_ids, task_suffix)
         tasks.add(f"{module}:{suffix}")
     return sorted(tasks) or [default_task]
 

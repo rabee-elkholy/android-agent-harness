@@ -423,12 +423,16 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     return True, f"mutation authorized by approved plan {plan.get('plan_id')}", "FILE_MUTATION_ALLOWED"
 
 
-TEST_PATH_MARKERS = ("/test/", "/androidtest/", "/testfixtures/", "/sharedtest/")
+TEST_PATH_MARKERS = ("/test/", "/androidtest/", "/testfixtures/", "/sharedtest/", "/commontest/", "/iostest/", "/androidunittest/", "/androidhosttest/")
 
 
 def _is_production_code(rel_posix: str) -> bool:
+    from _modules import is_kmp_or_android_test_path
+
     lower = f"/{rel_posix.lower()}"
     if not lower.endswith((".kt", ".java")):
+        return False
+    if is_kmp_or_android_test_path(rel_posix):
         return False
     return not (any(marker in lower for marker in TEST_PATH_MARKERS) or lower.endswith(("test.kt", "tests.kt", "test.java")))
 

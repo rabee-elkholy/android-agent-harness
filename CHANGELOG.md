@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.29] - 2026-10-17
+
+### Scoped KMM (Android + iOS) with Compose Multiplatform support
+
+- Require an actively applied Kotlin Multiplatform plugin (`org.jetbrains.kotlin.multiplatform`, `kotlin("multiplatform")`, or `com.android.kotlin.multiplatform.library`) or a real `src/commonMain` source set before classifying a project as `kmp`, preventing Native Android modules named `:shared` from being misclassified.
+- Support both `:composeApp` and `:androidApp` + `:shared` KMM topologies across both classic `androidTarget()` and modern `com.android.kotlin.multiplatform.library` (`androidLibrary`) Gradle task conventions, while keeping Windows host verification scoped to Android/common compilation and host tests.
+- Unify KMP test source-set classification (`commonTest`, `iosTest`, `iosSimulatorArm64Test`, `androidUnitTest`, `androidHostTest`) across `project_context`, `plan_authority`, `mutation_guard`, `change_classifier`, `check_strings`, and `fast_kt_lint`.
+- Track Compose Multiplatform resources (`composeResources/values*/strings.xml`), KMP cinterop/native files (`.def`, `.m`, `.mm`, `.swift`), and Apple configuration files (`.plist`, `.entitlements`, `.xcprivacy`, `.xcconfig`, `.pbxproj`, `.xcscheme`, `Podfile`) in the delivery manifest and surface classifier.
+- Add deterministic `expect` / `actual` pairing verification in `preflight_check.py` for modified KMP `commonMain` declarations with zero overhead on Native Android repositories.
+
 ## [1.1.28] - 2026-10-15
 
 ### Focused follow-up review, faster routing and audit recovery

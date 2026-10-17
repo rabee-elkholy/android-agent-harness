@@ -214,9 +214,11 @@ def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) 
 
 
 def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[dict]:
+    from _modules import is_kmp_or_android_test_path
+
     issues = []
-    posix = file_path.as_posix().lower()
-    is_test = "/src/test/" in posix or "/androidtest/" in posix or posix.endswith("test.kt")
+    posix = file_path.as_posix()
+    is_test = is_kmp_or_android_test_path(posix)
 
     try:
         text = file_path.read_text(encoding="utf-8", errors="replace")
@@ -227,7 +229,7 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
     has_fragment_activity_in_diff = False
     has_android_entry_point = False
     has_compose_function_in_diff = False
-    has_compose_imports = any("androidx.compose" in l for l in lines[:60])
+    has_compose_imports = any("androidx.compose" in l or "org.jetbrains.compose" in l for l in lines[:60])
     in_block_comment = False
     in_triple_string = False
 

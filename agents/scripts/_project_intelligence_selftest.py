@@ -675,6 +675,12 @@ class TaskContextFallbackTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def write(self, relative: str, content: str) -> Path:
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
     def test_TASKCTX_FALLBACK_001_kotlin_source_graph_context_unchanged(self) -> None:
         from task_context import resolve_task_context
         res = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
@@ -798,6 +804,126 @@ class TaskContextFallbackTests(unittest.TestCase):
         res = resolve_task_context(self.repo, file="scratch/session.tmp")
         self.assertNotEqual("RESOLVED", res["status"])
 
+    def test_KMM_CMP_001_native_android_shared_module_is_not_misclassified_as_kmp(self) -> None:
+        from wizard.discovery import discover_project_structure
+        self.write("settings.gradle.kts", 'include(":app", ":shared")\n')
+        self.write("app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        self.write("shared/build.gradle.kts", 'plugins { id("com.android.library") }\n')
+        self.assertEqual("multi_module", discover_project_structure(self.repo, [":app", ":shared"]))
+
+        # When KMP plugin is applied, structure becomes kmp
+        self.write("shared/build.gradle.kts", 'plugins { kotlin("multiplatform"); id("com.android.library") }\n')
+        self.assertEqual("kmp", discover_project_structure(self.repo, [":app", ":shared"]))
+
+    def test_KMM_CMP_002_kmp_test_source_sets_and_delivery_inputs(self) -> None:
+        from delivery_manifest import is_delivery_relevant
+        from mutation_guard import _is_production_code
+        from plan_authority import is_test_path
+        from project_context import classify_source_path
+
+        for test_rel in (
+            "shared/src/commonTest/kotlin/ContractSpec.kt",
+            "shared/src/iosTest/kotlin/ContractSpec.kt",
+            "shared/src/androidUnitTest/kotlin/ContractSpec.kt",
+            "shared/src/androidHostTest/kotlin/ContractSpec.kt",
+            "composeApp/src/iosSimulatorArm64Test/kotlin/UiSpec.kt",
+        ):
+            self.assertEqual("TEST_SOURCE", classify_source_path(test_rel), test_rel)
+            self.assertTrue(is_test_path(test_rel), test_rel)
+            self.assertFalse(_is_production_code(test_rel), test_rel)
+
+        for prod_rel in (
+            "shared/src/commonMain/kotlin/Auth.kt",
+            "composeApp/src/iosMain/kotlin/MainViewController.kt",
+        ):
+            self.assertEqual("MAIN_SOURCE", classify_source_path(prod_rel), prod_rel)
+            self.assertFalse(is_test_path(prod_rel), prod_rel)
+            self.assertTrue(_is_production_code(prod_rel), prod_rel)
+
+        for delivery_rel in (
+            "composeApp/src/commonMain/composeResources/values/strings.xml",
+            "shared/src/nativeInterop/cinterop/sqlite.def",
+            "iosApp/iosApp/ContentView.swift",
+            "iosApp/iosApp/Info.plist",
+            "iosApp/iosApp.xcodeproj/project.pbxproj",
+            "iosApp/Podfile",
+        ):
+            self.assertTrue(is_delivery_relevant(delivery_rel), delivery_rel)
+
+    def test_KMM_CMP_003_dual_kmp_android_target_and_agp_kmp_library_task_resolution(self) -> None:
+        from workflow import resolve_module_gradle_task
+        # 1. Classic androidTarget() in :composeApp or :shared
+        self.write(
+            "composeApp/build.gradle.kts",
+            'plugins { id("org.jetbrains.kotlin.multiplatform"); id("com.android.application") }\nkotlin { androidTarget() }\n',
+        )
+        self.write("composeApp/src/commonMain/kotlin/App.kt", "package app\nfun App() {}\n")
+        self.assertEqual(":composeApp:compileKotlinAndroid", resolve_module_gradle_task(self.repo, ":composeApp", "compile"))
+        self.assertEqual(":composeApp:testDebugUnitTest", resolve_module_gradle_task(self.repo, ":composeApp", "test"))
+
+        # 2. Modern com.android.kotlin.multiplatform.library in :shared
+        self.write(
+            "shared/build.gradle.kts",
+            'plugins { id("org.jetbrains.kotlin.multiplatform"); id("com.android.kotlin.multiplatform.library") }\n',
+        )
+        self.write("shared/src/commonMain/kotlin/Shared.kt", "package shared\nclass Shared\n")
+        self.assertEqual(":shared:compileAndroidMain", resolve_module_gradle_task(self.repo, ":shared", "compile"))
+        self.assertEqual(":shared:testAndroidHostTest", resolve_module_gradle_task(self.repo, ":shared", "test"))
+
+    def test_KMM_CMP_004_expect_actual_pairing_check(self) -> None:
+        from _modules import check_kmp_expect_actual_pairs
+        from wizard.discovery import discover_locales, discover_product
+        self.write(
+            "shared/src/commonMain/kotlin/Platform.kt",
+            "package shared\nexpect class Platform()\nsuspend expect fun Map<String, Int>.platformName(): String\n",
+        )
+        self.write(
+            "shared/src/androidMain/kotlin/Platform.android.kt",
+            "package shared\ndata actual class Platform(val id: Int = 1)\nactual suspend fun Map<String, Int>.platformName(): String = \"Android\"\n",
+        )
+        self.write(
+            "shared/src/iosMain/kotlin/Platform.ios.kt",
+            "package shared\ndata actual class Platform(val id: Int = 2)\n",
+        )
+
+        ok, msg = check_kmp_expect_actual_pairs(self.repo, ["shared/src/commonMain/kotlin/Platform.kt"])
+        self.assertFalse(ok)
+        self.assertIn("platformName", msg)
+        self.assertIn("iosMain", msg)
+
+        self.write(
+            "shared/src/iosMain/kotlin/Platform.ios.kt",
+            "package shared\ndata actual class Platform(val id: Int = 2)\nsuspend actual fun Map<String, Int>.platformName(): String = \"iOS\"\n",
+        )
+        ok2, msg2 = check_kmp_expect_actual_pairs(self.repo, ["shared/src/commonMain/kotlin/Platform.kt"])
+        self.assertTrue(ok2, msg2)
+
+        # Verify composeResources locale discovery and androidMain manifest product discovery
+        self.write(
+            "composeApp/build.gradle.kts",
+            'plugins { id("com.android.application"); id("org.jetbrains.kotlin.multiplatform") }\nandroid { namespace = "com.example.cmp" }\n',
+        )
+        self.write(
+            "composeApp/src/androidMain/AndroidManifest.xml",
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+            '<application android:label="@string/app_name">'
+            '<activity android:name=".MainActivity"><intent-filter>'
+            '<action android:name="android.intent.action.MAIN"/>'
+            '<category android:name="android.intent.category.LAUNCHER"/>'
+            '</intent-filter></activity></application></manifest>\n',
+        )
+        self.write(
+            "composeApp/src/commonMain/composeResources/values/strings.xml",
+            '<resources><string name="app_name">CmpSuperApp</string></resources>\n',
+        )
+        self.write(
+            "composeApp/src/commonMain/composeResources/values-ar/strings.xml",
+            '<resources><string name="app_name">تطبيق</string></resources>\n',
+        )
+        self.assertIn("values-ar", discover_locales(self.repo))
+        self.assertEqual("CmpSuperApp", discover_product(self.repo))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

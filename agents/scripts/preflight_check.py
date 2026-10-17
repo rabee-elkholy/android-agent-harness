@@ -197,8 +197,26 @@ def main(argv: list[str] | None = None) -> int:
                 exported_ok, exported_msg = False, f"EXPORTED_COMPONENT_CHECK_ERROR: {exc}"
         sublog(f"[{'OK' if exported_ok else 'FAIL'}] {exported_msg}")
 
+    with step_progress("7. KMP expect/actual pairing"):
+        try:
+            from _modules import check_kmp_expect_actual_pairs
+            kmp_paths = task_change_paths if task_change_paths is not None else modified
+            expect_ok, expect_msg = check_kmp_expect_actual_pairs(repo_target, kmp_paths)
+        except Exception as exc:
+            expect_ok, expect_msg = False, f"KMP_EXPECT_ACTUAL_CHECK_ERROR: {exc}"
+        sublog(f"[{'OK' if expect_ok else 'FAIL'}] {expect_msg}")
+
     live_print("\n==================================================")
-    overall_pass = (hook_code == 0) and (str_code == 0) and db_ok and (lint_code == 0) and risk_ok and arch_ok and exported_ok
+    overall_pass = (
+        (hook_code == 0)
+        and (str_code == 0)
+        and db_ok
+        and (lint_code == 0)
+        and risk_ok
+        and arch_ok
+        and exported_ok
+        and expect_ok
+    )
     checks = (
         ("hook selftest", hook_code == 0),
         ("string parity", str_code == 0),
@@ -207,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         ("plan authority", risk_ok),
         ("architecture drift", arch_ok),
         ("exported components", exported_ok),
+        ("KMP expect/actual", expect_ok),
     )
     failed_checks = [name for name, ok in checks if not ok]
     common = {
@@ -224,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             "risk_approval": risk_ok,
             "architecture_drift": arch_ok,
             "exported_components": exported_ok,
+            "kmp_expect_actual": expect_ok,
         },
         "detail": "" if overall_pass else "failed: " + ", ".join(failed_checks),
     }

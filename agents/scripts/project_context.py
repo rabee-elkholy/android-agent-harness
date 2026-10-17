@@ -78,12 +78,18 @@ def classify_source_path(rel_path: str) -> str:
 
     MAIN_SOURCE, TEST_SOURCE, SAMPLE_SOURCE, BUILD_CONFIG, MANIFEST.
     """
+    from _modules import is_test_source_set_name
+
     norm = rel_path.replace("\\", "/").lower()
-    parts = set(norm.split("/"))
-    # Match Gradle test source sets: src/test/, src/testDebug/, src/androidTest/, src/androidTestDebug/, etc.
+    parts_list = [p for p in norm.split("/") if p]
+    parts = set(parts_list)
+    for idx, part in enumerate(parts_list):
+        if part == "src" and idx + 1 < len(parts_list) and is_test_source_set_name(parts_list[idx + 1]):
+            return "TEST_SOURCE"
+    # Match Gradle test source sets: src/test/, src/testDebug/, src/androidTest/, src/commonTest/, etc.
     if (
-        parts & {"test", "testfixtures", "sharedtest", "androidtest", "instrumentationtest"}
-        or re.search(r"/src/(?:test|androidtest|testfixtures|sharedtest|instrumentationtest)[^/]*/", f"/{norm}")
+        parts & {"test", "testfixtures", "sharedtest", "androidtest", "instrumentationtest", "commontest", "iostest", "androidunittest", "androidhosttest"}
+        or re.search(r"/src/(?:test|androidtest|testfixtures|sharedtest|instrumentationtest|commontest|iostest|androidunittest|androidhosttest)[^/]*/", f"/{norm}")
     ):
         return "TEST_SOURCE"
     if parts & {"sample", "samples", "demo", "fixtures"} or re.search(r"/(?:sample|samples|demo|fixtures)(?:/|$)", f"/{norm}"):
@@ -604,7 +610,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     di_modules: list[dict] = []
 
     has_hilt = "dagger.hilt" in corpus_gradle or "hilt-android" in corpus_gradle or "com.google.dagger.hilt.android" in corpus_gradle
-    has_koin = "org.koin" in corpus_gradle or "koin-android" in corpus_gradle
+    has_koin = any(marker in corpus_gradle for marker in ("org.koin", "koin-android", "koin-core", "koin-compose"))
     has_anvil = "com.squareup.anvil" in corpus_gradle
 
     if has_hilt:
@@ -612,7 +618,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
         di_evidence.append({"type": "build_file", "evidence": "dagger.hilt / hilt-android dependency declared", "confidence": "HIGH"})
     if has_koin:
         di_frameworks.append("koin")
-        di_evidence.append({"type": "build_file", "evidence": "koin-android dependency declared", "confidence": "HIGH"})
+        di_evidence.append({"type": "build_file", "evidence": "koin dependency declared", "confidence": "HIGH"})
     if has_anvil:
         di_frameworks.append("anvil")
         di_evidence.append({"type": "build_file", "evidence": "anvil dependency declared", "confidence": "HIGH"})

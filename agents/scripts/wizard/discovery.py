@@ -73,19 +73,30 @@ def discover_product(repo: Path) -> str:
     android_label = "{http://schemas.android.com/apk/res/android}label"
     for module in discover_android_modules(repo):
         module_dir = repo.joinpath(*module.strip(":").split(":"))
-        manifest = module_dir / "src" / "main" / "AndroidManifest.xml"
-        manifest_text = read_text(manifest)
-        if "android.intent.category.LAUNCHER" not in manifest_text:
+        manifest_text = ""
+        for src_set in ("main", "androidMain"):
+            manifest = module_dir / "src" / src_set / "AndroidManifest.xml"
+            txt = read_text(manifest)
+            if "android.intent.category.LAUNCHER" in txt:
+                manifest_text = txt
+                break
+        if not manifest_text:
             continue
         try:
             application = ET.fromstring(manifest_text).find("application")
             label = str(application.get(android_label) or "").strip() if application is not None else ""
             if label.startswith("@string/"):
                 key = label.removeprefix("@string/")
-                strings = module_dir / "src" / "main" / "res" / "values" / "strings.xml"
-                for entry in ET.parse(strings).getroot().iter("string"):
-                    if entry.get("name") == key and (entry.text or "").strip():
-                        return entry.text.strip()
+                for strings in (
+                    module_dir / "src" / "main" / "res" / "values" / "strings.xml",
+                    module_dir / "src" / "androidMain" / "res" / "values" / "strings.xml",
+                    module_dir / "src" / "commonMain" / "composeResources" / "values" / "strings.xml",
+                ):
+                    if not strings.is_file():
+                        continue
+                    for entry in ET.parse(strings).getroot().iter("string"):
+                        if entry.get("name") == key and (entry.text or "").strip():
+                            return entry.text.strip()
             elif label and not label.startswith("@"):
                 return label
         except (OSError, ET.ParseError):
@@ -128,7 +139,7 @@ def _inventory(repo: Path) -> dict[str, list[Path] | bool]:
     for root, dirs, files in os.walk(repo):
         dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
         root_path = Path(root)
-        if root_path.name.startswith("values") and root_path.parent.name == "res":
+        if root_path.name.startswith("values") and root_path.parent.name in {"res", "composeResources"}:
             locale_dirs.append(root_path)
         for name in files:
             path = root_path / name
@@ -154,8 +165,10 @@ def _inventory(repo: Path) -> dict[str, list[Path] | bool]:
 
 def discover_modules(repo: Path, paths: list[Path] | None = None) -> list[str]:
     modules: list[str] = []
+    catalog_ids = _catalog_plugin_ids(repo)
     for path in (paths if paths is not None else gradle_files(repo)):
-        text = read_text(path)
+        raw_text = read_text(path)
+        text = _resolve_catalog_aliases(raw_text, catalog_ids)
         if "applicationId" not in text and "androidApplication" not in text:
             if "com.android.application" not in text:
                 continue
@@ -215,9 +228,15 @@ def discover_android_modules(repo: Path, paths: list[Path] | None = None) -> lis
     catalog_ids = _catalog_plugin_ids(repo)
     for path in (paths if paths is not None else gradle_files(repo)):
         text = _resolve_catalog_aliases(read_text(path), catalog_ids)
-        if not re.search(r"com\.android\.(?:application|library|dynamic-feature)|androidTarget\s*\(", text):
+        if not re.search(
+            r"com\.android\.(?:application|library|dynamic-feature|kotlin\.multiplatform\.library)|androidTarget\s*\(|\bandroidLibrary\s*\{",
+            text,
+        ):
             continue
-        if re.search(r"com\.android\.(?:application|library|dynamic-feature).*apply\s+false", text):
+        if re.search(
+            r"com\.android\.(?:application|library|dynamic-feature|kotlin\.multiplatform\.library).*apply\s+false",
+            text,
+        ):
             continue
         rel = path.parent.relative_to(repo).as_posix()
         module = ":" + rel.replace("/", ":") if rel != "." else ":"
@@ -279,7 +298,7 @@ def discover_android_source_root(repo: Path, module: str) -> list[str]:
 # Gradle test source sets only (testDebug, androidTestFree, androidUnitTest, commonTest...),
 # so a product flavor whose name ends in "Test" keeps its launcher.
 _TEST_SOURCE_SET = re.compile(
-    r"^(?:(?:test|androidTest|testFixtures)(?:[A-Z]\w*)?|\w*(?:UnitTest|InstrumentedTest)|(?:common|jvm|android|ios|js|native)Test)$"
+    r"^(?:(?:test|androidTest|testFixtures|sharedTest|instrumentationTest)(?:[A-Z]\w*)?|\w*(?:UnitTest|InstrumentedTest|HostTest)|(?:common|jvm|android|ios|iosArm64|iosSimulatorArm64|iosX64|js|wasmJs|native)Test)$"
 )
 
 
@@ -395,6 +414,8 @@ def discover_apk_hint(repo: Path, modules: list[str] | None = None) -> str:
     modules = modules if modules is not None else discover_modules(repo)
     if any("composeApp" in m for m in modules):
         return "composeApp/build/outputs/apk/debug/*.apk"
+    if any("androidApp" in m for m in modules):
+        return "androidApp/build/outputs/apk/debug/*.apk"
     if any(m == ":app" or m.endswith(":app") for m in modules):
         return "app/build/outputs/apk/debug/app-debug.apk"
     return "**/outputs/apk/debug/*.apk"
@@ -402,7 +423,12 @@ def discover_apk_hint(repo: Path, modules: list[str] | None = None) -> str:
 
 def discover_locales(repo: Path, locale_dirs: list[Path] | None = None) -> list[str]:
     names: set[str] = set()
-    for path in (locale_dirs if locale_dirs is not None else _repo_glob(repo, "**/res/values*")):
+    candidates = (
+        locale_dirs
+        if locale_dirs is not None
+        else [*_repo_glob(repo, "**/res/values*"), *_repo_glob(repo, "**/composeResources/values*")]
+    )
+    for path in candidates:
         if skip_path(path, repo) or not path.is_dir():
             continue
         names.add(path.name)
@@ -422,7 +448,13 @@ def discover_di_framework(text: str) -> str:
 
 def discover_ui_framework(text: str, modules: list[str]) -> str:
     lower = text.casefold()
-    has_compose = "androidx.compose" in lower or "jetpack compose" in lower or any("composeApp" in m for m in modules)
+    has_compose = (
+        "androidx.compose" in lower
+        or "org.jetbrains.compose" in lower
+        or "compose multiplatform" in lower
+        or "jetpack compose" in lower
+        or any("composeApp" in m for m in modules)
+    )
     has_xml = (
         "xml views" in lower or "viewbinding" in lower or "databinding" in lower
         or "findviewbyid" in lower or "r.layout" in lower or "basefragment" in lower
@@ -470,9 +502,27 @@ def discover_clean_locales(raw_locales: list[str]) -> list[str]:
 
 
 def discover_project_structure(repo: Path, modules: list[str], paths: list[Path] | None = None) -> str:
-    if any("composeApp" in m or "shared" in m for m in modules) or (repo / "composeApp").is_dir():
+    scripts = str(Path(__file__).resolve().parents[1])
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from _modules import detect_kmp_build_script
+
+    gradle_list = paths if paths is not None else gradle_files(repo)
+    catalog_ids = _catalog_plugin_ids(repo)
+    for path in gradle_list:
+        raw_text = read_text(path)
+        resolved_text = _resolve_catalog_aliases(raw_text, catalog_ids)
+        if detect_kmp_build_script(raw_text, resolved_text)["has_kmp_plugin"]:
+            return "kmp"
+        if (path.parent / "src" / "commonMain").is_dir():
+            return "kmp"
+    for mod in modules:
+        mod_rel = str(mod or "").strip(":").replace(":", "/")
+        if mod_rel and (repo / mod_rel / "src" / "commonMain").is_dir():
+            return "kmp"
+    if (repo / "composeApp" / "src" / "commonMain").is_dir() or (repo / "shared" / "src" / "commonMain").is_dir():
         return "kmp"
-    if len(modules) > 1 or len(paths if paths is not None else gradle_files(repo)) > 2:
+    if len(modules) > 1 or len(gradle_list) > 2:
         return "multi_module"
     return "single_module"
 
@@ -529,7 +579,12 @@ def discover_stack(
     if has_layout_xml:
         bits.append("XML Views")
     active_modules = modules if modules is not None else discover_modules(repo, paths)
-    if any("composeApp" in m for m in active_modules):
+    if (
+        "org.jetbrains.compose" in text
+        or "compose.material3" in text
+        or "compose.runtime" in text
+        or any("composeApp" in m for m in active_modules)
+    ):
         bits.append("Compose Multiplatform")
     elif "androidx.compose" in text:
         bits.append("Jetpack Compose")

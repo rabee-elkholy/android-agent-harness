@@ -235,8 +235,9 @@ def discover_locale_pairs(res_dirs: list[Path] | None = None, repo: Path | None 
 
 
 def _is_test_path(path: Path) -> bool:
-    posix = path.as_posix().lower()
-    return "/src/test/" in posix or "/androidtest/" in posix
+    from _modules import is_kmp_or_android_test_path
+
+    return is_kmp_or_android_test_path(path.as_posix())
 
 
 def _cut_line_comment(line: str) -> str:

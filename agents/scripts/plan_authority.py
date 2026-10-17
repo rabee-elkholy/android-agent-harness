@@ -475,8 +475,9 @@ TEST_CLASS_SUFFIXES = ("Tests", "Test", "Spec")
 
 
 def is_test_path(path: str) -> bool:
-    lower = "/" + str(path or "").replace("\\", "/").strip("/").lower()
-    return "/test/" in lower or "/androidtest/" in lower or lower.endswith(("test.kt", "test.java", "tests.kt", "tests.java"))
+    from _modules import is_kmp_or_android_test_path
+
+    return is_kmp_or_android_test_path(str(path or ""))
 
 
 def planned_test_classes(expected_files: list[str] | set[str]) -> set[str]:
