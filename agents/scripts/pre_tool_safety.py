@@ -294,9 +294,15 @@ def _audit(
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         if len(lines) > AUDIT_MAX_RECORDS:
             fd, temp_name = tempfile.mkstemp(prefix=".audit-", suffix=".tmp", dir=str(path.parent))
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines[-AUDIT_MAX_RECORDS:]) + "\n")
-            os.replace(temp_name, path)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write("\n".join(lines[-AUDIT_MAX_RECORDS:]) + "\n")
+                os.replace(temp_name, path)
+            except Exception:
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    pass
     except Exception:
         pass
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.32] - 2026-10-18
+
+### Post-revision verification resilience and active-task update concurrency tolerance
+
+- Add fallback in `workflow.py` `prepare_verification` for tasks revised after prior review rounds: if the previous verification run was aborted or preflight-failed before generating `reviews.json`, fall back cleanly to first-round policy decisions rather than crashing on missing review artifacts.
+- Filter transient hook telemetry files (`audit_log.jsonl`, `hook-conversations.json`, `hook-state.json`, `.audit-*.tmp`) in `lifecycle.py` `_state_snapshot`, and ensure temporary audit files are unlinked on Windows file contention in `pre_tool_safety.py`, preventing concurrent IDE safety hook calls from falsely aborting active-task updates.
+
 ## [1.1.31] - 2026-10-18
 
 ### Disjoint local multi-task isolation, pre-implementation task consolidation, and later-round verification hardening

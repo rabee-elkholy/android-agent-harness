@@ -1124,10 +1124,16 @@ def require_update_idle(repo: Path, *, preserve_active_task: str | None = None, 
 def _state_snapshot(repo: Path) -> dict[str, str]:
     state = repo / ".agents/state"
     records = {}
+    ignored = {".write.lock", "audit_log.jsonl", "hook-conversations.json", "hook-state.json"}
     for path in state.rglob("*"):
         if path.is_symlink():
             raise ValidationError("active-task state contains a symlink; update refused")
-        if path.is_file() and path.name != ".write.lock":
+        if (
+            path.is_file()
+            and path.name not in ignored
+            and not path.name.startswith(".audit-")
+            and not path.name.endswith(".tmp")
+        ):
             records[path.relative_to(state).as_posix()] = sha256_file(path)
     return records
 

@@ -1740,6 +1740,15 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 "change_set_sha256": str(source.get("change_set") or ""),
             }
             previous_policy = read_json(Path(previous_current["policy"]))
+        if not (
+            store_for_rounds.run_dir(
+                str(previous_current["delivery_snapshot_sha256"]),
+                str(previous_current["run_id"]),
+            )
+            / "reviews.json"
+        ).is_file():
+            completed_rounds = 0
+    if completed_rounds:
         previous_reviews = EvidenceStore(state_root(repo)).read(
             str(previous_current["delivery_snapshot_sha256"]),
             str(previous_current["run_id"]),
@@ -1772,7 +1781,10 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             plan=plan,
             fix_delta=_fix_delta(repo, args.task_id, str(previous_current["run_id"]), manifest, plan),
         )
-        calls_used = int(plan.get("review_calls_used") or 0)
+    else:
+        policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
+    calls_used = int(plan.get("review_calls_used") or 0)
+    if completed_rounds or calls_used:
         from review_budget import effective_review_budget
         effective_budget = effective_review_budget(repo, plan, policy)
         if calls_used + int(policy.get("estimated_calls_this_round") or 0) > effective_budget:
@@ -1783,8 +1795,6 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 "budget": effective_budget,
             }
             policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
-    else:
-        policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
     if policy.get("reviewers"):
         from review_budget import review_round_cap_action
         round_block = review_round_cap_action(repo, plan, policy)

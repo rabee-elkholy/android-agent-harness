@@ -5781,6 +5781,16 @@ class ReviewOrchestrationTests(unittest.TestCase):
             allow_pass_retry=True,
         )
         self.assertEqual("PASS", store.read(manifest3["delivery_snapshot_sha256"], third["run_id"], "device_install")["status"])
+        # A post-revise run starts with no current-run.json (so its policy has no later_round_source) while
+        # plan.review_rounds > 0 is preserved; if that run stops in preflight before reviews.json is written,
+        # the next prepare-verification after resume must fall back to first-round policy instead of crashing.
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        (tdir / "current-run.json").unlink(missing_ok=True)
+        aborted_post_revise = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertNotIn("later_round_source", read_json(Path(aborted_post_revise["policy"])))
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        recovered_post_revise = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        self.assertNotIn("later_round_source", read_json(Path(recovered_post_revise["policy"])))
 
     def test_third_round_keeps_carries_from_the_first_and_the_verifier_accepts_it(self) -> None:
         """Real app: round 3 after a test-only fix sent back reviewers carried since round 1."""
