@@ -228,7 +228,7 @@ def github_release_exists(tag_name: str) -> bool:
 
 
 def wait_for_workflow(
-    workflow: str, sha: str, *, branch: str = "main", timeout: float = 1800, accept_pull_request: bool = False, accept_dispatch: bool = False,
+    workflow: str, sha: str, *, branch: str = "main", timeout: float = 1800, accept_pull_request: bool = False, accept_dispatch: bool = False, accept_workflow_run: bool = False,
 ) -> bool:
     """Require a successful completed run for the exact commit and ref.
 
@@ -243,7 +243,7 @@ def wait_for_workflow(
             "--json", "databaseId,headSha,status,conclusion,event,headBranch",
         ]
         if not accept_pull_request:
-            command[7:7] = ["--branch", branch] + ([] if accept_dispatch else ["--event", "push"])
+            command[7:7] = ["--branch", branch] + ([] if accept_dispatch or accept_workflow_run else ["--event", "push"])
         result = run_cmd(command, check=False)
         if result.returncode != 0:
             print(f"[FAIL] Cannot verify {workflow}: {result.stderr.strip()}")
@@ -255,6 +255,7 @@ def wait_for_workflow(
                 and (
                     (run.get("event", "push") == "push" and run.get("headBranch", branch) == branch)
                     or (accept_dispatch and run.get("event") == "workflow_dispatch" and run.get("headBranch") == branch)
+                    or (accept_workflow_run and run.get("event") == "workflow_run" and run.get("headBranch") == branch)
                     or (accept_pull_request and run.get("event") == "pull_request")
                 )
             ]
@@ -577,14 +578,10 @@ def main(argv: list[str] | None = None) -> int:
         if run_cmd(["git", "rev-parse", "HEAD"]).stdout.strip() != sha:
             print("[FAIL] HEAD changed during verification; release stopped.")
             return 1
-        run_cmd(["git", "tag", tag_name, sha])
-        run_cmd(["git", "push", "origin", f"refs/tags/{tag_name}"])
-        if not wait_for_workflow("release-check.yml", sha, branch=tag_name):
-            return 1
-        if github_release_status(tag_name) != "ABSENT":
-            print("[FAIL] Release exists or its absence could not be verified.")
-            return 1
-        if not publish_release(tag_name, title, notes):
+        # One publisher owns tags and releases. The workflow_run publisher is
+        # triggered by canonical main CI; running a second local publisher here
+        # would race tag creation and GitHub release publication.
+        if not wait_for_workflow("publish-release.yml", sha, accept_workflow_run=True):
             return 1
 
     print(f"\n==================================================")

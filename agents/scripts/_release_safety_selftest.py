@@ -230,9 +230,9 @@ class ReleaseSafetyTests(unittest.TestCase):
         with mock.patch.object(release, "run_cmd", side_effect=command):
             self.assertFalse(release.publish_release("v1.0.18", "Title", "Line one\n`literal` $text\n"))
 
-    def test_release_main_never_tags_failed_ci_or_publishes_failed_validation(self):
+    def test_release_main_delegates_to_one_exact_commit_publisher(self):
         from contextlib import ExitStack
-        for decisions, expect_tag in (([False], False), ([True, False], True), ([True, True], True)):
+        for decisions in ([False], [True, False], [True, True]):
             with self.subTest(decisions=decisions), ExitStack() as stack:
                 for name, value in (("tag_exists_locally", False), ("tag_remote_status", "ABSENT"),
                                     ("github_release_status", "ABSENT"), ("update_version_files", []),
@@ -243,11 +243,14 @@ class ReleaseSafetyTests(unittest.TestCase):
                 command = stack.enter_context(mock.patch.object(release, "run_cmd", return_value=subprocess.CompletedProcess([], 0, "a" * 40, "")))
                 gate = stack.enter_context(mock.patch.object(release, "wait_for_workflow", side_effect=decisions))
                 publish = stack.enter_context(mock.patch.object(release, "publish_release", return_value=False))
-                self.assertEqual(1, release.main(["1.0.18"]))
+                self.assertEqual(0 if decisions == [True, True] else 1, release.main(["1.0.18"]))
                 commands = [call.args[0] for call in command.call_args_list]
-                self.assertEqual(expect_tag, any(args[:2] == ["git", "tag"] for args in commands))
-                self.assertEqual(len(decisions) == 2 and decisions[-1], publish.called)
+                self.assertFalse(any(args[:2] == ["git", "tag"] for args in commands))
+                publish.assert_not_called()
                 self.assertEqual("ci.yml", gate.call_args_list[0].args[0])
+                if len(decisions) > 1:
+                    self.assertEqual("publish-release.yml", gate.call_args_list[1].args[0])
+                    self.assertTrue(gate.call_args_list[1].kwargs["accept_workflow_run"])
 
     def test_workflow_job_missing_or_incorrect_timeout_is_rejected(self):
         original = Path.read_text

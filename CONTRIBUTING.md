@@ -96,7 +96,9 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ## Publishing an approved release
 
-The maintainer may publish through the existing release CLI, or merge an explicit
+The release CLI prepares and pushes a release commit, then follows the single
+GitHub publisher; it never races that publisher to create tags or releases.
+The maintainer may use that CLI, or merge an explicit
 `release: v<agents/VERSION>` commit to `main`. The validated-release workflow acts
 only after successful canonical CI for that exact main commit. It validates
 metadata and the unchanged release tag across the existing OS matrix, creates
