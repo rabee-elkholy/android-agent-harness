@@ -103,6 +103,8 @@ The maintainer may use that CLI, or merge an explicit
 only after successful canonical CI for that exact main commit. It validates
 metadata and the unchanged release tag across the existing OS matrix, creates
 the GitHub release, and dispatches the existing trusted PyPI workflow. Ordinary
-main commits do not publish. Conflicting tags are never overwritten. An existing
+main commits do not publish. Conflicting tags are never overwritten.
+Superseded CI runs are cancelled so the current commit can run the complete
+validation matrix without waiting for obsolete source. An existing
 published release is not republished automatically; diagnose/retry a failed PyPI
 job through its existing workflow.
