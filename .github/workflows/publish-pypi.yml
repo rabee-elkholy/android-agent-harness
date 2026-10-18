@@ -1,11 +1,12 @@
 name: Publish to PyPI
 
 on:
+  workflow_dispatch:
   release:
     types: [published]
 
 concurrency:
-  group: pypi-${{ github.event.release.tag_name }}
+  group: pypi-${{ github.event.release.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -22,8 +23,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Verify release tag matches version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
-          TAG_VER="${{ github.event.release.tag_name }}"
+          TAG_VER="$RELEASE_TAG"
           PKG_VER=$(cat agents/VERSION | tr -d '[:space:]')
           if [ "${TAG_VER#v}" != "$PKG_VER" ]; then
             echo "::error::Release tag '$TAG_VER' does not match agents/VERSION '$PKG_VER'"
@@ -51,7 +54,7 @@ jobs:
       - name: Require successful CI and tag validation
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           python - <<'PY'
           import os, subprocess, sys
@@ -60,7 +63,7 @@ jobs:
           sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           if not wait_for_workflow("ci.yml", sha):
               raise SystemExit("CI must pass for the release commit before uploading")
-          if not wait_for_workflow("release-check.yml", sha, branch=os.environ["RELEASE_TAG"]):
+          if not wait_for_workflow("release-check.yml", sha, branch=os.environ["RELEASE_TAG"], accept_dispatch=True):
               raise SystemExit("Release validation must pass for the release tag before uploading")
           PY
 

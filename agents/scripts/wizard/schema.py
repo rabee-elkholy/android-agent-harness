@@ -39,6 +39,8 @@ ALLOWED_QUESTION_KEYS = {
     "i22",
     "review_call_budget",
     "review_call_budget_text",
+    "review_model_policy",
+    "review_model_policy_text",
     "b_platform",
     "b_arch",
     "b_di",
@@ -85,6 +87,7 @@ ALLOWED_NORMALIZED_KEYS = {
     "gemini_config",
     "assemble_now",
     "model_call_budget",
+    "review_model_policy",
     "unit_test_scope",
     "plan_scope",
     "zoho_mcp",
@@ -108,6 +111,12 @@ def validate_raw_answers(payload: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(payload, dict):
         return ["answers payload must be a JSON object"]
+
+    if "review_model_policy" in payload:
+        try:
+            setup_model_policy(payload)
+        except (ValueError, RuntimeError) as exc:
+            errors.append(str(exc))
 
     # Check unsupported schema
     if "schema" in payload and payload.get("schema") != SCHEMA:
@@ -206,6 +215,20 @@ def validate_raw_answers(payload: Any) -> list[str]:
             errors.append(f"value for key '{key}' exceeds maximum permitted length (2048 characters)")
 
     return errors
+
+
+def setup_model_policy(payload: dict) -> dict:
+    import json
+    from review_models import MODEL_CHOICES, default_policy, validate_policy
+    value = payload.get("review_model_policy", "inherit")
+    if isinstance(value, str) and value in MODEL_CHOICES:
+        return {**default_policy(), "default": value}
+    if value == "custom":
+        try:
+            value = json.loads(payload.get("review_model_policy_text") or "")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("review_model_policy_text must contain a complete policy JSON object") from exc
+    return validate_policy(value)
 
 
 validate_answers_json = validate_raw_answers

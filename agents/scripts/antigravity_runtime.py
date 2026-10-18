@@ -19,7 +19,7 @@ def candidate_runtime_roots() -> tuple[Path, ...]:
         try:
             resolved_override = Path(override.strip()).expanduser().resolve()
             roots.append(resolved_override)
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             pass
 
     home = Path.home().resolve()

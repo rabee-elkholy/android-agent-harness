@@ -452,7 +452,7 @@ def load_task_baseline(repo: Path, task_id: str | None = None) -> dict | None:
                     tid = data.get("task_id")
                     if tid:
                         break
-                except Exception:
+                except (OSError, ValueError, ValidationError):
                     pass
     if not tid:
         return None
@@ -543,7 +543,7 @@ def build_task_diff(
                 try:
                     pdata = json.loads(plan_file.read_text(encoding="utf-8"))
                     task_base_head = pdata.get("task_base_head") or pdata.get("repository", {}).get("head")
-                except Exception:
+                except (OSError, ValueError, ValidationError):
                     pass
 
     secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
@@ -939,7 +939,7 @@ def build_task_manifest(
                                 "content_identity": oid,
                                 "git_mode": git_mode,
                             })
-        except Exception:
+        except (OSError, ValueError, subprocess.SubprocessError, ValidationError):
             pass
 
     if baseline is None:

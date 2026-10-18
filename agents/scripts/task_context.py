@@ -16,6 +16,7 @@ from project_context import (  # noqa: E402
     source_identity,
     validate_advisory_knowledge,
 )
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 SCHEMA_VERSION = 1
 RESOLVER_VERSION = "1.0.0"
@@ -409,7 +410,7 @@ def _persist_task_context(
             "developer_instructions": base.get("developer_instructions", []),
         }
         atomic_write_json(cache_dir / f"{context_id}.json", cache_entry)
-    except Exception:
+    except (OSError, ValueError, ImportError, _ExpectedArtifactError):
         pass
 
 
@@ -524,7 +525,7 @@ def _resolve_task_context(
             )
             if publish:
                 save_discovery_receipt(root, receipt)
-        except Exception:
+        except (OSError, ValueError, ImportError, _ExpectedArtifactError):
             pass
 
         fallback_status = "DEVELOPER_INSTRUCTION_CONFLICT" if inst_conflict else "RESOLVED"
@@ -725,7 +726,7 @@ def _resolve_task_context(
         )
         if publish:
             save_discovery_receipt(root, receipt)
-    except Exception:
+    except (OSError, ValueError, ImportError, _ExpectedArtifactError):
         pass
 
     base.update({

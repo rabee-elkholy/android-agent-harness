@@ -957,7 +957,7 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
                     declared_modules.add(mod)
                 for match in re.finditer(r'''project\s*\(\s*["'](:[^"']+)["']\s*\)\s*\.projectDir\s*=\s*file\s*\(\s*["']([^"']+)["']\s*\)''', content):
                     module_dirs[match.group(1)] = match.group(2)
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
     if not found_modules:
@@ -1353,7 +1353,7 @@ class GraphEngine:
             self.cache_file.with_name(self.cache_file.name + ".fingerprint").write_text(
                 self.graph_fingerprint + "\n", encoding="utf-8",
             )
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     def _rebuild_symbol_index(self) -> None:

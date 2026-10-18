@@ -30,3 +30,5 @@ Rows below are written only when that tool is selected (`--tools all` writes eve
 | `.claude/agents/*.md` | Claude Code custom agents (from `.agents/subagents/*.json`) |
 
 Canonical rules remain `.agents/rules/harness-rules.md`.
+
+Optional global Gemini configuration examples live in `gemini-runtime/` alongside these canonical adapter templates. They are packaged with the runtime; installation does not overwrite a user-level Gemini configuration.

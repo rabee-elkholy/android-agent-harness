@@ -91,7 +91,7 @@ def resolve_assemble_task(repo: Path | str | None = None, flavor: str | None = N
                             if not attr.startswith("_"):
                                 prod_dict[attr] = getattr(mod, attr)
                         break
-                except Exception:
+                except (OSError, ValueError, ImportError):
                     pass
 
     kind = str(prod_dict.get("PROJECT_KIND") or ("" if repo else PROJECT_KIND) or "application").lower().strip()
@@ -118,7 +118,7 @@ def resolve_assemble_task(repo: Path | str | None = None, flavor: str | None = N
                 if not module and mods:
                     first = mods[0]
                     module = first if first.startswith(":") else f":{first}"
-            except Exception:
+            except (OSError, ValueError, ImportError):
                 pass
     if not module and not configured_task:
         raise ValidationError(

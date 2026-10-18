@@ -439,7 +439,7 @@ def approve_and_begin(
                     raise ValidationError(f"DISCOVERY_REFRESH_REQUIRED: {reason}")
         except ValidationError:
             raise
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
 
     nonce = uuid.uuid4().hex
@@ -458,7 +458,7 @@ def approve_and_begin(
         pres = load_plan_presentation(plan_file)
         if pres:
             plan["approval"]["presentation_receipt"] = pres
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
     plan["execution_nonce"] = nonce
     plan["status"] = "IMPLEMENTING"

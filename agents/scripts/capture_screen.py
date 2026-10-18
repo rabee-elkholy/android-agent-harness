@@ -45,7 +45,7 @@ def capture_screenshot(device_id: str, name: str | None = None) -> Path | None:
             return out_path
     except subprocess.TimeoutExpired:
         sys.stderr.write("[WARN] direct screenshot capture timed out after 30s; attempting fallback\n")
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
 
     remote_tmp = f"/data/local/tmp/harness_cap_{timestamp}.png"
@@ -74,7 +74,7 @@ def capture_screenshot(device_id: str, name: str | None = None) -> Path | None:
                 sys.stderr.write("[WARN] screenshot pull timed out after 30s\n")
     except subprocess.TimeoutExpired:
         sys.stderr.write("[WARN] fallback screenshot capture timed out after 30s\n")
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     finally:
         try:
@@ -86,7 +86,7 @@ def capture_screenshot(device_id: str, name: str | None = None) -> Path | None:
             )
         except subprocess.TimeoutExpired:
             sys.stderr.write("[WARN] remote screenshot cleanup timed out after 10s\n")
-        except Exception:
+        except (OSError, ValueError, subprocess.SubprocessError):
             pass
 
     if fallback_succeeded:
@@ -95,7 +95,7 @@ def capture_screenshot(device_id: str, name: str | None = None) -> Path | None:
     if out_path.is_file():
         try:
             out_path.unlink()
-        except Exception:
+        except (OSError, ValueError):
             pass
     return None
 

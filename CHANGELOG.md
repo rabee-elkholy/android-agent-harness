@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.1.34] - 2026-10-18
+
+### Developer-owned reviewer model choices
+
+- Preserve inheritance by default; support documented Claude Code native aliases through setup, project defaults, per-role choices and complete task overrides. Unsupported native choices block without silent fallback.
+- Freeze resolved settings in phase/final review packages and execution profiles. Require matching unchanged native Claude transcript model metadata for explicit selections; record requested and observed models separately without upgrading independent execution proof.
+- Add shared `review models show/set` commands with developer provenance, strict schema validation and host capability reporting. Amend the inheritance invariant in ADR-015; Antigravity remains inherit-only under its current native schema.
+- Publish explicit `release: v<version>` main commits only after successful exact-commit CI. The release workflow validates the tag across the existing OS matrix before creating the GitHub release and dispatching the existing trusted PyPI workflow; it never overwrites a conflicting tag.
+
+### Platform safety and public command consistency
+
+- Probe Zoho and evidence-lock owners through one read-only process helper. Windows uses process-query handles, invalid PIDs cannot signal process groups, and uncertain owners retain their locks.
+- Configure repaired hooks with the same interpreter rules as installation, preserve quoted executable paths, and compare configured hook bytes for idempotent repair and correct ownership hashes. Installed-hook diagnostics check the actual configured command.
+- Route `review dispatch-batch` through the orchestrator and expose variant-aware `compile` through the global CLI. Both launchers now share the review dispatch contract.
+
+### Android checks and maintainability
+
+- Batch Kotlin changed-line discovery with NUL-delimited filenames and bounded Git calls. Preserve cached, untracked, unborn-HEAD, rename, deletion-only, Unicode, and line-ending behavior; failed or ambiguous Git output selects full-file linting.
+- Recognize Room numeric auto-migration arguments in either named order and Kotlin/Java embedded types. Ignore comments and literals when extracting these declarations.
+- Keep `workflow.py` as a compatible facade while separating planning, architecture resolution, phase routing, and verification stages. Share state paths, checksum validation, checkout containment, and process probes; separate project architecture-family extraction.
+- Narrow silent broad exception handlers to expected I/O, parsing, artifact, and optional-import failures. Reject malformed reviewer transcripts with a validation error.
+
+### Documentation and packaging
+
+- Replace absolute README guarantees with the implemented host, approval, CI, and verification boundaries. Reference recorded benchmark failures and pending scenarios without presenting them as current-release certification.
+- Renumber optional verification to ADR-014 and move optional Gemini examples into the packaged canonical adapter tree. Add portability regressions to both full and quick test registries.
+
 ## [1.1.33] - 2026-10-18
 
 ### Planning recovery, command efficiency, and complete preflight diagnostics

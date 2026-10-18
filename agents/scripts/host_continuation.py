@@ -312,7 +312,7 @@ def continue_task(args):
             if restart_phase:
                 from phase_review import build_phase_package, invalidate_phase_review, phase_ledger_file
                 invalidate_phase_review(repo, task_id, phase["id"], lock=False)
-                _, new = build_phase_package(repo, task_id, phase["id"], host=host)
+                _, new = build_phase_package(repo, task_id, phase["id"], host=host, model_source_run=phase["run"])
                 new["host_restart_count"] = int(phase["run"].get("host_restart_count") or 0) + 1
                 new["supersedes_review_run"] = phase["run"]["phase_review_run_id"]
                 atomic_write_json(directory / "phases" / phase["id"] / "review/current-phase-run.json", new)
@@ -357,6 +357,8 @@ def _restart_final(repo, task_id, plan, final, host, session_id):
     from review_orchestrator import init_ledger, save_ledger
     from review_budget import effective_review_budget
     directory, old = _directory(repo, task_id), final["run"]
+    from review_models import transfer_models
+    frozen_review_models = transfer_models(old, host, list(final["policy"].get("reviewers") or []))
     if int(old.get("host_restart_count") or 0) >= 3:
         raise ValidationError("host review restart limit reached")
     _, ledger = _interrupted_final_dispatches(directory, old)
@@ -371,6 +373,7 @@ def _restart_final(repo, task_id, plan, final, host, session_id):
     atomic_write_json(directory / ("manifest-" + new_run + ".json"), final["manifest"])
     atomic_write_json(directory / ("policy-" + new_run + ".json"), final["policy"])
     current = {**old, "run_id": new_run, "review_host": host,
+               "review_models": frozen_review_models,
                "review_protocol_version": 2 if has_trusted_review_source(host) else 1,
                "manifest": str(directory / ("manifest-" + new_run + ".json")),
                "policy": str(directory / ("policy-" + new_run + ".json")), "created_at": utc_now(),

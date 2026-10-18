@@ -455,6 +455,8 @@ def validate_completed_phase_review_proof(
             raise ValidationError(f"phase review proof result is missing for '{reviewer}'")
         result = read_json(result_file)
         parsed = result.get("result") if isinstance(result, dict) else None
+        from review_models import validate_model_evidence
+        validate_model_evidence(run, reviewer, result.get("model_selection") if isinstance(result, dict) else None)
         if not isinstance(parsed, dict) or any(result.get(key) != value for key, value in {
             "schema_version": 2,
             "task_id": task_id,
@@ -646,7 +648,7 @@ def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: d
     return True, ""
 
 
-def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | None = None) -> tuple[Path, dict[str, Any]]:
+def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | None = None, *, model_source_run: dict | None = None) -> tuple[Path, dict[str, Any]]:
     tdir = task_dir(repo, task_id)
     pdir = phase_dir(tdir, phase_id)
     rdir = phase_review_dir(tdir, phase_id)
@@ -696,7 +698,11 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | Non
             file_hashes[p] = sha256_file(target)
 
     run_host = resolve_review_host(repo, host)
+    from review_models import freeze_models, transfer_models
+    frozen_review_models = (transfer_models(model_source_run, run_host, selected_reviewers) if model_source_run is not None
+                            else freeze_models(repo, task_id, run_host, selected_reviewers))
     metadata = {
+        "review_models": frozen_review_models,
         "schema_version": 2,
         "task_id": task_id,
         "phase_id": phase_id,
@@ -915,6 +921,7 @@ def _record_phase_dispatch_batch_locked(
                 "phase_delta_sha256": run_meta.get("phase_delta_sha256", ""),
                 "package_sha256": run_meta.get("package_sha256", ""),
                 "checkpoint_sha256": run_meta.get("checkpoint_sha256", ""),
+                "review_models_sha256": (run_meta.get("review_models") or {}).get("sha256"),
                 "host": host,
                 "dispatch_nonce": str(uuid.uuid4())[:8],
                 "dispatched_at": utc_now(),
@@ -1144,8 +1151,11 @@ def _complete_phase_review_locked(
         }
 
     # Save result JSON
+    from review_models import model_evidence
+    selected_model_evidence = model_evidence(run_meta, reviewer, response_source)
     result_sha = canonical_sha256(parsed)
     res_payload = {
+        "model_selection": selected_model_evidence,
         "schema_version": 2,
         "task_id": task_id,
         "phase_id": phase_id,
@@ -1220,6 +1230,8 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
         except Exception as exc:
             raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: missing or unreadable result for '{reviewer}': {exc}") from exc
         parsed = result.get("result") if isinstance(result, dict) else None
+        from review_models import validate_model_evidence
+        validate_model_evidence(run_meta, reviewer, result.get("model_selection") if isinstance(result, dict) else None)
         if (
             not isinstance(parsed, dict)
             or result.get("task_id") != task_id
@@ -1309,7 +1321,7 @@ def format_phase_provenance_section(repo: Path, task_id: str) -> str:
         if ckpt_f.is_file():
             try:
                 ckpt_sha = str(read_json(ckpt_f).get("checkpoint_sha256") or "")[:12]
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
 
         if res_f.is_file() and run_f.is_file():
@@ -1323,7 +1335,7 @@ def format_phase_provenance_section(repo: Path, task_id: str) -> str:
                 finding_ids = ", ".join(str(f.get("id")) for f in (res_data.get("findings") or [])) or "NONE"
                 resolved = "YES" if verdict == "PASS" else "NO"
                 rows.append(f"| `{pid}` | `{delta_sha}` | `{pkg_sha}` | {revs} | {verdict} | {finding_ids} | {resolved} | `{ckpt_sha}` |")
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
         elif ckpt_f.is_file():
             rows.append(f"| `{pid}` | N/A | N/A | DETERMINISTIC_ONLY | PASS | NONE | YES | `{ckpt_sha}` |")

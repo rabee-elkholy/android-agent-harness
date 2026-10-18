@@ -587,7 +587,7 @@ class TestDefaultsAndTerminology(unittest.TestCase):
     def test_DOCS_001_antigravity_instructions(self):
         gemini_md = (REPO_ROOT / "GEMINI.md").read_text(encoding="utf-8")
         gemini_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
-        global_tpl = (REPO_ROOT / "templates" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
+        global_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
 
         for name, content in [("GEMINI.md", gemini_md), ("GEMINI.md.template", gemini_tpl), ("android-harness-global.md.template", global_tpl)]:
             self.assertIn("INHERIT_PARENT_BY_OMISSION", content, f"{name} missing INHERIT_PARENT_BY_OMISSION")

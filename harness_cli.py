@@ -50,6 +50,14 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+# Load only support code bundled beside this CLI, before selecting an external
+# kit. Avoid the generic "agents" namespace used by unrelated Python packages.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
+from harness_shared.integrity import KitIntegrityError, verify_kit
+from harness_shared.commands import review_command
+from harness_shared.paths import assert_kit_outside_repo as _shared_assert_kit_outside_repo
+from harness_shared.paths import is_within as _is_within, find_nested_kit_checkouts as _find_nested_kit_checkouts
+
 KIT_REPO_URL = "https://github.com/rabee-elkholy/android-agent-harness.git"
 RELEASES_API_URL = "https://api.github.com/repos/rabee-elkholy/android-agent-harness/releases/latest"
 KIT_DIR = Path.home() / ".android-harness" / "kit"
@@ -110,72 +118,11 @@ def _latest_release_tag(timeout: float = 3.0) -> str | None:
 
 
 def _verify_kit_checksums(kit: Path) -> None:
-    """Pre-execution release checksum verifier.
-
-    Verifies every file in agents/release_checksums.json using standard library Python
-    before importing or executing any kit scripts. Rejects symlinks and path traversal.
-    """
-    checksum_file = kit / "agents" / "release_checksums.json"
-    if not checksum_file.is_file() or checksum_file.is_symlink():
-        raise SystemExit(f"[ERROR] Kit release checksums manifest missing or symlink: {checksum_file}")
+    """Verify the selected kit with the CLI's bundled, dependency-free verifier."""
     try:
-        manifest = json.loads(checksum_file.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise SystemExit(f"[ERROR] Kit release checksums manifest corrupt: {exc}")
-    if not isinstance(manifest, dict):
-        raise SystemExit("[ERROR] Kit release checksums manifest has an unsupported schema")
-    files = manifest.get("files")
-    if not isinstance(files, dict) or not files:
-        raise SystemExit("[ERROR] Kit release checksums manifest files inventory is empty or malformed")
-    core_files = {"agents/VERSION", "agents/scripts/lifecycle.py"}
-    missing_core = core_files - set(files)
-    if missing_core:
-        raise SystemExit(f"[ERROR] Kit release checksums manifest missing core files: {', '.join(sorted(missing_core))}")
-
-    agents_dir = kit / "agents"
-    if not agents_dir.is_dir() or agents_dir.is_symlink():
-        raise SystemExit(f"[ERROR] Kit agents directory missing or symlink: {agents_dir}")
-    actual_files: set[str] = set()
-    ignored_parts = {"state", "cache", "__pycache__"}
-    for p in sorted(agents_dir.rglob("*")):
-        if p.is_symlink():
-            rel_sym = p.relative_to(kit).as_posix()
-            raise SystemExit(f"[ERROR] Symlink rejected in kit payload: {rel_sym}")
-        if not p.is_file():
-            continue
-        rel_from_agents = p.relative_to(agents_dir)
-        if rel_from_agents.as_posix() == "release_checksums.json":
-            continue
-        if ignored_parts.intersection(rel_from_agents.parts):
-            continue
-        if p.suffix.lower() in {".pyc", ".pyo"}:
-            continue
-        actual_files.add(p.relative_to(kit).as_posix())
-
-    manifest_keys = set(files.keys())
-    if actual_files != manifest_keys:
-        missing = sorted(manifest_keys - actual_files)
-        unexpected = sorted(actual_files - manifest_keys)
-        details = []
-        if missing:
-            details.append(f"missing ({len(missing)}): {', '.join(missing[:10])}")
-        if unexpected:
-            details.append(f"unexpected ({len(unexpected)}): {', '.join(unexpected[:10])}")
-        raise SystemExit(f"[ERROR] Kit release checksums inventory mismatch: {'; '.join(details)}")
-
-    for rel, expected in files.items():
-        rel_path = Path(rel)
-        if rel_path.is_absolute() or ".." in rel_path.parts:
-            raise SystemExit(f"[ERROR] Suspicious path in release checksums: {rel}")
-        target = kit / rel_path
-        if not target.is_file() or target.is_symlink():
-            raise SystemExit(f"[ERROR] Missing or symlinked kit file: {rel}")
-        h = hashlib.sha256()
-        with open(target, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        if h.hexdigest() != expected:
-            raise SystemExit(f"[ERROR] Kit release checksum mismatch for {rel}")
+        verify_kit(kit)
+    except KitIntegrityError as exc:
+        raise SystemExit(f"[ERROR] {exc}") from exc
 
 
 def _remove_tree(path: Path) -> bool:
@@ -329,41 +276,20 @@ EXIT_INFRA_ERROR = 3
 EXIT_INCOMPLETE_OR_STALE = 2
 
 
-def _is_within(child: Path, parent: Path) -> bool:
-    try:
-        child.resolve().relative_to(parent.resolve())
-        return True
-    except ValueError:
-        return False
+
 
 
 def _assert_kit_outside_repo(repo: Path, kit: Path) -> None:
-    repo_r = repo.resolve()
-    kit_r = kit.resolve()
-    if kit_r == repo_r or _is_within(kit_r, repo_r):
+    try:
+        _shared_assert_kit_outside_repo(repo, kit)
+    except ValueError as exc:
         raise SystemExit(
             "[ERROR] Harness kit checkout must live outside the Android project. "
-            f"Target app: {repo_r}. "
-            f"Kit: {kit_r}. "
-            f"Use {KIT_DIR}."
-        )
+            f"Target app: {repo.resolve()}. Kit: {kit.resolve()}. Use {KIT_DIR}."
+        ) from exc
 
 
-def _find_nested_kit_checkouts(repo: Path) -> list[Path]:
-    found: list[Path] = []
-    try:
-        for child in repo.iterdir():
-            if (
-                child.is_dir()
-                and (child / ".git").exists()
-                and (child / "harness_cli.py").is_file()
-                and (child / "agents" / "VERSION").is_file()
-                and (child / "agents" / "scripts" / "lifecycle.py").is_file()
-            ):
-                found.append(child.resolve())
-    except (OSError, PermissionError):
-        pass
-    return sorted(found)
+
 
 
 def resolve_kit(explicit: str | None) -> Path:
@@ -728,7 +654,7 @@ def cmd_update(args: argparse.Namespace) -> int:
                         "Clean setup required. Remove/reset .harness-setup and rerun installer."
                     )
                     return 1
-            except Exception:
+            except (OSError, ValueError):
                 pass
         answers_arg = getattr(args, "answers_json", None)
         temp_answers = Path(answers_arg).absolute() if answers_arg else None
@@ -1076,23 +1002,29 @@ def cmd_assemble(args: argparse.Namespace) -> int:
     return _dispatch_pipeline_script(args, "run_gradle_task.py", forward)
 
 
-def cmd_review(args: argparse.Namespace) -> int:
-    """Record reviewer verdicts, complete reviewer execution, or build/profile review packages."""
-    forward = list(args.review_args)
-    if forward and forward[0] == "--":
+def cmd_compile(args: argparse.Namespace) -> int:
+    """Run the same variant-aware diagnostic compilation as the local launcher."""
+    forward = list(args.gradle_args)
+    if forward[:1] == ["--"]:
         forward = forward[1:]
     if not forward:
-        return _dispatch_pipeline_script(args, "record_review.py", forward)
-    sub = forward[0]
-    if sub == "package":
-        return _dispatch_pipeline_script(args, "review_package.py", forward[1:])
-    if sub == "profile":
-        return _dispatch_pipeline_script(args, "review_execution.py", forward[1:])
-    if sub in ("complete", "finalize", "dispatch", "status"):
-        return _dispatch_pipeline_script(args, "review_orchestrator.py", forward)
-    if sub == "ingest":
-        return _dispatch_pipeline_script(args, "record_review.py", forward[1:])
-    return _dispatch_pipeline_script(args, "record_review.py", forward)
+        kit = ensure_kit(getattr(args, "kit", None))
+        repo = find_repo(args.repo) if getattr(args, "repo", None) else Path.cwd().resolve()
+        sys.path.insert(0, str(_script_root(kit)))
+        from _variants import resolve_compile_task
+        task, note = resolve_compile_task(repo)
+        if not task:
+            print(f"[WARN] {note}", file=sys.stderr)
+            return 3
+        print(f"[*] {note}")
+        forward = [task]
+    return _dispatch_pipeline_script(args, "run_gradle_task.py", forward)
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    """Dispatch review commands using the same contract as the installed launcher."""
+    script, forward = review_command(list(args.review_args))
+    return _dispatch_pipeline_script(args, script, forward)
 
 
 def cmd_commands(args: argparse.Namespace) -> int:
@@ -1131,6 +1063,8 @@ def cmd_phase_review(args: argparse.Namespace) -> int:
 
 
 FULL_SELFTEST_SUITES = (
+    "_review_models_selftest.py",
+    "_portability_selftest.py",
     "_host_continuation_selftest.py",
     "_vnext_selftest.py",
     "_hook_selftest.py",
@@ -1161,6 +1095,8 @@ FULL_SELFTEST_SUITES = (
 )
 
 QUICK_SELFTEST_SUITES = (
+    "_review_models_selftest.py",
+    "_portability_selftest.py",
     "_host_continuation_selftest.py",
     "_workflow_insight_selftest.py",
     "_hook_selftest.py",
@@ -1562,7 +1498,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             from mutation_guard import active_plan
             plan = active_plan(repo)
             task_id = str(plan.get("task_id") or "")
-        except Exception:
+        except (OSError, ValueError, ImportError):
             pass
     if not task_id:
         print("[FAIL] No active task found in repository; pass --task-id <id>", file=sys.stderr)
@@ -1657,6 +1593,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.add_argument("gradle_args", nargs=argparse.REMAINDER, help="Gradle task arguments (resolved dynamically from project configuration if omitted)")
     sp.set_defaults(func=cmd_assemble)
+
+    sp = sub.add_parser("compile", help="Run variant-aware diagnostic compilation.")
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("gradle_args", nargs=argparse.REMAINDER)
+    sp.set_defaults(func=cmd_compile)
 
     sp = sub.add_parser("review", help="Record reviewer results via record_review.py.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
@@ -1814,7 +1756,7 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             try:
                 stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-            except Exception:
+            except (OSError, ValueError):
                 pass
     parser = build_parser()
     args = parser.parse_args(argv)

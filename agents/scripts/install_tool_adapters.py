@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _repo_files import ensure_local_git_privacy  # noqa: E402
 from policy_vocab import ANTIGRAVITY_REVIEWER_TOOLS, CORE_ROUTED_REVIEWERS  # noqa: E402
@@ -641,6 +642,8 @@ _PM_LANG_NOTES = {
 }
 
 
+from harness_shared.commands import configured_python_command
+
 def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
     unit_test = (args.unit_test or "").strip() or _derive_unit_test(args.assemble)
     provider = str(getattr(args, "pm_provider", "zoho_sprints") or "zoho_sprints").strip()
@@ -654,7 +657,7 @@ def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
     pm_language_note = "No tracker integration is configured." if provider == "none" else _PM_LANG_NOTES[tracker_lang]
     return {
         "PRODUCT": args.product.strip(),
-        "PY": args.py.strip(),
+        "PY": configured_python_command(args.py),
         "ASSEMBLE": args.assemble.strip(),
         "UNIT_TEST": unit_test,
         "DEVICE_POLICY": (args.device_text or DEVICE_TEXT[args.device_policy]).strip(),
@@ -810,39 +813,13 @@ def ensure_copilot_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
 
 
 def sync_hooks_json(repo: Path, py: str, *, dry_run: bool) -> list[str]:
-    """Rewrite .agents/hooks.json hook commands to use the configured python (I.2)."""
+    """Apply the configured interpreter to managed hook templates."""
+    from harness_shared.commands import rewrite_python_hooks
     hooks_path = repo / ".agents" / "hooks.json"
     if not hooks_path.is_file():
         return []
-    try:
-        data = json.loads(hooks_path.read_text(encoding="utf-8"))
-    except Exception:
-        return ["WARNING: .agents/hooks.json is not valid JSON; python substitution skipped"]
-
-    changed = False
-
-    def walk(obj) -> None:
-        nonlocal changed
-        if isinstance(obj, dict):
-            for key, value in list(obj.items()):
-                if key == "command" and isinstance(value, str):
-                    new = re.sub(
-                        r"^python(?:\d+)?(?=\.exe\b|\s)",
-                        lambda _match: py,
-                        value,
-                        count=1,
-                    )
-                    if new != value:
-                        obj[key] = new
-                        changed = True
-                else:
-                    walk(value)
-        elif isinstance(obj, list):
-            for item in obj:
-                walk(item)
-
-    walk(data)
-    if not changed:
+    data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    if not rewrite_python_hooks(data, configured_python_command(py)):
         return []
     if dry_run:
         return ["dry-run rewrite .agents/hooks.json commands with the configured python"]

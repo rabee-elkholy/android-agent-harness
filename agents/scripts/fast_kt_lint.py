@@ -157,66 +157,79 @@ def is_stateful_container_only(text: str) -> bool:
 
 
 def get_modified_lines_map(repo: Path, files: list[Path], cached: bool = False) -> dict[Path, set[int] | None]:
-    """Return map of file -> set of 1-indexed added/modified line numbers from git diff HEAD.
-    
-    If a file is untracked or git diff fails (e.g. no git HEAD), returns None for that file
-    (indicating that all lines in that file should be linted).
+    """Select changed lines with one batched diff and one NUL-safe inventory.
+
+    None means lint every line. Failed/ambiguous Git output never suppresses lint.
+    Numstat supplies literal filenames in patch order, including tabs/newlines,
+    so quoted patch headers need no platform-dependent filename decoding.
     """
-    res: dict[Path, set[int] | None] = {}
-    hunk_re = re.compile(r"^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@")
-
-    for f in files:
+    result: dict[Path, set[int] | None] = {path: None for path in files}
+    if not files:
+        return result
+    root = repo.resolve()
+    by_relative: dict[str, list[Path]] = {}
+    for path in files:
         try:
-            rel = f.relative_to(repo).as_posix()
+            absolute = path if path.is_absolute() else root / path
+            relative = absolute.resolve().relative_to(root).as_posix()
         except ValueError:
-            rel = str(f)
+            continue
+        by_relative.setdefault(relative, []).append(path)
+    if not by_relative:
+        return result
 
-        cmd = ["git", "diff", "-U0", "--ignore-cr-at-eol"]
-        if cached:
-            cmd.append("--cached")
-        cmd.extend(["HEAD", "--", rel])
+    base = ["git", "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+            "--no-color", "--no-renames", "--numstat", "-z", "--patch", "-U0", "--ignore-cr-at-eol"]
+    if cached:
+        base.append("--cached")
+    # Avoid Windows command-line limits on very large tasks. Extra diff paths
+    # are filtered in memory; the process count remains independent of file count.
+    paths = list(by_relative)
+    if sum(len(path.encode("utf-16-le")) // 2 + 3 for path in paths) > 20000:
+        paths = []
+    def run(arguments: list[str]):
+        return subprocess.run(arguments, cwd=repo, capture_output=True, check=False)
 
-        proc = subprocess.run(
-            cmd,
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        if proc.returncode != 0 or not proc.stdout.strip():
-            if cached:
-                # Fallback for fresh repos before initial commit
-                proc = subprocess.run(
-                    ["git", "diff", "-U0", "--ignore-cr-at-eol", "--cached", "--", rel],
-                    cwd=repo,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
-                )
-            if proc.returncode == 0 and not proc.stdout.strip():
-                tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel], cwd=repo, capture_output=True, check=False)
-                if tracked.returncode == 0:
-                    res[f] = set()
-                    continue
-            if proc.returncode != 0 or not proc.stdout.strip():
-                # Untracked file, brand new file, or git diff returned nothing
-                res[f] = None
-                continue
-
-        modified_lines: set[int] = set()
-        for line in proc.stdout.splitlines():
-            m = hunk_re.match(line)
-            if m:
-                start = int(m.group(1))
-                count = int(m.group(2)) if m.group(2) is not None else 1
-                for l_num in range(start, start + count):
-                    modified_lines.add(l_num)
-        res[f] = modified_lines
-    return res
+    try:
+        proc = run([*base, "HEAD", "--", *paths])
+        if proc.returncode != 0 and cached:
+            proc = run([*base, "--", *paths])
+        if proc.returncode != 0:
+            return result
+        inventory = run(["git", "ls-files", "--cached", "-z"])
+    except OSError:
+        return result
+    if inventory.returncode != 0:
+        return result
+    tracked = {os.fsdecode(name) for name in inventory.stdout.split(b"\0") if name}
+    for relative, originals in by_relative.items():
+        if relative in tracked:
+            for path in originals:
+                result[path] = set()
+    if not proc.stdout.strip(b"\0"):
+        return result
+    stats, separator, patch = proc.stdout.partition(b"\0\0")
+    entries = [entry.split(b"\t", 2) for entry in stats.split(b"\0") if entry]
+    sections = re.split(rb"(?m)^diff --git ", patch)[1:]
+    if not separator or len(entries) != len(sections) or any(len(entry) != 3 for entry in entries):
+        return {path: None for path in files}
+    hunk_re = re.compile(rb"(?m)^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@")
+    for entry, section in zip(entries, sections):
+        relative = os.fsdecode(entry[2])
+        if relative not in by_relative:
+            continue
+        if entry[0] == b"-" or entry[1] == b"-":
+            for path in by_relative[relative]:
+                result[path] = None
+            continue
+        modified: set[int] = set()
+        for match in hunk_re.finditer(section):
+            start = int(match.group(1))
+            count = int(match.group(2)) if match.group(2) is not None else 1
+            modified.update(range(start, start + count))
+        for path in by_relative[relative]:
+            result[path] = set(modified)
+    return result
 
 
 def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[dict]:

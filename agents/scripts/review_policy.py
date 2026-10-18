@@ -708,7 +708,7 @@ def main() -> int:
             try:
                 active_data = json.loads(active_p.read_text(encoding="utf-8"))
                 task_id = active_data.get("task_id")
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
     task_kind = "FEATURE"
     plan = None
@@ -718,7 +718,7 @@ def main() -> int:
             try:
                 plan = json.loads(plan_p.read_text(encoding="utf-8"))
                 task_kind = str(plan.get("task_kind") or "FEATURE")
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
     skills_root = (repo / ".agents" / "skills") if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1] / "skills"
     try:

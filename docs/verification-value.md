@@ -141,3 +141,5 @@ The configured default task and explicit `test --task` override remain authorita
 ## Validation limits
 
 Kit validation uses deterministic fixtures and fake transports only. Real Android/device certification requires a separate approved client checkout. Local suite success does not imply cross-platform CI or device certification, and no release is published by these features.
+
+Design decision: [ADR-014](adr/014-optional-verification-value.md).

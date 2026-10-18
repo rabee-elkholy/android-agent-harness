@@ -4,7 +4,7 @@
 
 Android Agent Harness is an approval-first engineering layer for AI coding tools working on real Android codebases.
 
-It gives agents bounded project context, preserves local architecture, verifies what actually changed, runs proportional Android checks, and binds delivery claims to real test/build/device evidence.
+It gives agents bounded project context, records the approved architecture and scope, checks the resulting changes, and requires the test, build, review, or device evidence selected by policy.
 
 The model focuses on engineering. The harness handles workflow state, proof, and safety boundaries.
 
@@ -27,21 +27,21 @@ Prompt rules help guide behavior. Android Agent Harness moves selected guarantee
 
 ---
 
-## What it actually stops
+## Failure modes it checks
 
-Every row below is a failure mode we have watched AI agents hit on a real Android codebase, and the concrete mechanism that now stops it.
+The mechanisms below check these failure modes within the configured host and verification boundaries. Native interception depends on the host; downstream verification applies to commands run through the harness.
 
 | Without the harness | With the harness |
 |---|---|
 | The agent reports "tests pass" from a run that predates its last edit. | Test, review, assemble and device evidence is bound to a frozen delivery snapshot. Any later edit makes it stale, and delivery fails closed. |
-| A bug is "fixed" without ever being reproduced. | Bug tasks require a captured RED: a new test that fails before the fix, recorded as evidence. Tests that were already failing are never accepted as the reproduction. |
-| Tests that were already broken block the task or get blamed on the change. | A test baseline is captured at install. Only new failures block; known debt is reported separately. |
-| The agent edits files the developer never agreed to. | The plan pins expected files and surfaces. On Antigravity, native hooks deny out-of-scope writes before they happen; on every host, drift is re-checked at verification. |
+| A bug is "fixed" without ever being reproduced. | Applicable BUG tasks require a new failing-test reproduction before the fix. Presentational changes and explicitly supported manual, device, or log reproductions follow the reproduction policy; a pre-existing failure alone does not establish RED. |
+| Tests that were already broken block the task or get blamed on the change. | Installation and task-start captures can identify pre-existing failures. Recognized unrelated debt is reported separately; unmatched failures and suspected flaky results still block verification. |
+| The agent edits files the developer never agreed to. | The plan pins expected files and surfaces. On Antigravity, installed native hooks can deny supported out-of-scope tool writes. Verification checks scope drift on every supported host. |
 | The agent approves its own plan, cancels its own task, or commits. | Approval must cite the developer's words in chat. Cancel, commit, merge, rebase and push stay with the developer. |
 | A risky change gets the same light review as a string fix. | A 6-tier risk model routes reviewers and gates from the final diff: none for trivial changes, specialists for Room, security or device surfaces. |
 | A large change is reviewed only once, at the end. | Multi-phase tasks checkpoint each phase; substantial or risky phases get a scoped delta review before the next begins. |
 | The developer asks for a change after verification and the workflow wedges. | `task resume --reopen` sends a verified task back to implementation under the same approval, and it is re-verified. |
-| A new chat forgets the team's conventions. | Project notes and scoped developer instructions live in the repo and are pinned into every matching plan. |
+| A new chat forgets the team's conventions. | Project notes and scoped developer instructions live in the repo. Applicable instructions are selected during planning; this does not provide memory to the chat provider. |
 
 ---
 
@@ -51,10 +51,10 @@ The harness adds six engineering capabilities around your AI coding assistant:
 
 - **Persistent project knowledge**: Generated project facts plus human project notes and scoped developer instructions give future task sessions durable repo-local context without depending on one chat history.
 - **Project-aware discovery**: Bounded AST slicing via Task Context, symbol dependency mapping via Project Graph, source-set awareness, and automatic detection of local architecture families in mixed codebases.
-- **Approval-first execution**: Strict plan-before-mutation flow, single-use cryptographic approval nonces, immutable scope and plan hashing, and zero silent scope creep.
+- **Approval-first execution**: Plan-before-mutation flow, plan hashes and approval receipts, with scope drift checks. Conversation-based approval is rule-enforced; a hash binds the recorded plan but does not authenticate the human who approved it.
 - **Adaptive Android verification**: Canonical 6-tier risk classification matching blast radius to verification requirements, including specialized checks for Room schemas, localized string parity, coroutine dispatchers, and device APIs.
 - **Evidence-bound delivery**: Tests, reviews, assemble, and device verification are cryptographically bound to the final frozen delivery snapshot. Stale or partial evidence fails closed.
-- **Recovery and developer control**: 12-dimension environment diagnostic (`doctor`), deterministic engine self-healing (`repair`), transactional updates with rollback, and 100% developer-owned Git authority.
+- **Recovery and developer control**: Environment and installation diagnostics (`doctor`), restoration from a checksum-verified pinned kit (`repair`), transactional updates with rollback, and developer authority over Git operations.
 
 ---
 
@@ -139,7 +139,7 @@ Task A
 **Key Invariants & Boundaries:**
 - **At most three live tasks per worktree**: Each task reserves explicit, disjoint files and keeps its own approval, baseline, reviews, and evidence. Pending approval and READY_FOR_DELIVERY tasks count toward the limit. Deliver or cancel a task before opening a fourth.
 - **Lineage preservation**: An accepted WIP commit does not cancel or pause Task A; it preserves Task A's lineage receipt chain.
-- **Model never executes Git mutations**: Git commit, worktree, branch, merge, and rebase operations are strictly 100% developer-owned.
+- **Developer Git authority**: Installed client-project policy reserves commit, worktree, branch, merge, rebase, and push decisions for the developer. Technical interception depends on host capabilities.
 - **Bound commit lineage**: Validated WIP checkpoints and commits matching verified files of a disjoint sibling task are accepted. Unrelated commits and commits that mix unverified files remain lineage violations.
 - **Arbitrary merges blocked**: Arbitrary external merge/rebase into an active Task A worktree remains blocked; finish or hand off first.
 - **Chat independence**: Returning to Task A uses persisted harness state on disk (`task status --next`), never chat memory.
@@ -153,7 +153,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.33/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.34/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -169,14 +169,14 @@ pipx install android-agent-harness
 # Initialize harness in your Android repository root
 android-harness init --repo /path/to/android-project
 
-# Run 12-point diagnostic check
+# Inspect environment and installation health
 android-harness doctor --repo /path/to/android-project --json
 ```
 
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.33 --single-branch \
+git clone --depth 1 --branch v1.1.34 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -198,7 +198,7 @@ At the start of a conversation, an installed harness tells the agent (at most on
 python ~/.android-harness/kit/harness_cli.py update --repo /path/to/android-project
 ```
 
-The update is transactional and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. It refuses while a task is active, and it lists managed files you edited by hand instead of overwriting them. If an update is interrupted (the process is killed), `.agents/VERSION` keeps the previous release and `doctor` reports it; running the update again rolls the interrupted one back, including `GEMINI.md`/`AGENTS.md`/`CLAUDE.md`, and applies it from the start.
+The update is transactional and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. The default update refuses while tasks are active and lists locally edited managed files. An explicit stopped-source update can preserve one active task; multiple live tasks still block that path. An explicit discard-local-edits option keeps a backup before replacing eligible managed edits. If an update is interrupted (the process is killed), `.agents/VERSION` keeps the previous release and `doctor` reports it; running the update again rolls the interrupted one back, including `GEMINI.md`/`AGENTS.md`/`CLAUDE.md`, and applies it from the start.
 
 For advanced configuration, see [docs/install-or-update-prompt.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md) and [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md).
 
@@ -341,9 +341,9 @@ The harness rehydrates and matches repo-local context; the chat provider itself 
 
 ## Android-specific protection
 
-- **Room database & schemas**: Schema version tracking, migration path continuity, column drop protection, and destructive fallback prevention (`fallbackToDestructiveMigration`).
+- **Room database & schemas**: Source-based checks for version changes, numeric migration paths, Kotlin/Java embedded types, risky schema changes, and unconditional destructive fallback. These heuristics do not replace Room schema export validation or migration tests.
 - **Compose, XML & resources**: String parity across locales (`values/`, `values-ar/`, etc.), plural/placeholder validation, ViewBinding lifecycle leak checks, and Compose UI state handling.
-- **Coroutines, ANR & threading**: Detection of blocking I/O calls on `Dispatchers.Main`, unconfined coroutine scopes, and missing exception handlers.
+- **Coroutines, ANR & threading**: Pattern-based checks for selected blocking calls, coroutine scope risks, and exception-handling patterns. Static checks cannot establish freedom from ANRs or concurrency bugs.
 - **Device & platform APIs**: Foreground services, runtime permissions, location, notifications, Bluetooth/camera, and Android user ID (`u0`) continuity.
 - **Gradle build variants & multi-module**: Real variant-aware compilation tasks, split APK handling, artifact set identity, and cross-module dependency validation.
 
@@ -375,12 +375,12 @@ For design, migration, compatibility and security decisions the agent asks the d
 
 - **Review Protocol V2**: Specialist reviewers return structured, machine-verifiable JSON (`HARNESS_REVIEW_RESULT_V2`) rather than fragile text tokens. Findings are typed, prioritized, and cryptographically bound to the frozen delivery snapshot, change set, and review package digest.
 - **Dedicated Custom Reviewer Subagents**: Seven core specialist reviewers are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md` (`bug-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `regression-impact-reviewer-agent`, `test-quality-reviewer-agent`, `spec-compliance-agent`).
-- **Reviewer Model Inheritance by Omission**: Reviewer subagents inherit the authoritative model of the lead agent by omission. No model escalation or manual model routing parameters are passed.
-- **Parallel Routed Reviews**: Dynamic review policies resolve the minimal required reviewer roster. All routed reviewers are dispatched concurrently via Antigravity `invoke_subagent` without intermediate prompt stops.
+- **Developer-selected reviewer models**: Inheritance remains the default. Claude Code supports a common native model alias or per-role choices, with task overrides and settings frozen per review run. Antigravity and other current adapters remain inherit-only; unsupported choices block without fallback. Account access depends on the host. Model selection does not establish independent review proof. See [reviewer model configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
+- **Parallel Routed Reviews**: Central policy selects the required reviewer roster. Antigravity dispatch commands prepare concurrent `invoke_subagent` calls when the host supports them; protocol and environment blockers remain explicit.
 - **Reviewer Call Safety Cap**: Maximum safety ceiling on total reviewer model calls (recommended: 20).
 - **Same-Conversation Protocol Recovery**: Malformed initial reviewer responses trigger exact `send_message` corrections within the same conversation ID, preventing runaway subagent spawns.
 - **PostToolUse Launch Reconciliation**: Subagent invocation errors are trapped by native `PostToolUse` hooks, transitioning pending reviewers to `ENV_BLOCKED` and returning actionable diagnostic guidance.
-- **Hard Mutation Interception**: `.agents/hooks.json` intercepts tool write calls (`multi_replace_file_content`, `replace_file_content`, `write_to_file`) to ensure changes stay strictly within approved scope and phases.
+- **Mutation Interception**: Installed `.agents/hooks.json` commands check supported tool writes (`multi_replace_file_content`, `replace_file_content`, `write_to_file`) against approved scope and phases. This is a host hook boundary, not an operating-system sandbox.
 
 ---
 
@@ -393,7 +393,7 @@ For design, migration, compatibility and security decisions the agent asks the d
 | **Codex** | Root `AGENTS.md`, `.codex/` instructions | Rule/sandbox dependent | V1 response ingestion; independence not natively verified | Yes |
 | **Cursor** | `.cursorrules` / `.cursor/rules` | `RULE_ENFORCED` | V1 response ingestion | Yes |
 | **Windsurf** | `.windsurfrules` | `RULE_ENFORCED` | V1 response ingestion | Yes |
-| **GitHub Copilot** | `.github/copilot-instructions.md` | `RULE_ENFORCED` | V1 response ingestion | Yes |
+| **GitHub Copilot** | `.github/copilot-instructions.md`, installed pre-tool hook adapter | Hook-backed where supported and detected; otherwise rule-enforced | V1 response ingestion | Yes |
 | **Gemini CLI** | Rules, instructions | `RULE_ENFORCED` | V1 response ingestion | Yes |
 | **Roo Code / Continue** | Mode instructions, system rules | `RULE_ENFORCED` | V1 response ingestion | Yes |
 
@@ -444,29 +444,29 @@ agents/
 └── workflows/     # Task lifecycle and multi-phase orchestration workflows
 ```
 
-Each component is implemented using Python standard-library modules with zero external runtime dependencies.
+The Python runtime engine uses the standard library. Git, a compatible JDK/Android SDK, the project Gradle Wrapper, ADB for device workflows, and the selected AI host are separate external requirements. Wheel building and publishing use development dependencies.
 
 ---
 
 ## Testing / CI
 
-- **Platforms**: Linux (Ubuntu 24.04), Windows (Server 2025), macOS (15).
-- **Python Matrix**: Python 3.10, 3.11, 3.12, 3.13, and 3.14 (standard library only; zero pip dependencies).
+- **Configured runners**: Ubuntu 24.04, Windows Server 2025, and Intel macOS 15.
+- **Configured Python coverage**: Full suite on Linux/Python 3.12; quick suite on Linux/Python 3.10, 3.11, 3.13, and 3.14, and on Windows/macOS with Python 3.12. Wheel lifecycle checks run on all three operating systems.
 - **Validation**: Full deterministic selftest suite (`python harness_cli.py selftest`), syntax compilation across all scripts (`python -m compileall`), wheel packaging and lifecycle tests, security/adversarial boundary validation, and multi-phase Android workflow scenario tests.
 
-Every pull request and push to `main` runs on GitHub Actions: the complete suite on Linux, and the quick suite on each supported OS and Python version (see [docs/compatibility-matrix.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)). A release is tagged only after that CI passes on the exact commit.
+Pushes and pull requests targeting `main` trigger the configured [GitHub Actions jobs](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml). This is a selected compatibility matrix, not every OS/Python combination. A configured job is not evidence of a pass: consult results for the exact commit. Release policy requires successful validation and CI before tagging.
 
 ---
 
-## Field-tested
+## Recorded client validation
 
-Version 1.1.0 is the first release line declared stable. Before it shipped, the harness drove Google Antigravity through four end-to-end rounds on a disposable copy of a production Android app (Kotlin and Java, XML and Compose, MVVM and MVI, Hilt, Room, Arabic and English resources), with a human in the developer role approving plans, reviewing diffs and making every commit.
+Historical client runs and their evidence are documented in [benchmark status](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/benchmark-status.md) and its linked reports. That record includes passed, failed, incomplete, and pending scenarios. Results apply to the frozen versions and environments named in each report; they do not certify every scenario on the current release.
 
-Those rounds covered ordinary daily work: date-logic bugs reproduced with failing tests, copy fixes across locales, ViewModel validation, a two-phase feature with scoped phase review, a new screen following the project's preferred architecture, developer-requested changes after verification, and harness updates between tasks. Every defect found in a round was fixed with a failing regression test first, and all of them are covered by the deterministic selftest suite that runs on every commit.
+The deterministic selftests exercise simulated Android projects and workflow contracts. They do not replace real-device testing or end-to-end validation on your own application.
 
 ## Maturity / roadmap
 
-Stable for daily use on Google Antigravity, where enforcement is hook-backed. Other hosts are supported with rule-level enforcement plus the same downstream verification. Real-world burn-in continues across more Android codebases.
+Antigravity is the primary host. Other hosts use their detected hook or rule enforcement plus downstream verification. Evaluate the current commit's CI results, supported boundaries, and client validation before relying on it for a particular project.
 
 **Roadmap:**
 - Real-repo burn-in across diverse Android topologies
@@ -497,7 +497,7 @@ No. Android Studio remains the primary IDE for Android development, debugging, a
 No. The harness is approval-first. All task scopes and risk classifications require explicit developer approval before modifications begin, and delivery requires verified evidence.
 
 **3. Can it work with mixed Java/Kotlin/XML/Compose codebases?**
-Yes. The harness detects local architectural conventions per module and source set, ensuring agents preserve existing patterns (such as Java + XML) rather than performing unplanned modernizations.
+Yes. It derives local architectural evidence per module and source set and checks changes against the approved architecture. Ambiguous or unsupported patterns can require developer clarification.
 
 **4. Does every task run many reviewers?**
 No. The 6-tier risk model dynamically assigns verification: trivial edits (T0) and low-risk changes (T1) skip reviewer subagents entirely. Specialized reviewers run only when justified by the final classified blast radius.
@@ -509,13 +509,13 @@ No. Device deployment and mobile verification are required only for tiers and ch
 Yes. Native tool adapters and instruction templates are provided for Claude Code, Gemini CLI / Antigravity, GitHub Copilot, Cursor, Windsurf, Roo Code, and others.
 
 **7. Does the harness commit/push code?**
-Never. Git commits, branches, pushes, and release decisions remain 100% developer-owned. The harness leaves modifications unstaged in your working tree.
+Installed client-project workflows leave Git mutations to the developer and normally leave edits unstaged. Maintenance of this harness repository may use Git or publish only when its maintainer explicitly authorizes those actions.
 
 **8. What happens if the harness itself is corrupted?**
 The harness includes deterministic health diagnostics (`doctor`) and self-healing repair (`repair`) that can restore managed engine files from the pinned kit without touching your application source code.
 
 **9. Will a new chat remember my project rules?**
-Yes, through repo-local context. Project notes (`project-notes.md`) and scoped developer instructions (`developer-instructions.json`) persist inside the repository. When a new chat begins, Task Context and Discovery automatically carry applicable instructions into task planning. The chat provider itself does not need to remember previous conversations. Current source evidence remains the highest authority.
+Future sessions can load repo-local context. Project notes (`project-notes.md`) and scoped developer instructions (`developer-instructions.json`) persist inside the repository. When a new chat begins, Task Context and Discovery automatically carry applicable instructions into task planning. The chat provider itself does not need to remember previous conversations. Current source evidence remains the highest authority.
 
 **10. Can I keep several local tasks without worktrees or committing the previous task first?**
 Yes. Up to **three live tasks** may share one worktree when their explicitly planned files do not overlap. Pending approvals, implementation, verification, blocked tasks, and READY_FOR_DELIVERY tasks all count. A fourth task is refused until one is delivered or cancelled; switching focus does not free a slot.

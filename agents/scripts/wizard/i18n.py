@@ -188,6 +188,7 @@ T = {
         "review_call_budget": (
             "Maximum reviewer calls shared by all phases and final review of one task before developer intervention?"
         ),
+        "review_models": "Choose the reviewer model for Claude Code. Native aliases depend on your account; no fallback is applied.",
         "review_call_budget_20": (
             "20 — Review-heavy / large critical work (Recommended)"
         ),
@@ -270,6 +271,7 @@ T = {
         "need_repo": "Need --repo pointing at an Android checkout with gradlew.",
     },
     "ar": {
+        "review_models": "اختر موديل المراجعين في Claude Code. توفر الموديل يعتمد على حسابك، ولن يُستبدل تلقائياً بموديل آخر.",
         "pref_arch_family": "ما هي المعمارية المفضلة للشاشات والميزات الجديدة (NEW)؟",
         "pref_arch_family_none": "لا شيء / التحديد لاحقاً",
         "update_context_mode": "كيف ترغب في التعامل مع سياق المشروع (Project Context) أثناء هذا التحديث؟",

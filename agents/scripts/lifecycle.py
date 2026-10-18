@@ -15,6 +15,9 @@ from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from harness_shared.paths import assert_kit_outside_repo as _shared_assert_kit_outside_repo
+from harness_shared.paths import is_within as _is_within, find_nested_kit_checkouts as _find_nested_kit_checkouts
 from _live_process import (  # noqa: E402
     enable_line_buffered_stdio,
     live_print,
@@ -78,38 +81,17 @@ def _read_version(root: Path, relative: str = "agents/VERSION") -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def _is_within(child: Path, parent: Path) -> bool:
-    try:
-        child.resolve().relative_to(parent.resolve())
-        return True
-    except ValueError:
-        return False
+
 
 
 def _assert_kit_outside_repo(repo: Path, kit: Path) -> None:
-    repo_r = repo.resolve()
-    kit_r = kit.resolve()
-    if kit_r == repo_r or _is_within(kit_r, repo_r):
-        raise ValidationError(
-            f"Harness kit checkout must live outside target Android repository: {kit_r} inside {repo_r}"
-        )
-
-
-def _find_nested_kit_checkouts(repo: Path) -> list[Path]:
-    found: list[Path] = []
     try:
-        for child in repo.iterdir():
-            if (
-                child.is_dir()
-                and (child / ".git").exists()
-                and (child / "harness_cli.py").is_file()
-                and (child / "agents" / "VERSION").is_file()
-                and (child / "agents" / "scripts" / "lifecycle.py").is_file()
-            ):
-                found.append(child.resolve())
-    except (OSError, PermissionError):
-        pass
-    return sorted(found)
+        _shared_assert_kit_outside_repo(repo, kit)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+
+
 
 
 def _validate_repo(repo: Path) -> Path:
@@ -469,7 +451,7 @@ def _migrate_legacy_references(repo: Path, recovery: Path) -> list[str]:
                 h = entry.get("post_install_sha256")
                 if p and h:
                     ownership_entries[p] = h
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
     overrides_dir = recovery / ".agents" / "project-context" / "legacy-overrides"
     for ref_file in refs_dir.glob("*.md"):

@@ -11,6 +11,7 @@ from _vnext_common import read_json
 from evidence_store import StateLock
 from review_orchestrator import load_ledger, save_ledger, REVIEW_DISPATCHED, REVIEW_ENV_BLOCKED
 from workflow import state_root, task_dir
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 
 def main() -> int:
@@ -138,7 +139,7 @@ def main() -> int:
                                 marker_file2 = rdir / run_id / "post-tool-reconcile-error.json"
                                 marker_file2.parent.mkdir(parents=True, exist_ok=True)
                                 atomic_write_json(marker_file2, marker_data)
-                        except Exception:
+                        except (OSError, ValueError, ImportError, _ExpectedArtifactError):
                             pass
 
             print(json.dumps({}))
@@ -191,7 +192,7 @@ def main() -> int:
                     "error_code": "POST_TOOL_RECONCILE_FAILED",
                     "occurred_at": utc_now(),
                 })
-            except Exception:
+            except (OSError, ValueError, ImportError, _ExpectedArtifactError):
                 pass
 
         print(json.dumps({}))

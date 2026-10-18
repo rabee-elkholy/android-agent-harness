@@ -22,7 +22,7 @@ def _resolve_changed_module_count(repo: Path, manifest: dict, plan: dict, policy
         mods = changed_modules(repo, manifest)
         if mods:
             return {"count": max(1, len(mods)), "source": "graph"}
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
     try:
@@ -38,14 +38,14 @@ def _resolve_changed_module_count(repo: Path, manifest: dict, plan: dict, policy
                     inferred.add(":")
         if inferred:
             return {"count": max(1, len(inferred)), "source": "manifest"}
-    except Exception:
+    except (OSError, ValueError, ValidationError):
         pass
 
     try:
         exp_mods = plan.get("expected_modules") or []
         if exp_mods:
             return {"count": max(1, len(exp_mods)), "source": "plan"}
-    except Exception:
+    except (OSError, ValueError, ValidationError):
         pass
 
     surfaces = set(policy.get("surfaces") or manifest.get("surfaces") or plan.get("expected_surfaces") or [])
@@ -102,6 +102,11 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
 
     plan = read_json(plan_path)
     current = read_json(current_path)
+    from review_models import frozen_models
+    selections = frozen_models(current)
+    if selections and host not in ("generic", current.get("review_host")):
+        raise ValidationError("review profile host cannot differ from the frozen review host")
+    host = str(current.get("review_host") or host)
     policy = read_json(Path(current["policy"]))
     protocol = int(current.get("review_protocol_version") or 1)
 
@@ -203,9 +208,15 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
             rev_entry["model_argument"] = None
         else:
             rev_entry["required_model"] = "inherit"
+        if rev in selections:
+            selected = selections[rev]
+            rev_entry.update(selected)
+            rev_entry["dispatch_contract"].update({key: selected[key] for key in ("model_policy", "model_argument", "native_arguments")})
+            if selected["requested_model"] != "inherit":
+                rev_entry["required_model"] = selected["requested_model"]
         resolved_reviewers[rev] = rev_entry
 
-    return {
+    profile = {
         "schema_version": 2,
         "task_id": task_id,
         "round_number": round_number,
@@ -222,6 +233,16 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
         "package_dir": str(active_pkg_dir) if active_pkg_dir.is_dir() else "",
         "reviewers": resolved_reviewers,
     }
+    if selections:
+        profile["review_models_sha256"] = current["review_models"]["sha256"]
+    if any(item.get("requested_model", "inherit") != "inherit" for item in resolved_reviewers.values()):
+        profile["model_policy"] = "DEVELOPER_SELECTED_NATIVE"
+        profile["dispatch_contract"] = {
+            "tool_family": "claude_native_subagent", "model_policy": "DEVELOPER_SELECTED_NATIVE",
+            "model_argument": "model", "enforcement": "RULE_ENFORCED",
+            "instructions": "Use each reviewer's frozen native_arguments on the native Agent/Task call. Never fall back on a host error.",
+        }
+    return profile
 
 
 
@@ -244,13 +265,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(profile, indent=2))
     else:
-        print(f"Task: {args.task} (Host: {args.host}, Model: inherit-parent)")
+        print(f"Task: {args.task} (Host: {profile['host']}, Model policy: {profile['model_policy']})")
         for rev, data in profile["reviewers"].items():
             effort = data.get("reasoning_intent", "NORMAL")
             res = (data.get("reasoning") or {}).get("resolution", "HOST_CONTROL_UNAVAILABLE")
             print(f"\n{rev}:")
             print(f"  effort={effort}")
             print(f"  reasoning={res}")
+            print(f"  requested_model={data.get('requested_model', 'inherit')}")
     return 0
 
 

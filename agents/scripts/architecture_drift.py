@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO, changed_paths
 from _vnext_common import read_json
 from project_context import _safe_read
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 
 def _lookup_family(repo: Path, family_id: str | None) -> dict[str, Any] | None:
@@ -33,7 +34,7 @@ def _lookup_family(repo: Path, family_id: str | None) -> dict[str, Any] | None:
         for fam in arch.get("families") or []:
             if fam.get("id") == family_id:
                 return fam
-    except Exception:
+    except (OSError, ValueError, _ExpectedArtifactError):
         pass
     return None
 
@@ -125,7 +126,7 @@ def check_architecture_drift(
                 from workflow import _load_plan
                 plan_obj = _load_plan(repo, task_id)
                 plan_exp = plan_obj.get("expected_files")
-            except Exception:
+            except (OSError, ValueError, ImportError, _ExpectedArtifactError):
                 pass
             man = build_task_manifest(repo, base_data, expected_files=plan_exp)
             t_changes = man.get("task_changes") or man.get("changes") or []
@@ -299,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         if active_file.is_file():
             try:
                 task_id = read_json(active_file).get("task_id", "")
-            except Exception:
+            except (OSError, ValueError, _ExpectedArtifactError):
                 pass
     plan = None
     if task_id:
@@ -308,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         if plan_file.is_file():
             try:
                 plan = read_json(plan_file)
-            except Exception:
+            except (OSError, ValueError, _ExpectedArtifactError):
                 pass
     contract = plan.get("architecture_contract") if plan else None
     if not contract:

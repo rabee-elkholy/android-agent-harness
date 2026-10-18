@@ -64,7 +64,7 @@ def find_test_reports(repo: Path) -> list[Path]:
                 continue
             if path.is_file():
                 reports.append(path)
-    except Exception:
+    except (OSError, ValueError):
         pass
     return sorted(reports)
 

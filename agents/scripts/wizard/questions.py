@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _vnext_common import atomic_write_bytes, atomic_write_json  # noqa: E402
 from review_sources import has_trusted_review_source, primary_host_from_tools  # noqa: E402
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 # Same floor as review_policy.MIN_MODEL_CALL_BUDGET: two full review rounds of a sign-in or payment change.
 MIN_MODEL_CALL_BUDGET = 12
@@ -307,7 +308,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
                     from common import read_json
                     pol_data = read_json(pol_path)
                     saved_pref = pol_data.get("preferred_new_code_family") or pol_data.get("default_family")
-                except Exception:
+                except (OSError, ValueError, ImportError, _ExpectedArtifactError):
                     pass
         if not saved_pref:
             saved_pref = d.get("preferred_new_code_family") or (d.get("answers") or {}).get("preferred_new_code_family")
@@ -565,6 +566,15 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             },
         }
     )
+    qs.append({
+        "id": "review_model_policy", "station": 5, "station_title": "Reviewer Models",
+        "required": False, "allow_multiple": False,
+        "depends_on": {"id": "i14", "equals": ["claude"]},
+        "prompt": t(lang, "review_models"),
+        "options": [{"id": model, "label": model} for model in ("inherit", "sonnet", "opus", "haiku", "custom")],
+        "conditional_text_input": {"when_option": "custom", "answer_key": "review_model_policy_text",
+                                   "prompt": 'Enter policy JSON: {"schema_version":1,"default":"sonnet","overrides":{"security-reviewer-agent":"opus"}}', "required": True},
+    })
     return _reorder_with_previous_answers(qs, repo, lang, d)
 
 
@@ -585,7 +595,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
                 prev = loaded
         except SystemExit:
             raise
-        except Exception:
+        except (OSError, ValueError, _ExpectedArtifactError):
             pass
 
     def strip_rec(lbl: str) -> str:
@@ -628,6 +638,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
         "i20": prev.get("pm_provider"),
         "i22": prev.get("device_verification"),
         "review_call_budget": prev_budget_choice,
+        "review_model_policy": ("custom" if (prev.get("review_model_policy") or {}).get("overrides") else (prev.get("review_model_policy") or {}).get("default")),
         "i19": prev.get("flavor") or "default",
         "pref_arch_family": prev.get("preferred_new_code_family") or prev.get("pref_arch_family"),
         "update_context_mode": prev.get("update_context_mode") or "preserve",
@@ -936,10 +947,20 @@ def normalize(raw: dict, facts: dict) -> dict:
                 "update_context_mode",
                 "review_call_budget",
                 "review_call_budget_text",
+                "review_model_policy",
+                "review_model_policy_text",
             )
         )
     )
+    # Preserve omitted legacy setup answers; explicit choices are validated
+    # against the selected native host rather than guessed from a model name.
+    model_settings = {}
+    if "review_model_policy" in raw:
+        from .schema import setup_model_policy
+        from review_models import validate_for_host
+        model_settings["review_model_policy"] = validate_for_host(setup_model_policy(raw), primary_host_from_tools(tools))
     return {
+        **model_settings,
         "schema": SCHEMA,
         "i0": True,
         "backup": do_backup,
@@ -1027,7 +1048,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- AI host: {ai_host}",
         f"- Primary AI host: {primary_host}",
         "- Review protocol: trusted Antigravity Review V2" if trusted_review else "- Review protocol: V1 rule-enforced response ingestion; independent execution is not natively verified",
-        "- Reviewer model: parent model inheritance by omission" if trusted_review else "- Reviewer model: host-managed; no guaranteed inheritance",
+        f"- Reviewer model settings: {json.dumps(answers.get('review_model_policy') or {'default': 'inherit'}, sort_keys=True)}; native support is host-dependent",
         "- Reviewer reasoning: host-capability-aware; no override when unavailable",
         f"- Reviewer call safety cap: {budget}",
         f"- Preferred new code architecture family: {answers.get('preferred_new_code_family') or '(none)'}",
@@ -1127,6 +1148,10 @@ def existing_defaults(repo: Path) -> dict[str, object]:
     else:
         defaults["review_call_budget"] = "20"
     tools = answers.get("tools")
+    if "review_model_policy" in answers:
+        policy = answers["review_model_policy"]
+        defaults["review_model_policy"] = "custom" if policy.get("overrides") else policy["default"]
+        defaults["review_model_policy_text"] = json.dumps(policy)
     if isinstance(tools, list) and tools:
         defaults["i14"] = list(tools)
     return defaults
@@ -1161,6 +1186,8 @@ def interactive(repo: Path, lang: str) -> dict:
                 raw[q["id"] + "_text"] = prompt_text(lang)
             elif q["id"] == "review_call_budget" and chosen[0] == "custom":
                 raw["review_call_budget_text"] = prompt_text(lang)
+            elif q["id"] == "review_model_policy" and chosen[0] == "custom":
+                raw["review_model_policy_text"] = prompt_text(lang)
         if q["id"] == "i2" and chosen[0] == "stop":
             print(t(lang, "no_python"))
             raise SystemExit(1)

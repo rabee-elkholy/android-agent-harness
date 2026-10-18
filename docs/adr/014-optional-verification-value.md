@@ -1,4 +1,4 @@
-# ADR 009: optional acceptance evidence, journeys, and local metrics
+# ADR-014: optional acceptance evidence, journeys, and local metrics
 
 Status: accepted for implementation on 2026-10-07.
 
