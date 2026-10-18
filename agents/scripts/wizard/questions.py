@@ -1049,6 +1049,7 @@ def write_answers(repo: Path, answers: dict) -> None:
         f"- Primary AI host: {primary_host}",
         "- Review protocol: trusted Antigravity Review V2" if trusted_review else "- Review protocol: V1 rule-enforced response ingestion; independent execution is not natively verified",
         f"- Reviewer model settings: {json.dumps(answers.get('review_model_policy') or {'default': 'inherit'}, sort_keys=True)}; native support is host-dependent",
+        "- Reviewer model: developer-selected native policy" if answers.get("review_model_policy") and answers["review_model_policy"] != {"schema_version": 1, "default": "inherit", "overrides": {}} else ("- Reviewer model: parent model inheritance by omission" if trusted_review else "- Reviewer model: host-managed; no guaranteed inheritance"),
         "- Reviewer reasoning: host-capability-aware; no override when unavailable",
         f"- Reviewer call safety cap: {budget}",
         f"- Preferred new code architecture family: {answers.get('preferred_new_code_family') or '(none)'}",
