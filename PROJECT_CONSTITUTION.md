@@ -185,7 +185,22 @@ Rules:
 
 Host parity is not required. **Correctness and truthful degradation are required.**
 
-### 3.7 Reviewer model inheritance on Antigravity
+### 3.7 Developer-owned reviewer model selection
+
+The developer may select a project default and per-role native models, or a
+complete task-local replacement, through setup or an explicit recorded decision.
+Omitted configuration preserves inheritance. Selection never changes risk,
+reviewer roster, call budgets, provider routing, or independent-review proof.
+Freeze the selection in each phase/final run and its review package. Live config
+changes affect future runs only; never rewrite existing review evidence.
+
+Only documented native controls are supported. Claude Code supports the native
+aliases `sonnet`, `opus`, and `haiku`; account availability is host-dependent.
+Unsupported explicit selection blocks, without silent inheritance fallback.
+Requested models are not proof of actual models. Record native transcript model
+metadata separately and honestly; explicit selection requires matching metadata
+before accepting the review. Claude execution remains rule-enforced/unverified.
+See ADR-015. The maintainer explicitly approved this amendment.
 
 For Antigravity Review Protocol V2:
 
@@ -202,7 +217,9 @@ Do not pass:
 
 Reasoning escalation is allowed only through a trusted host-native capability whose real supported argument/schema was detected.
 
-Do not create a cross-provider model-routing subsystem.
+Do not create a cross-provider model-routing subsystem or infer new native
+arguments from developer configuration. Antigravity remains inherit-only until
+a real supported native override is established.
 
 ### 3.8 Review proof cannot be self-certified
 

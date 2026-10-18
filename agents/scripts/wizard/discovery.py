@@ -379,7 +379,7 @@ def discover_launchers(
                             comp = name
                         if comp not in found:
                             found.append(comp)
-        except Exception:
+        except (OSError, ValueError, ImportError, ET.ParseError):
             pass
 
         # 2. Fallback regex search if XML parser failed
@@ -672,7 +672,7 @@ def antigravity_exists() -> bool:
         for root in antigravity_runtime.candidate_runtime_roots():
             if root.is_dir():
                 return True
-    except Exception:
+    except (OSError, ValueError, ImportError):
         pass
     for suffix in ("antigravity", "antigravity-cli", "antigravity-ide"):
         if (Path.home() / ".gemini" / suffix).is_dir():
@@ -735,7 +735,7 @@ def discover_architectural_bases(repo: Path, sources: list[Path] | None = None) 
                     "fqcn": f"{pkg}.{m_res.group(2)}" if pkg else m_res.group(2),
                     "file": str(p.relative_to(repo)),
                 })
-        except Exception:
+        except (OSError, ValueError):
             pass
     return bases
 

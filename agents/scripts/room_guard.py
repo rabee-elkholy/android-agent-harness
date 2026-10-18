@@ -15,12 +15,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from _repo_files import REPO, changed_paths, repo_glob
+from _source_text import mask_comments_and_strings
 
 VERSION_RE = re.compile(r"version\s*=\s*(\d+)")
 MIGRATION_RE = re.compile(r"Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")
-AUTO_MIGRATION_RE = re.compile(r"AutoMigration\s*\(\s*(?:from\s*=\s*)?(\d+)\s*,\s*(?:to\s*=\s*)?(\d+)")
+AUTO_MIGRATION_RE = re.compile(r"\bAutoMigration\s*\(")
 ENTITY_REF_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)(?:::class|\.class)")
-EMBEDDED_TYPE_RE = re.compile(r"@Embedded(?:\([^)]*\))?\s+(?:val|var)\s+\w+\s*:\s*([A-Z][A-Za-z0-9_]*)")
+EMBEDDED_TYPE_RE = re.compile(
+    r"@(?:(?:field|get|property):)?(?:[A-Za-z_][\w]*\.)*Embedded\b(?:\([^)]*\))?\s*"
+    r"(?:@[\w.]+(?:\([^)]*\))?\s*|(?:public|protected|private|static|final|transient|volatile|internal|lateinit|override)\s+)*"
+    r"(?:(?:val|var)\s+\w+\s*:\s*([A-Za-z_][\w.]*)|([A-Za-z_][\w.]*)\s+\w+\s*(?=[;=,)]))"
+)
 # Only the unconditional upgrade fallback loses data when a migration is missing; OnDowngrade and
 # From(<versions>) are scoped choices the app makes deliberately.
 DESTRUCTIVE_RE = re.compile(r"fallbackToDestructiveMigration\s*\(")
@@ -42,6 +47,44 @@ KT_VAR_RE = re.compile(
 JAVA_VAR_RE = re.compile(
     r"(?:(?:public|protected|private|static|final)\s+)*Migration\s+([A-Za-z0-9_]+)\s*=\s*new\s+Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)"
 )
+
+
+def find_auto_migrations(text: str) -> list[tuple[str, str]]:
+    """Read numeric annotation arguments in either language and any named order."""
+    source = mask_comments_and_strings(text)
+    result: list[tuple[str, str]] = []
+    for match in AUTO_MIGRATION_RE.finditer(source):
+        start = match.end()
+        depth = 1
+        index = start
+        while index < len(source) and depth:
+            depth += (source[index] == "(") - (source[index] == ")")
+            index += 1
+        if depth:
+            continue
+        arguments = source[start:index - 1].split(",")
+        values: dict[str, str] = {}
+        invalid = False
+        for position, argument in enumerate(arguments):
+            argument = argument.strip()
+            named = re.fullmatch(r"(from|to)\s*=\s*(\d+)", argument)
+            if named:
+                name, value = named.groups()
+            elif position < 2 and re.fullmatch(r"\d+", argument):
+                name, value = ("from", "to")[position], argument
+            else:
+                continue
+            if name in values:
+                invalid = True
+            values[name] = value
+        if not invalid and "from" in values and "to" in values:
+            result.append((values["from"], values["to"]))
+    return result
+
+
+def embedded_type_names(text: str) -> set[str]:
+    return {next(group for group in match if group).rsplit(".", 1)[-1]
+            for match in EMBEDDED_TYPE_RE.findall(mask_comments_and_strings(text))}
 
 
 def _extract_add_migrations_blocks(text: str, target_db_class: str = "") -> list[str]:
@@ -154,7 +197,7 @@ def resolve_all_entity_types(
             visited_files.add(kt_file)
             try:
                 content = kt_file.read_text(encoding="utf-8", errors="replace")
-                for embedded in EMBEDDED_TYPE_RE.findall(content):
+                for embedded in embedded_type_names(content):
                     if embedded not in all_types:
                         all_types.add(embedded)
                         frontier.append(embedded)
@@ -195,7 +238,7 @@ def parse_database_source(
     raw_entities = frozenset(ENTITY_REF_RE.findall(header))
     entities = resolve_all_entity_types(raw_entities, root, source_index)
     auto_migrations = frozenset(
-        (int(a), int(b)) for a, b in AUTO_MIGRATION_RE.findall(text)
+        (int(a), int(b)) for a, b in find_auto_migrations(text)
     )
     registered: set[str] = set()
     add_blocks = _extract_add_migrations_blocks(text, target_db_class=class_name)
@@ -261,7 +304,7 @@ def find_candidate_migration_files(db_path: Path, changed_src: list[Path], repo:
             if "addMigrations" in head or "Migration(" in head:
                 candidates.append(p)
                 seen.add(p)
-        except Exception:
+        except (OSError, ValueError):
             pass
     return candidates
 
@@ -279,7 +322,7 @@ def registered_migration_edges(bodies: list[str], database: str, other_databases
         texts.append(text)
     blocks = [block for text in texts for block in _extract_add_migrations_blocks(text, database)]
     registered = {token for block in blocks for token in IDENT_RE.findall(block)}
-    edges = {(int(a), int(b)) for text in texts for a, b in AUTO_MIGRATION_RE.findall(text)}
+    edges = {(int(a), int(b)) for text in texts for a, b in find_auto_migrations(text)}
     edges.update((int(a), int(b)) for block in blocks for a, b in MIGRATION_RE.findall(block))
     edges.update((int(a), int(b)) for text in texts for name, a, b in KT_VAR_RE.findall(text) + JAVA_VAR_RE.findall(text) if name in registered)
     return frozenset(edges)
@@ -298,7 +341,7 @@ def iter_database_files(repo: Path | None = None) -> list[Path]:
                     head = full_p.read_text(encoding="utf-8", errors="replace")[:4000]
                     if "@Database" in head or "androidx.room.Database" in head:
                         db_files.append(full_p)
-                except Exception:
+                except (OSError, ValueError):
                     pass
     return db_files
 
@@ -495,7 +538,7 @@ def check_room_working_tree(
                         if not (new_decl.class_name and re.search(rf"\b{re.escape(new_decl.class_name)}\b", c_text)):
                             continue
                     candidate_texts.append(c_text)
-                    for a, b in AUTO_MIGRATION_RE.findall(c_text):
+                    for a, b in find_auto_migrations(c_text):
                         all_migs.add((int(a), int(b)))
                     add_blocks = _extract_add_migrations_blocks(c_text, target_db_class=new_decl.class_name)
                     if add_blocks:
@@ -517,7 +560,7 @@ def check_room_working_tree(
                         all_candidate_edges.add((int(a_str), int(b_str)))
                     for a_str, b_str in re.findall(r"\bMIGRATION_(\d+)_(\d+)\b", b_text):
                         all_candidate_edges.add((int(a_str), int(b_str)))
-                    for a_str, b_str in AUTO_MIGRATION_RE.findall(b_text):
+                    for a_str, b_str in find_auto_migrations(b_text):
                         all_candidate_edges.add((int(a_str), int(b_str)))
                     for add_block in _extract_add_migrations_blocks(b_text, target_db_class=new_decl.class_name):
                         for a_str, b_str in MIGRATION_RE.findall(add_block):

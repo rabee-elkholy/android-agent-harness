@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _live_process import enable_line_buffered_stdio, live_print, step_progress, sublog  # noqa: E402
 from _repo_files import REPO  # noqa: E402
 from _vnext_common import (  # noqa: E402
@@ -33,6 +34,8 @@ from _vnext_common import (  # noqa: E402
     sha256_file,
     utc_now,
 )
+from harness_shared.integrity import KitIntegrityError, verify_kit
+from harness_shared.commands import configured_python_command, rewrite_python_hooks
 from doctor.engine import HarnessDoctor  # noqa: E402
 from lifecycle import (  # noqa: E402
     ARCHITECTURE_MAJOR,
@@ -70,7 +73,7 @@ def _read_pinned_version(repo: Path) -> str:
             ver = str(data.get("harness_version") or "").strip()
             if ver:
                 return ver
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
     raise ValidationError(f"Target repository {repo} does not contain an installed Android Agent Harness or valid VERSION.")
 
@@ -89,69 +92,10 @@ def _verify_kit(kit: Path, expected_version: str) -> dict[str, str]:
             f"Target repository is pinned to v{expected_version}, but kit is v{kit_ver}. "
             "Repair cannot silently repair from another version."
         )
-
-    checksum_file = kit / "agents" / "release_checksums.json"
-    if not checksum_file.is_file() or checksum_file.is_symlink():
-        raise ValidationError("Kit release checksums manifest missing or symlink.")
     try:
-        manifest = read_json(checksum_file)
-    except Exception as exc:
-        raise ValidationError(f"Kit release checksums manifest corrupt: {exc}")
-    if not isinstance(manifest, dict):
-        raise ValidationError("Kit release checksums manifest has an unsupported schema.")
-
-    files = manifest.get("files")
-    if not isinstance(files, dict) or not files:
-        raise ValidationError("Kit release checksums manifest files inventory is empty or malformed.")
-
-    core_files = {"agents/VERSION", "agents/scripts/lifecycle.py"}
-    missing_core = core_files - set(files)
-    if missing_core:
-        raise ValidationError(f"Kit release checksums manifest missing core files: {', '.join(sorted(missing_core))}")
-
-    agents_dir = kit / "agents"
-    if not agents_dir.is_dir() or agents_dir.is_symlink():
-        raise ValidationError("Kit agents directory missing or symlink.")
-    actual_files: set[str] = set()
-    ignored_parts = {"state", "cache", "__pycache__"}
-    for p in sorted(agents_dir.rglob("*")):
-        if p.is_symlink():
-            rel_sym = p.relative_to(kit).as_posix()
-            raise ValidationError(f"Symlink rejected in kit payload: {rel_sym}")
-        if not p.is_file():
-            continue
-        rel_from_agents = p.relative_to(agents_dir)
-        if rel_from_agents.as_posix() == "release_checksums.json":
-            continue
-        if ignored_parts.intersection(rel_from_agents.parts):
-            continue
-        if p.suffix.lower() in {".pyc", ".pyo"}:
-            continue
-        actual_files.add(p.relative_to(kit).as_posix())
-
-    manifest_keys = set(files.keys())
-    if actual_files != manifest_keys:
-        missing = sorted(manifest_keys - actual_files)
-        unexpected = sorted(actual_files - manifest_keys)
-        details = []
-        if missing:
-            details.append(f"missing ({len(missing)}): {', '.join(missing[:10])}")
-        if unexpected:
-            details.append(f"unexpected ({len(unexpected)}): {', '.join(unexpected[:10])}")
-        raise ValidationError(f"Kit release checksums inventory mismatch: {'; '.join(details)}")
-
-    for rel, expected in files.items():
-        rel_path = Path(rel)
-        if rel_path.is_absolute() or ".." in rel_path.parts:
-            raise ValidationError(f"Suspicious path in release checksums: {rel}")
-        target = kit / rel_path
-        if not target.is_file() or target.is_symlink():
-            raise ValidationError(f"Missing or symlinked kit file: {rel}")
-        actual_sha = sha256_file(target)
-        if actual_sha != expected:
-            raise ValidationError(f"Kit release checksum mismatch for {rel}")
-
-    return files
+        return verify_kit(kit)
+    except KitIntegrityError as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 def _is_corrupted(path: Path) -> bool:
@@ -218,6 +162,19 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
     active_task_detected, active_task_id = _check_active_task(root, force)
     kit_files = _verify_kit(kit_root, pinned_version)
 
+    # Compare hooks against the installed configuration, not raw kit defaults.
+    # The same rendered bytes are restored and recorded in ownership metadata.
+    answers_path = root / ".harness-setup" / "answers.json"
+    answers = read_json(answers_path) if answers_path.is_file() else {}
+    try:
+        python_command = configured_python_command(str(answers.get("py") or sys.executable))
+        hooks = json.loads((kit_root / "agents/hooks.json").read_text(encoding="utf-8"))
+        changed = rewrite_python_hooks(hooks, python_command)
+        hook_bytes = ((json.dumps(hooks, indent=2) + "\n").encode("utf-8") if changed
+                      else (kit_root / "agents/hooks.json").read_bytes())
+    except (OSError, ValueError) as exc:
+        raise ValidationError(f"Cannot configure hook interpreter: {exc}") from exc
+
     # Snapshot application source code outside harness to guarantee immutability
     app_snapshot_before = _snapshot_app_files(root)
 
@@ -269,6 +226,8 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
             continue
         dest = root / rel_installed
         src = kit_root / rel
+        if rel_installed == ".agents/hooks.json":
+            expected_sha = hashlib.sha256(hook_bytes).hexdigest()
 
         if not dest.is_file():
             missing.append(rel_installed)
@@ -286,7 +245,7 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
         src = kit_root / rel_kit
         dest = root / rel_installed
         dest.parent.mkdir(parents=True, exist_ok=True)
-        content = src.read_bytes()
+        content = hook_bytes if rel_installed == ".agents/hooks.json" else src.read_bytes()
         atomic_write_bytes(dest, content)
         if dest.suffix == ".py":
             try:
@@ -304,7 +263,7 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
             views = render_project_context(payload)
             write_project_context(root, payload, views)
             restored.append(".agents/project-context/project-facts.json")
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
 
     # Update ownership manifest if present
@@ -313,6 +272,8 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
         try:
             manifest_data = read_json(ownership_file)
             entries = manifest_data.get("entries") or []
+            if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+                raise ValidationError("Ownership entries must be objects in a list")
             updated = False
             for entry in entries:
                 p = entry.get("path")
@@ -324,8 +285,8 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                     k: v for k, v in manifest_data.items() if k != "ownership_sha256"
                 })
                 atomic_write_json(ownership_file, manifest_data)
-        except Exception:
-            pass
+        except (OSError, ValidationError) as exc:
+            raise ValidationError(f"Cannot update repaired ownership metadata: {exc}") from exc
 
     # Verify zero application source code modified
     _verify_app_snapshot(root, app_snapshot_before, allowed_adapter_rels=set())
@@ -406,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         if report["doctor"]["failures"] > 0:
             print("[FAIL] Doctor reported remaining issues after repair.")
             return 1
-        print("[SUCCESS] Managed harness engine restored to pinned release perfection.")
+        print("[SUCCESS] Managed harness engine restored and post-repair diagnostics passed.")
     return 0 if report["status"] == "PASS" else 1
 
 

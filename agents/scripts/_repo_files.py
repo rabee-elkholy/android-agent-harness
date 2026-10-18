@@ -106,7 +106,7 @@ def _changed_files_from_status(r: Path, raw: bytes, *, include_untracked: bool =
             if exists:
                 try:
                     c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
-                except Exception:
+                except (OSError, ValueError):
                     pass
             status = "D" if "D" in xy else ("A" if "A" in xy else "M")
             if status == "M" and exists:
@@ -148,7 +148,7 @@ def _changed_files_from_status(r: Path, raw: bytes, *, include_untracked: bool =
             if exists:
                 try:
                     c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
-                except Exception:
+                except (OSError, ValueError):
                     pass
             results.append(
                 ChangedFile(
@@ -172,7 +172,7 @@ def _changed_files_from_status(r: Path, raw: bytes, *, include_untracked: bool =
             if exists:
                 try:
                     c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
-                except Exception:
+                except (OSError, ValueError):
                     pass
             results.append(
                 ChangedFile(
@@ -194,7 +194,7 @@ def _changed_files_from_status(r: Path, raw: bytes, *, include_untracked: bool =
                 if exists:
                     try:
                         c_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
-                    except Exception:
+                    except (OSError, ValueError):
                         pass
                 results.append(
                     ChangedFile(
@@ -420,7 +420,7 @@ def ensure_local_git_privacy(target_repo: Path | None = None, *, clean_strays: b
         exclude_path.parent.mkdir(parents=True, exist_ok=True)
         exclude_path.write_text(new_text, encoding="utf-8", newline="\n")
         logs.append("local git exclude -> managed harness block")
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
 
     agents_gi = repo / ".agents" / ".gitignore"
@@ -445,6 +445,6 @@ def ensure_local_git_privacy(target_repo: Path | None = None, *, clean_strays: b
                     ag_added = True
             if ag_added or not agents_gi.is_file():
                 agents_gi.write_text("\n".join(ag_lines) + "\n", encoding="utf-8")
-        except Exception:
+        except (OSError, ValueError):
             pass
     return logs

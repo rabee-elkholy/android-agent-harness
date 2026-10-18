@@ -671,7 +671,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                         if r2.get("baseline_sha256") != base_data.get("baseline_sha256"):
                             base_matches = False
                             binding_errors.append("RED evidence baseline_sha256 does not match task baseline")
-                    except Exception:
+                    except (OSError, ValueError, ValidationError):
                         pass
                 for t in r2.get("failed_tests") or []:
                     if isinstance(t, dict):
@@ -704,7 +704,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                             minor = int(task_created_version.split(".")[2].split("-")[0])
                             if minor < 41:
                                 is_provably_legacy = True
-                        except Exception:
+                        except (OSError, ValueError, ValidationError):
                             pass
                     if is_provably_legacy and schema_ver in (1, 2) and not binding_errors:
                         has_executable_red = True
@@ -724,7 +724,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                             repro_defect_ids.add(str(e.get("test_name")))
                         if e.get("test_id"):
                             repro_defect_ids.add(str(e.get("test_id")))
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
         try:
             red_rec, red_err = _validate_artifact(store, snapshot, change_set, run_id, "red_evidence", harness_version)
@@ -748,7 +748,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     exp_rp_hash = canonical_sha256({k: v for k, v in rp.items() if k != "red_sha256"})
                     if rp.get("red_sha256") == exp_rp_hash and rp.get("task_id") == plan.get("task_id") and rp.get("plan_sha256") in red_plans and bool(rp.get("failed_tests")):
                         has_executable_red = True
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
 
         # Validate that defects captured in RED do not remain failing in GREEN and were executed
@@ -804,6 +804,20 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             reasons.append(error)
         elif review_record:
             evidence = review_record.get("evidence") or {}
+            from review_models import frozen_models, validate_model_evidence
+            model_run_file = plan_path.parent / "current-run.json"
+            try:
+                model_run = read_json(model_run_file) if model_run_file.is_file() else {}
+                selections = frozen_models(model_run)
+                if selections and model_run.get("run_id") != run_id:
+                    raise ValidationError("frozen reviewer model run mismatch")
+                model_reports = {rep.get("reviewer"): rep for rep in evidence.get("reports") or [] if isinstance(rep, dict)}
+                for role in reviewers:
+                    validate_model_evidence(model_run, role, model_reports.get(role, {}).get("model_selection"))
+            except (ValidationError, OSError, ValueError) as exc:
+                reasons.append(str(exc))
+                checks[-1]["status"] = "FAIL"
+                checks[-1]["detail"] = str(exc)
             override_evidence = evidence if evidence.get("developer_override") else None
             if override_evidence is None and (store.run_dir(snapshot, run_id) / "review_override.json").is_file():
                 # Recorded after the reviews as its own append-only artifact (N11). It accepts

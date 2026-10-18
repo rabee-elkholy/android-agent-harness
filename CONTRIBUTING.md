@@ -93,3 +93,14 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 3. Add tests to `_hook_selftest.py` and run tests.
 4. Update `CHANGELOG.md` under an `[Unreleased]` or target release section.
 5. Push your branch and open a PR with the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).
+
+## Publishing an approved release
+
+The maintainer may publish through the existing release CLI, or merge an explicit
+`release: v<agents/VERSION>` commit to `main`. The validated-release workflow acts
+only after successful canonical CI for that exact main commit. It validates
+metadata and the unchanged release tag across the existing OS matrix, creates
+the GitHub release, and dispatches the existing trusted PyPI workflow. Ordinary
+main commits do not publish. Conflicting tags are never overwritten. An existing
+published release is not republished automatically; diagnose/retry a failed PyPI
+job through its existing workflow.

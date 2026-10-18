@@ -300,6 +300,7 @@ def record_dispatch_batch(
                 "change_set_sha256": change_set,
                 "review_package_sha256": pkg_sha,
                 "dispatch_nonce": dispatch_nonce,
+                "review_models_sha256": (current.get("review_models") or {}).get("sha256"),
                 "host": run_host,
                 "dispatched_at": utc_now(),
             }
@@ -404,7 +405,7 @@ def _extract_v2_objects(text: str) -> list[dict[str, Any]]:
                     candidates.append(obj)
                 idx = end_idx
                 continue
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
         idx += 1
     return candidates

@@ -278,6 +278,10 @@ def state_root(repo: Path) -> Path:
     return installed if (repo / ".agents").is_dir() else repo / "agents" / "state"
 
 
+def task_dir(repo: Path, task_id: str) -> Path:
+    return state_root(repo) / "tasks" / validate_id(task_id, "task id")
+
+
 def active_review_package_path(repo: Path, current_run: dict[str, Any], root: Path | None = None) -> Path:
     run_id = str(current_run.get("run_id") or "").strip()
     snapshot = str(current_run.get("delivery_snapshot_sha256") or "").strip()
@@ -285,7 +289,7 @@ def active_review_package_path(repo: Path, current_run: dict[str, Any], root: Pa
         try:
             m = read_json(Path(current_run["manifest"]))
             snapshot = str(m.get("delivery_snapshot_sha256") or "").strip()
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
     base = root if root is not None else state_root(repo)
     canonical = base / "runs" / snapshot / run_id / "review-package.md"

@@ -15,6 +15,7 @@ from _live_process import enable_line_buffered_stdio, live_print, step_progress,
 from _repo_files import ChangedFile, changed_files  # noqa: E402
 from _vnext_common import canonical_sha256  # noqa: E402
 from delivery_manifest import is_delivery_relevant  # noqa: E402
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 
 SCHEMA_VERSION = 1
@@ -202,7 +203,7 @@ def _room_schema_types(repo: Path) -> set[str]:
                 types.update(decl.entity_names)
             except Exception:
                 continue
-    except Exception:
+    except (OSError, ValueError, ImportError, _ExpectedArtifactError):
         pass
     return types
 
@@ -318,7 +319,7 @@ def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list
             surface = next(iter(resolved_surfaces))
             _TYPE_SURFACE_CACHE[cache_key] = surface
             return surface, f"{type_name} -> {surface}"
-    except Exception:
+    except (OSError, ValueError, _ExpectedArtifactError):
         pass
 
     _TYPE_SURFACE_CACHE[cache_key] = None
@@ -772,7 +773,7 @@ def classify(
                 types_in_file = {Path(rel).stem} | declared_type_names(full_text)
                 if types_in_file & room_types:
                     _add(found, "ROOM_SCHEMA", rel, "ROOM_ENTITY_OR_EMBEDDED_TYPE")
-            except Exception:
+            except (OSError, ValueError, ImportError, _ExpectedArtifactError):
                 pass
         if (
             suffix in (".gradle", ".kts", ".toml", ".properties", ".xcconfig", ".pbxproj", ".xcscheme")
@@ -821,7 +822,7 @@ def classify(
             try:
                 from _product import PROJECT_KIND
                 is_library = (str(PROJECT_KIND or "").lower() == "library")
-            except Exception:
+            except (OSError, ValueError, ImportError, _ExpectedArtifactError):
                 pass
 
             if has_explicit_public:

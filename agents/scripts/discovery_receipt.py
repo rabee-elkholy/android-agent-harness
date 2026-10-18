@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 
 DISCOVERY_CACHE_SUBDIR = Path(".agents") / "cache" / "discovery"
@@ -153,7 +154,7 @@ def load_discovery_receipt(repo: Path, receipt_id: str) -> dict[str, Any] | None
         data = json.loads(rec_path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             return data
-    except Exception:
+    except (OSError, ValueError, _ExpectedArtifactError):
         pass
     return None
 
@@ -181,7 +182,7 @@ def load_latest_discovery_receipt(repo: Path, max_age_seconds: float = 3600.0) -
         data = json.loads(latest_file.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             return data
-    except Exception:
+    except (OSError, ValueError, _ExpectedArtifactError):
         pass
     return None
 

@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file, utc_now, atomic_write_json  # noqa: E402
 from _vnext_common import active_review_package_path as _vnext_active_package_path  # noqa: E402
 from evidence_store import EvidenceStore, StateLock  # noqa: E402
-from workflow import SENSITIVE_SURFACES, assert_active_run_fresh, state_root, task_dir  # noqa: E402
+from workflow import SENSITIVE_SURFACES, assert_active_run_fresh
+from _vnext_common import state_root, task_dir  # noqa: E402
 from review_sources import find_claude_subagent_transcript, is_claude_transcript, read_claude_subagent_transcript  # noqa: E402
 
 
@@ -86,27 +87,33 @@ def parse_verdict(reviewer: str, text: str) -> dict:
 
 
 def _extract_transcript_response(transcript_path: Path) -> str:
-    """Reads transcript.jsonl or transcript.json and returns the final assistant message."""
+    """Read a structured transcript or reject malformed input with a diagnostic."""
     target_path = transcript_path
     if transcript_path.name == "transcript.jsonl":
         full_cand = transcript_path.with_name("transcript_full.jsonl")
         if full_cand.is_file():
             target_path = full_cand
-    raw = target_path.read_text(encoding="utf-8", errors="replace")
-    if transcript_path.suffix.lower() == ".jsonl" or "\n{" in raw:
-        lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
-        for step in reversed(lines):
-            source = str(step.get("source") or "").upper()
-            stype = str(step.get("type") or "").upper()
-            content = str(step.get("content") or "")
-            if content and (source == "MODEL" or stype in ("PLANNER_RESPONSE", "ASSISTANT_RESPONSE")):
-                return content
-        if lines and lines[-1].get("content"):
-            return str(lines[-1]["content"])
-    else:
-        data = json.loads(raw)
-        if isinstance(data, dict):
+    try:
+        raw = target_path.read_text(encoding="utf-8")
+        if target_path.suffix.lower() == ".jsonl" or "\n{" in raw:
+            lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
+            if any(not isinstance(step, dict) for step in lines):
+                raise ValidationError("Transcript entries must be JSON objects")
+            for step in reversed(lines):
+                source = str(step.get("source") or "").upper()
+                stype = str(step.get("type") or "").upper()
+                content = str(step.get("content") or "")
+                if content and (source == "MODEL" or stype in ("PLANNER_RESPONSE", "ASSISTANT_RESPONSE")):
+                    return content
+            if lines and lines[-1].get("content"):
+                return str(lines[-1]["content"])
+        else:
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValidationError("Transcript must contain a JSON object")
             return str(data.get("content") or data.get("response") or raw)
+    except (OSError, ValueError) as exc:
+        raise ValidationError(f"Cannot read reviewer transcript {target_path}: {exc}") from exc
     return raw
 
 
@@ -508,7 +515,10 @@ def _ingest_locked(repo: Path, task_id: str, reports: list[Path]) -> Path:
             if not str(finding.get("message") or "").strip():
                 raise ValidationError(f"reviewer {reviewer} finding has no message")
         findings.extend({"reviewer": reviewer, **item} for item in report_findings if isinstance(item, dict))
+        from review_models import model_evidence
+        selected_model_evidence = model_evidence(current, reviewer, report)
         report_identities.append({
+            "model_selection": selected_model_evidence,
             "reviewer": reviewer,
             "report_sha256": sha256_file(report_path),
             "verdict": verdict,
@@ -542,7 +552,7 @@ def _ingest_locked(repo: Path, task_id: str, reports: list[Path]) -> Path:
             val_data = read_json(val_path)
             if isinstance(val_data, dict) and isinstance(val_data.get("validations"), list):
                 validations = val_data["validations"]
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
     version_file = (repo / ".agents" / "VERSION") if (repo / ".agents").is_dir() else (repo / "agents" / "VERSION")
     harness_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.0"
@@ -870,7 +880,7 @@ def main(argv: list[str] | None = None) -> int:
                         rc["subagent_id"] = conv_id
                         rc["receipt_sha256"] = canonical_sha256({k: v for k, v in rc.items() if k != "receipt_sha256"})
                         atomic_write_json(receipt_file, rc)
-                except Exception:
+                except (OSError, ValueError, ValidationError):
                     pass
 
             manifest = read_json(Path(current["manifest"]))

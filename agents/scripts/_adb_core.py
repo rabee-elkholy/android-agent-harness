@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _env_codes import device_gone_reason  # noqa: E402
 from _repo_files import repo_glob  # noqa: E402
 from _product import APPLICATION_ID, LAUNCHER  # noqa: E402
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
@@ -485,7 +486,7 @@ def parse_flow_definition(content: str) -> dict:
                 return {"appId": None, "steps": data}
             if isinstance(data, dict):
                 return {"appId": data.get("appId") or data.get("app_id"), "steps": data.get("steps") or data.get("actions") or []}
-        except Exception:
+        except (OSError, ValueError, _ExpectedArtifactError):
             pass
 
     app_id: str | None = None
@@ -626,7 +627,7 @@ def discover_diff_targets(repo: Path) -> dict:
                                 results["target_strings"].append(m.strip())
                     except Exception:
                         continue
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError, _ExpectedArtifactError):
         pass
 
     if results["target_activity"]:
@@ -1033,7 +1034,7 @@ class DeviceSession:
             if proc.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 1000:
                 return out_path
             out_path.unlink(missing_ok=True)
-        except Exception:
+        except (OSError, ValueError, subprocess.SubprocessError, _ExpectedArtifactError):
             pass
         return None
 

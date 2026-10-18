@@ -30,7 +30,7 @@ def _dns_query_fallback(
             if sock:
                 try:
                     sock.close()
-                except Exception:
+                except (OSError, ValueError):
                     pass
         if len(data) < 12:
             continue

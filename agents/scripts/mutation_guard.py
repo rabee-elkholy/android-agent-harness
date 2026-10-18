@@ -14,7 +14,7 @@ VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
-    "phase_review", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps",
+    "phase_review", "review_models", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps",
 }
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
@@ -148,6 +148,10 @@ def _valid_context_targets(args: list[str]) -> bool:
 
 def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
+    if name == "review_models" and (not args or args[0] == "show"):
+        return True
+    if name in {"harness_cli", "android-harness"} and args[:2] == ["review", "models"] and (len(args) == 2 or args[2] == "show"):
+        return True
     if name == "verification_contract" and args[:1] == ["coverage"]:
         return True
     if name == "journey_runner" and args[:1] in (["list"], ["validate"]):
@@ -294,7 +298,7 @@ def active_plan(repo: Path | str, *, allow_missing: bool = False) -> dict:
                 return read_json(plan_resolved)
         except ValidationError:
             raise
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
 
     tasks_dir = state / "tasks"
@@ -318,7 +322,7 @@ def active_plan(repo: Path | str, *, allow_missing: bool = False) -> dict:
             try:
                 from _vnext_common import atomic_write_json, utc_now
                 atomic_write_json(active_file, {"task_id": chosen_tid, "plan_path": str(chosen_file), "updated_at": utc_now()})
-            except Exception:
+            except (OSError, ValueError, ImportError, ValidationError):
                 pass
             return chosen_plan
         elif len(candidates) > 1:
@@ -836,6 +840,20 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     raw_entry, _ = _entry(normalized, repo)
     if raw_entry in {"adb", "gradlew", "gradlew.bat", "gradle"}:
         return False, "Direct Gradle/ADB execution is blocked; use the harness build or device commands."
+    entry, model_args = _entry(normalized, repo)
+    if entry in {"harness_cli", "android-harness"} and model_args[:2] == ["review", "models"]:
+        entry, model_args = "review_models", model_args[2:]
+    if entry == "review_models" and model_args[:1] == ["set"]:
+        def value(flag):
+            for index, arg in enumerate(model_args):
+                if arg.startswith(flag + "="):
+                    return arg.split("=", 1)[1]
+                if arg == flag and index + 1 < len(model_args):
+                    return model_args[index + 1]
+            return ""
+        if value("--source") == "conversation" and value("--proof-reference").strip():
+            return True, "explicit developer reviewer-model decision; command validates native policy"
+        return False, "review model changes require the developer's explicit conversation decision and proof reference"
     if _workflow_action(normalized, repo) != "continue" and not _is_read_only(normalized, repo):
         try:
             plan = active_plan(Path(repo))

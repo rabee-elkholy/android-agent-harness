@@ -188,7 +188,7 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
                     v_lines.append(f"- Finding `{fid}`: **{st}** | Reason: {re_msg} (Ref: {ref})")
                 v_lines.append("\n")
                 extras.append("\n".join(v_lines))
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
     contract = plan.get("architecture_contract")
     if contract:
@@ -240,10 +240,11 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         provenance = format_phase_provenance_section(repo, task_id)
         if provenance:
             extras.append("\n" + provenance + "\n")
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
     metadata = {
+        "review_models": current.get("review_models"),
         "schema_version": 1,
         "task_id": task_id,
         "run_id": current["run_id"],
@@ -472,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 active_data = json.loads(active_p.read_text(encoding="utf-8"))
                 task_id = active_data.get("task_id")
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
     if not task_id:
         print("[FAIL] --task or HARNESS_TASK_ID is required", file=sys.stderr)

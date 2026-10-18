@@ -283,7 +283,7 @@ def resolve_target_task(repo: Path, requested_task: str | None) -> str:
                 from wizard.discovery import _catalog_plugin_ids
                 task_suffix = _kmp_or_module_test_suffix(repo, single_mod, build_text, _catalog_plugin_ids(repo), task_suffix)
             return f"{single_mod}:{task_suffix}"
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
     return default_task
 

@@ -6,6 +6,7 @@ import os
 import platform
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,8 @@ from .models import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from harness_shared.commands import split_command
 from _enforcement import detect as detect_enforcement  # noqa: E402
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent.parent
@@ -202,7 +205,7 @@ class HarnessDoctor:
             git_exclude = Path(raw) if Path(raw).is_absolute() else (self.repo / raw).resolve()
             if proc.returncode == 0 and git_exclude.is_file():
                 ignore_files.append(git_exclude)
-        except Exception:
+        except (OSError, ValueError, subprocess.SubprocessError):
             pass
 
         if not ignore_files:
@@ -213,7 +216,7 @@ class HarnessDoctor:
         for ig_file in ignore_files:
             try:
                 combined_ignore += ig_file.read_text(encoding="utf-8", errors="ignore") + "\n"
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
         required_patterns = {
@@ -563,7 +566,7 @@ class HarnessDoctor:
                         f"flavor task mismatch for '{flavor_name}': answers.json '{task}' "
                         f"resolves to '{resolved}'."
                     )
-        except Exception:
+        except (OSError, ValueError, ImportError):
             pass
 
         try:
@@ -665,14 +668,14 @@ class HarnessDoctor:
                 continue
             try:
                 text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
         toml_path = self.repo / "gradle" / "libs.versions.toml"
         if toml_path.is_file():
             try:
                 text_corpus += toml_path.read_text(encoding="utf-8", errors="ignore") + "\n"
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
         for p in self._repo_files(("AndroidManifest.xml",), skip_parts):
@@ -680,7 +683,7 @@ class HarnessDoctor:
                 continue
             try:
                 text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
         scanned_kt = 0
@@ -1177,7 +1180,7 @@ class HarnessDoctor:
                 ans = json.loads(answers_file.read_text(encoding="utf-8"))
                 tools = ans.get("tools") or []
                 is_ag = bool("antigravity" in tools)
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
         if not self.is_raw_kit:
@@ -1251,9 +1254,15 @@ class HarnessDoctor:
                                 if not cmd_str or cmd_str in checked_cmds:
                                     continue
                                 checked_cmds.add(cmd_str)
-                                parts = cmd_str.split()
+                                parts = split_command(cmd_str)
+                                if len(parts) < 2:
+                                    hook_errors.append(f"Hook command has no script: '{cmd_str}'")
+                                    continue
                                 py_exe = parts[0]
                                 resolved_py = shutil.which(py_exe)
+                                if not resolved_py and self.is_raw_kit and py_exe in {"python", "python3"}:
+                                    # Raw kit hooks are templates; installed hooks must resolve literally.
+                                    resolved_py = shutil.which("python3") or sys.executable
                                 if not resolved_py:
                                     hook_errors.append(f"Python executable '{py_exe}' not found for hook '{cmd_str}'")
                                     continue
@@ -1324,7 +1333,7 @@ class HarnessDoctor:
                                     self.log(cat, "Enforcement Metadata", "FAIL", "Antigravity is selected but enforcement metadata says only generic Gemini.")
                                 else:
                                     self.log(cat, "Enforcement Metadata", "PASS", "Enforcement metadata preserves semantic host 'antigravity'.")
-                except Exception:
+                except (OSError, ValueError, ImportError):
                     pass
         else:
             self.log(cat, "Mutation Interception", "PASS", "Kit repository template mode (hooks.json present in kit).")
@@ -1414,7 +1423,7 @@ class HarnessDoctor:
             try:
                 import _product
                 cap = getattr(_product, "MODEL_CALL_BUDGET", 20)
-            except Exception:
+            except (OSError, ValueError, ImportError):
                 pass
         self.log(cat, "Reviewer Execution Policy", "PASS", f"Reviewer Model Policy = INHERIT_PARENT_BY_OMISSION; Reviewer Reasoning Override = unavailable (inherits parent); Reviewer Call Safety Cap = {cap}")
 

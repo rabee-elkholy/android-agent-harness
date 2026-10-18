@@ -441,7 +441,7 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
                 try:
                     content = changed.read_text(encoding="utf-8", errors="replace")
                     keys.update(_extract_touched_keys_from_xml(content, new_lines))
-                except Exception:
+                except (OSError, ValueError):
                     pass
             if old_lines:
                 proc_head = subprocess.run(

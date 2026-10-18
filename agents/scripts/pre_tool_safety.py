@@ -145,6 +145,17 @@ def _developer_authority_violation(command: str) -> str:
         if subcommand in ("approve", "approve-sensitive"):
             if _flag(rest, "--source").lower() != "conversation":
                 return "approve"
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    for pos, token in enumerate(tokens):
+        name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        rest = tokens[pos + 1:]
+        is_models = name == "review_models.py" or (name in TASK_ENTRYPOINTS and rest[:2] == ["review", "models"])
+        if is_models and "set" in rest and not any(flag in rest for flag in ("-h", "--help")):
+            if _flag(rest, "--source") != "conversation" or not _flag(rest, "--proof-reference"):
+                return "review-models"
     return ""
 
 
@@ -217,7 +228,7 @@ def _record_cancel_request(task_id: str) -> None:
     try:
         from _vnext_common import atomic_write_json
         atomic_write_json(state_root(REPO) / CANCEL_REQUEST_FILE, {"task_id": task_id, "requested_at": time.time()})
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
 
@@ -303,7 +314,7 @@ def _audit(
                     os.unlink(temp_name)
                 except OSError:
                     pass
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
 
@@ -446,7 +457,7 @@ def _handle_command(command: str) -> None:
     try:
         p = active_plan(REPO)
         active_tid = str(p.get("task_id") or "")
-    except Exception:
+    except (OSError, ValueError, ValidationError):
         pass
     violated = _developer_authority_violation(command)
     if violated == "cancel":
@@ -517,7 +528,7 @@ def _handle_command(command: str) -> None:
             )
             if probe.get("status") in {"RESOLVED", "AMBIGUOUS"}:
                 reason = f"targeted task_context executed: {reason}"
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
     emit("allow" if allowed else "deny", reason, tool="run_command", command=command, reason_code="HARNESS_COMMAND" if allowed else "COMMAND_MUTATION_GUARD", task_id=active_tid)
 
@@ -535,7 +546,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             ps_file = state_dir / "tasks" / str(plan.get("task_id") or "") / "phase-state.json"
             if ps_file.is_file():
                 phase_id = str(read_json(ps_file).get("current_phase_id") or "")
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
     briefs = dict(act.get("briefs") or {})
 
@@ -1378,7 +1389,7 @@ def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
                 norm_er = str(er).replace("\\", "/").strip().lstrip("/").lower().rstrip("/")
                 if norm_er:
                     roots.add(norm_er)
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
     arch = plan.get("architecture_contract") or {}
@@ -1405,7 +1416,7 @@ def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
         from discovery_router import _is_exact_non_architectural_file
         if _is_exact_non_architectural_file(target_str):
             return True
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
     roots, files = _get_active_task_scope(repo, plan)
@@ -1415,7 +1426,7 @@ def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
             rec = load_latest_discovery_receipt(repo)
             if rec and check_discovery_freshness(repo, rec)[0] and is_path_in_discovery_scope(repo, target_str, rec):
                 return True
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
         return False
 
@@ -1442,7 +1453,7 @@ def _is_contract_file(path: str) -> bool:
         from discovery_router import _is_exact_non_architectural_file
         if _is_exact_non_architectural_file(norm):
             return True
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
     return False
 
@@ -1473,7 +1484,7 @@ def _is_path_in_verifying_scope(repo: Path, target_path: str, plan: dict) -> tup
             try:
                 run_data = json.loads(run_file.read_text(encoding="utf-8"))
                 review_scope = run_data.get("review_scope") or {}
-            except Exception:
+            except (OSError, ValueError, ValidationError):
                 pass
     if not review_scope:
         review_scope = plan.get("review_scope") or {}
@@ -1511,7 +1522,7 @@ def _is_path_in_verifying_scope(repo: Path, target_path: str, plan: dict) -> tup
             fresh, _ = check_discovery_freshness(repo, receipt)
             if fresh and is_path_in_discovery_scope(repo, target_str, receipt):
                 return True, "GRAPH_EXPANSION_ALLOWED"
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
     return False, "OUT_OF_SCOPE"
@@ -1536,7 +1547,7 @@ def _handle_list_dir(name: str, args: dict) -> None:
             if dir_target and _is_exact_non_architectural_file(dir_target):
                 emit("allow", "Exact non-architectural directory listing allowed under D0.", tool=name, reason_code="LIST_DIR_ALLOWED")
                 return
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
         emit(
             "deny",
@@ -1656,7 +1667,7 @@ def _handle_search(name: str, args: dict) -> None:
             if target and _is_exact_non_architectural_file(target):
                 emit("allow", "Exact non-architectural file search allowed under D0.", tool=name, reason_code="SEARCH_ALLOWED")
                 return
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
 
         clean_target = target.replace("\\", "/").strip()
@@ -1701,7 +1712,7 @@ def _handle_search(name: str, args: dict) -> None:
         if target and _is_exact_non_architectural_file(target):
             emit("allow", "Exact non-architectural file search allowed under D0.", tool=name, reason_code="SEARCH_ALLOWED")
             return
-    except Exception:
+    except (OSError, ValueError, ImportError, ValidationError):
         pass
 
     # Deny initial code search without discovery anchor

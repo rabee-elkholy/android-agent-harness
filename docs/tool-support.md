@@ -66,6 +66,10 @@ a stable `operation_id`; terminal states such as Done remain developer-owned.
 
 ## Review behavior
 
+Claude Code also supports developer-selected native reviewer model aliases,
+with project defaults and task/per-role overrides frozen per run. See
+[reviewer models](reviewer-models.md). Other current adapters remain inherit-only.
+
 The final change classification selects the smallest valid reviewer set from the adaptive 6-tier risk policy. Eligible micro-changes use `REVIEW_NOT_REQUIRED_BY_POLICY`. Normal business logic, UI, coroutine, network, persistence, and build changes select their relevant specialist roles. Critical security, billing, authentication, cryptography, or sensitive-data changes select all applicable specialist roles.
 
 On **Google Antigravity**:

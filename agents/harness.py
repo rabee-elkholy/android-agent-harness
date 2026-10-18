@@ -105,7 +105,7 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
                     from review_package import build_package
                     build_package(REPO_ROOT, task_id)
                     action = resolve_next_action(REPO_ROOT, task_id, plan)
-                except Exception:
+                except (OSError, ValueError, ImportError):
                     pass
     except Exception:
         return
@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
                         task_id = str(json.loads(active.read_text(encoding="utf-8")).get("task_id") or "")
                 if task_id:
                     record_operation(REPO_ROOT, task_id, operation, time.monotonic() - monotonic, code, started)
-        except Exception:
+        except (OSError, ValueError, ImportError):
             pass
     # Never after --json (the output must stay pure JSON) or help.
     step = args[0] in NEXT_STEP_COMMANDS if args else False
@@ -266,15 +266,10 @@ def _main(argv: list[str] | None = None) -> int:
             forwarded = [task_str]
         return _run("run_gradle_task.py", forwarded)
     if command == "review":
-        if args and args[0] == "package":
-            return _run("review_package.py", args[1:])
-        if args and args[0] == "profile":
-            return _run("review_execution.py", args[1:])
-        if args and args[0] == "ingest":
-            return _run("record_review.py", args[1:])
-        if args and args[0] in ("complete", "finalize", "dispatch", "dispatch-batch", "status"):
-            return _run("review_orchestrator.py", args)
-        return _run("record_review.py", args)
+        sys.path.insert(0, str(AGENTS_ROOT))
+        from harness_shared.commands import review_command
+        script, forward = review_command(args)
+        return _run(script, forward)
     if command == "phase-review":
         return _run("phase_review.py", args)
     if command == "device":

@@ -62,7 +62,7 @@ def _read_cache() -> dict:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 return data
-        except Exception:
+        except (OSError, ValueError):
             pass
     return {}
 
@@ -70,7 +70,7 @@ def _read_cache() -> dict:
 def _write_cache(data: dict) -> None:
     try:
         get_cache_file().write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 

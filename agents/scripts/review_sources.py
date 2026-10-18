@@ -203,4 +203,9 @@ def read_claude_subagent_transcript(path: Path) -> tuple[str, dict]:
     return text, {
         "transcript_path": str(path.resolve()),
         "transcript_sha256": hashlib.sha256(data).hexdigest(),
+        "host_reported_model": (last.get("message") or {}).get("model"),
+        "host_reported_models": sorted({
+            entry["message"]["model"] for entry in assistant
+            if isinstance(entry["message"].get("model"), str) and entry["message"]["model"]
+        }),
     }

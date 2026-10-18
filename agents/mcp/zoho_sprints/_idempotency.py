@@ -5,10 +5,14 @@ import hashlib
 import json
 import os
 import tempfile
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from harness_shared.processes import pid_alive as _pid_alive
 
 
 def ledger_path() -> Path:
@@ -51,14 +55,7 @@ def _read(path: Path) -> dict:
     return data
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return pid > 0
-    except PermissionError:
-        return True
-    except (OSError, ValueError):
-        return False
+
 
 
 @contextmanager

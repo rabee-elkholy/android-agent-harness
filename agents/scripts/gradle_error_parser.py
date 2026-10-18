@@ -11,7 +11,7 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 KOTLIN_ERROR_RE = re.compile(

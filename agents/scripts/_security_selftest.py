@@ -2141,7 +2141,7 @@ class SecurityTests(unittest.TestCase):
             enforcement_tier="RULE_ENFORCED",
         ))
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
-        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
 
         pkg_path, metadata = build_package(self.repo, task_id)
         self.assertTrue(pkg_path.is_file())
@@ -2435,7 +2435,8 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
     def test_REASON_INSTALL_001_questions_payload_has_no_review_model_policy(self):
         from wizard import questions
         qs = questions.questions_payload(self.repo, "en")
-        self.assertFalse(any(q.get("id") == "review_model_policy" for q in qs))
+        q = next(q for q in qs if q.get("id") == "review_model_policy")
+        self.assertEqual({"id": "i14", "equals": ["claude"]}, q["depends_on"])
 
     def test_REASON_INSTALL_002_questions_payload_still_contains_review_call_budget(self):
         from wizard import questions
@@ -2467,7 +2468,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         questions.write_answers(self.repo, {"product": "App", "tools": ["antigravity"], "model_call_budget": 10})
         md = discovery.markdown_path(self.repo).read_text(encoding="utf-8")
         self.assertIn("- Primary AI host: antigravity", md)
-        self.assertIn("- Reviewer model: parent model inheritance by omission", md)
+        self.assertIn('- Reviewer model settings: {"default": "inherit"}', md)
 
     def test_REASON_INSTALL_007_setup_answers_says_reviewer_reasoning_adaptive(self):
         from wizard import questions, discovery

@@ -284,7 +284,7 @@ def cmd_instruct(args: argparse.Namespace) -> int:
             loaded = json.loads(inst_file.read_text(encoding="utf-8"))
             if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
                 existing_store = loaded
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     if supersedes_id:

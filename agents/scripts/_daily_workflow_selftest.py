@@ -3497,6 +3497,8 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         plan, tdir, policy, manifest = self._setup_verifying_task(task_id)
         current = read_json(tdir / "current-run.json")
         current["review_protocol_version"] = 1
+        from review_models import transfer_models
+        current["review_models"] = transfer_models(current, "claude", list((current.get("review_models") or {}).get("reviewers") or []))
         current["review_host"] = "claude"
         atomic_write_json(tdir / "current-run.json", current)
         policy.update({"gates": ["preflight"], "reviewers": ["bug-reviewer-agent"], "assemble_required": False,
@@ -5107,7 +5109,7 @@ def _managed_instruction_files(kit: Path) -> list[Path]:
         kit / "CODEX.md",
         kit / "QWEN.md",
         kit / "agents" / "rules" / "harness-rules.md",
-        kit / "templates" / "gemini-runtime" / "android-harness-global.md.template",
+        kit / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template",
         kit / "agents" / "skills" / "android-harness" / "SKILL.md",
         kit / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
         kit / "agents" / "workflows" / "deliver.md",
@@ -6399,6 +6401,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def _setup_claude_v1_task(self, task_id: str, reviewers: list[str] | None = None) -> tuple[dict, str, str, Path]:
         current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, reviewers or ["bug-reviewer-agent"])
         current["review_protocol_version"] = 1
+        from review_models import transfer_models
+        current["review_models"] = transfer_models(current, "claude", list((current.get("review_models") or {}).get("reviewers") or []))
         current["review_host"] = "claude"
         atomic_write_json(tdir / "current-run.json", current)
         policy = read_json(Path(current["policy"]))
@@ -6926,7 +6930,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertIn("antigravity", captured_hosts)
 
     def test_REVIEW_HOST_ROUTER_002_default_host_is_generic(self) -> None:
-        """REVIEW-HOST-ROUTER-002: Default host parameter of resolve_execution_profile is generic."""
+        """REVIEW-HOST-ROUTER-002: A generic profile request resolves the frozen run host."""
         import inspect
         from review_execution import resolve_execution_profile
         sig = inspect.signature(resolve_execution_profile)
@@ -6935,7 +6939,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         task_id = "test-router-host-002"
         current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
         prof = resolve_execution_profile(self.repo, task_id)
-        self.assertEqual("generic", prof.get("host"))
+        self.assertEqual(current["review_host"], prof.get("host"))
 
     def test_REVIEW_HOST_ROUTER_003_explicit_antigravity_resolves_antigravity_routes(self) -> None:
         """REVIEW-HOST-ROUTER-003: Explicit antigravity host still resolves Antigravity routes."""
@@ -7033,7 +7037,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertIn("--host antigravity", tmpl_md)
         self.assertIn("Review Host Binding", tmpl_md)
 
-        global_tmpl = (KIT / "templates" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
+        global_tmpl = (KIT / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
         self.assertIn("--host antigravity", global_tmpl)
         self.assertIn("Review Host Binding", global_tmpl)
 
@@ -8066,7 +8070,7 @@ class DocumentationConsistencyTests(unittest.TestCase):
             self.root / "README.md",
             self.root / "docs" / "quickstart.md",
             self.root / "docs" / "setup-prompt.md",
-            self.root / "templates" / "gemini-runtime" / "android-harness-global.md.template",
+            self.root / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template",
             self.root / "agents" / "tool-adapters" / "GEMINI.md.template",
         ]
         for p in active_paths:

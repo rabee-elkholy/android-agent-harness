@@ -23,7 +23,7 @@ def detect(repo: Path, tools: list[str] | None = None) -> dict:
             try:
                 data = json.loads(answers_file.read_text(encoding="utf-8"))
                 tools = data.get("tools")
-            except Exception:
+            except (OSError, ValueError):
                 pass
         if not tools and (root / ".agents/hooks.json").is_file():
             tools = ["antigravity"]

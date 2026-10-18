@@ -228,7 +228,7 @@ def github_release_exists(tag_name: str) -> bool:
 
 
 def wait_for_workflow(
-    workflow: str, sha: str, *, branch: str = "main", timeout: float = 1800, accept_pull_request: bool = False,
+    workflow: str, sha: str, *, branch: str = "main", timeout: float = 1800, accept_pull_request: bool = False, accept_dispatch: bool = False,
 ) -> bool:
     """Require a successful completed run for the exact commit and ref.
 
@@ -243,7 +243,7 @@ def wait_for_workflow(
             "--json", "databaseId,headSha,status,conclusion,event,headBranch",
         ]
         if not accept_pull_request:
-            command[7:7] = ["--branch", branch, "--event", "push"]
+            command[7:7] = ["--branch", branch] + ([] if accept_dispatch else ["--event", "push"])
         result = run_cmd(command, check=False)
         if result.returncode != 0:
             print(f"[FAIL] Cannot verify {workflow}: {result.stderr.strip()}")
@@ -254,6 +254,7 @@ def wait_for_workflow(
                 if run.get("headSha") == sha
                 and (
                     (run.get("event", "push") == "push" and run.get("headBranch", branch) == branch)
+                    or (accept_dispatch and run.get("event") == "workflow_dispatch" and run.get("headBranch") == branch)
                     or (accept_pull_request and run.get("event") == "pull_request")
                 )
             ]
@@ -552,7 +553,6 @@ def main(argv: list[str] | None = None) -> int:
             "harness_cli.py",
             "docs/",
             "scripts_dev/",
-            "templates/",
         ]
         run_cmd(["git", "add", *stage_paths])
 

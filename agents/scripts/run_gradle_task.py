@@ -32,6 +32,7 @@ from _live_process import enable_line_buffered_stdio, live_print, run_streaming,
 from _variants import resolve_or_raise  # noqa: E402
 from gradle_error_parser import format_errors, parse_compiler_errors  # noqa: E402
 from artifact_set import build_artifact_set, resolve_artifacts  # noqa: E402
+from _vnext_common import ValidationError as _ExpectedArtifactError
 
 _env_repo = os.environ.get("HARNESS_REPO", "").strip()
 
@@ -190,7 +191,7 @@ def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
             b = wrapper.read_bytes()
             if b"\r\n" in b:
                 wrapper.write_bytes(b.replace(b"\r\n", b"\n"))
-        except Exception:
+        except (OSError, ValueError, _ExpectedArtifactError):
             pass
     target = "./gradlew" if wrapper.name == "gradlew" else str(wrapper)
     for shell in posix_shell_candidates():
@@ -250,7 +251,7 @@ def validate_reviewer_precondition_before_assemble(
         try:
             active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
             tid = str(active_task_data.get("task_id") or "").strip()
-        except Exception:
+        except (OSError, ValueError, _ExpectedArtifactError):
             pass
 
     if not tid:

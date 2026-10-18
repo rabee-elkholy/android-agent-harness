@@ -263,7 +263,7 @@ def _gate_passed(state_root: Path, current_run: dict, gate_name: str) -> bool:
             manifest_p = Path(str(current_run["manifest"]))
             if manifest_p.is_file():
                 change_set = str(read_json(manifest_p).get("change_set_sha256") or "")
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
     if snapshot and run_id and change_set:
         try:
@@ -567,7 +567,7 @@ def _record_signoff(args: argparse.Namespace) -> int:
             if (plan.get("verification_contract") or {}).get("device_validation") != "manual_or_automatic":
                 live_print(f"[SUCCESS] Device sign-off already recorded (idempotent): verdict={verdict} for task {task_id}")
                 return 0
-    except Exception:
+    except (OSError, ValueError, ValidationError):
         pass
 
     install_sha = ""
@@ -578,7 +578,7 @@ def _record_signoff(args: argparse.Namespace) -> int:
             install_ev = rec_inst.get("evidence") or {}
             if str(rec_inst.get("status") or "").upper() == "PASS":
                 install_sha = str(install_ev.get("artifact_set_sha256") or "") or "PASS"
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
 
         if not install_sha:
@@ -592,7 +592,7 @@ def _record_signoff(args: argparse.Namespace) -> int:
             launch_ev = rec_launch.get("evidence") or {}
             if str(rec_launch.get("status") or "").upper() == "PASS":
                 launch_sha = str(launch_ev.get("artifact_set_sha256") or "") or "PASS"
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
 
         if not launch_sha:
@@ -604,7 +604,7 @@ def _record_signoff(args: argparse.Namespace) -> int:
             rec_asm = store.read(snapshot, run_id, "assemble")
             assemble_ev = rec_asm.get("evidence") or {}
             assemble_sha = str(assemble_ev.get("artifact_set_sha256") or (assemble_ev.get("artifact_set") or {}).get("artifact_set_sha256") or "")
-        except Exception:
+        except (OSError, ValueError, ValidationError):
             pass
 
         if assemble_sha and install_sha and install_sha != "PASS" and assemble_sha != install_sha:
@@ -1063,7 +1063,7 @@ def main() -> int:
             live_print("[!] CRITICAL: DO NOT simply ask 'Did it pass' without first explaining the 4 test sections above in chat!\n")
             if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
                 live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
-        except Exception:
+        except (OSError, ValueError, ImportError, ValidationError):
             pass
 
     return 0

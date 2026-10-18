@@ -1354,7 +1354,7 @@ class LifecycleTests(RepoCase):
         logs = sync_hooks_json(self.repo, python_path, dry_run=False)
         payload = json.loads(hooks.read_text(encoding="utf-8"))
         self.assertEqual(
-            python_path + " agents/scripts/preflight_check.py",
+            __import__("harness_shared.commands", fromlist=["quote_executable"]).quote_executable(python_path) + " agents/scripts/preflight_check.py",
             payload["hooks"][0]["command"],
         )
         self.assertEqual(
@@ -3325,9 +3325,11 @@ class HarnessExecutionBoundaryTests(unittest.TestCase):
 
     def test_exec_boundary_005_workflow_guidance_and_walkthrough_timing(self) -> None:
         """Ensure workflow errors give actionable commands and walkthrough requires completed device install."""
-        workflow_py = (KIT / "agents" / "scripts" / "workflow.py").read_text(encoding="utf-8")
-        self.assertIn("REVIEW_BUDGET_EXHAUSTED", workflow_py)
-        self.assertIn("workflow.py draft --repo . --task-id", workflow_py)
+        import workflow
+        message = workflow.build_budget_exhausted_remediation({"severity": "HIGH"}, 20, 1, 20)
+        self.assertIn("REVIEW_BUDGET_EXHAUSTED", message)
+        self.assertIn("task review-budget", message)
+        self.assertIn("workflow.py draft --repo . --task-id", workflow.__doc__)
 
         self.assertIn("Device verification & mobile walkthrough timing", self.rules)
         self.assertIn("run_device.py install-start", self.rules)
@@ -3507,7 +3509,8 @@ class CleanInstallV2SpecificationTests(RepoCase):
         import wizard.questions as wq
         qs = wq.questions_payload(self.repo, "en")
         q = next((q for q in qs if q["id"] == "review_model_policy"), None)
-        self.assertIsNone(q)
+        self.assertIsNotNone(q)
+        self.assertEqual({"id": "i14", "equals": ["claude"]}, q["depends_on"])
 
     def test_SETUP_V2_005_questions_payload_contains_review_call_budget(self) -> None:
         """REASON-INSTALL-002: questions payload still contains review_call_budget"""
@@ -3556,7 +3559,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
         """REASON-CLEAN-004: installer asks no model escalation question and rejects it"""
         from wizard.schema import validate_raw_answers
         errors = validate_raw_answers({"review_model_policy": "inherit_only"})
-        self.assertTrue(any("unknown question keys in answers payload: review_model_policy" in e for e in errors))
+        self.assertTrue(any("review_model_policy" in e for e in errors))
 
     def test_SETUP_V2_012_invalid_review_call_budget_rejected(self) -> None:
         from wizard.schema import validate_raw_answers

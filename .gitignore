@@ -4,6 +4,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.zip
+build/
+dist/
+*.egg-info/
 agents/state/
 agents/cache/
 agents/scripts/__pycache__/

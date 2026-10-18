@@ -5,6 +5,10 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {"command": "review models show", "read_only": True, "valid_states": ["ANY"], "required_inputs": [], "model_facing": True,
+     "description": "Show developer reviewer-model policy, native host choices and frozen final-run selections."},
+    {"command": "review models set", "read_only": False, "valid_states": ["ANY"], "required_inputs": ["source", "proof_reference"], "model_facing": True,
+     "description": "Record an explicit developer model choice for future project or task reviews; never change an existing run or roster."},
     {"command": "policy", "read_only": True, "valid_states": ["ANY"],
      "required_inputs": [], "model_facing": True,
      "description": "Classify live changes once and return central policy, including surfaces, risk, gates and reviewer roles.",

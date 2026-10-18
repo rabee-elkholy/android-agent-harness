@@ -18,9 +18,60 @@ import release_version as release
 import validate_release as validation
 import _vnext_selftest as fixtures
 import lifecycle
+import publish_validated_release as automatic_release
 
 
 class ReleaseSafetyTests(unittest.TestCase):
+    def test_automatic_release_never_tags_failed_ci_moved_main_or_bad_metadata(self):
+        sha = "a" * 40
+        good_run = {"head_sha": sha, "head_branch": "main", "event": "push", "status": "completed",
+                    "conclusion": "success", "path": ".github/workflows/ci.yml"}
+        for failure in ("ci", "moved-main", "metadata", "tag-conflict", "tag-check", "none"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "agents").mkdir()
+                (root / "agents/VERSION").write_text("1.1.34\n")
+                commands = []
+                def run_command(*args, **kwargs):
+                    commands.append(args)
+                    if args[:2] == ("git", "rev-parse"):
+                        return sha
+                    if args[:2] == ("git", "log"):
+                        return "release: v1.1.34"
+                    return ""
+                def api(repository, path, **kwargs):
+                    if path.startswith("actions/runs/"):
+                        return dict(good_run, conclusion="failure") if failure == "ci" else good_run
+                    if path == "git/ref/heads/main":
+                        return {"object": {"sha": "b" * 40 if failure == "moved-main" else sha}}
+                    if path.startswith("git/ref/tags/"):
+                        if failure == "tag-conflict":
+                            return {"object": {"sha": "b" * 40}}
+                        return {"object": {"sha": sha}} if any("sha=" + sha in call for call in commands) else None
+                    return None
+                with mock.patch.object(automatic_release, "ROOT", root), \
+                     mock.patch.object(automatic_release, "command", side_effect=run_command), \
+                     mock.patch.object(automatic_release, "api", side_effect=api), \
+                     mock.patch.object(automatic_release, "validate_release", return_value=["invalid"] if failure == "metadata" else []), \
+                     mock.patch.object(automatic_release, "wait_for_workflow", return_value=failure != "tag-check"), \
+                     mock.patch.object(automatic_release, "extract_changelog_notes", return_value=("Release", "Notes")), \
+                     mock.patch.object(automatic_release, "publish_release", return_value=True) as publish:
+                    if failure == "none":
+                        self.assertTrue(automatic_release.publish("owner/repo", sha, "123"))
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            automatic_release.publish("owner/repo", sha, "123")
+                    tagged = any("sha=" + sha in call for call in commands)
+                    self.assertEqual(failure in ("tag-check", "none"), tagged)
+                    self.assertEqual(failure == "none", publish.called)
+
+    def test_dispatch_validation_gate_remains_bound_to_sha_and_tag(self):
+        sha = "a" * 40
+        run = dict(headSha=sha, headBranch="v1.1.34", event="workflow_dispatch", status="completed", conclusion="success", databaseId=1)
+        for change, accepted in (({}, True), ({"headSha": "b" * 40}, False), ({"headBranch": "main"}, False), ({"conclusion": "failure"}, False)):
+            with self.subTest(change=change), mock.patch.object(release, "run_cmd", return_value=subprocess.CompletedProcess([], 0, json.dumps([{**run, **change}]), "")):
+                self.assertEqual(accepted, release.wait_for_workflow("release-check.yml", sha, branch="v1.1.34", timeout=0, accept_dispatch=True))
+
     def test_workflow_integrity_requires_pinned_actions_and_supported_matrix(self):
         self.assertEqual([], validation.workflow_integrity_errors(KIT))
 

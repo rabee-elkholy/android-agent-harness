@@ -6,7 +6,7 @@ Printed by `python <kit-dir>/harness_cli.py chat-steps --repo <app-root>` after 
 UPDATE keeps the saved answers; skip to Phase 4.
 Run: `python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>`
 The setup wizard payload is the sole interview authority. Ask **only** the questions returned; respect `recommended` (1 per question); answers use each option's `id`. Context preview: `python <kit-dir>/harness_cli.py context preview --repo <app-root>`.
-- AI host: default **Google Antigravity** (`antigravity`). No model questions; reviewers inherit the model.
+- AI host: default **Google Antigravity** (`antigravity`), whose current reviewer schema supports inheritance only. Claude-only setup can select native reviewer models; see [reviewer models](reviewer-models.md).
 - Reviewer Call Safety Cap: the recommended `20`.
 If a question contains `conditional_text_input` and the selected option equals `when_option`, ask exactly that nested prompt and save it under `answer_key`.
 

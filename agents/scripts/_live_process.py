@@ -29,7 +29,7 @@ def enable_line_buffered_stdio() -> None:
         if hasattr(stream, "reconfigure"):
             try:
                 stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
 
@@ -39,7 +39,7 @@ def live_print(msg: str, *, err: bool = False, end: str = "\n") -> None:
     if _open_step_line and not (msg.startswith("[Done]") or msg.startswith("[Fail]")):
         try:
             print("", file=stream, flush=True)
-        except Exception:
+        except (OSError, ValueError):
             pass
         _open_step_line = False
     try:
@@ -208,14 +208,14 @@ def run_streaming(
             if proc.stdout:
                 try:
                     proc.stdout.close()
-                except Exception:
+                except (OSError, ValueError, subprocess.SubprocessError):
                     pass
             proc.terminate()
             try:
                 proc.wait(timeout=2.0)
             except Exception:
                 proc.kill()
-        except Exception:
+        except (OSError, ValueError, subprocess.SubprocessError):
             pass
         raise
     finally:
