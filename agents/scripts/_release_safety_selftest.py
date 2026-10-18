@@ -72,6 +72,17 @@ class ReleaseSafetyTests(unittest.TestCase):
             with self.subTest(change=change), mock.patch.object(release, "run_cmd", return_value=subprocess.CompletedProcess([], 0, json.dumps([{**run, **change}]), "")):
                 self.assertEqual(accepted, release.wait_for_workflow("release-check.yml", sha, branch="v1.1.34", timeout=0, accept_dispatch=True))
 
+    def test_publisher_gate_binds_triggering_source_not_workflow_default_branch(self):
+        # workflow_run.headSha names the default branch when the workflow starts,
+        # even when its triggering CI belongs to an older, cancelled commit.
+        sha = "a" * 40
+        run = dict(headSha=sha, headBranch="main", event="workflow_run", status="completed", conclusion="success", databaseId=10,
+                   displayTitle="Publish validated release " + sha)
+        for change, expected in (({}, True), ({"displayTitle": "Publish validated release " + "b" * 40}, False),
+                                 ({"headSha": "b" * 40}, False), ({"headBranch": "other"}, False), ({"conclusion": "failure"}, False)):
+            with self.subTest(change=change), mock.patch.object(release, "run_cmd", return_value=subprocess.CompletedProcess([], 0, json.dumps([{**run, **change}]), "")):
+                self.assertEqual(expected, release.wait_for_workflow("publish-release.yml", sha, timeout=0, accept_workflow_run=True))
+
     def test_workflow_integrity_requires_pinned_actions_and_supported_matrix(self):
         self.assertEqual([], validation.workflow_integrity_errors(KIT))
 

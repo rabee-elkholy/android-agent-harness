@@ -240,7 +240,7 @@ def wait_for_workflow(
     while True:
         command = [
             "gh", "run", "list", "--workflow", workflow, "--commit", sha, "--limit", "50",
-            "--json", "databaseId,headSha,status,conclusion,event,headBranch",
+            "--json", "databaseId,headSha,status,conclusion,event,headBranch,displayTitle",
         ]
         if not accept_pull_request:
             command[7:7] = ["--branch", branch] + ([] if accept_dispatch or accept_workflow_run else ["--event", "push"])
@@ -255,7 +255,8 @@ def wait_for_workflow(
                 and (
                     (run.get("event", "push") == "push" and run.get("headBranch", branch) == branch)
                     or (accept_dispatch and run.get("event") == "workflow_dispatch" and run.get("headBranch") == branch)
-                    or (accept_workflow_run and run.get("event") == "workflow_run" and run.get("headBranch") == branch)
+                    or (accept_workflow_run and run.get("event") == "workflow_run" and run.get("headBranch") == branch
+                        and run.get("displayTitle") == "Publish validated release " + sha)
                     or (accept_pull_request and run.get("event") == "pull_request")
                 )
             ]
