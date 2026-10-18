@@ -3268,17 +3268,11 @@ class HarnessExecutionBoundaryTests(unittest.TestCase):
         self.assertIn("--find", self.contract)
 
         # Classification & policy
-        self.assertIn("change_classifier.py", self.contract)
-        self.assertIn("review_policy.py", self.contract)
+        self.assertIn("harness.py policy --json", self.contract)
 
         # Workflow draft / approval / begin / prepare-verification / resume / complete / deliver / cancel
-        self.assertIn("workflow.py draft", self.contract)
-        self.assertIn("workflow.py approve", self.contract)
-        self.assertIn("workflow.py begin", self.contract)
-        self.assertIn("workflow.py prepare-verification", self.contract)
-        self.assertIn("workflow.py resume", self.contract)
-        self.assertIn("workflow.py verify", self.contract)
-        self.assertIn("workflow.py complete", self.contract)
+        for action in ("draft", "approve", "begin", "prepare-verification", "resume", "verify", "complete"):
+            self.assertIn(f"harness.py task {action}", self.contract)
 
         # Preflight verification
         self.assertIn("preflight_check.py", self.contract)

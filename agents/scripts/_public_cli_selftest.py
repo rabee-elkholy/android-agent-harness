@@ -2373,5 +2373,323 @@ class UpdateNoticeSelftest(unittest.TestCase):
             self.assertEqual(expected, "UPDATE-NOTICE" in message, invocation)
 
 
+class CommandEfficiencySelftest(unittest.TestCase):
+    setUp = PublicCliSelftest.setUp
+    tearDown = PublicCliSelftest.tearDown
+
+    def test_batch_context_syncs_once_and_preserves_all_discovered_scopes(self):
+        import task_context
+        from _graph_core import GraphEngine
+        from discovery_receipt import load_latest_discovery_receipt
+        from unittest import mock
+
+        first = "app/src/main/kotlin/com/example/MainActivity.kt"
+        second = "app/src/main/kotlin/com/other/PaymentViewModel.kt"
+        path = self.repo / second
+        path.parent.mkdir(parents=True)
+        path.write_text("package com.other\nclass PaymentViewModel\n", encoding="utf-8")
+        sync = GraphEngine.sync
+        with mock.patch.object(GraphEngine, "sync", autospec=True,
+                               side_effect=lambda engine, **kw: sync(engine, **kw)) as calls:
+            result = task_context.resolve_task_contexts(self.repo, files=[first, second])
+        self.assertEqual("BATCH_RESOLVED", result["status"])
+        self.assertEqual(1, calls.call_count)
+        self.assertEqual([first, second], [row["target"]["path"] for row in result["results"]])
+        receipt = load_latest_discovery_receipt(self.repo)
+        self.assertTrue({first, second} <= set(receipt["resolved_paths"]))
+        self.assertNotIn("app", receipt["allowed_search_roots"])
+        self.assertFalse((self.repo / ".agents/cache/project-graph.json").exists())
+
+    def test_batch_public_cli_reports_each_target_including_missing_files(self):
+        (self.repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+        first = "app/src/main/kotlin/com/example/MainActivity.kt"
+        proc = subprocess.run([sys.executable, str(KIT / "harness_cli.py"), "task-context",
+                               "--repo", str(self.repo), "--kit", str(KIT),
+                               "--file", first, "--file", "app/src/main/kotlin/Missing.kt", "--json"],
+                              capture_output=True, text=True, env=self.env, check=False)
+        self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertEqual("BATCH_PARTIAL", result["status"])
+        self.assertEqual(["RESOLVED", "NOT_FOUND"], [row["status"] for row in result["results"]])
+
+    def test_batch_rejects_concurrent_source_change_and_excessive_targets(self):
+        import task_context
+        from unittest import mock
+        first = "app/src/main/kotlin/com/example/MainActivity.kt"
+        with mock.patch("project_context.compute_source_fingerprint", side_effect=[
+            {"source_fingerprint_sha256": "before"}, {"source_fingerprint_sha256": "after"},
+        ]):
+            result = task_context.resolve_task_contexts(self.repo, files=[first, "missing.kt"])
+        self.assertEqual("SOURCE_CHANGED_DURING_DISCOVERY", result["status"])
+        self.assertFalse((self.repo / ".agents/cache/discovery/latest.json").exists())
+        with mock.patch("task_context.GraphEngine") as graph:
+            with self.assertRaises(ValueError):
+                task_context.resolve_task_contexts(self.repo, files=[f"{i}.kt" for i in range(9)])
+            graph.assert_not_called()
+
+    def _run_verification_steps(self, actions, *, failure=0, switch_after_first=False, state="IMPLEMENTING"):
+        import contextlib
+        import io
+        import verification_steps
+        from unittest import mock
+        entry = NextStepAfterCommandSelftest()._entry()
+        plan = {"task_id": "t1", "status": state}
+        calls = []
+
+        def dispatch(repo, script, arguments):
+            calls.append((script, arguments))
+            plan["status"] = "VERIFYING"
+            if switch_after_first:
+                plan["task_id"] = "other"
+            return failure
+
+        def run(script, arguments):
+            self.assertEqual("verification_steps.py", script)
+            return verification_steps.main([*arguments, "--repo", str(self.repo)])
+
+        out = io.StringIO()
+        with mock.patch.object(entry, "_run", side_effect=run), \
+             mock.patch("mutation_guard.active_plan", side_effect=lambda repo: dict(plan)), \
+             mock.patch("workflow.resolve_next_action", side_effect=actions), \
+             mock.patch("host_continuation.assert_execution_session"), \
+             mock.patch.object(verification_steps, "_dispatch", side_effect=dispatch), \
+             contextlib.redirect_stdout(out):
+            code = entry.main(["verify-steps", "--task-id", "t1", "--host", "generic"])
+        return code, calls, out.getvalue()
+
+    def test_verification_steps_follows_router_and_stops_at_review_boundary(self):
+        actions = [{"code": "IMPLEMENT_APPROVED_SCOPE", "on_complete": {"code": "PREPARE_VERIFICATION"}},
+                   {"code": "RUN_PREFLIGHT"}, {"code": "RUN_UNIT_TESTS"},
+                   {"code": "BUILD_REVIEW_PACKAGE"},
+                   {"code": "DISPATCH_REVIEWERS", "kind": "SUBAGENT_DISPATCH", "inputs": {"reviewers": ["security"]}}]
+        code, calls, text = self._run_verification_steps(actions)
+        self.assertEqual(0, code, text)
+        self.assertEqual(["workflow.py", "preflight_check.py", "run_tests_gate.py", "review_package.py"],
+                         [script for script, _ in calls])
+        self.assertIn('"code": "DISPATCH_REVIEWERS"', text)
+        self.assertIn('"security"', text)
+
+    def test_verification_steps_never_runs_past_failure_staleness_or_focus_change(self):
+        start = {"code": "IMPLEMENT_APPROVED_SCOPE", "on_complete": {"code": "PREPARE_VERIFICATION"}}
+        code, calls, _ = self._run_verification_steps([start, {"code": "RUN_PREFLIGHT"}], failure=30)
+        self.assertEqual(30, code)
+        self.assertEqual(1, len(calls))
+        code, calls, text = self._run_verification_steps([start, {"code": "RESUME_IMPLEMENTATION"}])
+        self.assertEqual(0, code, text)
+        self.assertEqual(1, len(calls))
+        self.assertIn("RESUME_IMPLEMENTATION", text)
+        code, calls, text = self._run_verification_steps([start], switch_after_first=True)
+        self.assertEqual(1, code)
+        self.assertEqual(1, len(calls))
+        self.assertIn("TASK_FOCUS_CHANGED", text)
+        code, calls, text = self._run_verification_steps([{"code": "APPROVE_PLAN"}], state="AWAITING_DEVELOPER_APPROVAL")
+        self.assertEqual(0, code, text)
+        self.assertEqual([], calls)
+
+    def test_public_catalog_covers_lifecycle_commands_and_partial_revision(self):
+        from _public_commands import get_public_commands
+        entry = NextStepAfterCommandSelftest()._entry()
+        commands = {row["command"]: row for row in get_public_commands()}
+        self.assertTrue({"task " + name for name in entry.TASK_SUBCOMMANDS} <= set(commands))
+        self.assertEqual(["task_id"], commands["task revise"]["required_inputs"])
+        self.assertIn("verify-steps", commands)
+        for command in ("task recover-active", "task recover-stale", "task begin-next-phase", "verify-steps", "task-context"):
+            self.assertTrue(commands[command].get("when_to_use"), command)
+            self.assertTrue(commands[command].get("example"), command)
+        for name in ("agents/skills/android-harness/references/command-contract.md", "agents/workflows/deliver.md", "docs/architecture.md"):
+            text = (KIT / name).read_text(encoding="utf-8")
+            self.assertNotIn("plan-summary", text)
+            self.assertNotIn("python .agents/scripts/workflow.py", text)
+
+    def test_uncommitted_task_files_reuses_one_manifest_and_rechecks_later_edits(self):
+        import delivery_manifest
+        import workflow
+        from unittest import mock
+        target = "app/src/main/kotlin/com/example/MainActivity.kt"
+        (self.repo / target).write_text("package com.example\nclass MainActivity { val price = 1 }\n", encoding="utf-8")
+        build = delivery_manifest.build_manifest
+        with mock.patch("workflow.load_task_baseline", return_value={"changes": []}), \
+             mock.patch("workflow.build_manifest", wraps=build) as calls, \
+             mock.patch("delivery_manifest.build_manifest", side_effect=AssertionError("Second scan would mix observations")):
+            self.assertIn(target, workflow._find_uncommitted_task_files(self.repo, "t1", {"expected_files": [target]}))
+            (self.repo / target).unlink()
+            self.assertIn(target, workflow._find_uncommitted_task_files(self.repo, "t1", {"expected_files": [target]}))
+        self.assertEqual(2, calls.call_count, "One live manifest per invocation, never a cross-command cache")
+
+    def test_guard_allows_batched_reads_but_requires_approval_for_verification_runner(self):
+        from mutation_guard import command_allowed
+        from unittest import mock
+        read = "python .agents/harness.py task-context --file app/src/main/kotlin/com/example/MainActivity.kt --file app/src/main/AndroidManifest.xml --json"
+        self.assertTrue(command_allowed(self.repo, read)[0])
+        command = "python .agents/harness.py verify-steps --task-id t1"
+        self.assertFalse(command_allowed(self.repo, command)[0])
+        with mock.patch("mutation_guard.active_plan", return_value={"task_id": "t1", "status": "VERIFYING"}):
+            self.assertTrue(command_allowed(self.repo, command)[0])
+
+    def test_captured_command_preserves_failure_diagnostics_on_stderr(self):
+        import contextlib
+        import io
+        import harness_cli
+        from unittest import mock
+        out, err = io.StringIO(), io.StringIO()
+        process = subprocess.CompletedProcess([], 7, stdout='{"status":"FAILED"}\n', stderr="Concrete command failure\n")
+        with mock.patch.object(harness_cli.subprocess, "run", return_value=process), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = harness_cli.run_engine_script(KIT, "task_context.py", [], capture=True)
+        self.assertEqual(7, code)
+        self.assertEqual({"status": "FAILED"}, json.loads(out.getvalue()))
+        self.assertIn("Concrete command failure", err.getvalue())
+
+    def test_preflight_collects_check_exceptions_and_reports_every_failure(self):
+        import contextlib
+        import io
+        import preflight_check
+        from unittest import mock
+        out = io.StringIO()
+        seen = []
+
+        def step(title, script, **kwargs):
+            seen.append(script)
+            if script == "check_strings.py":
+                raise OSError("string checker unavailable")
+            return 1 if script == "fast_kt_lint.py" else 0
+
+        plan = {"task_id": "t1", "status": "IMPLEMENTING", "architecture_contract": {"family_id": "f"}}
+        policy = self.repo / ".agents/state/tasks/t1/preliminary-policy.json"
+        policy.parent.mkdir(parents=True, exist_ok=True)
+        policy.write_text(json.dumps({"gates": ["preflight", "localization", "room", "unit_tests"]}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"HARNESS_HOOK_SELFTEST_ACTIVE": "0"}), \
+             mock.patch("_repo_files.REPO", self.repo), \
+             mock.patch("preflight_check.active_plan", return_value=plan), \
+             mock.patch("preflight_check.changed_paths", return_value=[]), \
+             mock.patch("preflight_check.classify", return_value={"severity": "HIGH", "surfaces": ["ROOM_SCHEMA"]}), \
+             mock.patch("preflight_check.run_step", side_effect=step), \
+             mock.patch("preflight_check.check_room_working_tree", side_effect=ValueError("room parser broke")), \
+             mock.patch("architecture_drift.check_architecture_drift", return_value=(False, "architecture changed", {})), \
+             mock.patch("_modules.has_kmp_common_main", return_value=True), \
+             mock.patch("_modules.check_kmp_expect_actual_pairs", return_value=(False, "missing JVM actual")), \
+             mock.patch("preflight_check.write_gate_result") as write, \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = preflight_check.main(["--repo", str(self.repo)])
+        self.assertEqual(1, code, out.getvalue())
+        self.assertIn("fast_kt_lint.py", seen, "Room/string errors must not prevent later checks")
+        for error in ("string checker unavailable", "room parser broke", "architecture changed", "missing JVM actual"):
+            self.assertIn(error, out.getvalue())
+        summary = out.getvalue().split("PREFLIGHT FAILED")[-1]
+        for check in ("string parity", "Room migrations", "Kotlin lint", "plan authority", "architecture drift", "KMP expect/actual"):
+            self.assertIn(check, summary)
+        preflight = next(call.args[1] for call in write.call_args_list if call.args[0] == "preflight")
+        self.assertEqual("FAIL", preflight["status"])
+
+    def test_preflight_stale_engine_collects_diagnostics_without_publishing_proof(self):
+        import contextlib
+        import io
+        import preflight_check
+        from unittest import mock
+        directory = self.repo / ".agents/state/tasks/t1"
+        directory.mkdir(parents=True, exist_ok=True)
+        policy = directory / "policy.json"
+        policy.write_text(json.dumps({"gates": ["preflight", "localization", "unit_tests"]}), encoding="utf-8")
+        (directory / "current-run.json").write_text(json.dumps({"policy": str(policy)}), encoding="utf-8")
+        plan = {"task_id": "t1", "status": "VERIFYING", "plan_sha256": "p", "execution_nonce": "n",
+                "approval": {"plan_sha256": "p", "single_use_nonce": "n"}}
+        out, seen = io.StringIO(), []
+
+        def step(title, script, **kwargs):
+            seen.append(script)
+            return 1
+
+        with mock.patch.dict(os.environ, {"HARNESS_HOOK_SELFTEST_ACTIVE": "0"}), \
+             mock.patch("_repo_files.REPO", self.repo), \
+             mock.patch("preflight_check.active_plan", return_value=plan), \
+             mock.patch("preflight_check.changed_paths", return_value=[]), \
+             mock.patch("preflight_check.classify", return_value={"severity": "HIGH", "surfaces": []}), \
+             mock.patch("workflow.verification_engine_freshness", return_value={"fresh": False, "reason": "engine changed"}), \
+             mock.patch("preflight_check.run_step", side_effect=step), \
+             mock.patch("_modules.has_kmp_common_main", return_value=False), \
+             mock.patch("preflight_check.write_gate_result") as write, \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = preflight_check.main(["--repo", str(self.repo)])
+        self.assertEqual(30, code)
+        self.assertEqual(["check_strings.py", "fast_kt_lint.py"], seen)
+        self.assertIn("engine changed", out.getvalue())
+        self.assertIn("string parity, Kotlin lint, verification engine", out.getvalue())
+        write.assert_not_called()
+
+    def test_invalid_resource_xml_is_a_reported_error_not_an_empty_success(self):
+        import contextlib
+        import io
+        import check_strings
+        first = self.repo / "app/src/main/res/values/strings.xml"
+        second = self.repo / "app/src/main/res/values-ar/strings.xml"
+        second.parent.mkdir(parents=True)
+        first.write_text('<resources><string name="one">', encoding="utf-8")
+        second.write_text('<resources><string name="two">', encoding="utf-8")
+        for path in (first, second):
+            resources, errors = check_strings._parse_resources(path)
+            self.assertEqual({}, resources)
+            self.assertTrue(any("XML_PARSE_ERROR" in message and str(path) in message for message in errors))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(1, check_strings.main([], repo=self.repo))
+        self.assertIn(str(first), out.getvalue())
+        self.assertIn(str(second), out.getvalue())
+        self.assertEqual(2, out.getvalue().count("XML_PARSE_ERROR"), "Each malformed file is reported once")
+
+    def test_working_tree_fingerprint_uses_one_status_and_hashes_current_content(self):
+        import _repo_files
+        from unittest import mock
+        target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        target.write_text("package com.example\nclass MainActivity { val value = 1 }\n", encoding="utf-8")
+        run = subprocess.run
+        with mock.patch.object(_repo_files.subprocess, "run", wraps=run) as calls:
+            before = _repo_files.working_tree_fingerprint(self.repo)
+        status_calls = [call for call in calls.call_args_list if call.args[0][:2] == ["git", "status"]]
+        self.assertEqual(1, len(status_calls), "Do not validate one status snapshot then parse a different one")
+        stat_before = target.stat()
+        target.write_text("package com.example\nclass MainActivity { val value = 2 }\n", encoding="utf-8")
+        os.utime(target, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
+        self.assertNotEqual(before, _repo_files.working_tree_fingerprint(self.repo))
+        with mock.patch.object(_repo_files.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stdout=b"")):
+            self.assertIsNone(_repo_files.working_tree_fingerprint(self.repo))
+
+    def test_verification_runner_cannot_spoof_session_owner_with_host_flag(self):
+        import contextlib
+        import io
+        import verification_steps
+        from unittest import mock
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"HARNESS_HOST": "claude"}), \
+             mock.patch("host_continuation.load_session", return_value={"host": "antigravity", "session_id": "s"}), \
+             mock.patch("verification_steps._dispatch") as dispatch, \
+             contextlib.redirect_stdout(out):
+            code = verification_steps.main(["--repo", str(self.repo), "--task-id", "t1", "--host", "antigravity"])
+        self.assertEqual(1, code)
+        self.assertIn("HOST_SESSION_MISMATCH", out.getvalue())
+        dispatch.assert_not_called()
+
+    def test_verification_runner_stops_on_no_progress_and_accepts_completed_phases(self):
+        code, calls, text = self._run_verification_steps(
+            [{"code": "PREPARE_VERIFICATION"}, {"code": "RUN_PREFLIGHT"}, {"code": "RUN_PREFLIGHT"}])
+        self.assertEqual(1, code)
+        self.assertEqual(["workflow.py", "preflight_check.py"], [name for name, _ in calls])
+        self.assertIn("NO_VERIFICATION_PROGRESS", text)
+
+    def test_new_public_commands_have_real_cli_parsers(self):
+        import harness_cli
+        from unittest import mock
+        parser = harness_cli.build_parser()
+        args = parser.parse_args(["verify-steps", "--repo", str(self.repo), "--kit", str(KIT),
+                                  "--task-id", "t1", "--host", "generic"])
+        with mock.patch("harness_cli._dispatch_pipeline_script", return_value=0) as dispatch:
+            self.assertEqual(0, args.func(args))
+        self.assertEqual("verification_steps.py", dispatch.call_args.args[1])
+        self.assertEqual(["--task-id", "t1", "--host", "generic"], dispatch.call_args.args[2])
+        entry = NextStepAfterCommandSelftest()._entry()
+        with mock.patch.object(entry, "_run", return_value=0) as run:
+            self.assertEqual(0, entry.main(["policy", "--json"]))
+        self.assertEqual("review_policy.py", run.call_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

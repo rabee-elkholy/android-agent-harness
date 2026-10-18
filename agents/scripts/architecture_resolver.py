@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from project_context import _canonical_json, extract_project_facts, project_context_status, resolve_feature_scope
+from project_context import _canonical_json, resolve_feature_scope
 
 RESOLVER_SCHEMA_VERSION = 1
 
@@ -201,7 +201,16 @@ def resolve_architecture_contract(
     repo = repo.resolve()
     mode = INTENT_MAP.get(architecture_intent.upper(), "PRESERVE")
 
-    # Load facts
+    from project_context import (
+        ContextSourceChangedDuringExtraction,
+        compute_source_fingerprint,
+        extract_consistent_project_context,
+    )
+
+    # Reuse current facts; stale/missing/legacy caches are convenience boundaries.
+    # Planning extracts a stable live snapshot without mutating persistent context.
+    policy_path = repo / ".agents" / "project-context" / "architecture-policy.json"
+    policy_before = policy_path.read_bytes() if policy_path.is_file() else None
     facts_file = repo / ".agents" / "project-context" / "project-facts.json"
     facts_payload = {}
     if facts_file.is_file():
@@ -210,25 +219,25 @@ def resolve_architecture_contract(
         except Exception:
             facts_payload = {}
 
-    if not facts_payload:
-        facts_payload = extract_project_facts(repo, in_memory_graph=True)
+    # Only compare a usable cache. Stable extraction already brackets its own
+    # source fingerprints; a missing cache needs no extra pre-extraction Git scan.
+    if not (isinstance(facts_payload, dict) and facts_payload.get("schema_version") == 2
+            and isinstance(facts_payload.get("facts"), dict)
+            and facts_payload.get("source_fingerprint_sha256")
+            and facts_payload["source_fingerprint_sha256"] == compute_source_fingerprint(repo)["source_fingerprint_sha256"]):
+        try:
+            facts_payload = extract_consistent_project_context(repo, in_memory_graph=True)
+        except ContextSourceChangedDuringExtraction:
+            return {
+                "status": STATUS_STALE_CONTEXT, "mode": mode, "contract": None, "brief_markdown": None,
+                "message": "CONTEXT_SOURCE_CHANGED_DURING_EXTRACTION: sources changed during bounded "
+                           "read-only planning. Do not retry until the concurrent source writer has stopped; "
+                           "then rerun the same draft or revision. Persistent context and approval are unchanged.",
+            }
 
     facts = facts_payload.get("facts") or {}
     arch = facts.get("architecture") or {}
     families = arch.get("families") or []
-
-    # Check freshness
-    ctx_status = project_context_status(repo)
-    is_stale = ctx_status.get("status") == "STALE"
-
-    if is_stale and mode in ("NEW", "MIGRATE"):
-        return {
-            "status": STATUS_STALE_CONTEXT,
-            "mode": mode,
-            "contract": None,
-            "brief_markdown": None,
-            "message": "Project context is stale; refresh context before planning new or migrated architecture.",
-        }
 
     # Load developer evolution policy
     from architecture_policy import read_architecture_policy, validate_architecture_policy
@@ -397,6 +406,17 @@ def resolve_architecture_contract(
 
     if not target_family:
         resolution_confidence = "LOW"
+
+    # Do not publish a decision made across a source or developer-policy change.
+    policy_after = policy_path.read_bytes() if policy_path.is_file() else None
+    if (compute_source_fingerprint(repo)["source_fingerprint_sha256"]
+            != facts_payload.get("source_fingerprint_sha256") or policy_after != policy_before):
+        return {
+            "status": STATUS_STALE_CONTEXT, "mode": mode, "contract": None, "brief_markdown": None,
+            "message": "ARCHITECTURE_INPUTS_CHANGED: sources or architecture policy changed while resolving "
+                       "the contract. Do not retry until the concurrent writer has stopped; then rerun "
+                       "the same draft or revision. No contract was published.",
+        }
 
     # Build contract
     exemplars = (target_family.get("exemplars") or []) if target_family else []

@@ -22,15 +22,18 @@ from _vnext_common import read_json  # noqa: E402
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
-def run_step(title: str, script_name: str, cwd: Path | None = None) -> int:
+def run_step(title: str, script_name: str, cwd: Path | None = None, *, diagnostics: dict | None = None) -> int:
     with step_progress(title):
-        code, _, _ = run_streaming(
+        code, output, _ = run_streaming(
             [sys.executable, str(SCRIPTS_DIR / script_name)],
             cwd=str(cwd or REPO),
             heartbeat_sec=10.0,
             should_echo=lambda line: bool(line.strip()),
             label=script_name,
+            echo=diagnostics is None,
         )
+    if code and diagnostics is not None:
+        diagnostics[title] = output.strip() or f"{script_name} failed with exit code {code}; no output was produced."
     return code
 
 
@@ -53,15 +56,31 @@ def main(argv: list[str] | None = None) -> int:
     live_print("[Preflight] Harness preflight verification")
     live_print("==================================================")
 
-    modified = [p.relative_to(repo_target).as_posix() for p in changed_paths(repo=repo_target)]
+    diagnostics: dict[str, str] = {}
+    extra_checks: list[tuple[str, bool]] = []
+    evidence_blocked = False
+
+    def execute_step(name: str, title: str, script: str) -> int:
+        try:
+            return run_step(title, script, cwd=repo_target, diagnostics=diagnostics)
+        except Exception as exc:
+            diagnostics[name] = f"CHECK_EXECUTION_ERROR: {exc}"
+            return 1
+
+    try:
+        modified = [p.relative_to(repo_target).as_posix() for p in changed_paths(repo=repo_target)]
+    except Exception as exc:
+        modified = []
+        diagnostics["change inventory"] = str(exc)
+        extra_checks.append(("change inventory", False))
     live_print(f"[*] Working-tree files (including untracked): {len(modified)}")
 
     selected_gates = {"preflight", "localization", "room"}
     task_changes: list | None = None
     task_id = ""
     if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
-        # Engine updates preserve old proof, but cannot append a new producer
-        # version to its immutable attempt chain. Fail before running checks.
+        # Stale engines cannot append proof to an immutable attempt chain.
+        # Still collect independent read-only diagnostics; never publish evidence.
         try:
             if task_id_arg:
                 from workflow import _load_plan
@@ -75,10 +94,10 @@ def main(argv: list[str] | None = None) -> int:
                 engine = verification_engine_freshness(repo_target, active_id, current)
                 if not engine["fresh"]:
                     raise ValidationError(engine["reason"])
-        except (OSError, ValueError, ValidationError) as exc:
-            live_print(f"[FAIL] {exc}", err=True)
-            live_print("Run task status --next and follow its recovery action before preflight.", err=True)
-            return 30
+        except Exception as exc:
+            evidence_blocked = True
+            diagnostics["verification engine"] = str(exc) + ". Run task status --next and follow its recovery action before recording preflight."
+            extra_checks.append(("verification engine", False))
     if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
         try:
             if task_id_arg:
@@ -103,14 +122,22 @@ def main(argv: list[str] | None = None) -> int:
                     prelim_p = t_dir / "preliminary-policy.json"
                     if prelim_p.is_file():
                         selected_gates = set(read_json(prelim_p).get("gates") or [])
-        except Exception:
+        except Exception as exc:
             selected_gates = {"preflight", "localization", "room"}
             task_changes = None
+            evidence_blocked = True
+            diagnostics["policy selection"] = f"POLICY_SELECTION_ERROR: {exc}"
+            extra_checks.append(("policy selection", False))
 
-    if task_changes is not None:
-        classification = classify(repo_target, task_id=task_id or None, task_changes=task_changes)
-    else:
-        classification = classify(repo_target)
+    try:
+        if task_changes is not None:
+            classification = classify(repo_target, task_id=task_id or None, task_changes=task_changes)
+        else:
+            classification = classify(repo_target)
+    except Exception as exc:
+        classification = {"severity": "HIGH", "surfaces": []}
+        diagnostics["classification"] = f"CLASSIFICATION_ERROR: {exc}"
+        extra_checks.append(("classification", False))
     risk_tier_name = classification["severity"]
     task_surfaces = set(classification.get("surfaces") or [])
 
@@ -125,9 +152,11 @@ def main(argv: list[str] | None = None) -> int:
         or (task_change_paths and any("room" in p.lower() or "dao" in p.lower() or "entity" in p.lower() or "database" in p.lower() for p in task_change_paths))
     )
 
-    skip_hook = diagnostic or "--skip-hook-selftest" in sys.argv or os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1"
-    hook_code = 0 if skip_hook else run_step("0. Hook selftest (cached)", "ensure_hook_selftest.py", cwd=repo_target)
-    str_code = run_step("1. String parity", "check_strings.py", cwd=repo_target) if "localization" in selected_gates else 0
+    skip_hook = diagnostic or evidence_blocked or "--skip-hook-selftest" in args_list or os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1"
+    if evidence_blocked:
+        sublog("[SKIP] Hook selftest proof cannot be recorded until the verification/policy blocker is resolved; collecting independent diagnostics.")
+    hook_code = 0 if skip_hook else execute_step("hook selftest", "0. Hook selftest (cached)", "ensure_hook_selftest.py")
+    str_code = execute_step("string parity", "1. String parity", "check_strings.py") if "localization" in selected_gates else 0
 
     with step_progress("2. Room Database Migrations"):
         if "room" not in selected_gates:
@@ -136,10 +165,13 @@ def main(argv: list[str] | None = None) -> int:
             db_ok, db_msg = True, "room check not required for current task changes"
         else:
             task_paths = task_change_paths if task_change_paths is not None else None
-            db_ok, db_msg = check_room_working_tree(repo_target, paths=task_paths)
+            try:
+                db_ok, db_msg = check_room_working_tree(repo_target, paths=task_paths)
+            except Exception as exc:
+                db_ok, db_msg = False, f"ROOM_CHECK_ERROR: {exc}"
         sublog(f"[{'OK' if db_ok else 'FAIL'}] {db_msg}")
 
-    lint_code = run_step("3. Kotlin Syntax & Architectural Rules (Fast Lint)", "fast_kt_lint.py", cwd=repo_target) if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
+    lint_code = execute_step("Kotlin lint", "3. Kotlin Syntax & Architectural Rules (Fast Lint)", "fast_kt_lint.py") if selected_gates - {"manifest", "preflight", "localization", "room"} else 0
     with step_progress("4. Approved plan authority"):
         if diagnostic:
             risk_ok, risk_msg = True, "diagnostic mode; task approval is checked only during delivery preflight"
@@ -160,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
                     and approval.get("plan_sha256") == plan.get("plan_sha256")
                 )
                 risk_msg = "approved task plan is active" if risk_ok else "active task approval is missing or stale"
-            except (ValidationError, OSError) as exc:
+            except Exception as exc:
                 risk_ok, risk_msg = False, str(exc)
         sublog(f"[{'OK' if risk_ok else 'FAIL'}] [{risk_tier_name}] {risk_msg}")
 
@@ -171,10 +203,15 @@ def main(argv: list[str] | None = None) -> int:
         if not diagnostic and os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") != "1":
             contract = None
             try:
-                plan = active_plan(repo_target)
+                if task_id_arg:
+                    from workflow import _load_plan
+                    plan = _load_plan(repo_target, task_id_arg)
+                else:
+                    plan = active_plan(repo_target)
                 contract = plan.get("architecture_contract")
-            except Exception:
+            except Exception as exc:
                 contract = None
+                arch_ok, arch_msg = False, f"ARCHITECTURE_PLAN_READ_ERROR: {exc}"
 
             if contract:
                 try:
@@ -183,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception as exc:
                     arch_ok = False
                     arch_msg = f"ARCHITECTURE_DRIFT_CHECK_ERROR: {exc}"
-            else:
+            elif arch_ok:
                 arch_ok = True
                 arch_msg = "no architecture contract bound (exempted)"
         sublog(f"[{'OK' if arch_ok else 'FAIL'}] [ARCHITECTURE] {arch_msg}")
@@ -202,11 +239,17 @@ def main(argv: list[str] | None = None) -> int:
         sublog(f"[{'OK' if exported_ok else 'FAIL'}] {exported_msg}")
 
     from _modules import check_kmp_expect_actual_pairs, has_kmp_common_main
-    has_kmp_common = has_kmp_common_main(repo_target)
+    try:
+        has_kmp_common = has_kmp_common_main(repo_target)
+        kmp_detection_error = ""
+    except Exception as exc:
+        has_kmp_common, kmp_detection_error = True, f"KMP_DETECTION_ERROR: {exc}"
     expect_ok = True
     if has_kmp_common:
         with step_progress("7. KMP expect/actual pairing"):
             try:
+                if kmp_detection_error:
+                    raise ValidationError(kmp_detection_error)
                 kmp_paths = task_change_paths if task_change_paths is not None else modified
                 expect_ok, expect_msg = check_kmp_expect_actual_pairs(repo_target, kmp_paths)
             except Exception as exc:
@@ -223,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         and arch_ok
         and exported_ok
         and expect_ok
+        and not extra_checks
     )
     checks_list = [
         ("hook selftest", hook_code == 0),
@@ -235,13 +279,14 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if has_kmp_common:
         checks_list.append(("KMP expect/actual", expect_ok))
+    checks_list.extend(extra_checks)
     checks = tuple(checks_list)
     failed_checks = [name for name, ok in checks if not ok]
     common = {
         "schema_version": 2,
         "producer": "preflight_check",
         "status": "PASS" if overall_pass else "FAIL",
-        "exit_code": 0 if overall_pass else 1,
+        "exit_code": 0 if overall_pass else 30 if evidence_blocked else 1,
         "git_sha": current_head_sha(repo_target),
         "working_tree_fingerprint": working_tree_fingerprint(repo_target),
         "steps": {
@@ -256,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "detail": "" if overall_pass else "failed: " + ", ".join(failed_checks),
     }
-    if not diagnostic:
+    if not diagnostic and not evidence_blocked:
         write_gate_result("preflight", common)
         if "localization" in selected_gates:
             write_gate_result("localization", {
@@ -275,7 +320,9 @@ def main(argv: list[str] | None = None) -> int:
         f"[FAIL] PREFLIGHT FAILED ({len(failed_checks)} of {len(checks)} checks): {', '.join(failed_checks)}. "
         "Fix the issues above before review packaging."
     )
-    return 1
+    for name, message in diagnostics.items():
+        live_print(f"\n[FAIL] {name}:\n{message}")
+    return 30 if evidence_blocked else 1
 
 
 if __name__ == "__main__":

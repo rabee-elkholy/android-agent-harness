@@ -222,7 +222,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertTrue(contract_file.is_file(), f"Missing contract file: {contract_file}")
         content = contract_file.read_text(encoding="utf-8")
 
-        self.assertIn("workflow.py draft", content)
+        self.assertIn("harness.py task draft", content)
         self.assertIn("--outcome", content)
         self.assertIn("--kind", content)
         self.assertIn("--expected-files", content)
@@ -5147,7 +5147,7 @@ class ContractConsistencyTests(unittest.TestCase):
             self.assertNotIn("approve → begin", txt, f"CONTRACT-001 violation in {f}")
             lines = txt.splitlines()
             for idx, line in enumerate(lines):
-                if "workflow.py begin" in line:
+                if re.search(r"(?:workflow\.py|harness\.py task) begin(?:\s|`)", line):
                     ctx = " ".join(lines[max(0, idx - 2):min(len(lines), idx + 3)]).lower()
                     self.assertTrue(
                         any(k in ctx for k in ["compat", "legacy", "idempotent"]),
@@ -5167,7 +5167,7 @@ class ContractConsistencyTests(unittest.TestCase):
             txt = f.read_text(encoding="utf-8")
             if "material drift" in txt.lower():
                 for block in re.split(r"\n\s*\n", txt):
-                    if "material drift" in block.lower() and "workflow.py draft" in block:
+                    if "material drift" in block.lower() and ("workflow.py draft" in block or "harness.py task draft" in block):
                         self.assertTrue(
                             any(neg in block.lower() for neg in ["never", "prohibited", "forbidden", "do not"]),
                             f"CONTRACT-003: material drift recommends draft in {f}",
@@ -8132,17 +8132,25 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
         atomic_write_json(directory / "current-run.json", current)
         self.assertTrue(workflow.verification_freshness(self.repo, task_id)["fresh"])
 
-    def test_engine_update_blocks_direct_preflight_and_device_before_work(self) -> None:
+    def test_engine_update_blocks_preflight_proof_and_device_but_keeps_diagnostics(self) -> None:
+        import contextlib
+        import io
         import preflight_check
         import run_device
         task_id = "engine-update-direct"
         _, _, _, directory = self._setup_v2_task(task_id)
         write_file(self.repo / ".agents/VERSION", "9.9.9\n")
+        output = io.StringIO()
         with mock.patch.object(preflight_check, "REPO", self.repo), \
-             mock.patch.object(preflight_check, "run_step") as checks, \
-             mock.patch.object(preflight_check, "write_gate_result") as writes:
+             mock.patch.object(preflight_check, "run_step", return_value=0) as checks, \
+             mock.patch.object(preflight_check, "write_gate_result") as writes, \
+             contextlib.redirect_stdout(output):
             self.assertEqual(30, preflight_check.main([]))
-            checks.assert_not_called()
+            # Independent read-only diagnostics now complete on stale engines;
+            # no state-producing hook run or frozen evidence may be consumed.
+            self.assertIn("Approved plan authority", output.getvalue())
+            self.assertIn("Exported components", output.getvalue())
+            self.assertNotIn("ensure_hook_selftest.py", [call.args[1] for call in checks.call_args_list])
             writes.assert_not_called()
         with mock.patch.object(run_device, "REPO", self.repo), \
              mock.patch.object(run_device, "_gate_passed") as gates:
@@ -9666,6 +9674,114 @@ class AntigravityCertificationRound6Tests(unittest.TestCase):
         with mock.patch("sys.stdout"):
             result = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="missing-prev-run"))
         self.assertTrue(result["run_id"])
+
+
+
+class PlanningRecoveryTests(unittest.TestCase):
+    setUp = DailyWorkflowSelftest.setUp
+    tearDown = DailyWorkflowSelftest.tearDown
+    _draft_ns = DailyWorkflowSelftest._draft_ns
+
+    def test_declared_future_tests_survive_explicit_surface_revision(self) -> None:
+        main = "app/src/main/kotlin/com/example/MainActivity.kt"
+        test = "app/src/test/kotlin/com/example/OnboardingFlowTest.kt"
+        before = draft(self._draft_ns("planned-tests", expected_files=f"{main},{test}",
+                                     architecture_target_scope=main, expected_surfaces="BILLING,AUTH"))
+        self.assertIn("TEST_ONLY", before["expected_surfaces"])
+        self.assertFalse((self.repo / test).exists())
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "planned-tests",
+                                 "--expected-surfaces", "BILLING,AUTH"])
+        self.assertEqual(0, ret)
+        after = read_json(task_dir(self.repo, "planned-tests") / "plan.json")
+        self.assertIn("TEST_ONLY", after["expected_surfaces"])
+        self.assertEqual(before["expected_files"], after["expected_files"])
+
+    def test_changed_files_recompute_architecture_and_refused_revision_keeps_state(self) -> None:
+        old_target = "app/src/main/kotlin/com/example/MainActivity.kt"
+        new_target = "app/src/main/kotlin/com/example/OtherActivity.kt"
+        write_file(self.repo / new_target, "package com.example\nclass OtherActivity\n")
+        draft(self._draft_ns("changed-anchor", expected_files=old_target, architecture_target_scope=old_target))
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "changed-anchor",
+                                 "--expected-files", new_target])
+        self.assertEqual(0, ret)
+        directory = task_dir(self.repo, "changed-anchor")
+        saved = read_json(directory / "plan.json")
+        self.assertEqual(new_target, saved["architecture_contract"]["target_scope"])
+        # A failing architecture decision must preserve the authoritative plan/run.
+        atomic_write_json(directory / "current-run.json", {"run_id": "retained-run"})
+        before = {name: (directory / name).read_bytes() for name in ("plan.json", "current-run.json")}
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "changed-anchor",
+                                 "--architecture-target-family", "af-missing", "--architecture-intent", "NEW_SCREEN"])
+        self.assertNotEqual(0, ret)
+        self.assertEqual(before, {name: (directory / name).read_bytes() for name in before})
+
+    def test_invalid_phase_input_does_not_publish_task(self) -> None:
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["draft", "--repo", str(self.repo), "--task-id", "invalid-phase",
+                                 "--outcome", "Update screen", "--expected-files",
+                                 "app/src/main/kotlin/com/example/MainActivity.kt", "--phases", '[{"id":'])
+        self.assertNotEqual(0, ret)
+        self.assertFalse((task_dir(self.repo, "invalid-phase") / "plan.json").exists())
+        self.assertFalse((state_root(self.repo) / "active-task.json").exists())
+
+    def test_partial_revision_preserves_architecture_anchor(self) -> None:
+        existing = "app/src/main/kotlin/com/example/MainActivity.kt"
+        future = "app/src/main/kotlin/com/example/AOnboardingPaywallActivity.kt"
+        before = draft(self._draft_ns("arch-anchor", expected_files=f"{future},{existing}",
+                                     architecture_target_scope=existing))
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "arch-anchor",
+                                 "--expected-surfaces", "BUSINESS_LOGIC,AUTH"])
+        self.assertEqual(0, ret)
+        after = read_json(task_dir(self.repo, "arch-anchor") / "plan.json")
+        self.assertEqual(before["architecture_contract"], after["architecture_contract"])
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "arch-anchor",
+                                 "--architecture-intent", "EXISTING_CHANGE", "--risks", "Preserve navigation"])
+        self.assertEqual(0, ret)
+        after = read_json(task_dir(self.repo, "arch-anchor") / "plan.json")
+        self.assertEqual(before["architecture_contract"], after["architecture_contract"])
+
+    def test_partial_revision_preserves_intent_and_explicit_changes_win(self) -> None:
+        existing = "app/src/main/kotlin/com/example/MainActivity.kt"
+        before = draft(self._draft_ns("arch-intent", expected_files=existing,
+                                     architecture_target_scope=existing, architecture_intent="REFACTOR"))
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "arch-intent",
+                                 "--risks", "Keep existing navigation"])
+        self.assertEqual(0, ret)
+        after = read_json(task_dir(self.repo, "arch-intent") / "plan.json")
+        self.assertEqual(before["architecture_contract"], after["architecture_contract"])
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "arch-intent",
+                                 "--architecture-intent", "EXISTING_CHANGE"])
+        self.assertEqual(0, ret)
+        after = read_json(task_dir(self.repo, "arch-intent") / "plan.json")
+        self.assertEqual("PRESERVE", after["architecture_contract"]["mode"])
+
+    def test_phase_error_provides_hook_allowed_executable_example(self) -> None:
+        files = ",".join(f"app/src/main/kotlin/com/example/Screen{i}.kt" for i in range(9))
+        args = self._draft_ns("phase-recovery", expected_files=files, force=False)
+        with self.assertRaises(ValidationError) as caught:
+            draft(args)
+        message = str(caught.exception)
+        self.assertNotIn("...", message)
+        self.assertIn('--phases "p1:Introduce shared API,p2:Migrate feature callers"', message)
+        from mutation_guard import command_allowed
+        command = ('python .agents/scripts/workflow.py draft --task-id phase-recovery '
+                   '--outcome "Update screens" --expected-files ' + files +
+                   ' --phases "p1:Introduce shared API,p2:Migrate feature callers"')
+        self.assertTrue(command_allowed(self.repo, command)[0])
+        with mock.patch("sys.stdout"):
+            ret = workflow.main(["draft", "--repo", str(self.repo), "--task-id", "phase-recovery",
+                                 "--outcome", "Update screens", "--expected-files", files,
+                                 "--phases", "p1:Introduce shared API,p2:Migrate feature callers"])
+        self.assertEqual(0, ret)
+        saved = read_json(task_dir(self.repo, "phase-recovery") / "plan.json")
+        self.assertEqual(["p1", "p2"], [p["id"] for p in saved["phases"]])
 
 
 if __name__ == "__main__":

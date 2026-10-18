@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.33] - 2026-10-18
+
+### Planning recovery, command efficiency, and complete preflight diagnostics
+
+- Preserve omitted architecture choices during partial plan revisions and re-infer scope when expected files change; explicit architectural changes still take precedence.
+- Resolve architecture from stable live facts when persistent context is stale or unusable, without requiring a pre-approval context refresh. Reject concurrent source or policy changes before returning a contract.
+- Replace incomplete phase-JSON remediation with executable inline examples, and guide agents to reuse bounded discovery results and address the named failure before retrying.
+- Keep `TEST_ONLY` for declared future test files even when an agent supplies a narrower explicit surface list, so test-review requirements are visible before implementation and survive revisions.
+
+### Less repeated discovery and verification work
+
+- Compute the structural context fingerprint in one recursive traversal, pruning only already-excluded root trees while preserving existing inputs, nested build manifests and fingerprint identities.
+- Resolve up to eight known files or symbols in one Task Context request with one graph synchronization, bounded union scope and source-change rejection; preserve single-target output.
+- Add `verify-steps` to execute only consecutive router-selected deterministic steps and stop on failure, stale inputs, reviewer dispatch or developer/device/delivery boundaries. Keep task focus/session checks and per-gate evidence intact.
+- Reuse already-built live manifests within task-file checks and test captures, without caching observations between commands or across builds.
+- Prefer public lifecycle entry points, provide one-call diagnostic policy, fix recovery/partial-revision documentation and catalog gaps, and preserve captured command errors on stderr.
+- Collect all selected preflight failures and checker exceptions before reporting failure, while blocking proof publication on stale engine/policy inputs. Count malformed resource XML as an error even without locale pairs, report each resource file once, and keep later verification steps blocked on any failure.
+
 ## [1.1.32] - 2026-10-18
 
 ### Post-revision verification resilience and active-task update concurrency tolerance

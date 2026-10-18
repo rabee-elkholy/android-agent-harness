@@ -75,7 +75,11 @@ def changed_files(repo: Path | None = None, *, include_untracked: bool = True) -
     except Exception:
         return []
 
-    raw = proc.stdout or b""
+    return _changed_files_from_status(r, proc.stdout or b"", include_untracked=include_untracked)
+
+
+def _changed_files_from_status(r: Path, raw: bytes, *, include_untracked: bool = True) -> list[ChangedFile]:
+    """Parse one observed porcelain status, reading current contents without another status call."""
     entries = raw.split(b"\x00")
     results: list[ChangedFile] = []
     idx = 0
@@ -239,7 +243,7 @@ def working_tree_fingerprint(repo: Path | None = None) -> str | None:
         return None
 
     items: list[str] = []
-    for changed in changed_files(r, include_untracked=True):
+    for changed in _changed_files_from_status(r, status_proc.stdout or b"", include_untracked=True):
         if changed.exists and not changed.content_sha256:
             return None
         content_marker = changed.content_sha256 or "deleted"

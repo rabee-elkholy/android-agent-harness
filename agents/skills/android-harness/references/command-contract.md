@@ -15,6 +15,7 @@ Resolve project topology, feature boundaries, callers, callees, UI screens, View
 python .agents/harness.py graph --feature <feature_name> --json
 python .agents/harness.py graph --find <SymbolName> --json
 python .agents/harness.py task-context --file <path> --json   # or --symbol <name>
+python .agents/harness.py task-context --file <first-path> --file <second-path> --json
 
 # Engine scripts
 python .agents/scripts/project_graph.py --feature <feature_name>
@@ -26,6 +27,7 @@ python .agents/scripts/project_graph.py --find <SymbolName>
 - `--feature <feature_name>`: Name or path token of the feature slice.
 - `--find <SymbolName>`: Specific Kotlin class, interface, or symbol to locate. A missing symbol prints the closest names; query one of them.
 - `task-context --file <path>`: bounded context for one exact target file. It records a discovery receipt that `draft` binds to the plan; the receipt and the saved graph always carry the same fingerprint.
+- Repeat `--file` or repeat `--symbol` for up to eight known targets (never mix the selectors). The batch synchronizes the graph once, returns each target result, and publishes a receipt granting only their discovered paths/packages. Single-target JSON remains unchanged. Batch statuses are `BATCH_RESOLVED` (exit 0), `BATCH_PARTIAL`/`BATCH_FAILED` (exit 1), or `SOURCE_CHANGED_DURING_DISCOVERY` (exit 1, no new receipt). Inspect every result and resolve missing/ambiguous targets before treating discovery as complete. Reuse returned `read_ranges`; do not repeat graph calls for already-resolved relationships.
 
 ### Expected Output
 - Human-readable slice and call hierarchy (callers, callees, UI layer, ViewModel, Data layer).
@@ -43,8 +45,7 @@ Classify affected application surfaces, assess change risk, and determine the ex
 
 ### Commands
 ```bash
-python .agents/scripts/change_classifier.py --repo . --json
-python .agents/scripts/review_policy.py --repo . --json
+python .agents/harness.py policy --json
 ```
 
 ### Expected Output
@@ -58,6 +59,8 @@ python .agents/scripts/review_policy.py --repo . --json
 
 > **Instruction**: Do not inspect implementation source of the classifier or policy engine before execution.
 
+`draft`/`revise` already classify declared scope and apply policy; `prepare-verification` classifies the actual diff and freezes its policy. Use this separate command for policy diagnosis, rather than routinely running classifier and policy separately. Diagnostic policy is not verification evidence.
+
 ---
 
 ## 3. Workflow Lifecycle Management
@@ -69,7 +72,7 @@ Record task lifecycle state deterministically from intake to final delivery:
 ### Commands
 ```bash
 # 1. Draft task plan
-python .agents/scripts/workflow.py draft \
+python .agents/harness.py task draft \
   --repo . \
   --task-id <id> \
   --outcome "<requested outcome>" \
@@ -90,64 +93,77 @@ python .agents/scripts/workflow.py draft \
   --architecture-intent <EXISTING_CHANGE|NEW_SCREEN|NEW_FEATURE|REFACTOR|MIGRATION> \
   --architecture-target-scope "<target scope when applicable>" \
   --architecture-target-family "<target family id when applicable>" \
-  --phases "<phases json or file path when required>"
+  --phases "p1:Introduce shared API,p2:Migrate callers and validate integration"
+```
 
 > `--planning-depth`: `BOUNDED` for normal scoped tasks (default); `ARCHITECTURAL` for explicit architecture migration or broad structural architectural work.
 > `--external-write`: Append `--external-write zoho_sprints` for Zoho mutation, `mcp:<server>` for generic MCP write operations, or `mcp:<server>:high-impact` for sensitive MCP mutations (deploy, drop, delete).
 > `--zoho-*`: Optional flags to bind the task to an existing Zoho Sprints item. When the developer wants the item's status or a comment updated, also pass `--external-write zoho_sprints` (draft prints `ZOHO_WRITE_NOT_PLANNED=` when it is missing).
-> Draft and revise print, in order: `APPROVAL_BRIEF_BEGIN`..`APPROVAL_BRIEF_END` (what changes, file names, sensitive areas, outside writes, phone checks, risks; omitted after a revise of an approved plan, which prints `REVISION_CHANGES=` and `DRIFT_CAUSES=` instead), `PLAN_HASH=` (for `approve --plan-hash`), `PLAN_DOCUMENT_URI=` (the plan.md link), `PRE_EXISTING_CHANGES=` (the developer's uncommitted files that predate the task), `ZOHO_WRITE_NOT_PLANNED=`, `PLAN_GAPS=` (revise first) and `APPROVAL_QUESTION:` (how to ask). Ask with `ask_question`: the plan.md link as a clickable Markdown link, then the brief lines, each once, as plain text, never in a code block. `python .agents/scripts/workflow.py plan-summary` still prints every field of the plan.
+> Draft and revise print, in order: `APPROVAL_BRIEF_BEGIN`..`APPROVAL_BRIEF_END` (what changes, file names, sensitive areas, outside writes, phone checks, risks; omitted after a revise of an approved plan, which prints `REVISION_CHANGES=` and `DRIFT_CAUSES=` instead), `PLAN_HASH=` (for `approve --plan-hash`), `PLAN_DOCUMENT_URI=` (the plan.md link), `PRE_EXISTING_CHANGES=` (the developer's uncommitted files that predate the task), `ZOHO_WRITE_NOT_PLANNED=`, `PLAN_GAPS=` (revise first) and `APPROVAL_QUESTION:` (how to ask). Ask with `ask_question`: the plan.md link as a clickable Markdown link, then the brief lines, each once, as plain text, never in a code block. `python .agents/harness.py task status --task-id <id> --json` prints the full registered plan; add `--next --brief` only when the next action/payload is missing. `--brief` reduces output, not the required freshness checks.
 
+```bash
 # 1b. Revise the plan (new scope, missing fields, Zoho write); a revised plan needs approval again
-python .agents/scripts/workflow.py revise --repo . --task-id <id> [any draft flag to change]
+python .agents/harness.py task revise --repo . --task-id <id> [any draft flag to change]
 
 # 2. Record developer approval (atomically transitions directly to IMPLEMENTING)
-python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH>
+python .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH>
 
 # Authoritative next action at any point (the router)
-python .agents/harness.py task status --task-id <id> --next --json
+python .agents/harness.py task status --task-id <id> --next --brief --json
 
 # 2b. Linked Zoho start sync (when task has approved zoho_link)
 python .agents/harness.py zoho start-sync --task-id <id>
 
 # 3. (Legacy compatibility only) Begin implementation (idempotent when already IMPLEMENTING)
-# python .agents/scripts/workflow.py begin --repo . --task-id <id>
+# python .agents/harness.py task begin --repo . --task-id <id>
 
 # 4. Advance phase checkpoint (for multi-phase plans; autonomous execution without developer prompt)
-python .agents/scripts/workflow.py checkpoint-phase --repo . --task-id <id>
+python .agents/harness.py task checkpoint-phase --repo . --task-id <id>
 
-# 5. Prepare verification (freezes review package and initializes run); the router names the host
+# 5. Preferred when implementation is finished: run consecutive deterministic steps.
+python .agents/harness.py verify-steps --task-id <id> --host <actual-host>
+# Individual preparation remains available for diagnosis or a specifically routed command:
 python .agents/harness.py task prepare-verification --repo . --task-id <id> --host <antigravity|claude|...>
-# engine form: python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id>
 
 # 6. Resume implementation (if verification findings require code fixes)
-python .agents/scripts/workflow.py resume --repo . --task-id <id>
+python .agents/harness.py task resume --repo . --task-id <id>
 # READY_FOR_DELIVERY and the developer requested changes before committing:
-python .agents/scripts/workflow.py resume --repo . --task-id <id> --reopen
+python .agents/harness.py task resume --repo . --task-id <id> --reopen
 
 # 7. Read-only verification check
-python .agents/scripts/workflow.py verify --repo . --task-id <id>
+python .agents/harness.py task verify --repo . --task-id <id>
 
 # 8. Complete task (transitions to READY_FOR_DELIVERY)
-python .agents/scripts/workflow.py complete --repo . --task-id <id>
+python .agents/harness.py task complete --repo . --task-id <id>
 
 # 9. Mark delivered / reconcile delivery (unlinks active task after Git commit)
-python .agents/scripts/workflow.py deliver --repo . --task-id <id>
-# or python .agents/scripts/workflow.py reconcile-delivery --repo . --task-id <id>
+python .agents/harness.py task deliver --repo . --task-id <id>
+# or python .agents/harness.py task reconcile-delivery --repo . --task-id <id>
 
 # 9b. Linked Zoho delivery sync (when task has approved zoho_link, after developer git commit)
 python .agents/harness.py zoho delivery-sync --task-id <id>
 
 # Cancel task: the developer's decision. When the developer asks in chat, the agent runs it with their
 # words as proof; it never cancels on its own and never resumes or edits files to undo the work.
-python .agents/scripts/workflow.py cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"
+python .agents/harness.py task cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"
 ```
+
+`verify-steps` follows the canonical router and runs only preparation, required preflight/unit tests, and review-package creation. Each gate retains its own evidence and freshness checks. It rechecks task focus/session between steps, never repeats a successful gate in the same invocation, preserves nonzero gate exits, and stops at all other actions (including review dispatch, stale inputs, phase work, approval, device work and delivery). Its final `next_action` contains the exact routed payload; follow it without another status call. `STOPPED` with exit 0 means the next boundary is ready, not that the task passed or finished. Do not run while implementation is incomplete or as a background polling command.
+
+| Recovery command | When to use it | Authority retained |
+|---|---|---|
+| `task begin-next-phase --task-id <id>` | Router returns `BEGIN_NEXT_PHASE` after a completed checkpoint/review | Same approved phase plan; no repeated approval |
+| `task recover-active --task-id <id>` | A known live plan has lost its active pointer | Restores focus only; no approval or evidence reset |
+| `task recover-stale` | Diagnostics identify a corrupt, missing-plan or terminal active pointer | Leaves valid live tasks/history intact; does not repair stale context |
+
+For partial `revise`, pass only changed fields; `--outcome` is optional and saved architecture decisions are retained unless deliberately changed. Surface/file lists are complete replacement lists, not append operations. Use `task switch` for ordinary focus changes and `task resume` for fixes after verification, rather than recovery commands.
 
 ### Expected Output
 - Lifecycle state confirmation message or JSON with task status, run ID, and frozen snapshot hash.
 - Exit code: `0` on success; non-zero if state transition precondition is not satisfied.
 
-> **Material Drift Reconciliation**: If `prepare-verification` reports material drift (e.g. `surface:BUSINESS_LOGIC`), do not inspect harness scripts. Material drift produces `PLAN_REVISION_REQUIRED`. Reconcile with the canonical command produced by `build_remediation_command()`:
-> `python .agents/scripts/workflow.py revise --repo . --task-id <id> --outcome "<original_outcome>" --kind <original_kind> --planning-depth <depth> --expected-surfaces "<all_active_surfaces>" ...`
+> **Material Drift Reconciliation**: If `prepare-verification` reports material drift (e.g. `surface:BUSINESS_LOGIC`), do not inspect harness scripts. Material drift produces `PLAN_REVISION_REQUIRED`. Follow the returned reconciliation command. A surface-only example is:
+> `python .agents/harness.py task revise --task-id <id> --expected-surfaces "<complete reconciled surface list>"`
 > This archives the old plan, invalidates prior approval, and requires developer approval of the revised plan. Never use `workflow.py draft` to re-draft or overwrite an active task.
 
 > **Instruction**: Do not inspect `workflow.py` implementation before execution.
@@ -168,6 +184,7 @@ python .agents/harness.py preflight
 ### Expected Output
 - Step-by-step PASS/FAIL report for active gates.
 - Exit code: `0` = all checks passed; non-zero = inspect reported failure details in terminal output.
+- All selected independent checks run even after an ordinary failure or checker exception. A final summary lists every failed check and collects failed subprocess output; fix the reported issues together before rerunning. Resource XML parse failures are errors, including in single-locale projects. A stale engine or unreadable policy still permits independent diagnostics but cannot publish verification proof (exit 30); state-producing hook proof waits for recovery. Failed preflight never advances to unit tests/review.
 
 > **Instruction**: Do not inspect `preflight.py` or `preflight_check.py` before execution.
 
@@ -234,7 +251,7 @@ python .agents/harness.py review finalize --task <id>
 python .agents/scripts/record_review.py --task <id> --from-subagent <reviewer_name>=<subagent_conversation_id>
 
 # 5. Validate or dispute reviewer findings (technical adjudication):
-python .agents/scripts/workflow.py validate-finding --repo . --task-id <id> --finding-id <finding_id> --status <FALSE_POSITIVE|CONFIRMED> --reason "<technical_explanation>"
+python .agents/harness.py task validate-finding --repo . --task-id <id> --finding-id <finding_id> --status <FALSE_POSITIVE|CONFIRMED> --reason "<technical_explanation>"
 
 # 6. Developer review override (router step REVIEW_OVERRIDE_REQUIRED; non-sensitive surfaces only).
 #    Show the developer this exact command; they run it in their own terminal, never the agent.
@@ -401,18 +418,18 @@ When an exception occurs:
 | **Discovery** | `python .agents/harness.py graph --feature <name> --json` (or `--find <Symbol>`; engine: `project_graph.py`) | Fast AST/symbol project graph analysis |
 | **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded context for one task target; records the discovery receipt |
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
-| **Draft Plan** | `python .agents/scripts/workflow.py draft --repo . --task-id <id> ...` | Register the plan and print the approval material |
-| **Revise Plan** | `python .agents/scripts/workflow.py revise --repo . --task-id <id> ...` | Change the plan; approval is asked again |
-| **Approve** | `python .agents/scripts/workflow.py approve --repo . --task-id <id> --source conversation --proof-reference "<reply>" --enforcement-tier RULE_ENFORCED --plan-hash <hash>` | Record the developer's approval of the shown plan |
+| **Draft Plan** | `python .agents/harness.py task draft --repo . --task-id <id> ...` | Register the plan and print the approval material |
+| **Revise Plan** | `python .agents/harness.py task revise --repo . --task-id <id> ...` | Change the plan; approval is asked again |
+| **Approve** | `python .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<reply>" --enforcement-tier RULE_ENFORCED --plan-hash <hash>` | Record the developer's approval of the shown plan |
 | **Next Action** | `python .agents/harness.py task status --task-id <id> --next --json` | The router: the single next step and why |
-| **Cancel Task** | `python .agents/scripts/workflow.py cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"` | Only when the developer asks in chat; files stay as they are |
+| **Cancel Task** | `python .agents/harness.py task cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"` | Only when the developer asks in chat; files stay as they are |
 | **Context Note** | `python .agents/harness.py context note "<note>"` | Record architectural convention/note |
 | **Zoho Start Sync**| `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item; on `ENV`, tell the developer |
 | **Preflight Gate** | `python .agents/harness.py preflight` (engine: `preflight.py` / `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
 | **Record Start** | `python .agents/harness.py test --record-start` | Before the first edit: record the tests that already fail |
 | **Unit Tests** | `python .agents/harness.py test` (engine: `run_tests_gate.py`) | Run unit tests gate (GREEN phase) |
 | **Capture RED** | `python .agents/harness.py test --capture-red` (engine: `run_tests_gate.py --capture-red`) | Capture executable test failure proof for BUG tasks |
-| **Checkpoint Phase** | `python .agents/scripts/workflow.py checkpoint-phase --repo . --task-id <id>` | Advance multi-phase plan checkpoint autonomously |
+| **Checkpoint Phase** | `python .agents/harness.py task checkpoint-phase --repo . --task-id <id>` | Advance multi-phase plan checkpoint autonomously |
 | **Strings Check** | `python .agents/scripts/check_strings.py` | Standalone strings parity across locales |
 | **Fast Lint** | `python .agents/scripts/fast_kt_lint.py` | Standalone fast Kotlin AST linter |
 | **Room Guard** | `python .agents/scripts/room_guard.py` | Standalone Room schema & migration check |
@@ -423,7 +440,7 @@ When an exception occurs:
 | **Review Package** | `python .agents/harness.py review package --task-id <id>` (engine: `review_package.py`) | Generate immutable review package markdown |
 | **Review Complete**| `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` | Record trusted reviewer completion |
 | **Review Finalize**| `python .agents/harness.py review finalize --task <id>` | Aggregate review evidence once all reviewers complete |
-| **Resume Task** | `python .agents/scripts/workflow.py resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation; add `--reopen` at READY_FOR_DELIVERY when the developer requests changes |
+| **Resume Task** | `python .agents/harness.py task resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation; add `--reopen` at READY_FOR_DELIVERY when the developer requests changes |
 | **Assemble** | `python .agents/harness.py assemble` | Build application debug artifact (derived assemble task) |
 | **Device Install over a newer build** | `python .agents/harness.py device install-start --allow-downgrade` | When the phone has a newer build (`INSTALL_FAILED_VERSION_DOWNGRADE`) and the developer chooses to keep its data (`adb install -d`) |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
@@ -434,6 +451,6 @@ When an exception occurs:
 | **Version / Update** | `python .agents/harness.py version` / `python .agents/harness.py update-info` | Installed version; how to update to a newer release |
 | **Selftest Quick** | `python harness_cli.py selftest --quick` | Kit checkout only: developer-loop selftest (7 suites) |
 | **Selftest Full** | `python harness_cli.py selftest` | Kit checkout only: complete deterministic selftest (22 suites) |
-| **Final Verify** | `python .agents/scripts/workflow.py verify --repo . --task-id <id>` | Read-only delivery verification check |
-| **Deliver Task** | `python .agents/scripts/workflow.py deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
+| **Final Verify** | `python .agents/harness.py task verify --repo . --task-id <id>` | Read-only delivery verification check |
+| **Deliver Task** | `python .agents/harness.py task deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
 | **Zoho Delivery Sync**| `python .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item |

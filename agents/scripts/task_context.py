@@ -22,6 +22,7 @@ RESOLVER_VERSION = "1.0.0"
 SUPPORTED_TARGET_SUFFIXES = {".kt", ".java", ".xml"}
 DEFAULT_NEIGHBOR_LIMIT = 20
 MAX_NEIGHBOR_LIMIT = 100
+MAX_BATCH_TARGETS = 8
 
 
 def _inside_repo(repo: Path, candidate: Path) -> bool:
@@ -438,6 +439,18 @@ def resolve_task_context(
     bounded_limit = max(1, min(int(limit), MAX_NEIGHBOR_LIMIT))
     engine = GraphEngine(root)
     sync = engine.sync(persist=False)
+    return _resolve_task_context(root, engine, sync, file=file, symbol=symbol,
+                                 module=module, source_set=source_set, limit=bounded_limit)
+
+
+def _resolve_task_context(
+    root: Path, engine: GraphEngine, sync: dict[str, Any], *,
+    file: str | None = None, symbol: str | None = None,
+    module: str | None = None, source_set: str | None = None,
+    limit: int = DEFAULT_NEIGHBOR_LIMIT, publish: bool = True,
+) -> dict[str, Any]:
+    """Resolve one target against the caller's synchronized graph."""
+    bounded_limit = max(1, min(int(limit), MAX_NEIGHBOR_LIMIT))
     if file:
         status, candidates, error = _resolve_file(root, file, engine)
         query = file
@@ -509,7 +522,8 @@ def resolve_task_context(
                 resolved_paths=[rel_posix],
                 resolved_symbols=[],
             )
-            save_discovery_receipt(root, receipt)
+            if publish:
+                save_discovery_receipt(root, receipt)
         except Exception:
             pass
 
@@ -566,7 +580,7 @@ def resolve_task_context(
         if receipt:
             base["discovery"] = receipt
 
-        if fallback_status == "RESOLVED":
+        if publish and fallback_status == "RESOLVED":
             _persist_task_context(
                 root, base,
                 target_file=rel_posix,
@@ -709,7 +723,8 @@ def resolve_task_context(
             resolved_paths=res_paths,
             resolved_symbols=res_symbols,
         )
-        save_discovery_receipt(root, receipt)
+        if publish:
+            save_discovery_receipt(root, receipt)
     except Exception:
         pass
 
@@ -758,7 +773,7 @@ def resolve_task_context(
     _add_line_numbers(root, base, target_nodes)
     if expansion_action:
         base["recommended_action"] = expansion_action
-    if result_status in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
+    if publish and result_status in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
         if primary.file_path and (root / primary.file_path).is_file():
             _persist_task_context(
                 root, base,
@@ -770,6 +785,61 @@ def resolve_task_context(
                 candidate_surfaces=target_surfaces,
             )
     return base
+
+
+def resolve_task_contexts(
+    repo: Path, *, files: list[str] | None = None, symbols: list[str] | None = None,
+    module: str | None = None, source_set: str | None = None,
+    limit: int = DEFAULT_NEIGHBOR_LIMIT,
+) -> dict[str, Any]:
+    """Resolve up to eight targets with one graph sync and a bounded union receipt."""
+    targets = files or symbols or []
+    if bool(files) == bool(symbols) or not 1 <= len(targets) <= MAX_BATCH_TARGETS or any(not str(t).strip() for t in targets):
+        raise ValueError("Supply 1-8 nonempty --file targets or 1-8 --symbol targets, never both.")
+    from project_context import compute_source_fingerprint
+    from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+
+    root = repo.resolve()
+    before = compute_source_fingerprint(root)["source_fingerprint_sha256"]
+    engine = GraphEngine(root)
+    sync = engine.sync(persist=False)
+    results = [_resolve_task_context(root, engine, sync,
+                                    file=target if files else None, symbol=target if symbols else None,
+                                    module=module, source_set=source_set, limit=limit, publish=False)
+               for target in dict.fromkeys(targets)]
+    successful = [row for row in results if row["status"] in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}]
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "BATCH_RESOLVED" if len(successful) == len(results) else "BATCH_PARTIAL" if successful else "BATCH_FAILED",
+        "graph_sync": sync,
+        "results": results,
+        "read_ranges": list(dict.fromkeys(item for row in results for item in row.get("read_ranges", []))),
+    }
+    if compute_source_fingerprint(root)["source_fingerprint_sha256"] != before:
+        for row in results:
+            row.pop("discovery", None)
+        result.update(status="SOURCE_CHANGED_DURING_DISCOVERY",
+                      warnings=["Source changed during discovery. Stop the writer and rerun the same batch; no batch receipt was published."])
+        return result
+    receipts = [row["discovery"] for row in successful if row.get("discovery")]
+    if receipts:
+        receipt = create_discovery_receipt(
+            mode="TARGETED_GRAPH_CONTEXT", query_kind="batch_files" if files else "batch_symbols",
+            query_value=json.dumps(list(dict.fromkeys(targets)), ensure_ascii=True),
+            graph_fingerprint=_receipt_graph_fingerprint(engine, sync),
+            resolved_modules=sorted({item for row in receipts for item in row["resolved_modules"]}),
+            resolved_paths=sorted({item for row in receipts for item in row["resolved_paths"]}),
+            resolved_symbols=sorted({item for row in receipts for item in row["resolved_symbols"]}),
+        )
+        save_discovery_receipt(root, receipt)
+        result["discovery"] = receipt
+        result["graph_expansion_required"] = any(row.get("graph_expansion_required") for row in results)
+        last = successful[-1]
+        target = last["target"]
+        _persist_task_context(root, last, target_file=target["path"], module=target["module"],
+                              source_set=target["source_set"], query=last["query"], status=last["status"],
+                              candidate_surfaces=target["candidate_surfaces"])
+    return result
 
 
 def _add_line_numbers(root: Path, result: dict[str, Any], target_nodes: list[GraphNode]) -> None:
@@ -828,21 +898,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     target = parser.add_mutually_exclusive_group(required=True)
-    target.add_argument("--file")
-    target.add_argument("--symbol")
+    target.add_argument("--file", action="append", help="Target file; repeat for a batch of up to 8.")
+    target.add_argument("--symbol", action="append", help="Target symbol; repeat for a batch of up to 8.")
     parser.add_argument("--module")
     parser.add_argument("--source-set")
     parser.add_argument("--limit", type=int, default=DEFAULT_NEIGHBOR_LIMIT)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    result = resolve_task_context(
-        Path(args.repo),
-        file=args.file,
-        symbol=args.symbol,
-        module=args.module,
-        source_set=args.source_set,
-        limit=args.limit,
-    )
+    targets = args.file or args.symbol
+    if len(targets) > MAX_BATCH_TARGETS:
+        parser.error("A task-context batch accepts at most 8 targets.")
+    if len(targets) > 1:
+        result = resolve_task_contexts(Path(args.repo), files=args.file, symbols=args.symbol,
+                                       module=args.module, source_set=args.source_set, limit=args.limit)
+    else:
+        result = resolve_task_context(Path(args.repo), file=args.file[0] if args.file else None,
+                                      symbol=args.symbol[0] if args.symbol else None,
+                                      module=args.module, source_set=args.source_set, limit=args.limit)
     if args.json:
         # ASCII JSON preserves every Unicode code point on legacy Windows pipes.
         print(json.dumps(result, ensure_ascii=True, indent=2))
@@ -860,7 +932,7 @@ def main(argv: list[str] | None = None) -> int:
             print("  Read ranges:")
             for item in result["read_ranges"]:
                 print(f"    {item}")
-    return 0 if result["status"] in {"RESOLVED", "AMBIGUOUS", "ADVISORY_STALE_FALLBACK_USED"} else 1
+    return 0 if result["status"] in {"RESOLVED", "AMBIGUOUS", "ADVISORY_STALE_FALLBACK_USED", "BATCH_RESOLVED"} else 1
 
 
 if __name__ == "__main__":

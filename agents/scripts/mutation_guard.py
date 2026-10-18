@@ -14,7 +14,7 @@ VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
-    "phase_review", "task_git_lineage", "verification_contract", "journey_runner",
+    "phase_review", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps",
 }
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
@@ -141,6 +141,11 @@ def is_read_only_git_branch(args: list[str]) -> bool:
     return True
 
 
+def _valid_context_targets(args: list[str]) -> bool:
+    selectors = [arg.split("=", 1)[0] for arg in args if arg.split("=", 1)[0] in {"--file", "--symbol"}]
+    return 1 <= len(selectors) <= 8 and len(set(selectors)) == 1 and not any(arg.startswith("--out") for arg in args)
+
+
 def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     if name == "verification_contract" and args[:1] == ["coverage"]:
@@ -189,19 +194,17 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return True
     if name in INSPECTION_SCRIPTS:
         if name == "task_context":
-            targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
-            return targets == 1 and not any(arg.startswith("--out") for arg in args)
+            return _valid_context_targets(args)
         return not any(arg.startswith("--out") for arg in args)
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
     if name in {"harness_cli", "android-harness"}:
         if args == ["device", "status"]:
             return True
-        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"]):
+        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"], ["policy"]):
             return True
         if args[:1] == ["task-context"]:
-            targets = sum(1 for arg in args if arg in {"--file", "--symbol"})
-            return targets == 1 and not any(arg.startswith("--out") for arg in args)
+            return _valid_context_targets(args)
         if args[:2] in (["context", "preview"], ["context", "status"]):
             return True
         # `graph` forwards to project_graph.py and gets the same read-only rule.
@@ -914,7 +917,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
         or action in {"verify", "complete", "bind-evidence"}
-        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"]))
+        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.

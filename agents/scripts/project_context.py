@@ -8,6 +8,7 @@ markdown views and computes normalized architectural fingerprints.
 from __future__ import annotations
 
 import hashlib
+import fnmatch
 import json
 import os
 import re
@@ -232,6 +233,9 @@ def scan_viewmodel_declarations(text: str) -> list[tuple[str, str]]:
     and balanced parentheses.
     Returns list of (class_name, base_class_name).
     """
+    # With no removable tokens the scanner cannot synthesize a ViewModel name.
+    if "ViewModel" not in text and not any(marker in text for marker in ("/", '"', "'")):
+        return []
     clean = _strip_comments_and_strings(text)
     results: list[tuple[str, str]] = []
     class_iter = re.finditer(r"\bclass\s+([A-Za-z0-9_]+)", clean)
@@ -1596,34 +1600,47 @@ def extract_consistent_project_context(
 
 def compute_context_fingerprint(repo: Path) -> str:
     """Computes a fast, lightweight structural fingerprint across build and config files."""
+    repo = repo.resolve()
     items: list[tuple[str, int, int]] = []
-    patterns = (
-        "settings.gradle*",
-        "build.gradle*",
-        "gradle/libs.versions.toml",
-        "*/build.gradle*",
-        "**/build.gradle*",
-        "**/AndroidManifest.xml",
-    )
+    excluded = {".git", ".agents", ".gradle", "build"}
+
+    def candidates():
+        # Keep the explicit patterns: unlike **, */build.gradle* can cross a
+        # first-level directory symlink. Preserve the existing input set/hash.
+        for pattern in ("settings.gradle*", "build.gradle*", "gradle/libs.versions.toml"):
+            yield from repo.glob(pattern)
+        try:
+            children = list(repo.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            if child.name not in excluded and child.is_dir():
+                yield from child.glob("build.gradle*")
+        # One traversal for both recursive patterns. Only ROOT exclusions are
+        # pruned: app/build manifests and modules named buildLogic still count.
+        for directory, dirs, files in os.walk(repo, followlinks=False):
+            if Path(directory) == repo:
+                dirs[:] = [name for name in dirs if name not in excluded]
+            for name in files:
+                if fnmatch.fnmatch(name, "build.gradle*") or fnmatch.fnmatch(name, "AndroidManifest.xml"):
+                    yield Path(directory) / name
+
     seen: set[str] = set()
-    for pattern in patterns:
-        for p in repo.glob(pattern):
-            if not p.is_file():
-                continue
-            try:
-                rel = p.resolve().relative_to(repo.resolve()).as_posix()
-            except ValueError:
-                continue
-            if rel.startswith((".git/", ".agents/", ".gradle/", "build/")):
-                continue
-            if rel in seen:
-                continue
-            seen.add(rel)
-            try:
-                st = p.stat()
-                items.append((rel, st.st_size, getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))))
-            except OSError:
-                pass
+    for p in candidates():
+        if not p.is_file():
+            continue
+        try:
+            rel = p.resolve().relative_to(repo).as_posix()
+        except ValueError:
+            continue
+        if rel.startswith((".git/", ".agents/", ".gradle/", "build/")) or rel in seen:
+            continue
+        seen.add(rel)
+        try:
+            st = p.stat()
+            items.append((rel, st.st_size, getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))))
+        except OSError:
+            pass
     items.sort()
     import hashlib
     raw = ";".join(f"{rel}:{sz}:{mt}" for rel, sz, mt in items)

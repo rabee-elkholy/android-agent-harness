@@ -581,7 +581,8 @@ def _record_task_start(
     if not task_id or plan.get("status") != "IMPLEMENTING":
         live_print("[FAIL] --record-start needs an active task in IMPLEMENTING.", err=True)
         return 1
-    task_manifest = build_task_manifest(REPO, load_task_baseline(REPO, task_id), expected_files=plan.get("expected_files"))
+    live_manifest = build_manifest(REPO)
+    task_manifest = build_task_manifest(REPO, load_task_baseline(REPO, task_id), expected_files=plan.get("expected_files"), live_manifest=live_manifest)
     if task_manifest.get("task_changes"):
         live_print(
             "[FAIL] --record-start runs only before the task's first edit: this task already changed files, so a "
@@ -598,7 +599,7 @@ def _record_task_start(
         "schema_version": 1,
         "task_id": task_id,
         "captured_at": utc_now(),
-        "pre_fix_delivery_snapshot_sha256": build_manifest(REPO)["delivery_snapshot_sha256"],
+        "pre_fix_delivery_snapshot_sha256": live_manifest["delivery_snapshot_sha256"],
         "gradle_task": task_label,
         "status": "RECORDED" if attributable else "BUILD_FAILED",
         "failures": [
@@ -920,7 +921,7 @@ def main(argv=None) -> int:
 
             baseline = load_task_baseline(REPO, task_id)
             live_manifest = build_manifest(REPO)
-            task_manifest = build_task_manifest(REPO, baseline, expected_files=plan.get("expected_files"))
+            task_manifest = build_task_manifest(REPO, baseline, expected_files=plan.get("expected_files"), live_manifest=live_manifest)
             pre_red_changes = task_manifest.get("task_changes") or []
 
             from _modules import is_kmp_or_android_test_path

@@ -285,7 +285,7 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
         return []
     task_baseline = load_task_baseline(repo, task_id)
     if task_baseline is not None:
-        task_manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"))
+        task_manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"), live_manifest=manifest)
         uncommitted = [
             str(c.get("path") if isinstance(c, dict) else c or "")
             for c in (task_manifest.get("task_changes") or [])
@@ -709,7 +709,11 @@ def _build_and_save_plan(
                             else:
                                 loaded.append({"id": part, "description": f"Phase {part}"})
                 if loaded is None:
-                    raise ValidationError(f"invalid --phases parameter: unable to parse phases from '{s[:60]}'")
+                    raise ValidationError(
+                        "invalid --phases parameter: use a JSON list with an id and title for each phase, "
+                        'or --phases "p1:Introduce shared API,p2:Migrate feature callers". '
+                        "Use semantic phase titles for this task; no helper file or shell redirection is needed."
+                    )
             if isinstance(loaded, list):
                 parsed_phases = loaded
             elif isinstance(loaded, dict) and isinstance(loaded.get("phases"), list):
@@ -821,7 +825,10 @@ def _build_and_save_plan(
             "PHASE_PLAN_REQUIRED: Task scope exceeds single-phase threshold "
             f"({len(impl_files)} implementation files, {len(impl_modules)} module(s), "
             f"arch_intent={arch_intent}, layer groups: {', '.join(sorted(spanned_layer_groups)) or 'none'}). "
-            "Define phased execution using --phases '[{\"id\": \"p1\", ...}, {\"id\": \"p2\", ...}]'."
+            'Define semantic phases, for example --phases "p1:Introduce shared API,p2:Migrate feature callers". '
+            "Replace the example titles with the task's semantic boundaries. "
+            "A JSON list with id/title and optional expected_files is also supported; "
+            "no helper file or shell redirection is needed."
         )
 
     raw_kind = str(getattr(args, "kind", None) or "AUTO").strip().upper()
@@ -1299,6 +1306,28 @@ def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argp
         merged.kind = old_plan["task_kind"]
     if not given("planning_depth") and old_plan.get("planning_depth"):
         merged.planning_depth = old_plan["planning_depth"]
+    contract = old_plan.get("architecture_contract") or {}
+    if not given("architecture_intent"):
+        merged.architecture_intent = {
+            "PRESERVE": "EXISTING_CHANGE", "NEW": "NEW_SCREEN",
+            "REFACTOR": "REFACTOR", "MIGRATE": "MIGRATION",
+        }.get(contract.get("mode"), "EXISTING_CHANGE")
+    same_files = not given("expected_files") or (
+        normalize_expected_files(repo, args.expected_files) == sorted(old_plan.get("expected_files") or [])
+    )
+    # Keep the anchor for metadata-only revisions, but never impose an old family
+    # on a changed scope or an explicitly changed architectural intent.
+    from architecture_resolver import INTENT_MAP
+    same_intent = INTENT_MAP.get(str(merged.architecture_intent).upper()) == contract.get("mode")
+    previous_scope = str(contract.get("target_scope") or "").replace("\\", "/").strip("/")
+    same_scope = not given("architecture_target_scope") or (
+        str(args.architecture_target_scope).replace("\\", "/").strip("/") == previous_scope
+    )
+    if same_files and same_intent and same_scope:
+        if not given("architecture_target_scope"):
+            merged.architecture_target_scope = contract.get("target_scope") or ""
+        if not given("architecture_target_family"):
+            merged.architecture_target_family = contract.get("target_family_id")
     if not given("expected_files") and old_plan.get("expected_files"):
         merged.expected_files = joined(old_plan["expected_files"])
     if not given("expected_modules") and old_plan.get("expected_modules"):
@@ -5112,8 +5141,8 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
         "--architecture-intent",
         choices=("EXISTING_CHANGE", "NEW_SCREEN", "NEW_FEATURE", "REFACTOR", "MIGRATION",
                  "existing_change", "new_screen", "new_feature", "refactor", "migration"),
-        default="EXISTING_CHANGE",
-        help="Task architectural intent: EXISTING_CHANGE (default), NEW_SCREEN, NEW_FEATURE, REFACTOR, MIGRATION",
+        default=None if is_revision else "EXISTING_CHANGE",
+        help="Architecture intent: draft defaults to EXISTING_CHANGE; revise preserves the saved mode when omitted",
     )
     command.add_argument("--architecture-target-scope", default="", help="Target component or screen path for architecture resolution")
     command.add_argument("--architecture-target-family", default=None, help="Target architecture family ID")
@@ -5671,7 +5700,12 @@ def _with_planned_file_surfaces(
     """
     from final_verifier import unplanned_mandatory_skills
     from plan_authority import check_material_drift
+    from _modules import is_kmp_or_android_test_path
 
+    # A declared test path is deterministic scope even before the file exists.
+    # TEST_ONLY is non-drifting, but omitting it would hide its reviewer at approval.
+    if any(is_kmp_or_android_test_path(path) for path in files):
+        expected = sorted(set(expected) | {"TEST_ONLY"})
     from_content, _unread = _planned_file_surfaces(repo, files)
     extra = sorted(from_content - set(expected))
     if not extra:

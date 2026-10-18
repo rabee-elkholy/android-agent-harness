@@ -605,7 +605,7 @@ class TestCanonicalDraftRow(unittest.TestCase):
         # canonical Antigravity draft row did not mention the flag, so the first draft failed.
         for path in (REPO_ROOT / "GEMINI.md", REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template"):
             row = next(line for line in path.read_text(encoding="utf-8").splitlines()
-                       if "workflow.py draft --repo . --task-id <id>" in line)
+                       if "harness.py task draft --repo . --task-id <id>" in line)
             with self.subTest(path=path.name):
                 self.assertIn("--expected-files <paths>", row)
 
@@ -616,7 +616,7 @@ class TestAntigravityPlanHashApproval(unittest.TestCase):
     DOCS = (REPO_ROOT / "GEMINI.md", REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template")
 
     def _approve_commands(self, path: Path) -> list[str]:
-        return re.findall(r"`[^`]*workflow\.py approve [^`]*`", path.read_text(encoding="utf-8"))
+        return re.findall(r"`[^`]*harness\.py task approve [^`]*`", path.read_text(encoding="utf-8"))
 
     def test_every_documented_approve_carries_the_summary_hash(self):
         for path in self.DOCS:
@@ -654,7 +654,7 @@ class TestAntigravityPlanHashApproval(unittest.TestCase):
             ))
             shown = re.search(r"Plan hash: ([0-9a-f]{12})", workflow.plan_summary(plan)).group(1)
             documented = self._approve_commands(self.DOCS[0])[-1].strip("`")
-            argv = documented.split("workflow.py ", 1)[1].replace('"<phrase>"', "ok").replace("<id>", "ag-approve").split()
+            argv = documented.split("harness.py task ", 1)[1].replace('"<phrase>"', "ok").replace("<id>", "ag-approve").split()
             argv[argv.index("--repo") + 1] = str(repo)
             hash_at = argv.index("<hash") 
             del argv[hash_at:hash_at + 3]

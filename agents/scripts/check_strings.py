@@ -109,7 +109,7 @@ def _is_language_locale_tag(tag: str) -> bool:
 
 
 def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
-    """Parse XML strings/plurals/arrays, returning (resource_dict, duplicate_key_errors)."""
+    """Parse resources, returning (resource_dict, duplicate/parse errors)."""
     if not xml_file.is_file():
         return {}, []
     res: dict[str, dict] = {}
@@ -120,8 +120,7 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
     try:
         root = ET.parse(xml_file).getroot()
     except Exception as exc:
-        print(f"Warning: Failed to parse XML {xml_file.name}: {exc}")
-        return {}, []
+        return {}, [f"XML_PARSE_ERROR: {xml_file}: {exc}"]
 
     for tag in ("string", "plurals", "string-array"):
         for elem in root.findall(tag):
@@ -538,6 +537,33 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
 
     pairs = discover_locale_pairs(res_dirs=res_dirs, repo=r)
     errors = 0
+    modified = changed_paths(repo=r)
+    parsed: dict[Path, tuple[dict, list[str]]] = {}
+    reported: set[Path] = set()
+
+    def resources(path: Path) -> tuple[dict, list[str]]:
+        if path not in parsed:
+            parsed[path] = _parse_resources(path)
+        return parsed[path]
+
+    def report_resource_errors(path: Path) -> int:
+        if path in reported:
+            return 0
+        reported.add(path)
+        _values, failures = resources(path)
+        if failures:
+            print(f"\n[!] Resource errors in {path} ({len(failures)}):")
+            for failure in failures:
+                print(f"   - {failure}")
+        return len(failures)
+
+    # Syntax/duplicate failures must not disappear because no translation pair
+    # exists or a malformed XML edit yielded no parseable changed resource key.
+    resource_files = {path for path in modified if path.suffix == ".xml" and path.parent.name.startswith("values")}
+    if args.all:
+        resource_files.update(path for root in res_dirs for path in root.glob("values*/*.xml") if path.is_file())
+    for path in sorted(resource_files):
+        errors += report_resource_errors(path)
 
     if not pairs:
         print("[OK] Single-locale checkout (no locale variants). Skipping translation parity.")
@@ -560,20 +586,10 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
                 print(f"[OK] No string modifications in {base_rel}. Global translation parity skipped (diff-scoped).")
                 continue
 
-            base_data, base_dups = _parse_resources(base_file)
-            loc_data, loc_dups = _parse_resources(loc_file)
-
-            if base_dups:
-                print(f"\n[!] Duplicate keys in {base_rel} ({len(base_dups)}):")
-                for d in base_dups:
-                    print(f"   - {d}")
-                errors += len(base_dups)
-
-            if loc_dups:
-                print(f"\n[!] Duplicate keys in {loc_rel} ({len(loc_dups)}):")
-                for d in loc_dups:
-                    print(f"   - {d}")
-                errors += len(loc_dups)
+            base_data, _base_errors = resources(base_file)
+            loc_data, _locale_errors = resources(loc_file)
+            errors += report_resource_errors(base_file)
+            errors += report_resource_errors(loc_file)
 
             base_keys = set(base_data.keys())
             loc_keys = set(loc_data.keys())
@@ -653,7 +669,7 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
             elif common_keys:
                 print(f"[OK] Placeholders matched across {len(common_keys)} key(s) in {loc_rel}.")
 
-    modified_src = [p for p in changed_paths() if p.suffix in {".kt", ".xml"}]
+    modified_src = [p for p in modified if p.suffix in {".kt", ".xml"}]
     hardcoded: list[str] = []
     if modified_src:
         print(f"\n[*] Checking {len(modified_src)} modified file(s) for hardcoded UI strings...")

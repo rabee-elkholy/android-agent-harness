@@ -173,43 +173,49 @@ def tag_exists_locally(tag_name: str) -> bool:
 
 def tag_remote_status(tag_name: str) -> str:
     """Return 'PRESENT', 'ABSENT', or 'UNKNOWN'."""
-    try:
-        res = subprocess.run(
-            ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-        if res.returncode == 0:
-            return "PRESENT" if res.stdout.strip() else "ABSENT"
-        return "UNKNOWN"
-    except Exception:
-        return "UNKNOWN"
+    for attempt in range(2):
+        try:
+            res = subprocess.run(
+                ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag_name}"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=45,
+            )
+            if res.returncode == 0:
+                return "PRESENT" if res.stdout.strip() else "ABSENT"
+        except Exception:
+            pass
+        if attempt == 0:
+            time.sleep(2)
+    return "UNKNOWN"
 
 
 def github_release_status(tag_name: str) -> str:
     """Return 'PRESENT', 'ABSENT', or 'UNKNOWN'."""
     if not shutil.which("gh"):
         return "UNKNOWN"
-    try:
-        res = subprocess.run(
-            ["gh", "release", "view", tag_name],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-        if res.returncode == 0:
-            return "PRESENT"
-        stderr = (res.stderr or "").lower()
-        if "release not found" in stderr or "not found" in stderr or "404" in stderr:
-            return "ABSENT"
-        return "UNKNOWN"
-    except Exception:
-        return "UNKNOWN"
+    for attempt in range(2):
+        try:
+            res = subprocess.run(
+                ["gh", "release", "view", tag_name],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=45,
+            )
+            if res.returncode == 0:
+                return "PRESENT"
+            stderr = (res.stderr or "").lower()
+            if "release not found" in stderr or "not found" in stderr or "404" in stderr:
+                return "ABSENT"
+        except Exception:
+            pass
+        if attempt == 0:
+            time.sleep(2)
+    return "UNKNOWN"
 
 
 def tag_exists_remotely(tag_name: str) -> bool:

@@ -575,7 +575,7 @@ def run_engine_script(
     )
     if capture and proc.stdout:
         sys.stdout.write(proc.stdout)
-    if not capture and proc.stderr:
+    if proc.stderr:
         sys.stderr.write(proc.stderr)
     return proc.returncode
 
@@ -854,10 +854,10 @@ def cmd_task_context(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
     cli_args = ["--repo", str(repo)]
-    if args.file:
-        cli_args.extend(["--file", args.file])
-    if args.symbol:
-        cli_args.extend(["--symbol", args.symbol])
+    for target in args.file or []:
+        cli_args.extend(["--file", target])
+    for target in args.symbol or []:
+        cli_args.extend(["--symbol", target])
     if args.module:
         cli_args.extend(["--module", args.module])
     if args.source_set:
@@ -866,6 +866,20 @@ def cmd_task_context(args: argparse.Namespace) -> int:
     if args.json:
         cli_args.append("--json")
     return run_engine_script(kit, "task_context.py", cli_args, capture=args.json)
+
+
+def cmd_verification_steps(args: argparse.Namespace) -> int:
+    arguments = ["--task-id", args.task_id]
+    if args.host:
+        arguments.extend(["--host", args.host])
+    return _dispatch_pipeline_script(args, "verification_steps.py", arguments)
+
+
+def cmd_policy(args: argparse.Namespace) -> int:
+    arguments = ["--json"] if args.json else []
+    if args.task_id:
+        arguments.extend(["--task-id", args.task_id])
+    return _dispatch_pipeline_script(args, "review_policy.py", arguments)
 
 
 def cmd_graph(args: argparse.Namespace) -> int:
@@ -1686,10 +1700,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--full", action="store_true", help="For context preview, print the complete diagnostic payload.")
     sp.set_defaults(func=cmd_context)
 
-    sp = sub.add_parser("task-context", help="Resolve bounded read-only context for one file or symbol.")
+    sp = sub.add_parser("verify-steps", help="Run routed deterministic verification steps; stop at the next review, failure or human boundary.")
+    sp.add_argument("--repo", help="Android project root.")
+    sp.add_argument("--kit", help="Kit checkout to use.")
+    sp.add_argument("--task-id", required=True, help="Focused approved task whose implementation is finished.")
+    sp.add_argument("--host", help="Actual execution host, matching the task session.")
+    sp.set_defaults(func=cmd_verification_steps)
+
+    sp = sub.add_parser("policy", help="Inspect classified surfaces, risk, gates and reviewers in one read-only request.")
+    sp.add_argument("--repo", help="Android project root.")
+    sp.add_argument("--kit", help="Kit checkout to use.")
+    sp.add_argument("--task-id", help="Optional task scope.")
+    sp.add_argument("--json", action="store_true", help="Print policy JSON.")
+    sp.set_defaults(func=cmd_policy)
+
+    sp = sub.add_parser("task-context", help="Resolve bounded read-only context for one file or a batch of up to 8 targets.")
     target = sp.add_mutually_exclusive_group(required=True)
-    target.add_argument("--file", help="Repository-relative or absolute source file path.")
-    target.add_argument("--symbol", help="Short symbol name or fully qualified name.")
+    target.add_argument("--file", action="append", help="Source file path; repeat for up to 8 targets sharing one graph sync.")
+    target.add_argument("--symbol", action="append", help="Short or qualified symbol; repeat for up to 8 targets.")
     sp.add_argument("--module", help="Optional module qualifier for ambiguous symbols.")
     sp.add_argument("--source-set", help="Optional source-set qualifier for ambiguous symbols.")
     sp.add_argument("--limit", type=int, default=20, help="Maximum related items to return (1-100).")

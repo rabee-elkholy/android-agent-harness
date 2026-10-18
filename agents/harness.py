@@ -28,12 +28,14 @@ def _run(script: str, args: list[str]) -> int:
     from _vnext_common import ValidationError, read_json
     from host_continuation import assert_execution_session
     from evidence_store import StateLock
-    read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py"}
+    read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py"}
     read_only = read_only or (script == "run_device.py" and args == ["status"])
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
     # Merge checks the execution sessions of every source before applying; preview is read-only.
     read_only = read_only or (script == "workflow.py" and args[:1] == ["merge"])
-    if not read_only and not {"--help", "-h"} & set(args):
+    # The bounded verification runner owns its execution lease, including when
+    # invoked directly; taking it here too would create a nested lock.
+    if script != "verification_steps.py" and not read_only and not {"--help", "-h"} & set(args):
         active = AGENTS_ROOT / "state/active-task.json"
         task_id = ""
         for index, argument in enumerate(args):
@@ -179,11 +181,15 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|preflight|test|compile|assemble|review|phase-review|device|journey|verify|zoho|version|update-info|commands> [args...]"
+            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|journey|verify|zoho|version|update-info|commands> [args...]"
         )
         return 0
 
     command = args.pop(0)
+    if command == "policy":
+        return _run("review_policy.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "verify-steps":
+        return _run("verification_steps.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "task" and args and args[0] in {"coverage", "bind-evidence", "metrics"}:
         return _run("workflow.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "journey":

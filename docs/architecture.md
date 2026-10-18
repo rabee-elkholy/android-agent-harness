@@ -1,21 +1,25 @@
 # v1 architecture
 
+Public commands use `.agents/harness.py`; direct script calls remain compatibility and diagnostic entry points. `task-context` accepts up to eight repeated file or symbol targets with one graph sync, a bounded union receipt and a before/after source-identity check. The single-target contract is unchanged. Structural context fingerprinting prunes only already-excluded root trees and keeps the existing inventory/hash, including nested build inputs. Live manifests may be shared within one observation, never cached between commands or across builds.
+
+`verify-steps` is a bounded command convenience, not another lifecycle state machine. It executes only preparation/preflight/unit-test/package actions from the canonical router and retains each gate's independent proof checks. It stops on failures, lack of progress, stale inputs, task/session changes and all reviewer/human/device/delivery boundaries. Per-step elapsed times are diagnostic only. Preflight aggregates all selected independent failures, including checker exceptions, before reporting failure; stale engine/policy inputs cannot publish new proof.
+
 The system has three external phases—analysis, planning, and execution—and a stricter internal task state machine. Analysis and plan drafting cannot authorize mutation.
 
 ```mermaid
 stateDiagram-v2
     [*] --> AWAITING_DEVELOPER_APPROVAL: draft
-    AWAITING_DEVELOPER_APPROVAL --> IMPLEMENTING: approve + begin
+    AWAITING_DEVELOPER_APPROVAL --> IMPLEMENTING: approve (atomic)
     IMPLEMENTING --> VERIFYING: freeze snapshot and policy
     VERIFYING --> BLOCKED: findings
     BLOCKED --> IMPLEMENTING: resume
     VERIFYING --> READY_FOR_DELIVERY: verify + complete
-    READY_FOR_DELIVERY --> [*]: handoff
+    READY_FOR_DELIVERY --> [*]: developer commit + deliver
 ```
 
-The approval hash includes plan identity, requested outcome, scope, tests, device strategy, risks, rollback, skills, repository identity, and base snapshot. `begin` consumes a single-use nonce. New surfaces or modules require a revised plan and fresh approval.
+The approval hash includes plan identity, requested outcome, scope, tests, device strategy, risks, rollback, skills, repository identity, and base snapshot. `approve` atomically consumes a single-use nonce and starts implementation; `begin` is idempotent compatibility. New surfaces or modules require a revised plan and fresh approval.
 
-`draft` and `revise` render an `APPROVAL_BRIEF` from the registered approval payload for the approval question: what changes, file names, sensitive areas, writes outside the repository, phone checks and risks, with a link to `plan.md` (after a revise of an approved plan, only what changed). `workflow.py plan-summary` renders every reviewable field (`PLAN_SUMMARY`). `plan.md` is generated next to `plan.json` on every draft and revise; it adds clickable file links, the gates and reviewers that will run, what needs the developer, a "what changed" section after a revise, and the full redacted approval payload (architecture contract, phase authority, repository binding). The plan hash covers the whole payload. Display redaction does not modify the plan or its approval hash. Secret-shaped assignments, including compound names such as `access_token` and `client_secret`, are redacted; use credential references rather than putting credentials in a plan. Redaction is not a general-purpose secret detector.
+`draft` and `revise` render an `APPROVAL_BRIEF` from the registered approval payload for the approval question: what changes, file names, sensitive areas, writes outside the repository, phone checks and risks, with a link to `plan.md` (after a revise of an approved plan, only what changed). `python .agents/harness.py task status --task-id <id> --json` returns the full registered plan. `plan.md` is generated next to `plan.json` on every draft and revise; it adds clickable file links, the gates and reviewers that will run, what needs the developer, a "what changed" section after a revise, and the full redacted approval payload (architecture contract, phase authority, repository binding). The plan hash covers the whole payload. Display redaction does not modify the plan or its approval hash. Secret-shaped assignments, including compound names such as `access_token` and `client_secret`, are redacted; use credential references rather than putting credentials in a plan. Redaction is not a general-purpose secret detector.
 
 ## Delivery identity
 
@@ -55,6 +59,12 @@ Project Intelligence has two deliberately separate layers. `project-facts.json` 
 Graph, Room type, classifier, and setup discovery use reusable single-pass indexes. Default JSON context preview is a bounded summary; `--full` is an explicit diagnostic escape hatch. Performance tests protect deterministic work/inventory invariants and publish timings only as observations, not brittle pass/fail deadlines.
 
 Persistent context refresh uses a bounded stable-snapshot retry, stages rendered views and facts together, and replaces `project-facts.json` last. A failed pre-commit replacement restores the previous rendered views. Old schema-v2 snapshots without advisory knowledge remain valid; Doctor reports the missing optional layer as a warning.
+
+Architecture planning reuses a source-current schema-v2 inventory, or uses the existing bounded, in-memory stable-snapshot extractor when the inventory is stale, missing, malformed or legacy. It does not update persistent context. Sources and architecture-policy bytes are checked again before returning a resolved contract; concurrent changes block publication. Policy validation, ambiguity, migration-depth checks and approval requirements remain authoritative. This avoids requiring an unapproved `context refresh` just to draft a new-screen plan and avoids extracting fresh facts only to discard them during a separate freshness check.
+
+Partial plan revisions reconstruct omitted architecture choices from the saved contract and re-resolve against current facts/policy. Changed expected files or explicit intent/scope changes do not impose the old scope/family. Plans without contracts retain normal inference. Phase errors provide the supported inline shorthand with complete examples rather than an invalid JSON skeleton; malformed phase input cannot publish a plan.
+
+Explicit surface lists cannot suppress `TEST_ONLY` for declared Android/KMP test paths, including files that do not exist yet. This keeps test-review requirements visible at initial approval and through revisions. New UI implementation choices must be declared before approval; filename heuristics do not prove whether an Activity will use Compose or Views. Later mandatory-skill reconciliation still blocks a previously undeclared toolkit.
 
 ## Enforcement boundary
 

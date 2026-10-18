@@ -362,6 +362,83 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertEqual("NEW", res["mode"])
         self.assertEqual(fam_id, res["contract"]["target_family_id"])
 
+    def test_stale_context_plans_from_live_facts_without_refresh(self) -> None:
+        self._init_git_repo()
+        self._write("app/src/main/kotlin/legacy/FeatureFragment.kt", "class FeatureFragment : Fragment()")
+        facts = extract_project_facts(self.repo)
+        fam_id = facts["facts"]["architecture"]["families"][0]["id"]
+        cache = self._write(".agents/project-context/project-facts.json", json.dumps(facts))
+        write_architecture_policy(self.repo, create_architecture_policy(preferred_new_code_family=fam_id))
+        self._write("app/src/main/kotlin/modern/NewScreen.kt", "@Composable fun NewScreen() {}")
+        modern_id = next(f["id"] for f in extract_project_facts(self.repo)["facts"]["architecture"]["families"]
+                         if f["id"] != fam_id)
+        before = {p.relative_to(self.repo).as_posix(): p.read_bytes()
+                  for p in (self.repo / ".agents").rglob("*") if p.is_file()}
+        for intent in ("NEW_SCREEN", "NEW_FEATURE", "MIGRATION"):
+            with self.subTest(intent=intent):
+                result = resolve_architecture_contract(self.repo, architecture_intent=intent,
+                    target_scope="app/src/main/kotlin/legacy/FeatureFragment.kt", planning_depth="ARCHITECTURAL",
+                    target_family_id=modern_id if intent == "MIGRATION" else None)
+                self.assertEqual(STATUS_RESOLVED, result["status"], result)
+                self.assertEqual(modern_id if intent == "MIGRATION" else fam_id, result["contract"]["target_family_id"])
+        after = {p.relative_to(self.repo).as_posix(): p.read_bytes()
+                 for p in (self.repo / ".agents").rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+        self.assertEqual(json.dumps(facts), cache.read_text(encoding="utf-8"))
+
+    def test_architecture_planning_rejects_changing_sources(self) -> None:
+        from project_context import ContextSourceChangedDuringExtraction
+        with mock.patch("project_context.extract_consistent_project_context",
+                        side_effect=ContextSourceChangedDuringExtraction("CONTEXT_SOURCE_CHANGED_DURING_EXTRACTION")):
+            result = resolve_architecture_contract(self.repo, architecture_intent="NEW_SCREEN")
+        self.assertEqual("CONTEXT_STALE_FOR_NEW_CODE", result["status"])
+        self.assertIsNone(result["contract"])
+        self.assertNotIn("context refresh", result["message"])
+        self.assertIn("Do not retry", result["message"])
+
+    def test_current_context_is_reused_without_duplicate_extraction(self) -> None:
+        self._write("app/src/main/kotlin/legacy/FeatureFragment.kt", "class FeatureFragment : Fragment()")
+        facts = extract_project_facts(self.repo)
+        self._write(".agents/project-context/project-facts.json", json.dumps(facts))
+        with mock.patch("project_context.extract_consistent_project_context", side_effect=AssertionError("cache is current")):
+            result = resolve_architecture_contract(self.repo, target_scope="app/src/main/kotlin/legacy/FeatureFragment.kt")
+        self.assertEqual(STATUS_RESOLVED, result["status"])
+
+    def test_unusable_context_is_recomputed_without_persisting(self) -> None:
+        import project_context
+        self._write("app/src/main/kotlin/legacy/FeatureFragment.kt", "class FeatureFragment : Fragment()")
+        for value in ("{broken", "[]", '{"facts":{}}'):
+            with self.subTest(cache=value):
+                cache = self._write(".agents/project-context/project-facts.json", value)
+                with mock.patch.object(project_context, "compute_source_fingerprint",
+                                       wraps=project_context.compute_source_fingerprint) as fingerprint:
+                    result = resolve_architecture_contract(self.repo, target_scope="app/src/main/kotlin/legacy/FeatureFragment.kt")
+                self.assertLessEqual(fingerprint.call_count, 3, "stable extraction already checks source identity")
+                self.assertEqual(STATUS_RESOLVED, result["status"], result)
+                self.assertTrue(result["contract"]["target_family_id"])
+                self.assertEqual(value, cache.read_text(encoding="utf-8"))
+
+    def test_sources_or_policy_changing_during_resolution_cannot_publish_contract(self) -> None:
+        self._init_git_repo()
+        source = self._write("app/src/main/kotlin/legacy/FeatureFragment.kt", "class FeatureFragment : Fragment()")
+        facts = extract_project_facts(self.repo)
+        family = facts["facts"]["architecture"]["families"][0]["id"]
+        policy = create_architecture_policy(preferred_new_code_family=family)
+        policy_file = write_architecture_policy(self.repo, policy)
+        for changed in (source, policy_file):
+            with self.subTest(path=changed):
+                original = changed.read_bytes()
+                def change_after_validation(*args, **kwargs):
+                    result = validate_architecture_policy(*args, **kwargs)
+                    changed.write_bytes(original + b"\n ")
+                    return result
+                with mock.patch("architecture_policy.validate_architecture_policy", side_effect=change_after_validation):
+                    result = resolve_architecture_contract(self.repo, architecture_intent="NEW_SCREEN", target_scope="legacy/Next.kt")
+                self.assertEqual("CONTEXT_STALE_FOR_NEW_CODE", result["status"], result)
+                self.assertIsNone(result["contract"])
+                self.assertIn("ARCHITECTURE_INPUTS_CHANGED", result["message"])
+                changed.write_bytes(original)
+
     def test_sim_04_entirely_new_feature(self) -> None:
         """SIM-04: Entirely new feature uses preferred family and modern exemplars."""
         self._write("app/src/main/kotlin/base/MviViewModel.kt", "abstract class MviViewModel : ViewModel()")
@@ -441,7 +518,12 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         ]
         facts_file = self.repo / ".agents/project-context/project-facts.json"
         facts_file.parent.mkdir(parents=True, exist_ok=True)
-        facts_file.write_text(json.dumps({"facts": {"architecture": {"families": families}}}), encoding="utf-8")
+        # A synthetic overlapping-family inventory must still be a current schema-v2
+        # snapshot; stale and legacy inventories are now re-extracted from source.
+        from project_context import compute_source_fingerprint
+        facts_file.write_text(json.dumps({"schema_version": 2,
+            "source_fingerprint_sha256": compute_source_fingerprint(self.repo)["source_fingerprint_sha256"],
+            "facts": {"architecture": {"families": families}}}), encoding="utf-8")
 
         existing = resolve_architecture_contract(self.repo, architecture_intent="EXISTING_CHANGE", target_scope="app/src/main/kotlin/feature/Header.kt")
         self.assertEqual(STATUS_RESOLVED, existing["status"], existing.get("message"))
@@ -938,6 +1020,58 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         self.assertIn("architecture_contract", plan)
         contract = plan["architecture_contract"]
         self.assertEqual("PRESERVE", contract["mode"])
+
+
+class ContextScanPerformanceTests(unittest.TestCase):
+    def test_config_fingerprint_preserves_inventory_without_walking_excluded_roots(self):
+        import hashlib
+        import project_context
+
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            for relative in ("settings.gradle.kts", "build.gradle", "gradle/libs.versions.toml",
+                             "app/build.gradle.kts", "app/src/main/AndroidManifest.xml",
+                             "app/build/generated/AndroidManifest.xml", "buildLogic/build.gradle.kts",
+                             ".agents/deep/AndroidManifest.xml", ".git/objects/build.gradle",
+                             ".gradle/caches/AndroidManifest.xml", "build/generated/AndroidManifest.xml"):
+                path = repo / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative, encoding="utf-8")
+            items = {}
+            for pattern in ("settings.gradle*", "build.gradle*", "gradle/libs.versions.toml",
+                            "*/build.gradle*", "**/build.gradle*", "**/AndroidManifest.xml"):
+                for path in repo.glob(pattern):
+                    if path.is_file():
+                        relative = path.resolve().relative_to(repo).as_posix()
+                        if not relative.startswith((".git/", ".agents/", ".gradle/", "build/")):
+                            stat = path.stat()
+                            items[relative] = (stat.st_size, stat.st_mtime_ns)
+            expected = hashlib.sha256(";".join(
+                f"{relative}:{size}:{mtime}" for relative, (size, mtime) in sorted(items.items())
+            ).encode()).hexdigest()
+            scan = os.scandir
+
+            def guarded_scan(path):
+                relative = Path(path).relative_to(repo)
+                if relative.parts and relative.parts[0] in {".git", ".agents", ".gradle", "build"}:
+                    self.fail(f"Excluded root was traversed: {relative}")
+                return scan(path)
+
+            with mock.patch("os.scandir", side_effect=guarded_scan):
+                self.assertEqual(expected, project_context.compute_context_fingerprint(repo))
+            nested = repo / "app/build/generated/AndroidManifest.xml"
+            nested.write_text("changed nested build input", encoding="utf-8")
+            self.assertNotEqual(expected, project_context.compute_context_fingerprint(repo))
+
+    def test_non_viewmodel_files_do_not_require_character_scanning(self):
+        import project_context
+
+        with mock.patch.object(project_context, "_strip_comments_and_strings",
+                               side_effect=AssertionError("Unnecessary character scan")):
+            self.assertEqual([], project_context.scan_viewmodel_declarations("class PaymentActivity : Activity()"))
+        # Comments can join tokens in the existing scanner; preserve that behavior too.
+        self.assertEqual([("PayViewModel", "ViewModel")],
+                         project_context.scan_viewmodel_declarations("class PayView/**/Model : ViewModel()"))
 
 
 if __name__ == "__main__":
