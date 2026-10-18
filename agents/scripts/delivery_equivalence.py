@@ -282,12 +282,26 @@ def evaluate_post_ready_changes(repo: Path, task_id: str, plan: dict[str, Any], 
         root = repo.resolve()
         run_id, ready, before = _ready_manifest(root, task_id, plan)
         after = _file_identities(live_manifest)
+        if ready.get("external_inputs_sha256") != live_manifest.get("external_inputs_sha256"):
+            return reject("EXTERNAL_INPUTS_CHANGED", "External build inputs differ from the verified run.")
         for field in ("root_sha256", "git_common_dir_sha256", "branch"):
             if not ready["repository"].get(field) or ready["repository"][field] != live_manifest["repository"].get(field):
                 return reject("REPOSITORY_IDENTITY_MISMATCH", f"Repository {field} differs from verified run.")
-        changed = sorted(rel for rel in set(before) | set(after) if before.get(rel) != after.get(rel))
-        if not changed:
+        all_changed = sorted(rel for rel in set(before) | set(after) if before.get(rel) != after.get(rel))
+        if not all_changed:
             return reject("NO_FILE_DIFF_DETECTED", "Snapshot divergence has no bound file difference.")
+        from delivery_manifest import disjoint_sibling_file_sets
+        live_siblings, committed_siblings = disjoint_sibling_file_sets(root, task_id, plan=plan)
+        dirty = {item.get(key) for item in live_manifest.get("changes") or [] for key in ("path", "old_path")}
+        sib_files = live_siblings | (committed_siblings - dirty)
+        changed = [rel for rel in all_changed if rel.replace("\\", "/").strip("/") not in sib_files]
+        if not changed:
+            return {
+                "is_benign": True,
+                "reason": "DISJOINT_SIBLING_TASK_CHANGES_ONLY",
+                "normalized_files": [],
+                "diff_summary": "Only disjoint sibling task files changed.",
+            }
         directory = _verified_dir(root, task_id, run_id)
         cache = read_json(directory / "verified-files-manifest.json")
         for field, value in _bindings(task_id, run_id, plan, ready).items():

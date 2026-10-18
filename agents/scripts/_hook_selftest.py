@@ -78,7 +78,7 @@ class HookTests(unittest.TestCase):
         task = self.state / "tasks/task-one"
         task.mkdir(parents=True, exist_ok=True)
         plan = {
-            "plan_id": "plan-one", "status": status, "execution_nonce": "nonce",
+            "task_id": "task-one", "plan_id": "plan-one", "status": status, "execution_nonce": "nonce",
             "approval": {"single_use_nonce": "nonce"},
             "external_writes": external_writes or [],
         }
@@ -589,7 +589,7 @@ class HookTests(unittest.TestCase):
         self.assertIn("--expected-surfaces COMPOSE_UI,LOCALIZATION,XML_UI", res["reason"])
         # Certification C-D4: the hint is a complete one-line revise that keeps files and modules.
         self.assertIn(
-            "Revise the plan in one command: python .agents/scripts/workflow.py revise --repo . --task-id '<task-id>'"
+            "Revise the plan in one command: python .agents/scripts/workflow.py revise --repo . --task-id task-one"
             " --expected-files app/src/main/kotlin/com/example/Screen.kt,app/src/main/res/layout/activity_main.xml,app/src/main/res/values/strings.xml"
             " --expected-modules :app --expected-surfaces COMPOSE_UI,LOCALIZATION,XML_UI",
             res["reason"],

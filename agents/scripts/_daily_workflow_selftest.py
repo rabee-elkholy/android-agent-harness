@@ -4730,7 +4730,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
                 phases=None,
                 force=True,
             ))
-        self.assertIn("PREVIOUS_DELIVERY_NOT_FINALIZED", str(cm.exception))
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
         # Ensure old plan remains READY_FOR_DELIVERY and active pointer is preserved
         self.assertEqual("READY_FOR_DELIVERY", read_json(tdir / "plan.json").get("status"))
         active = read_json(state_root(self.repo) / "active-task.json")
@@ -4814,7 +4814,7 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         self.assertEqual("IMPLEMENTING", plan_after.get("status"))
 
     def test_STATE_SAFE_010_multiple_live_tasks_fail_closed_ambiguous(self) -> None:
-        """STATE-SAFE-010: Multiple legacy live tasks fail closed with AMBIGUOUS_LIVE_TASKS."""
+        """STATE-SAFE-010: Overlapping legacy live tasks fail closed."""
         from workflow import cancel, assert_single_live_task
         task_a = "task-ambig-a"
         task_b = "task-ambig-b"
@@ -4844,11 +4844,11 @@ class LifecycleMergeAndGapClosureTests(DailyWorkflowSelftest):
         # Both task_a and task_b are now live
         with self.assertRaises(ValidationError) as cm:
             assert_single_live_task(self.repo)
-        self.assertIn("AMBIGUOUS_LIVE_TASKS", str(cm.exception))
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
 
         with self.assertRaises(ValidationError) as cm:
             reconcile_delivery(self.repo)
-        self.assertIn("AMBIGUOUS_LIVE_TASKS", str(cm.exception))
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(cm.exception))
 
         # Cancel one
         cancel(argparse.Namespace(repo=str(self.repo), task_id=task_a))
@@ -5745,13 +5745,42 @@ class ReviewOrchestrationTests(unittest.TestCase):
             self.repo, read_json(tdir / "plan.json"), policy3, state_root(self.repo), Path(third["policy"]),
             current_change_set=manifest3["change_set_sha256"], task_changes=manifest3.get("task_changes"),
         )[1])
-        # A policy that claims more carried reviews than the delta allows is refused.
+        # After later-round reviews pass, review finalize clears plan["blocked_reviewers"];
+        # device install-start and final_verifier must still validate the round policy from source_reviews.
+        cleared_plan = dict(read_json(tdir / "plan.json"))
+        cleared_plan.pop("blocked_reviewers", None)
+        self.assertIsNone(validate_policy_artifact(
+            self.repo, cleared_plan, policy3, state_root(self.repo), Path(third["policy"]),
+            current_change_set=manifest3["change_set_sha256"], task_changes=manifest3.get("task_changes"),
+        )[1])
+        # A policy that omits source finding_owners or claims more carried reviews than the delta allows is refused.
+        forged_owners = dict(policy3, later_round_source={**policy3["later_round_source"], "finding_owners": []})
+        forged_owners["policy_sha256"] = canonical_sha256({k: v for k, v in forged_owners.items() if k != "policy_sha256"})
+        self.assertIn("omits blocking finding owners", str(validate_policy_artifact(
+            self.repo, cleared_plan, forged_owners, state_root(self.repo), Path(third["policy"]),
+            current_change_set=manifest3["change_set_sha256"], task_changes=manifest3.get("task_changes"),
+        )[1]))
         forged = dict(policy2, reviewers=["bug-reviewer-agent"])
         forged["policy_sha256"] = canonical_sha256({k: v for k, v in forged.items() if k != "policy_sha256"})
         self.assertIsNotNone(validate_policy_artifact(
             self.repo, read_json(tdir / "plan.json"), forged, state_root(self.repo), Path(second["policy"]),
             current_change_set=manifest2["change_set_sha256"], task_changes=manifest2.get("task_changes"),
         )[1])
+        # An EMERGENCY_UNVERIFIED device_install artifact from --force must not block subsequent install retries.
+        store = EvidenceStore(state_root(self.repo))
+        store.write(
+            snapshot=manifest3["delivery_snapshot_sha256"], run_id=third["run_id"], name="device_install",
+            producer="run_device", harness_version="1.1.30", change_set=manifest3["change_set_sha256"],
+            status="EMERGENCY_UNVERIFIED", evidence={"action": "install", "status": "EMERGENCY_UNVERIFIED"},
+            allow_pass_retry=True,
+        )
+        store.write(
+            snapshot=manifest3["delivery_snapshot_sha256"], run_id=third["run_id"], name="device_install",
+            producer="run_device", harness_version="1.1.30", change_set=manifest3["change_set_sha256"],
+            status="PASS", evidence={"action": "install", "status": "PASS"},
+            allow_pass_retry=True,
+        )
+        self.assertEqual("PASS", store.read(manifest3["delivery_snapshot_sha256"], third["run_id"], "device_install")["status"])
 
     def test_third_round_keeps_carries_from_the_first_and_the_verifier_accepts_it(self) -> None:
         """Real app: round 3 after a test-only fix sent back reviewers carried since round 1."""
@@ -8337,6 +8366,8 @@ class GitDeliveryTests(ReviewOrchestrationTests):
             "ready_delivery_snapshot_sha256": snapshot,
             "ready_change_set_sha256": change_set,
             "ready_run_id": f"run-{task_id}",
+            "repository": manifest["repository"],
+            "task_base_head": manifest["repository"]["head"],
             "expected_surfaces": ["AUTH"],
             "expected_modules": [":app"],
             "expected_files": ["app/src/main/kotlin/com/example/MainActivity.kt"],
@@ -8345,6 +8376,10 @@ class GitDeliveryTests(ReviewOrchestrationTests):
         p_path = tdir / "plan.json"
         atomic_write_json(p_path, plan)
         atomic_write_json(tdir / f"manifest-run-{task_id}.json", manifest)  # as prepare-verification saves it
+        atomic_write_json(tdir / "current-run.json", {
+            "run_id": f"run-{task_id}", "manifest": str(tdir / f"manifest-run-{task_id}.json"),
+            "delivery_snapshot_sha256": snapshot, "change_set_sha256": change_set,
+        })
         active = {"task_id": task_id, "plan_path": str(p_path)}
         atomic_write_json(state_root(self.repo) / "active-task.json", active)
         from delivery_equivalence import snapshot_verified_files

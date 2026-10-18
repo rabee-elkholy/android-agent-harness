@@ -124,7 +124,7 @@ while valid deterministic proof is retained with its original provenance. See
 
 ### Urgent Task Interruption & Worktree Handoff
 
-When an urgent hotfix or bug interrupts an in-progress task (Task A):
+For overlapping files or independent builds, use a separate worktree. When an urgent hotfix or bug interrupts an in-progress task (Task A):
 ```text
 Task A
 → task handoff (freeze WIP snapshot)
@@ -137,10 +137,10 @@ Task A
 ```
 
 **Key Invariants & Boundaries:**
-- **One live task per worktree**: Each worktree maintains isolated task state. Never run multiple concurrent tasks in the same worktree.
+- **At most three live tasks per worktree**: Each task reserves explicit, disjoint files and keeps its own approval, baseline, reviews, and evidence. Pending approval and READY_FOR_DELIVERY tasks count toward the limit. Deliver or cancel a task before opening a fourth.
 - **Lineage preservation**: An accepted WIP commit does not cancel or pause Task A; it preserves Task A's lineage receipt chain.
 - **Model never executes Git mutations**: Git commit, worktree, branch, merge, and rebase operations are strictly 100% developer-owned.
-- **Raw commits blocked**: Random unregistered commits in Task A remain lineage violations; only a validated handoff checkpoint commit with accepted lineage receipt is allowed.
+- **Bound commit lineage**: Validated WIP checkpoints and commits matching verified files of a disjoint sibling task are accepted. Unrelated commits and commits that mix unverified files remain lineage violations.
 - **Arbitrary merges blocked**: Arbitrary external merge/rebase into an active Task A worktree remains blocked; finish or hand off first.
 - **Chat independence**: Returning to Task A uses persisted harness state on disk (`task status --next`), never chat memory.
 
@@ -153,7 +153,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.30/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.31/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -176,7 +176,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.30 --single-branch \
+git clone --depth 1 --branch v1.1.31 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -517,8 +517,43 @@ The harness includes deterministic health diagnostics (`doctor`) and self-healin
 **9. Will a new chat remember my project rules?**
 Yes, through repo-local context. Project notes (`project-notes.md`) and scoped developer instructions (`developer-instructions.json`) persist inside the repository. When a new chat begins, Task Context and Discovery automatically carry applicable instructions into task planning. The chat provider itself does not need to remember previous conversations. Current source evidence remains the highest authority.
 
-**10. Can I interrupt a large task for an urgent fix?**
-Yes. Run `python .agents/harness.py task handoff --task-id <id>` to freeze a safe WIP checkpoint, create one developer WIP commit, and validate it with `python .agents/harness.py task reconcile-handoff --task-id <id>`. Then create a separate Git worktree for the urgent fix (Task B). When finished, return to Task A's worktree and resume via `python .agents/harness.py task status --next`. Never run two live tasks in the same worktree.
+**10. Can I keep several local tasks without worktrees or committing the previous task first?**
+Yes. Up to **three live tasks** may share one worktree when their explicitly planned files do not overlap. Pending approvals, implementation, verification, blocked tasks, and READY_FOR_DELIVERY tasks all count. A fourth task is refused until one is delivered or cancelled; switching focus does not free a slot.
+
+Start each task with its own `--task-id` and `--expected-files`. A ready task may remain uncommitted while you work on another disjoint task. Switch focus before editing or running commands that use the active task:
+
+```bash
+python .agents/harness.py task switch --task-id task-b
+python .agents/harness.py task status --task-id task-b --next --brief
+```
+
+Explicit `--task-id` selects the task for commands that accept it. `task switch` preserves the task's status and approval; a pending plan still requires approval, and a verifying task still needs `task resume` before edits. Without an active pointer, several live tasks require explicit selection. Revisions cannot reserve another live task's files.
+
+When tasks conflict, the harness names the affected tasks and files and offers understandable choices: finish the existing task first, agree separate file scopes, explicitly cancel an unwanted task while keeping its edits, or use a developer-created worktree. Even edits to different lines of the same file overlap. The three-task limit instead offers delivery, cancellation, or another worktree. `--json` includes structured options and a `RESOLVE_TASK_CONFLICT` next action so the host can present these choices in your language. No resolution runs automatically.
+
+**Combine plans before starting:** The conflict choices also offer **Combine plans before implementation**, with an eligibility explanation. You can consolidate two or three plans awaiting their first approval into a new task. Preview their combined goals, files, execution phases, tests and newly evaluated review policy:
+
+```bash
+python .agents/harness.py task merge --task-id combined --from-task-id task-a --from-task-id task-b --json
+```
+
+Repeat `--from-task-id` in the desired execution order, adding a third source if needed. The preview changes no task state or project files. After you explicitly select the merge, the agent applies that exact preview:
+
+```bash
+python .agents/harness.py task merge --task-id combined --from-task-id task-a --from-task-id task-b --apply --expect-preview <merge_preview_sha256> --source conversation --proof-reference "<your merge choice>"
+```
+
+The source tasks become CANCELLED with their original plans and a `merged_into` reference retained. The new task awaits **one fresh implementation approval**; selecting a merge grants no permission to edit application files. Changed plans or inputs require a fresh preview. No approval, execution evidence, or spending transfers. Started tasks remain separate, even if revised back to pending approval. Conflicting architecture, acceptance or Zoho links require a reviewed consolidated plan rather than silently dropping an obligation. If the conflicting request has no saved task yet, the host offers to include its complete goals in a revision of the existing pending plan. Interrupted application blocks project writes and can be recovered by repeating the recorded apply command. This feature consolidates plans; file changes and Git branches are unaffected.
+
+When a task is ready, commit only its verified files yourself, then run:
+
+```bash
+python .agents/harness.py task reconcile-delivery --task-id task-b
+```
+
+Only that task becomes DELIVERED. Other tasks keep their local changes and accept the verified sibling commit in their lineage. Unrelated commits, overlapping edits, and changed verified content still block delivery.
+
+**Shared build limitation:** Gradle, unit tests, assembly, and the APK use the entire working tree, including unfinished sibling changes. Keep parked work compilable. Editing any task during another task's frozen verification makes that run stale; rerun verification against the actual tree. Use separate developer-created worktrees when you need overlapping files or independent builds. The existing `task handoff` / `task reconcile-handoff` WIP checkpoint flow remains available.
 
 **11. Does every phase run AI reviewers?**
 No. Deterministic checks (Room schema guards, string parity, fast ktlint, and targeted unit tests) remain primary. Scoped phase delta review runs only when the phase delta is substantial (e.g. >= 180 changed lines), elevates canonical risk (such as `T4_DATA_DEVICE` or `T5_CRITICAL`), touches critical surfaces, or is explicitly requested. Even then, only 1–2 policy-routed specialists review the phase delta. Final integration review across the completed task remains authoritative.

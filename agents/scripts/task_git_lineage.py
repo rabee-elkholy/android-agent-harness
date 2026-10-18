@@ -42,6 +42,102 @@ def compute_receipt_sha(receipt: dict[str, Any]) -> str:
     return canonical_sha256(clean)
 
 
+def _is_disjoint_sibling_commit_chain(
+    repo: Path,
+    task_id: str,
+    ancestor_head: str,
+    target_head: str,
+    valid_heads: set[str],
+    plan: dict | None = None,
+) -> bool:
+    if not ancestor_head or not target_head:
+        return False
+    if ancestor_head == target_head:
+        return True
+    proc_anc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor_head, target_head],
+        cwd=str(repo),
+        capture_output=True,
+        check=False,
+    )
+    if proc_anc.returncode != 0:
+        return False
+    merges_proc = subprocess.run(
+        ["git", "rev-list", "--merges", f"{ancestor_head}..{target_head}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if merges_proc.returncode != 0 or merges_proc.stdout.strip():
+        return False
+    from delivery_manifest import _normal_rel, disjoint_sibling_file_sets
+    _, committed_sibling_files = disjoint_sibling_file_sets(repo, task_id, plan=plan)
+    if not committed_sibling_files:
+        return False
+    revs_proc = subprocess.run(
+        ["git", "rev-list", f"{ancestor_head}..{target_head}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if revs_proc.returncode != 0:
+        return False
+    commits = [c.strip() for c in revs_proc.stdout.splitlines() if c.strip()]
+    if not commits:
+        return False
+    for c_sha in commits:
+        if c_sha in valid_heads:
+            continue
+        dt_proc = subprocess.run(
+            ["git", "diff-tree", "--no-commit-id", "--no-renames", "--name-only", "-z", "-r", c_sha],
+            cwd=str(repo), capture_output=True, check=False,
+        )
+        if dt_proc.returncode != 0:
+            return False
+        c_files = {_normal_rel(f.decode("utf-8", errors="surrogateescape")) for f in dt_proc.stdout.split(b"\0") if f}
+        if not c_files or not c_files <= committed_sibling_files:
+            return False
+        # File declarations alone are not proof that this commit belongs to a sibling.
+        # Every changed blob/mode must match a bound READY/DELIVERED sibling run.
+        if not _matches_verified_sibling_files(repo, task_id, c_sha, c_files):
+            return False
+    return True
+
+
+def _matches_verified_sibling_files(repo: Path, task_id: str, commit: str, paths: set[str]) -> bool:
+    from delivery_equivalence import _ready_manifest
+    from _vnext_common import state_root
+    remaining = set(paths)
+    for plan_file in sorted((state_root(repo) / "tasks").glob("*/plan.json")):
+        sibling = read_json(plan_file)
+        if sibling.get("task_id") == task_id or sibling.get("status") not in {"READY_FOR_DELIVERY", "DELIVERED"}:
+            continue
+        try:
+            _, manifest, files = _ready_manifest(repo, plan_file.parent.name, sibling)
+        except (ValidationError, OSError, ValueError, KeyError, TypeError):
+            continue
+        changes = {str(item.get(key) or "") for item in manifest.get("task_changes") or []
+                   if item.get("status") != "BASELINE_DIRTY_REMOVED" for key in ("path", "old_path")}
+        for rel in remaining & changes:
+            proc = subprocess.run(["git", "ls-tree", "-z", commit, "--", rel],
+                                  cwd=str(repo), capture_output=True, check=False)
+            if proc.returncode != 0:
+                return False
+            expected = files.get(rel)
+            if expected is None:
+                if not proc.stdout:
+                    remaining.discard(rel)
+                continue
+            metadata = proc.stdout.split(b"\t", 1)[0].decode("ascii").split()
+            if len(metadata) == 3 and metadata[0] == expected["git_mode"] and "git:" + metadata[2] == expected["content_identity"]:
+                remaining.discard(rel)
+        if not remaining:
+            return True
+    return False
+
+
 def validate_checkpoint_receipt(
     repo: Path,
     task_id: str,
@@ -77,7 +173,8 @@ def validate_checkpoint_receipt(
         return False, "receipt missing parent_head", None
 
     if parent_head != base_head and parent_head not in known_valid_heads:
-        return False, f"parent_head '{parent_head[:8]}' is not base_head or a previously validated checkpoint", None
+        if not _is_disjoint_sibling_commit_chain(repo, task_id, base_head, parent_head, known_valid_heads):
+            return False, f"parent_head '{parent_head[:8]}' is not base_head or a previously validated checkpoint", None
 
     # Check that head is a descendant of parent_head
     proc_anc = subprocess.run(
@@ -169,10 +266,6 @@ def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[
     if current_head == base_head:
         return True, "head matches immutable task base head"
 
-    valid_heads = resolve_valid_checkpoint_heads(repo, task_id, base_head)
-    if current_head not in valid_heads:
-        return False, f"HEAD/branch lineage mismatch: commit {current_head[:8]} is not in accepted checkpoints"
-
     # Verify current_head is a git descendant of base_head
     proc = subprocess.run(
         ["git", "merge-base", "--is-ancestor", base_head, current_head],
@@ -194,7 +287,14 @@ def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[
     if merges_proc.returncode == 0 and merges_proc.stdout.strip():
         return False, "TASK_HEAD_LINEAGE_RECONCILIATION_REQUIRED: merge commit detected in task lineage"
 
-    return True, "valid accepted checkpoint descendant"
+    valid_heads = resolve_valid_checkpoint_heads(repo, task_id, base_head)
+    if current_head in valid_heads:
+        return True, "valid accepted checkpoint descendant"
+
+    if _is_disjoint_sibling_commit_chain(repo, task_id, base_head, current_head, valid_heads, plan=plan):
+        return True, "valid disjoint sibling task commit lineage"
+
+    return False, f"HEAD/branch lineage mismatch: commit {current_head[:8]} is not in accepted checkpoints"
 
 
 def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, Any]) -> str | None:
@@ -224,8 +324,15 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
         return None
     merges = _git("rev-list", "--merges", f"{parent_head}..{current_head}")
     count = _git("rev-list", "--count", f"{parent_head}..{current_head}")
-    if merges.returncode != 0 or merges.stdout.strip() or count.returncode != 0 or count.stdout.strip() != "1":
+    if merges.returncode != 0 or merges.stdout.strip():
         return None
+    if count.returncode != 0 or count.stdout.strip() != "1":
+        prev_proc = _git("rev-parse", f"{current_head}~1")
+        prev_head = prev_proc.stdout.strip() if prev_proc.returncode == 0 else ""
+        if prev_head and _is_disjoint_sibling_commit_chain(repo, task_id, parent_head, prev_head, valid_heads, plan=plan):
+            parent_head = prev_head
+        else:
+            return None
 
     current_run = tdir / "current-run.json"
     if not current_run.is_file():
@@ -235,9 +342,12 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
         return None
     frozen = read_json(run_manifest)
     changes = frozen.get("task_changes") if "task_changes" in frozen else frozen.get("changes") or []
-    verified_paths = {str(c.get("path") or "").replace("\\", "/") for c in changes if isinstance(c, dict) and c.get("path")}
-    committed = _git("diff", "--name-only", parent_head, current_head)
-    committed_paths = {line.strip().replace("\\", "/") for line in committed.stdout.splitlines() if line.strip()}
+    verified_paths = {str(c[key]).replace("\\", "/") for c in changes if isinstance(c, dict)
+                      and c.get("status") != "BASELINE_DIRTY_REMOVED" for key in ("path", "old_path") if c.get(key)}
+    committed = subprocess.run(["git", "diff", "--no-renames", "--name-only", "-z", parent_head, current_head],
+                               cwd=str(repo), capture_output=True, check=False)
+    committed_paths = {path.decode("utf-8", errors="surrogateescape").replace("\\", "/")
+                       for path in committed.stdout.split(b"\0") if path}
     if committed.returncode != 0 or not committed_paths or not committed_paths <= verified_paths:
         return None
 
@@ -384,7 +494,7 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
         )
         if not ok or not receipt or not isinstance(receipt.get("checkpoint_baseline_changes"), list):
             raise ValidationError(f"HANDOFF_CHECKPOINT_BASELINE_INVALID: {reason or 'accepted checkpoint baseline missing'}")
-        checkpoint_base = {"changes": receipt["checkpoint_baseline_changes"], "task_base_head": current_head}
+        checkpoint_base = {"changes": receipt["checkpoint_baseline_changes"], "task_base_head": current_head, "task_id": task_id}
     checkpoint_manifest = build_task_manifest(
         repo, checkpoint_base, expected_files=expected_scope, task_base_head=current_head,
     )

@@ -198,6 +198,9 @@ def plan_payload(plan: dict) -> dict:
         "base_change_set_sha256": plan.get("base_change_set_sha256"),
         "repository": plan.get("repository"),
     }
+    for field in ("base_file_identities", "base_change_identities", "base_external_inputs_sha256"):
+        if field in plan:
+            payload[field] = plan[field]
     if "architecture_contract" in plan and plan.get("architecture_contract") is not None:
         payload["architecture_contract"] = plan["architecture_contract"]
     if "phases" in plan and plan.get("phases") is not None:
@@ -213,6 +216,8 @@ def plan_payload(plan: dict) -> dict:
         payload["approach"] = plan["approach"]
     if "verification_contract" in plan:
         payload["verification_contract"] = plan["verification_contract"]
+    if "merged_from" in plan:
+        payload["merged_from"] = plan["merged_from"]
     return payload
 
 
@@ -293,6 +298,12 @@ def create_plan(
         "base_delivery_snapshot_sha256": base["delivery_snapshot_sha256"],
         "base_change_set_sha256": base["change_set_sha256"],
         "repository": repository_identity(repo),
+        "base_file_identities": [
+            {key: value for key, value in item.items() if key in {"path", "content_identity", "git_mode", "worktree_git_mode"}}
+            for item in base.get("files") or []
+        ],
+        "base_change_identities": base.get("changes") or [],
+        "base_external_inputs_sha256": base.get("external_inputs_sha256"),
         "approval": None,
         "execution_nonce": None,
     }
@@ -347,6 +358,41 @@ def approve(plan: dict, *, source: str, proof_reference: str, enforcement_tier: 
     return plan
 
 
+def _check_implementation_tree(repo: Path, plan: dict) -> None:
+    from delivery_manifest import disjoint_sibling_file_sets, assert_disjoint_task_scope, is_disjoint_sibling_change
+    current = build_manifest(repo)
+    assert_disjoint_task_scope(repo, plan["task_id"], plan)
+    if (current["delivery_snapshot_sha256"] == plan.get("base_delivery_snapshot_sha256")
+            and current["change_set_sha256"] == plan.get("base_change_set_sha256")):
+        return
+    live_siblings, committed_siblings = disjoint_sibling_file_sets(repo, plan["task_id"], plan=plan)
+    sibling_files = live_siblings | committed_siblings
+    before = plan.get("base_file_identities")
+    if (not sibling_files or not isinstance(before, list)
+            or canonical_sha256(before) != plan.get("base_delivery_snapshot_sha256")
+            or current.get("external_inputs_sha256") != plan.get("base_external_inputs_sha256")):
+        raise ValidationError("delivery snapshot changed before implementation")
+    def exclude_siblings(items):
+        return [item for item in items if not is_disjoint_sibling_change(item, sibling_files)]
+    live_files = [{k: v for k, v in item.items() if k in {"path", "content_identity", "git_mode", "worktree_git_mode"}}
+                  for item in current["files"]]
+    if exclude_siblings(before) != exclude_siblings(live_files):
+        raise ValidationError("delivery snapshot changed before implementation outside sibling tasks")
+    if exclude_siblings(plan.get("base_change_identities") or []) != exclude_siblings(current["changes"]):
+        raise ValidationError("working change set changed before implementation outside sibling tasks")
+
+
+def _check_start_repository(repo: Path, plan: dict) -> None:
+    current_repo = repository_identity(repo)
+    for key in ("root_sha256", "git_common_dir_sha256", "head", "branch"):
+        if current_repo.get(key) != (plan.get("repository") or {}).get(key):
+            if key == "head":
+                from task_git_lineage import is_valid_task_lineage
+                if is_valid_task_lineage(repo, plan["task_id"], current_repo.get("head") or "")[0]:
+                    continue
+            raise ValidationError(_identity_changed_message(key, plan.get("repository") or {}, current_repo))
+
+
 def approve_and_begin(
     repo: Path,
     plan: dict,
@@ -378,16 +424,9 @@ def approve_and_begin(
     if not valid:
         raise ValidationError("plan content changed after its hash was created")
 
-    current_repo = repository_identity(repo)
-    for key in ("root_sha256", "git_common_dir_sha256", "head", "branch"):
-        if current_repo.get(key) != (plan.get("repository") or {}).get(key):
-            raise ValidationError(_identity_changed_message(key, plan.get("repository") or {}, current_repo))
+    _check_start_repository(repo, plan)
 
-    current = build_manifest(repo)
-    if current["delivery_snapshot_sha256"] != plan.get("base_delivery_snapshot_sha256"):
-        raise ValidationError("delivery snapshot changed before implementation")
-    if current["change_set_sha256"] != plan.get("base_change_set_sha256"):
-        raise ValidationError("working change set changed before implementation")
+    _check_implementation_tree(repo, plan)
 
     prov = plan.get("discovery_provenance")
     if prov:
@@ -448,15 +487,8 @@ def begin(repo: Path, plan: dict) -> dict:
         raise ValidationError("approval is not bound to this plan")
     if plan.get("execution_nonce"):
         raise ValidationError("approval has already been consumed")
-    current_repo = repository_identity(repo)
-    for key in ("root_sha256", "git_common_dir_sha256", "head", "branch"):
-        if current_repo.get(key) != (plan.get("repository") or {}).get(key):
-            raise ValidationError(_identity_changed_message(key, plan.get("repository") or {}, current_repo))
-    current = build_manifest(repo)
-    if current["delivery_snapshot_sha256"] != plan.get("base_delivery_snapshot_sha256"):
-        raise ValidationError("delivery snapshot changed before implementation")
-    if current["change_set_sha256"] != plan.get("base_change_set_sha256"):
-        raise ValidationError("working change set changed before implementation")
+    _check_start_repository(repo, plan)
+    _check_implementation_tree(repo, plan)
     plan["execution_nonce"] = approval["single_use_nonce"]
     plan["status"] = "IMPLEMENTING"
     plan["implementation_started_at"] = utc_now()

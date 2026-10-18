@@ -2425,7 +2425,8 @@ class EndToEndWorkflowTests(RepoCase):
                 expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
                 risks="", rollback="Restore", external_write=[], force=False,
             ))
-        self.assertIn("uncommitted changes", str(ctx2.exception).lower())
+        # A broad legacy plan cannot prove disjoint ownership while another task is live.
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(ctx2.exception))
 
         with self.assertRaises(ValidationError) as ctx_forced:
             draft(Namespace(
@@ -2433,7 +2434,7 @@ class EndToEndWorkflowTests(RepoCase):
                 expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
                 risks="", rollback="Restore", external_write=[], force=True,
             ))
-        self.assertIn("uncommitted changes", str(ctx_forced.exception).lower())
+        self.assertIn("ACTIVE_TASK_CONFLICT", str(ctx_forced.exception))
 
         run_git(self.repo, "add", ".")
         run_git(self.repo, "commit", "-qm", "commit task 1 files")

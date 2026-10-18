@@ -105,6 +105,10 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
         f"Plan hash: `{plan_hash[:12]}` (the hash the approval is bound to). Generated from `plan.json`; do not edit.",
         "",
     ]
+    if plan.get("merge", {}).get("merged_into"):
+        lines += [f"This source task is CANCELLED after consolidation into `{plan['merge']['merged_into']}`. This document preserves its original plan; it grants no execution authority.", ""]
+    if plan.get("merged_from"):
+        lines += ["Source plans (execution order): " + ", ".join(f"`{p['task_id']}` (`{p['plan_sha256'][:12]}`)" for p in plan["merged_from"]), ""]
     if previous:
         lines += [
             f"## What changed from the previous plan (`{str(previous.get('plan_sha256') or '')[:12]}`)",

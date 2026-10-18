@@ -22,6 +22,7 @@ from _vnext_common import (  # noqa: E402
     git_text,
     repository_identity,
     read_json,
+    state_root,
     sha256_bytes,
     utc_now,
     validate_id,
@@ -602,6 +603,261 @@ def build_task_diff(
     return "".join(diff_chunks)
 
 
+LIVE_TASK_STATUSES = frozenset({
+    "AWAITING_DEVELOPER_APPROVAL",
+    "APPROVED",
+    "IMPLEMENTING",
+    "VERIFYING",
+    "BLOCKED",
+    "READY_FOR_DELIVERY",
+})
+MAX_LIVE_TASKS = 3
+
+
+class TaskConflictError(ValidationError):
+    """A blocked operation with reviewable choices, never an automatic resolution."""
+
+    def __init__(self, code: str, reason: str, task_id: str, tasks: list[dict], files: list[str] | None = None, *, repo: Path | None = None):
+        options = []
+        if code != "LIVE_TASK_LIMIT_REACHED":
+            if tasks:
+                options.append({"id": "work_in_order", "label": "Finish the task using these files first",
+                                "description": "Switch to that task and follow its next step, then return here.",
+                                "recommended": True, "kind": "HARNESS_COMMAND",
+                                "command": f"python .agents/harness.py task status --task-id {tasks[0]['task_id']} --next --brief"})
+            options.append({"id": "change_scope", "label": "Choose separate files",
+                            "description": "Agree which task owns each file, then revise the affected plans and obtain approval. Different lines in one file still overlap.",
+                            "recommended": not bool(tasks), "kind": "DEVELOPER_ACTION", "command": ""})
+        else:
+            options.append({"id": "finish_task", "label": "Finish one open task",
+                            "description": "Choose a task below and follow task status --next through delivery to free a slot.",
+                            "recommended": True, "kind": "DEVELOPER_ACTION", "command": ""})
+        if repo is not None:
+            from task_merge import conflict_merge_option
+            options.append(conflict_merge_option(repo, task_id, tasks, limit=code == "LIVE_TASK_LIMIT_REACHED"))
+        options.extend([
+            {"id": "cancel_task", "label": "Cancel a task you no longer need",
+             "description": "Only on your explicit choice, use workflow.py cancel for the selected task. Its local files stay in place; cancellation does not discard edits.",
+             "kind": "DEVELOPER_ACTION", "command": ""},
+            {"id": "separate_worktree", "label": "Use a separate worktree",
+             "description": "Create a separate worktree yourself for independent work on the same files, then review conflicts when integrating it.",
+             "kind": "DEVELOPER_ACTION", "command": ""},
+        ])
+        self.details = {"code": code, "task_id": task_id, "reason": reason,
+                        "conflicting_files": files or [], "tasks": tasks, "options": options}
+        roster = "\n".join(f"- {task['task_id']} ({task['status']}): {' '.join(str(task.get('outcome') or '').split())[:160]}"
+                           for task in tasks)
+        choices = "\n".join(f"{index}. {option['label']}{' (recommended)' if option.get('recommended') else ''}{' (unavailable)' if option.get('available') is False else ''}: {option['description']}"
+                            + (f"\n   Next step: {option['command']}" if option.get("command") else "")
+                            for index, option in enumerate(options, 1))
+        super().__init__(f"{code}: {reason}" + (f"\nAffected tasks:\n{roster}" if roster else "") + f"\nAvailable choices:\n{choices}")
+
+
+def _iter_state_dirs(repo: Path) -> list[Path]:
+    directory = state_root(repo.resolve())
+    return [directory] if directory.is_dir() else []
+
+
+def _load_task_plan_dict(repo: Path, task_id: str) -> dict | None:
+    for sdir in _iter_state_dirs(repo):
+        pfile = sdir / "tasks" / task_id / "plan.json"
+        if pfile.is_file():
+            try:
+                data = json.loads(pfile.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+            except Exception as exc:
+                raise ValidationError(f"TASK_STATE_INVALID: cannot load task '{task_id}'") from exc
+    return None
+
+
+def task_owned_files(repo: Path, task_id: str, plan: dict | None = None) -> set[str]:
+    """Return normalized repo-relative paths declared or verified as owned by task_id."""
+    if plan is None and task_id:
+        plan = _load_task_plan_dict(repo, task_id)
+    if not isinstance(plan, dict):
+        return set()
+    owned: set[str] = set()
+    for f in plan.get("expected_files") or []:
+        if str(f).strip():
+            owned.add(_normal_rel(str(f).strip()))
+    for phase in plan.get("phases") or []:
+        if isinstance(phase, dict):
+            for f in phase.get("expected_files") or []:
+                if str(f).strip():
+                    owned.add(_normal_rel(str(f).strip()))
+    for sdir in _iter_state_dirs(repo):
+        tdir = sdir / "tasks" / task_id
+        if not tdir.is_dir():
+            continue
+        manifest_candidates: list[Path] = []
+        ready_run = str(plan.get("ready_run_id") or "").strip()
+        if ready_run:
+            validate_id(ready_run, "run id")
+            manifest_candidates.append(tdir / f"manifest-{ready_run}.json")
+        for mfile in manifest_candidates:
+            if mfile.is_file():
+                try:
+                    mdata = json.loads(mfile.read_text(encoding="utf-8"))
+                    if any(mdata.get(field) != plan.get(plan_field) for field, plan_field in (
+                        ("delivery_snapshot_sha256", "ready_delivery_snapshot_sha256"),
+                        ("change_set_sha256", "ready_change_set_sha256"),
+                    )):
+                        raise ValidationError("ready task manifest binding mismatch")
+                    tchanges = mdata.get("task_changes") if "task_changes" in mdata else []
+                    for item in tchanges or []:
+                        if isinstance(item, dict) and item.get("status") != "BASELINE_DIRTY_REMOVED":
+                            for key in ("path", "old_path"):
+                                val = str(item.get(key) or "").strip()
+                                if val:
+                                    owned.add(_normal_rel(val))
+                except Exception as exc:
+                    raise ValidationError(f"TASK_STATE_INVALID: invalid ready manifest for '{task_id}'") from exc
+    return {p for p in owned if p}
+
+
+def live_task_plans(repo: Path) -> list[tuple[str, dict, Path]]:
+    """One state root and one roster for lifecycle, guards and diff isolation."""
+    result = []
+    for sdir in _iter_state_dirs(repo):
+        if (sdir / "task-merge-pending.json").exists():
+            raise ValidationError("TASK_MERGE_RECOVERY_REQUIRED: repeat the recorded task merge --apply command to finish the interrupted consolidation; project writes remain blocked.")
+        directory = sdir / "tasks"
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*/plan.json")):
+            plan = read_json(path)
+            if plan.get("status") in LIVE_TASK_STATUSES:
+                if plan.get("task_id") != path.parent.name:
+                    raise ValidationError("TASK_STATE_INVALID: task directory identity mismatch")
+                result.append((path.parent.name, plan, path))
+    return result
+
+
+def assert_disjoint_task_scope(repo: Path, task_id: str, plan: dict, *, exclude_task_ids: tuple[str, ...] = ()) -> None:
+    """Concurrent tasks reserve explicit files; broad/unknown scopes fail closed."""
+    others = [(tid, other) for tid, other, _ in live_task_plans(repo) if tid != task_id and tid not in exclude_task_ids]
+    task_choices = [{"task_id": tid, "status": other.get("status"), "outcome": other.get("requested_outcome", ""),
+                     "status_command": f"python .agents/harness.py task status --task-id {tid} --next --brief"}
+                    for tid, other in others]
+    if len(others) >= MAX_LIVE_TASKS:
+        raise TaskConflictError("LIVE_TASK_LIMIT_REACHED", f"All {MAX_LIVE_TASKS} live-task slots are occupied. Switching focus does not free a slot.", task_id, task_choices, repo=repo)
+    if not others:
+        return
+    from _vnext_common import validate_repo_path_containment
+    from plan_authority import validate_plan_hash
+
+    def scope(tid: str, data: dict) -> set[str]:
+        paths = task_owned_files(repo, tid, data)
+        if not paths:
+            raise TaskConflictError("ACTIVE_TASK_CONFLICT", f"Task '{tid}' needs explicit expected files for shared-worktree execution.", task_id, task_choices, repo=repo)
+        normalized = set()
+        for rel in paths:
+            if any(c in rel for c in "*?[") or (repo / rel).is_dir():
+                raise TaskConflictError("ACTIVE_TASK_CONFLICT", f"Task '{tid}' has a broad file scope: {rel}", task_id, task_choices, [rel], repo=repo)
+            clean = validate_repo_path_containment(repo, rel)
+            normalized.add(os.path.normcase(clean).replace("\\", "/"))
+        return normalized
+
+    own = scope(task_id, plan)
+    for tid, other in others:
+        theirs = scope(tid, other)
+        overlap = sorted(a for a in own for b in theirs if a == b or a.startswith(b + "/") or b.startswith(a + "/"))
+        if overlap:
+            raise TaskConflictError("ACTIVE_TASK_CONFLICT", f"Tasks '{task_id}' and '{tid}' need the same files: {', '.join(overlap)}.",
+                                    task_id, [item for item in task_choices if item["task_id"] == tid], overlap, repo=repo)
+        if not validate_plan_hash(other)[0]:
+            raise ValidationError(f"TASK_STATE_INVALID: plan hash mismatch for '{tid}'")
+
+
+def disjoint_sibling_file_sets(
+    repo: Path,
+    task_id: str | None,
+    plan: dict | None = None,
+    expected_files: list[str] | set[str] | None = None,
+) -> tuple[set[str], set[str]]:
+    """Return (live_sibling_files, committed_sibling_files) for strictly disjoint sibling tasks."""
+    if not task_id:
+        return set(), set()
+    own_plan = plan if isinstance(plan, dict) else _load_task_plan_dict(repo, task_id)
+    own_expected: set[str] = set()
+    if expected_files:
+        for f in expected_files:
+            if str(f).strip():
+                own_expected.add(_normal_rel(str(f).strip()))
+    if own_plan:
+        own_expected |= task_owned_files(repo, task_id, own_plan)
+    if not own_expected:
+        return set(), set()
+
+    own_created = str((own_plan or {}).get("created_at") or "")
+    own_base_head = str(
+        (own_plan or {}).get("task_base_head")
+        or ((own_plan or {}).get("repository") or {}).get("head")
+        or ""
+    )
+
+    live_sibling_files: set[str] = set()
+    committed_sibling_files: set[str] = set()
+    seen_tasks: set[str] = set()
+
+    for sdir in _iter_state_dirs(repo):
+        tasks_dir = sdir / "tasks"
+        if not tasks_dir.is_dir():
+            continue
+        for sub in sorted(tasks_dir.iterdir()):
+            if not sub.is_dir() or sub.name == task_id or sub.name in seen_tasks:
+                continue
+            pfile = sub / "plan.json"
+            if not pfile.is_file():
+                continue
+            seen_tasks.add(sub.name)
+            try:
+                other_plan = json.loads(pfile.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise ValidationError(f"TASK_STATE_INVALID: cannot load sibling '{sub.name}'") from exc
+            if not isinstance(other_plan, dict):
+                continue
+            other_status = str(other_plan.get("status") or "").upper()
+            if other_status == "CANCELLED":
+                continue
+            other_files = task_owned_files(repo, sub.name, other_plan)
+            if not other_files or (other_files & own_expected):
+                continue
+            from plan_authority import validate_plan_hash
+            if not validate_plan_hash(other_plan)[0]:
+                raise ValidationError(f"TASK_STATE_INVALID: sibling plan hash mismatch for '{sub.name}'")
+            if other_status in LIVE_TASK_STATUSES:
+                live_sibling_files.update(other_files)
+            if other_status == "READY_FOR_DELIVERY":
+                committed_sibling_files.update(other_files)
+            elif other_status == "DELIVERED":
+                other_delivered_at = str(other_plan.get("delivered_at") or other_plan.get("ready_at") or "")
+                other_base_head = str(
+                    other_plan.get("task_base_head")
+                    or (other_plan.get("repository") or {}).get("head")
+                    or ""
+                )
+                if (
+                    not own_created
+                    or (other_delivered_at and other_delivered_at >= own_created)
+                    or (own_base_head and other_base_head == own_base_head)
+                ):
+                    committed_sibling_files.update(other_files)
+
+    return live_sibling_files, committed_sibling_files
+
+
+def is_disjoint_sibling_change(change: dict, sibling_files: set[str]) -> bool:
+    """Exclude a sibling change only when both ends stay inside its scope."""
+    paths = {_normal_rel(str(change[key])) for key in ("path", "old_path") if change.get(key)}
+    if paths & sibling_files:
+        if not paths <= sibling_files:
+            raise TaskConflictError("ACTIVE_TASK_CONFLICT", "A rename crosses task file ownership.", "", [], sorted(paths))
+        return True
+    return False
+
+
 def build_task_manifest(
     repo: Path,
     baseline: dict | list | str | None = None,
@@ -612,25 +868,30 @@ def build_task_manifest(
 ) -> dict:
     manifest = dict(live_manifest) if live_manifest is not None else build_manifest(repo)
     task_id: str | None = None
+    pdata: dict | None = None
+    plan_defaults = False
     if isinstance(baseline, str):
         task_id = baseline
         baseline = load_task_baseline(repo, task_id)
-        if task_id:
-            for state_dir in (repo.resolve() / ".agents" / "state", repo.resolve() / "agents" / "state"):
-                plan_file = state_dir / "tasks" / task_id / "plan.json"
-                if plan_file.is_file():
-                    try:
-                        pdata = json.loads(plan_file.read_text(encoding="utf-8"))
-                        if task_base_head is None:
-                            task_base_head = pdata.get("task_base_head") or pdata.get("repository", {}).get("head")
-                        if expected_files is None:
-                            expected_files = pdata.get("expected_files")
-                        break
-                    except Exception:
-                        pass
+        plan_defaults = True
+    elif isinstance(baseline, dict) and baseline.get("task_id"):
+        task_id = str(baseline.get("task_id") or "").strip() or None
+
+    if task_id:
+        pdata = _load_task_plan_dict(repo, task_id)
+        if plan_defaults and isinstance(pdata, dict):
+            if task_base_head is None:
+                task_base_head = pdata.get("task_base_head") or (pdata.get("repository") or {}).get("head")
+            if expected_files is None:
+                expected_files = pdata.get("expected_files")
 
     if task_base_head is None and isinstance(baseline, dict):
         task_base_head = baseline.get("task_base_head") or (baseline.get("repository") or {}).get("head")
+
+    live_sibling_files, committed_sibling_files = disjoint_sibling_file_sets(
+        repo, task_id, plan=pdata, expected_files=expected_files
+    )
+    all_sibling_files = live_sibling_files | committed_sibling_files
 
     committed_task_changes: list[dict] = []
     if task_base_head:
@@ -682,12 +943,16 @@ def build_task_manifest(
             pass
 
     if baseline is None:
-        all_changes = list(manifest.get("changes") or [])
+        all_changes = [
+            c for c in (manifest.get("changes") or [])
+            if not is_disjoint_sibling_change(c, live_sibling_files)
+        ]
         cur_paths = {_normal_rel(c.get("path") or "") for c in all_changes if c.get("path")}
         for comm in committed_task_changes:
-            if comm.get("path") not in cur_paths:
+            cpath = _normal_rel(comm.get("path") or "")
+            if cpath and not is_disjoint_sibling_change(comm, committed_sibling_files) and cpath not in cur_paths:
                 all_changes.append(comm)
-                cur_paths.add(comm.get("path"))
+                cur_paths.add(cpath)
         all_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))
         change_identities = [asdict(item) if hasattr(item, "__dataclass_fields__") else item for item in all_changes]
         manifest["task_changes"] = all_changes
@@ -732,6 +997,8 @@ def build_task_manifest(
             current_paths.add(norm_path)
         if path:
             current_paths.add(path)
+        if is_disjoint_sibling_change(cur, live_sibling_files):
+            continue
 
         if path not in base_map and norm_path not in base_map:
             task_changes.append(cur)
@@ -751,6 +1018,11 @@ def build_task_manifest(
         p = comm.get("path")
         norm_p = _normal_rel(p) if p else ""
         if not norm_p:
+            continue
+        if is_disjoint_sibling_change(comm, committed_sibling_files):
+            current_paths.add(norm_p)
+            if p:
+                current_paths.add(p)
             continue
         if norm_p not in current_paths and p not in current_paths:
             if norm_p in base_map or p in base_map:
@@ -785,6 +1057,8 @@ def build_task_manifest(
             b_path = str(base_entry)
             b_old = None
         b_norm = _normal_rel(b_path) if b_path else ""
+        if b_norm in all_sibling_files:
+            continue
         if b_norm and b_norm not in current_paths and b_path not in current_paths:
             task_changes.append({
                 "path": b_path,

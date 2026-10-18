@@ -1143,6 +1143,7 @@ FULL_SELFTEST_SUITES = (
     "_verification_value_selftest.py",
     "_delivery_equivalence_selftest.py",
     "_workflow_insight_selftest.py",
+    "_task_isolation_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (

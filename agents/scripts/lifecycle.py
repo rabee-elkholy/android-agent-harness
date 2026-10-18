@@ -1077,7 +1077,13 @@ def require_update_idle(repo: Path, *, preserve_active_task: str | None = None, 
     root = repo.resolve()
     state = root / ".agents/state"
     pointer = state / "active-task.json"
+    from delivery_manifest import live_task_plans
+    live = live_task_plans(root)
+    if len(live) > 1 and preserve_active_task:
+        raise ValidationError("active-task update cannot reserve several live tasks; finish or cancel siblings first")
     if not pointer.exists() and not pointer.is_symlink():
+        if live:
+            raise ValidationError("live tasks exist without active focus; select a task before updating")
         if preserve_active_task:
             raise ValidationError("the requested active task is no longer active; inspect task status before updating")
         return
@@ -1111,6 +1117,8 @@ def require_update_idle(repo: Path, *, preserve_active_task: str | None = None, 
             f"compatible update refused while active task '{task_id}' exists; "
             f"finish or cancel the task before updating (run: python .agents/scripts/workflow.py cancel --repo . --task-id {task_id})"
         )
+    if live:
+        raise ValidationError("other live tasks remain; finish or cancel them before updating")
 
 
 def _state_snapshot(repo: Path) -> dict[str, str]:

@@ -135,6 +135,9 @@ def _developer_authority_violation(command: str) -> str:
     Returns the violated action ("cancel" or "approve"), or "" when the command is allowed.
     """
     for subcommand, rest in _lifecycle_calls(command):
+        if subcommand == "merge" and "--apply" in rest:
+            if _flag(rest, "--source").lower() != "conversation" or not _flag(rest, "--proof-reference"):
+                return "merge"
         if subcommand == "cancel":
             # The developer asked in chat: the agent runs it with their words as proof, like an approval.
             if _flag(rest, "--source").lower() != "conversation" or not _flag(rest, "--proof-reference"):

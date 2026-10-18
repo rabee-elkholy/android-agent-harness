@@ -13,7 +13,7 @@
 Open the Android project root in your coding agent (select **Google Antigravity** during setup) and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.30/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.31/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent interviews you in chat, preserves references, shows an explicit plan, provisions the pinned kit into `~/.android-harness/kit` (or `%USERPROFILE%\.android-harness\kit` on Windows), and runs Doctor verification (`doctor --install-check`).
@@ -73,6 +73,10 @@ one task approval
 
 ## Urgent Task Interruption & Worktree Handoff
 
+Before execution, two or three pending plans can become one task: preview with `python .agents/harness.py task merge --task-id combined --from-task-id task-a --from-task-id task-b --json`. After the developer chooses the preview, apply with the same ids plus `--apply --expect-preview <merge_preview_sha256> --source conversation --proof-reference "<merge choice>"`. Source history stays readable; the new plan needs one fresh approval. Started tasks and conflicting architecture/acceptance/tracker contracts cannot be combined automatically. [Merge details](../README.md#faq).
+
+Disjoint tasks may share a worktree without committing previous work. Builds and APKs still include every local task, and frozen verification becomes stale if any task changes. For overlapping files or independent builds, use the separate-worktree flow below.
+
 When an urgent bug or hotfix interrupts an active in-progress task (Task A):
 ```text
 Task A
@@ -86,7 +90,7 @@ Task A
 ```
 
 ### Core Invariants
-- **One live task per worktree**: Each worktree maintains isolated task state.
+- **At most three disjoint live tasks per worktree**: Reserve explicit files for each task; pending and ready tasks count. Use `python .agents/harness.py task switch --task-id <id>` to select focus. A fourth task is blocked until one is delivered or cancelled.
 - **Model never executes Git mutations**: Git operations are strictly developer-owned.
-- **Lineage enforcement**: Mid-task Git commits must follow the handoff protocol; raw unregistered commits remain lineage violations.
+- **Lineage enforcement**: Validated handoff checkpoints and verified disjoint sibling commits are accepted; unrelated or mixed unverified commits remain lineage violations.
 - **Final review required**: Even when all phase reviews pass cleanly, final integration review remains required.

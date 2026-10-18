@@ -260,7 +260,7 @@ class EvidenceStore:
             if primary.exists():
                 latest, previous_attempt = self._read_attempt_chain(snapshot, run_id, name)
                 previous_status = str(latest.get("status") or "").upper()
-                if previous_status not in ("FAIL", "ENV", "BLOCKED", "STALE") and not (
+                if previous_status not in ("FAIL", "ENV", "BLOCKED", "STALE", "EMERGENCY_UNVERIFIED") and not (
                     allow_pass_retry and previous_status == "PASS"
                 ):
                     raise ValidationError(f"append-only artifact already exists: {primary.name}")

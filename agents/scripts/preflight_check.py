@@ -63,7 +63,11 @@ def main(argv: list[str] | None = None) -> int:
         # Engine updates preserve old proof, but cannot append a new producer
         # version to its immutable attempt chain. Fail before running checks.
         try:
-            plan = active_plan(repo_target, allow_missing=True) or {}
+            if task_id_arg:
+                from workflow import _load_plan
+                plan = _load_plan(repo_target, task_id_arg)
+            else:
+                plan = active_plan(repo_target, allow_missing=True) or {}
             if plan.get("status") == "VERIFYING":
                 from workflow import verification_engine_freshness
                 active_id = str(plan.get("task_id") or "")

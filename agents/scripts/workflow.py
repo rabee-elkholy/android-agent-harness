@@ -280,7 +280,7 @@ def _load_plan(repo: Path, task_id: str) -> dict:
 
 def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[str]:
     manifest = build_manifest(repo)
-    current_changes = {str(c.get("path") or "") for c in (manifest.get("changes") or [])}
+    current_changes = {str(c.get(k) or "") for c in (manifest.get("changes") or []) for k in ("path", "old_path")}
     if not current_changes:
         return []
     task_baseline = load_task_baseline(repo, task_id)
@@ -291,7 +291,7 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
             for c in (task_manifest.get("task_changes") or [])
             if (c.get("path") if isinstance(c, dict) else c) and (not isinstance(c, dict) or c.get("status") != "BASELINE_DIRTY_REMOVED")
         ]
-        return sorted(set(uncommitted))
+        return sorted(set(uncommitted) & current_changes)
     task_current = task_dir(repo, task_id) / "current-run.json"
     if task_current.is_file():
         run_info = read_json(task_current)
@@ -307,19 +307,9 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
     return sorted(expected & current_changes)
 
 
-LIVE_TASK_STATUSES = frozenset({
-    "AWAITING_DEVELOPER_APPROVAL",
-    "APPROVED",
-    "IMPLEMENTING",
-    "VERIFYING",
-    "BLOCKED",
-    "READY_FOR_DELIVERY",
-})
+from delivery_manifest import LIVE_TASK_STATUSES, live_task_plans, assert_disjoint_task_scope, TaskConflictError
 
-TERMINAL_TASK_STATUSES = frozenset({
-    "CANCELLED",
-    "DELIVERED",
-})
+TERMINAL_TASK_STATUSES = frozenset({"CANCELLED", "DELIVERED"})
 
 
 def is_live_task_status(status: str) -> bool:
@@ -327,88 +317,44 @@ def is_live_task_status(status: str) -> bool:
 
 
 def _find_live_tasks(repo: Path) -> list[tuple[str, str, dict, Path]]:
-    state = state_root(repo)
-    tasks_dir = state / "tasks"
-    live = []
-    if not tasks_dir.is_dir():
-        return live
-    for task_sub in sorted(tasks_dir.iterdir()):
-        if task_sub.is_dir():
-            p_file = task_sub / "plan.json"
-            if p_file.is_file():
-                try:
-                    p_data = read_json(p_file)
-                    st = str(p_data.get("status") or "")
-                    if is_live_task_status(st):
-                        live.append((task_sub.name, st, p_data, p_file))
-                except Exception:
-                    pass
-    return live
+    return [(tid, plan["status"], plan, path) for tid, plan, path in live_task_plans(repo)]
 
 
 def assert_single_live_task(repo: Path, allowed_task_id: str | None = None) -> list[tuple[str, str, dict, Path]]:
-    """Enforce the one-live-task-per-worktree invariant.
-
-    Fails closed with AMBIGUOUS_LIVE_TASKS if multiple live tasks are found.
-    Fails closed with ACTIVE_TASK_CONFLICT if a single live task exists that does not match allowed_task_id.
-    """
+    """Compatibility entrypoint: enforce disjoint ownership rather than a task count."""
     live = _find_live_tasks(repo)
-    if len(live) > 1:
-        tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
-        raise ValidationError(
-            f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
-            "Fail closed: at most one live task is allowed per worktree. "
-            "Remediation: inspect tasks via 'task status' and cancel unwanted live tasks via 'workflow.py cancel --task-id <id>'."
-        )
-    if live and allowed_task_id and live[0][0] != allowed_task_id:
-        prev_id, prev_status = live[0][0], live[0][1]
-        raise ValidationError(
-            f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
-            f"Choices: 1. continue current task '{prev_id}'; 2. cancel it via 'workflow.py cancel --task-id {prev_id}'; "
-            "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
-        )
+    for tid, _, plan, _ in live:
+        if allowed_task_id is None or allowed_task_id == tid:
+            assert_disjoint_task_scope(repo, tid, plan)
     return live
 
 
+def _focused_task_id(repo: Path) -> str:
+    from mutation_guard import active_plan
+    return str(active_plan(repo, allow_missing=True).get("task_id") or "")
+
+
+def _serialize_task_scope(handler):
+    from functools import wraps
+    @wraps(handler)
+    def locked(args):
+        with StateLock(state_root(Path(args.repo).resolve())):
+            return handler(args)
+    return locked
+
+
+@_serialize_task_scope
 def draft(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
-    _clear_cancel_request(repo)
+    _clear_cancel_request(repo, task_id)
 
     # 0. Reconcile clean delivered tasks automatically before conflict checks
     reconcile_delivery(repo)
 
-    # 1. Enforce at most one live task per worktree
-    live_tasks = _find_live_tasks(repo)
-    if len(live_tasks) > 1:
-        tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live_tasks)
-        raise ValidationError(
-            f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
-            "Fail closed: at most one live task is allowed per worktree. "
-            "Remediation: inspect tasks via 'task status' and cancel unwanted live tasks via 'workflow.py cancel --task-id <id>'."
-        )
-    for prev_id, prev_status, prev_plan, _ in live_tasks:
-        if prev_id != task_id:
-            if prev_status == "READY_FOR_DELIVERY":
-                dirty = _find_uncommitted_task_files(repo, prev_id, prev_plan)
-                if dirty:
-                    raise ValidationError(
-                        f"PREVIOUS_DELIVERY_NOT_FINALIZED: previous task '{prev_id}' is READY_FOR_DELIVERY with uncommitted changes: "
-                        f"{', '.join(sorted(dirty))}. Finalize delivery via 'workflow.py deliver' or cancel it via 'workflow.py cancel' before starting a new task."
-                    )
-                finalize_ready_delivery(repo, prev_id, prev_plan, require_clean_tree=True)
-            elif prev_status in ("APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
-                raise ValidationError(
-                    f"ACTIVE_TASK_CONFLICT: active task '{prev_id}' is currently {prev_status}. "
-                    f"Choices: 1. continue current task; 2. cancel current task via 'workflow.py cancel --task-id {prev_id}'; "
-                    "3. deliver current task when valid; 4. use a separate Git worktree for parallel work."
-                )
-            elif prev_status == "AWAITING_DEVELOPER_APPROVAL":
-                raise ValidationError(
-                    f"ACTIVE_TASK_CONFLICT: pending task '{prev_id}' is currently AWAITING_DEVELOPER_APPROVAL. "
-                    f"Choices: 1. approve or revise current task '{prev_id}'; 2. cancel it via 'workflow.py cancel --task-id {prev_id}' before drafting an unrelated task; "
-                    "3. use a separate Git worktree for parallel work."
-                )
+    candidate = {"expected_files": normalize_expected_files(repo, getattr(args, "expected_files", None))}
+    # Parsed phases and inferred files are checked again before the plan is saved.
+    assert_disjoint_task_scope(repo, task_id, candidate)
 
     # 2. Check if task_id already exists
     existing_plan_path = _plan_path(repo, task_id)
@@ -701,6 +647,9 @@ def _build_and_save_plan(
     old_plan: dict | None = None,
     old_baseline: dict | None = None,
     old_plan_sha: str | None = None,
+    output_directory: Path | None = None,
+    scope_exclusions: tuple[str, ...] = (),
+    activate: bool = True,
 ) -> dict:
     with step_progress("Classifying changed surfaces"):
         sublog("Inspecting working tree status and surface triggers...")
@@ -1015,7 +964,7 @@ def _build_and_save_plan(
         raise ValidationError("plan requested outcome must not be empty")
     requested_outcome = str(requested_outcome).strip()
 
-    directory = task_dir(repo, task_id)
+    directory = output_directory or task_dir(repo, task_id)
     directory.mkdir(parents=True, exist_ok=True)
     if arch_brief:
         (directory / "task-architecture-brief.md").write_text(arch_brief, encoding="utf-8")
@@ -1092,8 +1041,12 @@ def _build_and_save_plan(
         )
         from review_budget import forecast_review_calls
         plan["review_budget_forecast"] = forecast_review_calls(plan, preliminary_policy)
+        if (old_plan or {}).get("merged_from"):
+            plan["merged_from"] = old_plan["merged_from"]
+            plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
         plan["task_baseline"] = old_baseline
         plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
+        assert_disjoint_task_scope(repo, task_id, plan, exclude_task_ids=scope_exclusions)
         for key in ("review_calls_used", "review_rounds", "final_review_call_charges"):
             if key in (old_plan or {}):
                 plan[key] = old_plan[key]
@@ -1228,10 +1181,12 @@ def _build_and_save_plan(
             "primary_target": str((disc_receipt.get("query") or {}).get("value") or ""),
         }
 
+    assert_disjoint_task_scope(repo, task_id, plan, exclude_task_ids=scope_exclusions)
     save_plan(directory / "plan.json", plan)
     atomic_write_json(directory / "preliminary-classification.json", classification)
     atomic_write_json(directory / "preliminary-policy.json", preliminary_policy)
-    atomic_write_json(state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(directory / "plan.json"), "updated_at": utc_now()})
+    if activate:
+        atomic_write_json(state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(directory / "plan.json"), "updated_at": utc_now()})
 
     base_man = build_manifest(repo)
     sensitive_changes = []
@@ -1372,6 +1327,7 @@ def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argp
     return merged
 
 
+@_serialize_task_scope
 def revise(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
@@ -1380,6 +1336,10 @@ def revise(args: argparse.Namespace) -> dict:
     if not plan_p.is_file():
         raise ValidationError(f"cannot revise task '{task_id}': plan.json does not exist at {plan_p}")
     old_plan = read_json(plan_p)
+    proposed = dict(old_plan)
+    if getattr(args, "expected_files", None):
+        proposed["expected_files"] = normalize_expected_files(repo, args.expected_files)
+    assert_disjoint_task_scope(repo, task_id, proposed)
     old_status = str(old_plan.get("status") or "")
     if old_status not in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
         raise ValidationError(f"cannot revise task '{task_id}': task status is {old_status}, only active non-terminal tasks can be revised")
@@ -1461,7 +1421,8 @@ def revise(args: argparse.Namespace) -> dict:
 
 def _same_plan(old: dict, new: dict) -> bool:
     """True when a revision changes nothing the developer approved (only its own lineage fields differ)."""
-    lineage = {"supersedes_plan_sha256", "plan_id", "base_delivery_snapshot_sha256", "base_change_set_sha256"}
+    lineage = {"supersedes_plan_sha256", "plan_id", "base_delivery_snapshot_sha256", "base_change_set_sha256",
+               "base_file_identities", "base_change_identities", "base_external_inputs_sha256"}
     # The revision builder observes the current dirty tree, but a no-op keeps the
     # original approved plan and task baseline. Observation alone is not new scope.
     if old.get("task_baseline") != new.get("task_baseline"):
@@ -1488,6 +1449,7 @@ def _same_plan(old: dict, new: dict) -> bool:
     return before == after
 
 
+@_serialize_task_scope
 def recover_active(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     tid = validate_id(args.task_id, "task id")
@@ -1529,6 +1491,7 @@ def _plan_hash_arg(plan: dict) -> str:
     return f" --plan-hash {shown}" if shown else ""
 
 
+@_serialize_task_scope
 def record_approval(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     assert_single_live_task(repo, allowed_task_id=args.task_id)
@@ -1558,6 +1521,7 @@ def record_approval(args: argparse.Namespace) -> dict:
     return plan
 
 
+@_serialize_task_scope
 def begin_task(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     assert_single_live_task(repo, allowed_task_id=args.task_id)
@@ -1786,11 +1750,17 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             for item in (previous_reviews.get("evidence") or {}).get("reports") or []
             if str(item.get("verdict") or "").upper() == "PASS"
         ]
+        source_finding_owners = {
+            str(item.get("reviewer") or "")
+            for item in (previous_reviews.get("evidence") or {}).get("blocking_findings") or []
+            if isinstance(item, dict) and str(item.get("reviewer") or "")
+        }
+        finding_owners = sorted(source_finding_owners | set(plan.get("blocked_reviewers") or []))
         policy = decide_later_round(
             classification,
             skills_root(repo),
             previous_policy=previous_policy,
-            finding_owners=list(plan.get("blocked_reviewers") or []),
+            finding_owners=finding_owners,
             passed_reviewers=passed_reviewers,
             source_snapshot=str(previous_current["delivery_snapshot_sha256"]),
             source_change_set=str(previous_current["change_set_sha256"]),
@@ -2049,6 +2019,7 @@ def complete(args: argparse.Namespace) -> dict:
     return plan
 
 
+@_serialize_task_scope
 def cancel(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     plan = _load_plan(repo, args.task_id)
@@ -2072,24 +2043,19 @@ def cancel(args: argparse.Namespace) -> dict:
             pass
     from discovery_receipt import clear_latest_discovery_receipt
     clear_latest_discovery_receipt(repo)
-    _clear_cancel_request(repo)
+    _clear_cancel_request(repo, args.task_id)
     return plan
 
 
-def _clear_cancel_request(repo: Path) -> None:
+def _clear_cancel_request(repo: Path, task_id: str) -> None:
     """A lifecycle command that actually ran settles a pending cancel request (the hook's CANCEL_PENDING)."""
-    (state_root(repo) / "cancel-requested.json").unlink(missing_ok=True)
+    path = state_root(repo) / "cancel-requested.json"
+    if path.is_file() and read_json(path).get("task_id") == task_id:
+        path.unlink(missing_ok=True)
 
 
 def recover_stale(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
-    live = _find_live_tasks(repo)
-    if len(live) > 1:
-        tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
-        raise ValidationError(
-            f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
-            "Cannot recover stale state automatically. Specify --task-id explicitly or cancel unwanted tasks via 'workflow.py cancel'."
-        )
     active_path = state_root(repo) / "active-task.json"
     if not active_path.is_file():
         return {"status": "NOOP", "cleared_active_task": False, "message": "no active task to recover"}
@@ -2131,10 +2097,21 @@ def resume(args: argparse.Namespace) -> dict:
         return _resume_locked(args)
 
 
+def _ready_external_inputs_changed(repo: Path, task_id: str, run_id: str, live_manifest: dict) -> bool:
+    if not run_id:
+        return False
+    validate_id(run_id, "run id")
+    path = task_dir(repo, task_id) / f"manifest-{run_id}.json"
+    if not path.is_file():
+        return False  # Legacy READY plans may not have frozen run artifacts.
+    frozen = read_json(path)
+    return bool(frozen.get("external_inputs_sha256")) and frozen["external_inputs_sha256"] != live_manifest.get("external_inputs_sha256")
+
+
 def _resume_locked(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     assert_single_live_task(repo, allowed_task_id=args.task_id)
-    _clear_cancel_request(repo)
+    _clear_cancel_request(repo, args.task_id)
     plan = _load_plan(repo, args.task_id)
     status = plan.get("status")
 
@@ -2155,7 +2132,7 @@ def _resume_locked(args: argparse.Namespace) -> dict:
                     pass
         live_manifest = build_manifest(repo)
         live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
-        unchanged = not ready_snapshot or not live_snapshot or ready_snapshot == live_snapshot
+        unchanged = (not ready_snapshot or not live_snapshot or ready_snapshot == live_snapshot) and not _ready_external_inputs_changed(repo, args.task_id, ready_run_id, live_manifest)
         # --reopen: the developer reviewed the verified diff and requested changes before committing.
         if unchanged and not getattr(args, "reopen", False):
             raise ValidationError(
@@ -2220,8 +2197,18 @@ def finalize_ready_delivery(
             )
 
     ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
+    live_identity = repository_identity(repo)
+    for field in ("root_sha256", "git_common_dir_sha256", "branch"):
+        approved_value = (plan.get("repository") or {}).get(field)
+        if approved_value and live_identity.get(field) != approved_value:
+            raise ValidationError(f"delivery repository identity mismatch: {field}")
     if ready_snapshot:
         manifest = build_manifest(repo)
+        if plan.get("ready_run_id"):
+            from delivery_equivalence import _ready_manifest
+            _, frozen, _ = _ready_manifest(repo, task_id, plan)
+            if frozen.get("external_inputs_sha256") != manifest.get("external_inputs_sha256"):
+                raise ValidationError("delivery external inputs changed after verification")
         current_snapshot = manifest["delivery_snapshot_sha256"]
         if current_snapshot != ready_snapshot:
             from delivery_equivalence import evaluate_post_ready_changes
@@ -2249,6 +2236,13 @@ def finalize_ready_delivery(
         delivery_commit_sha = git_text(repo, "rev-parse", "HEAD")
     except Exception:
         delivery_commit_sha = ""
+    if plan.get("ready_run_id") and delivery_commit_sha:
+        from task_git_lineage import accept_requested_delivery_commit, is_valid_task_lineage
+        accept_requested_delivery_commit(repo, task_id, plan)
+        # Validate against the persisted plan plus a freshly validated delivery receipt.
+        valid_lineage, reason = is_valid_task_lineage(repo, task_id, delivery_commit_sha)
+        if not valid_lineage:
+            raise ValidationError(reason)
     plan = deliver_plan(plan)
     if delivery_commit_sha:
         plan["delivery_commit_sha"] = delivery_commit_sha
@@ -2268,24 +2262,10 @@ def finalize_ready_delivery(
 
 def reconcile_delivery(repo: Path, task_id: str | None = None) -> tuple[dict | None, str]:
     """Reconcile READY_FOR_DELIVERY task against clean committed repository state."""
+    assert_single_live_task(repo, allowed_task_id=task_id)
     tid = task_id
     if not tid:
-        live = _find_live_tasks(repo)
-        if len(live) > 1:
-            tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
-            raise ValidationError(
-                f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
-                "Cannot determine which task to reconcile automatically. Specify --task-id explicitly or cancel unwanted tasks via 'workflow.py cancel'."
-            )
-        elif len(live) == 1:
-            tid = live[0][0]
-        else:
-            active_p = state_root(repo) / "active-task.json"
-            if active_p.is_file():
-                try:
-                    tid = str(read_json(active_p).get("task_id") or "").strip()
-                except Exception:
-                    pass
+        tid = _focused_task_id(repo)
     if not tid:
         return None, "NOOP"
     plan_p = _plan_path(repo, tid)
@@ -4681,7 +4661,13 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
 
         live_manifest = build_manifest(repo)
         live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
+        external_changed = _ready_external_inputs_changed(repo, task_id, ready_run_id, live_manifest)
+        sibling_only_drift = False
         if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
+            from delivery_equivalence import evaluate_post_ready_changes
+            equivalence = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
+            sibling_only_drift = equivalence.get("is_benign") and equivalence.get("reason") == "DISJOINT_SIBLING_TASK_CHANGES_ONLY"
+        if ready_snapshot and live_snapshot and (ready_snapshot != live_snapshot or external_changed) and not sibling_only_drift:
             dirty = _find_uncommitted_task_files(repo, task_id, plan)
             if not dirty:
                 from delivery_equivalence import evaluate_post_ready_changes
@@ -4702,7 +4688,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
                     }
 
             changed = changed_since_verification(repo, task_id, plan, live_manifest)
-            named = ", ".join(changed[:10]) if changed else "files outside the task's list"
+            named = ", ".join(changed[:10]) if changed else ("external build inputs" if external_changed else "files outside the task's list")
             diff_detail = ""
             if not dirty:
                 from delivery_equivalence import evaluate_post_ready_changes
@@ -5018,30 +5004,7 @@ def status(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = str(getattr(args, "task_id", "") or "").strip()
     if not task_id:
-        live = _find_live_tasks(repo)
-        if len(live) > 1:
-            tasks_summary = ", ".join(f"'{t[0]}' ({t[1]})" for t in live)
-            raise ValidationError(
-                f"AMBIGUOUS_LIVE_TASKS: multiple live tasks found in worktree: {tasks_summary}. "
-                "Specify --task-id explicitly or cancel unwanted live tasks via 'workflow.py cancel --task-id <id>'."
-            )
-        elif len(live) == 1:
-            task_id = live[0][0]
-        else:
-            active_p = state_root(repo) / "active-task.json"
-            if active_p.is_file():
-                try:
-                    active_data = read_json(active_p)
-                    task_id = str(active_data.get("task_id") or "").strip()
-                except Exception:
-                    pass
-            if not task_id:
-                try:
-                    from mutation_guard import active_plan
-                    plan_data = active_plan(repo)
-                    task_id = str(plan_data.get("task_id") or "").strip()
-                except Exception:
-                    pass
+        task_id = _focused_task_id(repo)
     if not task_id:
         raise ValidationError("no active task found in repository state; specify --task-id <id>")
     plan = _load_plan(repo, task_id)
@@ -5308,6 +5271,18 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     command.add_argument("--task-id", default="")
     command.set_defaults(handler=recover_stale)
+    command = sub.add_parser("switch", help="Focus a live task without changing its approval or verification state")
+    command.add_argument("--repo", default=".")
+    command.add_argument("--task-id", required=True)
+    command.set_defaults(handler=recover_active)
+    from task_merge import merge_plans
+    command = sub.add_parser("merge", parents=[common], allow_abbrev=False, help="Preview consolidation of two or three never-started plans into a new pending task")
+    command.add_argument("--from-task-id", action="append", required=True, help="Source task id; repeat for each source in execution order")
+    command.add_argument("--apply", action="store_true", help="Apply only after the developer selects the reviewed merge preview")
+    command.add_argument("--expect-preview", default="", help="Exact merge_preview_sha256 returned by the reviewed preview")
+    command.add_argument("--source", choices=["conversation", "developer_terminal"], default="developer_terminal")
+    command.add_argument("--proof-reference", default="", help="Developer's explicit merge choice; never implementation approval")
+    command.set_defaults(handler=merge_plans)
     command = sub.add_parser("recover-active")
     command.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     command.add_argument("--task-id", required=True, help="Task ID to restore as active task")
@@ -5391,6 +5366,8 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
         lines.append(forecast_summary(plan["review_budget_forecast"]))
     if authority.get("supersedes_plan_sha256"):
         lines.append(f"Supersedes plan hash: {str(authority['supersedes_plan_sha256'])[:12]}")
+    if authority.get("merged_from"):
+        lines.append("Merged source plans (execution order): " + ", ".join(f"{p['task_id']} ({p['plan_sha256'][:12]})" for p in authority["merged_from"]))
     if authority.get("zoho_link"):
         lines.append(f"Zoho link: {displayed(authority.get('zoho_link'))}")
     if plan_document is not None:
@@ -5818,10 +5795,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale"}:
+        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale", "merge"}:
             from host_continuation import assert_execution_session
             assert_execution_session(Path(args.repo).resolve(), args.task_id)
-        if args.action == "continue" and args.json:
+        if args.action in {"continue", "merge"} and args.json:
             import contextlib
             with contextlib.redirect_stdout(sys.stderr):
                 result = args.handler(args)
@@ -5838,6 +5815,27 @@ def main(argv: list[str] | None = None) -> int:
                     continue_task(argparse.Namespace(repo=str(repo), task_id=args.task_id, host=current_host,
                                                      source_stopped=False, expect_session=None))
     except (ValidationError, OSError) as exc:
+        if args.action == "merge" and args.json and not isinstance(exc, TaskConflictError):
+            message = str(exc)
+            code = message.split(":", 1)[0] if message.startswith("TASK_MERGE_") else "TASK_MERGE_FAILED"
+            print(json.dumps({"status": "BLOCKED", "task_id": args.task_id,
+                              "next_action": {"code": code, "kind": "DEVELOPER_ACTION", "command": "", "blocking": True,
+                                              "reason": message, "inputs": {"source_task_ids": args.from_task_id},
+                                              "instructions": "Explain this blocker in the user's language. Preserve all task history and project files. Show a fresh preview when stale; recover an interrupted publication using its recorded apply command. For ineligible or incompatible plans, offer work in order or separately reviewed scopes. Never auto-cancel or treat merge consent as implementation approval."}},
+                             ensure_ascii=False, indent=2))
+            return 1
+        if isinstance(exc, TaskConflictError) and args.json:
+            if not exc.details["tasks"]:
+                choices = [{"task_id": tid, "status": plan["status"], "outcome": plan.get("requested_outcome", "")}
+                           for tid, plan, _ in live_task_plans(Path(args.repo).resolve()) if tid != args.task_id]
+                exc = TaskConflictError(exc.details["code"], exc.details["reason"], args.task_id, choices, exc.details["conflicting_files"], repo=Path(args.repo).resolve())
+            print(json.dumps({"status": "BLOCKED", "task_id": args.task_id, "conflict": exc.details,
+                              "next_action": {"code": "RESOLVE_TASK_CONFLICT", "kind": "DEVELOPER_ACTION",
+                                              "command": "", "blocking": True, "reason": exc.details["reason"],
+                                              "inputs": exc.details,
+                                              "instructions": "Explain the affected tasks and files in the user's language. Present the available choices with short consequences and a recommendation. Wait for their choice; never cancel, revise approvals, discard edits or mutate Git automatically."}},
+                             ensure_ascii=False, indent=2))
+            return 1
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
     if args.action == "prepare-verification":
@@ -5873,14 +5871,20 @@ def main(argv: list[str] | None = None) -> int:
         if upcoming.get("inputs"):
             print("NEXT_ACTION_INPUTS=" + json.dumps(upcoming["inputs"], ensure_ascii=False))
     elif args.json:
-        if args.action in ("draft", "revise"):
+        if args.action in ("draft", "revise") or (args.action == "merge" and args.apply):
             # A live run passed --json to draft and revise and got none of this, so the agent wrote the
             # approval question itself (no Cancel option, no files).
             lines = approval_material_lines(Path(args.repo).resolve(), result, args.action)
             result = {**result, "approval_material": "\n".join(lines)}
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        if args.action in ("draft", "revise"):
+        if args.action == "merge" and not args.apply:
+            print(result["plan_summary"])
+            print(f"MERGE_PREVIEW_SHA256={result['merge_preview_sha256']}")
+            for consequence in result["consequences"]:
+                print(consequence)
+            print("NEXT_ACTION=CONFIRM_PLAN_MERGE: present the preview and wait for the developer's merge choice.")
+        if args.action in ("draft", "revise") or (args.action == "merge" and args.apply):
             for line in approval_material_lines(Path(args.repo).resolve(), result, args.action):
                 print(line)
         if args.action == "approve":

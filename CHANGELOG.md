@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.31] - 2026-10-18
+
+### Disjoint local multi-task isolation, pre-implementation task consolidation, and later-round verification hardening
+
+- Support up to 3 concurrent live tasks in one worktree when modified and planned task scopes remain strictly disjoint (`docs/adr/013-disjoint-local-tasks.md`), while preserving explicit single-active-task routing pointers and `task switch`.
+- Surface structured `RESOLVE_TASK_CONFLICT` next-action choices when a second task drafts or revises overlapping files or modules, offering developer-owned options to switch to the existing task, consolidate pre-implementation tasks via `task merge --into <primary> --from <secondary>`, or isolate in a separate Git worktree.
+- Implement crash-recoverable two-phase `task merge` with durable `.merge-journal.json` rollback/Finalize recovery for combining two pre-implementation (`PLANNED` / `AWAITING_DEVELOPER_APPROVAL`) tasks before code mutation begins.
+- Derive later-round `finding_owners` from immutable `source_reviews` blocking findings and persisted `later_round_source.finding_owners` in `final_verifier.py` and `workflow.py` so `validate_policy_artifact` remains deterministic after `review finalize` clears `plan.blocked_reviewers`.
+- Allow append-only `EvidenceStore.write` retries over `EMERGENCY_UNVERIFIED` device artifacts so running `device install-start` after `device install --force` records a verified `PASS` artifact cleanly.
+
 ## [1.1.30] - 2026-10-17
 
 ### Graph engine accuracy, pruned source discovery, and faster verification handoff

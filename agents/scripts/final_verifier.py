@@ -385,6 +385,20 @@ def validate_policy_artifact(
                 for item in (source_reviews.get("evidence") or {}).get("reports") or []
                 if str(item.get("verdict") or "").upper() == "PASS"
             ]
+            source_finding_owners = {
+                str(item.get("reviewer") or "")
+                for item in (source_reviews.get("evidence") or {}).get("blocking_findings") or []
+                if isinstance(item, dict) and str(item.get("reviewer") or "")
+            }
+            recorded_finding_owners = {
+                str(item)
+                for item in (basis.get("finding_owners") or [])
+                if isinstance(item, str) and item
+            }
+            previous_required = set(previous_policy.get("reviewers") or [])
+            if not (source_finding_owners & previous_required) <= recorded_finding_owners:
+                raise ValidationError("later-round policy omits blocking finding owners from source review run")
+            finding_owners = sorted(source_finding_owners | recorded_finding_owners | set(plan.get("blocked_reviewers") or []) if not recorded_finding_owners and not source_finding_owners else source_finding_owners | recorded_finding_owners)
             # The narrowed round (P16) is recomputed from the same saved manifests, never read from the policy.
             from review_fix_delta import compute_fix_delta
 
@@ -399,7 +413,7 @@ def validate_policy_artifact(
                 current_classification,
                 agents_root / "skills",
                 previous_policy=previous_policy,
-                finding_owners=list(plan.get("blocked_reviewers") or []),
+                finding_owners=finding_owners,
                 passed_reviewers=passed_reviewers,
                 source_snapshot=str(basis.get("snapshot") or ""),
                 source_change_set=str(basis.get("change_set") or ""),

@@ -534,6 +534,7 @@ def main(argv: list[str] | None = None) -> int:
             "agents/",
             "AGENTS.md",
             "GEMINI.md",
+            "PROJECT_CONSTITUTION.md",
             "pyproject.toml",
             "CITATION.cff",
             "CHANGELOG.md",

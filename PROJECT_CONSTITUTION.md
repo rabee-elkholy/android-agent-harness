@@ -219,13 +219,16 @@ For Review V2 and scoped Phase Review V2:
 - environment failure is not PASS;
 - stale review result is not PASS.
 
-### 3.9 One live task per worktree
+### 3.9 At most three disjoint live tasks per worktree
 
-- One live harness task per Git worktree.
-- Urgent parallel work uses a separate developer-created worktree.
-- A validated WIP checkpoint may extend Task A's accepted lineage without cancelling Task A.
-- Arbitrary unregistered commits, merges, or rebases into a live task remain lineage violations.
-- Returning to Task A resumes from persisted harness state, not chat memory.
+- At most three live harness tasks may share a Git worktree, including pending approval, blocked, and READY_FOR_DELIVERY tasks.
+- Each concurrent task reserves explicit, non-overlapping files; broad or unknown ownership cannot establish isolation. A fourth task requires delivery or cancellation of an existing task.
+- The active pointer selects focus, not exclusive task existence. Switching focus never approves, resumes, cancels, or discards another task.
+- Task baselines, review deltas, approval identities, budgets, and evidence remain task-local. Builds and APKs include the whole working tree; any change during frozen verification still invalidates that run.
+- Developer commits matching a disjoint sibling's verified files may advance another task's lineage. Arbitrary unregistered commits, mixed unverified changes, merges, and rebases remain lineage violations.
+- A validated WIP checkpoint may extend Task A's accepted lineage without cancelling Task A. Separate developer-created worktrees remain necessary for overlapping files or independent build trees.
+- Returning to a task resumes from persisted harness state, not chat memory. See ADR-013.
+- On an explicit developer choice, two or three never-approved, never-executed pending plans may consolidate into a new pending task after a read-only preview. Preserve source history, recompute central policy, and require one fresh approval. Never transfer started work, approvals, evidence or spent review budgets through a merge. This changes no project files or Git history.
 
 ### 3.10 Semantic phases, not mechanical chunking
 

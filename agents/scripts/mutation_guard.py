@@ -18,7 +18,7 @@ VERIFICATION_SCRIPTS = {
 }
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
-    "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery",
+    "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery", "switch", "merge",
     "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget", "continue",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
@@ -340,6 +340,23 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
     try:
         plan = active_plan(root)
         require_mutation(plan)
+        from delivery_manifest import assert_disjoint_task_scope, live_task_plans, task_owned_files, TaskConflictError
+        assert_disjoint_task_scope(root, str(plan.get("task_id") or ""), plan)
+        if len(live_task_plans(root)) > 1:
+            if not targets:
+                raise ValidationError("ACTIVE_TASK_CONFLICT: shared-worktree writes require explicit target files")
+            owned = {os.path.normcase(p) for p in task_owned_files(root, plan["task_id"], plan)}
+            for target in targets:
+                path = Path(target)
+                path = path.resolve() if path.is_absolute() else (root / path).resolve()
+                if not path.is_relative_to(root) or os.path.normcase(path.relative_to(root).as_posix()) not in owned:
+                    other_tasks = [{"task_id": tid, "status": other["status"], "outcome": other.get("requested_outcome", "")}
+                                   for tid, other, _ in live_task_plans(root) if tid != plan["task_id"]
+                                   and path.is_relative_to(root)
+                                   and os.path.normcase(path.relative_to(root).as_posix()) in
+                                   {os.path.normcase(p) for p in task_owned_files(root, tid, other)}]
+                    raise TaskConflictError("ACTIVE_TASK_CONFLICT", f"Write target is outside the focused task's files: {target}",
+                                            plan["task_id"], other_tasks, [str(target)], repo=root)
         from host_continuation import assert_execution_session
         assert_execution_session(root, plan.get("task_id"))
     except ValidationError as exc:
@@ -819,6 +836,14 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if _workflow_action(normalized, repo) != "continue" and not _is_read_only(normalized, repo):
         try:
             plan = active_plan(Path(repo))
+            if _workflow_action(normalized, repo):
+                _, task_args = _entry(normalized, repo)
+                explicit_id = next((arg.split("=", 1)[1] for arg in task_args if arg.startswith("--task-id=")), "")
+                if "--task-id" in task_args and task_args.index("--task-id") + 1 < len(task_args):
+                    explicit_id = task_args[task_args.index("--task-id") + 1]
+                if explicit_id:
+                    from workflow import _load_plan
+                    plan = _load_plan(Path(repo), explicit_id)
         except ValidationError:
             plan = None
         if plan:

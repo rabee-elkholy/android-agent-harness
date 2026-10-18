@@ -5,6 +5,14 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {"command": "task merge", "read_only": False,
+     "valid_states": ["AWAITING_DEVELOPER_APPROVAL"],
+     "required_inputs": ["task_id", "from_task_id"], "model_facing": True,
+     "description": "Read-only preview by default; explicit --apply, --expect-preview and developer proof consolidate two or three never-started plans. New task still requires approval."},
+    {"command": "task switch", "read_only": False,
+     "valid_states": ["AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"],
+     "required_inputs": ["task_id"], "model_facing": True,
+     "description": "Focus one of at most three disjoint live tasks without changing approval or verification state."},
     {"command": "task continue", "read_only": False,
      "valid_states": ["APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"],
      "required_inputs": ["task_id", "host"], "model_facing": True,
