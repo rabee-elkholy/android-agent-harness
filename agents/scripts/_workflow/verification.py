@@ -291,13 +291,27 @@ def review_action(context: VerificationContext) -> dict | None:
                             }
 
                     prompts = _engine._reviewer_prompts(exec_profile, sorted(not_dispatched))
-                    return {
+                    before_first_dispatch = None
+                    if (
+                        str(review_host).strip().lower() == "antigravity"
+                        and (current_run.get("review_models") or {}).get("source", "default") == "default"
+                        and len(not_dispatched) == len(required_reviewers)
+                    ):
+                        from review_models import build_antigravity_model_prompt
+                        before_first_dispatch = build_antigravity_model_prompt(
+                            repo,
+                            task_id,
+                            sorted(not_dispatched),
+                            run_id=run_id,
+                        )
+                        exec_profile["reviewer_model_prompt"] = before_first_dispatch
+                    action_payload = {
                         "code": "DISPATCH_REVIEWERS",
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
                         "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))}.{_engine._prompt_hint(prompts)}",
-                        "reviewer_prompts": prompts,
+                        **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                         "reviewers": sorted(not_dispatched),
                         "package_path": str(pkg_path),
                         "briefs": briefs,
@@ -306,14 +320,17 @@ def review_action(context: VerificationContext) -> dict | None:
                             "repo": ".",
                             "task_id": task_id,
                             "run_id": run_id,
+                            **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                             "reviewers": sorted(not_dispatched),
                             "package_path": str(pkg_path),
                             "briefs": briefs,
-                            "reviewer_prompts": _engine._reviewer_prompts(exec_profile, sorted(not_dispatched)),
                             "review_execution_profile": exec_profile,
+                            "reviewer_prompts": _engine._reviewer_prompts(exec_profile, sorted(not_dispatched)),
                         },
                         "expected": {"success_statuses": ["PASS"]},
+                        "reviewer_prompts": prompts,
                     }
+                    return action_payload
 
                 reconcile_err_marker = tdir / "review-execution" / run_id / "post-tool-reconcile-error.json"
                 if reconcile_err_marker.is_file():

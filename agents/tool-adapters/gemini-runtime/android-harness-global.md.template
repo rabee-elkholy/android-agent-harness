@@ -19,6 +19,7 @@ MANDATORY:
 10. Exact Reviewer Dispatch Procedure (Antigravity):
 1. Run status --next.
 2. If code == DISPATCH_REVIEWERS:
+   - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer once via `ask_question` using the 5 choices (`flash-dynamic-task`, `flash-dynamic-once`, `inherit-task`, `inherit-once`, `hybrid-smart-task`) and execute its `command_template` before dispatch;
    - use exactly the returned reviewer set;
    - one invoke_subagent call;
    - for each reviewer:

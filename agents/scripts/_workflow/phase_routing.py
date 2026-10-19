@@ -296,6 +296,21 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         exec_profile["reviewers"][role].update(selection)
                 if any(r.get("model_policy") == "DEVELOPER_SELECTED_NATIVE" for r in exec_profile["reviewers"].values()):
                     exec_profile["model_policy"] = "DEVELOPER_SELECTED_NATIVE"
+                before_first_dispatch = None
+                if (
+                    str(phase_host).strip().lower() == "antigravity"
+                    and (run_meta.get("review_models") or {}).get("source", "default") == "default"
+                    and len(not_dispatched) == len(revs)
+                ):
+                    from review_models import build_antigravity_model_prompt
+                    before_first_dispatch = build_antigravity_model_prompt(
+                        repo,
+                        task_id,
+                        sorted(not_dispatched),
+                        run_id=str(run_meta.get("phase_review_run_id") or ""),
+                        phase_id=phase_id,
+                    )
+                    exec_profile["reviewer_model_prompt"] = before_first_dispatch
 
                 return {
                     "code": "DISPATCH_PHASE_REVIEWERS",
@@ -304,6 +319,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     "blocking": True,
                     "phase_id": phase_id,
                     "reason": f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))}.",
+                    **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                     "reviewers": sorted(not_dispatched),
                     "package_path": run_meta.get("package_path", ""),
                     "briefs": briefs,
@@ -312,6 +328,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         "repo": ".",
                         "task_id": task_id,
                         "phase_id": phase_id,
+                        **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                         "reviewers": sorted(not_dispatched),
                         "briefs": briefs,
                         "review_execution_profile": exec_profile,

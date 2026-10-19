@@ -699,8 +699,8 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | Non
 
     run_host = resolve_review_host(repo, host)
     from review_models import freeze_models, transfer_models
-    frozen_review_models = (transfer_models(model_source_run, run_host, selected_reviewers) if model_source_run is not None
-                            else freeze_models(repo, task_id, run_host, selected_reviewers))
+    frozen_review_models = (transfer_models(model_source_run, run_host, selected_reviewers, plan=plan) if model_source_run is not None
+                            else freeze_models(repo, task_id, run_host, selected_reviewers, run_id=run_id, plan=plan))
     metadata = {
         "review_models": frozen_review_models,
         "schema_version": 2,
@@ -1152,7 +1152,7 @@ def _complete_phase_review_locked(
 
     # Save result JSON
     from review_models import model_evidence
-    selected_model_evidence = model_evidence(run_meta, reviewer, response_source)
+    selected_model_evidence = model_evidence(run_meta, reviewer, {**(response_source or {}), "repo": str(repo)})
     result_sha = canonical_sha256(parsed)
     res_payload = {
         "model_selection": selected_model_evidence,

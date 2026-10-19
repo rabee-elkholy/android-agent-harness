@@ -660,8 +660,15 @@ def complete_review(
             raise
 
         # Save result JSON
+        from review_models import model_evidence
+        selected_model_evidence = model_evidence(
+            current,
+            reviewer,
+            {"transcript_path": str(t_path), "repo": str(repo)},
+        )
         result_sha = canonical_sha256(parsed)
         res_payload = {
+            "model_selection": selected_model_evidence,
             "schema_version": 2,
             "task_id": task_id,
             "run_id": run_id,
@@ -745,6 +752,7 @@ def _finalize_review_execution_locked(
         if st not in (REVIEW_COMPLETED, REVIEW_INGESTED):
             raise ValidationError(f"cannot finalize reviews; reviewer '{r}' is in state '{st}', not COMPLETED")
 
+    from review_models import model_evidence
     reports = []
     all_findings = []
     for r in required_reviewers:
@@ -766,12 +774,16 @@ def _finalize_review_execution_locked(
 
         verdict = result_body.get("verdict", "PASS")
         r_findings = result_body.get("findings", [])
+        model_sel = res_data.get("model_selection")
+        if model_sel is None:
+            model_sel = model_evidence(current, r, {"repo": str(repo)})
         reports.append({
             "reviewer": r,
             "verdict": verdict,
             "result_sha256": res_data.get("result_sha256", ""),
             "execution_id_sha256": res_data.get("execution_id_sha256", ""),
             "independent_execution_verified": True,
+            "model_selection": model_sel,
             **({"criterion_results": result_body["criterion_results"]} if "criterion_results" in result_body else {}),
         })
         for item in r_findings:

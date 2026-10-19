@@ -217,9 +217,12 @@ Do not pass:
 
 Reasoning escalation is allowed only through a trusted host-native capability whose real supported argument/schema was detected.
 
-Do not create a cross-provider model-routing subsystem or infer new native
-arguments from developer configuration. Antigravity remains inherit-only until
-a real supported native override is established.
+Do not create a cross-provider model-routing subsystem or pass `model`/`Model`
+in Antigravity `invoke_subagent` tool arguments. On Antigravity, developer-selected
+reviewer models (`flash-dynamic`, `hybrid-smart`, `inherit`, or explicit Gemini 3.8
+Flash/Pro thinking slugs) are bound through `.agents/agents/<role>/agent.md` YAML
+frontmatter (`model:`) while `invoke_subagent` arguments remain strictly
+`Prompt`, `Role`, `TypeName`, and `Workspace`.
 
 ### 3.8 Review proof cannot be self-certified
 

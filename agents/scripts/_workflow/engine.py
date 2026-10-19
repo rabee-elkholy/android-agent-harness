@@ -1243,8 +1243,16 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         raise ValidationError(f"policy preparation blocked: {policy.get('status')}")
     from review_models import freeze_models
     configured_host = resolve_review_host(repo, getattr(args, "host", None))
-    frozen_review_models = freeze_models(repo, args.task_id, configured_host, list(policy.get("reviewers") or []))
     run_id = f"run-{uuid.uuid4().hex}"
+    frozen_review_models = freeze_models(
+        repo,
+        args.task_id,
+        configured_host,
+        list(policy.get("reviewers") or []),
+        run_id=run_id,
+        policy_data=policy,
+        plan=plan,
+    )
     directory = task_dir(repo, args.task_id)
     manifest_path = directory / f"manifest-{run_id}.json"
     policy_path = directory / f"policy-{run_id}.json"
@@ -2717,7 +2725,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "inputs": act.get("inputs", {}),
         "expected": act.get("expected", {}),
     }
-    for k in ("choices", "reviewer_prompts", "reviewers", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
+    for k in ("choices", "before_first_dispatch", "reviewer_prompts", "reviewers", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
         if k in act:
             res_entry[k] = act[k]
     return [res_entry]

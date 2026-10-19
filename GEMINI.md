@@ -37,6 +37,7 @@ Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AG
 - Exact Reviewer Dispatch Procedure (Antigravity):
   1. Run `python .agents/harness.py task status --task-id <id> --next --json` (or `workflow.py status`).
   2. If code == DISPATCH_REVIEWERS:
+     - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer with `ask_question` using the 5 choices (`flash-dynamic-task`, `flash-dynamic-once`, `inherit-task`, `inherit-once`, `hybrid-smart-task`) and run its `command_template` before launching subagents;
      - use exactly the returned reviewer set;
      - one invoke_subagent call;
      - for each reviewer:

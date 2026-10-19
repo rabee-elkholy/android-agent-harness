@@ -212,7 +212,11 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
             selected = selections[rev]
             rev_entry.update(selected)
             rev_entry["dispatch_contract"].update({key: selected[key] for key in ("model_policy", "model_argument", "native_arguments")})
-            if selected["requested_model"] != "inherit":
+            if selected.get("agent_frontmatter_model") is not None:
+                rev_entry["dispatch_contract"]["agent_frontmatter_model"] = selected.get("agent_frontmatter_model")
+            if selected.get("thinking_level") is not None:
+                rev_entry["dispatch_contract"]["thinking_level"] = selected.get("thinking_level")
+            if selected["requested_model"] != "inherit" and not is_antigravity:
                 rev_entry["required_model"] = selected["requested_model"]
         resolved_reviewers[rev] = rev_entry
 
@@ -237,11 +241,23 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
         profile["review_models_sha256"] = current["review_models"]["sha256"]
     if any(item.get("requested_model", "inherit") != "inherit" for item in resolved_reviewers.values()):
         profile["model_policy"] = "DEVELOPER_SELECTED_NATIVE"
-        profile["dispatch_contract"] = {
-            "tool_family": "claude_native_subagent", "model_policy": "DEVELOPER_SELECTED_NATIVE",
-            "model_argument": "model", "enforcement": "RULE_ENFORCED",
-            "instructions": "Use each reviewer's frozen native_arguments on the native Agent/Task call. Never fall back on a host error.",
-        }
+        if str(host).strip().lower() == "antigravity" or str(current.get("review_host") or "").strip().lower() == "antigravity":
+            profile["dispatch_contract"] = {
+                "tool": "invoke_subagent",
+                "subagent_allowed_keys": list(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS),
+                "workspace_policy": "inherit_or_omit",
+                "model_policy": "DEVELOPER_SELECTED_NATIVE",
+                "model_argument": None,
+                "reasoning_argument": None,
+                "agent_frontmatter_field": "model",
+                "instructions": "Never pass model or Model in invoke_subagent arguments. Antigravity resolves each reviewer's model from .agents/agents/<role>/agent.md frontmatter.",
+            }
+        else:
+            profile["dispatch_contract"] = {
+                "tool_family": "claude_native_subagent", "model_policy": "DEVELOPER_SELECTED_NATIVE",
+                "model_argument": "model", "enforcement": "RULE_ENFORCED",
+                "instructions": "Use each reviewer's frozen native_arguments on the native Agent/Task call. Never fall back on a host error.",
+            }
     return profile
 
 

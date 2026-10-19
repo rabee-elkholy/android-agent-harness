@@ -271,5 +271,113 @@ class ReviewerModelsTests(unittest.TestCase):
             self.assertEqual("PASS", result["verdict"])
 
 
+
+    def test_antigravity_five_choices_and_dynamic_thinking_resolution(self):
+        from install_tool_adapters import generate_antigravity_agents
+        import shutil
+        shutil.copytree(Path(__file__).resolve().parents[1] / "subagents", self.repo / ".agents" / "subagents", dirs_exist_ok=True)
+        generate_antigravity_agents(self.repo, dry_run=False)
+        conv = "convention-reviewer-agent"
+        roster = [conv, ROLE, SECURITY]
+        prompt = models.build_antigravity_model_prompt(self.repo, "task-ag", roster, run_id="run-1")
+        self.assertEqual("SELECT_REVIEW_MODEL", prompt["code"])
+        choice_ids = [c["id"] for c in prompt["choices"]]
+        self.assertEqual(
+            ["flash-dynamic-task", "flash-dynamic-once", "inherit-task", "inherit-once", "hybrid-smart-task"],
+            choice_ids,
+        )
+
+        # 1. flash-dynamic-task: medium for convention, high for bug & security
+        atomic_write_json(task_dir(self.repo, "task-ag") / "plan.json", {"status": "IMPLEMENTING"})
+        args_set = [
+            sys.executable, str(SCRIPT), "set", "--repo", str(self.repo), "--host", "antigravity",
+            "--task-id", "task-ag", "--choice", "flash-dynamic-task",
+            "--source", "conversation", "--proof-reference", "Use flash dynamic for task",
+        ]
+        res = subprocess.run(args_set, text=True, capture_output=True)
+        self.assertEqual(0, res.returncode, res.stdout + res.stderr)
+        frozen = models.freeze_models(self.repo, "task-ag", "antigravity", roster, run_id="run-1")
+        self.assertEqual("gemini-3.8-flash-medium", frozen["reviewers"][conv]["resolved_model"])
+        self.assertEqual("medium", frozen["reviewers"][conv]["thinking_level"])
+        self.assertEqual("gemini-3.8-flash-high", frozen["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("high", frozen["reviewers"][ROLE]["thinking_level"])
+        self.assertEqual("gemini-3.8-flash-high", frozen["reviewers"][SECURITY]["resolved_model"])
+        self.assertEqual({}, frozen["reviewers"][SECURITY]["native_arguments"])
+
+        # Check frontmatter synced on disk
+        sec_md = (self.repo / ".agents" / "agents" / SECURITY / "agent.md").read_text(encoding="utf-8")
+        conv_md = (self.repo / ".agents" / "agents" / conv / "agent.md").read_text(encoding="utf-8")
+        self.assertIn('model: "gemini-3.8-flash-high"', sec_md)
+        self.assertIn('model: "gemini-3.8-flash-medium"', conv_md)
+
+        # Verify model_evidence and validate_model_evidence on Antigravity
+        run_doc = {"review_host": "antigravity", "review_models": frozen}
+        ev = models.model_evidence(run_doc, SECURITY, {"repo": str(self.repo)})
+        self.assertEqual("ANTIGRAVITY_AGENT_FRONTMATTER_BOUND", ev["actual_model_status"])
+        self.assertEqual("gemini-3.8-flash-high", ev["actual_model"])
+        models.validate_model_evidence(run_doc, SECURITY, ev)
+
+        # 2. hybrid-smart-task: Flash medium for standard (convention), Inherit for critical (bug, security)
+        args_hybrid = [
+            sys.executable, str(SCRIPT), "set", "--repo", str(self.repo), "--host", "antigravity",
+            "--task-id", "task-ag", "--choice", "hybrid-smart-task",
+            "--source", "conversation", "--proof-reference", "Use hybrid smart for task",
+        ]
+        res_h = subprocess.run(args_hybrid, text=True, capture_output=True)
+        self.assertEqual(0, res_h.returncode, res_h.stdout + res_h.stderr)
+        frozen_h = models.freeze_models(self.repo, "task-ag", "antigravity", roster, run_id="run-2")
+        self.assertEqual("gemini-3.8-flash-medium", frozen_h["reviewers"][conv]["resolved_model"])
+        self.assertEqual("DEVELOPER_SELECTED_NATIVE", frozen_h["reviewers"][conv]["model_policy"])
+        self.assertEqual("inherit", frozen_h["reviewers"][ROLE]["requested_model"])
+        self.assertEqual("INHERIT_PARENT_BY_OMISSION", frozen_h["reviewers"][ROLE]["model_policy"])
+        self.assertIsNone(frozen_h["reviewers"][ROLE].get("agent_frontmatter_model"))
+        self.assertEqual("inherit", frozen_h["reviewers"][SECURITY]["requested_model"])
+        sec_md_after = (self.repo / ".agents" / "agents" / SECURITY / "agent.md").read_text(encoding="utf-8")
+        conv_md_after = (self.repo / ".agents" / "agents" / conv / "agent.md").read_text(encoding="utf-8")
+        self.assertNotIn("model:", sec_md_after)
+        self.assertIn('model: "gemini-3.8-flash-medium"', conv_md_after)
+
+    def test_antigravity_run_scope_expires_on_next_run_and_refreshes_undispatched_run(self):
+        from install_tool_adapters import generate_antigravity_agents
+        import shutil
+        shutil.copytree(Path(__file__).resolve().parents[1] / "subagents", self.repo / ".agents" / "subagents", dirs_exist_ok=True)
+        generate_antigravity_agents(self.repo, dry_run=False)
+        tdir = task_dir(self.repo, "task-once")
+        atomic_write_json(tdir / "plan.json", {"task_id": "task-once", "status": "VERIFYING"})
+        policy_path = tdir / "policy-run-1.json"
+        atomic_write_json(policy_path, {"reviewers": [ROLE], "risk_tier": "T2_FEATURE", "severity": "MEDIUM"})
+        initial_models = models.freeze_models(self.repo, "task-once", "antigravity", [ROLE], run_id="run-1")
+        self.assertEqual("default", initial_models["source"])
+        atomic_write_json(tdir / "current-run.json", {
+            "task_id": "task-once",
+            "run_id": "run-1",
+            "review_host": "antigravity",
+            "review_protocol_version": 2,
+            "policy": str(policy_path),
+            "delivery_snapshot_sha256": "a" * 64,
+            "change_set_sha256": "b" * 64,
+            "review_models": initial_models,
+        })
+
+        # Setting flash-dynamic-once while VERIFYING before any reviewer is dispatched succeeds and refreshes current-run.json
+        models.set_policy(
+            self.repo,
+            models.choice_to_policy("flash-dynamic-once")[0],
+            task_id="task-once",
+            host="antigravity",
+            source="conversation",
+            proof_reference="Flash once for this run",
+            scope="run",
+        )
+        updated_current = read_json(tdir / "current-run.json")
+        self.assertEqual("run", updated_current["review_models"]["source"])
+        self.assertEqual("gemini-3.8-flash-high", updated_current["review_models"]["reviewers"][ROLE]["resolved_model"])
+
+        # Next run (run-2) does not match bound_run_id="run-1", so it reverts to default inherit!
+        next_run_models = models.freeze_models(self.repo, "task-once", "antigravity", [ROLE], run_id="run-2")
+        self.assertEqual("default", next_run_models["source"])
+        self.assertEqual("inherit", next_run_models["reviewers"][ROLE]["requested_model"])
+
+
 if __name__ == "__main__":
     unittest.main()

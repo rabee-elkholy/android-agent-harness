@@ -7,12 +7,32 @@ or the requirement for independent review proof.
 | Host | Supported choices | Enforcement |
 |---|---|---|
 | Claude Code | `inherit`, `sonnet`, `opus`, `haiku` | Rule-enforced native Agent/Task model argument; account access is host-dependent |
-| Antigravity | `inherit` | Omit `model` and `Model`; current native schema has no override |
+| Antigravity | `inherit`, `flash-dynamic`, `hybrid-smart`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-3.8-pro-medium`, `gemini-3.8-pro-high` (or `<model>@<low|medium|high>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` never sends `model`/`Model` |
 | Other adapters | `inherit` | Host-managed; inheritance is not independently verified |
 
-These are documented native aliases, not a live account model inventory. An
-unavailable model must stop the review; the lead must never silently substitute
-another model. External providers, arbitrary IDs and API keys are not supported.
+## Antigravity pre-review interactive choices (`SELECT_REVIEW_MODEL`)
+
+When a task or phase review on Antigravity reaches `DISPATCH_REVIEWERS` / `DISPATCH_PHASE_REVIEWERS` with no explicit model bound (`source == "default"`), the router emits `before_first_dispatch` (`code = "SELECT_REVIEW_MODEL"`) with 5 developer choices:
+
+1. `flash-dynamic-task` (`--default flash-dynamic --scope task`): Gemini 3.8 Flash with dynamic thinking (`high` for `security-reviewer-agent`, `bug-reviewer-agent`, `perf-anr-guardian-agent`, or `DEEP`/`MAX` effort; `medium` for standard reviewers) for the whole task.
+2. `flash-dynamic-once` (`--default flash-dynamic --scope run`): Gemini 3.8 Flash with dynamic thinking for this review run only (`review-models-run.json`).
+3. `inherit-task` (`--default inherit --scope task`): Chat conversation model (`Inherit`) for the whole task.
+4. `inherit-once` (`--default inherit --scope run`): Chat conversation model (`Inherit`) for this review run only.
+5. `hybrid-smart-task` (`--default hybrid-smart --scope task`): Smart Hybrid — Flash Dynamic for standard reviewers (`convention`, `test-quality`, `spec-compliance`, `regression-impact`) and Chat model (`Inherit`) for critical reviewers (`bug`, `perf-anr-guardian`, `security`) for the whole task.
+
+You can also pass `--choice <id>` directly:
+
+```bash
+python .agents/harness.py review models set --host antigravity --task-id <id> --choice hybrid-smart-task --source conversation --proof-reference "Developer chose hybrid-smart-task"
+```
+
+Or configure per-reviewer overrides and thinking levels explicitly:
+
+```bash
+python .agents/harness.py review models set --host antigravity --task-id <id> --default flash@medium --reviewer security-reviewer-agent=pro@high --scope task --source conversation --proof-reference "Use Flash Medium by default and Pro High for security"
+```
+
+## Claude Code configuration
 
 During Claude-only setup, choose a common alias or `custom` for a complete policy:
 
@@ -27,30 +47,4 @@ python .agents/harness.py review models show --host claude
 python .agents/harness.py review models set --host claude --default sonnet --reviewer security-reviewer-agent=opus --source conversation --proof-reference "Use Sonnet for reviewers and Opus for security"
 ```
 
-Add `--task-id <id>` for a task-local replacement before final verification.
-Each `set` replaces the complete policy: omitted overrides are cleared. Reset to
-inheritance with `--default inherit` and no `--reviewer`. Sources are
-`conversation` (the developer's explicit instruction) or `developer_terminal`.
-Agents must not invent permission, edit state/config files, or select models
-from environment variables. The global `android-harness review models` command
-uses the same implementation (add `--repo <project>`).
-
-Precedence: task decision, project decision, setup answer, inheritance.
-Project and task decisions are stored in harness state, outside managed release
-files. Every new phase/final run freezes its resolved selections in its package.
-Changing the project default affects future runs only. To change a final run,
-resume implementation and prepare a new run through the normal lifecycle; no
-previous evidence is rewritten and previous reviewer calls remain spent.
-
-The router's execution profile is authoritative for dispatch. On Claude, pass
-each role's `native_arguments` to its native Agent/Task call and use its exact
-brief. On inheritance, omit the model argument. Do not use the lead model name
-as a substitute for inheritance. Launching a reviewer needs no extra approval.
-
-Ingest the unchanged Claude transcript using the existing final/phase review
-commands. Explicit model choices require native assistant-message model metadata
-matching the requested family; missing or different metadata blocks ingestion.
-The evidence records requested and host-reported models separately. A reviewer's
-own statement about its model is ignored. Claude transcript metadata remains
-unverified host-reported evidence and does not upgrade independent execution
-proof or bypass sensitive-change restrictions.
+Precedence: run-scoped decision (`--scope run`, bound to current `run_id`), task decision (`--scope task`), project decision, setup answer, inheritance.

@@ -373,7 +373,7 @@ def generate_claude_agents(repo: Path, *, dry_run: bool) -> list[str]:
     return logs
 
 
-def antigravity_agent_markdown(data: dict) -> str:
+def antigravity_agent_markdown(data: dict, *, model: str | None = None) -> str:
     name = str(data.get("name") or "").strip()
     if not name:
         raise ValueError("Custom agent name cannot be empty.")
@@ -385,6 +385,9 @@ def antigravity_agent_markdown(data: dict) -> str:
     name_yaml = json.dumps(name, ensure_ascii=False)
     description_yaml = json.dumps(description, ensure_ascii=False)
     tools_block = "\n".join(f"  - {t}" for t in ANTIGRAVITY_REVIEWER_TOOLS)
+    model_line = ""
+    if model and str(model).strip() and str(model).strip().lower() != "inherit":
+        model_line = f"model: {json.dumps(str(model).strip(), ensure_ascii=False)}\n"
 
     return (
         f"---\n"
@@ -392,6 +395,7 @@ def antigravity_agent_markdown(data: dict) -> str:
         f"description: {description_yaml}\n"
         f"mainAgent: false\n"
         f"subagent: true\n"
+        f"{model_line}"
         f"tools:\n"
         f"{tools_block}\n"
         f"---\n\n"
@@ -414,8 +418,19 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
         if source_name != role:
             raise RuntimeError(f"Subagent source name mismatch in {json_path}: expected '{role}', got '{source_name}'")
         dest = repo / ".agents" / "agents" / role / "agent.md"
+        configured_model = None
+        try:
+            from review_models import load_policy, resolve_antigravity_model, CRITICAL_HYBRID_REVIEWERS
+            pol, src_scope = load_policy(repo)
+            if src_scope != "default":
+                req_m = pol.get("overrides", {}).get(role, pol.get("default", "inherit"))
+                if req_m and req_m != "inherit":
+                    eff = "DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL"
+                    configured_model, _ = resolve_antigravity_model(req_m, role, eff)
+        except Exception:
+            configured_model = None
         logs.append(
-            write_file(dest, antigravity_agent_markdown(data), dry_run=dry_run, repo=repo)
+            write_file(dest, antigravity_agent_markdown(data, model=configured_model), dry_run=dry_run, repo=repo)
         )
     return logs
 

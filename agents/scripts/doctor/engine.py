@@ -1399,6 +1399,11 @@ class HarnessDoctor:
                         agent_errors.append(f"{role}: mainAgent must be false")
                     if fm.get("subagent") is not True:
                         agent_errors.append(f"{role}: subagent must be true")
+                    fm_model = fm.get("model")
+                    if fm_model is not None:
+                        from review_models import ANTIGRAVITY_MODEL_CHOICES
+                        if str(fm_model) not in ANTIGRAVITY_MODEL_CHOICES or str(fm_model) in ("inherit", "flash-dynamic", "hybrid-smart"):
+                            agent_errors.append(f"{role}: invalid frontmatter model ({fm_model})")
                     r_tools = set(fm.get("tools") or [])
                     if r_tools != approved_tools:
                         agent_errors.append(f"{role}: tools {r_tools} != approved {approved_tools}")

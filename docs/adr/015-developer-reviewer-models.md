@@ -4,25 +4,21 @@ Status: Accepted (explicit maintainer approval)
 
 The previous blanket inheritance contract prevented a developer from choosing
 different supported reviewer models. Preserve inheritance for existing installs,
-but accept a project policy and complete task-local replacement. The policy has
-one default and optional canonical-role overrides; it never selects reviewers.
-Setup choices apply unless an explicit project decision exists; task decisions
-take precedence. Changes require a developer source and proof reference.
+but accept a project policy, a task-local replacement (`--scope task`), and a
+single-run choice (`--scope run`). The policy has one default and optional
+canonical-role overrides; it never selects reviewers.
 
-Freeze resolved selections in phase and final review packages. Existing runs,
-receipts, findings, budgets and historical evidence do not change with config.
-Unsupported native controls fail before a review run is published. Never retry
-with inheritance after an explicit native selection fails.
+Freeze resolved selections in phase and final review packages. When a developer
+selects a reviewer model right before the first dispatch of an undispatched run,
+the harness refreshes the undispatched run metadata and briefs and syncs
+`.agents/agents/<role>/agent.md` frontmatter before any reviewer is launched.
 
 Claude Code documents `inherit`, `sonnet`, `opus`, and `haiku` in its
 [native subagent model contract](https://code.claude.com/docs/en/sub-agents#supported-frontmatter-fields).
-The execution profile supplies `model` only for explicit Claude selection.
-This is a documented alias catalog, not a probe of account entitlements or a
-cross-provider runner. Antigravity's current invoke_subagent schema lacks model
-controls and stays inherit-only. Other adapters also stay inherit-only.
-
-Requested models and host-reported model IDs are distinct. Only the unchanged
-native Claude transcript supplies observed IDs; response-body claims are ignored.
-An explicit selection requires matching family metadata. Transcript location and
-hash checks do not prove independent Claude execution, which remains unverified.
-All existing stronger proof requirements and developer override limits remain.
+Antigravity `invoke_subagent` tool arguments stay strictly limited to
+`Prompt`, `Role`, `TypeName`, and `Workspace` (`INHERIT_PARENT_BY_OMISSION` on tool args);
+instead, Antigravity custom reviewer agents resolve their model from the `model:`
+field in `.agents/agents/<role>/agent.md` YAML frontmatter, supporting `inherit`,
+`flash-dynamic` (dynamic `medium`/`high` thinking level by reviewer criticality),
+`hybrid-smart` (Flash Dynamic for standard reviewers + Chat model `Inherit` for
+critical specialists), and explicit `gemini-3.8-flash-*` / `gemini-3.8-pro-*` slugs.

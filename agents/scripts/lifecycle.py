@@ -222,6 +222,36 @@ LEGACY_REFERENCE_PREFIX = ".agents/skills/android-harness/references/"
 DISCARDABLE_PREFIX = ".agents/"
 
 
+
+
+def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
+    """Allow .agents/agents/<role>/agent.md rendered by review_models for a valid Antigravity model."""
+    try:
+        parts = Path(rel).parts
+        if len(parts) != 4 or parts[0] != ".agents" or parts[1] != "agents" or parts[3] != "agent.md":
+            return False
+        role = parts[2]
+        agent_file = repo / rel
+        if not agent_file.is_file():
+            return False
+        content = agent_file.read_text(encoding="utf-8")
+        from install_tool_adapters import antigravity_agent_markdown
+        from review_models import ANTIGRAVITY_MODEL_CHOICES, _parse_agent_frontmatter_model
+        src = (repo / ".agents" / "subagents" / f"{role}.json")
+        if not src.is_file():
+            src = (repo / "agents" / "subagents" / f"{role}.json")
+        if not src.is_file():
+            return False
+        import json as _json
+        data = _json.loads(src.read_text(encoding="utf-8"))
+        fm_model = _parse_agent_frontmatter_model(content)
+        if fm_model is not None and fm_model not in ANTIGRAVITY_MODEL_CHOICES:
+            return False
+        return content == antigravity_agent_markdown(data, model=fm_model)
+    except Exception:
+        return False
+
+
 def managed_file_conflicts(repo: Path, ownership: dict, answers: dict | None = None) -> list[str]:
     """Managed paths whose bytes differ from the last install or update record. Read-only.
 
@@ -239,6 +269,8 @@ def managed_file_conflicts(repo: Path, ownership: dict, answers: dict | None = N
         if rel.startswith(LEGACY_REFERENCE_PREFIX):
             continue
         if rel == PRODUCT_CONFIG and _product_config_matches_answers(repo, answers or {}):
+            continue
+        if rel.startswith(".agents/agents/") and rel.endswith("/agent.md") and _antigravity_agent_matches_policy(repo, rel):
             continue
         conflicts.append(rel)
     return conflicts
