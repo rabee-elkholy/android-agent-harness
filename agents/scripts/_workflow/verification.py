@@ -295,6 +295,9 @@ def review_action(context: VerificationContext) -> dict | None:
                             }
 
                     prompts = _engine._reviewer_prompts(exec_profile, sorted(not_dispatched))
+                    from review_models import format_reviewers_with_models, reviewer_model_map
+                    dispatch_models = reviewer_model_map(exec_profile, sorted(not_dispatched))
+                    dispatch_with_models = format_reviewers_with_models(exec_profile, sorted(not_dispatched))
                     before_first_dispatch = None
                     if (
                         str(review_host).strip().lower() == "antigravity"
@@ -315,9 +318,10 @@ def review_action(context: VerificationContext) -> dict | None:
                         "command": "",
                         "blocking": True,
                         "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
-                                   f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))}.{_engine._prompt_hint(prompts)}"),
+                                   f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}).{_engine._prompt_hint(prompts)}"),
                         **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                         "reviewers": sorted(not_dispatched),
+                        "reviewer_models": dispatch_models,
                         "package_path": str(pkg_path),
                         "briefs": briefs,
                         "review_execution_profile": exec_profile,
@@ -327,6 +331,7 @@ def review_action(context: VerificationContext) -> dict | None:
                             "run_id": run_id,
                             **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                             "reviewers": sorted(not_dispatched),
+                            "reviewer_models": dispatch_models,
                             "package_path": str(pkg_path),
                             "briefs": briefs,
                             "review_execution_profile": exec_profile,
@@ -357,32 +362,41 @@ def review_action(context: VerificationContext) -> dict | None:
 
                 dispatched = [r for r in required_reviewers if rev_states.get(r, {}).get("state") == REVIEW_DISPATCHED]
                 if dispatched:
+                    from review_models import format_reviewers_with_models, reviewer_model_map
+                    pending_models = reviewer_model_map(exec_profile, sorted(dispatched))
+                    pending_with_models = format_reviewers_with_models(exec_profile, sorted(dispatched))
                     return {
                         "code": "WAIT_FOR_REVIEWERS",
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(sorted(dispatched))}.",
+                        "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(sorted(dispatched))} (models: {pending_with_models}).",
                         "reviewers": required_reviewers,
                         "pending_reviewers": sorted(dispatched),
+                        "reviewer_models": pending_models,
                         "inputs": {
                             "repo": ".",
                             "task_id": task_id,
                             "run_id": run_id,
                             "pending_reviewers": sorted(dispatched),
+                            "reviewer_models": pending_models,
                         },
                         "expected": {"success_statuses": ["PASS"]},
                     }
 
                 all_completed = all(rev_states.get(r, {}).get("state") in (REVIEW_COMPLETED, REVIEW_INGESTED) for r in required_reviewers)
                 if all_completed:
+                    from review_models import format_reviewers_with_models, reviewer_model_map
+                    all_models = reviewer_model_map(exec_profile, sorted(required_reviewers))
+                    all_with_models = format_reviewers_with_models(exec_profile, sorted(required_reviewers))
                     return {
                         "code": "INGEST_REVIEW_RESULT",
                         "kind": "HARNESS_COMMAND",
                         "command": f"python .agents/harness.py review finalize --task {task_id}",
                         "blocking": True,
-                        "reason": f"Finalize and aggregate completed review results for {', '.join(sorted(required_reviewers))}.",
-                        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewers": required_reviewers},
+                        "reason": f"Finalize and aggregate completed review results for {', '.join(sorted(required_reviewers))} (models: {all_with_models}).",
+                        "reviewer_models": all_models,
+                        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewers": required_reviewers, "reviewer_models": all_models},
                         "expected": {"success_statuses": ["PASS"]},
                     }
 
@@ -425,16 +439,21 @@ def review_action(context: VerificationContext) -> dict | None:
                     f" Record each finished reviewer's reply with `python .agents/scripts/record_review.py --task {task_id} "
                     "--from-subagent <role>=<transcript-path>`."
                 )
+            from review_models import format_reviewers_with_models, reviewer_model_map
             if not req_set.issubset(dispatched_reviewers):
-                prompts = _engine._reviewer_prompts(exec_profile, sorted(req_set - dispatched_reviewers))
+                not_disp_v1 = sorted(req_set - dispatched_reviewers)
+                prompts = _engine._reviewer_prompts(exec_profile, not_disp_v1)
+                v1_models = reviewer_model_map(exec_profile or current_run, not_disp_v1)
+                v1_with_models = format_reviewers_with_models(exec_profile or current_run, not_disp_v1)
                 return {
                     "code": "DISPATCH_REVIEWERS",
                     "kind": "HOST_ACTION",
                     "command": "",
                     "blocking": True,
-                    "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(req_set - dispatched_reviewers))}.{_engine._prompt_hint(prompts)}{record_hint}",
+                    "reason": f"Dispatch independent reviewer subagents: {', '.join(not_disp_v1)} (models: {v1_with_models}).{_engine._prompt_hint(prompts)}{record_hint}",
                     "reviewer_prompts": prompts,
-                    "reviewers": sorted(req_set - dispatched_reviewers),
+                    "reviewers": not_disp_v1,
+                    "reviewer_models": v1_models,
                     "package_path": str(pkg_path),
                     "briefs": briefs,
                     "review_execution_profile": exec_profile,
@@ -442,10 +461,11 @@ def review_action(context: VerificationContext) -> dict | None:
                         "repo": ".",
                         "task_id": task_id,
                         "run_id": run_id,
-                        "reviewers": sorted(req_set - dispatched_reviewers),
+                        "reviewers": not_disp_v1,
+                        "reviewer_models": v1_models,
                         "package_path": str(pkg_path),
                         "briefs": briefs,
-                        "reviewer_prompts": _engine._reviewer_prompts(exec_profile, sorted(req_set - dispatched_reviewers)),
+                        "reviewer_prompts": _engine._reviewer_prompts(exec_profile, not_disp_v1),
                         "review_execution_profile": exec_profile,
                     },
                     "expected": {"success_statuses": ["PASS"]},
@@ -453,32 +473,39 @@ def review_action(context: VerificationContext) -> dict | None:
 
             if not req_set.issubset(completed_reviewers):
                 pending = sorted(req_set - completed_reviewers)
+                v1_pending_models = reviewer_model_map(exec_profile or current_run, pending)
+                v1_pending_with_models = format_reviewers_with_models(exec_profile or current_run, pending)
                 return {
                     "code": "WAIT_FOR_REVIEWERS",
                     "kind": "HOST_ACTION",
                     "command": "",
                     "blocking": True,
-                    "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(pending)}.{record_hint}",
+                    "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(pending)} (models: {v1_pending_with_models}).{record_hint}",
                     "reviewers": required_reviewers,
                     "pending_reviewers": pending,
+                    "reviewer_models": v1_pending_models,
                     "inputs": {
                         "repo": ".",
                         "task_id": task_id,
                         "run_id": run_id,
                         "dispatched_reviewers": sorted(dispatched_reviewers),
                         "pending_reviewers": pending,
+                        "reviewer_models": v1_pending_models,
                         "completed_reviewers": sorted(completed_reviewers),
                     },
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
+            v1_all_models = reviewer_model_map(exec_profile or current_run, sorted(required_reviewers))
+            v1_all_with_models = format_reviewers_with_models(exec_profile or current_run, sorted(required_reviewers))
             return {
                 "code": "INGEST_REVIEW_RESULT",
                 "kind": "HARNESS_COMMAND",
                 "command": f"python .agents/harness.py review ingest --task {task_id}",
                 "blocking": True,
-                "reason": f"Ingest completed review results for {', '.join(sorted(required_reviewers))}.",
-                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewers": required_reviewers},
+                "reason": f"Ingest completed review results for {', '.join(sorted(required_reviewers))} (models: {v1_all_with_models}).",
+                "reviewer_models": v1_all_models,
+                "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewers": required_reviewers, "reviewer_models": v1_all_models},
                 "expected": {"success_statuses": ["PASS"]},
             }
 

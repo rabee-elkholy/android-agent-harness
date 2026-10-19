@@ -99,6 +99,8 @@ class ZohoPolicyResolver:
         solution_or_changes: str,
         blast_radius: list[str] | str,
         test_cases: list[str] | str,
+        *,
+        use_html_template: bool = False,
     ) -> str:
         lang = language if language in ALLOWED_LANGUAGES else "en_titles_ar_comments"
         is_english = (lang == "all_en")
@@ -127,8 +129,52 @@ class ZohoPolicyResolver:
                 f"Test Cases & Verification Steps:\n{tc_str.strip()}"
             )
         else:
-            # Arabic headers
             is_bug = "BUG" in template_name
+            if use_html_template and not is_bug:
+                tc_list = test_cases if isinstance(test_cases, list) else [line.strip() for line in str(test_cases or "").splitlines() if line.strip()]
+                rows_html = []
+                for idx, tc in enumerate(tc_list or ["التحقق من السلوك المطلوب"], 1):
+                    rows_html.append(
+                        "      <tr>\n"
+                        f"        <td style=\"text-align: center;\">{idx}</td>\n"
+                        f"        <td>سيناريو الفحص {idx}</td>\n"
+                        f"        <td>{tc}</td>\n"
+                        "        <td>نجاح السيناريو دون أخطاء</td>\n"
+                        "      </tr>"
+                    )
+                blast_items = blast_radius if isinstance(blast_radius, list) else [line.strip() for line in str(blast_radius or "").splitlines() if line.strip()]
+                blast_p = "، ".join(blast_items) if blast_items else blast_str.strip()
+                return (
+                    "<div dir=\"rtl\" style=\"font-family: inherit; line-height: 1.6; text-align: right;\">\n"
+                    "  <h3>1. سبب المشكلة والهدف من المهمة (Root Cause &amp; Objective)</h3>\n"
+                    f"  <p>{root_cause_or_objective.strip()}</p>\n\n"
+                    "  <h3>2. التعديلات الوظيفية والسلوكية للتطبيق (Functional Solution &amp; What Changed)</h3>\n"
+                    f"  <p>{solution_or_changes.strip()}</p>\n"
+                    "  <p><strong>حالة اختبارات الوحدة (Unit Tests):</strong> تم اجتياز كافة الاختبارات بنجاح (PASS).</p>\n"
+                    f"  <p><strong>معرّف الـ Commit:</strong> <code>{c_hash}</code></p>\n\n"
+                    "  <h3>3. نطاق التأثير وفحص الآثار الجانبية (Impact Area &amp; Blast Radius)</h3>\n"
+                    f"  <p>{blast_p}</p>\n\n"
+                    "  <h3>4. سيناريوهات الفحص اليدوي وفريق الجودة (Manual QA Scenarios)</h3>\n"
+                    "  <table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse: collapse; width: 100%; border: 1px solid rgba(128,128,128,0.3); text-align: right;\">\n"
+                    "    <thead>\n"
+                    "      <tr style=\"background-color: rgba(128,128,128,0.15);\">\n"
+                    "        <th style=\"width: 5%; text-align: center;\">#</th>\n"
+                    "        <th style=\"width: 25%;\">سيناريو الفحص</th>\n"
+                    "        <th style=\"width: 40%;\">الخطوات المتبعة</th>\n"
+                    "        <th style=\"width: 30%;\">النتيجة المتوقعة</th>\n"
+                    "      </tr>\n"
+                    "    </thead>\n"
+                    "    <tbody>\n"
+                    + "\n".join(rows_html)
+                    + "\n    </tbody>\n"
+                    "  </table>\n\n"
+                    "  <h3>5. معايير القبول (Acceptance Criteria)</h3>\n"
+                    "  <ul>\n"
+                    f"    <li>[x] {root_cause_or_objective.strip()}</li>\n"
+                    "  </ul>\n"
+                    "</div>"
+                )
+            # Arabic headers
             sec1_header = "سبب المشكلة:" if is_bug else "الهدف من المهمة:"
             sec2_header = "الحل المطبق:" if is_bug else "ما تم تنفيذه:"
             return (

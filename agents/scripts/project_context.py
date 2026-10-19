@@ -1227,6 +1227,72 @@ def project_context_diff(old_facts_payload: dict, new_facts_payload: dict) -> di
     }
 
 
+DEFAULT_PROJECT_NOTES_PLACEHOLDER = (
+    "- Add specific team idioms, legacy constraints, or non-obvious architecture requirements here."
+)
+
+
+def load_project_notes(repo: Path, *, max_chars: int = 16000) -> dict[str, Any]:
+    """Load human-authored project-notes.md metadata and content when customized."""
+    notes_file = repo / ".agents" / "project-context" / "project-notes.md"
+    if not notes_file.is_file():
+        return {
+            "path": ".agents/project-context/project-notes.md",
+            "exists": False,
+            "has_custom_notes": False,
+            "sha256": "",
+            "sections": [],
+            "content": "",
+        }
+    raw = _safe_read(notes_file)
+    norm = raw.replace("\r\n", "\n").strip()
+    sha = _sha256_text(norm) if norm else ""
+    stripped_lines = [
+        line.strip()
+        for line in norm.splitlines()
+        if line.strip()
+        and not line.strip().startswith("# Human-Authored Project Architectural Notes")
+        and not line.strip().startswith("> This file is owned and maintained by the project engineering team.")
+        and not line.strip().startswith("> When instructed by the developer, AI agents may append or update project notes and conventions here.")
+        and line.strip() != "## Domain Conventions & Context"
+        and line.strip() != DEFAULT_PROJECT_NOTES_PLACEHOLDER
+    ]
+    has_custom = bool(stripped_lines)
+    sections: list[str] = []
+    for line in norm.splitlines():
+        m = re.match(r"^##\s+(.+?)\s*$", line.strip())
+        if m:
+            sec = m.group(1).replace(r"\.", ".").replace(r"\&", "&").replace(r"\*", "*").strip()
+            if sec and (sec != "Domain Conventions & Context" or has_custom):
+                sections.append(sec)
+    content = norm[:max_chars] if has_custom else ""
+    return {
+        "path": ".agents/project-context/project-notes.md",
+        "exists": True,
+        "has_custom_notes": has_custom,
+        "sha256": sha,
+        "sections": sections,
+        "content": content,
+    }
+
+
+def extract_zoho_notes_section(notes_text: str) -> str:
+    """Extract the Zoho Sprints section from project-notes.md if present."""
+    if not notes_text:
+        return ""
+    norm = notes_text.replace("\r\n", "\n")
+    m = re.search(
+        r"(^##\s+[^\n]*zoho[^\n]*\n.*?)(?=^\\?---\s*\n+\s*^##\s+|^##\s+|\Z)",
+        norm,
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    if m:
+        return m.group(1).strip()
+    if "zoho" in norm.lower():
+        return norm[:4000].strip()
+    return ""
+
+
 def project_context_status(repo: Path) -> dict:
     """Checks the status and freshness of project-context without modifying disk."""
     facts_file = repo / ".agents" / "project-context" / "project-facts.json"

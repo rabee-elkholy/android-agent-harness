@@ -355,6 +355,16 @@ def cmd_delivery(args: argparse.Namespace) -> int:
     tmpl_name = str(policy_res.get("template") or "TASK_DESCRIPTION")
 
     language = plan.get("language") or "en_titles_ar_comments"
+    use_html = False
+    try:
+        from project_context import extract_zoho_notes_section, load_project_notes
+        notes = load_project_notes(repo)
+        if notes.get("has_custom_notes"):
+            zoho_sec = extract_zoho_notes_section(notes.get("content") or "")
+            if "<div dir=\"rtl\"" in zoho_sec:
+                use_html = True
+    except Exception:
+        use_html = False
     rendered = ZohoPolicyResolver.render_template(
         tmpl_name,
         language=language,
@@ -363,6 +373,7 @@ def cmd_delivery(args: argparse.Namespace) -> int:
         solution_or_changes=report_data.get("solution_or_changes") or "",
         blast_radius=report_data.get("impact_area") or [],
         test_cases=report_data.get("test_cases") or [],
+        use_html_template=use_html,
     )
 
     item_id = str(zoho_link.get("item_id") or "")
@@ -475,13 +486,24 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_authorize(args: argparse.Namespace) -> int:
     """Record the developer's `update zoho` as a short-lived Zoho write grant."""
+    repo = Path(args.repo).resolve()
     try:
-        grant = record_grant(Path(args.repo).resolve(), args.proof_reference, source=args.source)
+        grant = record_grant(repo, args.proof_reference, source=args.source)
     except Exception as exc:
         sys.stderr.write(f"ERROR: {exc}\n")
         return 1
     print(f"ZOHO_WRITE_GRANTED until {time.strftime('%H:%M', time.localtime(grant['expires_epoch']))} "
           "(the developer's `update zoho`). Write only what the developer saw.")
+    try:
+        from project_context import extract_zoho_notes_section, load_project_notes
+        notes = load_project_notes(repo)
+        if notes.get("has_custom_notes"):
+            zoho_sec = extract_zoho_notes_section(notes.get("content") or "")
+            if zoho_sec:
+                print("\nMANDATORY ZOHO RULES FROM .agents/project-context/project-notes.md:")
+                print(zoho_sec)
+    except (ImportError, OSError, ValueError, KeyError):
+        zoho_sec = ""
     return 0
 
 

@@ -289,7 +289,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     },
                 }
 
-                from review_models import frozen_models
+                from review_models import effective_reviewer_model, format_reviewers_with_models, frozen_models, reviewer_model_map
                 try:
                     frozen_selections = frozen_models(run_meta)
                 except (_engine.ValidationError, OSError, ValueError) as exc:
@@ -298,6 +298,11 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                 for role, selection in frozen_selections.items():
                     if role in exec_profile["reviewers"]:
                         exec_profile["reviewers"][role].update(selection)
+                for role, r_info in exec_profile["reviewers"].items():
+                    r_info["effective_model"] = effective_reviewer_model(r_info)
+                dispatch_models = reviewer_model_map(exec_profile, sorted(not_dispatched))
+                dispatch_with_models = format_reviewers_with_models(exec_profile, sorted(not_dispatched))
+                exec_profile["reviewer_models"] = dispatch_models
                 if any(r.get("model_policy") == "DEVELOPER_SELECTED_NATIVE" for r in exec_profile["reviewers"].values()):
                     exec_profile["model_policy"] = "DEVELOPER_SELECTED_NATIVE"
                 before_first_dispatch = None
@@ -323,9 +328,10 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     "blocking": True,
                     "phase_id": phase_id,
                     "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
-                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))}."),
+                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models})."),
                     **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                     "reviewers": sorted(not_dispatched),
+                    "reviewer_models": dispatch_models,
                     "package_path": run_meta.get("package_path", ""),
                     "briefs": briefs,
                     "review_execution_profile": exec_profile,
@@ -335,6 +341,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         "phase_id": phase_id,
                         **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                         "reviewers": sorted(not_dispatched),
+                        "reviewer_models": dispatch_models,
                         "briefs": briefs,
                         "review_execution_profile": exec_profile,
                     },
@@ -344,27 +351,37 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
             # 5. Waiting for dispatched reviewers
             dispatched = [r for r, d in revs.items() if d.get("state") == REVIEW_DISPATCHED]
             if dispatched:
+                from review_models import format_reviewers_with_models, reviewer_model_map
+                run_meta_wait = _engine.read_json(prun_f) if prun_f.is_file() else {}
+                pending_models = reviewer_model_map(run_meta_wait, sorted(dispatched))
+                pending_with_models = format_reviewers_with_models(run_meta_wait, sorted(dispatched))
                 return {
                     "code": "WAIT_FOR_PHASE_REVIEWERS",
                     "kind": "HOST_ACTION",
                     "command": "",
                     "blocking": True,
-                    "reason": f"Waiting for phase reviewer subagents: {', '.join(sorted(dispatched))}.",
+                    "reason": f"Waiting for phase reviewer subagents: {', '.join(sorted(dispatched))} (models: {pending_with_models}).",
                     "pending_reviewers": sorted(dispatched),
-                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                    "reviewer_models": pending_models,
+                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id, "pending_reviewers": sorted(dispatched), "reviewer_models": pending_models},
                     "expected": {"success_statuses": ["PASS"]},
                 }
 
             # 6. Finalize
             all_completed = all(d.get("state") == REVIEW_COMPLETED for d in revs.values())
             if all_completed:
+                from review_models import format_reviewers_with_models, reviewer_model_map
+                run_meta_fin = _engine.read_json(prun_f) if prun_f.is_file() else {}
+                all_models = reviewer_model_map(run_meta_fin, sorted(revs.keys()))
+                all_with_models = format_reviewers_with_models(run_meta_fin, sorted(revs.keys()))
                 return {
                     "code": "FINALIZE_PHASE_REVIEW",
                     "kind": "HARNESS_COMMAND",
                     "command": f'python .agents/harness.py phase-review finalize --repo . --task-id {task_id} --phase-id "{phase_id}"',
                     "blocking": True,
-                    "reason": f"Finalize review results for phase '{phase_id}'.",
-                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                    "reason": f"Finalize review results for phase '{phase_id}' (models: {all_with_models}).",
+                    "reviewer_models": all_models,
+                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id, "reviewer_models": all_models},
                     "expected": {"success_statuses": ["PASS"]},
                 }
 

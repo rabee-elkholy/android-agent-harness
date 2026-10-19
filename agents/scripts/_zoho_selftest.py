@@ -1016,6 +1016,84 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual("Task", resolve_new_item_type("OTHER"))
         self.assertEqual("Bug", resolve_new_item_type("FEATURE", explicit_type="Bug"))
 
+    def test_ZOHO_project_notes_authorize_and_mutation_validation(self):
+        """Verify project-notes.md Zoho HTML template and No-Code-Leak rules are enforced."""
+        notes_p = self.repo / ".agents" / "project-context" / "project-notes.md"
+        notes_p.parent.mkdir(parents=True, exist_ok=True)
+        notes_p.write_text(
+            "# Project Notes\n\n"
+            "## 1. Zoho Sprints Task & Bug Description Standard (Mandatory)\n"
+            "- **No Code or File Artifacts**: Do NOT include raw code blocks, Kotlin/Java snippets, XML, file paths, or class/function names.\n"
+            "- **Dark/Light Mode Safe Styling**: Never hardcode dark text colors (such as `#2c3e50` or `#000000`).\n"
+            "- **Required 5-Section Structure**:\n"
+            "  1. `🎯 الهدف من التاسك` (Objective)\n"
+            "  2. `🔍 المشكلة أو السياق الحالي` (Problem / Current Context)\n"
+            "  3. `🛠️ الحل والتعديلات المنفذة` (Solution & Implemented Changes)\n"
+            "  4. `📱 النتيجة المتوقعة وتجربة المستخدم` (Expected Result & UX Impact)\n"
+            "  5. `✅ خطوات التحقق والاختبار (QA Checklist)`\n"
+            "```html\n<div dir=\"rtl\"></div>\n```\n",
+            encoding="utf-8",
+        )
+        import io
+        stdout_buf = io.StringIO()
+        with mock.patch("sys.stdout", stdout_buf):
+            rc = zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof", "حدث زوهو"])
+        self.assertEqual(0, rc)
+        self.assertIn("MANDATORY ZOHO RULES FROM .agents/project-context/project-notes.md:", stdout_buf.getvalue())
+        self.assertIn("No Code or File Artifacts", stdout_buf.getvalue())
+
+        from integrations.zoho_sprints.integration import ZohoSprintsIntegration
+        integ = ZohoSprintsIntegration()
+        plan = {
+            "status": "READY_FOR_DELIVERY",
+            "repo_root": str(self.repo),
+            "execution_nonce": "nonce-notes",
+            "approval": {"single_use_nonce": "nonce-notes"},
+            "external_writes": ["zoho_sprints"],
+        }
+
+        # 1. Plain-text bulleted description without <div dir="rtl" -> rejected
+        ok_plain, reason_plain = integ.validate_mutation(
+            "zoho_create_task",
+            {"name": "Task", "description": "تم فصل منطق البانرات بالكامل", "operation_id": "op-1"},
+            plan,
+        )
+        self.assertFalse(ok_plain)
+        self.assertIn("ZOHO_PROJECT_NOTES_VIOLATION", reason_plain)
+
+        # 2. HTML description leaking class/file names -> rejected
+        bad_html = (
+            '<div dir="rtl">'
+            '🎯 الهدف من التاسك 🔍 المشكلة أو السياق الحالي 🛠️ الحل والتعديلات المنفذة '
+            '📱 النتيجة المتوقعة وتجربة المستخدم ✅ خطوات التحقق والاختبار '
+            'تم تعديل CampaignBannerItem و HomeScreen.kt'
+            '</div>'
+        )
+        ok_leak, reason_leak = integ.validate_mutation(
+            "zoho_create_task",
+            {"name": "Task", "description": bad_html, "operation_id": "op-2"},
+            plan,
+        )
+        self.assertFalse(ok_leak)
+        self.assertIn("ZOHO_PROJECT_NOTES_VIOLATION", reason_leak)
+
+        # 3. Compliant 5-section Arabic HTML description without code/class names -> accepted
+        good_html = (
+            '<div dir="rtl">'
+            '<h3>🎯 الهدف من التاسك</h3><p>فصل منطق البانرات الترويجية</p>'
+            '<h3>🔍 المشكلة أو السياق الحالي</h3><p>اعتماد البانر على حالة الاشتراك</p>'
+            '<h3>🛠️ الحل والتعديلات المنفذة</h3><p>فصل منطق العرض والتوجيه للويب</p>'
+            '<h3>📱 النتيجة المتوقعة وتجربة المستخدم</h3><p>عرض البانرات وتوجيه المستخدم بسلاسة</p>'
+            '<h3>✅ خطوات التحقق والاختبار (QA Checklist)</h3><p>التحقق من ظهور البانر</p>'
+            '</div>'
+        )
+        ok_good, reason_good = integ.validate_mutation(
+            "zoho_create_task",
+            {"name": "Task", "description": good_html, "operation_id": "op-3"},
+            plan,
+        )
+        self.assertTrue(ok_good, reason_good)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -56,16 +56,77 @@ def is_documentation_path(relative: str) -> bool:
     return not ("/src/" in f"/{lower}" and "/assets/" in f"/{lower}/")
 
 PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
-    ("BILLING", re.compile(r"(?i)billingclient|purchase|subscription|productdetails|com\.android\.billingclient"), "BILLING_PATTERN"),
-    ("AUTH", re.compile(r"(?i)oauth|authentication|authorization|login|sign.?in|jwt|androidx\.biometric|com\.google\.android\.gms\.auth"), "AUTH_PATTERN"),
-    ("CRYPTO", re.compile(r"(?i)cipher|keystore|secretkey|encrypt|decrypt|messageDigest|javax\.crypto|java\.security\.(?:KeyStore|MessageDigest)"), "CRYPTO_PATTERN"),
-    ("SENSITIVE_DATA", re.compile(r"(?i)access.?token|refresh.?token|password|biometric|health.?data|androidx\.security\.crypto|android\.location|fusedlocation|locationservices|locationrequest|lastknownlocation|lastlocation|access_(?:fine|coarse|background)_location|\blatitude\b|\blongitude\b"), "SENSITIVE_PATTERN"),
+    (
+        "BILLING",
+        re.compile(
+            r"\b(?:"
+            r"billingclient|com\.android\.billingclient|productdetails|skudetails|"
+            r"billingflowparams|billingresult|purchasesupdatedlistener|"
+            r"acknowledgepurchaseparams|consumeparams|queryproductdetailsparams|"
+            r"querypurchasesparams|purchasetoken|onpurchasesupdated|"
+            r"launchbillingflow|acknowledgepurchase|consumeasync|"
+            r"querypurchases\w*|queryproductdetails\w*|restorepurchases\w*|verifypurchase\w*"
+            r")\b"
+            r"|\b(?:class|interface|object|fun)\s+\w*(?:billing|purchase|subscription)\w*"
+            r"|\bpurchase[a-z0-9_]*\s*\(",
+            re.IGNORECASE,
+        ),
+        "BILLING_PATTERN",
+    ),
+    (
+        "AUTH",
+        re.compile(
+            r"\b(?:"
+            r"oauth\w*|jwt|androidx\.biometric|biometricprompt|"
+            r"com\.google\.android\.gms\.auth|firebaseauth|credentialmanager|"
+            r"idtoken|authtoken|bearertoken|oauth_token|auth_token"
+            r")\b"
+            r"|(?<!\bis)(?<!\bhas)(?<!\bwas)\b(?:authentication|authorization)\b"
+            r"|\b(?:class|interface|object|fun)\s+\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*"
+            r"|\b(?:authenticate|authorize|login|sign_?in|logout|sign_?out)[a-z0-9_]*\s*\(",
+            re.IGNORECASE,
+        ),
+        "AUTH_PATTERN",
+    ),
+    (
+        "CRYPTO",
+        re.compile(
+            r"\b(?:cipher|keystore|secretkey|secretkeyspec|keygenerator|keypairgenerator|messagedigest)\b"
+            r"|javax\.crypto|java\.security\.(?:KeyStore|MessageDigest|Signature|SecureRandom)"
+            r"|(?<!\bis)(?<!\bwas)\b(?:encrypt|decrypt)\w*",
+            re.IGNORECASE,
+        ),
+        "CRYPTO_PATTERN",
+    ),
+    (
+        "SENSITIVE_DATA",
+        re.compile(
+            r"\b(?:access_?token|refresh_?token|health_?data|fusedlocation\w*|locationservices|locationrequest|lastknownlocation|lastlocation|access_(?:fine|coarse|background)_location|latitude|longitude)\b"
+            r"|androidx\.security\.crypto|android\.location\b"
+            r"|(?<!\bis)(?<!\bhas)(?<!\bshow)(?<!\bhide)(?<!\btoggle)\b(?:password|biometric)\b(?!Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b)",
+            re.IGNORECASE,
+        ),
+        "SENSITIVE_PATTERN",
+    ),
     ("COROUTINES", re.compile(r"\b(suspend|CoroutineScope|Dispatchers\.|Flow<|StateFlow|SharedFlow|launch\s*\{|async\s*\{)"), "COROUTINE_PATTERN"),
-    ("ROOM_SCHEMA", re.compile(r"@(Database|Entity|Embedded|Relation)|AutoMigration|Migration\s*\("), "ROOM_PATTERN"),
-    ("PERSISTENCE", re.compile(r"(?i)datastore|sqldelight|sqlite(database|openhelper)?|realm(configuration)?"), "PERSISTENCE_PATTERN"),
-    ("NETWORK", re.compile(r"(?i)retrofit|okhttp|ktor|httpclient|@GET\b|@POST\b|websocket"), "NETWORK_PATTERN"),
-    ("SECURITY", re.compile(r"(?i)networksecurityconfig|certificatepinner|trustmanager|hostnameverifier|x509certificate|androidx\.security|Class\.forName\s*\(\s*[\"']?(?:[^\"']*\.)?(?:billingclient|biometric|auth|crypto|security)"), "SECURITY_PATTERN"),
-    ("DEVICE_API", re.compile(r"(?i)bluetooth|sensor|locationmanager|camera|notificationmanager|foregroundservice"), "DEVICE_API_PATTERN"),
+    ("ROOM_SCHEMA", re.compile(r"@(Database|Entity|Embedded|Relation)\b|\bAutoMigration\b|\bMigration\s*\("), "ROOM_PATTERN"),
+    ("PERSISTENCE", re.compile(r"\b(?:datastore|preferencesdatastore|sqldelight|sqlite(?:database|openhelper)?|realm(?:configuration)?)\b", re.IGNORECASE), "PERSISTENCE_PATTERN"),
+    ("NETWORK", re.compile(r"\b(?:retrofit|okhttp\w*|ktor|httpclient|websocket)\b|@(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|HTTP)\b", re.IGNORECASE), "NETWORK_PATTERN"),
+    ("SECURITY", re.compile(r"\b(?:networksecurityconfig|certificatepinner|trustmanager|hostnameverifier|x509certificate)\b|androidx\.security|Class\.forName\s*\(\s*[\"']?(?:[^\"']*\.)?(?:billingclient|biometric|auth|crypto|security)", re.IGNORECASE), "SECURITY_PATTERN"),
+    (
+        "DEVICE_API",
+        re.compile(
+            r"\b(?:"
+            r"locationmanager|notificationmanager|notificationmanagercompat|foregroundservice|startforeground|"
+            r"bluetoothadapter|bluetoothmanager|bluetoothgatt|bluetoothdevice|bluetoothsocket|bluetoothle\w*|"
+            r"sensormanager|sensoreventlistener|sensorevent|"
+            r"cameramanager|cameradevice|cameracapturesession|camerax|processcameraprovider|imagecapture|previewview"
+            r")\b"
+            r"|\b(?:android\.hardware\.(?:camera2?|sensor\w*)|android\.bluetooth|androidx\.camera)\b",
+            re.IGNORECASE,
+        ),
+        "DEVICE_API_PATTERN",
+    ),
     ("ANALYTICS", re.compile(r"\b(?:FirebaseAnalytics|Mixpanel|Segment|Amplitude|AnalyticsTracker|trackEvent|logEvent)\b"), "ANALYTICS_PATTERN"),
 )
 
@@ -90,8 +151,8 @@ BUSINESS_TRIGGERS_RE = re.compile(
     r"\b(?:UiState|UiAction|UiEffect|Event|Action|Intent)\b|"
     r"\b(?:validate|validator|sanitize|calculate|compute)\b|"
     r"\b(?:retrofit|okhttp|ktor|httpclient|datastore|sqldelight|sqlite|realm)\b|"
-    r"\b(?:billingclient|purchase|subscription|productdetails)\b|"
-    r"\b(?:oauth|authentication|authorization|login|sign.?in|jwt|biometric)\b|"
+    r"\b(?:billingclient|productdetails|launchbillingflow|acknowledgepurchase|onpurchasesupdated)\b|"
+    r"\b(?:oauth|authentication|authorization|jwt|biometricprompt)\b|"
     r"\b(?:cipher|keystore|secretkey|encrypt|decrypt|access.?token|refresh.?token|password)\b|"
     r"\b(?:NavHost|NavController|findNavController|rememberNavController|navigate\(|popBackStack\()",
     re.IGNORECASE,
@@ -209,12 +270,14 @@ def _room_schema_types(repo: Path) -> set[str]:
 
 
 SENSITIVE_DEPENDENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("BILLING", re.compile(r"(?i)billing|purchase|subscription|entitlement")),
+    ("BILLING", re.compile(r"(?i)billing|entitlement|(?:purchase|subscription)(?:manager|repository|service|client|handler|helper|usecase|interactor|datasource|provider|controller|processor|validator|store|api|sdk)?$")),
     ("AUTH", re.compile(r"OAuth|Oauth|Authentication|Authorization|Auth(?:$|[A-Z_])|Login|SignIn|Signin|Credential|Biometric")),
     ("CRYPTO", re.compile(r"(?i)cipher|keystore|secretkey|encrypt|decrypt|crypto")),
     ("SENSITIVE_DATA", re.compile(r"(?i)access.?token|refresh.?token|password|health.?data")),
     ("SECURITY", re.compile(r"(?i)certificatepinner|trustmanager|hostnameverifier|security")),
 )
+
+PASSIVE_UI_CONTAINER_RE = re.compile(r"(?:UiState|ViewState|ScreenState|UiEvent|UiAction|UiEffect|UiModel|Contract)$")
 
 FRAMEWORK_EXCLUDED_TYPES = frozenset({
     "String", "Int", "Long", "Float", "Double", "Boolean", "Byte", "Short", "Char",
@@ -294,6 +357,8 @@ def _build_type_file_index(root: Path) -> dict[str, list[Path]]:
 
 def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list[Path]]) -> tuple[str, str] | None:
     """Check if a dependency type maps to a sensitive surface directly or via target source file (1 hop)."""
+    if PASSIVE_UI_CONTAINER_RE.search(type_name):
+        return None
     # Direct match on type name
     for surface, pattern in SENSITIVE_DEPENDENCY_PATTERNS:
         if pattern.search(type_name):
@@ -410,6 +475,71 @@ def _strip_code_line(line: str, in_block: bool, in_triple: str | None = None) ->
             res.append(line[i])
             i += 1
     return "".join(res), in_block, in_triple
+
+
+def _strip_comments_only(text: str) -> str:
+    """Strip // and /* */ comments from code or diff text while preserving string literals."""
+    if not text:
+        return ""
+    out_lines: list[str] = []
+    in_block = False
+    in_triple: str | None = None
+    for raw_line in text.splitlines():
+        prefix = ""
+        line = raw_line
+        if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+            prefix = line[0]
+            line = line[1:]
+        buf: list[str] = []
+        i = 0
+        n = len(line)
+        while i < n:
+            if in_block:
+                end = line.find("*/", i)
+                if end != -1:
+                    in_block = False
+                    i = end + 2
+                else:
+                    break
+            elif in_triple:
+                end = line.find(in_triple, i)
+                if end != -1:
+                    buf.append(line[i:end + 3])
+                    in_triple = None
+                    i = end + 3
+                else:
+                    buf.append(line[i:])
+                    break
+            elif line[i:i+2] == "/*":
+                in_block = True
+                i += 2
+            elif line[i:i+2] == "//":
+                break
+            elif line[i:i+3] in ('"""', "'''"):
+                q3 = line[i:i+3]
+                end = line.find(q3, i + 3)
+                if end != -1:
+                    buf.append(line[i:end + 3])
+                    i = end + 3
+                else:
+                    buf.append(line[i:])
+                    in_triple = q3
+                    break
+            elif line[i] in ('"', "'"):
+                q = line[i]
+                start = i
+                i += 1
+                while i < n:
+                    if line[i] == q and (i == 0 or line[i-1] != "\\"):
+                        i += 1
+                        break
+                    i += 1
+                buf.append(line[start:i])
+            else:
+                buf.append(line[i])
+                i += 1
+        out_lines.append(prefix + "".join(buf))
+    return "\n".join(out_lines)
 
 
 def _enclosing_structural_context(text: str, modified_line_numbers: list[int]) -> str:
@@ -838,10 +968,11 @@ def classify(
         # res/values*.xml holds user-facing copy and constants; words like "login" or
         # "subscribe" there are text, not billing/auth/device code.
         values_resource = ("/res/values" in f"/{lower}" or "/composeresources/values" in f"/{lower}") and suffix == ".xml"
+        pattern_diff_text = _strip_comments_only(diff_text) if suffix in (".kt", ".java", ".kts") else diff_text
         for surface, pattern, reason in PATTERNS:
 
             if not test_path and not values_resource:
-                if pattern.search(diff_text):
+                if pattern.search(pattern_diff_text):
                     _add(found, surface, rel, reason)
                 elif comparison is not None and surface in (CRITICAL_SURFACES | {"COROUTINES", "ROOM_SCHEMA", "DEVICE_API"}) and pattern.search(context_text):
                     _add(found, surface, rel, "REVIEWED_DELTA_STRUCTURAL_CONTEXT")
@@ -849,7 +980,7 @@ def classify(
                     _add(found, surface, rel, f"{reason}_CONTEXT")
 
         if suffix in (".kt", ".java") and not test_path:
-            _propagate_sensitive_dependencies(root, rel, full_text, diff_text, found, type_index)
+            _propagate_sensitive_dependencies(root, rel, full_text, pattern_diff_text, found, type_index)
 
     non_docs = set(found) - {"DOCS", "TEST_ONLY"}
     relevant_changes = [item for item in changes if is_delivery_relevant(item.rel_posix) or (item.old_rel_posix and is_delivery_relevant(item.old_rel_posix))]

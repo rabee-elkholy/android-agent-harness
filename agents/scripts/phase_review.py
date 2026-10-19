@@ -71,7 +71,7 @@ ALL_PHASE_SUBSTATES = frozenset({
 })
 
 MIN_RESERVED_FINAL_REVIEWERS = 2
-PHASE_REVIEW_CHANGED_LINES_TRIGGER = 180
+PHASE_REVIEW_CHANGED_LINES_TRIGGER = 400
 
 
 def phase_dir(task_directory: Path, phase_id: str) -> Path:
@@ -425,12 +425,15 @@ def validate_completed_phase_review_proof(
         if not isinstance(entry, dict):
             raise ValidationError(f"phase review proof reviewer entry is invalid for '{reviewer}'")
         execution_id = entry.get("execution_id")
+        agg_rev = aggregate["reviewers"].get(reviewer)
         if (
             entry.get("state") != REVIEW_COMPLETED
             or entry.get("verdict") != "PASS"
             or entry.get("findings") != []
             or not isinstance(execution_id, str) or not execution_id
-            or aggregate["reviewers"].get(reviewer) != {"verdict": "PASS", "findings": []}
+            or not isinstance(agg_rev, dict)
+            or agg_rev.get("verdict") != "PASS"
+            or agg_rev.get("findings") != []
         ):
             raise ValidationError(f"phase review proof reviewer state is invalid for '{reviewer}'")
         receipt_file = rdir / "dispatch" / run_id / f"{reviewer}.json"
@@ -494,6 +497,16 @@ def is_phase_review_needed(
     explicit_flag = plan.get("scoped_phase_review_enabled")
     if len(phases) <= 1 and not explicit_flag:
         return False, []
+    # The final phase of a multi-phase plan transitions immediately into
+    # prepare-verification (which runs the full final integration review across
+    # the entire task), so running a separate scoped phase review on the last
+    # phase is redundant unless explicitly forced on that specific phase.
+    if (
+        len(phases) > 1
+        and target_phase.get("id") == phases[-1].get("id")
+        and target_phase.get("scoped_phase_review_enabled") is not True
+    ):
+        return False, []
 
     if not phase_changes:
         return False, []
@@ -513,8 +526,7 @@ def is_phase_review_needed(
         return False, []
 
     # Explicit flag can disable or force
-    explicit_flag = plan.get("scoped_phase_review_enabled")
-    if explicit_flag is False:
+    if explicit_flag is False or target_phase.get("scoped_phase_review_enabled") is False:
         return False, []
 
     if phase_policy is None:
@@ -541,7 +553,7 @@ def is_phase_review_needed(
 
     is_critical = (
         target_phase.get("critical_boundary") is True
-        or any(k in phase_name or k in phase_desc or k in paths_str for k in ("auth", "security", "crypto", "billing", "token", "keystore", "migration"))
+        or bool(re.search(r"\b(?:auth(?!or)\w*|security|crypto\w*|billing\w*|token\w*|keystore\w*|migration\w*)\b", f"{phase_name} {phase_desc} {paths_str}"))
         or any(s in surfaces for s in ("SECURITY", "AUTH", "CRYPTO", "BILLING", "ROOM_SCHEMA", "MIGRATION"))
         or is_elevated_risk
     )
@@ -555,7 +567,7 @@ def is_phase_review_needed(
 
     is_large = (
         explicit_flag is True
-        or (plan.get("task_kind") in ("REFACTOR", "FEATURE") and len(non_harness) >= 5)
+        or target_phase.get("scoped_phase_review_enabled") is True
         or is_large_delta
         or is_elevated_risk
     )
@@ -676,6 +688,19 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
         diff,
         "```",
     ]
+    try:
+        from project_context import load_project_notes
+        notes_info = load_project_notes(repo)
+        if notes_info.get("has_custom_notes") and notes_info.get("content"):
+            content_lines.extend([
+                "",
+                "## Project Architectural & Domain Notes (.agents/project-context/project-notes.md)",
+                "*(Mandatory repo-local conventions and constraints; verify that all changes strictly comply)*",
+                "",
+                notes_info["content"],
+            ])
+    except (ImportError, OSError, ValueError, KeyError):
+        notes_info = {}
     content = redact_text("\n".join(content_lines))
     atomic_write_bytes(package_path, content.encode("utf-8"))
     pkg_sha = sha256_file(package_path)
@@ -1307,13 +1332,23 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
             all_findings.extend(d.get("findings") or [])
 
     aggregate_verdict = "FINDINGS" if has_findings else "PASS"
+    from review_models import reviewer_model_map
+    models_by_role = reviewer_model_map(run_meta, sorted(reviewers.keys()))
     res = {
         "schema_version": 2,
         "task_id": task_id,
         "phase_id": phase_id,
         "verdict": aggregate_verdict,
         "findings": all_findings,
-        "reviewers": {r: {"verdict": d.get("verdict"), "findings": d.get("findings")} for r, d in reviewers.items()},
+        "reviewer_models": models_by_role,
+        "reviewers": {
+            r: {
+                "verdict": d.get("verdict"),
+                "findings": d.get("findings"),
+                "model": models_by_role.get(r, "inherit"),
+            }
+            for r, d in reviewers.items()
+        },
         "finalized_at": utc_now(),
     }
     atomic_write_json(phase_review_dir(tdir, phase_id) / "phase_review_result.json", res)
@@ -1382,7 +1417,8 @@ def format_phase_provenance_section(repo: Path, task_id: str) -> str:
                 run_data = read_json(run_f)
                 delta_sha = str(run_data.get("phase_delta_sha256") or "")[:12]
                 pkg_sha = str(run_data.get("package_sha256") or "")[:12]
-                revs = ", ".join(sorted(run_data.get("selected_reviewers") or []))
+                from review_models import format_reviewers_with_models
+                revs = format_reviewers_with_models(run_data, sorted(run_data.get("selected_reviewers") or []))
                 verdict = res_data.get("verdict", "UNKNOWN")
                 finding_ids = ", ".join(str(f.get("id")) for f in (res_data.get("findings") or [])) or "NONE"
                 resolved = "YES" if verdict == "PASS" else "NO"

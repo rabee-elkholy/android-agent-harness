@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _graph_core import GraphEngine, GraphNode  # noqa: E402
 from project_context import (  # noqa: E402
     _safe_read,
+    load_project_notes,
     source_identity,
     validate_advisory_knowledge,
 )
@@ -408,6 +409,7 @@ def _persist_task_context(
             "status": status,
             "candidate_surfaces": candidate_surfaces,
             "developer_instructions": base.get("developer_instructions", []),
+            "project_notes": base.get("project_notes", {}),
         }
         atomic_write_json(cache_dir / f"{context_id}.json", cache_entry)
     except (OSError, ValueError, ImportError, _ExpectedArtifactError):
@@ -473,6 +475,8 @@ def _resolve_task_context(
     if status in {"AMBIGUOUS", "NOT_FOUND", "INVALID_TARGET_PATH"}:
         base["candidates"] = _candidate_summaries(candidates)[:bounded_limit]
         return base
+
+    project_notes = load_project_notes(root)
 
     if status == "FILE_FALLBACK":
         rel_posix = str(candidates[0])
@@ -562,6 +566,7 @@ def _resolve_task_context(
                 }
                 for inst in matched_instructions
             ],
+            "project_notes": project_notes,
             "test_discovery": {
                 "candidate_files": 0,
                 "files_opened": 0,
@@ -754,6 +759,7 @@ def _resolve_task_context(
             }
             for inst in matched_instructions
         ],
+        "project_notes": project_notes,
         "test_discovery": {
             "candidate_files": len(test_candidates),
             "files_opened": files_opened,
@@ -814,6 +820,7 @@ def resolve_task_contexts(
         "status": "BATCH_RESOLVED" if len(successful) == len(results) else "BATCH_PARTIAL" if successful else "BATCH_FAILED",
         "graph_sync": sync,
         "results": results,
+        "project_notes": load_project_notes(root),
         "read_ranges": list(dict.fromkeys(item for row in results for item in row.get("read_ranges", []))),
     }
     if compute_source_fingerprint(root)["source_fingerprint_sha256"] != before:
@@ -927,6 +934,10 @@ def main(argv: list[str] | None = None) -> int:
         if target_info:
             print(f"  Path: {target_info.get('path')}")
             print(f"  Module/source set: {target_info.get('module')} / {target_info.get('source_set')}")
+        notes_info = result.get("project_notes") or {}
+        if notes_info.get("has_custom_notes"):
+            secs = ", ".join(notes_info.get("sections") or []) or "active"
+            print(f"  Project notes (.agents/project-context/project-notes.md): {secs}")
         for warning in result.get("warnings") or []:
             print(f"  Warning: {warning}")
         if result.get("read_ranges"):

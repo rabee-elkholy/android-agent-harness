@@ -236,6 +236,19 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         extras.append("\n".join(inst_lines))
 
     try:
+        from project_context import load_project_notes
+        notes_info = load_project_notes(repo)
+        if notes_info.get("has_custom_notes") and notes_info.get("content"):
+            extras.append(
+                "\n## Project Architectural & Domain Notes (.agents/project-context/project-notes.md)\n"
+                "*(Mandatory repo-local conventions and constraints; verify that all changes strictly comply)*\n\n"
+                + redact_text(notes_info["content"])
+                + "\n"
+            )
+    except (ImportError, OSError, ValueError, KeyError):
+        notes_info = {}
+
+    try:
         from phase_review import format_phase_provenance_section
         provenance = format_phase_provenance_section(repo, task_id)
         if provenance:

@@ -881,22 +881,29 @@ def get_review_execution_status(repo: Path, task_id: str) -> dict[str, Any]:
     run_id = str(current["run_id"])
     policy = read_json(Path(current["policy"]))
     required_reviewers = list(policy.get("reviewers") or [])
+    from review_models import reviewer_model_map
+    models_by_role = reviewer_model_map(current, required_reviewers)
     l_file = ledger_file(directory, run_id)
     if not l_file.is_file():
         return {
             "task_id": task_id,
             "run_id": run_id,
             "required_reviewers": required_reviewers,
+            "reviewer_models": models_by_role,
             "ledger_initialized": False,
-            "reviewers": {r: {"state": REVIEW_NOT_DISPATCHED} for r in required_reviewers},
+            "reviewers": {r: {"state": REVIEW_NOT_DISPATCHED, "effective_model": models_by_role.get(r, "inherit")} for r in required_reviewers},
         }
     ledger = load_ledger(directory, run_id)
+    revs_out = {}
+    for r, info in (ledger.get("reviewers") or {}).items():
+        revs_out[r] = {**(info if isinstance(info, dict) else {}), "effective_model": models_by_role.get(r, "inherit")}
     return {
         "task_id": task_id,
         "run_id": run_id,
         "required_reviewers": required_reviewers,
+        "reviewer_models": models_by_role,
         "ledger_initialized": True,
-        "reviewers": ledger.get("reviewers", {}),
+        "reviewers": revs_out,
     }
 
 
@@ -965,11 +972,25 @@ def main(argv: list[str] | None = None) -> int:
                 args.execution_id,
                 host=args.host,
             )
-            print(f"REVIEW_COMPLETED: {args.reviewer} verdict={res.get('verdict')}")
+            eff_model = "inherit"
+            try:
+                from review_models import reviewer_model_map
+                crun_p = task_dir(repo, args.task) / "current-run.json"
+                if crun_p.is_file():
+                    eff_model = reviewer_model_map(read_json(crun_p), [args.reviewer]).get(args.reviewer, "inherit")
+            except (ImportError, OSError, ValueError, KeyError):
+                eff_model = "inherit"
+            print(f"REVIEW_COMPLETED: {args.reviewer} [{eff_model}] verdict={res.get('verdict')}")
             return 0
         elif args.subcommand == "finalize":
             res = finalize_review_execution(repo, args.task)
-            print(f"REVIEW_FINALIZED: {len(res.get('reports', []))} reports, {len(res.get('blocking_findings', []))} blocking findings")
+            from review_models import effective_reviewer_model
+            rep_summaries = [
+                f"{rep.get('reviewer')} [{effective_reviewer_model(rep.get('model_selection'))}]={rep.get('verdict')}"
+                for rep in (res.get("reports") or [])
+            ]
+            rep_suffix = f" ({', '.join(rep_summaries)})" if rep_summaries else ""
+            print(f"REVIEW_FINALIZED: {len(res.get('reports', []))} reports, {len(res.get('blocking_findings', []))} blocking findings{rep_suffix}")
             return 0
         elif args.subcommand in ("dispatch", "dispatch-batch", "dispatch_batch") and _run_uses_native_dispatch(repo, args.task):
             raise ValidationError(

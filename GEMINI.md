@@ -27,8 +27,8 @@ Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AG
 - 6-Tier Dynamic Risk Model: Review policy (`review_policy.py`) evaluates changes into 6 risk tiers (`T0_TRIVIAL` through `T5_CRITICAL`) and is the sole runtime authority for risk tier, required gates, reviewer roster, and device requirements. Execute exactly the policy-resolved roster; when reviewers are omitted by policy, do not dispatch subagents.
 - Next-Action Command Router: Follow the returned next_action or NEXT_ACTION/NEXT_REASON directly. Only when the action/payload is missing, query `python .agents/harness.py task status --task-id <id> --next --brief --json`. Never repeat status after a complete routed result. Once implementation is finished, `python .agents/harness.py verify-steps --task-id <id> --host <actual-host>` runs consecutive deterministic steps and stops at failures, reviews or decisions; STOPPED is not task completion.
 - Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is still running as a background task, wait for completion; never output walkthrough or invoke `ask_question` prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when it is not, and NEVER ask the developer to verify a build that was not installed. If the developer chooses to skip device verification, record honest skip evidence with `python .agents/harness.py device skip-validation --task-id <id> --source conversation --proof-reference "<phrase>"` (recording `status: "SKIPPED"`, never synthetic PASS). When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE invoking `ask_question` for sign-off. Once developer replies with explicit PASS, record device sign-off via `python .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<phrase>"`. Never run signoff before developer replies.
-- Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `python .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `python .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit.
-- Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `python harness_cli.py context note "<note>"`.
+- Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `python .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `python .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit. All Zoho task descriptions and comments must strictly obey any Zoho Sprints formatting, language, HTML template, and No-Code-Leak rules defined in `.agents/project-context/project-notes.md`.
+- Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Directly record the note using `python harness_cli.py context note "<note>"`. Always adhere to `.agents/project-context/project-notes.md` across all task phases.
 - Review Host Binding:
   - In Antigravity, prepare verification with:
     `python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity`
@@ -46,7 +46,8 @@ Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AG
          Prompt = exact current reviewer brief
          Workspace = inherit (or omit if host default is used consistently)
      - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
-     - do not invent reasoning fields.
+     - do not invent reasoning fields;
+     - in chat, list each dispatched/completed reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
   3. Yield; do not poll.
   4. On reactive completion, run `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>`.
   5. On RETRY_REVIEW_PROTOCOL, execute the exact router-provided send_message.
@@ -64,7 +65,8 @@ Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AG
          Prompt = exact current phase brief
          Workspace = inherit (or omit if host default is used consistently)
      - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
-     - do not invent reasoning fields.
+     - do not invent reasoning fields;
+     - in chat, list each dispatched/completed phase reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
   3. Yield; do not poll.
   4. On reactive reviewer completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>`.
   5. On `RETRY_PHASE_REVIEW_PROTOCOL`, execute the exact router-provided `send_message`.

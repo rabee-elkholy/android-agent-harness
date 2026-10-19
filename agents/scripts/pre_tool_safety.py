@@ -1260,6 +1260,8 @@ def _handle_external_mutation(integration, tool_name: str, args: dict) -> None:
         if not plan and not grant:
             emit("deny", f"{integration.display_name} mutation is not included in the active approved plan.", tool=tool_name)
             return
+        if isinstance(plan, dict) and not plan.get("repository"):
+            plan = {**plan, "repository": str(REPO)}
         allowed, reason = validate_external_write(integration, tool_name, args, plan, grant=grant)
         if not allowed:
             emit("deny", reason, tool=tool_name)

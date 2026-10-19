@@ -240,6 +240,8 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
             severity = "CRITICAL"
         elif set(surfaces) & HIGH_SURFACES:
             severity = "HIGH"
+        elif set(surfaces) & {"BUSINESS_LOGIC", "NETWORK", "COROUTINES", "PERSISTENCE", "DEVICE_API", "NAVIGATION", "XML_UI"}:
+            severity = "MEDIUM"
 
     unknown_files = set(((classification.get("details") or {}).get("UNKNOWN") or {}).get("files") or [])
     approved_files = {str(f).replace("\\", "/").strip("/") for f in (plan or {}).get("expected_files") or []}

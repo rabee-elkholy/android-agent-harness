@@ -162,6 +162,16 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
     notes = [SURFACE_NOTES[s] for s in surfaces if s in SURFACE_NOTES]
     if notes:
         lines += ["", "Harness notes for this kind of change:", ""] + [f"- {note}" for note in notes]
+    try:
+        from project_context import load_project_notes
+        notes_info = load_project_notes(repo)
+        if notes_info.get("has_custom_notes"):
+            lines += ["", "## Project notes and conventions", ""]
+            lines.append(f"- Mandatory repo conventions: {_file_link(repo, notes_info['path'])}")
+            for sec in notes_info.get("sections") or []:
+                lines.append(f"  - {redact(sec)}")
+    except (ImportError, OSError, ValueError, KeyError):
+        notes_info = {}
     lines += [
         "",
         "## Tests",

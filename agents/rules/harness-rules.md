@@ -17,7 +17,7 @@ This is the authoritative always-loaded contract. Route detailed Android guidanc
 - **Direct follow-up execution**: approved in-scope fixes execute immediately; new plan/Proceed only if behavior, sensitive surface, contract, external write, or blast radius materially expands.
 - One approval covers all stated phases. Validate phase boundaries without pausing for repeat approval.
 - **Host continuation**: use `task continue --task-id <id> --host <actual-host>`. Stop the former writer before `--source-stopped`; include routed `--expect-session`. Follow its brief/next action. Preserve approval, review limits and proof provenance.
-- Context notes are administrative, not delivery work: `python .agents/harness.py context note "<note>"`.
+- Context notes are administrative, not delivery work: `python .agents/harness.py context note "<note>"`. Always read and strictly follow `.agents/project-context/project-notes.md` and `developer-instructions.json` across discovery, planning, implementation, review, and Zoho Sprints formatting.
 - Commit, push, release, tracker mutation, app uninstall/data clear, downgrade, purchase, and publication are never implicit.
 
 Lifecycle (PLAN → BUILD → VERIFY → SHIP → DONE):
@@ -50,7 +50,7 @@ Use `.agents/harness.py task` for state; engine scripts remain compatibility/dia
 Use the policy computed by `draft`/`revise` before approval and by `prepare-verification` on the actual final diff. These lifecycle commands already classify and apply central policy. For a separate diagnostic, use `python .agents/harness.py policy --json`, which performs classification once. Do not routinely call classifier, policy and status again when their authoritative results are already available. Diagnostic policy is not frozen verification evidence.
 
 - Central policy is the sole router for gates, reviewers, device checks, and skills.
-- Reviewer-model choice is separate from plan approval. Show its setting/scope with the plan; keep unanswered choices pending and finish model publication before dispatch.
+- Reviewer-model choice is separate from plan approval. Show its setting/scope with the plan and show each reviewer's active model (`<role> [<model>]`) in chat when dispatching or reporting reviews; keep unanswered choices pending and finish model publication before dispatch.
 - Load selected skills before acting. Missing/corrupt/incompatible mandatory skills block that surface.
 - Instruction order: kernel and developer authority -> approved task -> central/project policy -> project conventions -> routed skills.
 - UNKNOWN needs developer resolution; never downgrade risk silently or exceed model budget.

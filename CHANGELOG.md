@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.37] - 2026-10-19
+
+### Surface classification precision, proportional phase review, and per-reviewer model visibility
+
+- Eliminate false-positive surface escalations in `change_classifier.py` across `BILLING`, `AUTH`, `CRYPTO`, `SENSITIVE_DATA`, `SECURITY`, `DEVICE_API`, `PERSISTENCE`, `ROOM_SCHEMA`, and `NETWORK`: passive UI boolean flags (`isPurchased`, `isSubscribed`, `isLoggedIn`, `isSignedIn`, `isAuthenticated`, `isPasswordVisible`), UI click callbacks (`onPurchaseClick`, `onLoginClick`, `onCameraClick`), icon resources (`ic_camera`), passive UI state containers (`HomeUiState`), and code comments (`// ...`, `/* ... */`) no longer trigger false `T4_DATA_DEVICE` or `T5_CRITICAL` escalations.
+- Skip redundant AI subagent phase reviews on routine `< 400`-line `T2_FEATURE` intermediate phases (relying on deterministic checkpoints) and on the final phase of multi-phase tasks (which is immediately followed by `prepare-verification` and the full final integration review), unless `scoped_phase_review_enabled` is explicitly set.
+- Display each reviewer's active model (`<role> [<model>]`) and include `reviewer_models` across all router actions (`DISPATCH_REVIEWERS`, `WAIT_FOR_REVIEWERS`, `INGEST_REVIEW_RESULT`, `DISPATCH_PHASE_REVIEWERS`, `WAIT_FOR_PHASE_REVIEWERS`, `FINALIZE_PHASE_REVIEW`), execution profiles, CLI completion outputs, provenance sections, and host chat instructions.
+- Enforce `.agents/project-context/project-notes.md` end-to-end across discovery (`task-context` and `graph` outputs), task plans (`plan.md`), review packages (`review-package.md` and `phase-review-package.md`), every-turn pre-invocation reminders (surviving `<CONTEXT_SUMMARY>` compaction), `zoho authorize` output, and `pre_tool_safety.py` Zoho mutation hooks (`ZOHO_PROJECT_NOTES_VIOLATION` when `project-notes.md` requires the `<div dir="rtl"` HTML template or forbids raw code/file identifiers and hardcoded dark colors).
+- Update `README.md`, `docs/reviewer-models.md`, and `docs/adr/009-instruction-size-budget.md` to accurately reflect Antigravity reviewer model selection, phase review thresholds, and instruction budget headroom.
+
 ## [1.1.36] - 2026-10-19
 
 ### Antigravity reviewer dispatch resilience, native tiered Flash verification, and Windows UTF-8 safety

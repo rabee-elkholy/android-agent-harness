@@ -218,8 +218,11 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
                 rev_entry["dispatch_contract"]["thinking_level"] = selected.get("thinking_level")
             if selected["requested_model"] != "inherit" and not is_antigravity:
                 rev_entry["required_model"] = selected["requested_model"]
+        from review_models import effective_reviewer_model, reviewer_model_map
+        rev_entry["effective_model"] = effective_reviewer_model(rev_entry)
         resolved_reviewers[rev] = rev_entry
 
+    from review_models import reviewer_model_map
     profile = {
         "schema_version": 2,
         "task_id": task_id,
@@ -236,6 +239,7 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
         },
         "package_dir": str(active_pkg_dir) if active_pkg_dir.is_dir() else "",
         "reviewers": resolved_reviewers,
+        "reviewer_models": reviewer_model_map({"reviewers": resolved_reviewers}, sorted(resolved_reviewers)),
     }
     if selections:
         profile["review_models_sha256"] = current["review_models"]["sha256"]
@@ -285,10 +289,12 @@ def main(argv: list[str] | None = None) -> int:
         for rev, data in profile["reviewers"].items():
             effort = data.get("reasoning_intent", "NORMAL")
             res = (data.get("reasoning") or {}).get("resolution", "HOST_CONTROL_UNAVAILABLE")
-            print(f"\n{rev}:")
+            eff_model = data.get("effective_model") or data.get("requested_model", "inherit")
+            print(f"\n{rev} [{eff_model}]:")
             print(f"  effort={effort}")
             print(f"  reasoning={res}")
             print(f"  requested_model={data.get('requested_model', 'inherit')}")
+            print(f"  effective_model={eff_model}")
     return 0
 
 

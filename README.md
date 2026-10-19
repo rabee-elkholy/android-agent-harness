@@ -110,7 +110,7 @@ one task approval
 ```
 
 - **Semantic boundaries**: Phases represent coherent engineering steps, not mechanical 200-line splits.
-- **Proportional review**: Small or trivial phases skip AI review; substantial deltas (e.g. >= 180 changed lines) or elevated risks trigger 1–2 policy-routed specialists.
+- **Proportional review**: Routine `< 400`-line feature phases and the final phase before `prepare-verification` use fast deterministic checkpoints only (`preflight`, Room guards, localized string parity, fast ktlint, and targeted unit tests); substantial intermediate deltas (`>= 400` changed lines), elevated risks (`T3_SUBSYSTEM` through `T5_CRITICAL`), critical surfaces, or explicitly opted-in phases trigger 1–2 policy-routed specialists.
 - **Final integration review**: Intermediate phase reviews do not replace the final integration review across the completed task.
 
 ### Continuing across AI hosts
@@ -153,7 +153,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.36/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.37/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -176,7 +176,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.36 --single-branch \
+git clone --depth 1 --branch v1.1.37 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -375,7 +375,7 @@ For design, migration, compatibility and security decisions the agent asks the d
 
 - **Review Protocol V2**: Specialist reviewers return structured, machine-verifiable JSON (`HARNESS_REVIEW_RESULT_V2`) rather than fragile text tokens. Findings are typed, prioritized, and cryptographically bound to the frozen delivery snapshot, change set, and review package digest.
 - **Dedicated Custom Reviewer Subagents**: Seven core specialist reviewers are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md` (`bug-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `regression-impact-reviewer-agent`, `test-quality-reviewer-agent`, `spec-compliance-agent`).
-- **Developer-selected reviewer models**: Inheritance remains the default. Claude Code supports a common native model alias or per-role choices, with task overrides and settings frozen per review run. Antigravity and other current adapters remain inherit-only; unsupported choices block without fallback. Account access depends on the host. Model selection does not establish independent review proof. See [reviewer model configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
+- **Developer-selected reviewer models & per-reviewer model visibility**: Inheritance remains the default. On Google Antigravity, the router prompts once before first dispatch (`SELECT_REVIEW_MODEL`: `flash-dynamic-task`, `flash-dynamic-once`, `inherit-task`, `inherit-once`, `hybrid-smart-task`) or accepts explicit model/thinking choices (`gemini-3.8-flash-*`, `gemini-4-argon-*`, `gemini-3.1-pro-*`), syncs `.agents/agents/<role>/agent.md` frontmatter, and verifies native SQLite execution metadata (`NATIVE_METADATA_OBSERVED`). Claude Code supports native model aliases (`sonnet`, `opus`, `haiku`) or per-role choices. Every router action, status report, and chat update displays each reviewer alongside its active model (`<role> [<model>]`). See [reviewer model configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
 - **Parallel Routed Reviews**: Central policy selects the required reviewer roster. Antigravity dispatch commands prepare concurrent `invoke_subagent` calls when the host supports them; protocol and environment blockers remain explicit.
 - **Reviewer Call Safety Cap**: Maximum safety ceiling on total reviewer model calls (recommended: 20).
 - **Same-Conversation Protocol Recovery**: Malformed initial reviewer responses trigger exact `send_message` corrections within the same conversation ID, preventing runaway subagent spawns.
@@ -556,7 +556,7 @@ Only that task becomes DELIVERED. Other tasks keep their local changes and accep
 **Shared build limitation:** Gradle, unit tests, assembly, and the APK use the entire working tree, including unfinished sibling changes. Keep parked work compilable. Editing any task during another task's frozen verification makes that run stale; rerun verification against the actual tree. Use separate developer-created worktrees when you need overlapping files or independent builds. The existing `task handoff` / `task reconcile-handoff` WIP checkpoint flow remains available.
 
 **11. Does every phase run AI reviewers?**
-No. Deterministic checks (Room schema guards, string parity, fast ktlint, and targeted unit tests) remain primary. Scoped phase delta review runs only when the phase delta is substantial (e.g. >= 180 changed lines), elevates canonical risk (such as `T4_DATA_DEVICE` or `T5_CRITICAL`), touches critical surfaces, or is explicitly requested. Even then, only 1–2 policy-routed specialists review the phase delta. Final integration review across the completed task remains authoritative.
+No. Deterministic checks (Room schema guards, string parity, fast ktlint, and targeted unit tests) remain primary. Routine feature phases (`< 400` changed lines) and the final phase of a multi-phase plan (which is immediately followed by `prepare-verification`) skip redundant AI subagent phase reviews. Scoped phase delta review runs only on intermediate phases when the delta is substantial (`>= 400` changed lines), elevates canonical risk (`T3_SUBSYSTEM` through `T5_CRITICAL`), touches critical surfaces, or explicitly enables `scoped_phase_review_enabled`. Even then, only 1–2 policy-routed specialists review the phase delta. Final integration review across the completed task remains authoritative.
 
 ---
 

@@ -395,12 +395,22 @@ def main(argv: list[str] | None = None) -> int:
                 live_print(f"[!] Discovery receipt generation failed: {exc}", err=True)
 
     # Format output
+    notes_info = {}
+    try:
+        from project_context import load_project_notes
+        notes_info = load_project_notes(repo_root)
+    except Exception:
+        notes_info = {}
+
     output_text = ""
     if args.format == "compact":
         output_text = graph_to_render.to_compact(
             focus_id=focus_node_id if graph_to_render is engine.graph else None,
             max_depth=args.depth,
         )
+        if notes_info.get("has_custom_notes"):
+            secs = ", ".join(notes_info.get("sections") or []) or "active"
+            output_text = f"{output_text.rstrip()}\n\n[*] Project Notes (.agents/project-context/project-notes.md): {secs}"
     elif args.format == "mermaid":
         output_text = graph_to_render.to_mermaid(title="Android Project Code Graph")
     elif args.format == "dot":
@@ -409,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
         payload = graph_to_render.to_dict()
         if receipt:
             payload["discovery"] = receipt
+        if notes_info.get("has_custom_notes"):
+            payload["project_notes"] = notes_info
         output_text = json.dumps(payload, indent=2, ensure_ascii=False)
 
     if args.output:

@@ -745,6 +745,41 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
         raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen model evidence for {role}")
 
 
+def effective_reviewer_model(selection: dict | None) -> str:
+    """Return a concise human-readable model label for a reviewer selection."""
+    if not isinstance(selection, dict):
+        return "inherit"
+    resolved = str(selection.get("resolved_model") or selection.get("agent_frontmatter_model") or "").strip()
+    requested = str(selection.get("requested_model") or "inherit").strip() or "inherit"
+    actual = str(selection.get("actual_model") or "").strip()
+    if resolved and resolved != "inherit":
+        return resolved
+    if requested != "inherit":
+        return actual or requested
+    if actual:
+        return f"inherit ({actual})"
+    return "inherit"
+
+
+def reviewer_model_map(run_or_profile: dict | None, reviewers: list[str] | None = None) -> dict[str, str]:
+    """Map each reviewer role to its effective model label."""
+    if not isinstance(run_or_profile, dict):
+        return {role: "inherit" for role in (reviewers or [])}
+    rev_source: dict[str, Any] = {}
+    if isinstance(run_or_profile.get("review_models"), dict):
+        rev_source = run_or_profile["review_models"].get("reviewers") or {}
+    elif isinstance(run_or_profile.get("reviewers"), dict):
+        rev_source = run_or_profile["reviewers"]
+    roles = list(reviewers) if reviewers is not None else sorted(rev_source.keys())
+    return {role: effective_reviewer_model(rev_source.get(role)) for role in roles}
+
+
+def format_reviewers_with_models(run_or_profile: dict | None, reviewers: list[str]) -> str:
+    """Format a list of reviewer roles with their active model in brackets."""
+    mapping = reviewer_model_map(run_or_profile, reviewers)
+    return ", ".join(f"{role} [{mapping.get(role, 'inherit')}]" for role in reviewers)
+
+
 def model_choice_summary(repo: Path, task_id: str) -> str:
     policy, source = load_policy(repo, task_id)
     overrides = ", ".join(f"{r}={m}" for r, m in sorted(policy["overrides"].items()))

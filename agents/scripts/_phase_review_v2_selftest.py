@@ -2250,6 +2250,38 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         needed, reviewers = is_phase_review_needed(self.repo, task_id, plan, phases[0], changes)
         self.assertTrue(needed, "4 files with >600 lines must trigger phase review even without explicit flag")
 
+    def test_PHASE_DELTA_SIZE_002_routine_feature_and_final_phase_skip_redundant_phase_review(self) -> None:
+        """Routine <400-line T2_FEATURE intermediate phases and final phases skip redundant subagent phase reviews."""
+        phases = [
+            {"id": "p1", "name": "Data and Domain", "description": "Add campaign repository and use case", "expected_files": [
+                f"app/src/main/java/com/example/Campaign{i}.kt" for i in range(1, 7)
+            ]},
+            {"id": "p2", "name": "Home UI", "description": "Render campaign banner on home screen", "expected_files": [
+                "app/src/main/java/com/example/HomeScreen.kt",
+            ]},
+        ]
+        task_id = self._create_phased_task(phases, scoped_phase_review=None)
+        for i in range(1, 7):
+            write_file(
+                self.repo / "app" / "src" / "main" / "java" / "com" / "example" / f"Campaign{i}.kt",
+                f"package com.example\nclass Campaign{i} {{\n    fun load(): String = \"campaign-{i}\"\n}}\n",
+            )
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        p1_changes = [{"path": f"app/src/main/java/com/example/Campaign{i}.kt"} for i in range(1, 7)]
+        needed_p1, rev_p1 = is_phase_review_needed(self.repo, task_id, plan, phases[0], p1_changes)
+        self.assertFalse(needed_p1, "Routine 6-file T2_FEATURE intermediate phase (<400 lines) should use deterministic checkpoint only")
+        self.assertEqual([], rev_p1)
+
+        # Even if scoped_phase_review_enabled is True at plan level, the final phase (p2) skips phase review
+        # because prepare-verification runs the full final review immediately after p2 checkpoints.
+        plan_explicit = {**plan, "scoped_phase_review_enabled": True}
+        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "HomeScreen.kt", "package com.example\nclass HomeScreen\n")
+        needed_p2, rev_p2 = is_phase_review_needed(
+            self.repo, task_id, plan_explicit, phases[1], [{"path": "app/src/main/java/com/example/HomeScreen.kt"}]
+        )
+        self.assertFalse(needed_p2, "Final phase of multi-phase plan must skip redundant phase review before prepare-verification")
+        self.assertEqual([], rev_p2)
+
     def test_PHASE_HOST_E2E_001_complete_lifecycle(self) -> None:
         """PHASE_HOST_E2E_001: complete phase review host lifecycle E2E."""
         task_id, reviewers, briefs, meta = self._setup_dispatch_state()

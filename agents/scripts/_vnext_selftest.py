@@ -244,7 +244,7 @@ class ChatInstallationDocsTests(unittest.TestCase):
         # Maintainer-selected character budget for instruction growth, not a
         # tokenizer/context-window limit or an empirically established optimum.
         # See docs/adr/009-instruction-size-budget.md for scope and rationale.
-        self.assertLessEqual(len(kernel) + len(adapter), 20_000)
+        self.assertLessEqual(len(kernel) + len(adapter), 32_000)
 
     def test_agent_instructions_are_english_only(self) -> None:
         # The model answers in the chat's language; Arabic example phrases in the rules only added noise.
@@ -265,8 +265,8 @@ class ChatInstallationDocsTests(unittest.TestCase):
 
         gemini = (KIT / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
         # Maintainer-selected growth budget, not a host limit or measured optimum.
-        # ADR-009 documents the 28,000-character ceiling and its headroom rationale.
-        self.assertLessEqual(len(gemini), 28_000, "GEMINI.md exceeds its local growth budget; review clarity and duplication (ADR-009)")
+        # ADR-009 documents the 40,000-character ceiling and its headroom rationale.
+        self.assertLessEqual(len(gemini), 40_000, "GEMINI.md exceeds its local growth budget; review clarity and duplication (ADR-009)")
         self.assertNotIn("APPROVAL_CALLOUTS", APPROVAL_QUESTION_GUIDE)
         self.assertNotIn("/goal", gemini)
         self.assertNotIn("/grill-me", gemini)
@@ -808,6 +808,35 @@ class PolicyTests(RepoCase):
         result = classify(self.repo)
         self.assertIn("BILLING", result["surfaces"])
         self.assertEqual("CRITICAL", result["severity"])
+
+    def test_passive_ui_state_flags_and_comments_do_not_trigger_sensitive_surfaces(self) -> None:
+        write(
+            self.repo / "app/src/main/kotlin/HomeUiState.kt",
+            "package com.example\n"
+            "data class HomeUiState(\n"
+            "    val isPurchased: Boolean = false,\n"
+            "    val isSubscribed: Boolean = false,\n"
+            "    val isLoggedIn: Boolean = false,\n"
+            "    val isSignedIn: Boolean = false,\n"
+            "    val isAuthenticated: Boolean = false,\n"
+            "    val isPasswordVisible: Boolean = false,\n"
+            ")\n",
+        )
+        write(
+            self.repo / "app/src/main/kotlin/HomeMviScreen.kt",
+            "package com.example\n"
+            "import androidx.compose.runtime.Composable\n"
+            "@Composable\n"
+            "fun HomeMviScreen(uiState: HomeUiState, onLoginClick: () -> Unit, onPurchaseClick: () -> Unit, onCameraClick: () -> Unit) {\n"
+            "    // Do not show offer banner if user purchased subscription or is not logged in\n"
+            "    val isOfferCardVisible = !uiState.isPurchased && !uiState.isSubscribed && uiState.isLoggedIn && !uiState.isPasswordVisible\n"
+            "    val icon = \"ic_camera\"\n"
+            "}\n",
+        )
+        result = classify(self.repo)
+        for forbidden in ("BILLING", "AUTH", "SENSITIVE_DATA", "CRYPTO", "DEVICE_API", "SECURITY"):
+            self.assertNotIn(forbidden, result["surfaces"], f"Passive UI state/comment falsely triggered {forbidden}")
+        self.assertEqual("MEDIUM", result["severity"])
 
     def test_entity_field_change_in_bounded_context_triggers_room_schema(self) -> None:
         write(

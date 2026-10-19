@@ -7,7 +7,7 @@ or the requirement for independent review proof.
 | Host | Supported choices | Enforcement |
 |---|---|---|
 | Claude Code | `inherit`, `sonnet`, `opus`, `haiku` | Rule-enforced native Agent/Task model argument; account access is host-dependent |
-| Antigravity | `inherit`, `flash-dynamic`, `hybrid-smart`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-3.8-pro-medium`, `gemini-3.8-pro-high` (or `<model>@<low|medium|high>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` never sends `model`/`Model` |
+| Antigravity | `inherit`, `flash-dynamic`, `argon-dynamic`, `hybrid-smart`, `gemini-3.8-flash-fast`, `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high` (or `<model>@<fast\|low\|medium\|high>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` omits `model`/`Model` unless matching explicit tier is selected |
 | Other adapters | `inherit` | Host-managed; inheritance is not independently verified |
 
 ## Antigravity pre-review interactive choices (`SELECT_REVIEW_MODEL`)
@@ -20,7 +20,7 @@ When a task or phase review on Antigravity reaches `DISPATCH_REVIEWERS` / `DISPA
 4. `inherit-once` (`--default inherit --scope run`): Chat conversation model (`Inherit`) for this review run only.
 5. `hybrid-smart-task` (`--default hybrid-smart --scope task`): Smart Hybrid — Flash Dynamic for standard reviewers (`convention`, `test-quality`, `spec-compliance`, `regression-impact`) and Chat model (`Inherit`) for critical reviewers (`bug`, `perf-anr-guardian`, `security`) for the whole task.
 
-The plan displays the current model setting and its source. Approving the plan
+The plan displays the current model setting and its source, and every router dispatch, wait, status, and completion output includes `reviewer_models` and formats each specialist as `<role> [<model>]` in both CLI output and chat updates. Approving the plan
 does not answer the model question. Keep an unanswered question pending when the
 developer sends an unrelated message. Newly prepared Antigravity runs require a
 recorded choice before dispatch; existing frozen runs retain their recorded policy.

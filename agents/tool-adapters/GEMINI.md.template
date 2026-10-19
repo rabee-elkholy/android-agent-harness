@@ -27,7 +27,7 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
 - Preflight Scope: `preflight` runs inside an active task only; before a plan exists use discovery commands.
 - Multi-Phase Execution: Multi-phase plans execute sequentially and autonomously. Single intake approval covers all phases; never pause or ask developer between phases.
 - Strict Verification Order: The Verification Plan MUST use the 6-step headings (1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install -> 5. mobile walkthrough -> 6. verify). The agent MUST wait for ALL routed specialist reviewers to finish, record their responses, and verify ZERO blocking findings BEFORE running `assemble` or starting device installation. Starting assemble or device deployment while any reviewer is still running is strictly forbidden.
-- Reviewer Dispatch: 100% autonomous. Launch routed reviewers in parallel via subagents immediately; never pause or ask for permission.
+- Reviewer Dispatch: 100% autonomous. Launch routed reviewers in parallel via subagents immediately; never pause or ask for permission. Whenever listing or reporting dispatched, running, or completed reviewers in chat, always display each reviewer alongside its active model from `reviewer_models` (e.g., `bug-reviewer-agent [gemini-3.8-flash-high]`, `security-reviewer-agent [inherit]`).
 - Review Protocol V2: On reactive reviewer completion, record trusted reviewer results with `{{PY}} .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>`. Once all routed reviewers complete, finalize aggregate review evidence with `{{PY}} .agents/harness.py review finalize --task <id>`. Clean reviews with findings: [] are recognized as PASS. Intermediate scratch files are forbidden.
 - Hard decisions before planning: Before `draft`, when the task carries a design, migration, backward-compatibility or security decision (Room schema, exported components, permissions, public contracts), ask the developer about it with `ask_question`; for a Room change ask about an existing destructive fallback, users on older schema versions and downgrade first. Carry resolved answers into the plan; do not repeat resolved questions or persist inferred conventions.
 - Continuous execution: After approval, follow `task status --next --json` until terminal completion or a real developer/environment boundary, without stopping between steps.
@@ -41,8 +41,8 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
 - 6-Tier Dynamic Risk Model: Review policy (`review_policy.py`) evaluates changes into 6 risk tiers (`T0_TRIVIAL` through `T5_CRITICAL`) and is the sole runtime authority for risk tier, required gates, reviewer roster, and device requirements. Execute exactly the policy-resolved roster; when reviewers are omitted by policy, do not dispatch subagents.
 - Next-Action Command Router: Follow the returned next_action or NEXT_ACTION/NEXT_REASON directly. Only when the action/payload is missing, query `{{PY}} .agents/harness.py task status --task-id <id> --next --brief --json`. Never repeat status after a complete routed result. Once implementation is finished, `{{PY}} .agents/harness.py verify-steps --task-id <id> --host <actual-host>` runs consecutive deterministic steps and stops at failures, reviews or decisions; STOPPED is not task completion.
 - Mobile Verification Walkthrough & Device Verification: When device verification is required, Next Action router presents the decision (`MOBILE_VALIDATION_DECISION`). Execute `{{PY}} .agents/harness.py device install-start` to install and launch on target device. If the developer explicitly chooses to skip device verification, record honest skip evidence via `{{PY}} .agents/harness.py device skip-validation --task-id <id> --source conversation --proof-reference "<phrase>"`. Honest skip records `status: "SKIPPED"` (never synthetic PASS). When installation succeeds, output a complete, numbered mobile verification walkthrough (Navigation path, Preconditions, User actions, Expected results, Edge cases) in chat BEFORE asking for sign-off. Once developer replies with explicit PASS, record device sign-off via `{{PY}} .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<phrase>"`. Never run signoff before developer replies.
-- Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `{{PY}} .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `{{PY}} .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit.
-- Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes is an administrative context action, NOT an Android code delivery task. Directly record the note using `{{PY}} .agents/harness.py context note "<note>"`.
+- Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `{{PY}} .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `{{PY}} .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit. All Zoho task descriptions and comments must strictly obey any Zoho Sprints formatting, language, HTML template, and No-Code-Leak rules defined in `.agents/project-context/project-notes.md`.
+- Context Management Actions: Updating project context, recording architectural conventions, or adding domain notes is an administrative context action, NOT an Android code delivery task. Directly record the note using `{{PY}} .agents/harness.py context note "<note>"`. Always adhere to `.agents/project-context/project-notes.md` across discovery, planning, implementation, review, and tracker updates.
 - Review Host Binding:
   - In Antigravity, prepare verification with:
     `{{PY}} .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity`
@@ -60,7 +60,8 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
          Prompt = reviewer_prompts[role] (one line; do not open the brief)
          Workspace = inherit (or omit if host default is used consistently)
      - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
-     - do not invent reasoning fields.
+     - do not invent reasoning fields;
+     - in chat, list each dispatched/completed reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
   3. Yield; do not poll.
   4. On reactive completion, run `{{PY}} .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>`.
   5. On RETRY_REVIEW_PROTOCOL, execute the exact router-provided send_message.
@@ -78,7 +79,8 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
          Prompt = exact current phase brief
          Workspace = inherit (or omit if host default is used consistently)
      - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
-     - do not invent reasoning fields.
+     - do not invent reasoning fields;
+     - in chat, list each dispatched/completed phase reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
   3. Yield; do not poll.
   4. On reactive reviewer completion, run `{{PY}} .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>`.
   5. On `RETRY_PHASE_REVIEW_PROTOCOL`, execute the exact router-provided `send_message`.

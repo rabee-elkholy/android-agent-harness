@@ -734,6 +734,29 @@ class ReviewerModelsTests(unittest.TestCase):
         _, disp3 = fixture._run_pre_tool_safety({"toolName": "invoke_subagent", "toolArgs": {"Subagents": subagents}})
         self.assertEqual("deny", disp3.get("decision"), disp3)
 
+    def test_reviewer_models_displayed_in_router_and_phase_review_outputs(self):
+        from workflow import resolve_next_action
+        from phase_review import phase_run_file
+        fixture, task, roster, _ = self.phase_fixture()
+        models.set_policy(
+            fixture.repo, self.policy("flash-dynamic"), task_id=task,
+            host="antigravity", source="conversation", proof_reference="Flash for task",
+        )
+        run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
+        rm_map = models.reviewer_model_map(run, roster)
+        self.assertTrue(all(rm_map[r].startswith("gemini-3.8-flash-") for r in roster))
+        formatted = models.format_reviewers_with_models(run, roster)
+        for r in roster:
+            self.assertIn(f"{r} [{rm_map[r]}]", formatted)
+        plan = read_json(task_dir(fixture.repo, task) / "plan.json")
+        with mock.patch.dict(os.environ, {"HARNESS_HOST": "antigravity"}):
+            action = resolve_next_action(fixture.repo, task, plan)
+        self.assertEqual("DISPATCH_PHASE_REVIEWERS", action["code"])
+        self.assertEqual(rm_map, action["inputs"]["reviewer_models"])
+        for r in roster:
+            self.assertIn(f"{r} [{rm_map[r]}]", action["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

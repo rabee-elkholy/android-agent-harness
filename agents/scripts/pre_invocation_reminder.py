@@ -9,12 +9,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
 
 
+def _project_notes_reminder() -> str:
+    try:
+        from project_context import load_project_notes
+        notes = load_project_notes(REPO)
+        if notes.get("has_custom_notes"):
+            secs = ", ".join(notes.get("sections") or []) or "custom rules"
+            return (
+                f" Mandatory repo conventions in `.agents/project-context/project-notes.md` ({secs}) — "
+                "read and strictly follow before planning, coding, or Zoho updates."
+            )
+    except (ImportError, OSError, ValueError, KeyError):
+        return ""
+    return ""
+
+
 def _message() -> str:
     try:
         from mutation_guard import active_plan
         plan = active_plan(REPO)
     except Exception:
         plan = {}
+    notes_rem = _project_notes_reminder()
     if not plan:
         return (
             "Android Harness: Idle (no active task). "
@@ -29,6 +45,7 @@ def _message() -> str:
             "Draft with --approach, --risks and --device-strategy so the developer can review the plan. "
             "To update the harness itself, run `python .agents/harness.py update-info` and follow it. "
             "Verification plan must use strict 6-step headings."
+            + notes_rem
         )
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
@@ -59,7 +76,7 @@ def _message() -> str:
             next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
         else:
             next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
-    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, the task must be cancelled first: only when the developer asks, run `workflow.py cancel --repo . --task-id {task_id} --source conversation --proof-reference \"<their words>\"`; do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`."
+    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, the task must be cancelled first: only when the developer asks, run `workflow.py cancel --repo . --task-id {task_id} --source conversation --proof-reference \"<their words>\"`; do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`.{notes_rem}"
 
 
 def _compact_message() -> str:
@@ -68,21 +85,22 @@ def _compact_message() -> str:
         plan = active_plan(REPO)
     except Exception:
         plan = {}
+    notes_rem = _project_notes_reminder()
     if not plan:
-        return "Android Harness: Idle (no active task). Use `python .agents/harness.py graph` for discovery or run `python .agents/scripts/workflow.py draft` to begin a task."
+        return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` for discovery or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}"
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":
-        return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion. For unrelated work, cancel active task first."
+        return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion. For unrelated work, cancel active task first.{notes_rem}"
     if status == "VERIFYING":
-        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. mobile walkthrough -> 6. verify. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. For unrelated work, cancel active task first."
+        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. mobile walkthrough -> 6. verify. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. For unrelated work, cancel active task first.{notes_rem}"
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
         blocked_str = f" ({', '.join(blocked)})" if blocked else ""
-        return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Fix issues and run: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`"
+        return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Fix issues and run: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}"
     if status == "READY_FOR_DELIVERY":
-        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close."
-    return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. For unrelated work or updates, cancel active task first (workflow.py cancel). Ask developer before guessing missing scenarios."
+        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close.{notes_rem}"
+    return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. For unrelated work or updates, cancel active task first (workflow.py cancel). Ask developer before guessing missing scenarios.{notes_rem}"
 
 
 def _update_notice() -> str:

@@ -242,6 +242,27 @@ class ProjectIntelligenceTests(unittest.TestCase):
         ctx_dir = write_project_context(self.repo, facts)
         self.assertEqual(note_content, (ctx_dir / "project-notes.md").read_text(encoding="utf-8"))
 
+    def test_PROJECT_NOTE_003_project_notes_surfaced_in_task_context_and_graph(self) -> None:
+        """PROJECT_NOTE_003: custom project-notes.md is surfaced in task-context and graph outputs."""
+        self.mixed_project()
+        notes_p = self.repo / ".agents" / "project-context" / "project-notes.md"
+        notes_p.parent.mkdir(parents=True, exist_ok=True)
+        note_content = (
+            "# Project Architectural & Domain Notes\n\n"
+            "## 1. Zoho Sprints Task & Bug Description Standard\n"
+            "- Mandatory Arabic HTML template.\n\n"
+            "## 2. Home Screen Architecture\n"
+            "- Home screen uses MVI state reducer.\n"
+        )
+        notes_p.write_text(note_content, encoding="utf-8")
+
+        res = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertEqual("RESOLVED", res.get("status"))
+        pnotes = res.get("project_notes", {})
+        self.assertTrue(pnotes.get("has_custom_notes"))
+        self.assertIn("1. Zoho Sprints Task & Bug Description Standard", pnotes.get("sections", []))
+        self.assertIn("Home screen uses MVI state reducer.", pnotes.get("content", ""))
+
     def test_PROJECT_INST_001_global_instruction_reaches_applicable_future_task_context(self) -> None:
         """PROJECT_INST_001: global instruction reaches applicable future task context."""
         self.mixed_project()

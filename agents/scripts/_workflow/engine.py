@@ -2725,7 +2725,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "inputs": act.get("inputs", {}),
         "expected": act.get("expected", {}),
     }
-    for k in ("choices", "before_first_dispatch", "reviewer_prompts", "reviewers", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
+    for k in ("choices", "before_first_dispatch", "reviewer_prompts", "reviewers", "reviewer_models", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
         if k in act:
             res_entry[k] = act[k]
     return [res_entry]
@@ -2754,6 +2754,7 @@ def status(args: argparse.Namespace) -> dict:
                 "blocking": next_act.get("blocking", True),
                 "inputs": next_act.get("inputs", {}),
                 "expected": next_act.get("expected", {}),
+                **({"reviewer_models": next_act["reviewer_models"]} if "reviewer_models" in next_act else {}),
             }
         ]
         # Antigravity keeps only the end of long tool output. With the full review briefs inside, the

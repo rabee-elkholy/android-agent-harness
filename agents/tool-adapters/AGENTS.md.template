@@ -9,11 +9,11 @@ Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 - Do not inspect `.agents/scripts/**` during normal app work. Follow diagnostic boundary on failure.
 - Clarify ambiguity before planning. When asked to explore edge cases or study scenarios before starting, present and discuss them in plain chat first. Approved plan required for mutations. Approval covers stated phases.
 - After approval, execute phases autonomously. Follow-ups within active scope must execute immediately: never generate redundant plan artifacts or stall for nonexistent UI buttons.
-- Policy evaluates 6 risk tiers (`T0_TRIVIAL` to `T5_CRITICAL`) as runtime authority for gates, reviewers, and device. Execute the policy roster.
+- Policy evaluates 6 risk tiers (`T0_TRIVIAL` to `T5_CRITICAL`) as runtime authority for gates, reviewers, and device. Execute the policy roster and always display each dispatched or completed reviewer alongside its active model from `reviewer_models` (`<role> [<model>]`) in chat.
 - Query `{{PY}} .agents/harness.py task status --task-id <id> --next` for canonical next actions.
 - Verification order is preflight, tests, routed reviews, assemble/device, Mobile Verification Walkthrough and sign-off, then final verification.
 - Never self-certify HIGH/CRITICAL reviews with `record_review.py --verdict PASS`. Adjudicate false positives via `validate-finding`. Never poll background work (Zero-Polling invariant).
-- Context notes are administrative: `{{PY}} .agents/harness.py context note "<note>"`.
+- Context notes are administrative: `{{PY}} .agents/harness.py context note "<note>"`. Always follow `.agents/project-context/project-notes.md` across all task phases and tracker mutations.
 
 ## Canonical Command Catalog
 
