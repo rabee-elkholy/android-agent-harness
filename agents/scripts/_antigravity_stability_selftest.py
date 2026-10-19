@@ -97,7 +97,7 @@ class TestAgentYaml(unittest.TestCase):
                 frontmatter = parts[1]
                 self.assertIn("tools:\n  - view_file\n  - grep_search\n  - find_by_name\n  - list_dir", frontmatter)
                 self.assertNotIn("write_to_file", frontmatter)
-                self.assertNotIn("run_command", frontmatter)
+                self.assertIn("run_command", frontmatter)
                 self.assertNotIn("invoke_subagent", frontmatter)
                 self.assertNotIn("model:", frontmatter.lower())
 

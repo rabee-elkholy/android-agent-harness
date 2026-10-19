@@ -291,7 +291,7 @@ class ErrorBoundaries(unittest.TestCase):
     def test_production_has_no_silent_broad_exception_handlers(self):
         files = [KIT / 'harness_cli.py', *(KIT / 'agents').rglob('*.py')]
         for path in files:
-            if path.name.endswith('selftest.py'):
+            if path.name.endswith('selftest.py') or (KIT / 'agents' / 'state') in path.parents:
                 continue
             tree = ast.parse(path.read_text(encoding='utf-8'))
             for node in ast.walk(tree):

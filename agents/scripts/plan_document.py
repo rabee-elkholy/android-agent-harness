@@ -184,6 +184,8 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
     lines += [f"- {GATE_TEXT.get(g, g)}" for g in gates] or ["- Decided when verification starts."]
     if reviewers:
         lines.append(f"- Reviewers: {', '.join(reviewers)}.")
+    from review_models import model_choice_summary
+    lines.append("- " + model_choice_summary(repo, str(plan.get("task_id") or "")))
     if plan.get("review_budget_forecast"):
         from review_budget import forecast_summary
         lines += ["", "## Reviewer spending estimate (advisory)", "", forecast_summary(plan["review_budget_forecast"])]

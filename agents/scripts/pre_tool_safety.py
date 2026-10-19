@@ -551,19 +551,34 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
     briefs = dict(act.get("briefs") or {})
 
     from phase_review import check_phase_safety_cap
-    cap_ok, cap_msg = check_phase_safety_cap(plan, len(dispatchable), repo=REPO)
+    new_phase_dispatches = 0 if act.get("_unbound_replay") else len(dispatchable)
+    cap_ok, cap_msg = check_phase_safety_cap(plan, new_phase_dispatches, repo=REPO)
     if not cap_ok:
         emit("deny", cap_msg, tool=tool_name, reason_code="REVIEWER_CALL_SAFETY_CAP_REACHED")
         return
 
     allowed_keys_set = set(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS)
+    phase_run_models: dict[str, Any] = {}
+    try:
+        from _vnext_common import task_dir as _tdir
+        from phase_review import phase_run_file
+        prun_f = phase_run_file(_tdir(REPO, str(plan.get("task_id") or "")), phase_id)
+        if prun_f.is_file():
+            phase_run_models = ((read_json(prun_f).get("review_models") or {}).get("reviewers") or {})
+    except Exception:
+        phase_run_models = {}
     actual = []
     for item in raw_subs:
         if not isinstance(item, dict):
             emit("deny", "Each entry in Subagents array must be an object.", tool=tool_name, reason_code="SUBAGENT_NOT_OBJECT")
             return
 
-        if "model" in item or "Model" in item:
+        r_role_hint = str(item.get("Role") or item.get("TypeName") or "").strip()
+        sel_info = phase_run_models.get(r_role_hint) if isinstance(phase_run_models, dict) else None
+        resolved_m = str((sel_info or {}).get("resolved_model") or "")
+        allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
+
+        if "model" in item or ("Model" in item and (not allowed_native_model or item.get("Model") != allowed_native_model)):
             emit(
                 "deny",
                 (
@@ -585,11 +600,12 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             )
             return
 
+        item_allowed_keys = set(allowed_keys_set) | ({"Model"} if allowed_native_model else set())
         for k in item:
-            if k not in allowed_keys_set:
+            if k not in item_allowed_keys:
                 emit(
                     "deny",
-                    f"Unexpected key '{k}' in subagent invocation. Allowed keys: {sorted(allowed_keys_set)}.",
+                    f"Unexpected key '{k}' in subagent invocation. Allowed keys: {sorted(item_allowed_keys)}.",
                     tool=tool_name,
                     reason_code="UNEXPECTED_SUBAGENT_KEY",
                 )
@@ -715,6 +731,26 @@ def _handle_subagent(name: str, args: dict) -> None:
     except ValidationError as exc:
         emit("deny", str(exc), tool=name, reason_code="HOST_SESSION_MISMATCH")
         return
+
+    if plan and plan.get("task_id"):
+        from workflow import resolve_next_action
+        action = resolve_next_action(REPO, str(plan["task_id"]), plan)
+        if action.get("code") in {"REVIEWER_CANCELLED", "RESUME_REVIEWER", "REVIEWER_RESUME_ENV_BLOCKED"}:
+            if action["code"] != "RESUME_REVIEWER":
+                emit("deny", action["reason"], tool=name, reason_code="REVIEWER_CANCELLED")
+                return
+            if name != "send_message":
+                emit("deny", "Resume the existing reviewer with the routed send_message.", tool=name, reason_code="REVIEWER_RESUME_REQUIRED")
+                return
+            recipient = str(args.get("Recipient") or args.get("recipient") or "")
+            message = str(args.get("Message") or args.get("message") or "")
+            if recipient != action["recipient"] or message != action["message"]:
+                emit("deny", "Resume must target the same execution with the routed message.", tool=name, reason_code="REVIEWER_RESUME_MISMATCH")
+                return
+            from reviewer_host import mark_resume_dispatched
+            mark_resume_dispatched(REPO, str(plan["task_id"]), action["inputs"]["reviewer"], recipient)
+            emit("allow", "Explicit reviewer resume decision recorded for this execution.", tool=name, reason_code="REVIEWER_RESUME_ALLOWED")
+            return
     # Zero-polling invariant: block busy-waiting loops
     if name == "manage_task":
         act = str(args.get("Action") or args.get("action") or "").strip().lower()
@@ -780,6 +816,9 @@ def _handle_subagent(name: str, args: dict) -> None:
                 return
 
             if act_code == "DISPATCH_PHASE_REVIEWERS":
+                if name == "define_subagent":
+                    emit("allow", "Reviewer subagent definition is allowed before phase reviewer dispatch.", tool=name)
+                    return
                 if name != "invoke_subagent":
                     emit(
                         "deny",
@@ -789,6 +828,36 @@ def _handle_subagent(name: str, args: dict) -> None:
                     )
                     return
                 _handle_phase_reviewer_dispatch(act, plan, args, name)
+                return
+
+            if act_code == "WAIT_FOR_PHASE_REVIEWERS" and name == "invoke_subagent":
+                from phase_review import load_phase_ledger, phase_run_file
+                from _vnext_common import task_dir as _tdir
+                phase_id = str(act.get("inputs", {}).get("phase_id") or "")
+                td = _tdir(REPO, task_id)
+                prun_f = phase_run_file(td, phase_id)
+                run_meta = read_json(prun_f) if prun_f.is_file() else {}
+                ok, _, ledger = load_phase_ledger(td, phase_id, expected_run_id=run_meta.get("phase_review_run_id"))
+                revs = (ledger or {}).get("reviewers") or {}
+                if ok and revs and all(
+                    d.get("state") == "DISPATCHED" and not d.get("execution_id")
+                    for d in revs.values()
+                ):
+                    replay_act = {
+                        **act,
+                        "_unbound_replay": True,
+                        "phase_id": phase_id,
+                        "reviewers": sorted(run_meta.get("selected_reviewers") or list(revs.keys())),
+                        "briefs": dict(run_meta.get("briefs") or {}),
+                    }
+                    _handle_phase_reviewer_dispatch(replay_act, plan, args, name)
+                    return
+
+            if name in {"invoke_subagent", "send_message"} and act_code in {
+                "WAIT_FOR_PHASE_REVIEWERS", "COMPLETE_REVIEWER", "PHASE_REVIEW_ENV_BLOCKED", "PHASE_REVIEW_PROTOCOL_BLOCKED",
+            }:
+                emit("deny", "Follow the existing phase review execution; no replacement or extra reviewer message is routed.",
+                     tool=name, reason_code="PHASE_REVIEW_EXECUTION_ALREADY_STARTED")
                 return
 
             raw_subs = args.get("Subagents") or args.get("subagents") or []
@@ -852,6 +921,7 @@ def _handle_subagent(name: str, args: dict) -> None:
         required_reviewers = list(policy.get("reviewers") or [])
 
         # Determine dispatchable reviewers
+        is_unbound_replay = False
         if protocol >= 2:
             from review_orchestrator import load_ledger, dispatchable_reviewers, ledger_file
             directory = state / "tasks" / str(active["task_id"])
@@ -860,6 +930,14 @@ def _handle_subagent(name: str, args: dict) -> None:
             if l_path.is_file():
                 ledger = load_ledger(directory, run_id_val)
                 dispatchable = dispatchable_reviewers(ledger, required_reviewers)
+                if not dispatchable:
+                    revs = ledger.get("reviewers") or {}
+                    if revs and all(
+                        d.get("state") == "DISPATCHED" and not d.get("execution_id")
+                        for d in revs.values()
+                    ):
+                        dispatchable = list(required_reviewers)
+                        is_unbound_replay = True
             else:
                 dispatchable = list(required_reviewers)
         else:
@@ -916,7 +994,8 @@ def _handle_subagent(name: str, args: dict) -> None:
         used_calls = effective_review_calls_used(REPO, plan)
         from review_budget import effective_review_budget
         safety_cap = effective_review_budget(REPO, plan, policy)
-        if used_calls + len(dispatchable) > safety_cap:
+        new_final_dispatches = 0 if is_unbound_replay else len(dispatchable)
+        if used_calls + new_final_dispatches > safety_cap:
             emit(
                 "deny",
                 "Reviewer Call Safety Cap reached; developer decision is required.",
@@ -926,14 +1005,19 @@ def _handle_subagent(name: str, args: dict) -> None:
             return
 
         allowed_keys_set = set(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS)
+        final_run_models = ((current or {}).get("review_models") or {}).get("reviewers") or {}
         actual = []
         for item in raw_subs:
             if not isinstance(item, dict):
                 emit("deny", "Each entry in Subagents array must be an object.", tool=name, reason_code="SUBAGENT_NOT_OBJECT")
                 return
 
-            # Check model/Model key rejection: ANY model key must be denied
-            if "model" in item or "Model" in item:
+            r_role_hint = str(item.get("Role") or item.get("TypeName") or item.get("role") or item.get("typeName") or "").strip()
+            sel_info = final_run_models.get(r_role_hint) if isinstance(final_run_models, dict) else None
+            resolved_m = str((sel_info or {}).get("resolved_model") or "")
+            allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
+
+            if "model" in item or ("Model" in item and (not allowed_native_model or item.get("Model") != allowed_native_model)):
                 emit(
                     "deny",
                     (
@@ -997,7 +1081,7 @@ def _handle_subagent(name: str, args: dict) -> None:
             native_val = rev_reasoning.get("native_value")
             arg_name = rev_reasoning.get("argument_name")
 
-            item_allowed_keys = set(allowed_keys_set)
+            item_allowed_keys = set(allowed_keys_set) | ({"Model"} if allowed_native_model else set())
             if control == "SUPPORTED" and arg_name:
                 item_allowed_keys.add(arg_name)
 
@@ -1866,6 +1950,28 @@ def _main() -> None:
             import discovery_receipt
             discovery_receipt.RECEIPT_NOT_BEFORE = started
         name, args = _tool_name_and_args(payload)
+        reviewer = None
+        conversation = str(payload.get("conversationId") or payload.get("conversation_id") or "")
+        if conversation and os.environ.get("HARNESS_HOST") == "antigravity":
+            from reviewer_host import reviewer_context, discovery_command_allowed
+            reviewer = reviewer_context(REPO, conversation, bind=True)
+            if reviewer:
+                if name == "run_command":
+                    command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
+                    cwd = Path(str(args.get("Cwd") or args.get("cwd") or REPO)).resolve()
+                    if cwd != REPO.resolve() or not discovery_command_allowed(command):
+                        emit("deny", "Reviewer run_command permits only bounded graph/task-context discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
+                        return
+                elif name not in {"view_file", "grep_search", "find_by_name", "list_dir"}:
+                    emit("deny", "Reviewer tools are limited to source reads and bounded discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
+                    return
+                if name in SEARCH_TOOLS:
+                    from discovery_receipt import load_latest_discovery_receipt, check_discovery_freshness, is_path_in_discovery_scope
+                    receipt = load_latest_discovery_receipt(REPO)
+                    target = str(args.get("SearchPath") or args.get("searchPath") or args.get("SearchDirectory") or args.get("searchDirectory") or "")
+                    if receipt and check_discovery_freshness(REPO, receipt)[0] and is_path_in_discovery_scope(REPO, target, receipt) and not _installed_engine_target(target, recursive=True):
+                        emit("allow", "Reviewer search is inside its graph discovery scope.", tool=name, reason_code="REVIEWER_DISCOVERY_SEARCH_ALLOWED")
+                        return
         if name in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
             target = str(args.get("AbsolutePath") or args.get("absolutePath") or args.get("SearchPath")
                          or args.get("searchPath") or args.get("SearchDirectory") or args.get("searchDirectory")

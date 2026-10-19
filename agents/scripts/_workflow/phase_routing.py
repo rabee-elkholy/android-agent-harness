@@ -171,6 +171,10 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                 }
 
             revs = ledger.get("reviewers") or {}
+            from reviewer_host import lifecycle_action
+            host_action = lifecycle_action(repo, run_meta, revs)
+            if host_action:
+                return host_action
 
             # 1. Environment blocked reviewers
             for r_name, r_info in revs.items():
@@ -318,7 +322,8 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     "command": dispatch_receipt_command,
                     "blocking": True,
                     "phase_id": phase_id,
-                    "reason": f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))}.",
+                    "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
+                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))}."),
                     **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                     "reviewers": sorted(not_dispatched),
                     "package_path": run_meta.get("package_path", ""),

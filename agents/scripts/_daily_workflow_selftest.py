@@ -5596,6 +5596,11 @@ class ReviewOrchestrationTests(unittest.TestCase):
         run_git(self.repo, "add", ".")
         run_git(self.repo, "commit", "-m", "init", "-q")
 
+        # These fixtures test execution/proof after the independent model decision.
+        from review_models import set_policy
+        set_policy(self.repo, {"schema_version": 1, "default": "inherit", "overrides": {}}, task_id=None,
+                   host="antigravity", source="conversation", proof_reference="Use chat model for orchestration fixtures")
+
         self.mock_transcripts: dict[str, Path] = {}
         self._source_patcher = mock.patch(
             "review_orchestrator.resolve_trusted_review_source",
@@ -7247,7 +7252,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
         }
         mock_transcript = self.repo / ".mock_transcript.jsonl"
         mock_transcript.write_text(json.dumps({
-            "type": "MODEL",
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
             "content": f"```json\n{json.dumps(valid_review_result)}\n```"
         }) + "\n", encoding="utf-8")
 
@@ -7733,6 +7739,9 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\nclass MainActivity { fun foo() = 42 }\n")
 
         # Step 8: prepare-verification --host antigravity
+        from review_models import set_policy
+        set_policy(self.repo, {"schema_version": 1, "default": "inherit", "overrides": {}}, task_id=task_id,
+                   host="antigravity", source="conversation", proof_reference="Use chat model for this review")
         prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         tdir = task_dir(self.repo, task_id)
         current = read_json(tdir / "current-run.json")
@@ -7912,6 +7921,9 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
             repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"
         ))
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        from review_models import set_policy
+        set_policy(self.repo, {"schema_version": 1, "default": "inherit", "overrides": {}}, task_id=task_id,
+                   host="antigravity", source="conversation", proof_reference="Use chat model for this review")
         prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         tdir = task_dir(self.repo, task_id)
         current = read_json(tdir / "current-run.json")

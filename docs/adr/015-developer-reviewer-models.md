@@ -22,3 +22,17 @@ field in `.agents/agents/<role>/agent.md` YAML frontmatter, supporting `inherit`
 `flash-dynamic` (dynamic `medium`/`high` thinking level by reviewer criticality),
 `hybrid-smart` (Flash Dynamic for standard reviewers + Chat model `Inherit` for
 critical specialists), and explicit `gemini-3.8-flash-*` / `gemini-3.8-pro-*` slugs.
+
+The recovery contract publishes model changes under the repository state lock,
+with a durable incomplete-update marker checked before dispatch. Refresh the
+undispatched package and briefs together using the phase owner's canonical paths.
+Preserve the run identity and all spent budgets. Dispatched evidence is immutable;
+an identical repeated decision is idempotent. Shared native agent settings cannot
+change during an unbound launch from another task.
+
+Frontmatter is configuration, not actual-model evidence. Explicit Antigravity
+choices require the matching native executor model and observed generation model
+family from that execution's read-only database. Unknown native schemas fail
+closed for explicit choices. Existing inheritance remains unobserved when the
+host cannot report metadata. Native user cancellation requires a recorded
+developer resume decision for the same execution; it never authorizes a new call.

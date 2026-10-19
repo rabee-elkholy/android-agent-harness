@@ -328,7 +328,8 @@ def _active_run_identifiers(repo: Path, task_id: str) -> set[str]:
             pstate = read_json(pstate_f)
             cur_phase = str(pstate.get("current_phase_id") or "").strip()
             if cur_phase:
-                prun_f = tdir / "phases" / cur_phase / "review" / "phase-review-run.json"
+                from phase_review import phase_run_file
+                prun_f = phase_run_file(tdir, cur_phase)
                 if prun_f.is_file():
                     prid = str(read_json(prun_f).get("phase_review_run_id") or "").strip()
                     if prid:
@@ -457,7 +458,21 @@ def sync_antigravity_agent_models(repo: Path, selections: dict[str, dict] | None
 
     updated: list[str] = []
     selections = selections or {}
-    for role in CORE_ROUTED_REVIEWERS:
+    from reviewer_host import active_reviews, _load_ledger
+    for run, ledger_file in active_reviews(repo):
+        if run.get("review_host") != "antigravity" or not ledger_file.is_file():
+            continue
+        for role, entry in _load_ledger(run, ledger_file).get("reviewers", {}).items():
+            if role not in selections or entry.get("state") != "DISPATCHED" or entry.get("execution_id"):
+                continue
+            pending = frozen_models(run).get(role, {})
+            expected = pending.get("agent_frontmatter_model") or pending.get("resolved_model")
+            desired = selections[role].get("agent_frontmatter_model") or selections[role].get("resolved_model")
+            if expected != desired:
+                raise ValidationError(f"REVIEW_MODEL_LAUNCH_PENDING: {role} still needs execution binding in task {run['task_id']}; its launch settings cannot change")
+    for role in selections:
+        if role not in CORE_ROUTED_REVIEWERS:
+            raise ValidationError(f"unknown reviewer role '{role}'")
         json_path = subagents_base / f"{role}.json"
         dest = agents_base / role / "agent.md"
         if not json_path.is_file() or not dest.parent.is_dir():
@@ -466,7 +481,7 @@ def sync_antigravity_agent_models(repo: Path, selections: dict[str, dict] | None
             data = json.loads(json_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
             continue
-        sel = selections.get(role) or {}
+        sel = selections[role]
         fm_model = sel.get("agent_frontmatter_model") or sel.get("resolved_model")
         if fm_model == "inherit":
             fm_model = None
@@ -557,6 +572,8 @@ def _resolve_policy(
                 "actual_model_status": "UNOBSERVED",
             }
     frozen = {"schema_version": 1, "host": host_norm, "source": source, "policy": policy, "reviewers": selections}
+    if host_norm == "antigravity":
+        frozen["selection_required"] = source == "default"
     frozen["sha256"] = canonical_sha256(frozen)
     return frozen
 
@@ -632,23 +649,34 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
     host_norm = str(run.get("review_host") or "").strip().lower()
     identity = transcript_identity or {}
 
-    if host_norm == "antigravity" and requested != "inherit":
-        expected_resolved = str(selection.get("resolved_model") or "")
-        thinking_level = str(selection.get("thinking_level") or "medium")
-        repo_hint = identity.get("repo")
-        repo_path = Path(repo_hint).resolve() if repo_hint else None
-        if repo_path and (repo_path / ".agents" / "agents" / role / "agent.md").is_file():
-            observed_fm = _antigravity_frontmatter_model(repo_path, role)
-            if observed_fm != expected_resolved:
-                raise ValidationError(
-                    f"REVIEW_MODEL_MISMATCH: {role} expected frontmatter model '{expected_resolved}', got '{observed_fm or 'inherit'}'"
-                )
+    if host_norm == "antigravity":
+        from antigravity_runtime import native_model_metadata
+        try:
+            observed = native_model_metadata(Path(identity["transcript_path"])) if identity.get("transcript_path") else {}
+        except ValidationError:
+            if requested != "inherit":
+                raise
+            observed = {}  # Legacy inheritance requires no invented native proof.
+        expected_resolved = selection.get("resolved_model")
+        if requested != "inherit":
+            if not observed:
+                raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: {role} requires native execution model metadata; frontmatter is configuration only")
+            # The native runtime ID omits thinking and may use a backend suffix.
+            # The executor's separate model field binds the exact thinking choice.
+            family = re.sub(r"-(?:fast|low|medium|high|tiered)$", "", str(expected_resolved))
+            valid_configured = {expected_resolved, f"{family}-tiered"}
+            if observed.get("host_configured_model") not in valid_configured or any(
+                not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered))?", m) and m != expected_resolved
+                for m in observed.get("host_reported_models", [])
+            ):
+                raise ValidationError(f"REVIEW_MODEL_MISMATCH: {role} native execution does not match {expected_resolved}")
         return {
             "requested_model": requested,
             "resolved_model": expected_resolved,
-            "thinking_level": thinking_level,
-            "actual_model": expected_resolved,
-            "actual_model_status": "ANTIGRAVITY_AGENT_FRONTMATTER_BOUND",
+            "thinking_level": selection.get("thinking_level"),
+            "actual_model": (observed.get("host_reported_models") or [None])[-1],
+            "actual_model_status": "NATIVE_METADATA_OBSERVED" if observed else "UNOBSERVED",
+            **observed,
             "settings_sha256": (run.get("review_models") or {}).get("sha256"),
         }
 
@@ -685,16 +713,28 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
         return
     host_norm = str(run.get("review_host") or "").strip().lower()
     if host_norm == "antigravity":
+        family = re.sub(r"-(?:fast|low|medium|high|tiered)$", "", str(selection.get("resolved_model")))
+        valid_configured = {selection.get("resolved_model"), f"{family}-tiered"}
         if not isinstance(evidence, dict) or (
             evidence.get("settings_sha256") != run["review_models"]["sha256"]
             or evidence.get("requested_model") != selection["requested_model"]
             or evidence.get("resolved_model") != selection.get("resolved_model")
             or evidence.get("thinking_level") != selection.get("thinking_level")
-            or evidence.get("actual_model_status") != "ANTIGRAVITY_AGENT_FRONTMATTER_BOUND"
-            or evidence.get("actual_model") != selection.get("resolved_model")
+            or evidence.get("actual_model_status") != "NATIVE_METADATA_OBSERVED"
+            or evidence.get("host_configured_model") not in valid_configured
+            or not evidence.get("native_metadata_sha256")
+            or not evidence.get("execution_id")
+            or not evidence.get("host_reported_models")
         ):
             raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen Antigravity model evidence for {role}")
+        native = {key: evidence[key] for key in ("execution_id", "host_configured_model", "host_reported_models", "native_metadata_source") if key in evidence}
+        if evidence["native_metadata_sha256"] != canonical_sha256(native) or any(
+            not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered))?", m) and m != selection.get("resolved_model")
+            for m in evidence["host_reported_models"]
+        ):
+            raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: native model evidence integrity mismatch for {role}")
         return
+
     if not isinstance(evidence, dict) or (
         evidence.get("settings_sha256") != run["review_models"]["sha256"]
         or evidence.get("requested_model") != selection["requested_model"]
@@ -703,6 +743,14 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
         or not re.match(r"claude-(?:[0-9]+(?:-[0-9]+)*-)?" + re.escape(selection["requested_model"]) + r"(?:-|$)", evidence["actual_model"])
     ):
         raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen model evidence for {role}")
+
+
+def model_choice_summary(repo: Path, task_id: str) -> str:
+    policy, source = load_policy(repo, task_id)
+    overrides = ", ".join(f"{r}={m}" for r, m in sorted(policy["overrides"].items()))
+    return (f"Reviewer model: {policy['default']} (source: {source})"
+            + (f"; overrides: {overrides}" if overrides else "")
+            + ". Model selection is separate from plan approval; an unresolved Antigravity choice is asked once before first dispatch.")
 
 
 def build_antigravity_model_prompt(
@@ -792,19 +840,43 @@ def _is_undispatched_final_run(tdir: Path, current: dict) -> bool:
     return True
 
 
+def assert_dispatch_ready(repo: Path, run: dict, roles: list[str]) -> None:
+    """Validate publication and bind shared native controls before spending calls.
+
+    Callers hold the repository state lock through receipt publication. A pending
+    launch keeps its native settings until its execution has been identified.
+    """
+    if (state_root(repo) / "review-model-update.json").exists():
+        raise ValidationError("REVIEW_MODEL_UPDATE_INCOMPLETE: repeat the recorded model choice to finish publication")
+    selections = frozen_models(run)
+    if (run.get("review_models") or {}).get("selection_required"):
+        raise ValidationError("SELECT_REVIEW_MODEL: record the developer's model choice before dispatch; plan approval is separate")
+    if str(run.get("review_host") or "").lower() == "antigravity":
+        active_policy, source = load_policy(repo, run.get("task_id"), run_id=run.get("phase_review_run_id") or run.get("run_id"))
+        if source in {"task", "run"} and ((run.get("review_models") or {}).get("source") != source or (run.get("review_models") or {}).get("policy") != active_policy):
+            raise ValidationError("REVIEW_MODEL_SELECTION_STALE: the active run does not bind the recorded task/run choice")
+        sync_antigravity_agent_models(repo, {r: selections[r] for r in roles if r in selections})
+        for role in roles:
+            selection = selections.get(role, {})
+            expected = selection.get("agent_frontmatter_model") or selection.get("resolved_model")
+            expected = None if expected == "inherit" else expected
+            if _antigravity_frontmatter_model(repo, role) != expected:
+                raise ValidationError(f"REVIEW_MODEL_CONFIGURATION_UNAVAILABLE: {role} native configuration is not synchronized")
+
+
 def _is_undispatched_phase_run(tdir: Path, phase_id: str) -> tuple[bool, Path | None]:
-    prun_f = tdir / "phases" / phase_id / "review" / "phase-review-run.json"
+    from phase_review import phase_run_file, phase_ledger_file, load_phase_ledger, phase_review_dir
+    prun_f = phase_run_file(tdir, phase_id)
     if not prun_f.is_file():
         return True, None
-    lpath = tdir / "phases" / phase_id / "review" / "phase-review-ledger.json"
-    if lpath.is_file():
-        try:
-            ledger = read_json(lpath)
-            for info in (ledger.get("reviewers") or {}).values():
-                if isinstance(info, dict) and info.get("state") not in (None, "NOT_DISPATCHED"):
-                    return False, prun_f
-        except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
-            return False, prun_f
+    run = read_json(prun_f)
+    ok, reason, ledger = load_phase_ledger(tdir, phase_id, expected_run_id=run.get("phase_review_run_id"))
+    if not ok:
+        raise ValidationError(f"phase review ledger cannot establish an unstarted review: {reason}")
+    if any(info.get("state") != "NOT_DISPATCHED" for info in ledger["reviewers"].values()):
+        return False, prun_f
+    if any((phase_review_dir(tdir, phase_id) / "dispatch" / str(run["phase_review_run_id"])).glob("*.json")):
+        return False, prun_f
     return True, prun_f
 
 
@@ -820,22 +892,14 @@ def _refresh_undispatched_runs(repo: Path, task_id: str, host: str) -> dict[str,
     # 1. Check active phase review run if in IMPLEMENTING
     pstate_f = tdir / "phase-state.json"
     if plan.get("status") == "IMPLEMENTING" and pstate_f.is_file():
-        try:
-            pstate = read_json(pstate_f)
-            phase_id = str(pstate.get("current_phase_id") or "")
-            ok_phase, prun_f = _is_undispatched_phase_run(tdir, phase_id)
-            if ok_phase and prun_f and prun_f.is_file():
-                run_meta = read_json(prun_f)
-                run_id = str(run_meta.get("phase_review_run_id") or "")
-                roster = list(run_meta.get("selected_reviewers") or [])
-                run_host = str(run_meta.get("review_host") or host)
-                frozen = freeze_models(repo, task_id, run_host, roster, run_id=run_id, plan=plan)
-                run_meta["review_models"] = frozen
-                atomic_write_json(prun_f, run_meta)
-                refreshed["phase_review_run_id"] = run_id
-                refreshed["active_run_models"] = frozen.get("reviewers") or {}
-        except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
-            pass
+        pstate = read_json(pstate_f)
+        phase_id = str(pstate.get("current_phase_id") or "")
+        ok_phase, prun_f = _is_undispatched_phase_run(tdir, phase_id)
+        if ok_phase and prun_f:
+            from phase_review import refresh_undispatched_phase_models
+            run_meta = refresh_undispatched_phase_models(repo, task_id, phase_id)
+            refreshed["phase_review_run_id"] = run_meta["phase_review_run_id"]
+            refreshed["active_run_models"] = run_meta["review_models"]["reviewers"]
 
     # 2. Check active final verification run if in VERIFYING
     crun_f = tdir / "current-run.json"
@@ -860,11 +924,8 @@ def _refresh_undispatched_runs(repo: Path, task_id: str, host: str) -> dict[str,
                     b_file.unlink(missing_ok=True)
                 ledger_p = tdir / "review-execution" / run_id / "ledger.json"
                 ledger_p.unlink(missing_ok=True)
-                try:
-                    from review_package import build_package
-                    build_package(repo, task_id)
-                except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
-                    pass
+                from review_package import build_package
+                build_package(repo, task_id)
             refreshed["run_id"] = run_id
             refreshed["active_run_models"] = frozen.get("reviewers") or {}
 
@@ -891,6 +952,25 @@ def set_policy(
         raise ValidationError(f"scope '{resolved_scope}' requires --task-id")
 
     with StateLock(state_root(repo)):
+        pending_file = state_root(repo) / "review-model-update.json"
+        operation = {"task_id": task_id, "scope": resolved_scope, "host": host, "policy": policy}
+        if pending_file.exists() and read_json(pending_file) != operation:
+            raise ValidationError("REVIEW_MODEL_UPDATE_INCOMPLETE: repeat the pending model choice before making another change")
+
+        def already_applied(run: dict) -> dict | None:
+            path = _policy_file(repo, task_id, scope=resolved_scope)
+            if pending_file.exists() or not path.is_file():
+                return None
+            existing = read_json(path)
+            if existing.get("record_sha256") != canonical_sha256({k: v for k, v in existing.items() if k != "record_sha256"}):
+                raise ValidationError("review model configuration checksum mismatch")
+            frozen_models(run)
+            if (existing.get("policy") == policy and existing.get("scope") == resolved_scope
+                    and existing.get("validated_host") == host
+                    and (run.get("review_models") or {}).get("policy") == policy
+                    and (run.get("review_models") or {}).get("source") == resolved_scope):
+                return {**existing, "already_applied": True}
+            return None
         bound_run_id = None
         if task_id:
             tdir = task_dir(repo, task_id)
@@ -902,6 +982,9 @@ def set_policy(
             if status == "VERIFYING":
                 crun_f = tdir / "current-run.json"
                 if not crun_f.is_file() or not _is_undispatched_final_run(tdir, read_json(crun_f)):
+                    previous = already_applied(read_json(crun_f)) if crun_f.is_file() else None
+                    if previous:
+                        return previous
                     raise ValidationError("task model choices require an unstarted review; resume implementation before changing future runs")
                 bound_run_id = str(read_json(crun_f).get("run_id") or "next_run")
             elif status == "IMPLEMENTING":
@@ -912,6 +995,9 @@ def set_policy(
                     if cur_phase:
                         ok_phase, prun_f = _is_undispatched_phase_run(tdir, cur_phase)
                         if not ok_phase:
+                            previous = already_applied(read_json(prun_f)) if prun_f else None
+                            if previous:
+                                return previous
                             raise ValidationError("phase review already dispatched; finish or re-checkpoint before changing reviewer models")
                         if prun_f and prun_f.is_file():
                             bound_run_id = str(read_json(prun_f).get("phase_review_run_id") or "next_run")
@@ -936,6 +1022,9 @@ def set_policy(
             record["bound_run_id"] = bound_run_id or "next_run"
         record["record_sha256"] = canonical_sha256(record)
         target_file = _policy_file(repo, task_id if resolved_scope in ("task", "run") else None, scope=resolved_scope)
+        atomic_write_json(pending_file, operation)
+        # The marker survives interruption. Dispatch remains blocked until the same
+        # explicit operation has repaired all derived artifacts under this lock.
         atomic_write_json(target_file, record)
 
         if resolved_scope == "task" and task_id:
@@ -952,10 +1041,13 @@ def set_policy(
             if refreshed:
                 record["refreshed_run"] = refreshed
 
+        pending_file.unlink()
         return record
 
 
 def main(argv: list[str] | None = None) -> int:
+    from _vnext_common import configure_utf8_output
+    configure_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("show", "set"), nargs="?", default="show")
     parser.add_argument("--repo", default=".")

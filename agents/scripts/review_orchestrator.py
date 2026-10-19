@@ -225,6 +225,8 @@ def record_dispatch_batch(
             raise ValidationError(f"reviewer '{r}' is not in policy required reviewers: {required_reviewers}")
 
     with StateLock(state_root(repo)):
+        from review_models import assert_dispatch_ready
+        assert_dispatch_ready(repo, current, reviewers)
         from review_budget import review_round_cap_action, settle_final_review_calls, effective_review_budget
         plan = read_json(directory / "plan.json")
         round_block = review_round_cap_action(repo, plan, policy)
@@ -244,13 +246,23 @@ def record_dispatch_batch(
         requested = set(reviewers)
         if len(reviewers) != len(requested):
             raise ValidationError(f"duplicate reviewers in dispatch batch: {reviewers}")
-        if requested != dispatchable:
+        is_unbound_replay = (
+            not dispatchable
+            and requested == set(required_reviewers)
+            and all(
+                ledger.get("reviewers", {}).get(r, {}).get("state") == REVIEW_DISPATCHED
+                and not ledger.get("reviewers", {}).get(r, {}).get("execution_id")
+                for r in required_reviewers
+            )
+        )
+        if not is_unbound_replay and requested != dispatchable:
             raise ValidationError(
                 f"dispatch batch must exactly match dispatchable reviewers {sorted(dispatchable)}, got {sorted(requested)}"
             )
 
         used = settle_final_review_calls(repo, plan)
-        if used + len(requested) > effective_review_budget(repo, plan, policy):
+        new_calls = 0 if is_unbound_replay else len(requested)
+        if used + new_calls > effective_review_budget(repo, plan, policy):
             raise ValidationError("REVIEW_BUDGET_EXHAUSTED: final dispatch exceeds the task reviewer-call limit; use task review-budget")
 
         for r in reviewers:
@@ -610,6 +622,8 @@ def complete_review(
             raise ValidationError(f"reviewer '{reviewer}' already bound to execution '{existing_bound_id}', rejecting different execution '{execution_id}'")
 
         current_st = ledger["reviewers"][reviewer].get("state")
+        if current_st == REVIEW_ENV_BLOCKED and str(ledger["reviewers"][reviewer].get("last_error") or "").startswith("REVIEW_MODEL_UNVERIFIED:") and existing_bound_id == execution_id:
+            current_st = REVIEW_DISPATCHED
         if current_st not in (REVIEW_DISPATCHED, REVIEW_PROTOCOL_RETRY_REQUIRED):
             raise ValidationError(f"cannot complete review for '{reviewer}': state is '{current_st}', expected DISPATCHED or PROTOCOL_RETRY_REQUIRED")
 
@@ -661,11 +675,13 @@ def complete_review(
 
         # Save result JSON
         from review_models import model_evidence
-        selected_model_evidence = model_evidence(
-            current,
-            reviewer,
-            {"transcript_path": str(t_path), "repo": str(repo)},
-        )
+        try:
+            selected_model_evidence = model_evidence(current, reviewer, {"transcript_path": str(t_path), "repo": str(repo)})
+        except ValidationError as exc:
+            ledger["reviewers"][reviewer]["state"] = REVIEW_ENV_BLOCKED
+            ledger["reviewers"][reviewer]["last_error"] = str(exc)
+            save_ledger(directory, run_id, ledger)
+            raise
         result_sha = canonical_sha256(parsed)
         res_payload = {
             "model_selection": selected_model_evidence,
@@ -922,6 +938,14 @@ def main(argv: list[str] | None = None) -> int:
     status_p.add_argument("--repo", default=".")
     status_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
 
+    resume_p = subparsers.add_parser("resume", help="Record explicit authority to resume a user-cancelled reviewer")
+    resume_p.add_argument("--repo", default=".")
+    resume_p.add_argument("--task", "--task-id", dest="task", required=True)
+    resume_p.add_argument("--phase-id", default="")
+    resume_p.add_argument("--reviewer", required=True)
+    resume_p.add_argument("--source", choices=("conversation",), required=True)
+    resume_p.add_argument("--proof-reference", required=True)
+
     args = parser.parse_args(argv)
     if not args.subcommand:
         parser.print_help(sys.stderr)
@@ -929,7 +953,11 @@ def main(argv: list[str] | None = None) -> int:
 
     repo = Path(args.repo).resolve()
     try:
-        if args.subcommand == "complete":
+        if args.subcommand == "resume":
+            from reviewer_host import authorize_resume
+            print(json.dumps(authorize_resume(repo, args.task, args.reviewer, args.phase_id, args.source, args.proof_reference)))
+            return 0
+        elif args.subcommand == "complete":
             res = complete_review(
                 repo,
                 args.task,

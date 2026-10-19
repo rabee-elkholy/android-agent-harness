@@ -96,6 +96,8 @@ def _extract_transcript_response(transcript_path: Path) -> str:
     try:
         raw = target_path.read_text(encoding="utf-8")
         if target_path.suffix.lower() == ".jsonl" or "\n{" in raw:
+            from antigravity_runtime import is_trusted_antigravity_path
+            native_transcript = is_trusted_antigravity_path(target_path)
             lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
             if any(not isinstance(step, dict) for step in lines):
                 raise ValidationError("Transcript entries must be JSON objects")
@@ -103,10 +105,11 @@ def _extract_transcript_response(transcript_path: Path) -> str:
                 source = str(step.get("source") or "").upper()
                 stype = str(step.get("type") or "").upper()
                 content = str(step.get("content") or "")
-                if content and (source == "MODEL" or stype in ("PLANNER_RESPONSE", "ASSISTANT_RESPONSE")):
+                native_reply = stype in ("PLANNER_RESPONSE", "ASSISTANT_RESPONSE") and source in ("", "MODEL")
+                legacy_reply = source == "MODEL" and not stype and not native_transcript
+                if content and (native_reply or legacy_reply) and not step.get("tool_calls"):
                     return content
-            if lines and lines[-1].get("content"):
-                return str(lines[-1]["content"])
+            raise ValidationError("no model response in reviewer transcript; prompts and tool output are not reviewer results")
         else:
             data = json.loads(raw)
             if not isinstance(data, dict):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,6 +28,12 @@ def main() -> int:
 
         err = payload.get("error")
         if not err:
+            # Host result shapes vary. IDs are merely candidates until the
+            # canonical child transcript matches a dispatched review brief.
+            from reviewer_host import reviewer_context
+            output = json.dumps(payload.get("toolResult") or payload.get("tool_response") or payload.get("toolOutput") or payload.get("output") or payload.get("result") or "")
+            for execution_id in set(re.findall(r'conversationId[\\"\s:]+([A-Za-z0-9_-]{4,128})', output)):
+                reviewer_context(Path(os.environ.get("HARNESS_REPO", ".")).resolve(), execution_id, bind=True)
             print(json.dumps({}))
             return 0
 
@@ -37,6 +44,13 @@ def main() -> int:
                 args = json.loads(args)
             except Exception:
                 args = {}
+
+        if str(call.get("name") or payload.get("toolName") or "") == "send_message":
+            from reviewer_host import mark_resume_failed
+            recipient = str(args.get("Recipient") or args.get("recipient") or "")
+            mark_resume_failed(Path(os.environ.get("HARNESS_REPO", ".")).resolve(), recipient, str(err))
+            print(json.dumps({}))
+            return 0
 
         subagents = args.get("Subagents") or args.get("subagents") or []
         roles = []

@@ -12,6 +12,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
     if plan is None:
         plan = _engine._load_plan(repo, task_id)
     state = str(plan.get("status") or "").upper()
+    pending = _engine.state_root(repo) / "review-model-update.json"
+    if pending.exists():
+        return {"code": "REVIEW_MODEL_UPDATE_INCOMPLETE", "kind": "HARNESS_DIAGNOSTIC", "blocking": True,
+                "command": "", "reason": "Repeat the recorded reviewer-model command to finish interrupted publication before dispatch.",
+                "inputs": _engine.read_json(pending), "expected": {}}
     identity = f'--repo . --task-id {task_id}'
     run_host = _engine.resolve_review_host(repo, host)
     from host_continuation import CONTINUABLE_STATES, load_session

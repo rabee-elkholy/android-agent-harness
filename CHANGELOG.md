@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.36] - 2026-10-19
+
+### Antigravity reviewer dispatch resilience, native tiered Flash verification, and Windows UTF-8 safety
+
+- Force UTF-8 stdout/stderr across CLI entry points (`harness.py`, `review_models.py`, `_vnext_common.py`) so Arabic developer proof strings and router payloads never fail on Windows `cp1252` consoles.
+- Allow `define_subagent` before phase reviewer dispatch and allow idempotent unbound cohort replay in `WAIT_FOR_PHASE_REVIEWERS` / `VERIFYING` when a prior `invoke_subagent` failed before binding an `execution_id`.
+- Allow `Model="flash"` (and `Model="pro"`) in `invoke_subagent` when the developer selected a matching explicit Antigravity model, and accept native `gemini-3.8-flash-tiered` execution metadata alongside `gemini-3.8-flash-high` / `gemini-3.8-flash-medium`.
+- Include the reviewer discovery guidance footer in generated Antigravity `.agents/agents/<role>/agent.md` files.
+
 ## [1.1.35] - 2026-10-19
 
 ### Antigravity review model selection and dynamic flash support

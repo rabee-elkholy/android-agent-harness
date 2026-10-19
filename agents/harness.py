@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 
@@ -56,7 +57,8 @@ def _run(script: str, args: list[str]) -> int:
                 return 1
     try:
         with lease:
-            proc = subprocess.run([sys.executable, "-u", str(target), *args], cwd=str(REPO_ROOT), check=False)
+            proc = subprocess.run([sys.executable, "-u", str(target), *args], cwd=str(REPO_ROOT), check=False,
+                                  env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     except ValidationError as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
@@ -132,6 +134,9 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
 
 
 def main(argv: list[str] | None = None) -> int:
+    sys.path.insert(0, str(SCRIPTS))
+    from _vnext_common import configure_utf8_output
+    configure_utf8_output()
     args = list(argv if argv is not None else sys.argv[1:])
     import os
     import time
@@ -172,7 +177,11 @@ def main(argv: list[str] | None = None) -> int:
     # still queried status for the next step; those lifecycle steps print it too.
     step = step or (len(args) > 1 and args[0] == "task" and args[1] in NEXT_STEP_TASK_ACTIONS)
     if step and not {"--json", "-h", "--help"} & set(args):
-        _print_next_step(step_args=args, exit_code=code)
+        try:
+            _print_next_step(step_args=args, exit_code=code)
+        except (OSError, UnicodeError, ValueError):
+            # Advisory printing cannot change the completed operation's exit code.
+            pass
     return code
 
 

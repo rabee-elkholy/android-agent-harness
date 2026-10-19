@@ -3102,6 +3102,8 @@ def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
     if authority.get("zoho_link"):
         lines.append(f"Zoho link: {displayed(authority.get('zoho_link'))}")
     if plan_document is not None:
+        from review_models import model_choice_summary
+        lines.append(model_choice_summary(Path(plan_document).resolve().parents[4], str(plan.get("task_id") or "")))
         lines.append(f"Full plan: [plan.md]({Path(plan_document).resolve().as_uri()})")
     lines.append(f"Plan hash: {str(plan.get('plan_sha256') or '')[:12]}")
     # Markdown joins single-newline lines into one paragraph; as a list each field stays on its own line.
@@ -3492,6 +3494,8 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
     if not reapproval:
         lines.append(approval_brief(result, sensitive_advisory=sensitive))
     lines.append(f"PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
+    from review_models import model_choice_summary
+    lines.append(model_choice_summary(repo, str(result["task_id"])))
     if document.is_file():
         lines.append(f"PLAN_DOCUMENT_URI={Path(document).resolve().as_uri()}")
     pre_existing = pre_existing_changes_line(repo, result)
@@ -3527,6 +3531,8 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from _vnext_common import configure_utf8_output
+    configure_utf8_output()
     enable_line_buffered_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)

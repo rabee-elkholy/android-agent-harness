@@ -15,7 +15,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "invoke_subagent",
+        "matcher": "invoke_subagent|send_message",
         "hooks": [
           {
             "type": "command",

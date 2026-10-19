@@ -75,6 +75,7 @@ ANTIGRAVITY_REVIEWER_TOOLS = (
     "grep_search",
     "find_by_name",
     "list_dir",
+    "run_command",
 )
 
 ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS = (

@@ -182,6 +182,10 @@ def review_action(context: VerificationContext) -> dict | None:
                 )
                 st = get_review_execution_status(repo, task_id)
                 rev_states = st.get("reviewers", {})
+                from reviewer_host import lifecycle_action
+                host_action = lifecycle_action(repo, current_run, rev_states)
+                if host_action:
+                    return host_action
 
                 failed_proto = [r for r in required_reviewers if rev_states.get(r, {}).get("state") == REVIEW_FAILED_PROTOCOL]
                 if failed_proto:
@@ -310,7 +314,8 @@ def review_action(context: VerificationContext) -> dict | None:
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))}.{_engine._prompt_hint(prompts)}",
+                        "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
+                                   f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))}.{_engine._prompt_hint(prompts)}"),
                         **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                         "reviewers": sorted(not_dispatched),
                         "package_path": str(pkg_path),

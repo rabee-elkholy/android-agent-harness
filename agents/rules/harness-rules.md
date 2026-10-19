@@ -50,6 +50,7 @@ Use `.agents/harness.py task` for state; engine scripts remain compatibility/dia
 Use the policy computed by `draft`/`revise` before approval and by `prepare-verification` on the actual final diff. These lifecycle commands already classify and apply central policy. For a separate diagnostic, use `python .agents/harness.py policy --json`, which performs classification once. Do not routinely call classifier, policy and status again when their authoritative results are already available. Diagnostic policy is not frozen verification evidence.
 
 - Central policy is the sole router for gates, reviewers, device checks, and skills.
+- Reviewer-model choice is separate from plan approval. Show its setting/scope with the plan; keep unanswered choices pending and finish model publication before dispatch.
 - Load selected skills before acting. Missing/corrupt/incompatible mandatory skills block that surface.
 - Instruction order: kernel and developer authority -> approved task -> central/project policy -> project conventions -> routed skills.
 - UNKNOWN needs developer resolution; never downgrade risk silently or exceed model budget.
@@ -78,6 +79,7 @@ Use the policy computed by `draft`/`revise` before approval and by `prepare-veri
 - `delivery_snapshot_sha256` identifies delivery tree; `change_set_sha256` identifies status, paths, renames/deletions, and untracked files relative to baseline.
 - Every gate/review must match the same snapshot, change-set, producer, and schema. Evidence is append-only under `.agents/state/runs/`.
 - Stale, partial, malformed, mismatched, truncated, or unknown-schema evidence blocks delivery. Build/install/launch must reference the same immutable APK artifact-set hash. Never edit evidence/state manually. `EMERGENCY_UNVERIFIED` cannot approve delivery.
+- User-cancelled reviewers need explicit `review resume` authority for the same execution. Preserve budgets and frozen proof. Frontmatter is configuration; native metadata is observed model evidence.
 
 ## 6. Android and environment safety
 

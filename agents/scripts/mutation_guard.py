@@ -841,6 +841,10 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if raw_entry in {"adb", "gradlew", "gradlew.bat", "gradle"}:
         return False, "Direct Gradle/ADB execution is blocked; use the harness build or device commands."
     entry, model_args = _entry(normalized, repo)
+    if entry in {"harness_cli", "android-harness"} and model_args[:2] == ["review", "resume"]:
+        if "--source" in model_args and model_args[model_args.index("--source") + 1:model_args.index("--source") + 2] == ["conversation"] and "--proof-reference" in model_args:
+            return True, "explicit developer reviewer resume; command validates native cancellation and execution"
+        return False, "reviewer resume requires explicit conversation authority"
     if entry in {"harness_cli", "android-harness"} and model_args[:2] == ["review", "models"]:
         entry, model_args = "review_models", model_args[2:]
     if entry == "review_models" and model_args[:1] == ["set"]:

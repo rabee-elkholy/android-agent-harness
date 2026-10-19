@@ -117,6 +117,9 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\nclass App\n")
         run_git(self.repo, "add", "-A")
         run_git(self.repo, "commit", "-m", "chore: baseline commit", "-q")
+        from review_models import set_policy
+        set_policy(self.repo, {"schema_version": 1, "default": "inherit", "overrides": {}}, task_id=None,
+                   host="antigravity", source="conversation", proof_reference="Use chat model for phase lifecycle fixtures")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -1578,7 +1581,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
             res = {"stdout": proc.stdout, "stderr": proc.stderr}
         return proc.returncode, res
 
-    def _setup_dispatch_state(self) -> tuple[str, list[str], dict[str, str], dict[str, Any]]:
+    def _setup_dispatch_state(self, *, select_model: bool = True) -> tuple[str, list[str], dict[str, str], dict[str, Any]]:
         product_file = self.repo / ".agents" / "scripts" / "_product.py"
         if not product_file.exists():
             write_file(product_file, "PRIMARY_AI_HOST = 'antigravity'\n")
@@ -1590,6 +1593,11 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "Auth.kt", "package com.example\nclass Auth {\n  fun encrypt(data: String) {}\n}\n")
         self._pass_phase_tests(task_id, "p1")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        if select_model:
+            from review_models import load_policy, set_policy
+            if load_policy(self.repo, task_id)[1] == "default":
+                set_policy(self.repo, {"schema_version": 1, "default": "inherit", "overrides": {}},
+                           task_id=task_id, host="antigravity", source="conversation", proof_reference="Use chat model")
         pkg_p, meta = build_phase_package(self.repo, task_id, "p1")
         act = resolve_next_action(self.repo, task_id)
         self.assertEqual("DISPATCH_PHASE_REVIEWERS", act["code"])

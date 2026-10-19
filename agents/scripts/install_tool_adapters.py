@@ -349,6 +349,11 @@ def claude_agent_markdown(data: dict) -> str:
         f"model: {model}\n"
         f"---\n\n"
         f"{prompt}\n"
+        "\nReviewer discovery: run_command is restricted by the native hook to "
+        "`python .agents/harness.py graph --find <symbol> --json`, "
+        "`graph --feature <name> --json`, and `task-context --file <path> --json` "
+        "or `task-context --symbol <name> --json`. Use these to expand a denied search. "
+        "Never run builds, tests, lifecycle commands, arbitrary shell, writes or reviewer orchestration.\n"
     )
 
 
@@ -400,6 +405,11 @@ def antigravity_agent_markdown(data: dict, *, model: str | None = None) -> str:
         f"{tools_block}\n"
         f"---\n\n"
         f"{prompt}\n"
+        "\nReviewer discovery: run_command is restricted by the native hook to "
+        "`python .agents/harness.py graph --find <symbol> --json`, "
+        "`graph --feature <name> --json`, and `task-context --file <path> --json` "
+        "or `task-context --symbol <name> --json`. Use these to expand a denied search. "
+        "Never run builds, tests, lifecycle commands, arbitrary shell, writes or reviewer orchestration.\n"
     )
 
 

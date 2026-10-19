@@ -34,6 +34,14 @@ class ValidationError(HarnessError):
     """Raised when an artifact or path violates a declared contract."""
 
 
+def configure_utf8_output() -> None:
+    """CLI output uses UTF-8 even when Windows pipes default to a legacy codepage."""
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
