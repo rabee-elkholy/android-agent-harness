@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.35] - 2026-10-19
+
+### Antigravity review model selection and dynamic flash support
+
+- Support interactive reviewer model selection (`SELECT_REVIEW_MODEL`) before first review dispatch on Antigravity with 5 developer choices (`flash-dynamic-task`, `flash-dynamic-once`, `inherit-task`, `inherit-once`, `hybrid-smart-task`).
+- Support dynamic Gemini Flash thinking levels (`high` for critical security, bug, and perf-anr guardian specialists; `medium` for standard reviewers).
+- Sync resolved review models into `.agents/agents/<role>/agent.md` frontmatter while maintaining `INHERIT_PARENT_BY_OMISSION` on `invoke_subagent`.
+
 ## [1.1.34] - 2026-10-18
 
 ### Developer-owned reviewer model choices
