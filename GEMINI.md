@@ -45,14 +45,14 @@ Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AG
          Role = exact reviewer role
          Prompt = exact current reviewer brief
          Workspace = inherit (or omit if host default is used consistently)
-     - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
+         Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
      - do not invent reasoning fields;
      - in chat, list each dispatched/completed reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
   3. Yield; do not poll.
-  4. On reactive completion, run `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>`.
+  4. On reactive completion, run `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` in one call to complete all ready reviewers together).
   5. On RETRY_REVIEW_PROTOCOL, execute the exact router-provided send_message.
   6. On REVIEW_ENV_BLOCKED / REVIEW_PROFILE_BLOCKED / REVIEW_PROTOCOL_BLOCKED, stop reviewer flow and report blocker.
-  7. After all completed, run `python .agents/harness.py review finalize --task <id>`.
+  7. After all completed, run `python .agents/harness.py review finalize --task <id>` (if not already auto-finalized).
   No legacy PASS token. No EVIDENCE footer. No self-certification.
 - Exact Scoped Phase Review V2 Procedure (Antigravity):
   1. On `BUILD_PHASE_REVIEW_PACKAGE`: run `python .agents/harness.py phase-review package --task-id <id> --phase-id <phase>`.
@@ -64,11 +64,11 @@ Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AG
          Role = exact reviewer role
          Prompt = exact current phase brief
          Workspace = inherit (or omit if host default is used consistently)
-     - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
+         Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
      - do not invent reasoning fields;
      - in chat, list each dispatched/completed phase reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
   3. Yield; do not poll.
-  4. On reactive reviewer completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>`.
+  4. On reactive reviewer completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` in one call when multiple phase reviewers finish together).
   5. On `RETRY_PHASE_REVIEW_PROTOCOL`, execute the exact router-provided `send_message`.
   6. On `PHASE_REVIEW_ENV_BLOCKED` / `PHASE_REVIEW_PROTOCOL_BLOCKED` / `PHASE_REVIEW_LEDGER_BLOCKED`, stop reviewer flow and report blocker.
   7. After all phase reviewers completed, run `python .agents/harness.py phase-review finalize --task-id <id> --phase-id <phase>`.

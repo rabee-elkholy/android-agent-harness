@@ -212,6 +212,9 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
             selected = selections[rev]
             rev_entry.update(selected)
             rev_entry["dispatch_contract"].update({key: selected[key] for key in ("model_policy", "model_argument", "native_arguments")})
+            if is_antigravity and "flash" in str(selected.get("resolved_model") or ""):
+                rev_entry["dispatch_contract"]["model_argument"] = "Model"
+                rev_entry["dispatch_contract"]["native_arguments"] = {"Model": "flash"}
             if selected.get("agent_frontmatter_model") is not None:
                 rev_entry["dispatch_contract"]["agent_frontmatter_model"] = selected.get("agent_frontmatter_model")
             if selected.get("thinking_level") is not None:
@@ -248,13 +251,16 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
         if str(host).strip().lower() == "antigravity" or str(current.get("review_host") or "").strip().lower() == "antigravity":
             profile["dispatch_contract"] = {
                 "tool": "invoke_subagent",
-                "subagent_allowed_keys": list(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS),
+                "subagent_allowed_keys": list(ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS) + ["Model"],
                 "workspace_policy": "inherit_or_omit",
                 "model_policy": "DEVELOPER_SELECTED_NATIVE",
-                "model_argument": None,
+                "model_argument": "Model",
                 "reasoning_argument": None,
                 "agent_frontmatter_field": "model",
-                "instructions": "Never pass model or Model in invoke_subagent arguments. Antigravity resolves each reviewer's model from .agents/agents/<role>/agent.md frontmatter.",
+                "instructions": (
+                    "Pass Model='flash' in invoke_subagent for each reviewer whose model in reviewer_models is gemini-3.8-flash-*. "
+                    "Omit Model (INHERIT_PARENT_BY_OMISSION) for reviewers whose model is inherit."
+                ),
             }
         else:
             profile["dispatch_contract"] = {

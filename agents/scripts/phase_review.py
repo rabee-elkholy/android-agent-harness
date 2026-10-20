@@ -1503,8 +1503,8 @@ def _main(argv: list[str] | None = None) -> int:
     complete_cmd.add_argument("--repo", default=".")
     complete_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
     complete_cmd.add_argument("--phase-id", required=True)
-    complete_cmd.add_argument("--reviewer", required=True)
-    complete_cmd.add_argument("--execution-id", required=True)
+    complete_cmd.add_argument("--reviewer", action="append", required=True, help="Reviewer role (repeatable for batch completion)")
+    complete_cmd.add_argument("--execution-id", action="append", required=True, help="Trusted execution transcript ID (repeatable, matched in order with --reviewer)")
     complete_cmd.add_argument("--host")
     complete_cmd.add_argument("--response-file", help="Unchanged reviewer response for hosts without a trusted transcript source; on Claude Code the subagent transcript path (JSONL)")
 
@@ -1537,44 +1537,53 @@ def _main(argv: list[str] | None = None) -> int:
         print("INDEPENDENT_EXECUTION_VERIFIED=false")
         return 0
     elif args.subcommand == "complete":
+        revs = list(args.reviewer) if isinstance(args.reviewer, list) else [args.reviewer]
+        exec_ids = list(args.execution_id) if isinstance(args.execution_id, list) else [args.execution_id]
+        if len(revs) != len(exec_ids):
+            raise ValidationError(f"--reviewer count ({len(revs)}) must match --execution-id count ({len(exec_ids)})")
+        if args.response_file and len(revs) > 1:
+            raise ValidationError("--response-file cannot be combined with multiple --reviewer arguments")
         if args.response_file:
             run_file = phase_run_file(task_dir(repo, args.task_id), args.phase_id)
             if not run_file.is_file():
                 raise ValidationError(f"no active phase review run found for phase '{args.phase_id}'")
             if has_trusted_review_source(str(read_json(run_file).get("review_host") or "")):
                 raise ValidationError("trusted host phase reviews require transcript ingestion; --response-file is unavailable")
-        raw_response, response_source = None, None
-        if not args.response_file:
-            run_file = phase_run_file(task_dir(repo, args.task_id), args.phase_id)
-            run_host = str(read_json(run_file).get("review_host") or "") if run_file.is_file() else ""
-            if run_file.is_file() and not has_trusted_review_source(run_host):
-                # Claude Code: the execution id is the subagent's agent id; read its transcript.
-                found = find_claude_subagent_transcript(args.execution_id)
-                if found:
-                    raw_response, response_source = read_claude_subagent_transcript(found)
-        if args.response_file:
-            response_path = Path(args.response_file).expanduser()
-            if not response_path.is_file():
-                raise ValidationError(
-                    f"--response-file must be the path of a file holding the unchanged reviewer reply "
-                    f"(on Claude Code, the reviewer's subagent transcript); '{args.response_file}' is not a file"
-                )
-            if is_claude_transcript(response_path):
-                # Claude Code: the reviewer's last reply, read unchanged from its subagent transcript.
-                raw_response, response_source = read_claude_subagent_transcript(response_path)
+        results = []
+        run_file = phase_run_file(task_dir(repo, args.task_id), args.phase_id)
+        run_host = str(read_json(run_file).get("review_host") or "") if run_file.is_file() else ""
+        for rev_name, exec_id in zip(revs, exec_ids):
+            raw_response, response_source = None, None
+            if not args.response_file:
+                if run_file.is_file() and not has_trusted_review_source(run_host):
+                    # Claude Code: the execution id is the subagent's agent id; read its transcript.
+                    found = find_claude_subagent_transcript(exec_id)
+                    if found:
+                        raw_response, response_source = read_claude_subagent_transcript(found)
             else:
-                raw_response = response_path.read_text(encoding="utf-8")
-        res = complete_phase_review(
-            repo,
-            args.task_id,
-            args.phase_id,
-            args.reviewer,
-            args.execution_id,
-            host=args.host,
-            raw_response=raw_response,
-            response_source=response_source,
-        )
-        print(json.dumps(res, indent=2))
+                response_path = Path(args.response_file).expanduser()
+                if not response_path.is_file():
+                    raise ValidationError(
+                        f"--response-file must be the path of a file holding the unchanged reviewer reply "
+                        f"(on Claude Code, the reviewer's subagent transcript); '{args.response_file}' is not a file"
+                    )
+                if is_claude_transcript(response_path):
+                    # Claude Code: the reviewer's last reply, read unchanged from its subagent transcript.
+                    raw_response, response_source = read_claude_subagent_transcript(response_path)
+                else:
+                    raw_response = response_path.read_text(encoding="utf-8")
+            res = complete_phase_review(
+                repo,
+                args.task_id,
+                args.phase_id,
+                rev_name,
+                exec_id,
+                host=args.host,
+                raw_response=raw_response,
+                response_source=response_source,
+            )
+            results.append(res)
+        print(json.dumps(results[0] if len(results) == 1 else {"completed": results}, indent=2))
         return 0
     elif args.subcommand == "finalize":
         res = finalize_phase_review(repo, args.task_id, args.phase_id)

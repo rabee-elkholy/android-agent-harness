@@ -67,6 +67,8 @@ def _load_ledger(run: dict, path: Path) -> dict:
 def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> dict | None:
     transcript = resolve_transcript(execution_id)
     rows = _steps(transcript) if transcript is not None else []
+    if rows and any(r.get("source") == "USER_EXPLICIT" and r.get("type") == "USER_INPUT" for r in rows[:8]):
+        return None
     messages = [str(r.get("content") or "") for r in rows
                 if r.get("source") == "SYSTEM_SDK" and r.get("type") == "SYSTEM_MESSAGE"][:8]
     pending_review = False
@@ -123,13 +125,22 @@ def _save_ledger(path: Path, ledger: dict) -> None:
     atomic_write_json(path, ledger)
 
 
-def cancellation(entry: dict) -> str | None:
-    parent = resolve_transcript(str(entry.get("parent_execution_id") or ""))
+def cancellation(entry: dict, *, _parent_steps_cache: dict[str, list[dict]] | None = None) -> str | None:
+    parent_id = str(entry.get("parent_execution_id") or "")
     execution_id = str(entry.get("execution_id") or "")
-    if parent is None or not execution_id:
+    if not parent_id or not execution_id:
         return None
+    if _parent_steps_cache is not None and parent_id in _parent_steps_cache:
+        parent_rows = _parent_steps_cache[parent_id]
+    else:
+        parent = resolve_transcript(parent_id)
+        if parent is None:
+            return None
+        parent_rows = _steps(parent)
+        if _parent_steps_cache is not None:
+            _parent_steps_cache[parent_id] = parent_rows
     latest = None
-    for row in _steps(parent):
+    for row in parent_rows:
         content = str(row.get("content") or "")
         if row.get("source") != "SYSTEM_SDK" or row.get("type") != "SYSTEM_MESSAGE":
             continue
@@ -142,10 +153,11 @@ def cancellation(entry: dict) -> str | None:
 def lifecycle_action(repo: Path, run: dict, reviewers: dict) -> dict | None:
     if run.get("review_host") != "antigravity":
         return None
+    parent_steps_cache: dict[str, list[dict]] = {}
     for role, entry in reviewers.items():
         if entry.get("state") not in {"DISPATCHED", "PROTOCOL_RETRY_REQUIRED"}:
             continue
-        cancelled_at = cancellation(entry)
+        cancelled_at = cancellation(entry, _parent_steps_cache=parent_steps_cache)
         if not cancelled_at:
             continue
         authority = entry.get("resume_authority") or {}
@@ -173,6 +185,7 @@ def lifecycle_action(repo: Path, run: dict, reviewers: dict) -> dict | None:
                 "inputs": inputs, "expected": {}}
     # A finished native reply is ready for ingestion, not an endless WAIT. The
     # existing completion command still validates protocol, snapshot and model.
+    ready: list[tuple[str, str]] = []
     for role, entry in reviewers.items():
         if entry.get("state") != "DISPATCHED" or not entry.get("execution_id"):
             continue
@@ -182,13 +195,23 @@ def lifecycle_action(repo: Path, run: dict, reviewers: dict) -> dict | None:
         model_steps = [r for r in _steps(transcript) if r.get("source") == "MODEL" and r.get("type") == "PLANNER_RESPONSE"]
         last = model_steps[-1] if model_steps else {}
         if last.get("content") and not last.get("tool_calls"):
-            if run.get("phase_id"):
-                command = f"python .agents/harness.py phase-review complete --task-id {run['task_id']} --phase-id {run['phase_id']} --reviewer {role} --execution-id {entry['execution_id']} --host antigravity"
-            else:
-                command = f"python .agents/harness.py review complete --task-id {run['task_id']} --reviewer {role} --execution-id {entry['execution_id']} --host antigravity"
-            return {"code": "COMPLETE_REVIEWER", "kind": "HARNESS_COMMAND", "blocking": True, "command": command,
-                    "reason": f"Native reviewer {role} returned a reply; validate and ingest that same execution.",
-                    "inputs": {"task_id": run["task_id"], "reviewer": role, "execution_id": entry["execution_id"]}, "expected": {}}
+            ready.append((role, str(entry["execution_id"])))
+    if ready:
+        first_role, first_exec = ready[0]
+        pairs_str = " ".join(f"--reviewer {r} --execution-id {eid}" for r, eid in ready)
+        if run.get("phase_id"):
+            command = f"python .agents/harness.py phase-review complete --task-id {run['task_id']} --phase-id {run['phase_id']} {pairs_str} --host antigravity"
+        else:
+            command = f"python .agents/harness.py review complete --task-id {run['task_id']} {pairs_str} --host antigravity"
+        names = ", ".join(r for r, _ in ready)
+        return {"code": "COMPLETE_REVIEWER", "kind": "HARNESS_COMMAND", "blocking": True, "command": command,
+                "reason": f"Native reviewer(s) {names} returned a reply; validate and ingest in one call.",
+                "inputs": {
+                    "task_id": run["task_id"],
+                    "reviewer": first_role,
+                    "execution_id": first_exec,
+                    "ready_reviewers": [{"reviewer": r, "execution_id": eid} for r, eid in ready],
+                }, "expected": {}}
     return None
 
 

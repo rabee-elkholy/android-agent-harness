@@ -756,6 +756,69 @@ class ReviewerModelsTests(unittest.TestCase):
         for r in roster:
             self.assertIn(f"{r} [{rm_map[r]}]", action["reason"])
 
+    def test_antigravity_flash_enforced_in_invoke_subagent_and_batch_complete(self):
+        from phase_review import phase_run_file, phase_ledger_file, main as phase_main
+        import workflow
+        fixture, task, roster, _ = self.phase_fixture()
+        models.set_policy(
+            fixture.repo, self.policy("flash-dynamic"), task_id=task,
+            host="antigravity", source="conversation", proof_reference="Flash for task",
+        )
+        run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
+        briefs = {r: Path(run["briefs"][r]).read_text(encoding="utf-8") for r in roster}
+
+        # Omitting Model="flash" when flash-dynamic is active is denied by pre_tool_safety
+        subagents_no_model = [{"TypeName": r, "Role": r, "Prompt": briefs[r]} for r in roster]
+        _, denied = fixture._run_pre_tool_safety({"toolName": "invoke_subagent", "toolArgs": {"Subagents": subagents_no_model}})
+        self.assertEqual("deny", denied.get("decision"), denied)
+        self.assertIn("REVIEWER_MODEL_MISMATCH", str(denied.get("reason") or ""), denied)
+
+        # Supplying Model="flash" is allowed
+        subagents_flash = [{"TypeName": r, "Role": r, "Prompt": briefs[r], "Model": "flash"} for r in roster]
+        _, allowed = fixture._run_pre_tool_safety({"toolName": "invoke_subagent", "toolArgs": {"Subagents": subagents_flash}})
+        self.assertEqual("allow", allowed.get("decision"), allowed)
+
+        # Verify batch COMPLETE_REVIEWER when multiple reviewers finish
+        ledger_path = phase_ledger_file(task_dir(fixture.repo, task), "p1")
+        ledger = read_json(ledger_path)
+        root = None
+        for idx, r in enumerate(roster):
+            exec_id = f"rev-batch-{idx}"
+            ledger["reviewers"][r]["execution_id"] = exec_id
+            root, identity = self.antigravity_identity(
+                configured="gemini-3.8-flash-tiered",
+                observed="gemini-3.8-flash-n",
+                cid=exec_id,
+            )
+            t_file = Path(identity["transcript_path"])
+            res_body = {
+                "schema_version": 2, "task_id": task, "run_id": run["phase_review_run_id"],
+                "reviewer": r, "review_package_sha256": run["package_sha256"],
+                "verdict": "PASS", "findings": [],
+            }
+            step = {
+                "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "content": "```json\n" + json.dumps(res_body) + "\n```",
+            }
+            t_file.write_text(json.dumps(step) + "\n", encoding="utf-8")
+        from phase_review import compute_ledger_sha
+        ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+        atomic_write_json(ledger_path, ledger)
+
+        with mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(root), "HARNESS_HOST": "antigravity"}):
+            action = workflow.resolve_next_action(fixture.repo, task)
+            self.assertEqual("COMPLETE_REVIEWER", action["code"])
+            for idx, r in enumerate(roster):
+                self.assertIn(f"--reviewer {r} --execution-id rev-batch-{idx}", action["command"])
+            batch_args = ["complete", "--repo", str(fixture.repo), "--task-id", task, "--phase-id", "p1"]
+            for idx, r in enumerate(roster):
+                batch_args.extend(["--reviewer", r, "--execution-id", f"rev-batch-{idx}"])
+            rc = phase_main(batch_args)
+            self.assertEqual(0, rc)
+            updated_ledger = read_json(ledger_path)
+            for r in roster:
+                self.assertEqual("COMPLETED", updated_ledger["reviewers"][r]["state"])
+
 
 if __name__ == "__main__":
     unittest.main()

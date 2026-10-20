@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.39] - 2026-10-20
+
+### Antigravity `Model="flash"` subagent enforcement and fast batch reviewer completion
+
+- Enforce `Model="flash"` in `pre_tool_safety.py`, `review_execution.py`, `review_models.py`, and Antigravity host templates whenever a reviewer's resolved model is `gemini-3.8-flash-*` (while preserving `INHERIT_PARENT_BY_OMISSION` for `inherit`), preventing Antigravity's `invoke_subagent` tool from defaulting `Model` to `'inherit'` and causing `REVIEW_MODEL_MISMATCH`.
+- Support batch reviewer completion (`--reviewer <role> --execution-id <id>` repeatable in a single command) in `review_orchestrator.py` and `phase_review.py`, and emit a single batched `COMPLETE_REVIEWER` command from `reviewer_host.py` when multiple reviewer subagents finish simultaneously.
+- Eliminate ~15–25s of redundant subprocess overhead during `review complete` / `review finalize` on Windows by batching `git check-ignore -z --stdin` in `delivery_manifest.py`, skipping duplicate `verification_freshness` checks during auto-finalization, caching parent transcript reads in `reviewer_host.py`, and short-circuiting `reviewer_context` on main-conversation turns.
+
 ## [1.1.38] - 2026-10-20
 
 ### Antigravity top-level `invoke_subagent` compatibility, clause-scoped instruction conflict detection, and `IDLE` context lifecycle commands

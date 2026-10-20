@@ -539,12 +539,23 @@ def parse_structured_result(
 
 
 def complete_review(
-
     repo: Path,
     task_id: str,
     reviewer: str,
     execution_id: str,
     host: str | None = None,
+) -> dict[str, Any]:
+    return _complete_review_core(repo, task_id, reviewer, execution_id, host=host)
+
+
+def _complete_review_core(
+    repo: Path,
+    task_id: str,
+    reviewer: str,
+    execution_id: str,
+    host: str | None = None,
+    *,
+    _freshness_checked: bool = False,
 ) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
     current = read_json(directory / "current-run.json")
@@ -566,14 +577,15 @@ def complete_review(
     elif not host:
         host = run_host or "generic"
 
-    from workflow import verification_freshness
-    freshness = verification_freshness(repo, task_id, current)
-    if not freshness.get("fresh"):
-        raise ValidationError(
-            f"STALE_VERIFICATION_RUN: repository modified after verification freeze ({freshness.get('reason_code')}). "
-            f"Result from reviewer '{reviewer}' cannot be ingested into stale run '{run_id}'. "
-            f"Run 'python .agents/harness.py task resume --task-id {task_id}' to resume implementation."
-        )
+    if not _freshness_checked:
+        from workflow import verification_freshness
+        freshness = verification_freshness(repo, task_id, current)
+        if not freshness.get("fresh"):
+            raise ValidationError(
+                f"STALE_VERIFICATION_RUN: repository modified after verification freeze ({freshness.get('reason_code')}). "
+                f"Result from reviewer '{reviewer}' cannot be ingested into stale run '{run_id}'. "
+                f"Run 'python .agents/harness.py task resume --task-id {task_id}' to resume implementation."
+            )
 
     if reviewer not in required_reviewers:
         raise ValidationError(f"reviewer '{reviewer}' is not in policy required reviewers: {required_reviewers}")
@@ -724,9 +736,8 @@ def complete_review(
             ledger["reviewers"][r].get("state") in (REVIEW_COMPLETED, REVIEW_INGESTED)
             for r in required_reviewers
         )
-
-    if all_completed:
-        finalize_review_execution(repo, task_id, run_id)
+        if all_completed:
+            _finalize_review_execution_locked(repo, task_id, run_id, ledger, _freshness_checked=True)
 
     return parsed
 
@@ -736,6 +747,8 @@ def _finalize_review_execution_locked(
     task_id: str,
     run_id: str | None = None,
     ledger: dict[str, Any] | None = None,
+    *,
+    _freshness_checked: bool = False,
 ) -> dict[str, Any]:
     directory = task_dir(repo, task_id)
     current = read_json(directory / "current-run.json")
@@ -747,14 +760,15 @@ def _finalize_review_execution_locked(
     pkg_path = active_review_package_path(repo, current)
     pkg_sha = sha256_file(pkg_path) if pkg_path.is_file() else ""
     required_reviewers = list(policy.get("reviewers") or [])
-    from workflow import verification_freshness
-    freshness = verification_freshness(repo, task_id, current)
-    if not freshness.get("fresh"):
-        raise ValidationError(
-            f"STALE_VERIFICATION_RUN: repository modified after verification freeze ({freshness.get('reason_code')}). "
-            f"Cannot finalize reviews for stale run '{run_id}'. "
-            f"Run 'python .agents/harness.py task resume --task-id {task_id}' to resume implementation."
-        )
+    if not _freshness_checked:
+        from workflow import verification_freshness
+        freshness = verification_freshness(repo, task_id, current)
+        if not freshness.get("fresh"):
+            raise ValidationError(
+                f"STALE_VERIFICATION_RUN: repository modified after verification freeze ({freshness.get('reason_code')}). "
+                f"Cannot finalize reviews for stale run '{run_id}'. "
+                f"Run 'python .agents/harness.py task resume --task-id {task_id}' to resume implementation."
+            )
 
     if ledger is None:
         ledger = load_ledger(directory, run_id)
@@ -932,11 +946,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Harness review execution orchestrator")
     subparsers = parser.add_subparsers(dest="subcommand")
 
-    complete_p = subparsers.add_parser("complete", help="Record trusted completion of reviewer")
+    complete_p = subparsers.add_parser("complete", help="Record trusted completion of reviewer(s)")
     complete_p.add_argument("--repo", default=".")
     complete_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
-    complete_p.add_argument("--reviewer", required=True, help="Reviewer role")
-    complete_p.add_argument("--execution-id", required=True, help="Trusted execution transcript ID")
+    complete_p.add_argument("--reviewer", action="append", required=True, help="Reviewer role (repeatable for batch completion)")
+    complete_p.add_argument("--execution-id", action="append", required=True, help="Trusted execution transcript ID (repeatable, matched in order with --reviewer)")
     complete_p.add_argument("--host", default=None, help="Host environment")
 
     finalize_p = subparsers.add_parser("finalize", help="Aggregate review evidence")
@@ -978,22 +992,38 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(authorize_resume(repo, args.task, args.reviewer, args.phase_id, args.source, args.proof_reference)))
             return 0
         elif args.subcommand == "complete":
-            res = complete_review(
-                repo,
-                args.task,
-                args.reviewer,
-                args.execution_id,
-                host=args.host,
-            )
-            eff_model = "inherit"
+            revs = list(args.reviewer) if isinstance(args.reviewer, list) else [args.reviewer]
+            exec_ids = list(args.execution_id) if isinstance(args.execution_id, list) else [args.execution_id]
+            if len(revs) != len(exec_ids):
+                raise ValidationError(f"--reviewer count ({len(revs)}) must match --execution-id count ({len(exec_ids)})")
+            model_map: dict[str, str] = {}
             try:
                 from review_models import reviewer_model_map
                 crun_p = task_dir(repo, args.task) / "current-run.json"
                 if crun_p.is_file():
-                    eff_model = reviewer_model_map(read_json(crun_p), [args.reviewer]).get(args.reviewer, "inherit")
+                    model_map = reviewer_model_map(read_json(crun_p), revs)
             except (ImportError, OSError, ValueError, KeyError):
-                eff_model = "inherit"
-            print(f"REVIEW_COMPLETED: {args.reviewer} [{eff_model}] verdict={res.get('verdict')}")
+                model_map = {}
+            for idx, (rev_name, exec_id) in enumerate(zip(revs, exec_ids)):
+                if idx == 0:
+                    res = complete_review(
+                        repo,
+                        args.task,
+                        rev_name,
+                        exec_id,
+                        host=args.host,
+                    )
+                else:
+                    res = _complete_review_core(
+                        repo,
+                        args.task,
+                        rev_name,
+                        exec_id,
+                        host=args.host,
+                        _freshness_checked=True,
+                    )
+                eff_model = model_map.get(rev_name, "inherit")
+                print(f"REVIEW_COMPLETED: {rev_name} [{eff_model}] verdict={res.get('verdict')}")
             return 0
         elif args.subcommand == "finalize":
             res = finalize_review_execution(repo, args.task)

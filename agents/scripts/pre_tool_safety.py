@@ -614,7 +614,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
         resolved_m = str((sel_info or {}).get("resolved_model") or "")
         allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
 
-        if "model" in item or ("Model" in item and (not allowed_native_model or item.get("Model") != allowed_native_model)):
+        if "model" in item or (not allowed_native_model and "Model" in item):
             emit(
                 "deny",
                 (
@@ -623,6 +623,17 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
                 ),
                 tool=tool_name,
                 reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
+            )
+            return
+        if allowed_native_model and item.get("Model") != allowed_native_model:
+            emit(
+                "deny",
+                (
+                    f"REVIEWER_MODEL_MISMATCH: Reviewer '{r_role_hint}' is configured for '{resolved_m}'; "
+                    f"you MUST pass Model='{allowed_native_model}' in invoke_subagent."
+                ),
+                tool=tool_name,
+                reason_code="REVIEWER_MODEL_MISMATCH",
             )
             return
 
@@ -1061,7 +1072,7 @@ def _handle_subagent(name: str, args: dict) -> None:
             resolved_m = str((sel_info or {}).get("resolved_model") or "")
             allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
 
-            if "model" in item or ("Model" in item and (not allowed_native_model or item.get("Model") != allowed_native_model)):
+            if "model" in item or (not allowed_native_model and "Model" in item):
                 emit(
                     "deny",
                     (
@@ -1070,6 +1081,17 @@ def _handle_subagent(name: str, args: dict) -> None:
                     ),
                     tool=name,
                     reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
+                )
+                return
+            if allowed_native_model and item.get("Model") != allowed_native_model:
+                emit(
+                    "deny",
+                    (
+                        f"REVIEWER_MODEL_MISMATCH: Reviewer '{r_role_hint}' is configured for '{resolved_m}'; "
+                        f"you MUST pass Model='{allowed_native_model}' in invoke_subagent."
+                    ),
+                    tool=name,
+                    reason_code="REVIEWER_MODEL_MISMATCH",
                 )
                 return
 

@@ -1136,6 +1136,11 @@ def main(argv: list[str] | None = None) -> int:
                 if result.get("scope") == "task"
                 else "future review runs across the project; existing runs are unchanged"
             )
+            if str(host).strip().lower() == "antigravity":
+                result["dispatch_hint"] = (
+                    "When calling invoke_subagent, pass Model='flash' for every reviewer whose model in reviewer_models is gemini-3.8-flash-*, "
+                    "and omit Model (INHERIT_PARENT_BY_OMISSION) for reviewers set to inherit."
+                )
         else:
             policy, source = load_policy(repo, args.task)
             result = {"policy": policy, "source": source, "capability": host_capability(host)}

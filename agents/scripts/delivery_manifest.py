@@ -346,15 +346,29 @@ def _external_inputs(repo: Path) -> list[dict[str, str | int | bool]]:
         for item in git(repo, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").split(b"\0")
         if item and is_delivery_relevant(_normal_rel(item.decode("utf-8", errors="surrogateescape")))
     }
-    for rel in sorted(EXTERNAL_CANDIDATES | ignored_relevant):
+    candidates = [rel for rel in sorted(EXTERNAL_CANDIDATES | ignored_relevant) if (repo / rel).is_file()]
+    check_targets = [rel for rel in candidates if rel not in ignored_relevant]
+    confirmed_ignored = set(ignored_relevant)
+    if check_targets:
+        proc = subprocess.run(
+            ["git", "check-ignore", "-z", "--stdin"],
+            cwd=str(repo),
+            input=b"\0".join(rel.encode("utf-8", errors="surrogateescape") for rel in check_targets) + b"\0",
+            capture_output=True,
+            check=False,
+        )
+        if proc.stdout:
+            for item in proc.stdout.split(b"\0"):
+                if item:
+                    confirmed_ignored.add(_normal_rel(item.decode("utf-8", errors="surrogateescape")))
+        elif proc.returncode not in (0, 1):
+            for rel in check_targets:
+                if subprocess.run(["git", "check-ignore", "-q", "--", rel], cwd=str(repo), check=False).returncode == 0:
+                    confirmed_ignored.add(rel)
+    for rel in candidates:
+        if rel not in confirmed_ignored:
+            continue
         path = repo / rel
-        if not path.is_file():
-            continue
-        ignored = subprocess.run(
-            ["git", "check-ignore", "-q", "--", rel], cwd=str(repo), check=False
-        ).returncode == 0
-        if not ignored:
-            continue
         if path.name == "local.properties":
             keys: list[str] = []
             normalized_lines: list[str] = []

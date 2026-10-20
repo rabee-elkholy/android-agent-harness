@@ -27,23 +27,23 @@ MANDATORY:
        Role = exact reviewer role
        Prompt = exact current reviewer brief
        Workspace = inherit (or omit if host default is used consistently)
-   - do not send model/Model (INHERIT_PARENT_BY_OMISSION);
+       Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
    - do not invent reasoning fields;
    - in chat, list each dispatched/completed reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
 3. Yield; do not poll.
-4. On reactive completion, run review complete with that conversation ID.
+4. On reactive completion, run review complete with all ready `--reviewer <role> --execution-id <convId>` pairs in one call.
 5. On RETRY_REVIEW_PROTOCOL, execute the exact router-provided send_message.
 6. On REVIEW_ENV_BLOCKED / REVIEW_PROFILE_BLOCKED / REVIEW_PROTOCOL_BLOCKED, stop reviewer flow and report blocker.
-7. After all completed, review finalize.
+7. After all completed, review finalize (if not already auto-finalized).
 No legacy PASS token. No EVIDENCE footer. No self-certification.
 11. Exact Scoped Phase Review V2 Procedure (Antigravity):
 1. On BUILD_PHASE_REVIEW_PACKAGE: run `python .agents/harness.py phase-review package --task-id <id> --phase-id <phase>`.
 2. On DISPATCH_PHASE_REVIEWERS:
    - use exactly the returned reviewer set;
-   - one invoke_subagent call with exact Role/TypeName/Prompt (no model/Model, no reasoning fields);
+   - one invoke_subagent call with exact Role/TypeName/Prompt (pass `Model="flash"` if `reviewer_models[role]` starts with `gemini-3.8-flash-`, otherwise omit `model`/`Model`; no reasoning fields);
    - in chat, list each dispatched/completed phase reviewer with its active model from `reviewer_models` (`<role> [<model>]`);
    - yield execution without polling.
-3. On reactive completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>`.
+3. On reactive completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` when multiple finish together).
 4. On RETRY_PHASE_REVIEW_PROTOCOL, execute router-provided send_message to exact recipient.
 5. When all phase reviewers complete, run `python .agents/harness.py phase-review finalize --task-id <id> --phase-id <phase>`.
 6. Advance to next phase via `python .agents/harness.py task begin-next-phase --task-id <id>` (no second approval needed).
