@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.38] - 2026-10-20
+
+### Antigravity top-level `invoke_subagent` compatibility, clause-scoped instruction conflict detection, and `IDLE` context lifecycle commands
+
+- Support Antigravity's top-level single-reviewer `invoke_subagent` tool schema (`TypeName`, `Role`, `Prompt`, `Workspace`, `Model` passed directly in `args` without a `Subagents` array, invoked in parallel/sequentially per reviewer) alongside the legacy `Subagents: [...]` batch format across `pre_tool_safety.py`, `review_orchestrator.py`, `phase_review.py`, and `post_tool_reconcile.py`.
+- Evaluate developer instruction polarity per sentence/clause and expand meta/path stopwords in `task_context.py` so multi-sentence global instructions mentioning `.agents/project-context/project-notes.md` or `AGENTS.md` with mixed clause polarities no longer trigger false-positive `DEVELOPER_INSTRUCTION_CONFLICT` errors.
+- Allow `context instruct` (alongside `context note`) as an administrative lifecycle command in `mutation_guard.py` when no task is active (`IDLE`).
+
 ## [1.1.37] - 2026-10-19
 
 ### Surface classification precision, proportional phase review, and per-reviewer model visibility

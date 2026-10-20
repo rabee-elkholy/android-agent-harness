@@ -194,6 +194,12 @@ class HookTests(unittest.TestCase):
                         "python .agents/harness.py assemble"):
             res = self.call("run_command", {"CommandLine": command})
             self.assertEqual("deny", res["decision"], command)
+        for command in (
+            'python .agents/harness.py context note "Home screen uses MVI"',
+            'python .agents/harness.py context instruct "Always follow project-notes.md" --scope GLOBAL:* --source conversation --proof-reference "follow project-notes.md" --strength REQUIREMENT',
+        ):
+            res = self.call("run_command", {"CommandLine": command})
+            self.assertEqual("allow", res["decision"], (command, res.get("reason")))
 
     def test_tracker_write_spares_audited_harness_commands_only(self):
         # Real app: the `tracker_write` boundary refused `zoho authorize --proof-reference "... update zoho ..."`

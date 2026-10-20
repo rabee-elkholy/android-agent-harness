@@ -76,7 +76,15 @@ def _message() -> str:
             next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
         else:
             next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
-    return f"Android Harness task {task_id}: {status}. {next_step} For unrelated work or updating the harness, the task must be cancelled first: only when the developer asks, run `workflow.py cancel --repo . --task-id {task_id} --source conversation --proof-reference \"<their words>\"`; do not attempt to finish an unrelated task. Zoho mutates only after explicit `update zoho`.{notes_rem}"
+    return (
+        f"Android Harness task {task_id}: {status}. {next_step} "
+        "Up to 3 concurrent live tasks with disjoint `--expected-files` may share one worktree "
+        "(draft a separate task with `workflow.py draft --task-id <new-id> --expected-files <disjoint-paths>` "
+        "or switch focus with `python .agents/harness.py task switch --task-id <id>`; "
+        "editing tracked files while another task is in VERIFYING stales its frozen verification snapshot). "
+        f"Only when the developer explicitly asks to cancel (or before updating the harness), run `workflow.py cancel --repo . --task-id {task_id} --source conversation --proof-reference \"<their words>\"`; never demand cancelling a disjoint task. "
+        f"Zoho mutates only after explicit `update zoho`.{notes_rem}"
+    )
 
 
 def _compact_message() -> str:
@@ -91,16 +99,16 @@ def _compact_message() -> str:
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":
-        return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion. For unrelated work, cancel active task first.{notes_rem}"
+        return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. Wait for background task completion. For a separate disjoint task, draft a new task-id or use `task switch --task-id <id>`.{notes_rem}"
     if status == "VERIFYING":
-        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. mobile walkthrough -> 6. verify. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. For unrelated work, cancel active task first.{notes_rem}"
+        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. mobile walkthrough -> 6. verify. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. Disjoint tasks can be drafted concurrently (`task draft` / `task switch`); editing tracked files stales frozen verification.{notes_rem}"
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
         blocked_str = f" ({', '.join(blocked)})" if blocked else ""
         return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Fix issues and run: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}"
     if status == "READY_FOR_DELIVERY":
         return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close.{notes_rem}"
-    return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. For unrelated work or updates, cancel active task first (workflow.py cancel). Ask developer before guessing missing scenarios.{notes_rem}"
+    return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. Up to 3 disjoint tasks may coexist (`task draft` / `task switch --task-id <id>`); only cancel when explicitly asked (workflow.py cancel). Ask developer before guessing missing scenarios.{notes_rem}"
 
 
 def _update_notice() -> str:

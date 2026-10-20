@@ -882,9 +882,11 @@ def record_phase_dispatch_batch(
     phase_id: str,
     reviewers: list[str],
     host: str | None = None,
+    *,
+    allow_single: bool = False,
 ) -> dict[str, Any]:
     with StateLock(state_root(repo)), StateLock(phase_review_dir(task_dir(repo, task_id), phase_id)):
-        return _record_phase_dispatch_batch_locked(repo, task_id, phase_id, reviewers, host)
+        return _record_phase_dispatch_batch_locked(repo, task_id, phase_id, reviewers, host, allow_single=allow_single)
 
 
 def _record_phase_dispatch_batch_locked(
@@ -893,6 +895,8 @@ def _record_phase_dispatch_batch_locked(
     phase_id: str,
     reviewers: list[str],
     host: str | None = None,
+    *,
+    allow_single: bool = False,
 ) -> dict[str, Any]:
     tdir = task_dir(repo, task_id)
     prun_f = phase_run_file(tdir, phase_id)
@@ -923,27 +927,54 @@ def _record_phase_dispatch_batch_locked(
     ]
 
     req_set = set(reviewers)
-    if len(reviewers) != len(selected_roster) or req_set != selected_roster:
-        raise ValidationError(f"dispatch batch mismatch: requested {sorted(req_set)} != authoritative roster {sorted(selected_roster)}")
     dispatch_dir = phase_review_dir(tdir, phase_id) / "dispatch" / run_id
-    if not dispatchable:
-        if not all(ledger_revs.get(r, {}).get("state") == REVIEW_DISPATCHED for r in reviewers):
-            raise ValidationError("dispatch batch replay requires the entire cohort to remain DISPATCHED")
-        for r in reviewers:
-            receipt_f = dispatch_dir / f"{r}.json"
-            if not receipt_f.is_file():
-                raise ValidationError(f"dispatch batch replay missing receipt for '{r}'")
-            receipt = read_json(receipt_f)
-            if any(receipt.get(key) != value for key, value in {
-                "task_id": task_id, "phase_id": phase_id, "phase_review_run_id": run_id,
-                "reviewer": r, "host": host, "package_sha256": run_meta.get("package_sha256", ""),
-            }.items()):
-                raise ValidationError(f"dispatch batch replay receipt mismatch for '{r}'")
-            if receipt.get("receipt_sha256") != canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"}):
-                raise ValidationError(f"dispatch batch replay receipt hash mismatch for '{r}'")
-        return ledger
-    if set(dispatchable) != selected_roster:
-        raise ValidationError("dispatch batch has a partial authoritative cohort")
+    if allow_single:
+        if len(reviewers) != len(req_set):
+            raise ValidationError(f"duplicate reviewers in dispatch batch: {reviewers}")
+        is_single_replay = bool(req_set) and all(
+            ledger_revs.get(r, {}).get("state") == REVIEW_DISPATCHED
+            and not ledger_revs.get(r, {}).get("execution_id")
+            for r in reviewers
+        )
+        if is_single_replay:
+            for r in reviewers:
+                receipt_f = dispatch_dir / f"{r}.json"
+                if not receipt_f.is_file():
+                    raise ValidationError(f"dispatch batch replay missing receipt for '{r}'")
+                receipt = read_json(receipt_f)
+                if any(receipt.get(key) != value for key, value in {
+                    "task_id": task_id, "phase_id": phase_id, "phase_review_run_id": run_id,
+                    "reviewer": r, "host": host, "package_sha256": run_meta.get("package_sha256", ""),
+                }.items()):
+                    raise ValidationError(f"dispatch batch replay receipt mismatch for '{r}'")
+                if receipt.get("receipt_sha256") != canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"}):
+                    raise ValidationError(f"dispatch batch replay receipt hash mismatch for '{r}'")
+            return ledger
+        if not req_set.issubset(set(dispatchable)):
+            raise ValidationError(
+                f"single phase reviewer dispatch must be in dispatchable reviewers {sorted(dispatchable)}, got {sorted(req_set)}"
+            )
+    else:
+        if len(reviewers) != len(selected_roster) or req_set != selected_roster:
+            raise ValidationError(f"dispatch batch mismatch: requested {sorted(req_set)} != authoritative roster {sorted(selected_roster)}")
+        if not dispatchable:
+            if not all(ledger_revs.get(r, {}).get("state") == REVIEW_DISPATCHED for r in reviewers):
+                raise ValidationError("dispatch batch replay requires the entire cohort to remain DISPATCHED")
+            for r in reviewers:
+                receipt_f = dispatch_dir / f"{r}.json"
+                if not receipt_f.is_file():
+                    raise ValidationError(f"dispatch batch replay missing receipt for '{r}'")
+                receipt = read_json(receipt_f)
+                if any(receipt.get(key) != value for key, value in {
+                    "task_id": task_id, "phase_id": phase_id, "phase_review_run_id": run_id,
+                    "reviewer": r, "host": host, "package_sha256": run_meta.get("package_sha256", ""),
+                }.items()):
+                    raise ValidationError(f"dispatch batch replay receipt mismatch for '{r}'")
+                if receipt.get("receipt_sha256") != canonical_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"}):
+                    raise ValidationError(f"dispatch batch replay receipt hash mismatch for '{r}'")
+            return ledger
+        if set(dispatchable) != selected_roster:
+            raise ValidationError("dispatch batch has a partial authoritative cohort")
 
     plan_f = tdir / "plan.json"
     plan = read_json(plan_f) if plan_f.is_file() else {}
@@ -968,7 +999,7 @@ def _record_phase_dispatch_batch_locked(
                 f"reserved_final={reserved_final} > budget={safety_cap}"
             )
 
-    if any((dispatch_dir / f"{reviewer}.json").exists() for reviewer in reviewers):
+    if any((dispatch_dir / f"{reviewer}.json").exists() for reviewer in (new_dispatches if allow_single else reviewers)):
         raise ValidationError("partial dispatch receipt exists before ledger dispatch; diagnose before retry")
 
     dispatch_dir.mkdir(parents=True, exist_ok=True)

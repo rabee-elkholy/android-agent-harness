@@ -663,6 +663,26 @@ class InstructionConflictResolutionTests(unittest.TestCase):
             inst("mvi-lib", "Keep the mvikotlin dependency pinned."),
         ]))
 
+    def test_INSTRUCT_CONFLICT_009_mixed_clause_polarities_and_project_notes_meta_words_do_not_false_conflict(self) -> None:
+        from task_context import _detect_instruction_conflict
+
+        def inst(iid: str, text: str) -> dict:
+            return {"id": iid, "status": "ACTIVE", "scope": {"kind": "GLOBAL", "value": "*"}, "strength": "REQUIREMENT", "text": text}
+
+        # Real Fitness_Android failure: two global instructions mentioning project-notes.md where one
+        # also had a negative clause ("Do not modify AGENTS.md") triggered a false conflict on
+        # meta/path words (`agents`, `context`, `follow`, `md`, `notes`, `project`, `strictly`).
+        self.assertIsNone(_detect_instruction_conflict([
+            inst(
+                "inst-df94a86e2da1",
+                "Store permanent Zoho HTML template structure in .agents/project-context/project-notes.md and reference it from AGENTS.md. Do not modify AGENTS.md without explicit approval.",
+            ),
+            inst(
+                "inst-9ac2fd1f8f08",
+                "Always read and strictly follow all rules and conventions in .agents/project-context/project-notes.md across every task phase (including section 2 for Zoho Sprints Arabic HTML formatting and no-code-leak rules).",
+            ),
+        ]))
+
 
 class TaskContextFallbackTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -920,6 +920,49 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         self.assertNotIn("preferred_model", rev)
         self.assertNotIn("fallback_model", rev)
 
+    def test_V2_TOP_LEVEL_SUBAGENT_001_parallel_single_reviewer_dispatches_pass(self):
+        """Antigravity's top-level invoke_subagent schema (without Subagents array) dispatches multi-reviewer rosters one by one."""
+        from review_orchestrator import get_review_execution_status, init_ledger, ledger_file, sha256_file
+        reviewers = ["bug-reviewer-agent", "regression-impact-reviewer-agent", "test-quality-reviewer-agent"]
+        self.policy_f.write_text(json.dumps({
+            "reviewers": reviewers,
+            "max_review_rounds": 3,
+            "model_call_budget": 20,
+        }), encoding="utf-8")
+        for r in reviewers:
+            (self.runs_d / f"brief-{r}.md").write_text(f"# Brief for {r}\n", encoding="utf-8")
+        ledger_file(self.task_d, "r1").unlink(missing_ok=True)
+        init_ledger(
+            self.task_d, "task-v2", "r1", self.snapshot, self.change_set,
+            sha256_file(self.pkg_f), reviewers,
+        )
+        for r in reviewers:
+            payload = {
+                "toolCall": {
+                    "name": "invoke_subagent",
+                    "args": {
+                        "Role": r,
+                        "TypeName": r,
+                        "Prompt": f"# Brief for {r}\n",
+                        "Workspace": "inherit",
+                    },
+                }
+            }
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPTS / "pre_tool_safety.py")],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                env=self.env,
+                check=False,
+                timeout=15,
+            )
+            res = _with_audit_reason(json.loads(proc.stdout), self.env, SCRIPTS / "pre_tool_safety.py")
+            self.assertEqual("allow", res["decision"], (r, res))
+        st = get_review_execution_status(self.repo, "task-v2")
+        for r in reviewers:
+            self.assertEqual("DISPATCHED", st["reviewers"][r]["state"], r)
+
 
 class TestResourceWriteScope(unittest.TestCase):
     def test_O13_resource_surface_never_expands_explicit_files(self):

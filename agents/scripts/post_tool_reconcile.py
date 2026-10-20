@@ -60,6 +60,10 @@ def main() -> int:
                     r = sa.get("TypeName") or sa.get("typeName") or sa.get("Role") or sa.get("role")
                     if r:
                         roles.append(str(r).strip())
+        if not roles and isinstance(args, dict):
+            top_r = args.get("TypeName") or args.get("typeName") or args.get("Role") or args.get("role")
+            if top_r:
+                roles.append(str(top_r).strip())
 
         repo_str = os.environ.get("HARNESS_REPO", ".")
         repo = Path(repo_str).resolve()

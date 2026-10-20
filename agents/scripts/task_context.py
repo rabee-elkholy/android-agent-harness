@@ -293,7 +293,14 @@ INSTRUCTION_STOPWORDS = {
     "never", "do", "not", "dont", "must", "use", "using", "uses", "always",
     "require", "required", "mandatory", "avoid", "no", "new", "existing",
     "screen", "screens", "code", "should", "the", "a", "an", "in", "for",
-    "to", "of", "and", "or", "with", "all", "is", "are", "be"
+    "to", "of", "and", "or", "with", "all", "is", "are", "be",
+    "agents", "project", "context", "notes", "md", "section", "sections",
+    "follow", "follows", "strictly", "rule", "rules", "convention",
+    "conventions", "file", "files", "path", "paths", "template", "templates",
+    "structure", "store", "permanent", "reference", "from", "when", "before",
+    "after", "any", "every", "each", "only", "without", "within", "across",
+    "update", "updates", "modify", "modifying", "read", "reading", "write",
+    "writing", "task", "tasks", "phase", "phases", "harness",
 }
 
 
@@ -315,6 +322,22 @@ def _instruction_polarity(text: str) -> str | None:
     if any(marker in text for marker in INSTRUCTION_POSITIVE_MARKERS):
         return "POSITIVE"
     return None
+
+
+def _instruction_clause_subjects(text: str) -> tuple[set[str], set[str]]:
+    """Return (positive_subjects, negative_subjects) extracted per sentence/clause."""
+    pos_subjects: set[str] = set()
+    neg_subjects: set[str] = set()
+    clauses = [c.strip() for c in re.split(r"(?:\.(?=\s|$)|[;\n])+", text.lower()) if c.strip()]
+    if not clauses:
+        clauses = [text.lower()]
+    for clause in clauses:
+        polarity = _instruction_polarity(clause)
+        if polarity == "POSITIVE":
+            pos_subjects |= _instruction_subject_tokens(clause)
+        elif polarity == "NEGATIVE":
+            neg_subjects |= _instruction_subject_tokens(clause)
+    return pos_subjects, neg_subjects
 
 
 def _required_architecture_patterns(text: str) -> set[str]:
@@ -350,13 +373,12 @@ def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | No
                 if len(a1) == 1 and len(a2) == 1 and a1 != a2:
                     return f"Conflicting developer architecture instructions '{i1.get('id')}' and '{i2.get('id')}' in scope {s1.get('kind')}:{s1.get('value')}."
 
-                # 3. Positive vs negative polarity conflict ONLY if they share a meaningful technical subject
-                if {p1, p2} == {"POSITIVE", "NEGATIVE"}:
-                    subj1 = _instruction_subject_tokens(t1)
-                    subj2 = _instruction_subject_tokens(t2)
-                    shared = subj1 & subj2
-                    if shared:
-                        return f"Conflicting developer instructions '{i1.get('id')}' and '{i2.get('id')}' in same scope {s1.get('kind')}:{s1.get('value')} regarding {', '.join(sorted(shared))}."
+                # 3. Positive vs negative polarity conflict ONLY if opposite-polarity clauses share a technical subject
+                pos1, neg1 = _instruction_clause_subjects(t1)
+                pos2, neg2 = _instruction_clause_subjects(t2)
+                shared = (pos1 & neg2) | (neg1 & pos2)
+                if shared:
+                    return f"Conflicting developer instructions '{i1.get('id')}' and '{i2.get('id')}' in same scope {s1.get('kind')}:{s1.get('value')} regarding {', '.join(sorted(shared))}."
 
     return None
 

@@ -141,7 +141,7 @@ Task A
 ```
 
 ### Core Invariants:
-- **One live task per worktree**: each worktree maintains isolated task state; never run multiple concurrent tasks in the same worktree.
+- **Up to three disjoint live tasks per worktree**: up to 3 concurrent live tasks with explicit disjoint `--expected-files` may share one worktree (use `python .agents/harness.py task switch --task-id <id>` to switch focus); use a separate worktree for overlapping files or independent builds while another task is in `VERIFYING`.
 - **Model never executes Git mutations**: Git add, commit, tag, push, checkout, merge, and worktree operations are strictly developer-owned.
 - **Lineage enforcement**: a raw unregistered mid-task commit is a lineage violation; only a validated handoff checkpoint commit with accepted lineage receipt is allowed.
 - **Final review required**: aggregate final integration review remains required even when all intermediate phase reviews pass.

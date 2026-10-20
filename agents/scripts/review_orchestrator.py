@@ -172,6 +172,8 @@ def record_dispatch_batch(
     task_id: str,
     reviewers: list[str],
     host: str = "antigravity",
+    *,
+    allow_single: bool = False,
 ) -> dict[str, dict]:
     directory = task_dir(repo, task_id)
     current_path = directory / "current-run.json"
@@ -246,22 +248,33 @@ def record_dispatch_batch(
         requested = set(reviewers)
         if len(reviewers) != len(requested):
             raise ValidationError(f"duplicate reviewers in dispatch batch: {reviewers}")
-        is_unbound_replay = (
-            not dispatchable
-            and requested == set(required_reviewers)
-            and all(
+        if allow_single:
+            is_unbound_replay = bool(requested) and all(
                 ledger.get("reviewers", {}).get(r, {}).get("state") == REVIEW_DISPATCHED
                 and not ledger.get("reviewers", {}).get(r, {}).get("execution_id")
-                for r in required_reviewers
+                for r in requested
             )
-        )
-        if not is_unbound_replay and requested != dispatchable:
-            raise ValidationError(
-                f"dispatch batch must exactly match dispatchable reviewers {sorted(dispatchable)}, got {sorted(requested)}"
+            if not is_unbound_replay and not requested.issubset(dispatchable):
+                raise ValidationError(
+                    f"single reviewer dispatch must be in dispatchable reviewers {sorted(dispatchable)}, got {sorted(requested)}"
+                )
+        else:
+            is_unbound_replay = (
+                not dispatchable
+                and requested == set(required_reviewers)
+                and all(
+                    ledger.get("reviewers", {}).get(r, {}).get("state") == REVIEW_DISPATCHED
+                    and not ledger.get("reviewers", {}).get(r, {}).get("execution_id")
+                    for r in required_reviewers
+                )
             )
+            if not is_unbound_replay and requested != dispatchable:
+                raise ValidationError(
+                    f"dispatch batch must exactly match dispatchable reviewers {sorted(dispatchable)}, got {sorted(requested)}"
+                )
 
         used = settle_final_review_calls(repo, plan)
-        new_calls = 0 if is_unbound_replay else len(requested)
+        new_calls = 0 if is_unbound_replay else len(requested & dispatchable if allow_single else requested)
         if used + new_calls > effective_review_budget(repo, plan, policy):
             raise ValidationError("REVIEW_BUDGET_EXHAUSTED: final dispatch exceeds the task reviewer-call limit; use task review-budget")
 

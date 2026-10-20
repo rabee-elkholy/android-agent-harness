@@ -532,8 +532,25 @@ def _handle_command(command: str) -> None:
             pass
     emit("allow" if allowed else "deny", reason, tool="run_command", command=command, reason_code="HARNESS_COMMAND" if allowed else "COMMAND_MUTATION_GUARD", task_id=active_tid)
 
+def _normalize_subagent_items(args: dict) -> tuple[list[Any], bool]:
+    if not isinstance(args, dict):
+        return [], False
+    if "Subagents" in args or "subagents" in args:
+        raw = args.get("Subagents") if "Subagents" in args else args.get("subagents")
+        return (raw if isinstance(raw, list) else []), False
+    top_level_markers = {
+        "Role", "role", "TypeName", "typeName", "Prompt", "prompt",
+        "Workspace", "workspace", "Model", "model", "name",
+    } | set(COMMON_REASONING_KEYS)
+    if any(k in args for k in top_level_markers):
+        host_meta_keys = {"toolAction", "toolSummary", "waitForPreviousTools"}
+        cleaned = {k: v for k, v in args.items() if k not in host_meta_keys}
+        return [cleaned], True
+    return [], False
+
+
 def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], args: dict, tool_name: str) -> None:
-    raw_subs = args.get("Subagents") or args.get("subagents") or []
+    raw_subs, is_single_top_level = _normalize_subagent_items(args)
     if not isinstance(raw_subs, list) or not raw_subs:
         emit("deny", "No reviewers specified in Subagents array.", tool=tool_name, reason_code="REVIEWER_ROSTER_EMPTY")
         return
@@ -549,9 +566,28 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
         except (OSError, ValueError, ValidationError):
             pass
     briefs = dict(act.get("briefs") or {})
+    is_unbound_replay = bool(act.get("_unbound_replay"))
+    if is_single_top_level and len(raw_subs) == 1 and isinstance(raw_subs[0], dict):
+        hint_role = str(raw_subs[0].get("Role") or raw_subs[0].get("TypeName") or "").strip()
+        if hint_role and hint_role not in dispatchable:
+            try:
+                from _vnext_common import task_dir as _tdir
+                from phase_review import load_phase_ledger, phase_run_file
+                td = _tdir(REPO, str(plan.get("task_id") or ""))
+                prun_f = phase_run_file(td, phase_id)
+                run_meta = read_json(prun_f) if prun_f.is_file() else {}
+                ok, _, ledger = load_phase_ledger(td, phase_id, expected_run_id=run_meta.get("phase_review_run_id"))
+                rev_entry = ((ledger or {}).get("reviewers") or {}).get(hint_role) or {}
+                if ok and rev_entry.get("state") == "DISPATCHED" and not rev_entry.get("execution_id"):
+                    dispatchable.append(hint_role)
+                    is_unbound_replay = True
+                    if not briefs:
+                        briefs = dict(run_meta.get("briefs") or {})
+            except (OSError, ValueError, ValidationError):
+                briefs = dict(briefs)
 
     from phase_review import check_phase_safety_cap
-    new_phase_dispatches = 0 if act.get("_unbound_replay") else len(dispatchable)
+    new_phase_dispatches = 0 if is_unbound_replay else (len(raw_subs) if is_single_top_level else len(dispatchable))
     cap_ok, cap_msg = check_phase_safety_cap(plan, new_phase_dispatches, repo=REPO)
     if not cap_ok:
         emit("deny", cap_msg, tool=tool_name, reason_code="REVIEWER_CALL_SAFETY_CAP_REACHED")
@@ -681,20 +717,20 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
     if actual_set != disp_set:
         missing = disp_set - actual_set
         extra = actual_set - disp_set
-        if missing:
-            emit(
-                "deny",
-                f"Reviewer batch incomplete: expected {len(disp_set)} reviewers ({sorted(disp_set)}), got {len(actual_set)} ({sorted(actual_set)}). All dispatchable reviewers must be launched in a single invoke_subagent call.",
-                tool=tool_name,
-                reason_code="REVIEWER_ROSTER_INCOMPLETE",
-            )
-            return
         if extra:
             emit(
                 "deny",
                 f"Reviewer batch contains extra reviewers: expected {sorted(disp_set)}, got {sorted(actual_set)}.",
                 tool=tool_name,
                 reason_code="REVIEWER_ROSTER_EXTRA",
+            )
+            return
+        if missing and not is_single_top_level:
+            emit(
+                "deny",
+                f"Reviewer batch incomplete: expected {len(disp_set)} reviewers ({sorted(disp_set)}), got {len(actual_set)} ({sorted(actual_set)}). All dispatchable reviewers must be launched in a single invoke_subagent call.",
+                tool=tool_name,
+                reason_code="REVIEWER_ROSTER_INCOMPLETE",
             )
             return
 
@@ -706,6 +742,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             phase_id,
             sorted(actual),
             host="antigravity",
+            allow_single=is_single_top_level,
         )
     except Exception as exc:
         emit(
@@ -920,6 +957,8 @@ def _handle_subagent(name: str, args: dict) -> None:
             return
         required_reviewers = list(policy.get("reviewers") or [])
 
+        raw_subs, is_single_top_level = _normalize_subagent_items(args)
+
         # Determine dispatchable reviewers
         is_unbound_replay = False
         if protocol >= 2:
@@ -930,13 +969,19 @@ def _handle_subagent(name: str, args: dict) -> None:
             if l_path.is_file():
                 ledger = load_ledger(directory, run_id_val)
                 dispatchable = dispatchable_reviewers(ledger, required_reviewers)
+                revs = ledger.get("reviewers") or {}
                 if not dispatchable:
-                    revs = ledger.get("reviewers") or {}
                     if revs and all(
                         d.get("state") == "DISPATCHED" and not d.get("execution_id")
                         for d in revs.values()
                     ):
                         dispatchable = list(required_reviewers)
+                        is_unbound_replay = True
+                if is_single_top_level and len(raw_subs) == 1 and isinstance(raw_subs[0], dict):
+                    hint_role = str(raw_subs[0].get("Role") or raw_subs[0].get("TypeName") or "").strip()
+                    rev_entry = revs.get(hint_role) or {}
+                    if hint_role and hint_role not in dispatchable and rev_entry.get("state") == "DISPATCHED" and not rev_entry.get("execution_id"):
+                        dispatchable.append(hint_role)
                         is_unbound_replay = True
             else:
                 dispatchable = list(required_reviewers)
@@ -979,7 +1024,6 @@ def _handle_subagent(name: str, args: dict) -> None:
             except Exception:
                 reviewer_routes = {}
 
-        raw_subs = args.get("Subagents") or args.get("subagents") or []
         if not isinstance(raw_subs, list) or not raw_subs:
             emit("deny", "No reviewers specified in Subagents array.", tool=name, reason_code="REVIEWER_ROSTER_EMPTY")
             return
@@ -994,7 +1038,7 @@ def _handle_subagent(name: str, args: dict) -> None:
         used_calls = effective_review_calls_used(REPO, plan)
         from review_budget import effective_review_budget
         safety_cap = effective_review_budget(REPO, plan, policy)
-        new_final_dispatches = 0 if is_unbound_replay else len(dispatchable)
+        new_final_dispatches = 0 if is_unbound_replay else (len(raw_subs) if is_single_top_level else len(dispatchable))
         if used_calls + new_final_dispatches > safety_cap:
             emit(
                 "deny",
@@ -1169,20 +1213,20 @@ def _handle_subagent(name: str, args: dict) -> None:
         if actual_set != dispatchable_set:
             missing = dispatchable_set - actual_set
             extra = actual_set - dispatchable_set
-            if missing:
-                emit(
-                    "deny",
-                    f"Reviewer batch incomplete: expected {len(dispatchable_set)} reviewers ({sorted(dispatchable_set)}), got {len(actual_set)} ({sorted(actual_set)}). All dispatchable reviewers must be launched in a single invoke_subagent call.",
-                    tool=name,
-                    reason_code="REVIEWER_ROSTER_INCOMPLETE",
-                )
-                return
             if extra:
                 emit(
                     "deny",
                     f"Reviewer batch contains extra reviewers: expected {sorted(dispatchable_set)}, got {sorted(actual_set)}.",
                     tool=name,
                     reason_code="REVIEWER_ROSTER_EXTRA",
+                )
+                return
+            if missing and not is_single_top_level:
+                emit(
+                    "deny",
+                    f"Reviewer batch incomplete: expected {len(dispatchable_set)} reviewers ({sorted(dispatchable_set)}), got {len(actual_set)} ({sorted(actual_set)}). All dispatchable reviewers must be launched in a single invoke_subagent call.",
+                    tool=name,
+                    reason_code="REVIEWER_ROSTER_INCOMPLETE",
                 )
                 return
 
@@ -1213,6 +1257,7 @@ def _handle_subagent(name: str, args: dict) -> None:
                     task_id,
                     sorted(actual),
                     host=review_host,
+                    allow_single=is_single_top_level,
                 )
             else:
                 receipts_dir = state / "tasks" / task_id / "reviewer-dispatches"
