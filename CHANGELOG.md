@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.41] - 2026-10-21
+
+### Fast parallel `invoke_subagent` hook execution, in-progress transcript recovery, and identical-snapshot reviewer carry-over
+
+- Keep reviewer state `DISPATCHED` (rather than permanently setting `ENV_BLOCKED`) when `review complete` or `phase-review complete` is called before a running reviewer subagent emits its final `PLANNER_RESPONSE` (`TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE`), and allow re-ingestion on the same bound `execution_id` once the transcript finishes.
+- Carry over already-completed `PASS` (`findings: []`) reviewer results from an unfinalized verification run when a new verification run is prepared on the identical `delivery_snapshot_sha256`, `change_set_sha256`, and `review_host`, without double-charging `review_calls_used`.
+- Eliminate `pre_tool_safety.py` hook timeouts during parallel `invoke_subagent` calls by reading only the first 8 lines of `transcript.jsonl` in `reviewer_host.py` `_head_steps` (avoiding multi-megabyte full-transcript parsing on main-conversation turns) and replacing full `resolve_next_action` (`verification_freshness`) evaluation in `_handle_subagent` with direct `reviewer_host.lifecycle_action` checks.
+
 ## [1.1.40] - 2026-10-21
 
 ### Allow commented `TODO` notes in `fast_kt_lint.py` while blocking executable `TODO()` stubs

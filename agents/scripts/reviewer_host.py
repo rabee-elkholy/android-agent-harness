@@ -28,6 +28,28 @@ def active_reviews(repo: Path):
                 yield read_json(path), phase_ledger_file(tdir, phase)
 
 
+def _head_steps(path: Path, limit: int = 8) -> list[dict]:
+    if path.stat().st_size > 32 * 1024 * 1024:
+        raise ValidationError("reviewer transcript exceeds bounded inspection size")
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                if not line.endswith("\n"):
+                    break
+                raise ValidationError("invalid reviewer host transcript")
+            if not isinstance(row, dict):
+                raise ValidationError("invalid reviewer host transcript")
+            rows.append(row)
+            if len(rows) >= limit:
+                break
+    return rows
+
+
 def _steps(path: Path) -> list[dict]:
     # Transcript content is inspected only at its canonical trusted host location.
     if path.stat().st_size > 32 * 1024 * 1024:
@@ -66,9 +88,10 @@ def _load_ledger(run: dict, path: Path) -> dict:
 
 def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> dict | None:
     transcript = resolve_transcript(execution_id)
-    rows = _steps(transcript) if transcript is not None else []
-    if rows and any(r.get("source") == "USER_EXPLICIT" and r.get("type") == "USER_INPUT" for r in rows[:8]):
+    head = _head_steps(transcript, limit=8) if transcript is not None else []
+    if head and any(r.get("source") == "USER_EXPLICIT" and r.get("type") == "USER_INPUT" for r in head):
         return None
+    rows = _steps(transcript) if transcript is not None else []
     messages = [str(r.get("content") or "") for r in rows
                 if r.get("source") == "SYSTEM_SDK" and r.get("type") == "SYSTEM_MESSAGE"][:8]
     pending_review = False
@@ -187,7 +210,12 @@ def lifecycle_action(repo: Path, run: dict, reviewers: dict) -> dict | None:
     # existing completion command still validates protocol, snapshot and model.
     ready: list[tuple[str, str]] = []
     for role, entry in reviewers.items():
-        if entry.get("state") != "DISPATCHED" or not entry.get("execution_id"):
+        st = entry.get("state")
+        last_err = str(entry.get("last_error") or "")
+        recoverable_env_blocked = st == "ENV_BLOCKED" and last_err.startswith(
+            ("REVIEW_MODEL_UNVERIFIED:", "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE", "TRUSTED_TRANSCRIPT_NOT_FOUND", "TRUSTED_TRANSCRIPT_UNREADABLE")
+        )
+        if (st != "DISPATCHED" and not recoverable_env_blocked) or not entry.get("execution_id"):
             continue
         transcript = resolve_transcript(entry["execution_id"])
         if transcript is None:

@@ -780,25 +780,6 @@ def _handle_subagent(name: str, args: dict) -> None:
         emit("deny", str(exc), tool=name, reason_code="HOST_SESSION_MISMATCH")
         return
 
-    if plan and plan.get("task_id"):
-        from workflow import resolve_next_action
-        action = resolve_next_action(REPO, str(plan["task_id"]), plan)
-        if action.get("code") in {"REVIEWER_CANCELLED", "RESUME_REVIEWER", "REVIEWER_RESUME_ENV_BLOCKED"}:
-            if action["code"] != "RESUME_REVIEWER":
-                emit("deny", action["reason"], tool=name, reason_code="REVIEWER_CANCELLED")
-                return
-            if name != "send_message":
-                emit("deny", "Resume the existing reviewer with the routed send_message.", tool=name, reason_code="REVIEWER_RESUME_REQUIRED")
-                return
-            recipient = str(args.get("Recipient") or args.get("recipient") or "")
-            message = str(args.get("Message") or args.get("message") or "")
-            if recipient != action["recipient"] or message != action["message"]:
-                emit("deny", "Resume must target the same execution with the routed message.", tool=name, reason_code="REVIEWER_RESUME_MISMATCH")
-                return
-            from reviewer_host import mark_resume_dispatched
-            mark_resume_dispatched(REPO, str(plan["task_id"]), action["inputs"]["reviewer"], recipient)
-            emit("allow", "Explicit reviewer resume decision recorded for this execution.", tool=name, reason_code="REVIEWER_RESUME_ALLOWED")
-            return
     # Zero-polling invariant: block busy-waiting loops
     if name == "manage_task":
         act = str(args.get("Action") or args.get("action") or "").strip().lower()
@@ -816,6 +797,33 @@ def _handle_subagent(name: str, args: dict) -> None:
         if cond in ("any",) or (dur is not None and int(dur) < 180):
             emit("deny", "ZERO-POLLING INVARIANT: Short schedule timers and condition-based busy-waiting are blocked. Yield execution and await reactive wakeup notifications from the system.", tool=name)
             return
+
+    if plan and plan.get("task_id"):
+        from reviewer_host import active_reviews, _load_ledger, lifecycle_action
+        for run, ledger_path in active_reviews(REPO):
+            if run.get("task_id") != str(plan["task_id"]) or not ledger_path.is_file():
+                continue
+            try:
+                ledger = _load_ledger(run, ledger_path)
+            except ValidationError:
+                continue
+            action = lifecycle_action(REPO, run, ledger.get("reviewers", {}))
+            if action and action.get("code") in {"REVIEWER_CANCELLED", "RESUME_REVIEWER", "REVIEWER_RESUME_ENV_BLOCKED"}:
+                if action["code"] != "RESUME_REVIEWER":
+                    emit("deny", action["reason"], tool=name, reason_code="REVIEWER_CANCELLED")
+                    return
+                if name != "send_message":
+                    emit("deny", "Resume the existing reviewer with the routed send_message.", tool=name, reason_code="REVIEWER_RESUME_REQUIRED")
+                    return
+                recipient = str(args.get("Recipient") or args.get("recipient") or "")
+                message = str(args.get("Message") or args.get("message") or "")
+                if recipient != action["recipient"] or message != action["message"]:
+                    emit("deny", "Resume must target the same execution with the routed message.", tool=name, reason_code="REVIEWER_RESUME_MISMATCH")
+                    return
+                from reviewer_host import mark_resume_dispatched
+                mark_resume_dispatched(REPO, str(plan["task_id"]), action["inputs"]["reviewer"], recipient)
+                emit("allow", "Explicit reviewer resume decision recorded for this execution.", tool=name, reason_code="REVIEWER_RESUME_ALLOWED")
+                return
 
     try:
         plan = active_plan(REPO)

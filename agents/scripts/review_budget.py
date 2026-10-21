@@ -50,7 +50,7 @@ def settle_final_review_calls(repo, plan, *, run=None, reviewers=()):
             validate_id(role)
             if not isinstance(entry, dict) or entry.get("state") not in ALL_REVIEW_STATES:
                 raise ValidationError("invalid final reviewer spending state")
-            if entry["state"] != "NOT_DISPATCHED":
+            if entry["state"] != "NOT_DISPATCHED" and not entry.get("carried_from_run_id"):
                 roles.add(role)
         # Receipts survive an interruption between receipt and ledger publication.
         for receipt_path in sorted((ledger_path.parent / "dispatch").glob("*.json")):

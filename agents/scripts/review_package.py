@@ -305,6 +305,18 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         briefs[rev] = str(b_path)
     metadata["briefs"] = briefs
     metadata["metadata_sha256"] = canonical_sha256({key: value for key, value in metadata.items() if key != "metadata_sha256"})
+    if int(current.get("review_protocol_version") or 1) >= 2:
+        from review_orchestrator import carry_over_completed_reviewers
+        carry_over_completed_reviewers(
+            directory,
+            task_id,
+            str(current["run_id"]),
+            manifest["delivery_snapshot_sha256"],
+            manifest["change_set_sha256"],
+            metadata["package_sha256"],
+            list(metadata["required_reviewers"]),
+            str(current.get("review_host") or "").strip().lower(),
+        )
     return package_path, metadata
 
 

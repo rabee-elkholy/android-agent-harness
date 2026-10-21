@@ -166,6 +166,125 @@ def init_ledger(
     return ledger
 
 
+def carry_over_completed_reviewers(
+    task_directory: Path,
+    task_id: str,
+    run_id: str,
+    delivery_snapshot_sha256: str,
+    change_set_sha256: str,
+    review_package_sha256: str,
+    required_reviewers: list[str],
+    review_host: str = "",
+) -> dict[str, Any] | None:
+    if not review_package_sha256:
+        return None
+    current_path = task_directory / "current-run.json"
+    if current_path.is_file():
+        current_run = read_json(current_path)
+        if current_run.get("supersedes_run_id"):
+            return None
+        if not review_host:
+            review_host = str(current_run.get("review_host") or "").strip().lower()
+    roots = task_directory / "review-execution"
+    if not roots.is_dir():
+        return None
+    carried: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+    for prev_l_path in sorted(roots.glob("*/ledger.json")):
+        prev_run_id = prev_l_path.parent.name
+        if prev_run_id == run_id or (task_directory / "host-history" / f"{prev_run_id}.json").is_file():
+            continue
+        try:
+            prev_ledger = load_ledger(task_directory, prev_run_id)
+        except (OSError, ValueError, ValidationError):
+            continue
+        if (
+            prev_ledger.get("task_id") != task_id
+            or prev_ledger.get("delivery_snapshot_sha256") != delivery_snapshot_sha256
+            or prev_ledger.get("change_set_sha256") != change_set_sha256
+        ):
+            continue
+        prev_revs = prev_ledger.get("reviewers") or {}
+        for rev in required_reviewers:
+            prev_entry = prev_revs.get(rev) or {}
+            if prev_entry.get("state") not in (REVIEW_COMPLETED, REVIEW_INGESTED):
+                continue
+            prev_res_p = result_file(task_directory, prev_run_id, rev)
+            if not prev_res_p.is_file():
+                continue
+            try:
+                prev_res = read_json(prev_res_p)
+            except (OSError, ValueError, ValidationError):
+                continue
+            prev_body = prev_res.get("result") or {}
+            if (
+                prev_res.get("task_id") != task_id
+                or prev_res.get("run_id") != prev_run_id
+                or prev_res.get("reviewer") != rev
+                or prev_res.get("result_sha256") != canonical_sha256(prev_body)
+                or prev_body.get("verdict") != "PASS"
+                or prev_body.get("findings")
+            ):
+                continue
+            prev_disp_p = dispatch_receipt_file(task_directory, prev_run_id, rev)
+            if prev_disp_p.is_file() and review_host:
+                try:
+                    prev_disp = read_json(prev_disp_p)
+                    if str(prev_disp.get("host") or "").strip().lower() != review_host:
+                        continue
+                except (OSError, ValueError, ValidationError):
+                    continue
+            carried[rev] = (prev_run_id, prev_entry, prev_res)
+    if not carried or len(carried) >= len(required_reviewers):
+        return None
+    ledger = init_ledger(
+        task_directory,
+        task_id,
+        run_id,
+        delivery_snapshot_sha256,
+        change_set_sha256,
+        review_package_sha256,
+        required_reviewers,
+    )
+    changed = False
+    for rev, (prev_run_id, prev_entry, prev_res) in carried.items():
+        cur_entry = ledger["reviewers"].get(rev) or {}
+        if cur_entry.get("state") != REVIEW_NOT_DISPATCHED:
+            continue
+        new_body = {
+            **dict(prev_res["result"]),
+            "run_id": run_id,
+            "review_package_sha256": review_package_sha256,
+        }
+        new_res_sha = canonical_sha256(new_body)
+        new_res_payload = {
+            **prev_res,
+            "run_id": run_id,
+            "result": new_body,
+            "result_sha256": new_res_sha,
+            "carried_from_run_id": prev_run_id,
+        }
+        res_p = result_file(task_directory, run_id, rev)
+        res_p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(res_p, new_res_payload)
+        cur_entry.update(
+            state=REVIEW_COMPLETED,
+            dispatch_nonce=prev_entry.get("dispatch_nonce"),
+            execution_id=prev_res.get("execution_id"),
+            execution_id_sha256=prev_res.get("execution_id_sha256"),
+            dispatch_count=int(prev_entry.get("dispatch_count") or 1),
+            protocol_attempts=int(prev_entry.get("protocol_attempts") or 0),
+            dispatched_at=prev_entry.get("dispatched_at"),
+            completed_at=prev_res.get("completed_at"),
+            result_sha256=new_res_sha,
+            last_error=None,
+            carried_from_run_id=prev_run_id,
+        )
+        changed = True
+    if changed:
+        save_ledger(task_directory, run_id, ledger)
+    return ledger
+
+
 
 def record_dispatch_batch(
     repo: Path,
@@ -647,7 +766,12 @@ def _complete_review_core(
             raise ValidationError(f"reviewer '{reviewer}' already bound to execution '{existing_bound_id}', rejecting different execution '{execution_id}'")
 
         current_st = ledger["reviewers"][reviewer].get("state")
-        if current_st == REVIEW_ENV_BLOCKED and str(ledger["reviewers"][reviewer].get("last_error") or "").startswith("REVIEW_MODEL_UNVERIFIED:") and existing_bound_id == execution_id:
+        last_err = str(ledger["reviewers"][reviewer].get("last_error") or "")
+        if (
+            current_st == REVIEW_ENV_BLOCKED
+            and last_err.startswith(("REVIEW_MODEL_UNVERIFIED:", "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE", "TRUSTED_TRANSCRIPT_NOT_FOUND", "TRUSTED_TRANSCRIPT_UNREADABLE"))
+            and existing_bound_id == execution_id
+        ):
             current_st = REVIEW_DISPATCHED
         if current_st not in (REVIEW_DISPATCHED, REVIEW_PROTOCOL_RETRY_REQUIRED):
             raise ValidationError(f"cannot complete review for '{reviewer}': state is '{current_st}', expected DISPATCHED or PROTOCOL_RETRY_REQUIRED")
@@ -665,13 +789,15 @@ def _complete_review_core(
             if not text or not text.strip():
                 raise ValueError("no model response in transcript")
         except Exception as exc:
-            ledger["reviewers"][reviewer]["state"] = REVIEW_ENV_BLOCKED
             if isinstance(exc, FileNotFoundError):
                 err_code = "TRUSTED_TRANSCRIPT_NOT_FOUND"
             elif "no model response" in str(exc).lower():
                 err_code = "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE"
             else:
                 err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
+            ledger["reviewers"][reviewer]["state"] = (
+                REVIEW_DISPATCHED if err_code == "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE" else REVIEW_ENV_BLOCKED
+            )
             ledger["reviewers"][reviewer]["last_error"] = err_code
             save_ledger(directory, run_id, ledger)
             raise ValidationError(f"could not extract trusted transcript for subagent '{execution_id}': {err_code}")

@@ -1155,8 +1155,13 @@ def _complete_phase_review_locked(
         return parsed_result
 
     current_st = rev_entry.get("state")
-    if current_st == REVIEW_ENV_BLOCKED and str(rev_entry.get("last_error") or "").startswith("REVIEW_MODEL_UNVERIFIED:") and rev_entry.get("execution_id") == execution_id:
-        # Missing host metadata may become readable later. Re-ingest this same
+    last_err = str(rev_entry.get("last_error") or "")
+    if (
+        current_st == REVIEW_ENV_BLOCKED
+        and last_err.startswith(("REVIEW_MODEL_UNVERIFIED:", "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE", "TRUSTED_TRANSCRIPT_NOT_FOUND", "TRUSTED_TRANSCRIPT_UNREADABLE"))
+        and rev_entry.get("execution_id") == execution_id
+    ):
+        # Missing host metadata or in-progress transcripts may become readable later. Re-ingest this same
         # execution; mismatched models, failed launches and other failures stay blocked.
         current_st = REVIEW_DISPATCHED
     if current_st == REVIEW_NOT_DISPATCHED:
@@ -1193,13 +1198,15 @@ def _complete_phase_review_locked(
             if not raw_response or not raw_response.strip():
                 raise ValueError("no model response in transcript")
         except Exception as exc:
-            rev_entry["state"] = REVIEW_ENV_BLOCKED
             if isinstance(exc, FileNotFoundError):
                 err_code = "TRUSTED_TRANSCRIPT_NOT_FOUND"
             elif "no model response" in str(exc).lower():
                 err_code = "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE"
             else:
                 err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
+            rev_entry["state"] = (
+                REVIEW_DISPATCHED if err_code == "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE" else REVIEW_ENV_BLOCKED
+            )
             rev_entry["last_error"] = err_code
             rev_entry["last_error_code"] = err_code
             ledger["ledger_sha256"] = compute_ledger_sha(ledger)
