@@ -135,6 +135,10 @@ def _developer_authority_violation(command: str) -> str:
     Returns the violated action ("cancel" or "approve"), or "" when the command is allowed.
     """
     for subcommand, rest in _lifecycle_calls(command):
+        if subcommand == "change-decision" and "--apply" in rest:
+            support = _flag(rest, "--mode") == "extend-scope" and _flag(rest, "--source") == "approved-plan"
+            if not support and (_flag(rest, "--source") != "conversation" or not _flag(rest, "--proof-reference")):
+                return "change-decision"
         if subcommand == "merge" and "--apply" in rest:
             if _flag(rest, "--source").lower() != "conversation" or not _flag(rest, "--proof-reference"):
                 return "merge"
@@ -468,7 +472,7 @@ def _handle_command(command: str) -> None:
     if violated:
         emit("deny", "Denied by local safety boundary: developer_authority.", tool="run_command", command=command, reason_code="DEVELOPER_AUTHORITY", task_id=active_tid)
         return
-    if _pending_cancel(active_tid) and any(sub in ("resume", "revise") for sub, _ in _lifecycle_calls(command)):
+    if _pending_cancel(active_tid) and any(sub in ("resume", "revise", "change-decision") for sub, _ in _lifecycle_calls(command)):
         emit("deny", _cancel_pending_message(active_tid), tool="run_command", command=command, reason_code="CANCEL_PENDING", task_id=active_tid)
         return
     for code, pattern in DANGEROUS:
@@ -1498,7 +1502,8 @@ def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
     roots: set[str] = set()
     files: set[str] = set()
 
-    for ef in plan.get("expected_files") or []:
+    from change_decision import reserved_files
+    for ef in set(plan.get("expected_files") or []) | reserved_files(plan):
         norm = str(ef).replace("\\", "/").strip().lstrip("/")
         if not norm:
             continue

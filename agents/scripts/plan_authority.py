@@ -572,6 +572,7 @@ def check_material_drift(
     actual_modules: list[str] | None = None,
     actual_files: list[str] | None = None,
     repo: Path | str | None = None,
+    *, for_mutation: bool = False,
 ) -> list[str]:
     """Material scope drift between the approved plan and the actual change.
 
@@ -604,6 +605,10 @@ def check_material_drift(
 
     unplanned_files: set[str] = set()
     expected_files = {f.replace("\\", "/").strip("/") for f in (plan.get("expected_files") or [])}
+    from change_decision import additional_files, observed_files
+    expected_files |= additional_files(plan)
+    if repo is not None and not for_mutation:
+        expected_files |= observed_files(plan, repo)
     if expected_files and actual_files is not None:
         test_strategy = str(plan.get("test_strategy") or "").lower()
         adds_tests = any(kw in test_strategy for kw in ("test", "add", "unit", "tdd", "new")) or bool(expected_surfaces & {"TEST_ONLY"})

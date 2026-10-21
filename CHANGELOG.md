@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.42] - 2026-10-21
+
+### Incremental change decisions (`task change-decision`) for same-goal support files and concurrent developer edits
+
+- Add `python .agents/harness.py task change-decision` (`agents/scripts/change_decision.py`) with preview-bound receipts (`--expect-preview <preview_sha256>`) supporting three modes without replacing the active task plan, approval, phase history, prior PASS review coverage, or spending counters:
+  - `--mode extend-scope` (`--source approved-plan`): reserve exact additional support files needed for the already-approved goal (`FILE_SCOPE_DECISION_REQUIRED`), avoiding full `revise` and reviewer reset when file membership expands within the same surfaces, modules, and architecture contract.
+  - `--mode accept-edits` (`--source conversation|developer_terminal` with `--proof-reference`): record explicit developer consent for an exact post-review file delta (`developer_accepted_files`) so unaffected/accepted edits do not trigger redundant AI reviewer rounds while still requiring fresh deterministic preflight, unit tests, assemble, and device gates.
+  - `--mode review-edits` (`--source conversation|developer_terminal` with `--proof-reference`): record developer-authored edits for targeted delta review while keeping `observed_files` in verification scope at those exact bytes without granting the agent write permission on unreserved files.
+- Preserve completed final-phase checkpoints in `phase_routing.py` when post-freeze changes are covered by a bound `change-decision` receipt, and update `VERIFICATION_STALE` / `DELIVERY_STALE_AFTER_COMMIT` router guidance to prompt the developer for `accept-edits` vs `review-edits`.
+
 ## [1.1.41] - 2026-10-21
 
 ### Fast parallel `invoke_subagent` hook execution, in-progress transcript recovery, and identical-snapshot reviewer carry-over

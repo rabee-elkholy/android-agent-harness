@@ -1063,6 +1063,7 @@ def cmd_phase_review(args: argparse.Namespace) -> int:
 
 
 FULL_SELFTEST_SUITES = (
+    "_change_decision_selftest.py",
     "_review_models_selftest.py",
     "_portability_selftest.py",
     "_host_continuation_selftest.py",

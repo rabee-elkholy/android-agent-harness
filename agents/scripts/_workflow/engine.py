@@ -1057,7 +1057,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             or not all(phase.get("id") in (phase_state.get("completed_phases") or []) for phase in phases)
         ):
             raise ValidationError("all approved phases must be complete before verification preparation")
-        validated_completed_phase_manifest(repo, args.task_id, plan, phase_state, final_phase)
+        validated_completed_phase_manifest(repo, args.task_id, plan, phase_state, final_phase, for_final=True)
     base_repo = plan.get("repository") or {}
     if base_repo:
         current_identity = repository_identity(repo)
@@ -1199,6 +1199,17 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         causes = _drift_causes(repo, manifest, drift, plan)
         plan["material_drift_causes"] = causes
         save_plan(_plan_path(repo, args.task_id), plan)
+        if all(item.startswith("file:") for item in drift):
+            raise ValidationError(
+                "FILE_SCOPE_DECISION_REQUIRED: additional files do not by themselves require plan revision: "
+                + ", ".join(item[5:] for item in drift)
+                + ". Preserve this task, approval and prior reviews. For support files serving the approved goal, preview "
+                + f"python .agents/harness.py task change-decision --task-id {args.task_id} --mode extend-scope "
+                + '--file "<path>" --reason "<same-goal justification>". Repeat --file for each file, then apply with '
+                + "--expect-preview <preview_sha256> --source approved-plan. For personal edits, ask the developer "
+                + "to accept-edits without additional AI review or review-edits, then record their explicit choice. "
+                + "Only material behavior, contract, sensitive surface or module expansion requires revise."
+            )
         remediation_cmd = build_remediation_command(repo, args.task_id, plan, policy, manifest)
         # A live run: the developer re-approved without being told which change pulled in AUTH/BILLING.
         named = [f"{item} (from {', '.join(causes[item])})" if causes.get(item) else str(item) for item in drift]
@@ -2491,6 +2502,7 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
 
 def validated_completed_phase_manifest(
     repo: Path, task_id: str, plan: dict, phase_state: dict, phase: dict,
+    *, for_final: bool = False,
 ) -> dict:
     """Return the live manifest only when it still matches a completed phase checkpoint."""
     from phase_review import PHASE_COMPLETE, compute_phase_delta_sha256, get_phase_substate, phase_path_states
@@ -2521,20 +2533,24 @@ def validated_completed_phase_manifest(
         expected_files=phase.get("expected_files") or plan.get("expected_files"),
     )
     changes = manifest.get("task_changes") or []
+    historical_for_final = False
     if any((
         manifest["delivery_snapshot_sha256"] != checkpoint.get("delivery_snapshot_sha256"),
         manifest["task_change_set_sha256"] != checkpoint.get("task_change_set_sha256"),
         compute_phase_delta_sha256(phase_id, changes) != checkpoint.get("phase_delta_sha256"),
         phase_path_states(repo, changes) != checkpoint.get("phase_path_states"),
     )):
-        raise ValidationError("phase checkpoint is stale; re-checkpoint the current phase before advancing")
+        from change_decision import final_phase_delta_covered
+        historical_for_final = for_final and final_phase_delta_covered(repo, plan, phase_id, checkpoint_sha, manifest)
+        if not historical_for_final:
+            raise ValidationError("phase checkpoint is stale; re-checkpoint the current phase before advancing")
     review_status = checkpoint.get("review")
     if not isinstance(review_status, dict):
         raise ValidationError("phase checkpoint review decision is missing")
     if review_status.get("status") == "REVIEW_PACKAGE_REQUIRED":
         from phase_review import validate_completed_phase_review_proof
 
-        validate_completed_phase_review_proof(repo, task_id, phase_id, checkpoint_sha)
+        validate_completed_phase_review_proof(repo, task_id, phase_id, checkpoint_sha, historical_for_final=historical_for_final)
     elif review_status.get("status") != "NOT_REQUIRED":
         raise ValidationError("phase checkpoint review decision is invalid")
     return manifest
@@ -2951,6 +2967,8 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
     command.set_defaults(handler=record_sensitive_approval)
     from review_budget import record_review_budget
+    from change_decision import register_parser
+    register_parser(sub, common)
     command = sub.add_parser("review-budget", parents=[common])
     command.add_argument("--limit", type=int, help="Developer-approved reviewer call limit (12-100)")
     command.add_argument("--round-limit", type=int, help="Developer-approved final review round limit (3-100)")
@@ -3590,6 +3608,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{recipe['surface']}]:")
                 for step in recipe["steps"]:
                     print(f"    - {step}")
+    elif args.action == "change-decision":
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.action == "debug-evidence":
         print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")
     elif args.action == "validate-finding":

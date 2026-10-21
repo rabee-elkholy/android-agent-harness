@@ -370,6 +370,7 @@ def phase_review_freshness(
 
 def validate_completed_phase_review_proof(
     repo: Path, task_id: str, phase_id: str, checkpoint_sha256: str,
+    *, historical_for_final: bool = False,
 ) -> None:
     """Revalidate the active PASS run before a completed phase can advance."""
     tdir = task_dir(repo, task_id)
@@ -392,12 +393,13 @@ def validate_completed_phase_review_proof(
         raise ValidationError("phase review proof has an invalid checkpoint or reviewer roster")
     for reviewer in roster:
         validate_id(reviewer, "reviewer")
-    try:
-        fresh, reason = phase_review_freshness(repo, task_id, phase_id, run, reviewed_paths_only=True)
-    except Exception as exc:
-        raise ValidationError(f"phase review proof freshness cannot be verified: {exc}") from exc
-    if not fresh:
-        raise ValidationError(f"phase review proof is stale: {reason}")
+    if not historical_for_final:
+        try:
+            fresh, reason = phase_review_freshness(repo, task_id, phase_id, run, reviewed_paths_only=True)
+        except Exception as exc:
+            raise ValidationError(f"phase review proof freshness cannot be verified: {exc}") from exc
+        if not fresh:
+            raise ValidationError(f"phase review proof is stale: {reason}")
     ok, reason, ledger = load_phase_ledger(
         tdir, phase_id, expected_run_id=run_id,
         expected_task_id=task_id, expected_reviewers=roster,

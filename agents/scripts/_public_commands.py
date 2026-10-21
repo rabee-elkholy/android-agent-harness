@@ -5,6 +5,12 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {"command": "task change-decision", "read_only": False,
+     "valid_states": ["IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"],
+     "required_inputs": ["task_id", "mode", "file", "reason"], "model_facing": True,
+     "description": "Preview by default; apply an exact developer edit decision or same-goal file reservation with --expect-preview. Preserve approval and review history; never waive fresh deterministic gates.",
+     "when_to_use": "Unexpected source edits or file-only drift. accept-edits/review-edits require explicit conversation proof; extend-scope may use approved-plan for the same approved goal.",
+     "example": "python .agents/harness.py task change-decision --task-id <id> --mode extend-scope --file <path> --reason <same-goal-justification>"},
     {"command": "review models show", "read_only": True, "valid_states": ["ANY"], "required_inputs": [], "model_facing": True,
      "description": "Show developer reviewer-model policy, native host choices and frozen final-run selections."},
     {"command": "review models set", "read_only": False, "valid_states": ["ANY"], "required_inputs": ["source", "proof_reference"], "model_facing": True,

@@ -479,7 +479,7 @@ class HookTests(unittest.TestCase):
         res = self.call("run_command", {"CommandLine": "python .agents/harness.py commands"})
         self.assertEqual("allow", res["decision"])
 
-    def test_MUTATION_SCOPE_002d_existing_test_of_another_feature_needs_revised_plan(self):
+    def test_MUTATION_SCOPE_002d_existing_test_of_another_feature_needs_scope_decision(self):
         # O65 (real app): with the default "Policy-selected relevant tests" strategy every test file in
         # :app was writable, so after an unrelated test failed the agent edited FoodPlanViewModelTest.
         other = self.repo / "app/src/test/kotlin/com/example/food/FoodPlanViewModelTest.kt"
@@ -497,7 +497,8 @@ class HookTests(unittest.TestCase):
         )
         res = self.call("replace_file_content", {"TargetFile": str(other)})
         self.assertEqual("deny", res["decision"])
-        self.assertEqual("SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL", res.get("reason_code"))
+        self.assertEqual("FILE_SCOPE_DECISION_REQUIRED", res.get("reason_code"))
+        self.assertIn("same approved goal", res["reason"])
         self.assertIn("FoodPlanViewModelTest.kt", res["reason"])
         mirror = self.call("replace_file_content", {"TargetFile": str(own)})
         self.assertEqual("allow", mirror["decision"], "the test of a planned file stays writable")

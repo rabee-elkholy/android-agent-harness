@@ -486,6 +486,8 @@ def decide_later_round(
                 "files": sorted(str(item) for item in fix_delta.get("files") or []),
                 "reviewers": sorted(str(item) for item in fix_delta.get("reviewers") or []),
                 **({"comparison": fix_delta["comparison"]} if fix_delta.get("comparison") else {}),
+                **({"developer_accepted_files": sorted(fix_delta["developer_accepted_files"])}
+                   if fix_delta.get("developer_accepted_files") else {}),
             }
 
     result["reviewers"] = sorted(rerun)
@@ -534,6 +536,9 @@ def decide_later_round(
         if fix_delta is not None else
         "A trustworthy fix delta is unavailable; previous coverage cannot be narrowed safely."
     )
+    if fix_delta and fix_delta.get("developer_accepted_files"):
+        result["explanation"]["developer_accepted_files"] = sorted(fix_delta["developer_accepted_files"])
+        result["explanation"]["followup_basis"] += " The developer accepted the named exact delta without additional AI review; this is not a reviewer PASS for those edits."
     if rerun or by_reviewer:
         result["explanation"]["review_exemption"] = None
     result["policy_sha256"] = canonical_sha256({key: value for key, value in result.items() if key != "policy_sha256"})

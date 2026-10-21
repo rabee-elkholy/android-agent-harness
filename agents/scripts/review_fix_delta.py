@@ -154,11 +154,17 @@ def compute_fix_delta(
         files = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
         if not files:
             return {"files": [], "reviewers": []}
+        from change_decision import accepted_files
+        accepted = accepted_files(plan, previous_run_id, previous, current_manifest) & set(files)
+        files = sorted(set(files) - accepted)
+        decision_basis = {"developer_accepted_files": sorted(accepted)} if accepted else {}
+        if not files:
+            return {"files": [], "reviewers": [], **decision_basis}
         comparison = _comparison_texts(repo, previous, current_manifest, plan, previous_run_id, files)
         present = [{"path": path} for path in files if path in after or comparison is not None]
         if not present:
             # Only deletions since the review: the regression reviewer covers what they break.
-            return {"files": files, "reviewers": ["regression-impact-reviewer-agent"]}
+            return {"files": files, "reviewers": ["regression-impact-reviewer-agent"], **decision_basis}
         delta_class = classify(repo, task_changes=present, candidate_paths=[item["path"] for item in present],
                                progress=False, review_comparison=comparison)
         if not delta_class.get("surfaces"):
@@ -170,6 +176,7 @@ def compute_fix_delta(
         if any(path not in after for path in files):
             reviewers.add("regression-impact-reviewer-agent")
         return {"files": files, "reviewers": sorted(reviewers),
+                **decision_basis,
                 "comparison": "REVIEWED_TEXT" if comparison is not None else "FILE_SCOPE_FALLBACK"}
     except Exception:
         return None

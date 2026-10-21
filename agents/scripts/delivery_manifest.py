@@ -692,6 +692,8 @@ def task_owned_files(repo: Path, task_id: str, plan: dict | None = None) -> set[
     if not isinstance(plan, dict):
         return set()
     owned: set[str] = set()
+    from change_decision import reserved_files
+    owned.update(reserved_files(plan))
     for f in plan.get("expected_files") or []:
         if str(f).strip():
             owned.add(_normal_rel(str(f).strip()))

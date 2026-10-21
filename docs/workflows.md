@@ -109,3 +109,24 @@ explain why incompatible JVM settings or explicit disabling can prevent reuse.
 ## Optional verification value
 
 New tasks can select an approved JSON verification contract for criterion-specific acceptance evidence and reusable UI journeys. Definitions remain project-owned outside `.agents`; installation, update, and uninstall do not manage them. Existing tasks are unchanged. Local operation timings are enabled only through `HARNESS_LOCAL_METRICS=1`, with reports generated on demand. These features add no setup question or external service. See [verification-value.md](verification-value.md) for schema examples, prerequisite gates, and commands.
+# Concurrent edits without restarting the task
+
+When unexpected source changes appear during verification, show the developer
+the diff and offer acceptance without additional AI review or review of the
+affected delta. Preserve the existing task and completed work. For example:
+
+```bash
+python .agents/harness.py task change-decision --task-id <id> --mode accept-edits --file app/src/main/res/layout/example.xml --reason "Intentional developer layout edit"
+```
+
+After explicit consent, repeat the command with `--apply --expect-preview <preview_sha256>
+--source conversation --proof-reference "<developer answer>"`. Use `review-edits`
+when review is requested. The agent executes the command; the developer need not
+run shell commands. Fresh deterministic verification still follows.
+
+For an exact additional support file needed for the same approved goal, use
+`--mode extend-scope`, a concrete same-goal reason and `--source approved-plan` on
+apply. This preserves the original approval and prior review evidence. Adding
+filenames alone no longer forces `revise`; genuine behavioral or risk expansion
+still does. See [ADR-016](adr/016-incremental-change-decisions.md).
+

@@ -1,8 +1,8 @@
 # Diagnose Android Agent Harness
 
-> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.41/docs/diagnostic-prompt.md`
+> **Raw Prompt URL**: `https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.42/docs/diagnostic-prompt.md`
 > **Kit Repository**: `https://github.com/rabee-elkholy/android-agent-harness`
-> **Kit version**: `v1.1.41` — **SHA-256**: `97963730fb9364c5ee915eab8f11862ffbc4bdcc3956930a03aac1d6f74c40cf` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
+> **Kit version**: `v1.1.42` — **SHA-256**: `97963730fb9364c5ee915eab8f11862ffbc4bdcc3956930a03aac1d6f74c40cf` (SHA-256 of every byte after this line; verify first — mismatch = STOP)
 
 ---
 Before executing anything: verify that the SHA-256 of every byte after the **SHA-256** header line equals the header value. If it does not match, STOP and tell the developer the file was tampered with.

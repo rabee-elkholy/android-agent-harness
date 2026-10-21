@@ -8234,7 +8234,8 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
         from workflow import resolve_next_action
         action = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("VERIFICATION_STALE", action.get("code"))
-        self.assertEqual("TASK_STATE", action.get("kind"))
+        self.assertEqual("DEVELOPER_ACTION", action.get("kind"))
+        self.assertIn("accept-edits", action["reason"])
         self.assertTrue(action.get("blocking"))
         self.assertIn("task resume", action.get("command", ""))
         self.assertIn("STALE", action.get("reason", "").upper())

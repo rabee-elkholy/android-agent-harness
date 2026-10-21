@@ -121,7 +121,11 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
 
 def _next_implementation(repo, task_id, plan, host, identity, run_host, state, session):
     tdir = _engine.task_dir(repo, task_id)
-    if plan.get("review_rounds"):
+    from change_decision import decisions
+    has_accept_edits = not plan.get("blocked_reviewers") and any(
+        row.get("mode") == "accept-edits" for row in decisions(plan)
+    )
+    if plan.get("review_rounds") and not has_accept_edits:
         from review_budget import review_round_cap_action
         previous = tdir / "current-run.json"
         previous_policy = _engine.read_json(_engine.Path(_engine.read_json(previous)["policy"])) if previous.is_file() else {}
@@ -284,13 +288,20 @@ def _next_verification(repo, task_id, plan, host, identity, run_host, state, ses
     if not freshness.get("fresh"):
         return {
             "code": "VERIFICATION_STALE",
-            "kind": "TASK_STATE",
+            "kind": "DEVELOPER_ACTION",
             "command": f"python .agents/harness.py task resume --task-id {task_id}",
             "blocking": True,
             "reason": (
                 "The frozen verification run no longer represents current repository content "
                 f"({freshness.get('reason_code')}: {freshness.get('reason', '')}). "
-                "No further gates or reviewers will be consumed. Resume task to return to implementing."
+                "No further gates or reviewers will be consumed. Preserve the same task and completed work. "
+                "For unexpected source edits, show the diff and ask whether these are intentional developer edits: "
+                "accept the exact edits without additional AI review, or review the affected delta. "
+                "Preview task change-decision --mode accept-edits or review-edits --file <changed-file> "
+                "--reason <explanation>, then apply --expect-preview <hash> --source conversation "
+                "--proof-reference <answer>. Never infer authorship or consent. "
+                "For agent fixes already authorized, resume and verify only the affected scope; do not restart the plan. "
+                "Non-source/environment drift still requires its normal recovery."
             ),
             "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
             "expected": {"success_statuses": ["IMPLEMENTING"]},
@@ -472,9 +483,11 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             "reason": (
                 f"Content changed after verification: {named}.{diff_detail} "
                 "Git attributes normalize line endings when configured; unproven content differences still require verification. "
-                "Before anything else, ask the developer with ask_question (it may be their own edit before the commit, "
-                "or an intentional refactor): 'Verify these changes' / 'Cancel task'. "
-                "On 'Verify', run the command, then prepare verification again; only the reviewers these files need run again."
+                "Show the diff and ask the developer whether these are intentional developer edits: accept the exact delta without additional AI review, "
+                "or verify the affected changes. Preview task change-decision --mode accept-edits or review-edits "
+                "--file <changed-file> --reason <explanation>; apply its --expect-preview <hash> with "
+                "--source conversation --proof-reference <answer>. Keep this task and prior review coverage. "
+                "Tests/build/device evidence must still match the new source. Cancel only on an explicit cancellation request."
             ),
             "changed_files": changed,
             "inputs": {

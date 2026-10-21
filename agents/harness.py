@@ -14,7 +14,7 @@ TASK_SUBCOMMANDS = frozenset({
     "draft", "revise", "checkpoint-phase", "begin-next-phase", "present-plan", "approve", "approve-sensitive",
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
-    "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge",
+    "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
 })
 
 

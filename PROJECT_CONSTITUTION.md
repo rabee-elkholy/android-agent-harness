@@ -85,6 +85,10 @@ Ordinary bug fixes, implementation details, refactors that preserve these invari
 - Normal phase progression never asks for approval again.
 - In-scope bug fixes after review findings resume implementation under the same approved scope.
 - Material scope expansion requires revised approval.
+- An additional exact support file for the same approved outcome may be reserved
+  through a preview-bound `change-decision` receipt without replacing the plan.
+  File membership alone is not material expansion; new behavior, sensitive
+  surfaces, modules and contracts still require revised approval. See ADR-016.
 
 Do not add repeated approval gates merely to feel safer.
 
@@ -238,6 +242,14 @@ For Review V2 and scoped Phase Review V2:
 - protocol correction stays in the same reviewer execution when possible;
 - environment failure is not PASS;
 - stale review result is not PASS.
+
+The maintainer approved a narrow developer-edit exception: explicit informed
+consent may accept a named exact post-review delta without additional AI review.
+Record that as developer acceptance, never as reviewer PASS. Preserve prior
+review provenance, unresolved finding owners, newly required responsibilities,
+initial review requirements and spent budgets. Different bytes invalidate the
+exception. Deterministic tests/build/device evidence must still be fresh.
+This exception and same-goal file reservations are documented in ADR-016.
 
 ### 3.9 At most three disjoint live tasks per worktree
 

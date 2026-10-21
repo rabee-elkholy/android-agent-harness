@@ -1023,10 +1023,10 @@ class TestResourceWriteScope(unittest.TestCase):
         for target in (added, other):
             allowed, reason, code = file_mutation_allowed(repo, targets=[target])
             self.assertFalse(allowed, reason)
-            self.assertEqual('SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL', code)
-            self.assertIn('file:' + target, reason)
+            self.assertEqual('FILE_SCOPE_DECISION_REQUIRED', code)
+            self.assertIn(target, reason)
         write_file(repo / added, '<resources><string name="new_label">New</string></resources>\n')
-        with self.assertRaisesRegex(ValidationError, 'file:app/src/debug/res/values/new.xml'):
+        with self.assertRaisesRegex(ValidationError, 'app/src/debug/res/values/new.xml'):
             workflow.prepare_verification(repo, 'resource-scope')
         parser = workflow.build_parser()
         revision = workflow.revise(parser.parse_args(['revise', '--repo', str(repo), '--task-id',
@@ -1078,9 +1078,9 @@ class TestResourceWriteScope(unittest.TestCase):
         workflow.record_approval(approval)
         self.assertFalse(file_mutation_allowed(repo, targets=[source, target])[0])
         (repo / source).rename(repo / target)
-        with self.assertRaisesRegex(ValidationError, 'file:' + source) as failure:
+        with self.assertRaisesRegex(ValidationError, source) as failure:
             workflow.prepare_verification(repo, 'rename-scope')
-        self.assertIn(source, str(failure.exception).split('--expected-files', 1)[1])
+        self.assertIn('FILE_SCOPE_DECISION_REQUIRED', str(failure.exception))
         revised = workflow.revise(workflow.build_parser().parse_args([
             'revise', '--repo', str(repo), '--task-id', 'rename-scope', '--expected-files', source + ',' + target]))
         approval.plan_hash = revised['plan_sha256'][:12]

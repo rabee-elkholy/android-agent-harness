@@ -19,7 +19,7 @@ VERIFICATION_SCRIPTS = {
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
     "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery", "switch", "merge",
-    "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget", "continue",
+    "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget", "continue", "change-decision",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base)\s", re.I)
@@ -435,8 +435,16 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             modules,
             actual_files=[rel_posix],
             repo=root,
+            for_mutation=True,
         )
         if drift:
+            if all(item.startswith("file:") for item in drift):
+                return (False,
+                        f"File '{rel_posix}' is not reserved yet. For a support file serving the same approved goal, "
+                        "use task change-decision --mode extend-scope with this exact --file and a same-goal --reason; "
+                        "preview then apply with --expect-preview and --source approved-plan. Preserve approval and reviews. "
+                        "New behavior or risk requires revised approval.",
+                        "FILE_SCOPE_DECISION_REQUIRED")
             hint = _all_missing_surfaces_hint(root, plan, rel_posix, drift, classify, check_material_drift)
             return (
                 False,
@@ -943,7 +951,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.
-    if status in ("VERIFYING", "BLOCKED", "READY_FOR_DELIVERY") and action == "resume":
+    if status in ("VERIFYING", "BLOCKED", "READY_FOR_DELIVERY") and action in {"resume", "change-decision"}:
         return True, f"resume authorized for {status.lower()} plan {plan.get('plan_id')}"
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
