@@ -211,6 +211,30 @@ class ModifiedLineSelection(unittest.TestCase):
         renamed = self.repo / 'renamed.kt'
         self.assertEqual({1, 2, 3}, fast_kt_lint.get_modified_lines_map(self.repo, [renamed], cached=True)[renamed])
 
+    def test_indented_todo_comments_allowed_while_executable_todo_flagged(self):
+        kt = self.repo / 'Sample.kt'
+        kt.write_text(
+            'class Sample {\n'
+            '    fun onClick() {\n'
+            '        // TODO(analytics): awaiting contract from developer\n'
+            '        val x = 1 /* TODO(analytics): inline block comment */\n'
+            '    }\n'
+            '}\n',
+            encoding='utf-8',
+        )
+        self.assertEqual([], fast_kt_lint.lint_file(kt))
+        kt_stub = self.repo / 'Stub.kt'
+        kt_stub.write_text(
+            'class Stub {\n'
+            '    fun onClick() {\n'
+            '        TODO("not implemented")\n'
+            '    }\n'
+            '}\n',
+            encoding='utf-8',
+        )
+        issues = fast_kt_lint.lint_file(kt_stub)
+        self.assertEqual(['UNIMPLEMENTED_STUB'], [i['type'] for i in issues])
+
 
 class HookCommandParsing(unittest.TestCase):
     def test_windows_backslashes_survive_quoted_command_parsing(self):

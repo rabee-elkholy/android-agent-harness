@@ -100,14 +100,27 @@ def _current_feature_segment(path: Path) -> str | None:
 
 
 def _in_string_or_comment(line: str, index: int) -> bool:
-    """True when index sits inside a // comment or a double-quoted string."""
+    """True when index sits inside a // comment, /* ... */ block comment, or double-quoted string."""
     in_string = False
+    in_block = False
     escaped = False
     i = 0
     while i < index and i < len(line):
         ch = line[i]
-        if not in_string and ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
-            return True
+        if in_block:
+            if ch == "*" and i + 1 < len(line) and line[i + 1] == "/":
+                in_block = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if not in_string and ch == "/" and i + 1 < len(line):
+            if line[i + 1] == "/":
+                return True
+            if line[i + 1] == "*":
+                in_block = True
+                i += 2
+                continue
         if in_string:
             if escaped:
                 escaped = False
@@ -118,7 +131,7 @@ def _in_string_or_comment(line: str, index: int) -> bool:
         elif ch == '"':
             in_string = True
         i += 1
-    return in_string
+    return in_string or in_block
 
 
 def is_preview_surface(filename: str, text: str = "") -> bool:
@@ -355,45 +368,37 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                 })
                 break
 
-        if not is_test and RUNBLOCKING_PATTERN.search(trimmed):
-            m_rb = RUNBLOCKING_PATTERN.search(trimmed)
-            if not _in_string_or_comment(line, m_rb.start()):
-                issues.append({
-                    "file": str(file_path),
-                    "line": idx,
-                    "type": "RUNBLOCKING_ANR",
-                    "msg": "runBlocking found in production code. Use viewModelScope.launch or coroutineScope to avoid ANRs.",
-                })
+        if not is_test and any(not _in_string_or_comment(line, m_rb.start()) for m_rb in RUNBLOCKING_PATTERN.finditer(line)):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "RUNBLOCKING_ANR",
+                "msg": "runBlocking found in production code. Use viewModelScope.launch or coroutineScope to avoid ANRs.",
+            })
 
-        if is_test and RUNBLOCKING_PATTERN.search(trimmed):
-            m_trb = RUNBLOCKING_PATTERN.search(trimmed)
-            if not _in_string_or_comment(line, m_trb.start()):
-                issues.append({
-                    "file": str(file_path),
-                    "line": idx,
-                    "type": "TEST_RUNBLOCKING",
-                    "msg": "runBlocking found in test file. Use runTest { ... } with StandardTestDispatcher / advanceUntilIdle() for robust coroutine testing.",
-                })
+        if is_test and any(not _in_string_or_comment(line, m_trb.start()) for m_trb in RUNBLOCKING_PATTERN.finditer(line)):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "TEST_RUNBLOCKING",
+                "msg": "runBlocking found in test file. Use runTest { ... } with StandardTestDispatcher / advanceUntilIdle() for robust coroutine testing.",
+            })
 
-        if not is_test and UNIMPLEMENTED_STUB_PATTERN.search(trimmed):
-            m_stub = UNIMPLEMENTED_STUB_PATTERN.search(trimmed)
-            if not _in_string_or_comment(line, m_stub.start()):
-                issues.append({
-                    "file": str(file_path),
-                    "line": idx,
-                    "type": "UNIMPLEMENTED_STUB",
-                    "msg": f"Unimplemented stub found in production code: '{trimmed}'. Provide complete implementation.",
-                })
+        if not is_test and any(not _in_string_or_comment(line, m_stub.start()) for m_stub in UNIMPLEMENTED_STUB_PATTERN.finditer(line)):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "UNIMPLEMENTED_STUB",
+                "msg": f"Unimplemented stub found in production code: '{trimmed}'. Provide complete implementation.",
+            })
 
-        if not is_test and DOUBLE_BANG_PATTERN.search(trimmed):
-            m_db = DOUBLE_BANG_PATTERN.search(trimmed)
-            if not _in_string_or_comment(line, m_db.start()):
-                issues.append({
-                    "file": str(file_path),
-                    "line": idx,
-                    "type": "UNCHECKED_DOUBLE_BANG",
-                    "msg": f"Unchecked double-bang (!!) found in production code: '{trimmed}'. Replace with safe call (?.) or checkNotNull()/requireNotNull() with clear message.",
-                })
+        if not is_test and any(not _in_string_or_comment(line, m_db.start()) for m_db in DOUBLE_BANG_PATTERN.finditer(line)):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "UNCHECKED_DOUBLE_BANG",
+                "msg": f"Unchecked double-bang (!!) found in production code: '{trimmed}'. Replace with safe call (?.) or checkNotNull()/requireNotNull() with clear message.",
+            })
 
         if DIAGNOSTIC_PROBE_PATTERN.search(trimmed):
             issues.append({

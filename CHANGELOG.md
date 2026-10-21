@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.40] - 2026-10-21
+
+### Allow commented `TODO` notes in `fast_kt_lint.py` while blocking executable `TODO()` stubs
+
+- Fix line-offset indexing in `fast_kt_lint.py` (`UNIMPLEMENTED_STUB`, `RUNBLOCKING_ANR`, `TEST_RUNBLOCKING`, and `UNCHECKED_DOUBLE_BANG`) to match against the full `line` rather than `trimmed` when calling `_in_string_or_comment(line, match.start())`, and extend `_in_string_or_comment` to recognize inline `/* ... */` block comments so indented `// TODO(...)` and `/* TODO(...) */` comments pass preflight and phase checkpoints while executable `TODO()` calls remain blocked.
+
 ## [1.1.39] - 2026-10-20
 
 ### Antigravity `Model="flash"` subagent enforcement and fast batch reviewer completion
