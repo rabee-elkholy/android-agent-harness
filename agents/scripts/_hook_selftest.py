@@ -1120,10 +1120,10 @@ class GenericMCPTests(unittest.TestCase):
         self.assertEqual("allow", res3["decision"])
 
     def test_MCP_002_write_without_scope_denied(self):
-        """MCP-002: Mutation without approved external-write scope is denied."""
+        """MCP-002: Mutation without approved external-write scope asks the developer (ADR-017)."""
         self.activate(external_writes=[])
         res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "create_component"})
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("ask", res["decision"])
         self.assertEqual("EXTERNAL_WRITE_SCOPE_REQUIRED", res.get("reason_code"))
         self.assertIn("--external-write mcp:figma", res.get("reason", ""))
 
@@ -1137,7 +1137,7 @@ class GenericMCPTests(unittest.TestCase):
         """MCP-004: mcp:figma scope does not authorize firebase mutations."""
         self.activate(external_writes=["mcp:figma"])
         res = self.call("call_mcp_tool", {"ServerName": "firebase", "ToolName": "create_app"})
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("ask", res["decision"])
         self.assertEqual("EXTERNAL_WRITE_SCOPE_REQUIRED", res.get("reason_code"))
         self.assertIn("--external-write mcp:firebase", res.get("reason", ""))
 
@@ -1145,7 +1145,7 @@ class GenericMCPTests(unittest.TestCase):
         """MCP-005: High-impact mutation (firebase deploy) with only mcp:firebase is denied."""
         self.activate(external_writes=["mcp:firebase"])
         res = self.call("call_mcp_tool", {"ServerName": "firebase", "ToolName": "firebase_deploy"})
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("force_ask", res["decision"])
         self.assertEqual("EXTERNAL_HIGH_IMPACT_SCOPE_REQUIRED", res.get("reason_code"))
         self.assertIn("--external-write mcp:firebase:high-impact", res.get("reason", ""))
 
@@ -1156,24 +1156,24 @@ class GenericMCPTests(unittest.TestCase):
         self.assertEqual("allow", res["decision"])
 
     def test_MCP_007_unknown_tool_denied(self):
-        """MCP-007: Tools that cannot be safely classified fail closed."""
+        """MCP-007: Tools that cannot be safely classified prompt on every call (ADR-017)."""
         self.activate(external_writes=["mcp:figma", "mcp:figma:high-impact"])
         res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "arbitrary_custom_action"})
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("force_ask", res["decision"])
         self.assertEqual("UNKNOWN_MCP_TOOL", res.get("reason_code"))
 
     def test_MCP_008_read_like_prefix_containing_mutation_keyword_is_not_treated_read_only(self):
         """MCP-008: Read prefix with mutation keyword (e.g. get_or_create_user) is treated as write."""
         self.activate(external_writes=[])
         res = self.call("call_mcp_tool", {"ServerName": "backend", "ToolName": "get_or_create_user"})
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("ask", res["decision"])
         self.assertEqual("EXTERNAL_WRITE_SCOPE_REQUIRED", res.get("reason_code"))
 
     def test_MCP_009_write_like_tool_cannot_disguise_itself_with_get(self):
         """MCP-009: High-impact tool prefixed with get (e.g. get_and_delete_account) is high-impact."""
         self.activate(external_writes=["mcp:auth"])
         res = self.call("call_mcp_tool", {"ServerName": "auth", "ToolName": "get_and_delete_account"})
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("force_ask", res["decision"])
         self.assertEqual("EXTERNAL_HIGH_IMPACT_SCOPE_REQUIRED", res.get("reason_code"))
 
     def test_MCP_010_old_revised_invalidated_approval_cannot_mutate(self):
@@ -1191,7 +1191,7 @@ class GenericMCPTests(unittest.TestCase):
         (task / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         (self.state / "active-task.json").write_text(json.dumps({"task_id": "task-mcp", "plan_path": str(task / "plan.json")}), encoding="utf-8")
         res = self.call("call_mcp_tool", {"ServerName": "figma", "ToolName": "create_frame"})
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("ask", res["decision"])
         self.assertEqual("PLAN_NOT_APPROVED", res.get("reason_code"))
 
     def test_MCP_011_generic_call_receives_no_injected_operation_id(self):

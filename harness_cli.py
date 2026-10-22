@@ -1093,6 +1093,7 @@ FULL_SELFTEST_SUITES = (
     "_delivery_equivalence_selftest.py",
     "_workflow_insight_selftest.py",
     "_task_isolation_selftest.py",
+    "_external_write_policy_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
@@ -1101,6 +1102,7 @@ QUICK_SELFTEST_SUITES = (
     "_host_continuation_selftest.py",
     "_workflow_insight_selftest.py",
     "_hook_selftest.py",
+    "_external_write_policy_selftest.py",
     "_security_selftest.py",
     "_critical_safety_selftest.py",
     "_daily_workflow_selftest.py",

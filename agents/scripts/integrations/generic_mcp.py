@@ -24,14 +24,17 @@ READ_ACTIONS = frozenset({
 
 WRITE_ACTIONS = frozenset({
     "create", "update", "edit", "write", "set", "add",
-    "comment", "rename", "move", "copy", "upload",
+    "comment", "rename", "copy", "upload",
     "patch", "post", "put", "assign",
 })
 
+# Sending, sharing, trashing and moving are one-way doors or widen access (a Drive move strips the
+# access a shared parent folder granted), so each call needs its own confirmation.
 HIGH_IMPACT_ACTIONS = frozenset({
     "delete", "remove", "drop", "destroy",
     "deploy", "publish", "revoke", "disable",
     "rotate", "truncate", "purge",
+    "send", "share", "unshare", "trash", "move", "transfer",
 })
 
 SENSITIVE_TARGETS = frozenset({

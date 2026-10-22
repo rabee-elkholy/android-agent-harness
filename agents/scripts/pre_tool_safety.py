@@ -506,6 +506,15 @@ def _handle_command(command: str) -> None:
             task_id=active_tid,
         )
         return
+    # Google Workspace skill CLIs (gdrive, gdocs, gsheets, ...) are external integrations, not project
+    # mutations: their readonly namespace is allowed and their mutate namespace asks the developer,
+    # whatever state the code task plan is in. Chained or redirected commands are never recognized.
+    from integrations.external_write_policy import classify_workspace_cli, workspace_cli_tokens
+    workspace_tokens = workspace_cli_tokens(command)
+    if workspace_tokens:
+        decision, reason, code = classify_workspace_cli(workspace_tokens)
+        emit(decision, reason, tool="run_command", command=command, reason_code=code, task_id=active_tid)
+        return
     allowed, reason = command_allowed(REPO, command)
     if allowed and re.search(r"project_graph(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+graph\b", command, re.I):
         reason = f"project_graph executed: {reason}"
@@ -1379,35 +1388,47 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
         validate_generic_mcp_mutation,
         compute_generic_mcp_fingerprint,
         READ,
-        UNKNOWN,
     )
+    from integrations.external_write_policy import generic_mcp_prompt, sensitive_values
 
     tool_class = classify_generic_mcp_tool(tool_name)
     if tool_class == READ:
         emit("allow", f"Read-only MCP tool execution '{tool_name}' on server '{server}' is allowed.", tool=name, reason_code="MCP_READ_ALLOWED")
         return
 
-    if tool_class == UNKNOWN:
-        emit("deny", f"External MCP operation '{tool_name}' on server '{server}' cannot be classified safely and is denied.", tool=name, reason_code="UNKNOWN_MCP_TOOL")
+    # WRITE, HIGH_IMPACT and UNKNOWN calls never carry a credential or signing file off the machine.
+    secrets = sensitive_values([tool_args])
+    if secrets:
+        emit(
+            "deny",
+            f"External MCP operation '{tool_name}' on '{server}' would send a credential or signing file "
+            f"({', '.join(sorted(set(secrets)))}). Use a copy without secrets instead.",
+            tool=name,
+            reason_code="SENSITIVE_EXTERNAL_UPLOAD",
+        )
         return
 
-    # WRITE or HIGH_IMPACT requires an active approved task plan
+    # An approved plan scope (--external-write mcp:<server>[:high-impact]) authorizes the call silently.
+    # Anything else asks the developer through the host prompt instead of tying the write to the code
+    # plan's state: an upload the developer asked for must not wait for an unrelated plan approval.
+    plan: dict = {}
     try:
-        plan = active_plan(REPO)
+        plan = active_plan(REPO) or {}
     except Exception:
-        emit("deny", "External MCP mutation requires an active approved task plan.", tool=name, reason_code="PLAN_NOT_APPROVED")
-        return
-
-    allowed, reason, reason_code = validate_generic_mcp_mutation(
-        server=server,
-        tool_name=tool_name,
-        plan=plan,
-    )
+        plan = {}
+    if tool_class == "UNKNOWN":
+        allowed = False
+        reason = f"'{tool_name}' cannot be classified safely"
+        reason_code = "UNKNOWN_MCP_TOOL"
+    elif plan:
+        allowed, reason, reason_code = validate_generic_mcp_mutation(
+            server=server,
+            tool_name=tool_name,
+            plan=plan,
+        )
+    else:
+        allowed, reason, reason_code = False, "no approved plan covers this server", "PLAN_NOT_APPROVED"
     task_id = str(plan.get("task_id") or "")
-    if not allowed:
-        emit("deny", reason, tool=name, reason_code=reason_code, task_id=task_id)
-        return
-
     fingerprint = compute_generic_mcp_fingerprint(
         task_id=task_id,
         plan_sha256=str(plan.get("plan_sha256") or ""),
@@ -1415,6 +1436,11 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
         tool_name=tool_name,
         arguments=tool_args,
     )
+    if not allowed:
+        decision, prompt_reason = generic_mcp_prompt(tool_class, server, tool_name, reason)
+        emit(decision, prompt_reason, tool=name, reason_code=reason_code, task_id=task_id, mcp_fingerprint=fingerprint)
+        return
+
     emit(
         "allow",
         f"Generic MCP mutation '{tool_name}' on server '{server}' is authorized.",

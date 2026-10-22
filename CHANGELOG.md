@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.43] - 2026-10-22
+
+### Developer-confirmed external writes (ADR-017)
+
+- External writes no longer depend on the code task plan state. A Drive upload requested while a plan awaited approval was refused with `command is not allowed while plan status is AWAITING_DEVELOPER_APPROVAL`; it now raises the host permission prompt.
+- Add `agents/scripts/integrations/external_write_policy.py`: Google Workspace skill CLIs (`gdrive`, `gdocs`, `gsheets`, `gslides`, `gcalendar`) are recognized as single, operator-free invocations. `readonly` commands are allowed, ordinary `mutate` commands return `ask`, and high-impact commands (trash, delete, share, permission changes, move, clear, batch, unknown subcommands) return `force_ask`.
+- Generic MCP writes not covered by an approved `--external-write` scope now return `ask`. High-impact and unclassifiable tools return `force_ask` instead of being denied. Approved plan scopes still authorize silently, and audit reason codes are unchanged.
+- Credential and signing files (`.env*`, keystores, `local.properties`, `key.properties`, `google-services.json`, private keys, service-account JSON) are always refused as external write arguments.
+- `send`, `share`, `unshare`, `trash`, `move` and `transfer` are classified as high-impact MCP actions.
+- Host bridges never turn a prompt into a silent allow: Claude Code maps prompts to its native `ask`; Copilot maps them to `deny`; unknown engine decisions are denied.
+- Unknown shell network tools (curl, rclone, scp) remain denied. Zoho keeps its `update zoho` grant.
+
 ## [1.1.42] - 2026-10-21
 
 ### Incremental change decisions (`task change-decision`) for same-goal support files and concurrent developer edits

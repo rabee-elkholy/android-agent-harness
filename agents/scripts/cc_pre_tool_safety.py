@@ -97,7 +97,12 @@ def main() -> int:
         emit("deny", f"android-harness gate error ({type(exc).__name__}). Fail-closed; retry the tool.")
         return 0
 
-    cc_decision = "deny" if decision == "deny" else "allow"
+    # Claude Code shows its own permission prompt for "ask"; external writes the developer must confirm
+    # (engine "ask"/"force_ask") go there and never become a silent allow.
+    if decision in {"ask", "force_ask"}:
+        emit("ask", f"[android-harness] {reason}")
+        return 0
+    cc_decision = "deny" if decision != "allow" else "allow"
     prefix = "[android-harness] " if cc_decision == "deny" else ""
     emit(cc_decision, f"{prefix}{reason}")
     return 0

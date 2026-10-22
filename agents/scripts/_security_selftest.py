@@ -951,14 +951,14 @@ class SecurityTests(unittest.TestCase):
                 self.assertEqual("deny", self.engine(cmd)["decision"])
 
     def test_generic_mcp_unrecognized_tool_fails_closed(self):
-        # SEC-MCP-001: Unrecognized MCP tool must fail closed as write mutation
+        # SEC-MCP-001: A destructive MCP tool never passes silently; it prompts on every call (ADR-017).
         proc = subprocess.run(
             [sys.executable, str(ENGINE)],
             input=json.dumps({"toolCall": {"name": "call_mcp_tool", "args": {"ServerName": "custom-server", "ToolName": "delete_entry", "Arguments": {}}}}),
             capture_output=True, text=True, env=self.env, check=False, timeout=15,
         )
         res = json.loads(proc.stdout)
-        self.assertEqual("deny", res["decision"])
+        self.assertEqual("force_ask", res["decision"])
 
     def test_generic_mcp_action_aware_classification(self):
         """P1-4: Action-aware generic MCP classification distinguishes safe reads from high impact."""

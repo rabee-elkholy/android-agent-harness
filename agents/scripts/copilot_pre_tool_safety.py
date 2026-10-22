@@ -89,7 +89,12 @@ def main() -> int:
         emit("deny", f"android-harness gate error ({type(exc).__name__}). Fail-closed; retry the tool.")
         return 0
 
-    copilot_decision = "deny" if decision == "deny" else "allow"
+    # The bridge maps only the documented allow/deny decisions. An external write the developer must
+    # confirm (engine "ask"/"force_ask") is denied here rather than allowed without a prompt.
+    if decision in {"ask", "force_ask"}:
+        emit("deny", f"[android-harness] Needs developer confirmation, which this host cannot prompt for: {reason}")
+        return 0
+    copilot_decision = "deny" if decision != "allow" else "allow"
     prefix = "[android-harness] " if copilot_decision == "deny" else ""
     emit(copilot_decision, f"{prefix}{reason}")
     return 0

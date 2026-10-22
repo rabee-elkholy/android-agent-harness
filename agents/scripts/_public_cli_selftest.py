@@ -1704,14 +1704,14 @@ class PhaseEDecoupleZohoSelftest(unittest.TestCase):
         self.assertIn("Zoho mutation is plan-bound and idempotency-bound", res_mcp["reason"])
 
     def test_unregistered_mcp_mutation_denied(self) -> None:
-        """Unregistered external mutation tool is denied fail-closed."""
+        """Unregistered external mutation asks the developer instead of silently passing (ADR-017)."""
         res = self._invoke_hook("call_mcp_tool", {
             "ServerName": "custom_tracker",
             "ToolName": "create_issue",
             "Arguments": {"title": "Issue"},
         })
-        self.assertEqual("deny", res["decision"])
-        self.assertIn("External MCP mutation requires an active approved task plan", res["reason"])
+        self.assertEqual("ask", res["decision"])
+        self.assertIn("needs your confirmation", res["reason"])
 
         self._activate_plan(external_writes=[])
         res2 = self._invoke_hook("call_mcp_tool", {
@@ -1719,7 +1719,7 @@ class PhaseEDecoupleZohoSelftest(unittest.TestCase):
             "ToolName": "create_issue",
             "Arguments": {"title": "Issue"},
         })
-        self.assertEqual("deny", res2["decision"])
+        self.assertEqual("ask", res2["decision"])
         self.assertIn("EXTERNAL_WRITE_SCOPE_REQUIRED", res2["reason"])
 
     def test_core_delivery_operates_cleanly_without_zoho(self) -> None:
