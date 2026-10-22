@@ -235,7 +235,7 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
         if not agent_file.is_file():
             return False
         content = agent_file.read_text(encoding="utf-8")
-        from install_tool_adapters import antigravity_agent_markdown
+        from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
         from review_models import ANTIGRAVITY_MODEL_CHOICES, _parse_agent_frontmatter_model
         src = (repo / ".agents" / "subagents" / f"{role}.json")
         if not src.is_file():
@@ -247,7 +247,8 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
         fm_model = _parse_agent_frontmatter_model(content)
         if fm_model is not None and fm_model not in ANTIGRAVITY_MODEL_CHOICES:
             return False
-        return content == antigravity_agent_markdown(data, model=fm_model)
+        rendered = antigravity_agent_markdown(data, model=fm_model)
+        return content in (rendered, with_managed_marker(rendered))
     except Exception:
         return False
 
@@ -636,11 +637,42 @@ def _backup(repo: Path, manifest: dict | None, label: str, extra_paths: list[Pat
         source = repo / rel
         dest = target / rel
         if source.is_dir():
-            shutil.copytree(source, dest, dirs_exist_ok=True)
+            shutil.copytree(
+                source,
+                dest,
+                dirs_exist_ok=True,
+                ignore=lambda _d, names: {
+                    n for n in names if n in {"state", "cache", "__pycache__"} or n.endswith((".pyc", ".pyo"))
+                },
+            )
         elif source.is_file():
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, dest)
     return target
+
+
+def _prune_update_backups(repo: Path, ownership: dict | None, *, keep_backup: Path | None = None) -> None:
+    """Remove completed update rollback backups while keeping install_backup and any discard backup."""
+    root = repo / ".harness-backup"
+    if not root.is_dir():
+        return
+    keep_resolved: set[Path] = set()
+    if keep_backup is not None:
+        keep_resolved.add(keep_backup.resolve())
+    install_rel = str((ownership or {}).get("install_backup") or "").strip()
+    if install_rel:
+        inst_path = Path(install_rel) if Path(install_rel).is_absolute() else repo / install_rel
+        keep_resolved.add(inst_path.resolve())
+    for child in list(root.iterdir()):
+        if child.resolve() in keep_resolved:
+            continue
+        if child.name.startswith("update-"):
+            shutil.rmtree(child, ignore_errors=True)
+    try:
+        if root.is_dir() and not any(root.iterdir()):
+            root.rmdir()
+    except OSError:
+        pass
 
 
 def _restore_paths_from_backup(repo: Path, backup: Path, before: dict[str, str | None]) -> None:
@@ -695,7 +727,67 @@ def _safe_restore_from_backup(backup_agents: Path, target_agents: Path) -> None:
     shutil.copytree(backup_agents, target_agents, dirs_exist_ok=True)
 
 
-def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool = False) -> None:
+def _replace_file(src: Path, dst: Path, *, retries: int = 5, delay: float = 0.15) -> None:
+    """Copy src over dst through a sibling temp file and an atomic rename, retrying Windows locks."""
+    temp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex}.tmp")
+    shutil.copy2(src, temp)
+    try:
+        for attempt in range(retries):
+            try:
+                os.replace(temp, dst)
+                return
+            except PermissionError:
+                if attempt == retries - 1:
+                    raise
+                gc.collect()
+                time.sleep(delay * (attempt + 1))
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _sync_tree_in_place(src: Path, dst: Path, *, keep: frozenset[str] = frozenset()) -> None:
+    """Make dst hold exactly src's files while every directory that survives keeps its identity.
+
+    Real app: an update during an open Antigravity chat moved `.agents/` aside and created a new one.
+    The chat then reported `subagent "perf-anr-guardian-agent" not found` although the reviewer
+    definitions were back in `.agents/subagents/`: the host had lost the directory it loaded them
+    from. Files are now replaced one by one inside the existing directories. Top-level names in
+    `keep` (live task state, caches) are left untouched.
+    """
+    dst.mkdir(parents=True, exist_ok=True)
+    wanted = {child.name for child in src.iterdir()}
+    for child in list(dst.iterdir()):
+        if child.name in keep or child.name in wanted:
+            continue
+        _remove_path(child)
+    for child in sorted(src.iterdir()):
+        if child.name in keep:
+            continue
+        target = dst / child.name
+        if child.is_dir() and not child.is_symlink():
+            if target.exists() and (not target.is_dir() or target.is_symlink()):
+                _remove_path(target)
+            _sync_tree_in_place(child, target)
+        else:
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            _replace_file(child, target)
+
+
+# Top-level `.agents/` entries an in-place engine update never rewrites: the live task state and the
+# rebuilt graph cache.
+IN_PLACE_KEEP = frozenset({"state", "cache"})
+
+
+def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool = False, in_place: bool = False) -> None:
     def ignored(_directory: str, names: list[str]) -> set[str]:
         return {name for name in names if name in {"state", "cache", "__pycache__"} or name.endswith((".pyc", ".pyo"))}
 
@@ -713,7 +805,10 @@ def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool 
             shutil.rmtree(state)
         state.mkdir(parents=True)
         (state / ".gitkeep").touch()
-        _safe_replace_dir(staging / ".agents", repo / ".agents", fallback_copy=True)
+        if in_place and (repo / ".agents").is_dir():
+            _sync_tree_in_place(staging / ".agents", repo / ".agents", keep=IN_PLACE_KEEP)
+        else:
+            _safe_replace_dir(staging / ".agents", repo / ".agents", fallback_copy=True)
         _configure(repo, kit, answers)
         if init_context:
             sublog("extracting project facts & architectural views...")
@@ -1249,15 +1344,28 @@ def _update_locked(repo: Path, kit: Path, answers: dict | None = None, *, discar
 
     try:
         with step_progress("2. Installing updated harness engine"):
-            _safe_replace_dir(repo / ".agents", old_agents, fallback_copy=True)
+            # Copy the engine files (excluding state/cache) as the rollback source; `.agents/` itself
+            # is updated in place so open IDE sessions keep the directories they watch.
+            old_agents_tmp = repo / f".agents-prev-stage-{uuid.uuid4().hex}"
+            try:
+                shutil.copytree(
+                    repo / ".agents",
+                    old_agents_tmp,
+                    symlinks=True,
+                    ignore=lambda _d, names: {
+                        n for n in names if n in {"state", "cache", "__pycache__"} or n.endswith((".pyc", ".pyo"))
+                    },
+                )
+                _safe_replace_dir(old_agents_tmp, old_agents, fallback_copy=True)
+            finally:
+                shutil.rmtree(old_agents_tmp, ignore_errors=True)
             _set_stage("OLD_ENGINE_MOVED")
 
-            _install_engine(repo, kit, answers, init_context=False)
+            _install_engine(repo, kit, answers, init_context=False, in_place=True)
             atomic_write_bytes(repo / ".agents" / "VERSION", f"{current_version}\n".encode("utf-8"))
             _set_stage("NEW_ENGINE_INSTALLED")
 
-            if (old_agents / "state").is_dir():
-                shutil.copytree(old_agents / "state", repo / ".agents/state", dirs_exist_ok=True)
+            # Live state was never rewritten by the in-place install.
             _set_stage("STATE_RESTORED")
 
             _restore_preserved(repo, preserve_root, preserved)
@@ -1304,7 +1412,8 @@ def _update_locked(repo: Path, kit: Path, answers: dict | None = None, *, discar
 
         with step_progress("4. Updating ownership manifest"):
             atomic_write_bytes(repo / ".agents" / "VERSION", (kit / "agents" / "VERSION").read_bytes())
-            new_ownership = _write_ownership(repo, version=target_version, before=before, backup=backup, previous=ownership)
+            retained_backup = backup if discarded else None
+            new_ownership = _write_ownership(repo, version=target_version, before=before, backup=retained_backup, previous=ownership)
             journal["ownership_after_sha256"] = new_ownership.get("ownership_sha256")
             _set_stage("OWNERSHIP_WRITTEN")
 
@@ -1317,10 +1426,12 @@ def _update_locked(repo: Path, kit: Path, answers: dict | None = None, *, discar
             journal["completed_at"] = utc_now()
             atomic_write_json(journal_path, journal)
             shutil.rmtree(old_agents, ignore_errors=True)
+            _prune_update_backups(repo, new_ownership, keep_backup=retained_backup)
     except Exception:
         if old_agents.exists():
-            shutil.rmtree(repo / ".agents", ignore_errors=True)
-            _safe_replace_dir(old_agents, repo / ".agents", fallback_copy=True)
+            # Restore the old engine into the same directories while keeping state/cache untouched.
+            _sync_tree_in_place(old_agents, repo / ".agents", keep=IN_PLACE_KEEP)
+            shutil.rmtree(old_agents, ignore_errors=True)
         elif backup and (backup / ".agents").is_dir() and not (repo / ".agents" / "VERSION").is_file():
             _safe_restore_from_backup(backup / ".agents", repo / ".agents")
         _rollback_adapters(repo, backup, before)
@@ -1347,7 +1458,7 @@ def _update_locked(repo: Path, kit: Path, answers: dict | None = None, *, discar
         "from_version": current_version,
         "version": target_version,
         "ownership": new_ownership,
-        "backup": str(backup),
+        "backup": str(retained_backup) if retained_backup else None,
         "app_snapshot_verified": True,
         "legacy_reference_migrated": legacy_migrated,
         "graph_cache_warmed": graph_cache_warmed,
@@ -1356,6 +1467,14 @@ def _update_locked(repo: Path, kit: Path, answers: dict | None = None, *, discar
         result["discarded_local_edits"] = discarded
     if active_task:
         result["preserved_active_task"] = journal["preserved_active_task"]
+        # Open chats keep the subagent and rule definitions they loaded; a reload picks up the new engine.
+        result["reload_ide_required"] = True
+        print(
+            f"[NEXT] Task '{active_task['task_id']}' was preserved. Before continuing it, reload the IDE window "
+            "(Antigravity: Developer: Reload Window) or open a new chat, then ask it to continue the task; "
+            "a chat opened before the update may report its reviewer subagents as not found.",
+            file=sys.stderr,
+        )
     if not graph_cache_warmed and graph_cache_warning:
         result["graph_cache_warning"] = graph_cache_warning
     return result
@@ -1400,8 +1519,9 @@ def replace_legacy(repo: Path, kit: Path) -> dict:
             shutil.rmtree(old_agents, ignore_errors=True)
     except Exception:
         if old_agents.exists():
-            shutil.rmtree(repo / ".agents", ignore_errors=True)
-            _safe_replace_dir(old_agents, repo / ".agents", fallback_copy=True)
+            # Restore the old engine and state into the same directories (see _sync_tree_in_place).
+            _sync_tree_in_place(old_agents, repo / ".agents")
+            shutil.rmtree(old_agents, ignore_errors=True)
         elif backup and (backup / ".agents").is_dir() and not (repo / ".agents" / "VERSION").is_file():
             _safe_restore_from_backup(backup / ".agents", repo / ".agents")
         _rollback_adapters(repo, backup, before)

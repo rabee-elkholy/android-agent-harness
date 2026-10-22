@@ -265,8 +265,8 @@ def rel_of(path: Path, repo: Path) -> str:
         return path.as_posix()
 
 
-def write_file(path: Path, body: str, *, dry_run: bool, repo: Path) -> str:
-    if path.is_file():
+def write_file(path: Path, body: str, *, dry_run: bool, repo: Path, merge_existing: bool = True) -> str:
+    if path.is_file() and merge_existing:
         try:
             existing = path.read_text(encoding="utf-8")
             text = merge_managed_content(existing, body)
@@ -277,8 +277,14 @@ def write_file(path: Path, body: str, *, dry_run: bool, repo: Path) -> str:
     rel = rel_of(path, repo)
     if dry_run:
         return f"dry-run {rel} ({len(text)} bytes)"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    encoded = text.encode("utf-8")
+    try:
+        current_bytes = path.read_bytes() if path.is_file() else None
+    except OSError:
+        current_bytes = None
+    if current_bytes != encoded:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(encoded)
     return f"wrote {rel}"
 
 
@@ -373,7 +379,13 @@ def generate_claude_agents(repo: Path, *, dry_run: bool) -> list[str]:
             logs.append(f"skip {json_path.name} (no system_prompt)")
             continue
         logs.append(
-            write_file(dest / f"{name}.md", claude_agent_markdown(data), dry_run=dry_run, repo=repo)
+            write_file(
+                dest / f"{name}.md",
+                claude_agent_markdown(data),
+                dry_run=dry_run,
+                repo=repo,
+                merge_existing=False,
+            )
         )
     return logs
 
@@ -430,17 +442,38 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
         dest = repo / ".agents" / "agents" / role / "agent.md"
         configured_model = None
         try:
-            from review_models import load_policy, resolve_antigravity_model, CRITICAL_HYBRID_REVIEWERS
-            pol, src_scope = load_policy(repo)
-            if src_scope != "default":
-                req_m = pol.get("overrides", {}).get(role, pol.get("default", "inherit"))
-                if req_m and req_m != "inherit":
-                    eff = "DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL"
-                    configured_model, _ = resolve_antigravity_model(req_m, role, eff)
+            from review_models import load_policy, resolve_antigravity_model, CRITICAL_HYBRID_REVIEWERS, frozen_models
+            from reviewer_host import active_reviews
+            from workflow import state_root
+            from _vnext_common import read_json
+            for run, _ in active_reviews(repo):
+                if run.get("review_host") == "antigravity":
+                    sel = frozen_models(run).get(role, {})
+                    fm = sel.get("agent_frontmatter_model") or sel.get("resolved_model")
+                    if fm and fm != "inherit":
+                        configured_model = fm
+                        break
+            if configured_model is None:
+                active_f = state_root(repo) / "active-task.json"
+                active_tid = None
+                if active_f.is_file():
+                    active_tid = str(read_json(active_f).get("task_id") or "").strip() or None
+                pol, src_scope = load_policy(repo, active_tid)
+                if src_scope != "default":
+                    req_m = pol.get("overrides", {}).get(role, pol.get("default", "inherit"))
+                    if req_m and req_m != "inherit":
+                        eff = "DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL"
+                        configured_model, _ = resolve_antigravity_model(req_m, role, eff)
         except Exception:
             configured_model = None
         logs.append(
-            write_file(dest, antigravity_agent_markdown(data, model=configured_model), dry_run=dry_run, repo=repo)
+            write_file(
+                dest,
+                antigravity_agent_markdown(data, model=configured_model),
+                dry_run=dry_run,
+                repo=repo,
+                merge_existing=False,
+            )
         )
     return logs
 

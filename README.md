@@ -40,7 +40,8 @@ The mechanisms below check these failure modes within the configured host and ve
 | The agent approves its own plan, cancels its own task, or commits. | Approval must cite the developer's words in chat. Cancel, commit, merge, rebase and push stay with the developer. |
 | A risky change gets the same light review as a string fix. | A 6-tier risk model routes reviewers and gates from the final diff: none for trivial changes, specialists for Room, security or device surfaces. |
 | A large change is reviewed only once, at the end. | Multi-phase tasks checkpoint each phase; substantial or risky phases get a scoped delta review before the next begins. |
-| The developer asks for a change after verification and the workflow wedges. | `task resume --reopen` sends a verified task back to implementation under the same approval, and it is re-verified. |
+| The developer asks for a change after verification and the workflow wedges. | `task change-decision` (`extend-scope`, `accept-edits`, `review-edits`) and `task resume --reopen` record incremental scope or post-verification changes under the same task without re-drafting from scratch. |
+| External CLI or MCP writes (Google Drive/Docs/Sheets/Slides/Calendar, generic MCP tools) either get blocked by task plan state or run silently. | External writes are independent of code task plan state and route through a native developer confirmation prompt (`ask`/`force_ask`), while secret files (`.env`, keystores, `local.properties`, `google-services.json`, credentials) are hard-denied. |
 | A new chat forgets the team's conventions. | Project notes and scoped developer instructions live in the repo. Applicable instructions are selected during planning; this does not provide memory to the chat provider. |
 
 ---
@@ -122,6 +123,11 @@ review runs are archived and restarted through the receiving host's real protoco
 while valid deterministic proof is retained with its original provenance. See
 [cross-host continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md) for commands and enforcement limits.
 
+### Incremental Changes & External Writes
+
+- **Incremental change decisions (`task change-decision`)**: When same-goal support files are needed or the developer edits files directly during implementation or verification, `python .agents/harness.py task change-decision --task-id <id> --mode <extend-scope|accept-edits|review-edits>` records a preview-bound receipt (`--expect-preview <preview_sha256>`) without discarding the active plan, approval, completed phase checkpoints, or prior `PASS` reviewer coverage ([ADR-016](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/016-incremental-task-change-decisions.md)).
+- **Developer-confirmed external writes**: External writes are evaluated independently of the code task plan state. Read-only external commands remain allowed, project tracker mutations (`zoho_sprints`, `jira`, `linear`, `gh`) follow configured tracker triggers, and external writes via Google Workspace CLIs (`gdrive`, `gdocs`, `gsheets`, `gslides`, `gcalendar`) or generic MCP tools raise a native host confirmation prompt (`ask` for standard writes, `force_ask` for destructive/permission/unknown actions) while always blocking secret and signing files (`.env*`, keystores, `local.properties`, `key.properties`, `google-services.json`, private keys, and service-account JSON) ([ADR-017](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/017-developer-confirmed-external-writes.md)).
+
 ### Urgent Task Interruption & Worktree Handoff
 
 For overlapping files or independent builds, use a separate worktree. When an urgent hotfix or bug interrupts an in-progress task (Task A):
@@ -153,7 +159,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.43/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.44/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -176,7 +182,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.43 --single-branch \
+git clone --depth 1 --branch v1.1.44 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -198,7 +204,7 @@ At the start of a conversation, an installed harness tells the agent (at most on
 python ~/.android-harness/kit/harness_cli.py update --repo /path/to/android-project
 ```
 
-The update is transactional and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. The default update refuses while tasks are active and lists locally edited managed files. An explicit stopped-source update can preserve one active task; multiple live tasks still block that path. An explicit discard-local-edits option keeps a backup before replacing eligible managed edits. If an update is interrupted (the process is killed), `.agents/VERSION` keeps the previous release and `doctor` reports it; running the update again rolls the interrupted one back, including `GEMINI.md`/`AGENTS.md`/`CLAUDE.md`, and applies it from the start.
+The update is transactional, synchronizes `.agents/` files in place (preserving existing `.agents/`, `.agents/subagents/`, and `.agents/agents/` directories for open IDE file watchers), and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. The default update refuses while tasks are active and lists locally edited managed files. An explicit stopped-source update (`--preserve-active-task <id> --source-stopped`) can preserve one active task and its reviewer model frontmatter; reload the IDE window (`Developer: Reload Window`) if the host keeps open handles to custom subagent definitions. Multiple live tasks still block that path. An explicit discard-local-edits option keeps a backup before replacing eligible managed edits. If an update is interrupted (the process is killed), `.agents/VERSION` keeps the previous release and `doctor` reports it; running the update again rolls the interrupted one back, including `GEMINI.md`/`AGENTS.md`/`CLAUDE.md`, and applies it from the start.
 
 For advanced configuration, see [docs/install-or-update-prompt.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md) and [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md).
 

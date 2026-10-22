@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.44] - 2026-10-22
+
+### In-place active-task engine updates and Antigravity subagent file stability
+
+- Synchronize `.agents/` engine files in place during `update` (`_sync_tree_in_place` in `agents/scripts/lifecycle.py`) instead of moving and replacing the `.agents/`, `.agents/subagents/`, and `.agents/agents/` directories, preserving directory inodes and IDE file watches when updating an open workspace with `--preserve-active-task`.
+- Exclude `.agents/state` and `.agents/cache` from `.harness-backup/` snapshots and automatically prune completed `update-*` rollback backups in `agents/scripts/lifecycle.py` (retaining only `install_backup` and any `--discard-local-edits` backup), preventing multi-gigabyte `.harness-backup/` accumulation.
+- Forbid `write_file(Overwrite=true)` on existing project files in `agents/tool-adapters/GEMINI.md.template`, `GEMINI.md`, `agents/rules/harness-rules.md`, and `agents/scripts/pre_tool_safety.py` (`EXISTING_FILE_OVERWRITE_FORBIDDEN`), requiring `edit_file` so commented-out code and original line endings are preserved.
+- Preserve active-task and active-run frozen reviewer model frontmatter in `generate_antigravity_agents` (`agents/scripts/install_tool_adapters.py`), include the canonical managed marker in `sync_antigravity_agent_models` (`agents/scripts/review_models.py`), and skip rewriting `.agents/agents/<role>/agent.md` when its bytes already match, eliminating mid-`invoke_subagent` file replacements during `PreToolUse` (`subagent "<role>" not found or not allowed to be invoked`).
+- Update `README.md` with documentation for developer-confirmed external writes (ADR-017), incremental change decisions (ADR-016), and in-place active-task updates.
+
 ## [1.1.43] - 2026-10-22
 
 ### Developer-confirmed external writes (ADR-017)

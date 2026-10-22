@@ -82,6 +82,35 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
             with mock.patch.dict(os.environ, {"HARNESS_HOST": "codex"}):
                 self.assertEqual(expected_action, workflow.resolve_next_action(self.repo, task_id)["code"])
 
+    def test_active_update_keeps_engine_directories_and_asks_for_reload(self):
+        """Real app: after an update an open chat reported its reviewer subagents as not found.
+
+        `.agents/` was moved aside and recreated; the in-place update keeps the directories an open
+        IDE session loaded definitions from, and tells the developer to reload before continuing.
+        """
+        import lifecycle
+        with self.installed_active_task() as (task_id, kit):
+            watched = [self.repo / ".agents", self.repo / ".agents/subagents", self.repo / ".agents/state"]
+            identities = [os.stat(path).st_ino for path in watched]
+            stale = self.repo / ".agents/scripts/removed_in_new_release.py"
+            stale.write_text("# not shipped any more\n", encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                result = lifecycle.update(self.repo, kit, preserve_active_task=task_id, source_stopped=True)
+            self.assertEqual("PASS", result["status"])
+            self.assertTrue(result["reload_ide_required"])
+            self.assertIn("Reload Window", err.getvalue())
+            self.assertEqual(identities, [os.stat(path).st_ino for path in watched])
+            self.assertFalse(stale.exists(), "files no longer shipped are removed by the in-place update")
+            self.assertTrue((self.repo / ".agents/subagents/perf-anr-guardian-agent.json").is_file())
+            self.assertEqual([], list(self.repo.glob(".agents.previous-*")))
+
+            with mock.patch.object(lifecycle, "_warm_project_graph", side_effect=OSError("simulated interruption")):
+                with self.assertRaises(OSError), contextlib.redirect_stdout(io.StringIO()):
+                    lifecycle.update(self.repo, kit, preserve_active_task=task_id, source_stopped=True)
+            self.assertEqual(identities, [os.stat(path).st_ino for path in watched])
+            self.assertEqual([], list(self.repo.glob(".agents.previous-*")))
+
     def test_active_update_requires_stopped_source_and_rejects_a_live_writer(self):
         import lifecycle
         with self.installed_active_task() as (task_id, kit):

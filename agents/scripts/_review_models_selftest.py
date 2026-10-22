@@ -819,6 +819,30 @@ class ReviewerModelsTests(unittest.TestCase):
             for r in roster:
                 self.assertEqual("COMPLETED", updated_ledger["reviewers"][r]["state"])
 
+    def test_adapter_regeneration_and_dispatch_keep_antigravity_agent_files_stable(self):
+        from install_tool_adapters import generate_antigravity_agents
+        from phase_review import phase_run_file
+        fixture, task, roster, _ = self.phase_fixture()
+        models.set_policy(
+            fixture.repo, self.policy("flash-dynamic"), task_id=task,
+            host="antigravity", source="conversation", proof_reference="Flash for task",
+        )
+        run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
+        role = roster[0]
+        agent_md = fixture.repo / ".agents" / "agents" / role / "agent.md"
+        expected_bytes = agent_md.read_bytes()
+        self.assertIn(b'model: "gemini-3.8-flash-high"', expected_bytes)
+
+        # Adapter regeneration during active-task update preserves active task/run model frontmatter
+        generate_antigravity_agents(fixture.repo, dry_run=False)
+        self.assertEqual(expected_bytes, agent_md.read_bytes())
+
+        # PreToolUse dispatch does not rewrite agent.md when frontmatter already matches
+        updated = models.sync_antigravity_agent_models(
+            fixture.repo, {r: models.frozen_models(run)[r] for r in roster}
+        )
+        self.assertEqual([], updated)
+
 
 if __name__ == "__main__":
     unittest.main()

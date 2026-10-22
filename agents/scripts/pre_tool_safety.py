@@ -2108,6 +2108,26 @@ def _main() -> None:
             if all_temp:
                 emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
                 return
+            if name == "write_file" and bool(args.get("Overwrite") or args.get("overwrite")):
+                for t in targets:
+                    if not t:
+                        continue
+                    try:
+                        cand = Path(t) if Path(t).is_absolute() else (REPO / t)
+                        if cand.is_file():
+                            emit(
+                                "deny",
+                                (
+                                    f"EXISTING_FILE_OVERWRITE_FORBIDDEN: Do not use write_file(Overwrite=true) to modify "
+                                    f"existing project file '{t}'. Always use edit_file to modify only targeted sections "
+                                    f"and preserve commented-out code and original line endings."
+                                ),
+                                tool=name,
+                                reason_code="EXISTING_FILE_OVERWRITE_FORBIDDEN",
+                            )
+                            return
+                    except OSError:
+                        pass
             try:
                 pending_tid = str(active_plan(REPO).get("task_id") or "")
             except Exception:

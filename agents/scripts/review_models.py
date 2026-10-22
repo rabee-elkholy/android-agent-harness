@@ -452,7 +452,7 @@ def sync_antigravity_agent_models(repo: Path, selections: dict[str, dict] | None
     if not agents_base.is_dir() or not subagents_base.is_dir():
         return []
     try:
-        from install_tool_adapters import antigravity_agent_markdown
+        from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
     except ImportError:
         return []
 
@@ -485,9 +485,15 @@ def sync_antigravity_agent_models(repo: Path, selections: dict[str, dict] | None
         fm_model = sel.get("agent_frontmatter_model") or sel.get("resolved_model")
         if fm_model == "inherit":
             fm_model = None
-        rendered = antigravity_agent_markdown(data, model=fm_model)
-        atomic_write_bytes(dest, rendered.encode("utf-8"))
-        updated.append(f".agents/agents/{role}/agent.md")
+        rendered = with_managed_marker(antigravity_agent_markdown(data, model=fm_model))
+        rendered_bytes = rendered.encode("utf-8")
+        try:
+            current_bytes = dest.read_bytes() if dest.is_file() else None
+        except OSError:
+            current_bytes = None
+        if current_bytes != rendered_bytes:
+            dest.write_bytes(rendered_bytes)
+            updated.append(f".agents/agents/{role}/agent.md")
 
     ownership_file = repo / ".harness-setup" / "ownership-v1.json"
     if updated and ownership_file.is_file():
