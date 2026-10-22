@@ -74,30 +74,6 @@ CLEARTEXT_WHITELIST_HOSTS = {
     "schemas.android.com", "schemas.xmlsoap.org", "w3.org", "www.w3.org",
 }
 
-FEATURE_CROSS_IMPORT_PATTERN = re.compile(
-    r"^\s*import\s+([a-zA-Z0-9_.]*\.(?:features|feature)\.([A-Za-z0-9_]+))(\.|$)"
-)
-FEATURE_CROSS_IMPORT_ALLOWED_HUBS = {
-    "main",
-    "home",
-    "payment",
-    "paywall",
-    "subscription",
-    "auth",
-    "login",
-    "navigation",
-    "common",
-    "core",
-}
-
-
-def _current_feature_segment(path: Path) -> str | None:
-    parts = [p.lower() for p in path.parts]
-    for i, part in enumerate(parts):
-        if part in ("features", "feature") and i + 1 < len(parts):
-            return parts[i + 1]
-    return None
-
 
 def _in_string_or_comment(line: str, index: int) -> bool:
     """True when index sits inside a // comment, /* ... */ block comment, or double-quoted string."""
@@ -407,28 +383,6 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                 "type": "STRAY_DIAGNOSTIC_PROBE",
                 "msg": f"Stray diagnostic probe detected: '{trimmed}'. Remove temporary probes before review/delivery.",
             })
-
-        current_feature = _current_feature_segment(file_path)
-        if current_feature:
-            m = FEATURE_CROSS_IMPORT_PATTERN.match(trimmed)
-            if m:
-                imported_feature = m.group(2).lower()
-                if (
-                    imported_feature != current_feature
-                    and imported_feature not in FEATURE_CROSS_IMPORT_ALLOWED_HUBS
-                    and "lint:allow-cross-import" not in line
-                    and "nolint" not in line
-                ):
-                    issues.append({
-                        "file": str(file_path),
-                        "line": idx,
-                        "type": "FEATURE_CROSS_IMPORT",
-                        "msg": (
-                            f"Feature module '{current_feature}' imports another feature "
-                            f"('{m.group(2)}'). Route shared logic through a :core/:common "
-                            "module instead of feature-to-feature imports."
-                        ),
-                    })
 
         if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function_in_diff):
             has_ann = "@Immutable" in trimmed or "@Stable" in trimmed

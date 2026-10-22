@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.45] - 2026-10-22
+
+### Remove hardcoded `FEATURE_CROSS_IMPORT` package regex check from `fast_kt_lint.py`
+
+- Remove the `FEATURE_CROSS_IMPORT` regex heuristic and hardcoded `FEATURE_CROSS_IMPORT_ALLOWED_HUBS` list from `agents/scripts/fast_kt_lint.py`. Module dependency boundaries in multi-module Gradle projects are enforced deterministically by Gradle module dependencies and `compileDebugKotlin`, whereas package-based `features.<name>` regex matching caused false-positive lint failures for valid intra-module navigation inside `:app` and incentivized brittle `Intent().setClassName(...)` workarounds.
+
 ## [1.1.44] - 2026-10-22
 
 ### In-place active-task engine updates and Antigravity subagent file stability
