@@ -126,6 +126,7 @@ while valid deterministic proof is retained with its original provenance. See
 ### Incremental Changes & External Writes
 
 - **Incremental change decisions (`task change-decision`)**: When same-goal support files are needed or the developer edits files directly during implementation or verification, `python .agents/harness.py task change-decision --task-id <id> --mode <extend-scope|accept-edits|review-edits>` records a preview-bound receipt (`--expect-preview <preview_sha256>`) without discarding the active plan, approval, completed phase checkpoints, or prior `PASS` reviewer coverage ([ADR-016](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/016-incremental-task-change-decisions.md)).
+- **Review corrections and plan clarifications**: After all semantic phases complete, in-scope corrections use the same task and fresh final gates, retaining historical phase proof. `task plan-note --text "<clarification>" --source conversation --proof-reference "<decision>"` explains an existing decision without replacing approval or restarting phase reviews. Notes grant no scope or PASS. Genuine requirement changes still use `task revise` and approval; narrative-only revisions require `--material-change-reason` ([ADR-018](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/018-integration-corrections.md)).
 - **Developer-confirmed external writes**: External writes are evaluated independently of the code task plan state. Read-only external commands remain allowed, project tracker mutations (`zoho_sprints`, `jira`, `linear`, `gh`) follow configured tracker triggers, and external writes via Google Workspace CLIs (`gdrive`, `gdocs`, `gsheets`, `gslides`, `gcalendar`) or generic MCP tools raise a native host confirmation prompt (`ask` for standard writes, `force_ask` for destructive/permission/unknown actions) while always blocking secret and signing files (`.env*`, keystores, `local.properties`, `key.properties`, `google-services.json`, private keys, and service-account JSON) ([ADR-017](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/017-developer-confirmed-external-writes.md)).
 
 ### Urgent Task Interruption & Worktree Handoff
@@ -159,7 +160,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.45/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.46/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -182,7 +183,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.45 --single-branch \
+git clone --depth 1 --branch v1.1.46 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \

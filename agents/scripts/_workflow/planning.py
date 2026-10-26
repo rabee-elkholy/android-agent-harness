@@ -276,6 +276,26 @@ def _build_and_save_plan(
         # Reject non-material revisions before touching phase progress or baselines.
         if (old_plan or {}).get("approval") and _engine._same_plan(old_plan, plan):
             return old_plan
+        if (old_plan or {}).get("approval"):
+            # Prose can describe new requirements, so never silently adopt it as
+            # a clarification. Require an explicit explanation before reapproval.
+            before, after = _engine.plan_payload(old_plan), _engine.plan_payload(plan)
+            lineage = {"plan_id", "supersedes_plan_sha256", "base_delivery_snapshot_sha256",
+                       "base_change_set_sha256", "base_file_identities", "base_change_identities",
+                       "base_external_inputs_sha256"}
+            changed = {key for key in set(before) | set(after)
+                       if key not in lineage and before.get(key) != after.get(key)}
+            narrative = {"requested_outcome", "approach", "risks", "rollback", "test_strategy", "device_strategy"}
+            reason = str(getattr(args, "material_change_reason", None) or "").strip()
+            if changed and changed <= narrative and not reason:
+                raise _engine.ValidationError(
+                    "PLAN_NOTE_REQUIRED: do not restart an approved task to clarify its description or fix review findings. "
+                    "Use task plan-note --text <clarification> --source conversation --proof-reference <decision>. "
+                    "For genuinely changed requirements, repeat revise with --material-change-reason <concrete expansion>; "
+                    "the revised plan still requires developer approval."
+                )
+            if reason:
+                plan["material_change_reason"] = reason
         # Completed phases are checked against the plan they were reviewed under, before the
         # revision replaces it; checked afterwards, every review proof reads as stale (N4).
         if parsed_phases:
@@ -284,6 +304,11 @@ def _build_and_save_plan(
             old_phases = (old_plan or {}).get("phases") or []
             preserved: list[str] = []
             from phase_review import phase_path_states, validate_completed_phase_review_proof
+            # Once every phase completed, final integration gates own later
+            # corrections. Keep historical proof; never re-label it as live PASS.
+            historical = bool(old_phases) and old_phases == parsed_phases and all(
+                phase["id"] in (old_state.get("completed_phases") or []) for phase in old_phases
+            )
 
             for old_phase, new_phase in zip(old_phases, parsed_phases):
                 phase_id = new_phase["id"]
@@ -297,11 +322,12 @@ def _build_and_save_plan(
                         checkpoint.get("status") != "CHECKPOINT_PASS"
                         or checkpoint_sha != _engine.canonical_sha256({k: v for k, v in checkpoint.items() if k != "checkpoint_sha256"})
                         or old_state.get("phase_checkpoints", {}).get(phase_id) != checkpoint_sha
-                        or checkpoint.get("phase_path_states") != phase_path_states(repo, checkpoint.get("manifest_delta") or [])
+                        or (not historical and checkpoint.get("phase_path_states") != phase_path_states(repo, checkpoint.get("manifest_delta") or []))
                     ):
                         break
                     if (checkpoint.get("review") or {}).get("status") == "REVIEW_PACKAGE_REQUIRED":
-                        validate_completed_phase_review_proof(repo, task_id, phase_id, checkpoint_sha)
+                        validate_completed_phase_review_proof(repo, task_id, phase_id, checkpoint_sha,
+                                                              historical_for_final=historical)
                 except (OSError, ValueError, _engine.ValidationError):
                     break
                 preserved.append(phase_id)

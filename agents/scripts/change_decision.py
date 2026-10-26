@@ -61,30 +61,6 @@ def observed_files(plan, repo):
     return {path for row in rows for path in row["files"] if row["after"].get(path) == live.get(path)}
 
 
-def final_phase_delta_covered(repo, plan, phase_id, checkpoint_sha, manifest):
-    """Keep historical phases after final freeze; fresh final gates own the delta.
-
-    Never used to advance an intermediate phase or before the first final run.
-    Only explicitly reconciled paths may differ from that final run.
-    """
-    from delivery_equivalence import _file_identities
-    from _vnext_common import task_dir
-    live = _file_identities(manifest)
-    rows = [row for row in decisions(plan) if row.get("source_run_id")
-            and row.get("phase_checkpoints", {}).get(phase_id) == checkpoint_sha]
-    for source in {row["source_run_id"] for row in rows}:
-        frozen = read_json(task_dir(repo, plan["task_id"]) / f"manifest-{validate_id(source)}.json")
-        if frozen.get("external_inputs_sha256") != manifest.get("external_inputs_sha256") or frozen.get("repository") != manifest.get("repository"):
-            continue
-        before = _file_identities(frozen)
-        changed = {p for p in set(before) | set(live) if before.get(p) != live.get(p)}
-        allowed = {p for row in rows if row["source_run_id"] == source for p in row["files"]
-                   if row["mode"] == "extend-scope" or row["after"].get(p) == live.get(p)}
-        if changed and changed <= allowed:
-            return True
-    return False
-
-
 def register_parser(sub, common):
     parser = sub.add_parser("change-decision", parents=[common])
     parser.add_argument("--mode", choices=("extend-scope", "accept-edits", "review-edits"), required=True)

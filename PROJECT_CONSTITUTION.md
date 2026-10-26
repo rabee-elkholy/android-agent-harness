@@ -271,6 +271,12 @@ Large tasks may use coherent phases.
 - Small/trivial phases may skip AI review.
 - Substantial/risk-sensitive phases may receive 1–2 policy-derived reviewers.
 - Final integration review remains authoritative.
+- Once every semantic phase has completed, later integration corrections retain
+  those immutable checkpoints as historical proof and proceed through fresh final
+  verification. They never convert old review evidence into a PASS for new bytes.
+  Intermediate phase transitions still require fresh checkpoint proof. Clarifying
+  plan notes cannot change approval authority; changed requirements still require
+  revised approval. See ADR-018.
 
 ### 3.11 Persistent project knowledge is repo-local
 

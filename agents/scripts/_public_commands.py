@@ -5,6 +5,12 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {"command": "task plan-note", "read_only": False,
+     "valid_states": ["IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"],
+     "required_inputs": ["task_id", "text", "source", "proof_reference"], "model_facing": True,
+     "description": "Append a non-authoritative plan clarification without changing approval, phase progress, frozen runs or budgets.",
+     "when_to_use": "Explain an existing decision or in-scope review fix. New requirements still need revise and approval; prose-only revisions require --material-change-reason.",
+     "example": "python .agents/harness.py task plan-note --task-id <id> --text <clarification> --source conversation --proof-reference <decision>"},
     {"command": "task change-decision", "read_only": False,
      "valid_states": ["IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"],
      "required_inputs": ["task_id", "mode", "file", "reason"], "model_facing": True,
@@ -448,7 +454,7 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "valid_states": ["ANY"],
         "required_inputs": ["note_text"],
         "model_facing": True,
-        "description": "Append architectural note or convention to project notes.",
+        "description": "Append, replace (--replace), or remove (--remove) a structured, clear English architectural note or convention in project notes after clarifying any ambiguity with the developer.",
     },
     {
         "command": "context instruct",
@@ -456,7 +462,7 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "valid_states": ["ANY"],
         "required_inputs": ["instruction_text"],
         "model_facing": True,
-        "description": "Add scoped developer instruction to developer-instructions.json.",
+        "description": "Add, supersede (--supersedes), or remove (--remove) a structured, clear English scoped developer instruction in developer-instructions.json after clarifying any ambiguity.",
     },
     {
         "command": "context generate",

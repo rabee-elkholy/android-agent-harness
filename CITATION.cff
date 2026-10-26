@@ -9,8 +9,8 @@ abstract: >-
   An approval-first, evidence-bound AI coding harness for Gradle Android and
   Kotlin Multiplatform projects with AST/symbol graph discovery, 6-tier dynamic
   risk routing, independent multi-agent code review, and deterministic verification gates.
-version: 1.1.45
-date-released: 2026-10-22
+version: 1.1.46
+date-released: 2026-10-26
 license: "MIT"
 url: "https://github.com/rabee-elkholy/android-agent-harness"
 repository-code: "https://github.com/rabee-elkholy/android-agent-harness"

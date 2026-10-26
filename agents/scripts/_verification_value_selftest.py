@@ -617,7 +617,8 @@ class PublicWorkflowContracts(unittest.TestCase):
     def test_revision_retains_contract_and_requires_fresh_approval(self):
         self.start()
         self.call("resume")
-        self.call("revise", "--outcome", "Document refresh and failure behavior")
+        self.call("revise", "--outcome", "Document refresh and failure behavior",
+                  "--material-change-reason", "The developer added refresh and failure requirements")
         from _vnext_common import read_json
         plan = read_json(self.repo / ".agents/state/tasks/feature/plan.json")
         self.assertEqual(contract(), plan["verification_contract"])

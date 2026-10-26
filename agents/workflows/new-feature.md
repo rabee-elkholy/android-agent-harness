@@ -14,6 +14,8 @@ Write new files using the project's resolved patterns. `new_feature_scaffold.py`
 
 ## Recovering planning errors
 
+- An in-scope fix or description clarification is not a new plan. Use `task resume` before correcting review findings and `task plan-note --text "<clarification>" --source conversation --proof-reference "<decision>"` for explanatory notes. Notes leave the approved payload, phases, review budgets and frozen evidence unchanged. `PLAN_NOTE_REQUIRED` means no reapproval is needed for a clarification; do not invent material scope. If prose really changes the requirements, use `revise --material-change-reason "<concrete expansion>"` and obtain approval of the revised requirements.
+
 - Use the resolved Task Context's `read_ranges`, direct dependencies/dependents and tests. Query the graph again only for a missing relationship; do not repeat discovery for files already resolved.
 - For several known targets, repeat `--file` or `--symbol` in one Task Context call (up to eight, one selector kind). Inspect every result, including missing/ambiguous files. Discover the source/layout/manifest/callers/tests needed to satisfy each requirement before presenting scope; a source filename alone does not establish complete cleanup.
 - `draft` and `revise` use stable live architecture facts when the saved context is stale, missing or unusable. They do not persist a context refresh or grant application-write authority. Concurrent source/policy changes block the decision; wait for the writer to stop before retrying. Genuine architecture ambiguity still requires the developer's decision; never change the intent merely to avoid it.

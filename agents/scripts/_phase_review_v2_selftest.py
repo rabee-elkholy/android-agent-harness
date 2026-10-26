@@ -780,7 +780,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         self.assertEqual(1, read_json(directory / "plan.json")["active_phase_index"])
 
-    def test_PHASE_TRANSITION_008_stale_final_phase_routes_to_recheckpoint(self) -> None:
+    def test_PHASE_TRANSITION_008_final_correction_routes_to_fresh_final_gates(self) -> None:
         phases = [{"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]}]
         task_id = self._create_phased_task(phases)
         source = self.repo / "app/src/main/res/values/one.xml"
@@ -788,10 +788,12 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
         self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
         write_file(source, "<resources><string name='late'>late edit</string></resources>\n")
-        self.assertEqual("CHECKPOINT_PHASE", resolve_next_action(self.repo, task_id)["code"])
+        # Completed phases record historical execution; fresh integration gates
+        # cover later edits instead of repeating phase review for the same fix.
+        self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
         with mock.patch.object(workflow, "check_material_drift", return_value={}):
-            with self.assertRaisesRegex(ValidationError, "phase checkpoint is stale"):
-                workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="generic"))
+            workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="generic"))
+        self.assertEqual("VERIFYING", read_json(task_dir(self.repo, task_id) / "plan.json")["status"])
 
     def test_PHASE_TRANSITION_009_fresh_final_phase_can_prepare_verification(self) -> None:
         phases = [{"id": "p1", "name": "Text", "expected_files": ["app/src/main/res/values/one.xml"]}]
@@ -1448,6 +1450,50 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         write_file(self.repo / "app/src/main/java/com/example/Auth.kt", "package com.example\nclass AuthChanged\n")
         with self.assertRaisesRegex(ValidationError, "PHASE_REVIEW_STALE"):
             finalize_phase_review(self.repo, task_id, "p1")
+
+    def _finished_integration_phases(self):
+        task_id, reviewers, meta = self._completed_dispatch_for_finalization()
+        finalize_phase_review(self.repo, task_id, "p1")
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "app/src/main/java/com/example/UI.kt", "package com.example\nclass UI\n")
+        self._pass_phase_tests(task_id, "p2")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+        return task_id, reviewers, meta
+
+    def test_final_correction_preserves_reviewed_history_and_security_policy(self):
+        task_id, _, _ = self._finished_integration_phases()
+        directory = task_dir(self.repo, task_id)
+        before = {p: p.read_bytes() for p in (directory / "phases").rglob("*.json")}
+        # Reconcile the fixture's initially unplanned crypto surface through the
+        # public authority path, preserving completed semantic phase history.
+        self.assertEqual(0, workflow.main(["revise", "--repo", str(self.repo), "--task-id", task_id,
+                                           "--expected-surfaces", "BUSINESS_LOGIC,CRYPTO"]))
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                           proof_reference="approve crypto scope", enforcement_tier="RULE_ENFORCED"))
+        write_file(self.repo / "app/src/main/java/com/example/Auth.kt",
+                   "package com.example\nclass Auth { fun encrypt(token: String) { println(token) } }\n")
+        self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
+        current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+        policy = read_json(Path(current["policy"]))
+        self.assertIn("security-reviewer-agent", policy["reviewers"])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, host="antigravity")["code"])
+
+    def test_final_history_still_rejects_corrupt_prior_package(self):
+        task_id, _, meta = self._finished_integration_phases()
+        write_file(Path(meta["package_path"]), "corrupted package\n")
+        action = resolve_next_action(self.repo, task_id)
+        self.assertEqual("PHASE_CHECKPOINT_STATE_BLOCKED", action["code"])
+        with self.assertRaisesRegex(ValidationError, "package.*corrupt"):
+            workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
+
+    def test_final_history_still_rejects_missing_prior_result(self):
+        task_id, reviewers, _ = self._finished_integration_phases()
+        result = phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewers[0]}.json"
+        result.unlink()
+        self.assertEqual("PHASE_CHECKPOINT_STATE_BLOCKED", resolve_next_action(self.repo, task_id)["code"])
+        with self.assertRaisesRegex(ValidationError, "result is missing"):
+            workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
 
     def test_PHASE_FINALIZE_002_missing_result_blocks_pass(self) -> None:
         task_id, reviewers, _ = self._completed_dispatch_for_finalization()

@@ -50,7 +50,8 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
     all_done = all(p.get("id") in completed_set for p in phases)
     if all_done or substate == PHASE_COMPLETE:
         try:
-            _engine.validated_completed_phase_manifest(repo, task_id, plan, p_state, cur_phase, for_final=all_done)
+            for phase in phases if all_done else [cur_phase]:
+                _engine.validated_completed_phase_manifest(repo, task_id, plan, p_state, phase, for_final=all_done)
         except Exception as exc:
             stale = isinstance(exc, _engine.ValidationError) and str(exc).startswith("phase checkpoint is stale")
             return {

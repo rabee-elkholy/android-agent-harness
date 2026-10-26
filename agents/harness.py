@@ -227,7 +227,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     if command == "context":
         if not args:
-            print("[ERROR] context requires preview, generate, status, refresh, or note", file=sys.stderr)
+            print("[ERROR] context requires preview, generate, status, refresh, note, or instruct", file=sys.stderr)
             return 2
         return _run("generate_project_context.py", [args[0], "--repo", str(REPO_ROOT), *args[1:]])
     if command == "task-context":

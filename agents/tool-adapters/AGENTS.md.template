@@ -13,7 +13,7 @@ Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 - Query `{{PY}} .agents/harness.py task status --task-id <id> --next` for canonical next actions.
 - Verification order is preflight, tests, routed reviews, assemble/device, Mobile Verification Walkthrough and sign-off, then final verification.
 - Never self-certify HIGH/CRITICAL reviews with `record_review.py --verdict PASS`. Adjudicate false positives via `validate-finding`. Never poll background work (Zero-Polling invariant).
-- Context notes are administrative: `{{PY}} .agents/harness.py context note "<note>"`. Always follow `.agents/project-context/project-notes.md` across all task phases and tracker mutations.
+- Context notes are administrative: clarify any ambiguity first, then structure, detail, and translate the developer's note into clear English before running `{{PY}} .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`). Always follow `.agents/project-context/project-notes.md` across all task phases and tracker mutations.
 
 ## Canonical Command Catalog
 
@@ -22,7 +22,7 @@ Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 | Task context | `{{PY}} .agents/harness.py task-context --file <path> --json` |
 | Feature / find graph | `{{PY}} .agents/harness.py graph --feature <name> --json` |
 | Task status | `{{PY}} .agents/harness.py task status --task-id <id> --next` |
-| Context note | `{{PY}} .agents/harness.py context note "<note>"` |
+| Context note | `{{PY}} .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) |
 | Preflight | `{{PY}} .agents/harness.py preflight` |
 | Unit tests | `{{PY}} .agents/harness.py test` |
 | Review evidence | `{{PY}} .agents/scripts/record_review.py --task <id> --response <role>=<unchanged-response-file>` |

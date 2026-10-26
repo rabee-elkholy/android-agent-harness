@@ -116,6 +116,10 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
             pass
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    atomic_write_bytes(path, text.replace("\r\n", "\n").encode("utf-8"))
+
+
 def atomic_write_json(path: Path, value: Any) -> None:
     atomic_write_bytes(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n")
 

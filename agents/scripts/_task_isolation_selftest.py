@@ -400,6 +400,7 @@ class TaskIsolationTests(unittest.TestCase):
             self.merge()
         workflow.revise(workflow.build_parser().parse_args([
             "revise", "--repo", str(self.repo), "--task-id", "alpha", "--outcome", "Expanded documentation goals",
+            "--material-change-reason", "The developer expanded documentation requirements",
         ]))
         with self.assertRaisesRegex(ValidationError, "history"):
             self.merge()

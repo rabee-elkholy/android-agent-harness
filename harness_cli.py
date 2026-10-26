@@ -754,6 +754,10 @@ def cmd_context(args: argparse.Namespace) -> int:
         text = getattr(args, "note", None) or getattr(args, "note_text", None)
         if text:
             cli_args.append(text)
+        if getattr(args, "replace", None):
+            cli_args.extend(["--replace", args.replace])
+        if getattr(args, "remove", None):
+            cli_args.extend(["--remove", args.remove])
         if getattr(args, "section", None):
             cli_args.extend(["--section", args.section])
     if args.subaction == "instruct":
@@ -772,6 +776,8 @@ def cmd_context(args: argparse.Namespace) -> int:
             cli_args.extend(["--applies-to", args.applies_to])
         if getattr(args, "supersedes", None):
             cli_args.extend(["--supersedes", args.supersedes])
+        if getattr(args, "remove", None):
+            cli_args.extend(["--remove", args.remove])
     return run_engine_script(kit, "generate_project_context.py", cli_args, capture=getattr(args, "json", False))
 
 
@@ -1627,11 +1633,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("phase_review_args", nargs=argparse.REMAINDER, help="Arguments passed to phase_review.py")
     sp.set_defaults(func=cmd_phase_review)
 
-    sp = sub.add_parser("context", help="Inspect, preview, refresh, or add notes/instructions to derived project context.")
+    sp = sub.add_parser("context", help="Inspect, preview, refresh, or add/edit/remove notes/instructions in derived project context.")
     sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note", "instruct"), help="Context action.")
     sp.add_argument("note_text", nargs="?", default="", help="Note or instruction text.")
-    sp.add_argument("--note", default="", help="Note text to append.")
+    sp.add_argument("--note", default="", help="Note text to append or replace with.")
     sp.add_argument("--instruction", default="", help="Instruction text.")
+    sp.add_argument("--replace", default="", help="Existing note text/bullet to replace in project notes.")
+    sp.add_argument("--remove", default="", help="Existing note text or instruction ID to remove.")
     sp.add_argument("--scope", default="GLOBAL", help="Instruction scope (e.g. module::payments, package:com.example, global).")
     sp.add_argument("--source", choices=("conversation", "developer_terminal", "host_native"), default=None, help="Explicit developer authority source.")
     sp.add_argument("--proof-reference", default="", help="Message or command reference proving developer direction.")

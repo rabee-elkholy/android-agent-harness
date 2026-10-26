@@ -263,6 +263,50 @@ class ProjectIntelligenceTests(unittest.TestCase):
         self.assertIn("1. Zoho Sprints Task & Bug Description Standard", pnotes.get("sections", []))
         self.assertIn("Home screen uses MVI state reducer.", pnotes.get("content", ""))
 
+    def test_PROJECT_NOTE_004_note_add_replace_and_remove_and_instruct_remove(self) -> None:
+        """PROJECT_NOTE_004: context note supports add, --replace, --remove; context instruct supports --remove."""
+        from generate_project_context import main as ctx_main
+        self.mixed_project()
+        notes_p = self.repo / ".agents" / "project-context" / "project-notes.md"
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+
+        self.assertEqual(0, ctx_main(["note", "--repo", str(self.repo), "Initial structured English convention for Home screen."]))
+        self.assertIn("- Initial structured English convention for Home screen.", notes_p.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, ctx_main([
+            "note", "--repo", str(self.repo),
+            "--replace", "Initial structured English convention for Home screen.",
+            "Updated structured English convention for Home screen MVI.",
+        ]))
+        txt_after_replace = notes_p.read_text(encoding="utf-8")
+        self.assertNotIn("Initial structured English convention", txt_after_replace)
+        self.assertIn("- Updated structured English convention for Home screen MVI.", txt_after_replace)
+
+        self.assertEqual(0, ctx_main([
+            "note", "--repo", str(self.repo),
+            "--remove", "Updated structured English convention for Home screen MVI.",
+        ]))
+        self.assertNotIn("Updated structured English convention", notes_p.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, ctx_main([
+            "instruct", "--repo", str(self.repo),
+            "All ViewModels must expose immutable StateFlow.",
+            "--scope", "GLOBAL", "--source", "conversation", "--proof-reference", "Developer requested StateFlow rule",
+        ]))
+        store = json.loads(inst_p.read_text(encoding="utf-8"))
+        inst_id = store["instructions"][0]["id"]
+        self.assertEqual("ACTIVE", store["instructions"][0]["status"])
+
+        self.assertEqual(0, ctx_main([
+            "instruct", "--repo", str(self.repo),
+            "--remove", inst_id,
+            "--source", "conversation", "--proof-reference", "Developer removed StateFlow rule",
+        ]))
+        store_after = json.loads(inst_p.read_text(encoding="utf-8"))
+        self.assertEqual("REMOVED", store_after["instructions"][0]["status"])
+        res = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/home/HomeScreen.kt")
+        self.assertFalse(any(i.get("id") == inst_id for i in res.get("developer_instructions", [])))
+
     def test_PROJECT_INST_001_global_instruction_reaches_applicable_future_task_context(self) -> None:
         """PROJECT_INST_001: global instruction reaches applicable future task context."""
         self.mixed_project()

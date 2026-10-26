@@ -777,7 +777,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         # A real change still makes a new plan for the developer to approve.
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, workflow_main(["revise", "--repo", str(self.repo), "--task-id", "noop-revise",
-                                               "--risks", "New risk"]))
+                                               "--risks", "New risk", "--material-change-reason", "New requirement introduces a risk"]))
         self.assertNotEqual(approved["plan_sha256"], read_json(plan_file)["plan_sha256"])
 
     def _approved_doc_phases(self, task_id):
@@ -805,6 +805,133 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self.assertEqual({"one.md", "two.md"}, {item["path"] for item in result["checkpoint"]["manifest_delta"]})
         self.assertEqual(approved["plan_sha256"], read_json(plan_path)["plan_sha256"])
         self.assertEqual(["p1", "p2"], result["completed_phases"])
+
+    def _completed_doc_phases(self, task_id):
+        self._approved_doc_phases(task_id)
+        write_file(self.repo / "two.md", "Second phase\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+
+    def test_final_correction_keeps_completed_phases_and_requires_fresh_verification(self):
+        task_id = "phase-final-correction"
+        self._completed_doc_phases(task_id)
+        directory = task_dir(self.repo, task_id)
+        original = {p: p.read_bytes() for p in directory.glob("phases/*/checkpoint.json")}
+        prepare_verification(self.repo, argparse.Namespace(task_id=task_id, host="generic", force=False))
+        first_run = read_json(directory / "current-run.json")
+        workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        write_file(self.repo / "two.md", "Second phase corrected after final review\n")
+        self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
+        prepare_verification(self.repo, argparse.Namespace(task_id=task_id, host="generic", force=False))
+        second_run = read_json(directory / "current-run.json")
+        self.assertNotEqual(first_run["run_id"], second_run["run_id"])
+        self.assertNotEqual(first_run["delivery_snapshot_sha256"], second_run["delivery_snapshot_sha256"])
+        self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, host="generic")["code"])
+        self.assertEqual(original, {p: p.read_bytes() for p in original})
+
+    def test_revision_after_all_phases_keeps_historical_progress_not_live_pass(self):
+        task_id = "phase-final-revision"
+        self._completed_doc_phases(task_id)
+        directory = task_dir(self.repo, task_id)
+        before = read_json(directory / "phase-state.json")
+        write_file(self.repo / "one.md", "First phase refined during integration\n")
+        write_file(self.repo / "two.md", "Second phase refined during integration\n")
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, workflow.main(["revise", "--repo", str(self.repo), "--task-id", task_id,
+                                               "--expected-files", "one.md,two.md,three.md"]))
+        self.assertEqual(before["completed_phases"], read_json(directory / "phase-state.json")["completed_phases"])
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", read_json(directory / "plan.json")["status"])
+        record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation",
+                                           proof_reference="approve integration expansion", enforcement_tier="RULE_ENFORCED"))
+        self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
+        prepare_verification(self.repo, argparse.Namespace(task_id=task_id, host="generic", force=False))
+        self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, host="generic")["code"])
+
+    def test_plan_note_preserves_authority_progress_and_frozen_run(self):
+        import contextlib
+        import io
+        task_id = "plan-clarification"
+        self._completed_doc_phases(task_id)
+        directory = task_dir(self.repo, task_id)
+        prepare_verification(self.repo, argparse.Namespace(task_id=task_id, host="generic", force=False))
+        original = {p: p.read_bytes() for p in directory.rglob("*.json")}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            from mutation_guard import command_allowed
+            allowed, reason = command_allowed(self.repo, f'python .agents/harness.py task plan-note --task-id {task_id} --text "Clarification" --source conversation --proof-reference "decision"')
+            self.assertTrue(allowed, reason)
+            result = workflow.main(["plan-note", "--repo", str(self.repo), "--task-id", task_id,
+                                    "--text", "The approved follow-up removes the optional badge.",
+                                    "--source", "conversation", "--proof-reference", "remove that badge"])
+        self.assertEqual(0, result)
+        self.assertEqual(original, {p: p.read_bytes() for p in original})
+        self.assertIn("The approved follow-up removes the optional badge.", (directory / "plan.md").read_text(encoding="utf-8"))
+        self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, host="generic")["code"])
+        package, _ = review_package.build_package(self.repo, task_id)
+        frozen = package.read_bytes()
+        self.assertIn(b"The approved follow-up removes the optional badge.", frozen)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, workflow.main(["plan-note", "--repo", str(self.repo), "--task-id", task_id,
+                                              "--text", "A later explanation does not rewrite a dispatched package.",
+                                              "--source", "approved-plan", "--proof-reference", "existing approved objective"]))
+        self.assertEqual(frozen, package.read_bytes())
+
+    def test_narrative_revision_requires_material_reason_without_resetting_state(self):
+        import contextlib
+        import io
+        task_id = "narrative-revision"
+        self._completed_doc_phases(task_id)
+        directory = task_dir(self.repo, task_id)
+        original = {p: p.read_bytes() for p in directory.rglob("*.json")}
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            result = workflow.main(["revise", "--repo", str(self.repo), "--task-id", task_id,
+                                    "--approach", "Clarify the approved badge removal"])
+        self.assertEqual(1, result)
+        self.assertIn("PLAN_NOTE_REQUIRED", err.getvalue())
+        self.assertEqual(original, {p: p.read_bytes() for p in original})
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, workflow.main(["revise", "--repo", str(self.repo), "--task-id", task_id,
+                                              "--approach", "Change the behavior under an expanded requirement",
+                                              "--material-change-reason", "Developer changed the required behavior"]))
+        revised = read_json(directory / "plan.json")
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", revised["status"])
+        self.assertIsNone(revised.get("approval"))
+
+    def test_plan_note_cannot_grant_new_file_authority(self):
+        import contextlib
+        import io
+        task_id = "plan-note-scope"
+        self._completed_doc_phases(task_id)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, workflow.main(["plan-note", "--repo", str(self.repo), "--task-id", task_id,
+                                              "--text", "This note claims that three.md is authorized.",
+                                              "--source", "approved-plan", "--proof-reference", "existing objective"]))
+        write_file(self.repo / "three.md", "Unapproved extra file\n")
+        with self.assertRaisesRegex(ValidationError, "FILE_SCOPE_DECISION_REQUIRED.*three.md"):
+            prepare_verification(self.repo, argparse.Namespace(task_id=task_id, host="generic", force=False))
+
+    def test_plan_note_on_blocked_task_succeeds_without_clearing_the_blocker(self):
+        import contextlib
+        import io
+        task_id = "blocked-plan-note"
+        self._completed_doc_phases(task_id)
+        plan_file = task_dir(self.repo, task_id) / "plan.json"
+        plan = read_json(plan_file)
+        plan.update(status="BLOCKED", blocked_reviewers=["bug-reviewer-agent"])
+        save_plan(plan_file, plan)
+        original = plan_file.read_bytes()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            result = workflow.main(["plan-note", "--repo", str(self.repo), "--task-id", task_id,
+                                    "--text", "Clarify the existing decision while review fixes are pending.",
+                                    "--source", "conversation", "--proof-reference", "existing decision"])
+        self.assertEqual(0, result)
+        receipt = json.loads(out.getvalue())
+        self.assertEqual("RECORDED", receipt["status"])
+        self.assertEqual("BLOCKED", receipt["task_status"])
+        self.assertEqual("UNCHANGED", receipt["authority"])
+        self.assertEqual(original, plan_file.read_bytes())
 
     def test_phase_file_redistribution_does_not_reset_completed_work(self):
         import contextlib
@@ -2052,6 +2179,7 @@ class StateAuthorityHardeningTests(DailyWorkflowSelftest):
             repo=str(self.repo),
             task_id=task_id,
             outcome="Revised outcome 6",
+            material_change_reason="The developer expanded the required outcome",
             kind="FEATURE",
             planning_depth="BOUNDED",
             expected_surfaces=None,

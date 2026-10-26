@@ -393,6 +393,11 @@ def validate_completed_phase_review_proof(
         raise ValidationError("phase review proof has an invalid checkpoint or reviewer roster")
     for reviewer in roster:
         validate_id(reviewer, "reviewer")
+    # Historical completion is still independently proven against the immutable
+    # package. Only live tree/plan freshness is delegated to final integration.
+    package = Path(run.get("package_path") or "")
+    if not package.is_file() or sha256_file(package) != run.get("package_sha256"):
+        raise ValidationError("phase review proof package is missing or corrupted")
     if not historical_for_final:
         try:
             fresh, reason = phase_review_freshness(repo, task_id, phase_id, run, reviewed_paths_only=True)
@@ -690,6 +695,8 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
         diff,
         "```",
     ]
+    if metadata.get("plan_clarifications"):
+        content_lines.append(metadata["plan_clarifications"])
     try:
         from project_context import load_project_notes
         notes_info = load_project_notes(repo)
@@ -849,6 +856,10 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | Non
     }
 
     metadata["plan_sha256"] = plan.get("plan_sha256")
+    from plan_notes import note_section
+    clarifications = note_section(tdir, plan)
+    if clarifications:
+        metadata["plan_clarifications"] = clarifications
     metadata["task_base_head"] = plan.get("task_base_head", "")
     metadata["accepted_checkpoint_head"] = plan.get("accepted_checkpoint_head", "")
     metadata = _publish_phase_package(repo, metadata, target_phase, diff)

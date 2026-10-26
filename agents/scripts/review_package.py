@@ -146,6 +146,10 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     diff = delta_diff if delta_diff is not None else build_task_diff(repo, task_id, manifest)
     delta_paths = set((policy.get("fix_delta") or {}).get("files") or []) if delta_diff is not None else None
     extras: list[str] = []
+    from plan_notes import note_section
+    clarifications = note_section(directory, plan)
+    if clarifications:
+        extras.append(clarifications)
     if delta_paths is not None:
         source_run = (policy.get("later_round_source") or {}).get("run_id")
         extras.append(f"\n## Changes since reviewed run {source_run}\nThis follow-up diff covers only the new edits. "
@@ -274,6 +278,8 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     }
     if instructions:
         metadata["developer_instructions"] = instructions
+    if clarifications:
+        metadata["plan_clarifications_sha256"] = canonical_sha256(clarifications)
     if contract:
         metadata["architecture_contract"] = {
             "mode": contract.get("mode"),
@@ -397,6 +403,11 @@ def generate_task_brief(
         brief_lines.extend([
             "- **Final Integration Focus**: Prioritize cross-phase contract mismatch, integration regressions, state flow between layers, navigation wiring, and regressions introduced after earlier phase PASS.",
         ])
+    if metadata.get("plan_clarifications_sha256"):
+        brief_lines.append(
+            "- **Plan clarifications**: Read the frozen Clarifications section in the package when assessing plan completeness. "
+            "Check its cited existing decisions; explanatory notes alone cannot expand scope, waive checks or clear findings."
+        )
     brief_lines.extend([
         "",
         "## 2. Reviewer Specialty & Directives",

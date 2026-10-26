@@ -173,16 +173,94 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 
 def cmd_note(args: argparse.Namespace) -> int:
     import re
+    from _vnext_common import atomic_write_text
     repo = Path(args.repo).resolve()
     context_dir = repo / ".agents" / "project-context"
     notes_file = context_dir / "project-notes.md"
     if not context_dir.is_dir():
         context_dir.mkdir(parents=True, exist_ok=True)
+    remove_target = (getattr(args, "remove", None) or "").strip()
+    replace_target = (getattr(args, "replace", None) or "").strip()
     text = (getattr(args, "note", None) or getattr(args, "text", None) or "").strip()
+    section = (getattr(args, "section", None) or "Domain Conventions & Context").strip()
+
+    if remove_target and replace_target:
+        print("[ERROR] Cannot pass both --remove and --replace in the same note command.", file=sys.stderr)
+        return 1
+
+    if remove_target:
+        if not notes_file.is_file():
+            print(f"[ERROR] Project notes file does not exist: {notes_file}", file=sys.stderr)
+            return 1
+        content = notes_file.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        new_lines = []
+        removed_count = 0
+        norm_target = remove_target.lstrip("-* ").strip()
+        for line in lines:
+            stripped = line.strip()
+            norm_line = stripped.lstrip("-* ").strip()
+            if stripped == remove_target or norm_line == norm_target or (len(norm_target) >= 8 and norm_target in norm_line):
+                removed_count += 1
+                continue
+            new_lines.append(line)
+        if removed_count == 0:
+            if remove_target in content:
+                updated = content.replace(remove_target, "").strip() + "\n"
+                removed_count = 1
+            else:
+                print(f"[ERROR] Target note text not found in {notes_file}: {remove_target}", file=sys.stderr)
+                return 1
+        else:
+            updated = "\n".join(new_lines).rstrip() + "\n"
+        atomic_write_text(notes_file, updated)
+        if getattr(args, "json", False):
+            print(json.dumps({"status": "PASS", "action": "REMOVED", "path": str(notes_file), "removed": remove_target, "count": removed_count}, ensure_ascii=False))
+        else:
+            print(f"[NOTE] Removed {removed_count} note entry/entries matching '{remove_target}' from {notes_file}")
+        return 0
+
+    if replace_target:
+        if not text:
+            print("[ERROR] Replacement note text cannot be empty when using --replace.", file=sys.stderr)
+            return 1
+        if not notes_file.is_file():
+            print(f"[ERROR] Project notes file does not exist: {notes_file}", file=sys.stderr)
+            return 1
+        content = notes_file.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        new_lines = []
+        replaced_count = 0
+        norm_target = replace_target.lstrip("-* ").strip()
+        clean_replacement = text.lstrip("-* ").strip()
+        for line in lines:
+            stripped = line.strip()
+            norm_line = stripped.lstrip("-* ").strip()
+            if replaced_count == 0 and (stripped == replace_target or norm_line == norm_target or (len(norm_target) >= 8 and norm_target in norm_line)):
+                prefix = "- " if stripped.startswith(("-", "*")) or not text.startswith(("#", "-", "*")) else ""
+                new_lines.append(f"{prefix}{clean_replacement if prefix else text}")
+                replaced_count += 1
+            else:
+                new_lines.append(line)
+        if replaced_count == 0:
+            if replace_target in content:
+                updated = content.replace(replace_target, text, 1)
+                replaced_count = 1
+            else:
+                print(f"[ERROR] Target note text not found in {notes_file}: {replace_target}", file=sys.stderr)
+                return 1
+        else:
+            updated = "\n".join(new_lines).rstrip() + "\n"
+        atomic_write_text(notes_file, updated)
+        if getattr(args, "json", False):
+            print(json.dumps({"status": "PASS", "action": "REPLACED", "path": str(notes_file), "replaced": replace_target, "note": text}, ensure_ascii=False))
+        else:
+            print(f"[NOTE] Updated note in {notes_file}")
+        return 0
+
     if not text:
         print("[ERROR] Note text cannot be empty.")
         return 1
-    section = (getattr(args, "section", None) or "Domain Conventions & Context").strip()
     if not notes_file.is_file():
         initial_content = [
             "# Human-Authored Project Architectural Notes",
@@ -194,7 +272,7 @@ def cmd_note(args: argparse.Namespace) -> int:
             f"- {text}",
             "",
         ]
-        notes_file.write_text("\n".join(initial_content), encoding="utf-8")
+        atomic_write_text(notes_file, "\n".join(initial_content))
     else:
         content = notes_file.read_text(encoding="utf-8")
         sec_pattern = rf"(##\s+{re.escape(section)}[^\n]*\n)"
@@ -202,10 +280,10 @@ def cmd_note(args: argparse.Namespace) -> int:
             updated = re.sub(sec_pattern, rf"\1- {text}\n", content, count=1)
         else:
             updated = content.rstrip() + f"\n\n## {section}\n- {text}\n"
-        notes_file.write_text(updated, encoding="utf-8")
+        atomic_write_text(notes_file, updated)
 
     if getattr(args, "json", False):
-        print(json.dumps({"status": "PASS", "path": str(notes_file), "note": text, "section": section}, ensure_ascii=False))
+        print(json.dumps({"status": "PASS", "action": "ADDED", "path": str(notes_file), "note": text, "section": section}, ensure_ascii=False))
     else:
         print(f"[NOTE] Added note to {notes_file} under section '{section}'")
     return 0
@@ -214,16 +292,15 @@ def cmd_note(args: argparse.Namespace) -> int:
 def cmd_instruct(args: argparse.Namespace) -> int:
     import hashlib
     import time
+    from _vnext_common import atomic_write_json
     repo = Path(args.repo).resolve()
     context_dir = repo / ".agents" / "project-context"
     inst_file = context_dir / "developer-instructions.json"
     if not context_dir.is_dir():
         context_dir.mkdir(parents=True, exist_ok=True)
 
+    remove_id = (getattr(args, "remove", None) or "").strip()
     text = (getattr(args, "instruction", None) or getattr(args, "text", None) or "").strip()
-    if not text:
-        print("[ERROR] Instruction text cannot be empty.", file=sys.stderr)
-        return 1
 
     source = getattr(args, "source", None)
     proof_ref = getattr(args, "proof_reference", None)
@@ -232,6 +309,39 @@ def cmd_instruct(args: argparse.Namespace) -> int:
         return 1
     if not proof_ref or not str(proof_ref).strip():
         print("[ERROR] Mandatory --proof-reference cannot be empty.", file=sys.stderr)
+        return 1
+
+    existing_store: dict[str, Any] = {"schema_version": 1, "instructions": []}
+    if inst_file.is_file():
+        try:
+            loaded = json.loads(inst_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
+                existing_store = loaded
+        except (OSError, ValueError):
+            pass
+
+    if remove_id:
+        found = None
+        for old_inst in existing_store["instructions"]:
+            if old_inst.get("id") == remove_id or (len(remove_id) >= 8 and remove_id.lower() in str(old_inst.get("text") or "").lower()):
+                old_inst["status"] = "REMOVED"
+                old_inst["removed_at"] = time.time()
+                old_inst["removed_source"] = source
+                old_inst["removed_proof_reference"] = str(proof_ref)
+                found = old_inst.get("id")
+        if not found:
+            print(f"[ERROR] Instruction '{remove_id}' not found in {inst_file}", file=sys.stderr)
+            return 1
+        atomic_write_json(inst_file, existing_store)
+        ret_payload = {"status": "PASS", "action": "REMOVED", "id": found, "path": str(inst_file)}
+        if getattr(args, "json", False):
+            print(json.dumps(ret_payload, ensure_ascii=False))
+        else:
+            print(f"[INSTRUCT] Removed persistent instruction '{found}'")
+        return ret_payload
+
+    if not text:
+        print("[ERROR] Instruction text cannot be empty.", file=sys.stderr)
         return 1
 
     raw_scope = (getattr(args, "scope", None) or "GLOBAL").strip()
@@ -278,15 +388,6 @@ def cmd_instruct(args: argparse.Namespace) -> int:
 
     supersedes_id = getattr(args, "supersedes", None)
 
-    existing_store: dict[str, Any] = {"schema_version": 1, "instructions": []}
-    if inst_file.is_file():
-        try:
-            loaded = json.loads(inst_file.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
-                existing_store = loaded
-        except (OSError, ValueError):
-            pass
-
     if supersedes_id:
         for old_inst in existing_store["instructions"]:
             if old_inst.get("id") == supersedes_id:
@@ -318,7 +419,6 @@ def cmd_instruct(args: argparse.Namespace) -> int:
     instructions.append(new_inst)
     existing_store["instructions"] = instructions
 
-    from _vnext_common import atomic_write_json
     atomic_write_json(inst_file, existing_store)
 
     ret_payload = {"status": "PASS", "id": inst_id, "instruction": new_inst, "path": str(inst_file)}
@@ -351,8 +451,10 @@ def main(argv: list[str] | None = None) -> int:
     p_ref.add_argument("--json", action="store_true")
 
     p_note = sub.add_parser("note")
-    p_note.add_argument("text", nargs="?", default="", help="Note text to append")
-    p_note.add_argument("--note", default="", help="Note text to append")
+    p_note.add_argument("text", nargs="?", default="", help="Note text to append or replace with")
+    p_note.add_argument("--note", default="", help="Note text to append or replace with")
+    p_note.add_argument("--replace", default="", help="Existing note text/bullet to replace in project-notes.md")
+    p_note.add_argument("--remove", default="", help="Existing note text/bullet to delete from project-notes.md")
     p_note.add_argument("--section", default="Domain Conventions & Context", help="Section header to place note under")
     p_note.add_argument("--repo", default=".")
     p_note.add_argument("--json", action="store_true")
@@ -367,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     p_inst.add_argument("--strength", choices=("REQUIREMENT", "PREFERENCE"), default="REQUIREMENT")
     p_inst.add_argument("--applies-to", default="ANY", help="Comma-separated applicable intents (ANY, PRESERVE, NEW, REFACTOR, MIGRATION)")
     p_inst.add_argument("--supersedes", default=None, help="Prior instruction ID to supersede")
+    p_inst.add_argument("--remove", default=None, help="Instruction ID or text substring to remove/deactivate")
     p_inst.add_argument("--repo", default=".")
     p_inst.add_argument("--json", action="store_true")
 

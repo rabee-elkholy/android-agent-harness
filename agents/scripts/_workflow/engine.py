@@ -1057,7 +1057,8 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             or not all(phase.get("id") in (phase_state.get("completed_phases") or []) for phase in phases)
         ):
             raise ValidationError("all approved phases must be complete before verification preparation")
-        validated_completed_phase_manifest(repo, args.task_id, plan, phase_state, final_phase, for_final=True)
+        for phase in phases:
+            validated_completed_phase_manifest(repo, args.task_id, plan, phase_state, phase, for_final=True)
     base_repo = plan.get("repository") or {}
     if base_repo:
         current_identity = repository_identity(repo)
@@ -2504,7 +2505,7 @@ def validated_completed_phase_manifest(
     repo: Path, task_id: str, plan: dict, phase_state: dict, phase: dict,
     *, for_final: bool = False,
 ) -> dict:
-    """Return the live manifest only when it still matches a completed phase checkpoint."""
+    """Validate phase progression, or its historical proof before fresh final gates."""
     from phase_review import PHASE_COMPLETE, compute_phase_delta_sha256, get_phase_substate, phase_path_states
 
     phase_id = phase.get("id")
@@ -2533,15 +2534,13 @@ def validated_completed_phase_manifest(
         expected_files=phase.get("expected_files") or plan.get("expected_files"),
     )
     changes = manifest.get("task_changes") or []
-    historical_for_final = False
+    historical_for_final = for_final
     if any((
         manifest["delivery_snapshot_sha256"] != checkpoint.get("delivery_snapshot_sha256"),
         manifest["task_change_set_sha256"] != checkpoint.get("task_change_set_sha256"),
         compute_phase_delta_sha256(phase_id, changes) != checkpoint.get("phase_delta_sha256"),
         phase_path_states(repo, changes) != checkpoint.get("phase_path_states"),
     )):
-        from change_decision import final_phase_delta_covered
-        historical_for_final = for_final and final_phase_delta_covered(repo, plan, phase_id, checkpoint_sha, manifest)
         if not historical_for_final:
             raise ValidationError("phase checkpoint is stale; re-checkpoint the current phase before advancing")
     review_status = checkpoint.get("review")
@@ -2945,7 +2944,10 @@ def build_parser() -> argparse.ArgumentParser:
     draft_cmd.set_defaults(handler=draft)
     revise_cmd = sub.add_parser("revise", parents=[common])
     _add_plan_arguments(revise_cmd, is_revision=True)
+    revise_cmd.add_argument("--material-change-reason", help="Concrete requirement expansion when revising only approved plan prose")
     revise_cmd.set_defaults(handler=revise)
+    from plan_notes import register_parser as register_plan_notes
+    register_plan_notes(sub, common)
     command = sub.add_parser("checkpoint-phase", parents=[common])
     command.add_argument("--phase-id", default=None, help="Phase ID to checkpoint")
     command.set_defaults(handler=checkpoint_phase)
@@ -3513,6 +3515,8 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
     if not reapproval:
         lines.append(approval_brief(result, sensitive_advisory=sensitive))
     lines.append(f"PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
+    if result.get("material_change_reason"):
+        lines.append("MATERIAL_CHANGE_REASON=" + str(redact(result["material_change_reason"])))
     from review_models import model_choice_summary
     lines.append(model_choice_summary(repo, str(result["task_id"])))
     if document.is_file():
@@ -3608,7 +3612,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{recipe['surface']}]:")
                 for step in recipe["steps"]:
                     print(f"    - {step}")
-    elif args.action == "change-decision":
+    elif args.action in ("change-decision", "plan-note"):
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.action == "debug-evidence":
         print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")

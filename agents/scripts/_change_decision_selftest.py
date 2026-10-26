@@ -145,7 +145,7 @@ class ChangeDecisionTests(unittest.TestCase):
         self.assertTrue(later["reviewers"])
         self.assertFalse(later.get("fix_delta", {}).get("developer_accepted_files"))
 
-    def test_final_phase_history_survives_exact_decision_but_not_unexplained_edits(self):
+    def test_final_phase_history_survives_exact_decision_and_integration_corrections(self):
         import _phase_review_v2_selftest as phase_tests
         fixture = phase_tests.PhaseReviewV2Selftest()
         fixture.setUp()
@@ -169,8 +169,10 @@ class ChangeDecisionTests(unittest.TestCase):
         workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task, host="generic"))
         self.assertEqual(original, (workflow.task_dir(self.repo, task) / "phase-state.json").read_bytes())
         workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task))
-        source.write_text("<resources><string name='late'>Unexplained</string></resources>\n", encoding="utf-8")
-        self.assertEqual("CHECKPOINT_PHASE", workflow.resolve_next_action(self.repo, task)["code"])
+        source.write_text("<resources><string name='late'>Corrected during integration</string></resources>\n", encoding="utf-8")
+        self.assertEqual("PREPARE_VERIFICATION", workflow.resolve_next_action(self.repo, task)["code"])
+        workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task, host="generic"))
+        self.assertEqual("RUN_PREFLIGHT", workflow.resolve_next_action(self.repo, task, host="generic")["code"])
 
     def test_native_hook_allows_decision_command_during_stale_verification(self):
         import _hook_selftest as hooks

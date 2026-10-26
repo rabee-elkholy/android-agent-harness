@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.46] - 2026-10-26
+
+### Integration corrections preserve completed phases (`ADR-018`), `task plan-note`, and structured English context notes (`--replace` / `--remove`)
+
+- Preserve validated historical phase checkpoints once all semantic phases are complete (`ADR-018`) in `agents/scripts/_workflow/engine.py`, `agents/scripts/_workflow/phase_routing.py`, and `agents/scripts/change_decision.py` so in-scope integration corrections route directly to `PREPARE_VERIFICATION` and final integration review without re-checkpointing or re-dispatching completed phase reviewers.
+- Add `python .agents/harness.py task plan-note` (`agents/scripts/plan_notes.py`) to append bounded, source-referenced, plan-bound clarifications outside the approval payload without invalidating approval or completed phase history, and include frozen plan notes in newly published review packages (`agents/scripts/review_package.py`, `agents/scripts/phase_review.py`, `agents/scripts/plan_document.py`).
+- Require `--material-change-reason` in `agents/scripts/_workflow/planning.py` when `task revise` alters only narrative prose without changing scope, risk, phases, or verification contracts (`NARRATIVE_ONLY_REVISION_USE_PLAN_NOTE`).
+- Enhance `context note` and `context instruct` in `agents/scripts/generate_project_context.py` and `harness_cli.py` with `--replace "<old-note>"` and `--remove "<old-note-or-id>"` so notes in `.agents/project-context/project-notes.md` and instructions in `developer-instructions.json` can be replaced or removed deterministically via the CLI.
+- Update `agents/rules/harness-rules.md`, `GEMINI.md`, and all managed tool-adapter templates (`agents/tool-adapters/*.template`) to require clarifying any ambiguity with the developer first and structuring/translating developer notes and instructions into clear, self-contained English before saving.
+
 ## [1.1.45] - 2026-10-22
 
 ### Remove hardcoded `FEATURE_CROSS_IMPORT` package regex check from `fast_kt_lint.py`

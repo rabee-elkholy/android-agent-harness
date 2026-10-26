@@ -116,6 +116,8 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
             *_changes(previous, plan),
             "",
         ]
+        if plan.get("material_change_reason"):
+            lines += ["Reason for changed requirements: " + _text(plan["material_change_reason"]), ""]
     lines += [
         "## Outcome",
         "",
@@ -236,5 +238,7 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
 
 def write_plan_document(repo: Path, task_directory: Path, plan: dict, *, policy: dict | None = None, previous: dict | None = None) -> Path:
     path = plan_document_path(task_directory)
-    atomic_write_bytes(path, render_plan_document(repo, plan, policy=policy, previous=previous).encode("utf-8"))
+    from plan_notes import note_section
+    document = render_plan_document(repo, plan, policy=policy, previous=previous)
+    atomic_write_bytes(path, (document + note_section(task_directory, plan)).encode("utf-8"))
     return path

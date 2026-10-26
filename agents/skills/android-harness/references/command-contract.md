@@ -102,7 +102,8 @@ python .agents/harness.py task draft \
 > Draft and revise print, in order: `APPROVAL_BRIEF_BEGIN`..`APPROVAL_BRIEF_END` (what changes, file names, sensitive areas, outside writes, phone checks, risks; omitted after a revise of an approved plan, which prints `REVISION_CHANGES=` and `DRIFT_CAUSES=` instead), `PLAN_HASH=` (for `approve --plan-hash`), `PLAN_DOCUMENT_URI=` (the plan.md link), `PRE_EXISTING_CHANGES=` (the developer's uncommitted files that predate the task), `ZOHO_WRITE_NOT_PLANNED=`, `PLAN_GAPS=` (revise first) and `APPROVAL_QUESTION:` (how to ask). Ask with `ask_question`: the plan.md link as a clickable Markdown link, then the brief lines, each once, as plain text, never in a code block. `python .agents/harness.py task status --task-id <id> --json` prints the full registered plan; add `--next --brief` only when the next action/payload is missing. `--brief` reduces output, not the required freshness checks.
 
 ```bash
-# 1b. Revise the plan (new scope, missing fields, Zoho write); a revised plan needs approval again
+# 1b. Revise for new scope/requirements, or fill missing fields before initial approval.
+# Narrative-only changes to an approved plan require --material-change-reason "<actual expansion>".
 python .agents/harness.py task revise --repo . --task-id <id> [any draft flag to change]
 
 # 2. Record developer approval (atomically transitions directly to IMPLEMENTING)
@@ -157,6 +158,16 @@ python .agents/harness.py task cancel --repo . --task-id <id> --source conversat
 | `task recover-stale` | Diagnostics identify a corrupt, missing-plan or terminal active pointer | Leaves valid live tasks/history intact; does not repair stale context |
 
 For partial `revise`, pass only changed fields; `--outcome` is optional and saved architecture decisions are retained unless deliberately changed. Surface/file lists are complete replacement lists, not append operations. Use `task switch` for ordinary focus changes and `task resume` for fixes after verification, rather than recovery commands.
+
+In-scope review corrections resume the same task, retain completed semantic phases and run fresh final gates. Completed phase evidence is historical, never current delivery PASS. Intermediate transitions and unfinished reviews still require fresh checkpoint proof. Once every phase completes, do not re-checkpoint old phases merely because integration corrections changed files; follow the final router's affected reviewers.
+
+To clarify an existing decision without replacing the approved requirements:
+
+```bash
+python .agents/harness.py task plan-note --task-id <id> --text "<clarification>" --source conversation --proof-reference "<existing decision>"
+```
+
+`plan-note` is available for approved live tasks in IMPLEMENTING, VERIFYING, BLOCKED and READY_FOR_DELIVERY. It appends an idempotent plan-bound receipt, regenerates the labeled clarification section in `plan.md`, and returns JSON with `status: RECORDED`, the unchanged `task_status`, `authority: UNCHANGED` and the next action. Recording a note on a blocked task succeeds without clearing its blocker. Publish explanatory notes before creating the review package; new packages include frozen notes, while existing packages remain immutable. Notes grant no files, behavior, edit acceptance, evidence waiver or reviewer PASS. An actual requirement change still needs `revise` and approval; prose-only revisions require `--material-change-reason`. Do not invent an expansion to bypass `PLAN_NOTE_REQUIRED`.
 
 ### Expected Output
 - Lifecycle state confirmation message or JSON with task status, run ID, and frozen snapshot hash.
@@ -423,7 +434,7 @@ When an exception occurs:
 | **Approve** | `python .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<reply>" --enforcement-tier RULE_ENFORCED --plan-hash <hash>` | Record the developer's approval of the shown plan |
 | **Next Action** | `python .agents/harness.py task status --task-id <id> --next --json` | The router: the single next step and why |
 | **Cancel Task** | `python .agents/harness.py task cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"` | Only when the developer asks in chat; files stay as they are |
-| **Context Note** | `python .agents/harness.py context note "<note>"` | Record architectural convention/note |
+| **Context Note** | `python .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) | Add, replace, or remove a structured English architectural convention/note |
 | **Zoho Start Sync**| `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item; on `ENV`, tell the developer |
 | **Preflight Gate** | `python .agents/harness.py preflight` (engine: `preflight.py` / `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
 | **Record Start** | `python .agents/harness.py test --record-start` | Before the first edit: record the tests that already fail |

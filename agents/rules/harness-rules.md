@@ -15,9 +15,10 @@ This is the authoritative always-loaded contract. Route detailed Android guidanc
 - **6-Tier Dynamic Risk Model**: Review policy alone assigns RISK_TIER (`T0_TRIVIAL` to `T5_CRITICAL`), gates, reviewer roster, device requirement, and skill routing. Execute its roster.
 - **Single-shot Proceed invariant**: Proceed appears only for initial task approval.
 - **Direct follow-up execution**: approved in-scope fixes execute immediately; new plan/Proceed only if behavior, sensitive surface, contract, external write, or blast radius materially expands.
+- **Review corrections are not replanning**: resume the same task before fixes, then freeze fresh final verification and execute only its routed reviewers. Once all semantic phases complete, their checkpoints remain historical proof; never replay them merely because integration corrections changed files. Intermediate phase transitions still require fresh checkpoint proof. Clarify an existing decision with `task plan-note --task-id <id> --text "<clarification>" --source conversation --proof-reference "<decision>"`; notes grant no scope, acceptance or PASS. Do not edit `plan.md` manually. Narrative-only `revise` on an approved task requires `--material-change-reason "<actual requirement expansion>"` and fresh approval; do not invent an expansion to bypass `PLAN_NOTE_REQUIRED`.
 - One approval covers all stated phases. Validate phase boundaries without pausing for repeat approval.
 - **Host continuation**: use `task continue --task-id <id> --host <actual-host>`. Stop the former writer before `--source-stopped`; include routed `--expect-session`. Follow its brief/next action. Preserve approval, review limits and proof provenance.
-- Context notes are administrative, not delivery work: `python .agents/harness.py context note "<note>"`. Always read and strictly follow `.agents/project-context/project-notes.md` and `developer-instructions.json` across discovery, planning, implementation, review, and Zoho Sprints formatting.
+- Context notes and instructions are administrative, not delivery work: `python .agents/harness.py context note "<structured-english-note>"` (use `--replace "<old-note>"` to replace an existing note or `--remove "<old-note>"` to delete one) and `context instruct "<structured-english-instruction>"` (use `--supersedes <id>` to replace or `--remove <id>` to delete). Never dump the developer's raw conversational phrasing verbatim into `project-notes.md` or `developer-instructions.json`: clarify any ambiguity with the developer first, then organize, detail, and translate the rule into clear, self-contained English (preserving intentional localized literals or templates when specified) before recording it so any future model can read and follow it effortlessly. Always read and strictly follow `.agents/project-context/project-notes.md` and `developer-instructions.json` across discovery, planning, implementation, review, and Zoho Sprints formatting.
 - Commit, push, release, tracker mutation, app uninstall/data clear, downgrade, purchase, and publication are never implicit.
 
 Lifecycle (PLAN → BUILD → VERIFY → SHIP → DONE):
@@ -116,7 +117,7 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 |---|---|
 | Task context | `python .agents/harness.py task-context --file <path> --json` |
 | Feature / find graph | `python .agents/harness.py graph --feature <name> --json` |
-| Context note | `python .agents/harness.py context note "<note>"` |
+| Context note | `python .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) |
 | Task guidance | `python .agents/harness.py task status --task-id <id> --next` |
 | Policy diagnosis | `python .agents/harness.py policy --json` |
 | Consecutive verification steps | `python .agents/harness.py verify-steps --task-id <id> --host <actual-host>` |
